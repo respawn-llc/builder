@@ -33,7 +33,7 @@ export function addWorkflowNode(
       draft.nodes.map((node) => node.key),
     );
   const node: DraftWorkflowNode = {
-    groupID: null,
+    groupID: "",
     groupKey: "",
     id: input.id,
     joinInputProviders: [],
@@ -67,7 +67,7 @@ export function deleteWorkflowNode(
   if (node.kind === "terminal" && draft.nodes.filter((item) => item.kind === "terminal").length <= 1) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.lastTerminalDelete);
   }
-  if (node.groupID !== null) {
+  if (node.groupID.length > 0) {
     const groupedBranchesAfterDelete = draft.nodes.filter(
       (item) => item.groupID === node.groupID && workflowBranchNodeKind(item.kind) && item.id !== nodeID,
     );
@@ -117,7 +117,7 @@ export function createWorkflowNodeGroupFromNode(
   if (!workflowBranchNodeKind(node.kind)) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupRequiresAgent);
   }
-  if (node.groupID !== null) {
+  if (node.groupID.length > 0) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupRequiresUngroupedNode);
   }
   const groupName = input.groupName ?? `${node.name} parallel`;
@@ -178,7 +178,7 @@ export function addWorkflowNodeToGroup(
   if (!workflowBranchNodeKind(node.kind)) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupRequiresAgentMembership);
   }
-  if (node.groupID !== null && node.groupID !== group.id) {
+  if (node.groupID.length > 0 && node.groupID !== group.id) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupRequiresUngroupedNode);
   }
   const nodes = draft.nodes.map((item) =>
@@ -211,7 +211,7 @@ export function removeWorkflowNodeFromGroup(
   if (node === undefined) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeNotFound);
   }
-  if (node.groupID === null) {
+  if (node.groupID.length === 0) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupNotFound);
   }
   if (!workflowBranchNodeKind(node.kind)) {
@@ -219,7 +219,7 @@ export function removeWorkflowNodeFromGroup(
   }
   const groupID = node.groupID;
   const ungroupedNodes = draft.nodes.map((item) =>
-    item.id === nodeID ? { ...item, groupID: null, groupKey: "" } : item,
+    item.id === nodeID ? { ...item, groupID: "", groupKey: "" } : item,
   );
   const remainingBranches = ungroupedNodes.filter(
     (item) => item.groupID === groupID && workflowBranchNodeKind(item.kind),
@@ -247,7 +247,7 @@ export function extractWorkflowNodeFromGroup(
   if (node === undefined) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeNotFound);
   }
-  if (node.groupID === null) {
+  if (node.groupID.length === 0) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupNotFound);
   }
   if (!workflowBranchNodeKind(node.kind)) {
@@ -279,7 +279,7 @@ export function extractWorkflowNodeFromGroup(
   const afterJoinEdges =
     joinEdgeIDs.size === 0 ? rehomedIncoming : removeEdgesInternal(rehomedIncoming, joinEdgeIDs);
   const ungroupedNodes = afterJoinEdges.nodes.map((item) =>
-    item.id === node.id ? { ...item, groupID: null, groupKey: "" } : item,
+    item.id === node.id ? { ...item, groupID: "", groupKey: "" } : item,
   );
   const remainingBranches = ungroupedNodes.filter(
     (item) => item.groupID === groupID && workflowBranchNodeKind(item.kind),
@@ -329,7 +329,7 @@ function dissolveWorkflowNodeGroup(
       ? preferredPreservedBranchID
       : branchIDs[0];
   const ungroupedNodes = draft.nodes.map((node) =>
-    node.groupID === groupID && node.kind !== "join" ? { ...node, groupID: null, groupKey: "" } : node,
+    node.groupID === groupID && node.kind !== "join" ? { ...node, groupID: "", groupKey: "" } : node,
   );
   const joinIDs = new Set(
     ungroupedNodes.filter((item) => item.groupID === groupID && item.kind === "join").map((item) => item.id),
@@ -383,9 +383,6 @@ function rehomeExtractedBranchFanoutEdge(
   node: DraftWorkflowNode,
   rehomedTransitionGroupID: string,
 ): Readonly<{ kind: "ready"; draft: DraftWorkflowDefinition } | { kind: "blocked" }> {
-  if (node.groupID === null) {
-    return { kind: "blocked" };
-  }
   const branchIDs = new Set(orderedNodeGroupBranchIDs(draft, node.groupID));
   const fanoutGroups = draft.transitionGroups.filter((group) =>
     transitionGroupTargetsExactly(draft, group.id, branchIDs),

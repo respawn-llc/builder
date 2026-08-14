@@ -7,6 +7,7 @@ import (
 	"core/cli/tui"
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	sharedtheme "core/shared/theme"
 
@@ -71,7 +72,7 @@ func (m *sessionPickerModel) View() string {
 		out.WriteString(m.renderRow(tab, 0, false))
 	case sessionPickerBodyReady:
 		visible := m.visibleRowsFromOffset(tab, tab.offset)
-		if tab.directional != nil && tab.directional.move < 0 {
+		if tab.directional != nil && tab.directional.position.Kind() == serverapi.SessionPagePositionNewer {
 			out.WriteString(m.styles.row.Render(pendingToolSpinnerFrame(m.spinnerFrame) + " Loading newer sessions"))
 			if len(visible) > 0 {
 				out.WriteByte('\n')
@@ -83,7 +84,7 @@ func (m *sessionPickerModel) View() string {
 			}
 			out.WriteString(m.renderRow(tab, row.index, row.showPreview))
 		}
-		if tab.directional != nil && tab.directional.move > 0 {
+		if tab.directional != nil && tab.directional.position.Kind() == serverapi.SessionPagePositionOlder {
 			if len(visible) > 0 {
 				out.WriteByte('\n')
 			}

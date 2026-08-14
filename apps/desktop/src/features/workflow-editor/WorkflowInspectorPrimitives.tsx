@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import type { WorkflowValidationError } from "@/api";
 import { WorkflowValidationErrorDetailsLine } from "@/shared/workflow-validation";
 import { ErrorState, HelpHint, IslandSurface } from "@/ui";
-import { workflowValidationErrorKey } from "./workflowValidationErrorKey";
 
 export function DetailSection({
   children,
@@ -78,7 +77,7 @@ export function ValidationDetails({
     <DetailSection title={title ?? t("workflowEditor.validationErrors")}>
       <ul className="m-0 grid list-disc gap-[var(--space-1)] pl-[1.1rem] text-sm leading-snug">
         {errors.map((error, index) => (
-          <li className="pl-[2px] marker:text-[var(--color-error)]" key={workflowValidationErrorKey(error, index)}>
+          <li className="pl-[2px] marker:text-[var(--color-error)]" key={validationErrorKey(error, index)}>
             <span>{error.message}</span>
             <WorkflowValidationErrorDetailsLine error={error} />
           </li>
@@ -86,6 +85,16 @@ export function ValidationDetails({
       </ul>
     </DetailSection>
   );
+}
+
+function validationErrorKey(error: WorkflowValidationError, index: number): string {
+  const entityID = [error.edgeID, error.nodeID, error.transitionGroupID, error.workflowID].find(
+    (value): value is string => value !== null && value.length > 0,
+  );
+  if (entityID !== undefined) {
+    return `${error.code}:${entityID}:${error.message}`;
+  }
+  return `${error.code}:${error.message}:${index.toString()}`;
 }
 
 export function MissingEntity({ entityID }: Readonly<{ entityID: string }>) {

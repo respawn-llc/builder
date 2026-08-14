@@ -132,9 +132,10 @@ func TestApplyReviewerInheritanceCopiesMainProviderCapabilitiesForNoOpReviewerPr
 	settings := config.Settings{
 		OpenAIBaseURL: "http://subagent.local/v1",
 		ProviderCapabilities: config.ProviderCapabilitiesOverride{
-			ProviderID:             "subagent-main-provider",
-			SupportsResponsesAPI:   true,
-			SupportsPromptCacheKey: true,
+			ProviderID:                     "subagent-main-provider",
+			SupportsResponsesAPI:           true,
+			SupportsRequestInputTokenCount: true,
+			SupportsPromptCacheKey:         true,
 		},
 		Reviewer: config.ReviewerSettings{
 			ProviderOverride: "openai",
@@ -151,9 +152,10 @@ func TestApplyReviewerInheritanceCopiesMainProviderCapabilitiesForNoOpReviewerPr
 		t.Fatalf("expected no-op reviewer provider override to inherit subagent main base URL, got %q", settings.Reviewer.OpenAIBaseURL)
 	}
 	wantCapabilities := config.ProviderCapabilitiesOverride{
-		ProviderID:             "subagent-main-provider",
-		SupportsResponsesAPI:   true,
-		SupportsPromptCacheKey: true,
+		ProviderID:                     "subagent-main-provider",
+		SupportsResponsesAPI:           true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
 	}
 	if settings.Reviewer.ProviderCapabilities != wantCapabilities {
 		t.Fatalf("reviewer provider capabilities = %+v, want %+v", settings.Reviewer.ProviderCapabilities, wantCapabilities)
@@ -187,15 +189,16 @@ func TestApplyReviewerInheritanceMergesReviewerModelCapabilitiesPerField(t *test
 func TestApplyReviewerInheritanceMergesReviewerProviderCapabilitiesPerField(t *testing.T) {
 	settings := config.Settings{
 		ProviderCapabilities: config.ProviderCapabilitiesOverride{
-			ProviderID:                    "main-provider",
-			SupportsResponsesAPI:          true,
-			SupportsResponsesCompact:      true,
-			SupportsPromptCacheKey:        true,
-			SupportsNativeWebSearch:       true,
-			SupportsReasoningEncrypted:    true,
-			SupportsServerSideContextEdit: true,
-			IsOpenAIFirstParty:            true,
-			SupportsProviderVerbosity:     true,
+			ProviderID:                     "main-provider",
+			SupportsResponsesAPI:           true,
+			SupportsResponsesCompact:       true,
+			SupportsRequestInputTokenCount: true,
+			SupportsPromptCacheKey:         true,
+			SupportsNativeWebSearch:        true,
+			SupportsReasoningEncrypted:     true,
+			SupportsServerSideContextEdit:  true,
+			IsOpenAIFirstParty:             true,
+			SupportsProviderVerbosity:      true,
 		},
 		Reviewer: config.ReviewerSettings{
 			ProviderCapabilities: config.ProviderCapabilitiesOverride{
@@ -226,15 +229,16 @@ func TestApplyReviewerInheritanceMergesReviewerProviderCapabilitiesPerField(t *t
 
 func reviewerProviderCapabilitySources() map[string]string {
 	sources := map[string]string{
-		"reviewer.provider_capabilities.provider_id":                       "default",
-		"reviewer.provider_capabilities.supports_responses_api":            "default",
-		"reviewer.provider_capabilities.supports_responses_compact":        "default",
-		"reviewer.provider_capabilities.supports_prompt_cache_key":         "default",
-		"reviewer.provider_capabilities.supports_native_web_search":        "default",
-		"reviewer.provider_capabilities.supports_reasoning_encrypted":      "default",
-		"reviewer.provider_capabilities.supports_server_side_context_edit": "default",
-		"reviewer.provider_capabilities.supports_provider_verbosity":       "default",
-		"reviewer.provider_capabilities.is_openai_first_party":             "default",
+		"reviewer.provider_capabilities.provider_id":                        "default",
+		"reviewer.provider_capabilities.supports_responses_api":             "default",
+		"reviewer.provider_capabilities.supports_responses_compact":         "default",
+		"reviewer.provider_capabilities.supports_request_input_token_count": "default",
+		"reviewer.provider_capabilities.supports_prompt_cache_key":          "default",
+		"reviewer.provider_capabilities.supports_native_web_search":         "default",
+		"reviewer.provider_capabilities.supports_reasoning_encrypted":       "default",
+		"reviewer.provider_capabilities.supports_server_side_context_edit":  "default",
+		"reviewer.provider_capabilities.supports_provider_verbosity":        "default",
+		"reviewer.provider_capabilities.is_openai_first_party":              "default",
 	}
 	return sources
 }

@@ -50,18 +50,6 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			},
 		},
 		{
-			name: "gated",
-			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				controller.gates[key] = currentNodeAdmissionGate{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
-				}
-			},
-			clean: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				delete(controller.gates, key)
-			},
-		},
-		{
 			name: "live",
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
 				scopeID := runtimeids.NewExecutionScopeID()
@@ -170,15 +158,7 @@ func TestCurrentNodeControllerFailedScriptDoesNotReleaseAgentCapacity(t *testing
 		},
 		started: make(chan workflow.CurrentNodeReference, 2),
 	}
-	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency: 1,
-		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
-			waitErr: errors.New("assignment preparation failed"),
-		},
-	})
-	if err != nil {
-		t.Fatalf("new current node controller: %v", err)
-	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
 	t.Cleanup(func() {
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
@@ -240,14 +220,17 @@ func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.
 			controller.ExecutionFinalized(scope)
 		}),
 	})
-	runner := &selectiveScriptFailureRunner{
+	runner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{
 			Path: shellPath,
 			Args: []string{"-c", "while :; do sleep 1; done"},
 		},
-		failed:  failed,
 		started: make(chan workflow.CurrentNodeReference, 1),
+		agents: map[workflow.CurrentNodeReference]struct{}{
+			failed: {},
+			next:   {},
+		},
 	}
 	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
 	t.Cleanup(func() {
@@ -259,9 +242,12 @@ func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.
 		}
 	})
 
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
-		CurrentNode: failed,
-		NodeKind:    workflow.NodeKindAgent,
+	controller.enqueueStarts([]currentNodeQueuedStart{{
+		reference: failed,
+		policy:    currentNodeAdmissionAutomaticAgent,
+		assignmentSteer: completedCurrentNodeAssignmentSteer{
+			err: errors.New("assignment preparation failed"),
+		},
 	}})
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		_, interrupted := store.interruption(failed)
@@ -289,13 +275,14 @@ type selectiveScriptFailureRunner struct {
 	started   chan workflow.CurrentNodeReference
 }
 
-func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ *CurrentNodeClassifiedAssignment, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
-	if reference.Equal(r.failed) {
-		return errors.New("script start failed")
-	}
-	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command:  r.command,
+func (*selectiveScriptFailureRunner) UsesScriptPublication(workflow.CurrentNodeReference) bool {
+	return true
+}
+
+func (r *selectiveScriptFailureRunner) PublishCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease workflowExecutionStart, _ workflowruntime.Controller) error {
+	_, err := startTestWorkflowScript(r.authority, lease, sessionruntime.ScriptExecutionRequest{
+
+		Command: r.command,
 	})
 	if err == nil {
 		r.started <- reference
@@ -303,20 +290,30 @@ func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, refer
 	return err
 }
 
+func (r *selectiveScriptFailureRunner) PrepareCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery) error {
+	if reference.Equal(r.failed) {
+		return errors.New("script start failed")
+	}
+	return nil
+}
+
 type finalizingBeforeLiveRunner struct {
 	authority *sessionruntime.Authority
 	fast      workflow.CurrentNodeReference
 	shellPath string
-	finalized <-chan struct{}
 	started   chan workflow.CurrentNodeReference
 }
 
-func (r *finalizingBeforeLiveRunner) StartCurrentNode(
+func (*finalizingBeforeLiveRunner) UsesScriptPublication(workflow.CurrentNodeReference) bool {
+	return false
+}
+
+func (r *finalizingBeforeLiveRunner) PublishCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ *CurrentNodeClassifiedAssignment,
-	lease sessionruntime.WorkflowExecutionLease,
+	_ CurrentNodeAssignmentSteer,
+	lease workflowExecutionStart,
 	_ workflowruntime.Controller,
 ) error {
 	command := sessionruntime.ScriptCommand{
@@ -325,23 +322,14 @@ func (r *finalizingBeforeLiveRunner) StartCurrentNode(
 	}
 	if reference.Equal(r.fast) {
 		command.Args = []string{"-c", "exit 0"}
-		if _, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-			Workflow: &lease,
-			Command:  command,
-		}); err != nil {
-			return err
-		}
-		lease.Release()
-		select {
-		case <-r.finalized:
-			return nil
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		}
+		_, err := startTestWorkflowScript(r.authority, lease, sessionruntime.ScriptExecutionRequest{
+			Command: command,
+		})
+		return err
 	}
-	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command:  command,
+	_, err := startTestWorkflowScript(r.authority, lease, sessionruntime.ScriptExecutionRequest{
+
+		Command: command,
 	})
 	if err == nil {
 		r.started <- reference
@@ -370,7 +358,6 @@ func TestCurrentNodeControllerFinalizedGateReleasesAgentCapacity(t *testing.T) {
 		authority: authority,
 		fast:      fast,
 		shellPath: shellPath,
-		finalized: finalized,
 		started:   make(chan workflow.CurrentNodeReference, 1),
 	}
 	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
@@ -406,7 +393,7 @@ func TestCurrentNodeControllerFinalizedGateReleasesAgentCapacity(t *testing.T) {
 	}
 }
 
-func TestExecutionFinalizationInterruptsUnassignedHeldSuccessor(t *testing.T) {
+func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -415,11 +402,9 @@ func TestExecutionFinalizationInterruptsUnassignedHeldSuccessor(t *testing.T) {
 	successor := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-successor")
 	queuedAgent := currentNodeReferenceForControllerTest(t, "task-unrelated-agent", "node-agent")
 	queuedScript := currentNodeReferenceForControllerTest(t, "task-unrelated-script", "node-script")
-	cause := errors.New("assignment persistence failed")
 	store := &currentNodeControllerStore{
 		completion: workflowstore.CurrentNodeCompletionResult{
-			AutomaticIntents:       []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
-			PostCompletionEligible: true,
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
 		},
 	}
 	steerer := &recordingCurrentNodeAssignmentSteerer{}
@@ -437,16 +422,13 @@ func TestExecutionFinalizationInterruptsUnassignedHeldSuccessor(t *testing.T) {
 		},
 		started: make(chan workflow.CurrentNodeReference, 4),
 	}
-	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
+	controller = newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: steerer,
 	})
-	if err != nil {
-		t.Fatalf("new current node controller: %v", err)
-	}
 	t.Cleanup(func() {
-		if err := controller.Close(); !errors.Is(err, cause) {
-			t.Errorf("close controller error = %v, want %v", err, cause)
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
 		}
 		if err := authority.Close(context.Background()); err != nil {
 			t.Errorf("close authority: %v", err)
@@ -461,11 +443,11 @@ func TestExecutionFinalizationInterruptsUnassignedHeldSuccessor(t *testing.T) {
 		{CurrentNode: queuedScript, NodeKind: workflow.NodeKindScript},
 	})
 	sourceScope := singleLiveScope(t, authority, source)
+	cause := errors.New("assignment persistence failed")
 	steerer.setWaitError(cause)
-	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
-		ScopeID:      sourceScope,
-		TransitionID: "next",
-	}); err != nil {
+	if _, err := completeCurrentNodeLifecycleForTest(
+		context.Background(), controller, sourceScope, nil, "next",
+	); err != nil {
 		t.Fatalf("complete source: %v", err)
 	}
 	sourceHandle, live := authority.ExecutionByScope(sourceScope)
@@ -476,14 +458,8 @@ func TestExecutionFinalizationInterruptsUnassignedHeldSuccessor(t *testing.T) {
 		t.Fatalf("stop source: %v", err)
 	}
 
-	var interruption currentNodeInterruptionRecord
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		var interrupted bool
-		interruption, interrupted = store.interruption(successor)
-		return interrupted
-	}, "unassigned held successor was not interrupted")
-	if interruption.reason != reasonCurrentNodeRuntimeStartFailed {
-		t.Fatalf("held successor interruption = %+v, want runtime start failure", interruption)
+	if interruption, interrupted := store.interruption(successor); interrupted {
+		t.Fatalf("unassigned held successor was made resumable: %+v", interruption)
 	}
 	if err := controller.EnsureTaskQuiescent(source.TaskID); err != nil {
 		t.Fatalf("uncommitted assignment failure latched controller failure: %v", err)

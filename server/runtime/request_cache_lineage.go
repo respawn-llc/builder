@@ -315,8 +315,8 @@ func promptCacheChunks(req llm.Request) ([][]byte, error) {
 		structuredOutput = &promptCacheStructuredOutput{
 			Name:        req.StructuredOutput.Name,
 			Description: req.StructuredOutput.Description,
-			Strict:      req.StructuredOutput.Schema.Strict(),
-			Schema:      compactPreparedSchema(req.StructuredOutput.Schema),
+			Strict:      req.StructuredOutput.Strict,
+			Schema:      compactJSONRaw(req.StructuredOutput.Schema),
 		}
 	}
 	metadata, err := json.Marshal(promptCacheMetadata{
@@ -386,7 +386,7 @@ func promptCacheTools(tools []llm.Tool) []promptCacheTool {
 		out = append(out, promptCacheTool{
 			Name:        tool.Name,
 			Description: tool.Description,
-			Schema:      compactPreparedSchema(tool.Schema),
+			Schema:      compactJSONRaw(tool.Schema),
 		})
 	}
 	return out
@@ -423,18 +423,6 @@ func compactJSONRaw(raw json.RawMessage) string {
 		return compact.String()
 	}
 	return string(trimmed)
-}
-
-type preparedSchema interface {
-	Prepared() bool
-	JSON() []byte
-}
-
-func compactPreparedSchema(schema preparedSchema) string {
-	if !schema.Prepared() {
-		return ""
-	}
-	return compactJSONRaw(json.RawMessage(schema.JSON()))
 }
 
 func extendPromptCacheDigest(previous []byte, chunk []byte) []byte {

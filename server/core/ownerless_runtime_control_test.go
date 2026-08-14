@@ -15,17 +15,14 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 	t.Run("live steer", func(t *testing.T) {
 		runSecondClientLiveControlsActiveRun(t, "steered final answer", func(t *testing.T, appCore *Core, sessionID string) {
 			steerResp, err := appCore.RuntimeLiveControlClient().LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
-				ClientRequestID: uuid.NewString(),
-				SessionID:       sessionID,
-				Text:            "steer me",
+				SessionID: sessionID,
+				Text:      "steer me",
 			})
 			if err != nil {
 				t.Fatalf("LiveSteer during active run: %v", err)
@@ -37,11 +34,9 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 	})
 	t.Run("runtime control submit user turn", func(t *testing.T) {
 		runSecondClientLiveControlsActiveRun(t, "steered final answer", func(t *testing.T, appCore *Core, sessionID string) {
-			clientRequestID := uuid.NewString()
 			submitResp, err := appCore.RuntimeControlClient().SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
-				ClientRequestID: clientRequestID,
-				SessionID:       sessionID,
-				Input:           runtimeinput.Text("steer me"),
+				SessionID: sessionID,
+				Input:     runtimeinput.Text("steer me"),
 			})
 			if err != nil {
 				t.Fatalf("SubmitUserTurn during active run: %v", err)
@@ -70,6 +65,9 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseRun()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
 		if r.URL.Path != "/responses" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 			return
@@ -125,9 +123,8 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
 	plan, err := launchClient.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "plan-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
@@ -149,9 +146,8 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 	runResult := make(chan serverapi.RunPromptResponse, 1)
 	go func() {
 		resp, runErr := runClient.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-			ClientRequestID: uuid.NewString(),
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(typedSessionID),
-			Prompt:          "drive the run",
+			Intent: serverapi.OpenExistingSessionLaunchIntent(typedSessionID),
+			Prompt: "drive the run",
 		}, nil)
 		runResult <- resp
 		runDone <- runErr

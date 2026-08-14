@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"testing"
@@ -60,8 +59,6 @@ func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 	}{
 		{name: "unauthenticated domain invalid is typed", params: serverapi.OnboardingFinalizeRequest{Theme: &blue}, code: protocol.ErrCodeOnboardingFinalizeFailed, structured: true},
 		{name: "malformed params remain invalid params", authReady: true, params: "not an object", code: protocol.ErrCodeInvalidParams},
-		{name: "null params remain invalid params", authReady: true, params: json.RawMessage(`null`), code: protocol.ErrCodeInvalidParams},
-		{name: "extra params remain invalid params", authReady: true, params: json.RawMessage(`{"unknown":true}`), code: protocol.ErrCodeInvalidParams},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -111,7 +108,7 @@ func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T
 			return serverapi.AttentionNotificationSubscribeRequest{}
 		}},
 		{name: "progress auth and preflight", dependency: apicontract.DependencyRunPrompt, method: protocol.MethodRunPrompt, params: func(*core.Core) any {
-			return serverapi.RunPromptRequest{ClientRequestID: "run-prompt", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "test"}
+			return serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "test"}
 		}},
 		{name: "attach after handshake", dependency: apicontract.DependencyProtocolAttach, method: protocol.MethodAttachProject, params: func(appCore *core.Core) any {
 			return protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}

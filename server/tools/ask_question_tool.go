@@ -13,7 +13,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 
 	"github.com/google/uuid"
 )
@@ -49,13 +48,9 @@ func (r AskQuestionRequest) IsTaskScopedApprovalQuestion() bool {
 // AskQuestionToolRequest is the model-facing ask_question payload. Keep this limited to
 // ordinary question flows; internal approval uses AskQuestionRequest instead.
 type AskQuestionToolRequest struct {
-	Question               string   `json:"question" jsonschema_description:"Question text shown to the user. You must only put exactly ONE question and the context needed to answer it here. The text is markdown-formatted."`
-	Suggestions            []string `json:"suggestions,omitempty" jsonschema_description:"Optional choice suggestions. Omit this field when you want a freeform-only answer. If you provide >1 suggestions, provide recommended_option_index. Strive to give users the best, sensible options possible, following best-practices, guidelines, and common sense. Omit 'Other' or similar generic options - the system already appends that option."`
-	RecommendedOptionIndex int      `json:"recommended_option_index,omitempty" jsonschema_description:"Optional 1-based index of the recommended suggestion, omit to not state a preference."`
-}
-
-func AskQuestionStaticContractSource() StaticContractSource {
-	return StaticContractSource{ID: toolspec.ToolAskQuestion, Input: AskQuestionToolRequest{}}
+	Question               string   `json:"question"`
+	Suggestions            []string `json:"suggestions,omitempty"`
+	RecommendedOptionIndex int      `json:"recommended_option_index,omitempty"`
 }
 
 // Validation sentinels for request/response shape errors. Tests match these
@@ -324,7 +319,20 @@ func (r AskQuestionToolRequest) request(callID string) AskQuestionRequest {
 	}
 }
 
-func DecodeAskQuestionToolRequest(callID string, input json.RawMessage) (AskQuestionRequest, error) {
+func PrepareAskQuestionToolRequest(callID string, input json.RawMessage) (AskQuestionRequest, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(input, &raw); err != nil {
+		return AskQuestionRequest{}, fmt.Errorf("invalid input: %w", err)
+	}
+	if _, ok := raw["action"]; ok {
+		return AskQuestionRequest{}, errors.New("invalid input: field \"action\" is not allowed")
+	}
+	if _, ok := raw["approval"]; ok {
+		return AskQuestionRequest{}, errors.New("invalid input: field \"approval\" is not allowed")
+	}
+	if _, ok := raw["approval_options"]; ok {
+		return AskQuestionRequest{}, errors.New("invalid input: field \"approval_options\" is not allowed")
+	}
 	var in AskQuestionToolRequest
 	if err := json.Unmarshal(input, &in); err != nil {
 		return AskQuestionRequest{}, fmt.Errorf("invalid input: %w", err)
@@ -359,7 +367,7 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 		notifyAskQuestionBatchSkipped(c)
 		return ErrorResult(c, prompts.QuestionsDisabledPrompt), nil
 	}
-	req, prepareErr := DecodeAskQuestionToolRequest(c.ID, c.Input)
+	req, prepareErr := PrepareAskQuestionToolRequest(c.ID, c.Input)
 	if prepareErr != nil {
 		notifyAskQuestionBatchSkipped(c)
 		return ErrorResult(c, prepareErr.Error()), nil

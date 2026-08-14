@@ -5,14 +5,12 @@ import (
 	"strings"
 
 	"core/server/session"
-	"core/shared/transcript"
 )
 
 type TranscriptCommittedRowProvenance struct {
-	EventSequence     int64
-	CommittedAtUnixMs *transcript.CommittedAtUnixMs
-	ToolCallID        string
-	ProjectedOrdinal  *int64
+	EventSequence    int64
+	ToolCallID       string
+	ProjectedOrdinal *int64
 }
 
 func transcriptCommittedProvenanceBefore(
@@ -39,10 +37,7 @@ func transcriptProvenanceFromRecord(record session.EventRecord) (TranscriptCommi
 	if err != nil {
 		return TranscriptCommittedRowProvenance{}, err
 	}
-	provenance := TranscriptCommittedRowProvenance{
-		EventSequence:     record.Seq(),
-		CommittedAtUnixMs: record.CommittedAtUnixMs(),
-	}
+	provenance := TranscriptCommittedRowProvenance{EventSequence: record.Seq()}
 	switch typed := payload.(type) {
 	case session.MessageRecord:
 		if typed.ToolCallID != nil {
@@ -63,10 +58,6 @@ func cloneTranscriptCommittedRowProvenance(value *TranscriptCommittedRowProvenan
 		return nil
 	}
 	copyValue := *value
-	if value.CommittedAtUnixMs != nil {
-		committedAt := *value.CommittedAtUnixMs
-		copyValue.CommittedAtUnixMs = &committedAt
-	}
 	if value.ProjectedOrdinal != nil {
 		ordinal := *value.ProjectedOrdinal
 		copyValue.ProjectedOrdinal = &ordinal

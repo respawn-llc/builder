@@ -234,7 +234,11 @@ func (s *streamingTranscriptScan) turnOwnsCall(callID string) bool {
 }
 
 func (s *streamingTranscriptScan) applyMessage(msg llm.Message, provenance *TranscriptCommittedRowProvenance, stepID string) {
-	s.scan.ApplyMessage(msg, provenance, stepID, s.completionProvenance)
+	var seq int64
+	if provenance != nil {
+		seq = provenance.EventSequence
+	}
+	s.scan.ApplyMessage(msg, seq, stepID, s.completionProvenance)
 	s.lastCommittedAssistantFinalAnswer = applyLastCommittedAssistantFinalAnswer(s.lastCommittedAssistantFinalAnswer, msg)
 }
 

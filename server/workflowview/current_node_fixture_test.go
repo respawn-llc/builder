@@ -17,13 +17,13 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -361,11 +361,8 @@ func (f currentNodeViewFixture) setCurrentNodeInterruptedAt(
 	unixMs int64,
 ) {
 	t.Helper()
-	nodeID, err := runtimeids.GraphEntityIDBlob(string(reference.NodeID))
-	if err != nil {
-		t.Fatalf("encode Current Node ID: %v", err)
-	}
 	branchKey, branchScoped := reference.TransitionBranchKey()
+	var err error
 	if branchScoped {
 		_, err = f.metadata.DB().ExecContext(
 			f.ctx,
@@ -374,7 +371,7 @@ SET interrupted_at_unix_ms = ?
 WHERE task_id = ? AND node_id = ? AND transition_branch_key = ?`,
 			unixMs,
 			string(reference.TaskID),
-			nodeID,
+			string(reference.NodeID),
 			string(branchKey),
 		)
 	} else {
@@ -385,7 +382,7 @@ SET interrupted_at_unix_ms = ?
 WHERE task_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
 			unixMs,
 			string(reference.TaskID),
-			nodeID,
+			string(reference.NodeID),
 		)
 	}
 	if err != nil {
@@ -427,28 +424,35 @@ func (f currentNodeViewFixture) startCurrentNodePrompt(
 	t.Helper()
 	authority, plan := f.newAgentAuthority(t)
 	sessionID := f.bindCurrentNodeSession(t, started)
-	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+	workflowRef := sessionruntime.WorkflowExecutionRef{
 		ProjectID:   f.binding.ProjectID,
 		WorkflowID:  f.workflowID,
 		CurrentNode: started.currentNode,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}
-	lease.Release()
-	handle, err := authority.StartAgentExecution(f.ctx, sessionruntime.AgentExecutionRequest{
+	detached, err := authority.PrepareDetachedAgentExecution(f.ctx, sessionruntime.DetachedAgentExecutionRequest{
 		Descriptor: mustOpenCurrentNodeViewSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   &lease,
+		Workflow:   workflowRef,
 		Resource:   sessionruntime.OpenAgentResource{},
+		Config: &workflowruntime.CurrentNodeExecutionConfig{
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: workflowRef.CurrentNode,
+				WorkflowID:  workflowRef.WorkflowID,
+			},
+		},
 		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
 			_, awaitErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
 			return awaitErr
 		},
 	})
 	if err != nil {
-		t.Fatalf("StartAgentExecution: %v", err)
+		t.Fatalf("PrepareDetachedAgentExecution: %v", err)
 	}
+	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("Publish detached Agent execution: %v", err)
+	}
+	launch()
 	t.Cleanup(func() {
 		if err := handle.Stop(context.Background()); err != nil {
 			t.Errorf("stop live workflow prompt execution: %v", err)
@@ -522,9 +526,7 @@ func (f currentNodeViewFixture) newAgentRuntimePlan(t *testing.T) sessionruntime
 	settings.ModelContextWindow = 200_000
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:              settings,
-		QuestionsEnabled:      textutil.Value(true),
-		AutoCompactionEnabled: textutil.Value(true),
+		Settings: settings,
 		FilesystemContext: func() tools.FilesystemContext {
 			context, err := runtimewire.NewFilesystemContext(f.cfg.WorkspaceRoot, f.cfg.WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {
@@ -555,9 +557,9 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	agentNodeID := workflow.NodeID(runtimeids.NewGraphEntityID())
-	startGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
-	doneGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	agentNodeID := workflow.NodeID("node-agent-" + created.ID.String())
+	startGroupID := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	doneGroupID := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	workflowfixture.SaveStoreGraph(t, t.Context(), store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindStart)
 		terminalNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
@@ -571,14 +573,14 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 		)
 		request.Edges = append(request.Edges,
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
+				ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID,
 				TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentNodeID,
 				AssigneeSelection: workflow.AssigneeSelectionConfigured,
 				ThinkingSelection: workflow.ThinkingSelectionConfigured,
 				ContextMode:       workflow.ContextModeNewSession, PromptTemplate: "Do work.",
 			},
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
+				ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID,
 				TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalNodeID,
 				AssigneeSelection: workflow.AssigneeSelectionConfigured,
 				ThinkingSelection: workflow.ThinkingSelectionConfigured,

@@ -43,7 +43,7 @@ func TestPreflightTaskResumeRejectsEditedTransitionParameterWithoutMutatingCurre
 	if _, err := store.db.ExecContext(ctx, `
 UPDATE workflow_edges
 SET parameters_json = ?
-WHERE id = ?`, parameters, testGraphEntityBlob(t, string(*review.EnteredByEdgeID))); err != nil {
+WHERE id = ?`, parameters, string(*review.EnteredByEdgeID)); err != nil {
 		t.Fatalf("edit entering Transition Branch: %v", err)
 	}
 
@@ -163,17 +163,13 @@ func TestPreflightTaskResumeRejectsEditedJoinDerivedParameter(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `DELETE FROM task_current_nodes WHERE task_id = ?`, task.ID); err != nil {
 		t.Fatalf("delete seeded Current Node: %v", err)
 	}
-	enteringEdgeID := testEdgeID("edge-join-synth-" + workflowID.String())
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO task_current_nodes (
     task_id, node_id, current_input_values_json, prior_node_values_json,
     scheduling_state, interruption_reason, interruption_detail_json, interrupted_at_unix_ms, entered_by_edge_id,
     effective_assignee, assignee_origin
 ) VALUES (?, ?, '{"joined":"existing"}', '{"transition_parameters":{}}', 'interrupted', 'user_interrupt', '{}', 1, ?, 'default', 'configured_fallback')`,
-		task.ID,
-		testGraphEntityBlob(t, string(synthID)),
-		testGraphEntityBlob(t, string(enteringEdgeID)),
-	); err != nil {
+		task.ID, synthID, "edge-join-synth-"+workflowID.String()); err != nil {
 		t.Fatalf("seed Join Current Node: %v", err)
 	}
 	parameters, err := marshalJSONArray([]workflow.Parameter{
@@ -186,7 +182,7 @@ INSERT INTO task_current_nodes (
 	if _, err := store.db.ExecContext(ctx, `
 UPDATE workflow_edges
 SET parameters_json = ?
-WHERE id = ?`, parameters, testGraphEntityBlob(t, string(testEdgeID("edge-join-a-"+workflowID.String())))); err != nil {
+WHERE id = ?`, parameters, "edge-join-a-"+workflowID.String()); err != nil {
 		t.Fatalf("edit Join incoming Transition Branch: %v", err)
 	}
 
@@ -200,7 +196,7 @@ WHERE id = ?`, parameters, testGraphEntityBlob(t, string(testEdgeID("edge-join-a
 	diagnostic := classifications[0].Diagnostics[0]
 	if diagnostic.Code != CurrentNodeResumeParameterNotMaterializedCode ||
 		!diagnostic.CurrentNode.Equal(synth) ||
-		diagnostic.EnteringEdgeID != enteringEdgeID ||
+		diagnostic.EnteringEdgeID != workflow.EdgeID("edge-join-synth-"+workflowID.String()) ||
 		diagnostic.ParameterKey != "risk" {
 		t.Fatalf("Join resume diagnostic = %+v, want exact derived binding context", diagnostic)
 	}
@@ -224,16 +220,12 @@ func TestPreflightTaskResumeRejectsEnteringEdgeForDifferentTarget(t *testing.T) 
 	if _, err := store.db.ExecContext(ctx, `DELETE FROM task_current_nodes WHERE task_id = ?`, task.ID); err != nil {
 		t.Fatalf("delete Current Node: %v", err)
 	}
-	enteringEdgeID := testEdgeID("edge-start-" + workflowID.String())
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO task_current_nodes (
     task_id, node_id, current_input_values_json, prior_node_values_json,
     scheduling_state, interruption_reason, interruption_detail_json, interrupted_at_unix_ms, entered_by_edge_id
 ) VALUES (?, ?, '{}', '{"transition_parameters":{}}', 'interrupted', 'user_interrupt', '{}', 1, ?)`,
-		task.ID,
-		testGraphEntityBlob(t, string(reference.NodeID)),
-		testGraphEntityBlob(t, string(enteringEdgeID)),
-	); err != nil {
+		task.ID, reference.NodeID, "edge-start-"+workflowID.String()); err != nil {
 		t.Fatalf("seed mismatched Current Node: %v", err)
 	}
 	if _, err := store.PreflightTaskResume(ctx, task.ID); err == nil {

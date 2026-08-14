@@ -171,19 +171,6 @@ const errorSchemas = {
     owner: z.enum(["base_ref", "form"]),
     diagnostic: worktree.nonBlankString,
   }).transform((value) => ({ kind: "create" as const, ...value })),
-  [rpcErrorCodes.worktreeTransitionPending]: strict({
-    type: z.literal("worktree_transition_pending"),
-    session_id: worktree.nonBlankString,
-    pending_operation_id: worktree.worktreeOperationIDSchema,
-  }).transform((value) => ({
-    kind: "transition_pending" as const,
-    sessionID: value.session_id,
-    pendingOperationID: value.pending_operation_id,
-  })),
-  [rpcErrorCodes.worktreeImmediateTransition]: strict({
-    type: z.literal("worktree_immediate_transition"),
-    kind: z.enum(["origin_inactive", "apply_failed"]),
-  }).transform((value) => ({ kind: "immediate_transition" as const, reason: value.kind })),
   [rpcErrorCodes.worktreeDeletePrecondition]: strict({
     type: z.literal("worktree_delete_precondition"),
     dirty_state: worktree.worktreeCleanlinessSchema.refine(

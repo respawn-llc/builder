@@ -397,7 +397,6 @@ func cloneDetailTranscriptNotice(notice *clientui.TranscriptNoticeRow) *clientui
 	}
 	copyNotice.CacheWarning = textutil.Pointer(notice.CacheWarning)
 	copyNotice.ToolOutputRepair = textutil.Pointer(notice.ToolOutputRepair)
-	copyNotice.ProviderModelMismatch = textutil.Pointer(notice.ProviderModelMismatch)
 	copyNotice.Diagnostic = textutil.Pointer(notice.Diagnostic)
 	if notice.Background != nil {
 		background := *notice.Background

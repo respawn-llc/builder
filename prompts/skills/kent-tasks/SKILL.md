@@ -84,7 +84,6 @@ kent task move <task> <target-node-id> --execution-target none|head|default-bran
 
 ## Supervising tasks
 The user may ask you to "babysit", supervise or manage running tasks.
-You can learn what agent sessions are running/ran for a task using `kent task sessions` command.
 You can track task completion with `kent task watch` and `kent task wait` commands. 
 - `watch` will block and wait until the task needs any sort of attention - interruption, completion, **question**, approval or error. 
 - You can watch tasks as background shells to get notified about them, then take action, like answering questions with `kent question` command. 

@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summarizer_prompt": {
+      "type": "string",
+      "description": "Optional *extra* instructions for the handoff summarizer. The summarizer already receives detailed generic guidance on preserving the workspace state and full conversation transcript. Only use this to add something specific about your current thoughts or state of work."
+    },
+    "future_agent_message": {
+      "type": "string",
+      "description": "Optional message to forward verbatim to the next agent *in addition* to the detailed summary of current work. Only include here specific concise information to preserve from the analysis block or the next immediate step, not generic guidance or converstaion summary."
+    }
+  }
+}

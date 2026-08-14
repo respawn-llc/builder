@@ -5,6 +5,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/invariant"
 )
 
 // SteerPersistedMessage applies a model-visible message to a dormant Session
@@ -21,9 +22,7 @@ func SteerPersistedMessage(
 	}
 	return engine.steerWithCommitReceipt(
 		stepID,
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityRuntimeContext,
-			steeringMessageEventDefault,
+		steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
 			[]llm.Message{message},
 		),
@@ -41,7 +40,11 @@ func newPersistedSteeringEngine(store *session.Store) (*Engine, error) {
 	return &Engine{
 		store:              store,
 		eventLog:           eventLog,
+		steering:           newSteeringQueue(),
+		invariantPolicy:    invariant.OperationalPolicy(false),
+		workflowControl:    newWorkflowControlState(),
 		transcriptState:    newTranscriptRuntimeState(transcriptWorkingDir("", store.Meta().WorkspaceRoot)),
 		modelRequestsState: newModelRequestRuntimeState(),
+		stepLifecycle:      &defaultExclusiveStepLifecycle{},
 	}, nil
 }

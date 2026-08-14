@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
@@ -66,9 +67,7 @@ func TestForkBeforeReminderDoesNotInheritReminderAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -96,9 +95,7 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("before")}},
 	)); err != nil {
@@ -108,9 +105,7 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "issued"); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
-	if err := engine.steer("anchor", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("anchor", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after")}},
 	)); err != nil {
@@ -136,7 +131,7 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 
 func newReminderRecoveryEngine(t *testing.T, store *session.Store, client llm.Client, onEvent func(Event)) *Engine {
 	t.Helper()
-	return mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	return mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 1_000,

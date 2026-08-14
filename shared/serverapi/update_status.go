@@ -150,69 +150,75 @@ func validateUpdateVersion(field string, version string) error {
 	return nil
 }
 
-type UpdateStatusResultWire struct {
+type updateStatusResultWire struct {
 	Kind           UpdateStatusResultKind `json:"kind"`
 	CurrentVersion *string                `json:"current_version,omitempty"`
 	LatestVersion  *string                `json:"latest_version,omitempty"`
 	Cause          *string                `json:"cause,omitempty"`
 }
 
-type CurrentUpdateStatusResultWire struct {
-	Kind           UpdateStatusResultKind `json:"kind" jsonschema:"enum=current"`
-	CurrentVersion string                 `json:"current_version"`
-	LatestVersion  string                 `json:"latest_version"`
-}
-
-type AvailableUpdateStatusResultWire struct {
-	Kind           UpdateStatusResultKind `json:"kind" jsonschema:"enum=available"`
-	CurrentVersion string                 `json:"current_version"`
-	LatestVersion  string                 `json:"latest_version"`
-}
-
-type CheckUnavailableUpdateStatusResultWire struct {
-	Kind UpdateStatusResultKind `json:"kind" jsonschema:"enum=check_unavailable"`
-}
-
-type CheckFailedUpdateStatusResultWire struct {
-	Kind  UpdateStatusResultKind `json:"kind" jsonschema:"enum=check_failed"`
-	Cause string                 `json:"cause"`
-}
-
 func (r UpdateStatusResult) MarshalJSON() ([]byte, error) {
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
-	switch r.kind {
-	case UpdateStatusCurrent:
-		return json.Marshal(CurrentUpdateStatusResultWire{
-			Kind:           r.kind,
-			CurrentVersion: *r.currentVersion,
-			LatestVersion:  *r.latestVersion,
-		})
-	case UpdateStatusAvailable:
-		return json.Marshal(AvailableUpdateStatusResultWire{
-			Kind:           r.kind,
-			CurrentVersion: *r.currentVersion,
-			LatestVersion:  *r.latestVersion,
-		})
-	case UpdateStatusCheckUnavailable:
-		return json.Marshal(CheckUnavailableUpdateStatusResultWire{Kind: r.kind})
-	case UpdateStatusCheckFailed:
-		return json.Marshal(CheckFailedUpdateStatusResultWire{
-			Kind:  r.kind,
-			Cause: *r.failureCause,
-		})
-	default:
-		panic(fmt.Sprintf("unknown update status kind %q", r.kind))
+	return json.Marshal(updateStatusResultWire{
+		Kind:           r.kind,
+		CurrentVersion: r.currentVersion,
+		LatestVersion:  r.latestVersion,
+		Cause:          r.failureCause,
+	})
+}
+
+func (r *UpdateStatusResult) UnmarshalJSON(data []byte) error {
+	var wire *updateStatusResultWire
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
+		return err
 	}
+	if wire == nil {
+		return errors.New("update status result is required")
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		return err
+	}
+	currentVersionPresent := members["current_version"] != nil
+	latestVersionPresent := members["latest_version"] != nil
+	causePresent := members["cause"] != nil
+
+	switch wire.Kind {
+	case UpdateStatusCurrent, UpdateStatusAvailable:
+		if !currentVersionPresent || wire.CurrentVersion == nil ||
+			!latestVersionPresent || wire.LatestVersion == nil ||
+			causePresent {
+			return fmt.Errorf("%s update status payload is invalid", wire.Kind)
+		}
+	case UpdateStatusCheckUnavailable:
+		if currentVersionPresent || latestVersionPresent || causePresent {
+			return errors.New("check_unavailable update status cannot contain versions or a failure cause")
+		}
+	case UpdateStatusCheckFailed:
+		if currentVersionPresent || latestVersionPresent || !causePresent || wire.Cause == nil {
+			return errors.New("check_failed update status payload is invalid")
+		}
+	default:
+		return fmt.Errorf("update status kind %q is invalid", wire.Kind)
+	}
+
+	decoded := UpdateStatusResult{
+		kind:           wire.Kind,
+		currentVersion: wire.CurrentVersion,
+		latestVersion:  wire.LatestVersion,
+		failureCause:   wire.Cause,
+	}
+	if err := decoded.Validate(); err != nil {
+		return err
+	}
+	*r = decoded
+	return nil
 }
 
 type UpdateStatusResponse struct {
 	Result UpdateStatusResult `json:"result"`
-}
-
-type UpdateStatusResponseWire[R any] struct {
-	Result R `json:"result"`
 }
 
 func (r UpdateStatusResponse) Validate() error {
@@ -223,5 +229,26 @@ func (r UpdateStatusResponse) MarshalJSON() ([]byte, error) {
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(UpdateStatusResponseWire[UpdateStatusResult]{Result: r.Result})
+	type wire struct {
+		Result UpdateStatusResult `json:"result"`
+	}
+	return json.Marshal(wire{Result: r.Result})
+}
+
+func (r *UpdateStatusResponse) UnmarshalJSON(data []byte) error {
+	var wire *struct {
+		Result *UpdateStatusResult `json:"result"`
+	}
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
+		return err
+	}
+	if wire == nil || wire.Result == nil {
+		return errors.New("update status response result is required")
+	}
+	decoded := UpdateStatusResponse{Result: *wire.Result}
+	if err := decoded.Validate(); err != nil {
+		return err
+	}
+	*r = decoded
+	return nil
 }

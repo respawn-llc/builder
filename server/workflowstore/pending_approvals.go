@@ -21,10 +21,6 @@ type PendingApprovalApplyResult struct {
 	TaskAttentionResolution
 }
 
-func (r PendingApprovalApplyResult) Committed() bool {
-	return len(r.Mutation.Removed) != 0
-}
-
 type pendingApprovalTransitionSnapshot struct {
 	WorkflowID        runtimeids.WorkflowID      `json:"workflow_id"`
 	ID                workflow.TransitionGroupID `json:"id"`
@@ -67,73 +63,7 @@ type pendingApprovalEffectiveEdgeSnapshot struct {
 }
 
 type pendingApprovalContextSourceResolutionSnapshot struct {
-	SessionID     *string                                  `json:"session_id,omitempty"`
-	TargetSession *workflow.TargetSessionIntent            `json:"target_session,omitempty"`
-	ActiveSource  *workflow.MaterializedContinuationSource `json:"active_source,omitempty"`
-}
-
-type pendingApprovalRecord struct {
-	ID                        string
-	SourceTaskID              string
-	SourceNodeID              string
-	SourceTransitionBranchKey sql.NullString
-	SourceSessionID           sql.NullString
-	WorkflowVersion           int64
-	TransitionSnapshotJSON    string
-	MaterializedValuesJSON    string
-	CreatedAtUnixMs           int64
-}
-
-func pendingApprovalRecordFromListRow(row sqlitegen.ListTaskPendingApprovalsRow) pendingApprovalRecord {
-	return pendingApprovalRecordFromValues(
-		row.ID,
-		row.SourceTaskID,
-		row.SourceNodeID,
-		row.SourceTransitionBranchKey,
-		row.SourceSessionID,
-		row.WorkflowVersion,
-		row.TransitionSnapshotJson,
-		row.MaterializedValuesJson,
-		row.CreatedAtUnixMs,
-	)
-}
-
-func pendingApprovalRecordFromGetRow(row sqlitegen.GetTaskPendingApprovalRow) pendingApprovalRecord {
-	return pendingApprovalRecordFromValues(
-		row.ID,
-		row.SourceTaskID,
-		row.SourceNodeID,
-		row.SourceTransitionBranchKey,
-		row.SourceSessionID,
-		row.WorkflowVersion,
-		row.TransitionSnapshotJson,
-		row.MaterializedValuesJson,
-		row.CreatedAtUnixMs,
-	)
-}
-
-func pendingApprovalRecordFromValues(
-	id string,
-	sourceTaskID string,
-	sourceNodeID string,
-	sourceTransitionBranchKey sql.NullString,
-	sourceSessionID sql.NullString,
-	workflowVersion int64,
-	transitionSnapshotJSON string,
-	materializedValuesJSON string,
-	createdAtUnixMs int64,
-) pendingApprovalRecord {
-	return pendingApprovalRecord{
-		ID:                        id,
-		SourceTaskID:              sourceTaskID,
-		SourceNodeID:              sourceNodeID,
-		SourceTransitionBranchKey: sourceTransitionBranchKey,
-		SourceSessionID:           sourceSessionID,
-		WorkflowVersion:           workflowVersion,
-		TransitionSnapshotJSON:    transitionSnapshotJSON,
-		MaterializedValuesJSON:    materializedValuesJSON,
-		CreatedAtUnixMs:           createdAtUnixMs,
-	}
+	SessionID *string `json:"session_id,omitempty"`
 }
 
 func (s *Store) ListPendingApprovals(ctx context.Context, taskID workflow.TaskID) ([]workflow.PendingApproval, error) {
@@ -146,7 +76,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, taskID workflow.TaskID
 	}
 	approvals := make([]workflow.PendingApproval, 0, len(rows))
 	for _, row := range rows {
-		approval, err := pendingApprovalFromRow(ctx, s.queries, pendingApprovalRecordFromListRow(row))
+		approval, err := pendingApprovalFromRow(ctx, s.queries, row)
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +94,7 @@ func (s *Store) PendingApproval(ctx context.Context, approvalID workflow.Approva
 }
 
 func (s *Store) IsCurrentNodeExecutionEligible(ctx context.Context, reference workflow.CurrentNodeReference) (bool, error) {
-	if _, err := s.currentNodeForReference(ctx, s.queries, reference); err != nil {
+	if _, err := currentNodeForReference(ctx, s.queries, reference); err != nil {
 		return false, err
 	}
 	_, pending, err := currentNodePendingApprovalID(ctx, s.queries, reference)
@@ -191,7 +121,6 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	nowTime := s.now().UTC()
 	approval, err := pendingApprovalByID(ctx, q, normalizedID)
 	if err != nil {
 		return PendingApprovalApplyResult{}, err
@@ -203,7 +132,7 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 	if !found {
 		return PendingApprovalApplyResult{}, fmt.Errorf("pending approval %q disappeared during attention resolution", normalizedID)
 	}
-	if _, err := s.currentNodeForReference(ctx, q, approval.Source); err != nil {
+	if _, err := currentNodeForReference(ctx, q, approval.Source); err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
 	targets := make([]workflow.CurrentNode, 0, len(approval.Branches))
@@ -239,16 +168,13 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 		if removedCurrentNode != 1 {
 			return PendingApprovalApplyResult{}, sql.ErrNoRows
 		}
-		if err := updateActiveFanoutBranchContinuationSource(ctx, q, approval.Source, targets[0].ContinuationSource); err != nil {
+		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind); err != nil {
 			return PendingApprovalApplyResult{}, err
 		}
-		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind, nowTime); err != nil {
-			return PendingApprovalApplyResult{}, err
-		}
-	} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets, nowTime); err != nil {
+	} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets); err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
-	if err := touchTaskUpdatedAt(ctx, q, string(approval.Source.TaskID), nowTime.UnixMilli()); err != nil {
+	if err := touchTaskUpdatedAt(ctx, q, string(approval.Source.TaskID), s.now().UnixMilli()); err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -282,7 +208,7 @@ func pendingApprovalByID(
 	if err != nil {
 		return workflow.PendingApproval{}, err
 	}
-	return pendingApprovalFromRow(ctx, q, pendingApprovalRecordFromGetRow(row))
+	return pendingApprovalFromRow(ctx, q, row)
 }
 
 func pendingApprovalHandoff(approval workflow.PendingApproval) CompletionHandoff {
@@ -355,10 +281,6 @@ func newPendingApproval(
 	outputValues map[string]string,
 	createdAt time.Time,
 ) (workflow.PendingApproval, error) {
-	resolution, err := pendingApprovalContextSourceResolution(target.Kind(), targetCurrentNode)
-	if err != nil {
-		return workflow.PendingApproval{}, err
-	}
 	return newPendingApprovalWithBranches(
 		source,
 		workflowVersion,
@@ -373,8 +295,10 @@ func newPendingApproval(
 				DisplayName: workflow.NodeDisplayName(target),
 				NodeKind:    target.Kind(),
 			},
-			EffectiveEdge:           edge,
-			ContextSourceResolution: resolution,
+			EffectiveEdge: edge,
+			ContextSourceResolution: workflow.PendingApprovalContextSourceResolution{
+				SessionID: clonePendingApprovalSessionID(targetCurrentNode.SessionID),
+			},
 		}},
 		createdAt,
 	)
@@ -522,7 +446,7 @@ func insertPendingApprovalBranch(ctx context.Context, q *sqlitegen.Queries, appr
 	if err != nil {
 		return fmt.Errorf("encode pending approval effective edge: %w", err)
 	}
-	contextResolutionJSON, err := pendingApprovalContextSourceResolutionJSON(branch)
+	contextResolutionJSON, err := pendingApprovalContextSourceResolutionJSON(branch.ContextSourceResolution)
 	if err != nil {
 		return err
 	}
@@ -535,7 +459,7 @@ func insertPendingApprovalBranch(ctx context.Context, q *sqlitegen.Queries, appr
 	})
 }
 
-func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row pendingApprovalRecord) (workflow.PendingApproval, error) {
+func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row sqlitegen.TaskPendingApproval) (workflow.PendingApproval, error) {
 	approvalID, err := workflow.ParseApprovalID(row.ID)
 	if err != nil {
 		return workflow.PendingApproval{}, fmt.Errorf("decode pending approval id: %w", err)
@@ -558,14 +482,14 @@ func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row pendi
 		sourceSessionID = &parsed
 	}
 	var transitionSnapshot pendingApprovalTransitionSnapshot
-	if err := workflow.UnmarshalString(row.TransitionSnapshotJSON, &transitionSnapshot); err != nil {
+	if err := workflow.UnmarshalString(row.TransitionSnapshotJson, &transitionSnapshot); err != nil {
 		return workflow.PendingApproval{}, fmt.Errorf("decode pending approval transition snapshot: %w", err)
 	}
 	if strings.TrimSpace(string(transitionSnapshot.ID)) == "" || strings.TrimSpace(string(transitionSnapshot.TransitionID)) == "" || strings.TrimSpace(transitionSnapshot.SourceDisplayName) == "" {
 		return workflow.PendingApproval{}, errors.New("pending approval transition snapshot is invalid")
 	}
 	outputValues := map[string]string{}
-	if err := workflow.UnmarshalString(row.MaterializedValuesJSON, &outputValues); err != nil {
+	if err := workflow.UnmarshalString(row.MaterializedValuesJson, &outputValues); err != nil {
 		return workflow.PendingApproval{}, fmt.Errorf("decode pending approval materialized values: %w", err)
 	}
 	if outputValues == nil {
@@ -636,15 +560,13 @@ func pendingApprovalBranchFromRow(taskID workflow.TaskID, row sqlitegen.TaskPend
 	if err := workflow.UnmarshalString(row.ContextSourceResolutionJson, &resolutionSnapshot); err != nil {
 		return workflow.PendingApprovalBranch{}, fmt.Errorf("decode pending approval context source resolution: %w", err)
 	}
-	resolution, activeSource, err := pendingApprovalContextSourceResolutionFromSnapshot(
-		resolutionSnapshot,
-		target,
-	)
+	resolution, err := pendingApprovalContextSourceResolutionFromSnapshot(resolutionSnapshot)
 	if err != nil {
 		return workflow.PendingApprovalBranch{}, err
 	}
-	target.CurrentNode.SessionID = targetSessionIntentSessionID(resolution.TargetSession)
-	target.CurrentNode.ContinuationSource = activeSource
+	if !sameOptionalSessionID(target.CurrentNode.SessionID, resolution.SessionID) {
+		return workflow.PendingApprovalBranch{}, errors.New("pending approval target and context source session snapshots differ")
+	}
 	return workflow.PendingApprovalBranch{
 		TransitionBranchKey: branchKey,
 		Target:              target,
@@ -677,6 +599,11 @@ func pendingApprovalTargetSnapshotJSON(target workflow.PendingApprovalTarget) (s
 	if value, present := currentNode.Reference.TransitionBranchKey(); present {
 		branchKey = &value
 	}
+	var sessionID *string
+	if currentNode.SessionID != nil {
+		value := currentNode.SessionID.String()
+		sessionID = &value
+	}
 	var enteredByEdgeID *workflow.EdgeID
 	if currentNode.EnteredByEdgeID != nil {
 		value := *currentNode.EnteredByEdgeID
@@ -698,6 +625,7 @@ func pendingApprovalTargetSnapshotJSON(target workflow.PendingApprovalTarget) (s
 		DisplayName:             target.DisplayName,
 		CurrentInputValues:      cloneCurrentNodeOutputValues(currentNode.CurrentInputValues),
 		PriorValues:             currentNode.PriorValues.Clone(),
+		SessionID:               sessionID,
 		SchedulingState:         schedulingState,
 		AgentExecutionSelection: cloneCurrentNodeExecutionSelection(currentNode.AgentExecutionSelection),
 	})
@@ -762,198 +690,24 @@ func cloneCurrentNodeExecutionSelection(selection *workflow.AgentExecutionSelect
 	return &cloned
 }
 
-func pendingApprovalContextSourceResolutionJSON(branch workflow.PendingApprovalBranch) (string, error) {
-	if err := validatePendingApprovalContextSourceResolution(
-		branch.Target.NodeKind,
-		branch.Target.CurrentNode,
-		branch.ContextSourceResolution,
-	); err != nil {
-		return "", err
+func pendingApprovalContextSourceResolutionJSON(resolution workflow.PendingApprovalContextSourceResolution) (string, error) {
+	var sessionID *string
+	if resolution.SessionID != nil {
+		value := resolution.SessionID.String()
+		sessionID = &value
 	}
-	targetSession := branch.ContextSourceResolution.TargetSession
-	activeSource := branch.ContextSourceResolution.ActiveSource
-	return workflow.MarshalString(pendingApprovalContextSourceResolutionSnapshot{
-		TargetSession: &targetSession,
-		ActiveSource:  &activeSource,
-	})
+	return workflow.MarshalString(pendingApprovalContextSourceResolutionSnapshot{SessionID: sessionID})
 }
 
-func pendingApprovalContextSourceResolutionFromSnapshot(
-	snapshot pendingApprovalContextSourceResolutionSnapshot,
-	target workflow.PendingApprovalTarget,
-) (
-	workflow.PendingApprovalContextSourceResolution,
-	workflow.MaterializedContinuationSource,
-	error,
-) {
-	typed := snapshot.TargetSession != nil || snapshot.ActiveSource != nil
-	if typed {
-		if snapshot.SessionID != nil || snapshot.TargetSession == nil || snapshot.ActiveSource == nil {
-			return workflow.PendingApprovalContextSourceResolution{},
-				workflow.MaterializedContinuationSource{},
-				errors.New("pending approval context source resolution snapshot mixes incompatible shapes")
-		}
-		if target.CurrentNode.SessionID != nil &&
-			snapshot.ActiveSource.Kind() != workflow.MaterializedContinuationSourceLegacy {
-			return workflow.PendingApprovalContextSourceResolution{},
-				workflow.MaterializedContinuationSource{},
-				errors.New("typed pending approval target snapshot duplicates Session authority")
-		}
-		resolution := workflow.PendingApprovalContextSourceResolution{
-			TargetSession: *snapshot.TargetSession,
-			ActiveSource:  *snapshot.ActiveSource,
-		}
-		reconstructed := target.CurrentNode
-		reconstructed.SessionID = targetSessionIntentSessionID(resolution.TargetSession)
-		reconstructed.ContinuationSource = resolution.ActiveSource
-		if err := validatePendingApprovalContextSourceResolution(target.NodeKind, reconstructed, resolution); err != nil {
-			return workflow.PendingApprovalContextSourceResolution{},
-				workflow.MaterializedContinuationSource{},
-				err
-		}
-		return resolution,
-			*snapshot.ActiveSource,
-			nil
+func pendingApprovalContextSourceResolutionFromSnapshot(snapshot pendingApprovalContextSourceResolutionSnapshot) (workflow.PendingApprovalContextSourceResolution, error) {
+	if snapshot.SessionID == nil {
+		return workflow.PendingApprovalContextSourceResolution{}, nil
 	}
-	var sessionID *runtimeids.SessionID
-	if snapshot.SessionID != nil {
-		parsed, err := runtimeids.ParseSessionID(*snapshot.SessionID)
-		if err != nil {
-			return workflow.PendingApprovalContextSourceResolution{},
-				workflow.MaterializedContinuationSource{},
-				fmt.Errorf("decode pending approval context session: %w", err)
-		}
-		sessionID = &parsed
+	sessionID, err := runtimeids.ParseSessionID(*snapshot.SessionID)
+	if err != nil {
+		return workflow.PendingApprovalContextSourceResolution{}, fmt.Errorf("decode pending approval context session: %w", err)
 	}
-	var (
-		targetSession workflow.TargetSessionIntent
-		source        workflow.MaterializedContinuationSource
-	)
-	switch target.NodeKind {
-	case workflow.NodeKindAgent:
-		if target.CurrentNode.SessionID == nil {
-			targetSession = workflow.CreateTargetSessionIntent()
-			source = workflow.DeferredSelfMaterializedContinuationSource()
-		} else {
-			reused, err := workflow.NewReuseTargetSessionIntent(*target.CurrentNode.SessionID)
-			if err != nil {
-				return workflow.PendingApprovalContextSourceResolution{},
-					workflow.MaterializedContinuationSource{},
-					err
-			}
-			targetSession = reused
-			source = workflow.LegacyMaterializedContinuationSource()
-		}
-	case workflow.NodeKindScript, workflow.NodeKindJoin:
-		targetSession = workflow.NoAgentTargetSessionIntent()
-		source = workflow.LegacyMaterializedContinuationSource()
-	case workflow.NodeKindTerminal:
-		targetSession = workflow.NoAgentTargetSessionIntent()
-		source = workflow.AbsentMaterializedContinuationSource()
-	default:
-		return workflow.PendingApprovalContextSourceResolution{},
-			workflow.MaterializedContinuationSource{},
-			fmt.Errorf("pending approval target node kind %q is invalid", target.NodeKind)
-	}
-	resolution := workflow.PendingApprovalContextSourceResolution{
-		TargetSession: targetSession,
-		ActiveSource:  source,
-	}
-	if reused, ok := targetSession.SessionID(); ok {
-		if sessionID == nil || *sessionID != reused {
-			return workflow.PendingApprovalContextSourceResolution{},
-				workflow.MaterializedContinuationSource{},
-				errors.New("legacy pending approval target and context source sessions differ")
-		}
-	} else if sessionID != nil {
-		return workflow.PendingApprovalContextSourceResolution{},
-			workflow.MaterializedContinuationSource{},
-			errors.New("legacy pending approval context source Session is invalid for target")
-	}
-	return resolution, source, nil
-}
-
-func targetSessionIntentSessionID(intent workflow.TargetSessionIntent) *runtimeids.SessionID {
-	sessionID, reused := intent.SessionID()
-	if !reused {
-		return nil
-	}
-	return &sessionID
-}
-
-func pendingApprovalContextSourceResolution(
-	nodeKind workflow.NodeKind,
-	currentNode workflow.CurrentNode,
-) (workflow.PendingApprovalContextSourceResolution, error) {
-	targetSession := workflow.NoAgentTargetSessionIntent()
-	if nodeKind == workflow.NodeKindAgent {
-		if currentNode.SessionID == nil {
-			targetSession = workflow.CreateTargetSessionIntent()
-		} else {
-			reused, err := workflow.NewReuseTargetSessionIntent(*currentNode.SessionID)
-			if err != nil {
-				return workflow.PendingApprovalContextSourceResolution{}, err
-			}
-			targetSession = reused
-		}
-	}
-	resolution := workflow.PendingApprovalContextSourceResolution{
-		TargetSession: targetSession,
-		ActiveSource:  currentNode.ContinuationSource,
-	}
-	if err := validatePendingApprovalContextSourceResolution(nodeKind, currentNode, resolution); err != nil {
-		return workflow.PendingApprovalContextSourceResolution{}, err
-	}
-	return resolution, nil
-}
-
-func validatePendingApprovalContextSourceResolution(
-	nodeKind workflow.NodeKind,
-	currentNode workflow.CurrentNode,
-	resolution workflow.PendingApprovalContextSourceResolution,
-) error {
-	if err := resolution.TargetSession.Validate(); err != nil {
-		return fmt.Errorf("pending approval target Session intent: %w", err)
-	}
-	if err := resolution.ActiveSource.Validate(); err != nil {
-		return fmt.Errorf("pending approval active source: %w", err)
-	}
-	resolvedSessionID, reused := resolution.TargetSession.SessionID()
-	switch nodeKind {
-	case workflow.NodeKindAgent:
-		if resolution.TargetSession.Kind() == workflow.TargetSessionIntentNoAgent {
-			return errors.New("pending approval Agent target cannot omit Agent Session intent")
-		}
-	case workflow.NodeKindScript, workflow.NodeKindJoin, workflow.NodeKindTerminal:
-		if resolution.TargetSession.Kind() != workflow.TargetSessionIntentNoAgent {
-			return fmt.Errorf("pending approval %s target cannot carry Agent Session intent", nodeKind)
-		}
-	default:
-		return fmt.Errorf("pending approval target node kind %q is invalid", nodeKind)
-	}
-	if reused {
-		if currentNode.SessionID == nil || *currentNode.SessionID != resolvedSessionID {
-			return errors.New("pending approval target and context source Session intent differ")
-		}
-	} else if currentNode.SessionID != nil {
-		return errors.New("pending approval target duplicates a Session absent from context resolution")
-	}
-	if !sameMaterializedContinuationSource(currentNode.ContinuationSource, resolution.ActiveSource) {
-		return errors.New("pending approval target and context source active source differ")
-	}
-	return nil
-}
-
-func sameMaterializedContinuationSource(
-	left workflow.MaterializedContinuationSource,
-	right workflow.MaterializedContinuationSource,
-) bool {
-	if left.Kind() != right.Kind() {
-		return false
-	}
-	leftSessionID, leftExact := left.ExactSessionID()
-	rightSessionID, rightExact := right.ExactSessionID()
-	return leftExact == rightExact && (!leftExact || leftSessionID == rightSessionID)
+	return workflow.PendingApprovalContextSourceResolution{SessionID: &sessionID}, nil
 }
 
 func normalizeApprovalID(id workflow.ApprovalID) (workflow.ApprovalID, error) {

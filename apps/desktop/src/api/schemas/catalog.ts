@@ -1,13 +1,23 @@
 import { z } from "zod";
-import type { SessionCatalogPage, SessionCatalogSummary, SessionCategory } from "../models";
-import { sessionCatalogPageSize } from "../models";
+import type {
+  SessionCatalogPage,
+  SessionCatalogSummary,
+  SessionCategory,
+  SessionPagePosition,
+} from "../models";
 export const canonicalProjectIDSchema = z
   .string()
   .refine((value) => value.trim().length > 0 && value.trim() === value);
 const canonicalNonBlankString = canonicalProjectIDSchema;
-export const workspaceOffsetSchema = z.number().int().nonnegative();
+const opaqueTokenSchema = canonicalNonBlankString;
+export const workspacePageTokenSchema = canonicalNonBlankString;
+export const workspaceContinuationWireSchema = z.union([z.literal(""), canonicalNonBlankString]);
 export const sessionCategorySchema: z.ZodType<SessionCategory> = z.enum(["main", "subagent"]);
-export const sessionPageOffsetSchema = z.number().int().nonnegative();
+export const sessionPagePositionSchema: z.ZodType<SessionPagePosition> = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("newest") }).strict(),
+  z.object({ kind: z.literal("older"), token: opaqueTokenSchema }).strict(),
+  z.object({ kind: z.literal("newer"), token: opaqueTokenSchema }).strict(),
+]);
 const sessionNameSchema = z
   .string()
   .refine((value) => value.trim().length > 0)
@@ -18,8 +28,8 @@ const promptPreviewSchema = z
   .string()
   .optional()
   .transform((value) => value ?? null);
-const sessionRecencySchema = z.iso
-  .datetime({ offset: true })
+const sessionRecencySchema = z
+  .iso.datetime({ offset: true })
   .transform((value) => Date.parse(value))
   .pipe(z.number().positive());
 const sessionCatalogSummarySchema: z.ZodType<SessionCatalogSummary> = z
@@ -38,18 +48,14 @@ const sessionCatalogSummarySchema: z.ZodType<SessionCatalogSummary> = z
     firstPromptPreview: value.first_prompt_preview,
     updatedAt: value.updated_at,
   }));
-const sessionNextOffsetSchema = z
-  .number()
-  .int()
-  .positive()
-  .nullish()
-  .transform((value) => value ?? null);
+const sessionContinuationSchema = opaqueTokenSchema.optional().transform((value) => value ?? null);
 export const sessionPageResponseSchema: z.ZodType<SessionCatalogPage> = z
   .object({
     project_id: canonicalNonBlankString,
     category: sessionCategorySchema,
-    sessions: z.array(sessionCatalogSummarySchema).max(sessionCatalogPageSize),
-    next_offset: sessionNextOffsetSchema,
+    sessions: z.array(sessionCatalogSummarySchema).max(100),
+    older: sessionContinuationSchema,
+    newer: sessionContinuationSchema,
   })
   .strict()
   .superRefine((value, context) => {
@@ -67,5 +73,6 @@ export const sessionPageResponseSchema: z.ZodType<SessionCatalogPage> = z
     projectID: value.project_id,
     category: value.category,
     sessions: value.sessions,
-    nextOffset: value.next_offset,
+    older: value.older,
+    newer: value.newer,
   }));

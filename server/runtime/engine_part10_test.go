@@ -52,7 +52,7 @@ func TestInjectsGlobalAndWorkspaceAgentsBeforeFirstUserMessage(t *testing.T) {
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("first submit: %v", err)
@@ -142,7 +142,7 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
-	eng := mustNewTestEngine(t, child, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, child, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	if _, err := eng.SubmitUserMessage(context.Background(), "first child turn"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestInjectsSkillsContextAfterEnvironmentAndPersists(t *testing.T) {
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok-1")}, Usage: llm.Usage{WindowTokens: 200000}},
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok-2")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("first submit: %v", err)
@@ -250,7 +250,7 @@ func TestDisabledSkillsAreNotInjectedIntoNewSessions(t *testing.T) {
 	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
 
 	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")}, Usage: llm.Usage{WindowTokens: 200000}}}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:       "gpt-5",
 		SkillPolicy: skillPolicyWithDisabled("workspace skill"),
 	})
@@ -370,7 +370,7 @@ func TestNewRejectsEmptyModel(t *testing.T) {
 	workspace := t.TempDir()
 	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
 
-	_, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
+	_, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 	if !errors.Is(err, ErrModelRequired) {
 		t.Fatalf("expected ErrModelRequired, got %v", err)
 	}
@@ -438,14 +438,14 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("condensed summary")},
 				Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
 			}}}
-			eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
+			eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
 			if test.active {
 				if err := store.SetHeadlessActive(true); err != nil {
 					t.Fatalf("mark headless active: %v", err)
 				}
 			}
 			for _, message := range append(test.persistedMessages, llm.Message{Role: llm.RoleUser, Content: textutil.Value("continue")}) {
-				if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+				if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 					t.Fatalf("append message: %v", err)
 				}
 			}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"core/internal/testharness/testsetup"
@@ -17,37 +16,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 )
-
-var testGraphEntityIDs sync.Map
-
-func testGraphEntityID(alias string) string {
-	if _, err := runtimeids.GraphEntityIDBlob(alias); err == nil {
-		return alias
-	}
-	generated, _ := testGraphEntityIDs.LoadOrStore(alias, runtimeids.NewGraphEntityID())
-	return generated.(string)
-}
-
-func testNodeID(alias string) workflow.NodeID {
-	return workflow.NodeID(testGraphEntityID(alias))
-}
-
-func testTransitionGroupID(alias string) workflow.TransitionGroupID {
-	return workflow.TransitionGroupID(testGraphEntityID(alias))
-}
-
-func testEdgeID(alias string) workflow.EdgeID {
-	return workflow.EdgeID(testGraphEntityID(alias))
-}
-
-func testGraphEntityBlob(t *testing.T, value string) []byte {
-	t.Helper()
-	raw, err := runtimeids.GraphEntityIDBlob(value)
-	if err != nil {
-		t.Fatalf("encode graph entity ID %q: %v", value, err)
-	}
-	return raw
-}
 
 func removeWorkflowGraphSaveEdgesTouchingNode(def workflow.Definition, edges []EdgeRecord, nodeID workflow.NodeID) []EdgeRecord {
 	sourceByGroup := map[workflow.TransitionGroupID]workflow.NodeID{}
@@ -249,9 +217,9 @@ func createValidWorkflow(t *testing.T, ctx context.Context, store *Store) runtim
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	agentID := testNodeID("node-agent-" + created.ID.String())
-	startGroup := testTransitionGroupID("group-start-" + created.ID.String())
-	doneGroup := testTransitionGroupID("group-done-" + created.ID.String())
+	agentID := workflow.NodeID("node-agent-" + created.ID.String())
+	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
@@ -261,8 +229,8 @@ func createValidWorkflow(t *testing.T, ctx context.Context, store *Store) runtim
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
-			EdgeRecord{ID: testEdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
+			EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return created.ID
@@ -275,14 +243,14 @@ func createApprovalWorkflow(t *testing.T, ctx context.Context, store *Store) run
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
 	workflowID := created.ID
-	agentID := testNodeID("node-agent-" + workflowID.String())
-	startGroup := testTransitionGroupID("group-start-" + workflowID.String())
-	doneGroup := testTransitionGroupID("group-done-" + workflowID.String())
+	agentID := workflow.NodeID("node-agent-" + workflowID.String())
+	startGroup := workflow.TransitionGroupID("group-start-" + workflowID.String())
+	doneGroup := workflow.TransitionGroupID("group-done-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
 		req.Nodes = append(req.Nodes, NodeRecord{
-			ID: agentID, WorkflowID: workflowID, Key: "agent", Kind: workflow.NodeKindAgent,
+			ID: workflow.NodeID(agentID), WorkflowID: workflowID, Key: "agent", Kind: workflow.NodeKindAgent,
 			DisplayName: "Agent", SubagentRole: "coder",
 		})
 		req.TransitionGroups = append(req.TransitionGroups,
@@ -290,8 +258,8 @@ func createApprovalWorkflow(t *testing.T, ctx context.Context, store *Store) run
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-start-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
-			EdgeRecord{ID: testEdgeID("edge-done-approval-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, RequiresApproval: true},
+			EdgeRecord{ID: workflow.EdgeID("edge-start-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
+			EdgeRecord{ID: workflow.EdgeID("edge-done-approval-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, RequiresApproval: true},
 		)
 	})
 	return workflowID
@@ -304,13 +272,13 @@ func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) r
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
 	workflowID := created.ID
-	planID := testNodeID("node-plan-" + workflowID.String())
-	implAID := testNodeID("node-impl-a-" + workflowID.String())
-	implBID := testNodeID("node-impl-b-" + workflowID.String())
-	joinID := testNodeID("node-join-" + workflowID.String())
-	synthID := testNodeID("node-synth-" + workflowID.String())
-	joinAEdgeID := testEdgeID("edge-join-a-" + workflowID.String())
-	joinBEdgeID := testEdgeID("edge-join-b-" + workflowID.String())
+	planID := workflow.NodeID("node-plan-" + workflowID.String())
+	implAID := workflow.NodeID("node-impl-a-" + workflowID.String())
+	implBID := workflow.NodeID("node-impl-b-" + workflowID.String())
+	joinID := workflow.NodeID("node-join-" + workflowID.String())
+	synthID := workflow.NodeID("node-synth-" + workflowID.String())
+	joinAEdgeID := workflow.EdgeID("edge-join-a-" + workflowID.String())
+	joinBEdgeID := workflow.EdgeID("edge-join-b-" + workflowID.String())
 	nodes := []NodeRecord{
 		{ID: planID, WorkflowID: workflowID, Key: "plan", Kind: workflow.NodeKindAgent, DisplayName: "Plan", SubagentRole: "coder"},
 		{ID: implAID, WorkflowID: workflowID, Key: "impl_a", Kind: workflow.NodeKindAgent, DisplayName: "Implement A", SubagentRole: "coder"},
@@ -318,12 +286,12 @@ func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) r
 		{ID: joinID, WorkflowID: workflowID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join", JoinInputProviders: []workflow.JoinInputProvider{{InputName: "joined", ProviderEdgeID: joinAEdgeID}}},
 		{ID: synthID, WorkflowID: workflowID, Key: "synth", Kind: workflow.NodeKindAgent, DisplayName: "Synthesize", SubagentRole: "coder"},
 	}
-	startGroup := testTransitionGroupID("group-start-" + workflowID.String())
-	splitGroup := testTransitionGroupID("group-split-" + workflowID.String())
-	joinAGroup := testTransitionGroupID("group-join-a-" + workflowID.String())
-	joinBGroup := testTransitionGroupID("group-join-b-" + workflowID.String())
-	synthGroup := testTransitionGroupID("group-join-synth-" + workflowID.String())
-	doneGroup := testTransitionGroupID("group-synth-done-" + workflowID.String())
+	startGroup := workflow.TransitionGroupID("group-start-" + workflowID.String())
+	splitGroup := workflow.TransitionGroupID("group-split-" + workflowID.String())
+	joinAGroup := workflow.TransitionGroupID("group-join-a-" + workflowID.String())
+	joinBGroup := workflow.TransitionGroupID("group-join-b-" + workflowID.String())
+	synthGroup := workflow.TransitionGroupID("group-join-synth-" + workflowID.String())
+	doneGroup := workflow.TransitionGroupID("group-synth-done-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
@@ -337,13 +305,13 @@ func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) r
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: workflowID, SourceNodeID: synthID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-start-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
-			EdgeRecord{ID: testEdgeID("edge-split-a-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: splitGroup, Key: "split_a", TargetNodeID: implAID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "A {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Plan summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
-			EdgeRecord{ID: testEdgeID("edge-split-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: splitGroup, Key: "split_b", TargetNodeID: implBID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "B {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Plan summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
+			EdgeRecord{ID: workflow.EdgeID("edge-start-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
+			EdgeRecord{ID: workflow.EdgeID("edge-split-a-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: splitGroup, Key: "split_a", TargetNodeID: implAID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "A {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Plan summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
+			EdgeRecord{ID: workflow.EdgeID("edge-split-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: splitGroup, Key: "split_b", TargetNodeID: implBID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "B {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Plan summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
 			EdgeRecord{ID: joinAEdgeID, WorkflowID: workflowID, TransitionGroupID: joinAGroup, Key: "join_a", TargetNodeID: joinID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined branch summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
 			EdgeRecord{ID: joinBEdgeID, WorkflowID: workflowID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
-			EdgeRecord{ID: testEdgeID("edge-join-synth-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: synthGroup, Key: "synth", TargetNodeID: synthID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Synthesize {{.Params.joined}}."},
-			EdgeRecord{ID: testEdgeID("edge-synth-done-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-join-synth-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: synthGroup, Key: "synth", TargetNodeID: synthID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Synthesize {{.Params.joined}}."},
+			EdgeRecord{ID: workflow.EdgeID("edge-synth-done-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return workflowID
@@ -363,9 +331,9 @@ func createScriptStartWorkflow(t *testing.T, ctx context.Context, store *Store, 
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	scriptID := testNodeID("node-script-" + created.ID.String())
-	startGroup := testTransitionGroupID("group-start-" + created.ID.String())
-	doneGroup := testTransitionGroupID("group-done-" + created.ID.String())
+	scriptID := workflow.NodeID("node-script-" + created.ID.String())
+	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
@@ -375,8 +343,8 @@ func createScriptStartWorkflow(t *testing.T, ctx context.Context, store *Store, 
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: scriptID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: scriptID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
-			EdgeRecord{ID: testEdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: scriptID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return created.ID
@@ -407,7 +375,7 @@ func newScriptExecutionFixture(t *testing.T, scriptPath string, contents []byte)
 		}
 	}
 	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
-	return scriptExecutionFixture{ctx: ctx, store: store, workflowID: workflowID, scriptID: testNodeID("node-script-" + workflowID.String()), task: task}
+	return scriptExecutionFixture{ctx: ctx, store: store, workflowID: workflowID, scriptID: workflow.NodeID("node-script-" + workflowID.String()), task: task}
 }
 
 func (f scriptExecutionFixture) requireLiveSummary(t *testing.T) {
@@ -460,15 +428,15 @@ func createChainedContextModeWorkflow(t *testing.T, ctx context.Context, store *
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	planID := testNodeID("node-plan-" + created.ID.String())
-	implID := testNodeID("node-impl-" + created.ID.String())
+	planID := workflow.NodeID("node-plan-" + created.ID.String())
+	implID := workflow.NodeID("node-impl-" + created.ID.String())
 	nodes := []NodeRecord{
 		{ID: planID, WorkflowID: created.ID, Key: "plan", Kind: workflow.NodeKindAgent, DisplayName: "Plan", SubagentRole: "coder"},
 		{ID: implID, WorkflowID: created.ID, Key: "implement", Kind: workflow.NodeKindAgent, DisplayName: "Implement", SubagentRole: targetRole},
 	}
-	startGroup := testTransitionGroupID("group-start-" + created.ID.String())
-	nextGroup := testTransitionGroupID("group-next-" + created.ID.String())
-	doneGroup := testTransitionGroupID("group-done-" + created.ID.String())
+	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	nextGroup := workflow.TransitionGroupID("group-next-" + created.ID.String())
+	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
@@ -479,9 +447,9 @@ func createChainedContextModeWorkflow(t *testing.T, ctx context.Context, store *
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: implID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan work."},
-			EdgeRecord{ID: testEdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: contextMode, PromptTemplate: "Implement {{.Params.prior_summary}}.", Parameters: []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
-			EdgeRecord{ID: testEdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan work."},
+			EdgeRecord{ID: workflow.EdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: contextMode, PromptTemplate: "Implement {{.Params.prior_summary}}.", Parameters: []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
+			EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return created.ID
@@ -493,18 +461,18 @@ func createPromptNodeReferenceWorkflow(t *testing.T, ctx context.Context, store 
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	planID := testNodeID("node-plan-" + created.ID.String())
-	reviewID := testNodeID("node-review-" + created.ID.String())
-	auditID := testNodeID("node-audit-" + created.ID.String())
+	planID := workflow.NodeID("node-plan-" + created.ID.String())
+	reviewID := workflow.NodeID("node-review-" + created.ID.String())
+	auditID := workflow.NodeID("node-audit-" + created.ID.String())
 	nodes := []NodeRecord{
 		{ID: planID, WorkflowID: created.ID, Key: "plan", Kind: workflow.NodeKindAgent, DisplayName: "Plan", SubagentRole: "coder"},
 		{ID: reviewID, WorkflowID: created.ID, Key: "review", Kind: workflow.NodeKindAgent, DisplayName: "Review", SubagentRole: "coder"},
 		{ID: auditID, WorkflowID: created.ID, Key: "audit", Kind: workflow.NodeKindAgent, DisplayName: "Audit", SubagentRole: "coder"},
 	}
-	startGroup := testTransitionGroupID("group-start-" + created.ID.String())
-	nextGroup := testTransitionGroupID("group-next-" + created.ID.String())
-	auditGroup := testTransitionGroupID("group-audit-" + created.ID.String())
-	doneGroup := testTransitionGroupID("group-done-" + created.ID.String())
+	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	nextGroup := workflow.TransitionGroupID("group-next-" + created.ID.String())
+	auditGroup := workflow.TransitionGroupID("group-audit-" + created.ID.String())
+	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
@@ -516,10 +484,10 @@ func createPromptNodeReferenceWorkflow(t *testing.T, ctx context.Context, store 
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: auditID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan work."},
-			EdgeRecord{ID: testEdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: reviewID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Plan summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
-			EdgeRecord{ID: testEdgeID("edge-audit-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: auditGroup, Key: "audit", TargetNodeID: auditID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Audit {{.Params.next.summary}}."},
-			EdgeRecord{ID: testEdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan work."},
+			EdgeRecord{ID: workflow.EdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: reviewID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Plan summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
+			EdgeRecord{ID: workflow.EdgeID("edge-audit-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: auditGroup, Key: "audit", TargetNodeID: auditID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Audit {{.Params.next.summary}}."},
+			EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return created.ID
@@ -531,21 +499,21 @@ func createSelectedContextSourceWorkflow(t *testing.T, ctx context.Context, stor
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	planID := testNodeID("node-plan-" + created.ID.String())
-	implementationID := testNodeID("node-implementation-" + created.ID.String())
-	acceptanceID := testNodeID("node-acceptance-" + created.ID.String())
-	openPRID := testNodeID("node-open-pr-" + created.ID.String())
+	planID := workflow.NodeID("node-plan-" + created.ID.String())
+	implementationID := workflow.NodeID("node-implementation-" + created.ID.String())
+	acceptanceID := workflow.NodeID("node-acceptance-" + created.ID.String())
+	openPRID := workflow.NodeID("node-open-pr-" + created.ID.String())
 	nodes := []NodeRecord{
 		{ID: planID, WorkflowID: created.ID, Key: "plan", Kind: workflow.NodeKindAgent, DisplayName: "Plan", SubagentRole: "coder"},
 		{ID: implementationID, WorkflowID: created.ID, Key: "implementation", Kind: workflow.NodeKindAgent, DisplayName: "Implementation", SubagentRole: "coder"},
 		{ID: acceptanceID, WorkflowID: created.ID, Key: "acceptance", Kind: workflow.NodeKindAgent, DisplayName: "Acceptance", SubagentRole: "coder"},
 		{ID: openPRID, WorkflowID: created.ID, Key: "open_pr", Kind: workflow.NodeKindAgent, DisplayName: "Open PR", SubagentRole: "coder"},
 	}
-	startGroup := testTransitionGroupID("group-start-" + created.ID.String())
-	implementGroup := testTransitionGroupID("group-implement-" + created.ID.String())
-	acceptGroup := testTransitionGroupID("group-accept-" + created.ID.String())
-	openPRGroup := testTransitionGroupID("group-open-pr-" + created.ID.String())
-	doneGroup := testTransitionGroupID("group-done-" + created.ID.String())
+	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	implementGroup := workflow.TransitionGroupID("group-implement-" + created.ID.String())
+	acceptGroup := workflow.TransitionGroupID("group-accept-" + created.ID.String())
+	openPRGroup := workflow.TransitionGroupID("group-open-pr-" + created.ID.String())
+	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
@@ -558,11 +526,11 @@ func createSelectedContextSourceWorkflow(t *testing.T, ctx context.Context, stor
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: openPRID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
-			EdgeRecord{ID: testEdgeID("edge-implement-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: implementGroup, Key: "implement", TargetNodeID: implementationID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Plan summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
-			EdgeRecord{ID: testEdgeID("edge-accept-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: acceptGroup, Key: "accept", TargetNodeID: acceptanceID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Accept {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
-			EdgeRecord{ID: testEdgeID("edge-open-pr-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: openPRGroup, Key: "open_pr", TargetNodeID: openPRID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: contextMode, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "implementation"}, PromptTemplate: "Open PR {{.Params.acceptance_decision}}.", Parameters: []workflow.Parameter{{Key: "acceptance_decision", Description: "Acceptance decision.", Purpose: workflow.ParameterPurposeOrdinary}}},
-			EdgeRecord{ID: testEdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
+			EdgeRecord{ID: workflow.EdgeID("edge-implement-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: implementGroup, Key: "implement", TargetNodeID: implementationID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Plan summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
+			EdgeRecord{ID: workflow.EdgeID("edge-accept-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: acceptGroup, Key: "accept", TargetNodeID: acceptanceID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Accept {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary.", Purpose: workflow.ParameterPurposeOrdinary}}},
+			EdgeRecord{ID: workflow.EdgeID("edge-open-pr-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: openPRGroup, Key: "open_pr", TargetNodeID: openPRID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: contextMode, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "implementation"}, PromptTemplate: "Open PR {{.Params.acceptance_decision}}.", Parameters: []workflow.Parameter{{Key: "acceptance_decision", Description: "Acceptance decision.", Purpose: workflow.ParameterPurposeOrdinary}}},
+			EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return created.ID

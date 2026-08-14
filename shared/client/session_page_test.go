@@ -44,21 +44,12 @@ func TestRemoteSessionPageRoundTripUsesProjectAttachment(t *testing.T) {
 				if err := params.Validate(); err != nil {
 					t.Fatalf("validate session page request: %v", err)
 				}
-				window, err := params.ResolveWindow()
-				if err != nil {
-					t.Fatalf("resolve session page window: %v", err)
-				}
-				if params.ProjectID != "project-1" ||
-					params.Category != sessioncontract.SessionCategorySubagent ||
-					window.Offset != 50 ||
-					window.Limit != 20 {
+				if params.ProjectID != "project-1" || params.Category != sessioncontract.SessionCategorySubagent || params.Position.Kind() != serverapi.SessionPagePositionNewest {
 					t.Fatalf("session page request = %+v", params)
 				}
-				nextOffset := 70
 				response := serverapi.SessionPageResponse{
-					ProjectID:  "project-1",
-					Category:   sessioncontract.SessionCategorySubagent,
-					NextOffset: &nextOffset,
+					ProjectID: "project-1",
+					Category:  sessioncontract.SessionCategorySubagent,
 					Sessions: []clientui.SessionSummary{{
 						SessionID: sessionID,
 						Category:  sessioncontract.SessionCategorySubagent,
@@ -82,17 +73,14 @@ func TestRemoteSessionPageRoundTripUsesProjectAttachment(t *testing.T) {
 	response, err := remote.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
 		ProjectID: "project-1",
 		Category:  sessioncontract.SessionCategorySubagent,
-		Offset:    remoteTestIntPointer(50),
-		Limit:     remoteTestIntPointer(20),
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}
 	if len(response.Sessions) != 1 || response.Sessions[0].SessionID.String() != "session-1" {
 		t.Fatalf("session page response = %+v", response)
-	}
-	if response.NextOffset == nil || *response.NextOffset != 70 {
-		t.Fatalf("session page next offset = %v, want 70", response.NextOffset)
 	}
 }
 
@@ -151,71 +139,10 @@ func TestRemoteSessionPageRejectsResponseIdentityMismatch(t *testing.T) {
 			if _, err := remote.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
 				ProjectID: "project-1",
 				Category:  sessioncontract.SessionCategoryMain,
-				Offset:    remoteTestIntPointer(0),
-				Limit:     remoteTestIntPointer(20),
+				PageSize:  20,
+				Position:  serverapi.NewestSessionPagePosition(),
 			}); err == nil {
 				t.Fatal("ListSessionPage accepted mismatched response identity")
-			}
-		})
-	}
-}
-
-func TestRemoteSessionPageRejectsObsoleteResponseFields(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		body json.RawMessage
-	}{
-		{
-			name: "old only",
-			body: json.RawMessage(`{"project_id":"project-1","category":"main","sessions":[],"older":"opaque"}`),
-		},
-		{
-			name: "mixed continuation and offset",
-			body: json.RawMessage(`{"project_id":"project-1","category":"main","sessions":[],"next_offset":50,"newer":"opaque"}`),
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				req := acceptRemoteHandshake(t, ws)
-				for {
-					if err := websocket.JSON.Receive(ws, &req); err != nil {
-						if errors.Is(err, io.EOF) {
-							return
-						}
-						t.Fatalf("receive session page request: %v", err)
-					}
-					switch req.Method {
-					case protocol.MethodAttachProject:
-						if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/workspace"))); err != nil {
-							t.Fatalf("send attach response: %v", err)
-						}
-					case protocol.MethodSessionPage:
-						if err := websocket.JSON.Send(ws, protocol.Response{
-							JSONRPC: protocol.JSONRPCVersion,
-							ID:      req.ID,
-							Result:  test.body,
-						}); err != nil {
-							t.Fatalf("send obsolete session page response: %v", err)
-						}
-					default:
-						t.Fatalf("unexpected method %q", req.Method)
-					}
-				}
-			})
-
-			remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
-			if err != nil {
-				t.Fatalf("DialRemoteURLForProject: %v", err)
-			}
-			defer func() { _ = remote.Close() }()
-
-			if _, err := remote.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-				ProjectID: "project-1",
-				Category:  sessioncontract.SessionCategoryMain,
-				Offset:    remoteTestIntPointer(0),
-				Limit:     remoteTestIntPointer(50),
-			}); err == nil {
-				t.Fatalf("ListSessionPage accepted obsolete response: %s", test.body)
 			}
 		})
 	}

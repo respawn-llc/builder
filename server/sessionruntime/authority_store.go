@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 
-	"core/server/runtime"
 	"core/server/session"
 	"core/shared/runtimeids"
 )
@@ -381,26 +379,4 @@ func (a *Authority) WithDormantSessionStore(
 		return DormantSessionStoreAdmission{}, err
 	}
 	return DormantSessionStoreAdmission{}, nil
-}
-
-func (a *Authority) WithSessionChatSettings(
-	ctx context.Context,
-	sessionID string,
-	callback func(context.Context, *session.Store, *runtime.Engine) error,
-) error {
-	if callback == nil {
-		return errors.New("Session Chat settings callback is required")
-	}
-	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-	if err != nil {
-		return err
-	}
-	return a.withMaintenanceResource(ctx, id, func(
-		runCtx context.Context,
-		store *session.Store,
-		_ *agentResource,
-		engine *runtime.Engine,
-	) (bool, error) {
-		return false, callback(runCtx, store, engine)
-	})
 }

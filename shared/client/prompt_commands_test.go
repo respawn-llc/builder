@@ -235,11 +235,9 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 	if !foundRemoteCommand {
 		t.Fatalf("catalog = %+v", catalog.Commands)
 	}
-	submitID := runtimeids.NewRuntimeClientRequestID()
 	_, err = remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: submitID.String(),
-		SessionID:       runtimeids.NewSessionID().String(),
-		Input:           runtimeinput.Command("prompt:remote_demo", "hello world"),
+		SessionID: runtimeids.NewSessionID().String(),
+		Input:     runtimeinput.Command("prompt:remote_demo", "hello world"),
 	})
 	if err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)

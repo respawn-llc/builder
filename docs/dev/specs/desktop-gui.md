@@ -29,7 +29,6 @@
   The parent destination owns navigation, server requests, pending state,
   failures, and retries through its existing action paths.
 - Cards are reserved for board Task cards. Navigation, browsing, and selection collections use list rows.
-- Workflow browsing rows show the Workflow name, description, version, and an Edit action. Selecting the row opens the Workflow editor. Edit opens Workflow settings without loading the Workflow graph.
 
 ## Home And Navigation
 
@@ -38,8 +37,6 @@
 - Navigation pins global Inbox above the infinite-scrolling Projects list. Inbox is not a Project and has no required attention badge.
 - Selecting Inbox shows aggregate Inbox. Selecting a Project opens its workspace, whose `Workflows` and `Sessions` tabs share one window-local last-used selection while moving between Projects; relaunch defaults to `Workflows`.
 - Selecting an Inbox item leaves Inbox visible and opens Task Detail as an overlay. It does not replace Home content or navigate away from Home.
-- An Inbox item shows at most five lines of its detail message before truncation. Selecting the item still opens its complete Task Detail.
-- Home opens sidebars by shifting content when the available layout width exceeds 1000 pixels and as an overlay otherwise. Shift-mode sidebar opening, closing, and resizing keep the sidebar and Home content movement synchronized.
 - The sticky Project workspace header shows Project name and key, the two tabs, and `Link workflow` or `New Session` as appropriate.
 - Workflow links are an infinite-scrolling list. Each shows reusable Workflow identity, Project-default state, and validation state. Selecting one opens that Project's Workflow board.
 - `Manage workflows` is available from `Link workflow` for reusable Workflows, including those not linked to the selected Project. Project Task and board destinations remain Project-scoped.
@@ -53,16 +50,8 @@
 - Choosing a directory already attached to a Project opens that Project. Choosing an unattached directory opens Project creation with an editable name and Project Key; the default name is the directory basename.
 - A Project Key is editable at any time, is unique, uses 2–8 uppercase letters or digits, begins with a letter, and is the prefix for future Task Short IDs. Existing Task Short IDs remain unchanged and resolvable.
 - Project name is one line, 1–80 visible characters, and has no leading or trailing whitespace. Name and key save together; an unchanged persisted key, including an empty one, does not block a name-only save. Back discards unsaved name and key edits.
-- Changing the default workspace or attaching or detaching a workspace applies immediately.
-- Workspace catalogs use infinite scroll, contain at most 100 entries per request, retain a bounded page window, show the default first, and then use newest attachment first.
-- A workspace-catalog page-edge failure retains loaded rows and offers Retry at that edge. A first-page failure uses the standard retryable error state.
-- Raw Project Settings catalog pages are not deduplicated or reconciled. Workspace mutations do not refresh retained pages, which may overlap or remain stale.
-- A workspace row shows the existing shortened-path presentation, default status, and unlink action. Choosing an already attached path focuses its existing row or gives equivalent feedback.
-- Choosing an already attached path outside the retained pages keeps the current list and scroll position and shows success-style feedback without adding or finding its row.
-- Project Settings loads Project metadata and the Workspace catalog independently.
-- Project Settings metadata contains no Workspace rows or Workspace pagination. Project Settings and New Task obtain Workspace rows from the same Project Workspace catalog.
-- A Workspace-catalog first-page failure leaves Project name and Project Key editable and saveable, keeps Attach available, and gives the Workspace area its own Retry state.
-- A recoverable Project-metadata failure gives the metadata area its own Retry state while loaded Workspace attach, default, and unlink actions remain available. A missing Project retains the Back behavior.
+- Changing the default workspace or attaching or detaching a workspace applies immediately. Workspace lists use infinite scroll, contain at most 100 entries per request, show the default first when it belongs to the bounded collection, then use newest attachment first, and stop at the global Project Workspace collection limit.
+- A workspace row shows path, default status, and unlink action. Choosing an already attached path focuses its existing row or gives equivalent feedback.
 - Unlink confirmation explains that files remain on disk, retained Sessions remain readable, and active work blocks removal. It requires no typed confirmation.
 - A Project without a linked default Workflow shows a blocker and disables New Task while directing the operator to configure a Workflow. An invalid linked Workflow remains visible and permits Backlog Task creation.
 
@@ -254,18 +243,7 @@
 
 ## Tasks
 
-- New Task requires title and accepts optional body, Project Labels, hidden source information, and source workspace. Workflow selection is outside the form.
-- The source-workspace selector uses the Project Workspace catalog with infinite scroll and bounded page retention.
-- Source-workspace options keep the existing Workspace-name presentation.
-- The source workspace defaults to the opened attached Workspace or Project default Workspace. A detached initiating Workspace is omitted and the Project default is selected.
-- An attached initiating Workspace outside the retained pages remains one pinned option for the dialog lifetime and appears before loaded rows.
-- The selector presents one option per Workspace identity even when raw catalog pages overlap.
-- If page retention discards the selected Workspace's page, the selector retains one compact selected-Workspace summary. A loaded row for the same Workspace replaces that summary.
-- While an initiating Workspace read is pending, Desktop does not automatically select the catalog default.
-- If the initiating Workspace read fails, Desktop keeps that failure distinct from detachment, offers an independent Retry, preserves loaded catalog pages and form Drafts, and does not automatically select the catalog default.
-- Retrying the initiating Workspace read does not restart the Workspace catalog.
-- An explicit source-Workspace selection commits immediately and a later initiating Workspace result or Retry does not replace it.
-- With one workspace, source-workspace selection is shown but unavailable.
+- New Task requires title and accepts optional body, Project Labels, hidden source information, and source workspace. Workflow selection is outside the form. The workspace defaults to the opened workspace or Project default workspace. With one workspace, selection is shown but unavailable.
 - Selected existing Labels are assigned atomically with Task creation. Creating a Label during Task creation selects it after Label creation succeeds; Create Task is unavailable while Label creation is pending. The Label remains in the Project if Task creation is cancelled or fails.
 - Creation makes a Backlog Task; it does not start automation. Title, body, and source workspace are editable only in Backlog. A managed Execution Target remains tied to its original source workspace; no-managed-worktree execution uses the Task's current source workspace.
 - Task creation and editing show server validation errors.

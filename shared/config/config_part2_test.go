@@ -20,6 +20,7 @@ supports_vision_inputs = true
 provider_id = "custom-provider"
 supports_responses_api = true
 supports_responses_compact = false
+supports_request_input_token_count = false
 supports_prompt_cache_key = true
 supports_native_web_search = true
 supports_reasoning_encrypted = false
@@ -33,6 +34,9 @@ supports_provider_verbosity = true
 	if cfg.Settings.ProviderCapabilities.ProviderID != "custom-provider" || !cfg.Settings.ProviderCapabilities.SupportsResponsesAPI || !cfg.Settings.ProviderCapabilities.SupportsPromptCacheKey || !cfg.Settings.ProviderCapabilities.SupportsNativeWebSearch {
 		t.Fatalf("expected provider capability overrides from file, got %+v", cfg.Settings.ProviderCapabilities)
 	}
+	if cfg.Settings.ProviderCapabilities.SupportsRequestInputTokenCount {
+		t.Fatalf("expected supports_request_input_token_count override from file, got %+v", cfg.Settings.ProviderCapabilities)
+	}
 	if !cfg.Settings.ProviderCapabilities.SupportsProviderVerbosity {
 		t.Fatalf("expected supports_provider_verbosity override from file, got %+v", cfg.Settings.ProviderCapabilities)
 	}
@@ -41,6 +45,9 @@ supports_provider_verbosity = true
 	}
 	if got := cfg.Source.Sources["provider_capabilities.provider_id"]; got != "file" {
 		t.Fatalf("expected provider_capabilities.provider_id source file, got %q", got)
+	}
+	if got := cfg.Source.Sources["provider_capabilities.supports_request_input_token_count"]; got != "file" {
+		t.Fatalf("expected provider_capabilities.supports_request_input_token_count source file, got %q", got)
 	}
 	if got := cfg.Source.Sources["provider_capabilities.supports_provider_verbosity"]; got != "file" {
 		t.Fatalf("expected provider_capabilities.supports_provider_verbosity source file, got %q", got)
@@ -54,6 +61,7 @@ func TestLoadCapabilityOverridesFromEnv(t *testing.T) {
 	t.Setenv("KENT_PROVIDER_CAPABILITIES_PROVIDER_ID", "custom-provider")
 	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_RESPONSES_API", "true")
 	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_RESPONSES_COMPACT", "false")
+	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_REQUEST_INPUT_TOKEN_COUNT", "false")
 	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_PROMPT_CACHE_KEY", "true")
 	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_NATIVE_WEB_SEARCH", "true")
 	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_REASONING_ENCRYPTED", "false")
@@ -68,6 +76,9 @@ func TestLoadCapabilityOverridesFromEnv(t *testing.T) {
 	if cfg.Settings.ProviderCapabilities.ProviderID != "custom-provider" || !cfg.Settings.ProviderCapabilities.SupportsResponsesAPI || !cfg.Settings.ProviderCapabilities.SupportsPromptCacheKey || !cfg.Settings.ProviderCapabilities.SupportsNativeWebSearch {
 		t.Fatalf("expected provider capability overrides from env, got %+v", cfg.Settings.ProviderCapabilities)
 	}
+	if cfg.Settings.ProviderCapabilities.SupportsRequestInputTokenCount {
+		t.Fatalf("expected supports_request_input_token_count override from env, got %+v", cfg.Settings.ProviderCapabilities)
+	}
 	if cfg.Settings.ProviderCapabilities.SupportsProviderVerbosity {
 		t.Fatalf("expected supports_provider_verbosity=false override from env, got %+v", cfg.Settings.ProviderCapabilities)
 	}
@@ -76,6 +87,9 @@ func TestLoadCapabilityOverridesFromEnv(t *testing.T) {
 	}
 	if got := cfg.Source.Sources["provider_capabilities.provider_id"]; got != "env" {
 		t.Fatalf("expected provider_capabilities.provider_id source env, got %q", got)
+	}
+	if got := cfg.Source.Sources["provider_capabilities.supports_request_input_token_count"]; got != "env" {
+		t.Fatalf("expected provider_capabilities.supports_request_input_token_count source env, got %q", got)
 	}
 	if got := cfg.Source.Sources["provider_capabilities.supports_provider_verbosity"]; got != "env" {
 		t.Fatalf("expected provider_capabilities.supports_provider_verbosity source env, got %q", got)
@@ -217,14 +231,16 @@ model_context_window = 39999
 func TestSettingsTOMLPreservesReviewerProviderCapabilityFalseOverride(t *testing.T) {
 	settings := configRegistry.defaultState().Settings
 	settings.ProviderCapabilities = ProviderCapabilitiesOverride{
-		ProviderID:             "main-provider",
-		SupportsResponsesAPI:   true,
-		SupportsPromptCacheKey: true,
+		ProviderID:                     "main-provider",
+		SupportsResponsesAPI:           true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
 	}
 	settings.Reviewer.ProviderCapabilities = ProviderCapabilitiesOverride{
-		ProviderID:             "reviewer-provider",
-		SupportsResponsesAPI:   false,
-		SupportsPromptCacheKey: false,
+		ProviderID:                     "reviewer-provider",
+		SupportsResponsesAPI:           false,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         false,
 	}
 
 	rendered := settingsTOMLWithRenderingOptions(settings, true, nil, nil)
@@ -384,18 +400,16 @@ func TestLoadCapabilityOverridesRequireProviderID(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsRemovedProviderCapabilitySettings(t *testing.T) {
-	removedSetting := "supports_request_" + "input_token_count"
-	for _, setting := range []string{
-		"provider_capabilities." + removedSetting,
-		"reviewer.provider_capabilities." + removedSetting,
-	} {
-		t.Run(setting, func(t *testing.T) {
-			err := loadConfigTestFileError(t, setting+" = true\n", LoadOptions{})
-			if err == nil || !strings.Contains(err.Error(), setting) {
-				t.Fatalf("removed setting error = %v, want unknown key %q", err, setting)
-			}
-		})
+func TestLoadRequestInputTokenCountCapabilityRequiresProviderID(t *testing.T) {
+	_, workspace := newConfigTestEnv(t)
+	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_REQUEST_INPUT_TOKEN_COUNT", "true")
+
+	_, err := Load(workspace, LoadOptions{})
+	if err == nil {
+		t.Fatal("expected validation error when request input token count capability override is set without provider_id")
+	}
+	if !errors.Is(err, errProviderCapabilitiesNeedID) {
+		t.Fatalf("expected provider_id validation error, got %v", err)
 	}
 }
 

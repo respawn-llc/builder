@@ -121,6 +121,14 @@ func (c *Remote) SubscribeSessionTranscript(ctx context.Context, req serverapi.T
 	}), nil
 }
 
+func (c *Remote) SubscribeProcessOutput(ctx context.Context, req serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error) {
+	conn, route, err := c.subscribeRPC(ctx, protocol.MethodProcessSubscribeOutput, "subscribe-process-output", req, "", false)
+	if err != nil {
+		return nil, err
+	}
+	return newRemoteSubscription(conn, route, func(params protocol.ProcessOutputEventParams) clientui.ProcessOutputChunk { return params.Chunk }), nil
+}
+
 func (c *Remote) SubscribeWorkflowProject(ctx context.Context, req serverapi.WorkflowProjectSubscribeRequest) (serverapi.WorkflowProjectSubscription, error) {
 	conn, route, err := c.subscribeRPC(ctx, protocol.MethodWorkflowSubscribeProject, "subscribe-workflow-project", req, "", false)
 	if err != nil {

@@ -407,25 +407,10 @@ func resolveOptionalWorktreeCommandSession(sessionFlag string) *string {
 	return nil
 }
 
-func worktreeCommandRuntimeOrigin() (*serverapi.RuntimeStepOrigin, error) {
-	runID, hasRunID := os.LookupEnv(sessionenv.RunIDEnv)
-	stepID, hasStepID := os.LookupEnv(sessionenv.StepIDEnv)
-	if !hasRunID && !hasStepID {
-		return nil, nil
-	}
-	origin := &serverapi.RuntimeStepOrigin{RunID: strings.TrimSpace(runID), StepID: strings.TrimSpace(stepID)}
-	return origin, origin.Validate()
-}
-
 func newWorktreeCommandTransitionHeader(sessionID string) (serverapi.WorktreeTransitionHeader, error) {
-	origin, err := worktreeCommandRuntimeOrigin()
-	if err != nil {
-		return serverapi.WorktreeTransitionHeader{}, err
-	}
 	return serverapi.WorktreeTransitionHeader{
 		OperationID: serverapi.NewWorktreeOperationID(),
 		SessionID:   sessionID,
-		Origin:      origin,
 	}, nil
 }
 

@@ -81,10 +81,6 @@ func TestDeleteWorktreeCompletesNonCurrentDeletionAndRetainsBranch(t *testing.T)
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-completed")
 	request := worktreeDeleteRequest(env, created.WorktreeID)
-	request.Origin = &serverapi.RuntimeStepOrigin{
-		RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
-		StepID: "018fdd67-89ab-4cde-8123-456789abc002",
-	}
 	result, err := env.service.DeleteWorktree(env.ctx, request)
 	if err != nil || result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
 		t.Fatalf("DeleteWorktree = %+v, %v", result, err)

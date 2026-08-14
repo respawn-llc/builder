@@ -1,11 +1,20 @@
 package metadata
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
+	"io/fs"
+	"path/filepath"
 	"slices"
 	"testing"
+	"testing/fstest"
+
+	metadatamigrations "core/server/metadata/migrations"
 
 	"core/shared/tasksearchtext"
+
+	"github.com/pressly/goose/v3"
 )
 
 type taskSearchCanonicalSource struct {
@@ -36,7 +45,11 @@ var taskSearchTriggerNames = []string{
 }
 
 func TestTaskSearchSchemaExposesTheRequiredOperationalContract(t *testing.T) {
-	store := openInMemoryMetadataTestStore(t, t.TempDir())
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 
 	assertTaskSearchSchemaObjects(t, store.db)
 	assertTaskSearchIndexCatalog(t, store.db, []string{
@@ -56,6 +69,194 @@ func TestTaskSearchSchemaExposesTheRequiredOperationalContract(t *testing.T) {
 	}
 }
 
+func TestTaskSearchSchemaContractRejectsMissingShortIDSearchObjects(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		statement string
+	}{
+		{name: "mapping", statement: `DROP TABLE task_search_documents`},
+		{name: "virtual table", statement: `DROP TABLE task_search_short_id_fts`},
+		{name: "unique index", statement: `DROP INDEX task_search_documents_task_short_id_unique`},
+		{name: "trigger", statement: `DROP TRIGGER task_search_short_id_document_insert`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			tx, err := store.db.BeginTx(t.Context(), nil)
+			if err != nil {
+				t.Fatalf("begin schema mutation: %v", err)
+			}
+			if _, err := tx.Exec(testCase.statement); err != nil {
+				_ = tx.Rollback()
+				t.Fatalf("remove required %s: %v", testCase.name, err)
+			}
+			failures, err := store.Queries().WithTx(tx).ListTaskSearchSchemaContractFailures(t.Context())
+			if err != nil {
+				_ = tx.Rollback()
+				t.Fatalf("validate schema without %s: %v", testCase.name, err)
+			}
+			if len(failures) == 0 {
+				_ = tx.Rollback()
+				t.Fatalf("schema without %s passed Task Search contract", testCase.name)
+			}
+			if err := tx.Rollback(); err != nil {
+				t.Fatalf("restore schema after removing %s: %v", testCase.name, err)
+			}
+		})
+	}
+}
+
+func TestTaskSearchMigrationCompletesFromEveryPublishedCheckpoint(t *testing.T) {
+	for _, checkpoint := range []int64{59, 60, 61, 62, 63, 64, 65, 66, 67, 68} {
+		t.Run(fmt.Sprintf("version_%d", checkpoint), func(t *testing.T) {
+			legacy, root := openVersion59TaskSearchFixture(t)
+			if checkpoint > 59 {
+				provider, err := newMetadataMigrationProvider(legacy)
+				if err != nil {
+					t.Fatalf("create migration provider: %v", err)
+				}
+				if _, err := provider.UpTo(t.Context(), checkpoint); err != nil {
+					t.Fatalf("advance to migration %d: %v", checkpoint, err)
+				}
+			}
+			if err := legacy.Close(); err != nil {
+				t.Fatalf("close version %d metadata database: %v", checkpoint, err)
+			}
+
+			store, err := Open(root)
+			if err != nil {
+				t.Fatalf("Open from version %d: %v", checkpoint, err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+
+			assertTaskSearchSchemaObjects(t, store.db)
+			assertTaskSearchIndexCatalog(t, store.db, []string{
+				"task_search_documents_comment_unique",
+				"task_search_documents_task_body_unique",
+				"task_search_documents_task_short_id_unique",
+				"task_search_documents_task_title_unique",
+			})
+			assertTaskSearchTriggerCatalog(t, store.db, taskSearchTriggerNames)
+			assertTaskSearchInvariants(t, store.db)
+			assertTaskSearchLegacySourcesSearchable(t, store.db)
+		})
+	}
+}
+
+func TestTaskSearchMigrationInstallsAfterWorkflowFixesMigrationHistory(t *testing.T) {
+	legacy, root := openVersion59TaskSearchFixture(t)
+	provider, err := newMetadataMigrationProvider(legacy)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 65); err != nil {
+		t.Fatalf("advance through workflow-fixes migration history: %v", err)
+	}
+	version, err := provider.GetDBVersion(t.Context())
+	if err != nil {
+		t.Fatalf("read workflow-fixes migration version: %v", err)
+	}
+	if version != 65 {
+		t.Fatalf("version after workflow-fixes migration history = %d, want 65", version)
+	}
+	assertNoTaskSearchSchemaObjects(t, legacy)
+	var workflowStorageClass string
+	if err := legacy.QueryRow(`SELECT typeof(id) FROM workflows WHERE name = 'Workflow'`).Scan(&workflowStorageClass); err != nil {
+		t.Fatalf("read workflow identity after main migration: %v", err)
+	}
+	if workflowStorageClass != "blob" {
+		t.Fatalf("workflow identity storage after main migration = %q, want blob", workflowStorageClass)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close workflow-fixes migration checkpoint: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open after workflow-fixes migration checkpoint: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	assertTaskSearchSchemaObjects(t, store.db)
+	assertTaskSearchInvariants(t, store.db)
+	assertTaskSearchLegacySourcesSearchable(t, store.db)
+}
+
+func TestTaskSearchMigrationInstallsPinnedFTSBehavior(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := int64(1)
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	insertTaskSearchTestTask(t, store.db, "task-fts-config", 1, "KNT-1", "ZÀBcQ", "other", now)
+
+	assertTaskSearchSourceSearchable(t, store.db, "abc", "title", "task-fts-config")
+	assertTaskSearchShortIDSearchable(t, store.db, "knt", "task-fts-config")
+	var indexedTitle sql.NullString
+	if err := store.db.QueryRow(`
+SELECT task_search_fts.title
+FROM task_search_fts
+JOIN task_search_documents document
+  ON document.document_id = task_search_fts.rowid
+WHERE document.source_kind = 'title'
+  AND document.task_id = ?`, "task-fts-config").Scan(&indexedTitle); err != nil {
+		t.Fatalf("read external-content Task Search title: %v", err)
+	}
+	if !indexedTitle.Valid || indexedTitle.String != "ZÀBcQ" {
+		t.Fatalf("external-content Task Search title = %+v, want ZÀBcQ", indexedTitle)
+	}
+}
+
+func TestTaskSearchMigrationHardCutoverRebuildsEveryCanonicalSource(t *testing.T) {
+	legacy, _ := openVersion59TaskSearchFixture(t)
+	t.Cleanup(func() { _ = legacy.Close() })
+	provider, err := newMetadataMigrationProvider(legacy)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 75); err != nil {
+		t.Fatalf("advance to immediately preceding schema: %v", err)
+	}
+	var priorDocumentID int64
+	if err := legacy.QueryRow(`
+SELECT document_id
+FROM task_search_documents
+WHERE source_kind = 'title'
+  AND task_id = 'task-legacy-search-one'`).Scan(&priorDocumentID); err != nil {
+		t.Fatalf("read prior derived document id: %v", err)
+	}
+	if _, err := legacy.Exec(`UPDATE task_search_documents SET document_id = document_id + 1000`); err != nil {
+		t.Fatalf("make prior derived document ids noncanonical: %v", err)
+	}
+
+	if _, err := provider.Up(t.Context()); err != nil {
+		t.Fatalf("apply Short ID search cutover: %v", err)
+	}
+
+	var sourceCount, shortIDCount int
+	if err := legacy.QueryRow(`SELECT COUNT(*) FROM task_search_documents`).Scan(&sourceCount); err != nil {
+		t.Fatalf("count rebuilt search documents: %v", err)
+	}
+	if err := legacy.QueryRow(`SELECT COUNT(*) FROM task_search_documents WHERE source_kind = 'short_id'`).Scan(&shortIDCount); err != nil {
+		t.Fatalf("count rebuilt Short ID documents: %v", err)
+	}
+	if sourceCount != 8 || shortIDCount != 2 {
+		t.Fatalf("rebuilt source counts = all:%d Short ID:%d, want 8 and 2", sourceCount, shortIDCount)
+	}
+	var rebuiltDocumentID int64
+	if err := legacy.QueryRow(`
+SELECT document_id
+FROM task_search_documents
+WHERE source_kind = 'title'
+  AND task_id = 'task-legacy-search-one'`).Scan(&rebuiltDocumentID); err != nil {
+		t.Fatalf("read rebuilt derived document id: %v", err)
+	}
+	if rebuiltDocumentID == priorDocumentID+1000 {
+		t.Fatalf("cutover preserved prior internal document id %d", rebuiltDocumentID)
+	}
+	assertTaskSearchInvariants(t, legacy)
+}
+
 func assertTaskSearchLegacySourcesSearchable(t *testing.T, db *sql.DB) {
 	t.Helper()
 	for _, search := range []struct {
@@ -70,6 +271,107 @@ func assertTaskSearchLegacySourcesSearchable(t *testing.T, db *sql.DB) {
 	} {
 		assertTaskSearchSourceSearchable(t, db, search.query, search.sourceKind, search.wantID)
 	}
+}
+
+func TestTaskSearchMigration66IsAtomic(t *testing.T) {
+	legacy, _ := openVersion59TaskSearchFixture(t)
+	t.Cleanup(func() { _ = legacy.Close() })
+	provider, err := goose.NewProvider(
+		goose.DialectSQLite3,
+		legacy,
+		taskSearchMigrationsWithForcedFailure(t),
+		goose.WithLogger(goose.NopLogger()),
+		goose.WithDisableGlobalRegistry(true),
+	)
+	if err != nil {
+		t.Fatalf("create failing task-search migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(context.Background(), 66); err == nil {
+		t.Fatal("task-search migration unexpectedly succeeded despite forced trailing failure")
+	}
+	version, err := provider.GetDBVersion(t.Context())
+	if err != nil {
+		t.Fatalf("read version after failed task-search migration: %v", err)
+	}
+	if version != 65 {
+		t.Fatalf("version after failed task-search migration = %d, want 65", version)
+	}
+	assertNoTaskSearchSchemaObjects(t, legacy)
+	assertTaskSearchLegacySourcesRemain(t, legacy)
+}
+
+func openVersion59TaskSearchFixture(t *testing.T) (*sql.DB, string) {
+	t.Helper()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	legacy, err := openDatabaseAtVersionForTest(t, root, dbPath, 59)
+	if err != nil {
+		t.Fatalf("open version 59 metadata database: %v", err)
+	}
+	assertNoTaskSearchSchemaObjects(t, legacy)
+	now := int64(1)
+	execSeed(t, legacy, "legacy project", `INSERT INTO projects (
+    id, display_name, project_key, next_task_seq, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('project-legacy-search', 'Legacy search', 'LEG', 3, ?, ?)`, now, now)
+	seedWorkflowGraph(t, legacy, "project-legacy-search", now)
+	for _, task := range []struct {
+		id      string
+		seq     int
+		shortID string
+		title   string
+		body    string
+	}{
+		{id: "task-legacy-search-one", seq: 1, shortID: "LEG-1", title: "legacy title one zebra", body: "legacy body one yak"},
+		{id: "task-legacy-search-two", seq: 2, shortID: "LEG-2", title: "legacy title two xerus", body: "legacy body two wombat"},
+	} {
+		execSeed(t, legacy, "legacy Task", `INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body,
+    created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES (?, 'link-1', 1, ?, ?, ?, ?, ?, ?, '{}')`,
+			task.id, task.seq, task.shortID, task.title, task.body, now, now,
+		)
+	}
+	for _, comment := range []struct {
+		id     string
+		taskID string
+		body   string
+	}{
+		{id: "comment-legacy-search-one", taskID: "task-legacy-search-one", body: "legacy comment one vulture"},
+		{id: "comment-legacy-search-two", taskID: "task-legacy-search-two", body: "legacy comment two urchin"},
+	} {
+		execSeed(t, legacy, "legacy Task Comment", `INSERT INTO task_comments (
+    id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, ?, 'user', 'operator', ?, ?)`, comment.id, comment.taskID, comment.body, now, now)
+	}
+	return legacy, root
+}
+
+func taskSearchMigrationsWithForcedFailure(t *testing.T) fs.FS {
+	t.Helper()
+	entries, err := fs.ReadDir(metadatamigrations.FS, ".")
+	if err != nil {
+		t.Fatalf("list metadata migrations: %v", err)
+	}
+	migrations := fstest.MapFS{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := entry.Name()
+		data, err := fs.ReadFile(metadatamigrations.FS, path)
+		if err != nil {
+			t.Fatalf("read metadata migration %s: %v", entry.Name(), err)
+		}
+		if entry.Name() == "00066_task_search_index.up.sql" {
+			data = append(data, []byte("\nSELECT * FROM task_search_forced_migration_failure;\n")...)
+		}
+		migrations["migrations/"+path] = &fstest.MapFile{Data: data}
+	}
+	sub, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		t.Fatalf("create task-search migration filesystem: %v", err)
+	}
+	return sub
 }
 
 func assertTaskSearchSchemaObjects(t *testing.T, db *sql.DB) {

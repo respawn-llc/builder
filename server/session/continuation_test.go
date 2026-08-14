@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-
-	"core/shared/textutil"
 )
 
 func TestContinuationRolePersistence(t *testing.T) {
@@ -106,61 +104,5 @@ func TestNormalizeContinuationContextRole(t *testing.T) {
 				t.Fatalf("agent role = %q, want %q", *got.AgentRole, tt.want)
 			}
 		})
-	}
-}
-
-func TestNormalizeContinuationContextOpenAIBaseURLUsesTypedAbsence(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		payload string
-		want    *string
-		wantErr bool
-	}{
-		{name: "omitted", payload: `{}`},
-		{name: "null", payload: `{"openai_base_url":null}`},
-		{name: "present", payload: `{"openai_base_url":" https://example.test/v1 "}`, want: textutil.Value("https://example.test/v1")},
-		{name: "empty", payload: `{"openai_base_url":""}`, wantErr: true},
-		{name: "blank", payload: `{"openai_base_url":" \t "}`, wantErr: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var decoded ContinuationContext
-			if err := json.Unmarshal([]byte(test.payload), &decoded); err != nil {
-				t.Fatalf("decode fixture: %v", err)
-			}
-			normalized, err := NormalizeContinuationContext(decoded)
-			if test.wantErr {
-				if !errors.Is(err, ErrInvalidContinuationOpenAIBaseURL) {
-					t.Fatalf("NormalizeContinuationContext error = %v, want invalid OpenAI base URL", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("NormalizeContinuationContext: %v", err)
-			}
-			if test.want == nil {
-				if normalized != nil {
-					t.Fatalf("normalized continuation = %+v, want absent", normalized)
-				}
-				return
-			}
-			if normalized == nil || normalized.OpenAIBaseURL == nil || *normalized.OpenAIBaseURL != *test.want {
-				t.Fatalf("normalized continuation = %+v, want OpenAI base URL %q", normalized, *test.want)
-			}
-		})
-	}
-}
-
-func TestContinuationContextPersistsAbsentOpenAIBaseURLAsNull(t *testing.T) {
-	encoded, err := json.Marshal(ContinuationContext{AgentRole: textutil.Value("worker")})
-	if err != nil {
-		t.Fatalf("marshal continuation: %v", err)
-	}
-	var persisted map[string]any
-	if err := json.Unmarshal(encoded, &persisted); err != nil {
-		t.Fatalf("decode continuation: %v", err)
-	}
-	baseURL, exists := persisted["openai_base_url"]
-	if !exists || baseURL != nil {
-		t.Fatalf("persisted openai_base_url = %#v, present=%t; want explicit null", baseURL, exists)
 	}
 }

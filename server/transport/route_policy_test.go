@@ -191,9 +191,8 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	stopRoute := routeForTest(t, protocol.MethodRuntimeLiveStop)
 
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       fixture.ownSessionID,
-		Text:            "steer",
+		SessionID: fixture.ownSessionID,
+		Text:      "steer",
 	}); err != nil {
 		t.Fatalf("live steer root-scoped existing session: %v", err)
 	}
@@ -202,15 +201,13 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	}
 	missing := "6ff7ace4-e08b-43fc-b425-73242f0b3d26"
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       missing,
-		Text:            "steer",
+		SessionID: missing,
+		Text:      "steer",
 	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		t.Fatalf("missing required live session error = %v, want ErrRuntimeUnavailable", err)
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{}, stopRoute, serverapi.RuntimeLiveStopRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       missing,
+		SessionID: missing,
 	}); err != nil {
 		t.Fatalf("optional live stop missing session: %v", err)
 	}
@@ -329,10 +326,6 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, projectWorkspaceRoute, serverapi.SessionPlanRequest{}); err != nil {
 		t.Fatalf("project workspace with attached project: %v", err)
 	}
-	materializationRoute := routeForTest(t, protocol.MethodSessionWorkspaceChatMaterialize)
-	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, materializationRoute, serverapi.WorkspaceChatMaterializeRequest{}); err != nil {
-		t.Fatalf("workspace Chat materialization with attached project: %v", err)
-	}
 	workspaceListRoute := routeForTest(t, protocol.MethodWorktreeWorkspaceList)
 	if err := executor.authorizeScope(
 		ctx,
@@ -363,9 +356,6 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	}
 	if err := newRoutePolicyExecutor(unboundGateway).authorizeScope(ctx, &connectionState{}, projectWorkspaceRoute, serverapi.SessionPlanRequest{}); err == nil {
 		t.Fatal("project workspace without active project unexpectedly allowed")
-	}
-	if err := newRoutePolicyExecutor(unboundGateway).authorizeScope(ctx, &connectionState{}, materializationRoute, serverapi.WorkspaceChatMaterializeRequest{}); err == nil {
-		t.Fatal("workspace Chat materialization without active project unexpectedly allowed")
 	}
 }
 

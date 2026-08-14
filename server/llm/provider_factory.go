@@ -40,18 +40,10 @@ type ProviderModelMatcher func(model string) bool
 type ProviderTransportVariantResolver func(baseURL string, mode OpenAIAuthMode) (string, error)
 
 type ProviderVariantContract struct {
-	ProviderID               string
-	Capabilities             ProviderCapabilities
-	RemoteCompactionProtocol remoteCompactionProtocol
-	NewErrorReducer          ProviderErrorReducerFactory
+	ProviderID      string
+	Capabilities    ProviderCapabilities
+	NewErrorReducer ProviderErrorReducerFactory
 }
-
-type remoteCompactionProtocol uint8
-
-const (
-	remoteCompactionUnsupported remoteCompactionProtocol = iota
-	remoteCompactionResponsesTriggerV2
-)
 
 type ProviderContract struct {
 	Provider                Provider
@@ -94,14 +86,15 @@ func providerContracts() []ProviderContract {
 				{
 					ProviderID: "anthropic",
 					Capabilities: ProviderCapabilities{
-						ProviderID:                    "anthropic",
-						SupportsResponsesAPI:          false,
-						SupportsResponsesCompact:      false,
-						SupportsNativeWebSearch:       false,
-						SupportsReasoningEncrypted:    false,
-						SupportsServerSideContextEdit: false,
-						SupportsProviderVerbosity:     false,
-						IsOpenAIFirstParty:            false,
+						ProviderID:                     "anthropic",
+						SupportsResponsesAPI:           false,
+						SupportsResponsesCompact:       false,
+						SupportsRequestInputTokenCount: false,
+						SupportsNativeWebSearch:        false,
+						SupportsReasoningEncrypted:     false,
+						SupportsServerSideContextEdit:  false,
+						SupportsProviderVerbosity:      false,
+						IsOpenAIFirstParty:             false,
 					},
 					NewErrorReducer: newOpaqueProviderErrorReducer,
 				},
@@ -114,49 +107,50 @@ func providerContracts() []ProviderContract {
 			NewClient:               newOpenAIProviderClient,
 			ProviderVariants: []ProviderVariantContract{
 				{
-					ProviderID:               "openai",
-					RemoteCompactionProtocol: remoteCompactionResponsesTriggerV2,
+					ProviderID: "openai",
 					Capabilities: ProviderCapabilities{
-						ProviderID:                    "openai",
-						SupportsResponsesAPI:          true,
-						SupportsResponsesCompact:      true,
-						SupportsPromptCacheKey:        true,
-						SupportsNativeWebSearch:       true,
-						SupportsReasoningEncrypted:    true,
-						SupportsServerSideContextEdit: true,
-						SupportsProviderVerbosity:     true,
-						IsOpenAIFirstParty:            true,
+						ProviderID:                     "openai",
+						SupportsResponsesAPI:           true,
+						SupportsResponsesCompact:       true,
+						SupportsRequestInputTokenCount: true,
+						SupportsPromptCacheKey:         true,
+						SupportsNativeWebSearch:        true,
+						SupportsReasoningEncrypted:     true,
+						SupportsServerSideContextEdit:  true,
+						SupportsProviderVerbosity:      true,
+						IsOpenAIFirstParty:             true,
 					},
 					NewErrorReducer: newOpenAICompatibleErrorReducer,
 				},
 				{
 					ProviderID: "openai-compatible",
 					Capabilities: ProviderCapabilities{
-						ProviderID:                    "openai-compatible",
-						SupportsResponsesAPI:          true,
-						SupportsResponsesCompact:      false,
-						SupportsPromptCacheKey:        false,
-						SupportsNativeWebSearch:       false,
-						SupportsReasoningEncrypted:    false,
-						SupportsServerSideContextEdit: false,
-						SupportsProviderVerbosity:     false,
-						IsOpenAIFirstParty:            false,
+						ProviderID:                     "openai-compatible",
+						SupportsResponsesAPI:           true,
+						SupportsResponsesCompact:       false,
+						SupportsRequestInputTokenCount: false,
+						SupportsPromptCacheKey:         false,
+						SupportsNativeWebSearch:        false,
+						SupportsReasoningEncrypted:     false,
+						SupportsServerSideContextEdit:  false,
+						SupportsProviderVerbosity:      false,
+						IsOpenAIFirstParty:             false,
 					},
 					NewErrorReducer: newOpenAICompatibleErrorReducer,
 				},
 				{
-					ProviderID:               "chatgpt-codex",
-					RemoteCompactionProtocol: remoteCompactionResponsesTriggerV2,
+					ProviderID: "chatgpt-codex",
 					Capabilities: ProviderCapabilities{
-						ProviderID:                    "chatgpt-codex",
-						SupportsResponsesAPI:          true,
-						SupportsResponsesCompact:      true,
-						SupportsPromptCacheKey:        true,
-						SupportsNativeWebSearch:       true,
-						SupportsReasoningEncrypted:    true,
-						SupportsServerSideContextEdit: true,
-						SupportsProviderVerbosity:     true,
-						IsOpenAIFirstParty:            true,
+						ProviderID:                     "chatgpt-codex",
+						SupportsResponsesAPI:           true,
+						SupportsResponsesCompact:       true,
+						SupportsRequestInputTokenCount: false,
+						SupportsPromptCacheKey:         true,
+						SupportsNativeWebSearch:        true,
+						SupportsReasoningEncrypted:     true,
+						SupportsServerSideContextEdit:  true,
+						SupportsProviderVerbosity:      true,
+						IsOpenAIFirstParty:             true,
 					},
 					NewErrorReducer: newOpenAICompatibleErrorReducer,
 				},

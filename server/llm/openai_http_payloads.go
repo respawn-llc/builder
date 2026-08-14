@@ -27,14 +27,6 @@ type openAIPayloadToolControls struct {
 	choice responses.ToolChoiceOptions
 }
 
-func effectiveServiceTier(fastMode bool, capabilities ProviderCapabilities) *responses.ResponseNewParamsServiceTier {
-	if fastMode && SupportsFastModeProvider(capabilities) {
-		tier := responses.ResponseNewParamsServiceTierPriority
-		return &tier
-	}
-	return nil
-}
-
 func newOpenAIRequestPayloadBuilder(store bool, modelVerbosity string, capabilities ProviderCapabilities) openAIRequestPayloadBuilder {
 	return openAIRequestPayloadBuilder{store: store, modelVerbosity: strings.ToLower(strings.TrimSpace(modelVerbosity)), capabilities: capabilities}
 }
@@ -44,18 +36,9 @@ func (t *HTTPTransport) buildPayload(request OpenAIRequest, mode OpenAIAuthMode,
 	return builder.BuildResponse(request, mode)
 }
 
-func (t *HTTPTransport) buildDispatchPayload(
-	request OpenAIRequest,
-	mode OpenAIAuthMode,
-	capabilities ProviderCapabilities,
-	projection *codexDispatchProjection,
-) (responses.ResponseNewParams, error) {
-	payload, err := t.buildPayload(request, mode, capabilities)
-	if err != nil {
-		return responses.ResponseNewParams{}, err
-	}
-	applyCodexClientMetadata(&payload, projection)
-	return payload, nil
+func (t *HTTPTransport) buildInputTokenCountParams(request OpenAIRequest, capabilities ProviderCapabilities) (responses.InputTokenCountParams, error) {
+	builder := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, capabilities)
+	return builder.BuildInputTokenCount(request)
 }
 
 func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode OpenAIAuthMode) (responses.ResponseNewParams, error) {
@@ -111,6 +94,45 @@ func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode O
 	return out, nil
 }
 
+func (b openAIRequestPayloadBuilder) BuildInputTokenCount(request OpenAIRequest) (responses.InputTokenCountParams, error) {
+	input, err := buildResponsesInput(request.Items)
+	if err != nil {
+		return responses.InputTokenCountParams{}, err
+	}
+	toolControls, err := b.prepareToolControls(request)
+	if err != nil {
+		return responses.InputTokenCountParams{}, err
+	}
+
+	out := responses.InputTokenCountParams{
+		Model: param.NewOpt(strings.TrimSpace(request.Model)),
+		ToolChoice: responses.InputTokenCountParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(toolControls.choice),
+		},
+	}
+	if len(input) > 0 {
+		out.Input = responses.InputTokenCountParamsInputUnion{OfResponseInputItemArray: input}
+	}
+	if instructions := strings.TrimSpace(request.SystemPrompt); instructions != "" {
+		out.Instructions = param.NewOpt(instructions)
+	}
+	if len(toolControls.tools) > 0 {
+		out.Tools = toolControls.tools
+		out.ParallelToolCalls = param.NewOpt(true)
+	}
+	if shouldApplyReasoningEffort(request.SupportsReasoningEffort, request.Model, request.ReasoningEffort) {
+		out.Reasoning = buildReasoningParam(request.Model, request.ReasoningEffort)
+	}
+	textConfig, ok, err := buildInputTokenCountTextConfig(request.StructuredOutput, configuredTextVerbosity(request.Model, b.modelVerbosity, b.capabilities))
+	if err != nil {
+		return responses.InputTokenCountParams{}, err
+	}
+	if ok {
+		out.Text = textConfig
+	}
+	return out, nil
+}
+
 func (b openAIRequestPayloadBuilder) prepareToolControls(request OpenAIRequest) (openAIPayloadToolControls, error) {
 	if err := ValidateToolChoiceSupport(b.capabilities, request.ToolChoiceMode); err != nil {
 		return openAIPayloadToolControls{}, err
@@ -140,46 +162,22 @@ func openAIToolChoice(mode ToolChoiceMode) (responses.ToolChoiceOptions, error) 
 	}
 }
 
-func (b openAIRequestPayloadBuilder) BuildCompactV2(request OpenAICompactionRequest) (responses.ResponseNewParams, error) {
+func (openAIRequestPayloadBuilder) BuildCompact(request OpenAICompactionRequest) (responses.ResponseCompactParams, error) {
 	if strings.TrimSpace(request.Model) == "" {
-		return responses.ResponseNewParams{}, fmt.Errorf("compaction model is required")
+		return responses.ResponseCompactParams{}, fmt.Errorf("compaction model is required")
 	}
 	input, err := buildResponsesInput(request.InputItems)
 	if err != nil {
-		return responses.ResponseNewParams{}, err
+		return responses.ResponseCompactParams{}, err
 	}
-	trigger := responses.NewResponseInputItemCompactionTriggerParam()
-	input = append(input, responses.ResponseInputItemUnionParam{OfCompactionTrigger: &trigger})
-	out := responses.ResponseNewParams{
-		Model:             request.Model,
-		Store:             openai.Bool(b.store),
-		ParallelToolCalls: openai.Bool(false),
-		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
-		},
-		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
-	}
-	if cacheKey := strings.TrimSpace(request.PromptCacheKey); cacheKey != "" && SupportsPromptCacheKeyProvider(b.capabilities) {
-		out.PromptCacheKey = openai.String(cacheKey)
+	out := responses.ResponseCompactParams{Model: responses.ResponseCompactParamsModel(request.Model)}
+	if len(input) > 0 {
+		out.Input = responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: input}
 	}
 	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
-		out.Instructions = openai.String(instructions)
-	}
-	if serviceTier := effectiveServiceTier(request.FastMode, b.capabilities); serviceTier != nil {
-		out.ServiceTier = *serviceTier
+		out.Instructions = param.NewOpt(instructions)
 	}
 	return out, nil
-}
-
-func applyCodexClientMetadata(payload *responses.ResponseNewParams, projection *codexDispatchProjection) {
-	if projection == nil {
-		return
-	}
-	payload.SetExtraFields(map[string]any{
-		"client_metadata": map[string]string{
-			"x-codex-turn-metadata": projection.TurnMetadataJSON,
-		},
-	})
 }
 
 func (b openAIRequestPayloadBuilder) buildTools(requestTools []Tool, enableNativeWebSearch bool) ([]responses.ToolUnionParam, error) {
@@ -227,27 +225,21 @@ func buildFunctionToolParam(tool Tool) (responses.ToolUnionParam, error) {
 		}
 		return responses.ToolUnionParam{OfCustom: &custom}, nil
 	}
-	if !tool.Schema.Prepared() {
-		return responses.ToolUnionParam{}, fmt.Errorf("tool schema is not prepared for %s", tool.Name)
+	if len(tool.Schema) > 0 && !json.Valid(tool.Schema) {
+		return responses.ToolUnionParam{}, fmt.Errorf("invalid tool schema for %s", tool.Name)
 	}
-	raw, err := json.Marshal(struct {
-		Type        string          `json:"type"`
-		Name        string          `json:"name"`
-		Description string          `json:"description,omitempty"`
-		Parameters  json.RawMessage `json:"parameters"`
-		Strict      bool            `json:"strict"`
-	}{
-		Type:        "function",
-		Name:        tool.Name,
-		Description: strings.TrimSpace(tool.Description),
-		Parameters:  json.RawMessage(tool.Schema.JSON()),
-		Strict:      tool.Schema.Strict(),
-	})
-	if err != nil {
-		return responses.ToolUnionParam{}, fmt.Errorf("serialize tool schema for %s: %w", tool.Name, err)
+	params := map[string]any{"type": "object", "properties": map[string]any{}}
+	if len(tool.Schema) > 0 {
+		if err := json.Unmarshal(tool.Schema, &params); err != nil {
+			return responses.ToolUnionParam{}, fmt.Errorf("invalid tool schema for %s", tool.Name)
+		}
 	}
-	function := param.Override[responses.FunctionToolParam](json.RawMessage(raw))
-	return responses.ToolUnionParam{OfFunction: &function}, nil
+	normalizeSchemaNode(params)
+	toolParam := responses.ToolParamOfFunction(tool.Name, params, false)
+	if description := strings.TrimSpace(tool.Description); description != "" && toolParam.OfFunction != nil {
+		toolParam.OfFunction.Description = openai.String(description)
+	}
+	return toolParam, nil
 }
 
 func buildResponseTextConfig(output *StructuredOutput, verbosity string) (responses.ResponseTextConfigParam, bool, error) {
@@ -258,42 +250,52 @@ func buildResponseTextConfig(output *StructuredOutput, verbosity string) (respon
 	if output == nil {
 		return text, text.Verbosity != "", nil
 	}
-	if !output.Schema.Prepared() {
-		return responses.ResponseTextConfigParam{}, false, errors.New("structured output schema is not prepared")
-	}
-	format, err := buildStructuredOutputFormat(output)
+	schema, err := parseStructuredOutputSchema(output.Schema)
 	if err != nil {
 		return responses.ResponseTextConfigParam{}, false, err
 	}
-	text.Format = format
+	text.Format = responses.ResponseFormatTextConfigParamOfJSONSchema(strings.TrimSpace(output.Name), schema)
+	if text.Format.OfJSONSchema != nil {
+		if output.Strict {
+			text.Format.OfJSONSchema.Strict = param.NewOpt(true)
+		}
+		if description := strings.TrimSpace(output.Description); description != "" {
+			text.Format.OfJSONSchema.Description = param.NewOpt(description)
+		}
+	}
 	return text, true, nil
 }
 
-func buildStructuredOutputFormat(
-	output *StructuredOutput,
-) (responses.ResponseFormatTextConfigUnionParam, error) {
-	raw, err := json.Marshal(struct {
-		Type        string          `json:"type"`
-		Name        string          `json:"name"`
-		Schema      json.RawMessage `json:"schema"`
-		Strict      bool            `json:"strict"`
-		Description string          `json:"description,omitempty"`
-	}{
-		Type:        "json_schema",
-		Name:        strings.TrimSpace(output.Name),
-		Schema:      json.RawMessage(output.Schema.JSON()),
-		Strict:      output.Schema.Strict(),
-		Description: strings.TrimSpace(output.Description),
-	})
-	if err != nil {
-		return responses.ResponseFormatTextConfigUnionParam{}, fmt.Errorf(
-			"serialize structured output schema for %s: %w",
-			output.Name,
-			err,
-		)
+func buildInputTokenCountTextConfig(output *StructuredOutput, verbosity string) (responses.InputTokenCountParamsText, bool, error) {
+	text := responses.InputTokenCountParamsText{}
+	if verbosity != "" {
+		text.Verbosity = verbosity
 	}
-	format := param.Override[responses.ResponseFormatTextJSONSchemaConfigParam](json.RawMessage(raw))
-	return responses.ResponseFormatTextConfigUnionParam{OfJSONSchema: &format}, nil
+	if output == nil {
+		return text, text.Verbosity != "", nil
+	}
+	schema, err := parseStructuredOutputSchema(output.Schema)
+	if err != nil {
+		return responses.InputTokenCountParamsText{}, false, err
+	}
+	text.Format = responses.ResponseFormatTextConfigParamOfJSONSchema(strings.TrimSpace(output.Name), schema)
+	if text.Format.OfJSONSchema != nil {
+		if output.Strict {
+			text.Format.OfJSONSchema.Strict = param.NewOpt(true)
+		}
+		if description := strings.TrimSpace(output.Description); description != "" {
+			text.Format.OfJSONSchema.Description = param.NewOpt(description)
+		}
+	}
+	return text, true, nil
+}
+
+func parseStructuredOutputSchema(raw json.RawMessage) (map[string]any, error) {
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return nil, fmt.Errorf("invalid structured output schema")
+	}
+	return schema, nil
 }
 
 func shouldApplyReasoningEffort(contractSupport bool, model, effort string) bool {
@@ -332,4 +334,72 @@ func configuredTextVerbosity(model, configured string, providerCaps ProviderCapa
 		}
 	}
 	return ""
+}
+
+func normalizeSchemaNode(node any) {
+	obj, ok := node.(map[string]any)
+	if ok {
+		if isJSONObjectSchema(obj) {
+			if _, exists := obj["additionalProperties"]; !exists {
+				obj["additionalProperties"] = false
+			}
+		}
+		if props, ok := obj["properties"].(map[string]any); ok {
+			for _, prop := range props {
+				normalizeSchemaNode(prop)
+			}
+		}
+		if defs, ok := obj["$defs"].(map[string]any); ok {
+			for _, def := range defs {
+				normalizeSchemaNode(def)
+			}
+		}
+		if defs, ok := obj["definitions"].(map[string]any); ok {
+			for _, def := range defs {
+				normalizeSchemaNode(def)
+			}
+		}
+		if items, exists := obj["items"]; exists {
+			normalizeSchemaNode(items)
+		}
+		for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+			if list, ok := obj[key].([]any); ok {
+				for _, item := range list {
+					normalizeSchemaNode(item)
+				}
+			}
+		}
+		for _, key := range []string{"not", "if", "then", "else"} {
+			if child, exists := obj[key]; exists {
+				normalizeSchemaNode(child)
+			}
+		}
+		return
+	}
+
+	if list, ok := node.([]any); ok {
+		for _, item := range list {
+			normalizeSchemaNode(item)
+		}
+	}
+}
+
+func isJSONObjectSchema(schema map[string]any) bool {
+	if len(schema) == 0 {
+		return false
+	}
+	if typeField, ok := schema["type"]; ok {
+		switch value := typeField.(type) {
+		case string:
+			return strings.TrimSpace(value) == "object"
+		case []any:
+			for _, item := range value {
+				if stringValue, ok := item.(string); ok && strings.TrimSpace(stringValue) == "object" {
+					return true
+				}
+			}
+		}
+	}
+	_, hasProps := schema["properties"]
+	return hasProps
 }

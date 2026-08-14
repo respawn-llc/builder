@@ -29,7 +29,7 @@ async function refreshVisibleQueries(queryClient: ReturnType<typeof useQueryClie
     queryClient.invalidateQueries({ queryKey: queryKeys.allAttention }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allBoards }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allProjectEdits }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.allProjectCatalogs }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allWorkspaces }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allTasks }),
     invalidateAllTaskSearches(queryClient),
     queryClient.invalidateQueries({ queryKey: queryKeys.allActivity }),

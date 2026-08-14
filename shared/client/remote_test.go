@@ -792,9 +792,8 @@ func TestRemotePersistInputDraftSendsComposerInput(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "draft-1",
-		SessionID:       "session-1",
-		Input:           "visible draft",
+		SessionID: "session-1",
+		Input:     "visible draft",
 	})
 	if err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
@@ -837,7 +836,7 @@ func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	var updates []serverapi.RunPromptProgress
-	resp, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+	resp, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 		updates = append(updates, progress)
 	}))
 	if err != nil {
@@ -892,7 +891,6 @@ func TestRemoteRunPromptCarriesTypedParentAgentOriginAndExplicitDefault(t *testi
 	parent := "parent-session"
 	role := "default"
 	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "present",
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))),
 		CallerSessionID: &caller,
 		Prompt:          "hello",
@@ -911,10 +909,10 @@ func TestLoopbackAndRemoteRunPromptPreserveTypedIntentCallerAndSelectors(t *test
 		name string
 		req  serverapi.RunPromptRequest
 	}{
-		{name: "human independent", req: serverapi.RunPromptRequest{ClientRequestID: "human-omitted", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}},
-		{name: "new child omitted selector", req: serverapi.RunPromptRequest{ClientRequestID: "new-omitted", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))), CallerSessionID: &caller, Prompt: "hello"}},
-		{name: "selected explicit default", req: serverapi.RunPromptRequest{ClientRequestID: "selected-default", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}}},
-		{name: "selected custom", req: serverapi.RunPromptRequest{ClientRequestID: "selected-worker", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &worker}}},
+		{name: "human independent", req: serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}},
+		{name: "new child omitted selector", req: serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))), CallerSessionID: &caller, Prompt: "hello"}},
+		{name: "selected explicit default", req: serverapi.RunPromptRequest{Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}}},
+		{name: "selected custom", req: serverapi.RunPromptRequest{Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &worker}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -981,7 +979,7 @@ func TestRemoteRunPromptDecodesTypedPolicyDenial(t *testing.T) {
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	_, err = remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "denied", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, nil)
+	_, err = remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, nil)
 	var denied *serverapi.SubagentLaunchDeniedError
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable || denied.Target == nil || *denied.Target != target {
 		t.Fatalf("RunPrompt error = %T %v, want typed hidden-target denial", err, err)
@@ -1018,9 +1016,8 @@ func TestRemoteRunPromptPreservesTypedSubagentDepthPolicyWithoutProgress(t *test
 	_, err = remote.RunPrompt(
 		context.Background(),
 		serverapi.RunPromptRequest{
-			ClientRequestID: "depth-policy",
-			Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-			Prompt:          "delegate",
+			Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			Prompt: "delegate",
 		},
 		serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 			progresses = append(progresses, progress)
@@ -1040,8 +1037,7 @@ func TestRemoteRunPromptPreservesTypedSubagentDepthPolicyWithoutProgress(t *test
 
 func assertSameRunPromptWireContract(t *testing.T, got serverapi.RunPromptRequest, want serverapi.RunPromptRequest) {
 	t.Helper()
-	if got.ClientRequestID != want.ClientRequestID ||
-		!got.Intent.Equal(want.Intent) ||
+	if !got.Intent.Equal(want.Intent) ||
 		got.Prompt != want.Prompt ||
 		serverapi.CanonicalOptionalString(got.CallerSessionID) != serverapi.CanonicalOptionalString(want.CallerSessionID) {
 		t.Fatalf("provenance request = %+v, want %+v", got, want)
@@ -1553,6 +1549,56 @@ func remoteTestRegisteredWorktreeEntry(t *testing.T, sessionScoped bool) servera
 	return entry
 }
 
+func TestRemoteProcessOutputSubscriptionAttachesProjectBeforeSubscribe(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		var req protocol.Request
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
+			return
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			return
+		}
+		if req.Method != protocol.MethodAttachProject {
+			t.Fatalf("expected attach-project before process output subscribe, got %q", req.Method)
+		}
+		var attach protocol.AttachProjectRequest
+		if err := json.Unmarshal(req.Params, &attach); err != nil {
+			t.Fatalf("decode attach-project: %v", err)
+		}
+		if attach.ProjectID != "project-1" {
+			t.Fatalf("attach project id = %q, want project-1", attach.ProjectID)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, attach.ProjectID, "workspace-1", "/workspace"))); err != nil {
+			return
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			return
+		}
+		if req.Method != protocol.MethodProcessSubscribeOutput {
+			t.Fatalf("expected process output subscribe after attach-project, got %q", req.Method)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
+			return
+		}
+		_ = websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodProcessOutputComplete, Params: mustJSON(t, protocol.StreamCompleteParams{})})
+	})
+
+	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	sub, err := remote.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: "proc-1"})
+	if err != nil {
+		t.Fatalf("SubscribeProcessOutput: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+}
+
 func TestDialRemoteURLForProjectAttachesProjectAndReturnsRemote(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		var req protocol.Request
@@ -1834,14 +1880,7 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 			case protocol.MethodProjectCreate:
 				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectCreateResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1"}}))
 			case protocol.MethodProjectAttachWorkspace:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectAttachWorkspaceResponse{
-					Binding: serverapi.ProjectBinding{
-						ProjectID:     "project-1",
-						WorkspaceID:   "workspace-2",
-						CanonicalRoot: "/tmp/workspace-b",
-					},
-					Outcome: serverapi.ProjectWorkspaceAttachOutcomeAttached,
-				}))
+				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectAttachWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1"}}))
 			case protocol.MethodProjectRebindWorkspace:
 				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectRebindWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"}}))
 			case protocol.MethodProjectGetOverview:
@@ -1882,8 +1921,8 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 	if _, err := remote.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
 		ProjectID: "project-1",
 		Category:  sessioncontract.SessionCategoryMain,
-		Offset:    remoteTestIntPointer(0),
-		Limit:     remoteTestIntPointer(20),
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
 	}); err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}
@@ -2091,9 +2130,8 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "request-1",
-		SessionID:       source.SessionID,
-		WorkspaceRoot:   source.TargetRoot,
+		SessionID:     source.SessionID,
+		WorkspaceRoot: source.TargetRoot,
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }
@@ -2141,7 +2179,7 @@ func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
 	}
 }
 
-func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationID) []protocol.StructuredRPCError {
+func remoteTestWorktreeStructuredErrors(_ serverapi.WorktreeOperationID) []protocol.StructuredRPCError {
 	return []protocol.StructuredRPCError{
 		&serverapi.WorktreeSelectorError{
 			Kind:  serverapi.WorktreeSelectorErrorKindAmbiguous,
@@ -2152,14 +2190,6 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 				FallbackIdentity: "/repo/feature",
 			}},
 		},
-		&serverapi.WorktreeTransitionPendingError{
-			SessionID:          "session",
-			PendingOperationID: operationID,
-		},
-		serverapi.NewWorktreeImmediateTransitionError(
-			serverapi.WorktreeImmediateTransitionOriginInactive,
-			errors.New("originating model step ended"),
-		),
 		&serverapi.WorktreeSetupRetainedError{
 			Worktree: serverapi.WorktreeTopologyEntry{
 				Variant: serverapi.WorktreeTopologyVariantRegistered,
@@ -2191,23 +2221,13 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 	}
 }
 
-func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protocol.StructuredRPCError, operationID serverapi.WorktreeOperationID) {
+func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protocol.StructuredRPCError, _ serverapi.WorktreeOperationID) {
 	t.Helper()
 	switch source.(type) {
 	case *serverapi.WorktreeSelectorError:
 		var decoded *serverapi.WorktreeSelectorError
 		if !errors.As(err, &decoded) || len(decoded.Candidates) != 1 || decoded.Candidates[0].FallbackIdentity != "/repo/feature" {
 			t.Fatalf("decoded selector error = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeTransitionPendingError:
-		var decoded *serverapi.WorktreeTransitionPendingError
-		if !errors.As(err, &decoded) || decoded.PendingOperationID != operationID || decoded.SessionID != "session" {
-			t.Fatalf("decoded pending transition = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeImmediateTransitionError:
-		var decoded *serverapi.WorktreeImmediateTransitionError
-		if !errors.As(err, &decoded) || decoded.Kind != serverapi.WorktreeImmediateTransitionOriginInactive {
-			t.Fatalf("decoded immediate transition = %+v (%v)", decoded, err)
 		}
 	case *serverapi.WorktreeSetupRetainedError:
 		var decoded *serverapi.WorktreeSetupRetainedError
@@ -2323,11 +2343,6 @@ func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 		{name: "manual compaction active", cause: serverapi.ErrManualCompactionActive, check: func(t *testing.T, err error) {
 			if !errors.Is(err, serverapi.ErrManualCompactionActive) {
 				t.Fatalf("decoded cause = %v, want manual compaction active", err)
-			}
-		}},
-		{name: "runtime unavailable", cause: serverapi.ErrRuntimeUnavailable, check: func(t *testing.T, err error) {
-			if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-				t.Fatalf("decoded cause = %v, want runtime unavailable", err)
 			}
 		}},
 	} {

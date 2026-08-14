@@ -11,50 +11,142 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/server/workflow"
+	"core/server/workflowruntime"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
 
-type steeringPriority int
-
-const (
-	steeringPriorityRuntimeContext steeringPriority = iota
-	steeringPriorityUser
-	steeringPriorityNormal
-	steeringPriorityRuntimeEvent
-)
-
 type steeringIntent struct {
-	priority steeringPriority
-	items    []steeringItem
+	items []steeringMutation
 }
 
-type steeringItem struct {
-	message                     *steeringMessage
-	assistantCommit             *steeringAssistantCommit
-	goalNoticeAndStatus         *steeringGoalNoticeAndStatus
-	committedAssistant          *steeringCommittedAssistantMessage
-	completedResponseResolution *steeringCompletedResponseResolution
-	localEntry                  *steeringLocalEntry
-	reviewerFeedback            *steeringReviewerFeedback
-	reviewerError               *steeringReviewerError
-	historyReplace              *steeringHistoryReplacement
-	toolCompletion              *tools.Result
-	resultGroupReport           *steeringResultGroupReport
-	resultGroupFlush            *steeringResultGroupFlush
-	resultGroupClose            *steeringResultGroupClose
-	missingToolOutputRepair     *steeringMissingToolOutputRepair
-	queuedFlush                 *steeringQueuedUserMessageFlush
-	queuedRestore               *steeringQueuedUserMessageRestore
-	event                       *Event
-	streaming                   *steeringStreamingOutput
-	cacheWarning                *steeringCacheWarning
-	cacheObservation            *steeringCacheObservation
-	liveToolAbort               *steeringLiveToolAbort
-	commitReceipt               *session.CommitReceipt
+type steeringMutation interface {
+	runtimeMutation()
+}
+
+func validateSteeringMutation(mutation steeringMutation) error {
+	if mutation == nil {
+		return errors.New("Runtime mutation is required")
+	}
+	switch mutation := mutation.(type) {
+	case *steeringMessage:
+		if mutation == nil {
+			return errors.New("message Runtime mutation is required")
+		}
+	case *steeringAssistantCommit:
+		if mutation == nil {
+			return errors.New("assistant commit Runtime mutation is required")
+		}
+	case *steeringGoalNoticeAndStatus:
+		if mutation == nil {
+			return errors.New("Goal Runtime mutation is required")
+		}
+	case *steeringGoalMutation:
+		if mutation == nil {
+			return errors.New("Goal command Runtime mutation is required")
+		}
+	case *steeringThinkingLevel:
+		if mutation == nil {
+			return errors.New("thinking-level Runtime mutation is required")
+		}
+	case *steeringFastMode:
+		if mutation == nil {
+			return errors.New("Fast Mode Runtime mutation is required")
+		}
+	case *steeringReviewerMode:
+		if mutation == nil {
+			return errors.New("Reviewer Runtime mutation is required")
+		}
+	case *steeringAutoCompaction:
+		if mutation == nil {
+			return errors.New("auto-compaction Runtime mutation is required")
+		}
+	case *steeringQuestions:
+		if mutation == nil {
+			return errors.New("Questions Runtime mutation is required")
+		}
+	case *steeringCommittedAssistantMessage:
+		if mutation == nil {
+			return errors.New("committed assistant Runtime mutation is required")
+		}
+	case *steeringCompletedResponseResolution:
+		if mutation == nil {
+			return errors.New("completed response Runtime mutation is required")
+		}
+	case *steeringLocalEntry:
+		if mutation == nil {
+			return errors.New("local entry Runtime mutation is required")
+		}
+	case *steeringReviewerFeedback:
+		if mutation == nil {
+			return errors.New("Reviewer feedback Runtime mutation is required")
+		}
+	case *steeringReviewerError:
+		if mutation == nil {
+			return errors.New("Reviewer error Runtime mutation is required")
+		}
+	case *steeringHistoryReplacement:
+		if mutation == nil {
+			return errors.New("history replacement Runtime mutation is required")
+		}
+	case *steeringToolCompletion:
+		if mutation == nil {
+			return errors.New("tool completion Runtime mutation is required")
+		}
+	case *steeringResultGroupReport:
+		if mutation == nil {
+			return errors.New("Result Group report Runtime mutation is required")
+		}
+	case *steeringResultGroupFlush:
+		if mutation == nil {
+			return errors.New("Result Group flush Runtime mutation is required")
+		}
+	case *steeringResultGroupClose:
+		if mutation == nil {
+			return errors.New("Result Group close Runtime mutation is required")
+		}
+	case *steeringMissingToolOutputRepair:
+		if mutation == nil {
+			return errors.New("missing tool output Runtime mutation is required")
+		}
+	case *steeringQueuedUserMessageFlush:
+		if mutation == nil {
+			return errors.New("queued user flush Runtime mutation is required")
+		}
+	case *steeringQueuedUserMessageRestore:
+		if mutation == nil {
+			return errors.New("queued user restore Runtime mutation is required")
+		}
+	case *steeringEvent:
+		if mutation == nil {
+			return errors.New("event Runtime mutation is required")
+		}
+	case *steeringStreamingOutput:
+		if mutation == nil {
+			return errors.New("streaming Runtime mutation is required")
+		}
+	case *steeringCacheWarning:
+		if mutation == nil {
+			return errors.New("cache warning Runtime mutation is required")
+		}
+	case *steeringCacheObservation:
+		if mutation == nil {
+			return errors.New("cache observation Runtime mutation is required")
+		}
+	case *steeringLiveToolAbort:
+		if mutation == nil {
+			return errors.New("live tool abort Runtime mutation is required")
+		}
+	default:
+		return fmt.Errorf("unsupported Runtime mutation %T", mutation)
+	}
+	return nil
 }
 
 type steeringMessage struct {
@@ -80,6 +172,41 @@ type steeringAssistantCommitResult struct {
 type steeringGoalNoticeAndStatus struct {
 	message llm.Message
 	update  GoalStatusUpdate
+}
+
+type steeringGoalMutation struct {
+	mutation GoalMutation
+	result   *GoalCommandResult
+}
+
+type steeringThinkingLevel struct {
+	level string
+}
+
+type steeringFastMode struct {
+	enabled  bool
+	feedback func(bool) string
+	changed  *bool
+}
+
+type steeringReviewerMode struct {
+	enabled  bool
+	feedback func(bool, string, bool) string
+	changed  *bool
+	mode     *string
+}
+
+type steeringAutoCompaction struct {
+	enabled       bool
+	changed       *bool
+	resultEnabled *bool
+}
+
+type steeringQuestions struct {
+	enabled       bool
+	feedback      func(bool, bool) string
+	changed       *bool
+	resultEnabled *bool
 }
 
 type steeringLocalEntry struct {
@@ -204,6 +331,42 @@ type steeringQueuedUserMessageRestore struct {
 	items []queuedUserMessage
 }
 
+type steeringToolCompletion struct {
+	result tools.Result
+}
+
+type steeringEvent struct {
+	event Event
+}
+
+func (*steeringMessage) runtimeMutation()                     {}
+func (*steeringAssistantCommit) runtimeMutation()             {}
+func (*steeringGoalNoticeAndStatus) runtimeMutation()         {}
+func (*steeringGoalMutation) runtimeMutation()                {}
+func (*steeringThinkingLevel) runtimeMutation()               {}
+func (*steeringFastMode) runtimeMutation()                    {}
+func (*steeringReviewerMode) runtimeMutation()                {}
+func (*steeringAutoCompaction) runtimeMutation()              {}
+func (*steeringQuestions) runtimeMutation()                   {}
+func (*steeringCommittedAssistantMessage) runtimeMutation()   {}
+func (*steeringCompletedResponseResolution) runtimeMutation() {}
+func (*steeringLocalEntry) runtimeMutation()                  {}
+func (*steeringReviewerFeedback) runtimeMutation()            {}
+func (*steeringReviewerError) runtimeMutation()               {}
+func (*steeringHistoryReplacement) runtimeMutation()          {}
+func (*steeringToolCompletion) runtimeMutation()              {}
+func (*steeringResultGroupReport) runtimeMutation()           {}
+func (*steeringResultGroupFlush) runtimeMutation()            {}
+func (*steeringResultGroupClose) runtimeMutation()            {}
+func (*steeringMissingToolOutputRepair) runtimeMutation()     {}
+func (*steeringQueuedUserMessageFlush) runtimeMutation()      {}
+func (*steeringQueuedUserMessageRestore) runtimeMutation()    {}
+func (*steeringEvent) runtimeMutation()                       {}
+func (*steeringStreamingOutput) runtimeMutation()             {}
+func (*steeringCacheWarning) runtimeMutation()                {}
+func (*steeringCacheObservation) runtimeMutation()            {}
+func (*steeringLiveToolAbort) runtimeMutation()               {}
+
 type steeringMessageEventPolicy uint8
 
 const (
@@ -211,17 +374,17 @@ const (
 	steeringMessageEventNone
 )
 
-func steerMessagesWithPersistenceIntent(priority steeringPriority, eventPolicy steeringMessageEventPolicy, persist bool, messages []llm.Message) steeringIntent {
-	items := make([]steeringItem, 0, len(messages))
+func steerMessagesWithPersistenceIntent(eventPolicy steeringMessageEventPolicy, persist bool, messages []llm.Message) steeringIntent {
+	items := make([]steeringMutation, 0, len(messages))
 	for _, message := range messages {
 		msg := message
-		items = append(items, steeringItem{message: &steeringMessage{
+		items = append(items, &steeringMessage{
 			message:     msg,
 			eventPolicy: eventPolicy,
 			persist:     persist,
-		}})
+		})
 	}
-	return steeringIntent{priority: priority, items: items}
+	return steeringIntent{items: items}
 }
 
 func steerAssistantCommitIntent(
@@ -230,54 +393,54 @@ func steerAssistantCommitIntent(
 	result *steeringAssistantCommitResult,
 ) steeringIntent {
 	return steeringIntent{
-		priority: steeringPriorityNormal,
-		items: []steeringItem{{
-			assistantCommit: &steeringAssistantCommit{
+		items: []steeringMutation{
+			&steeringAssistantCommit{
 				message:           msg,
 				executableCallIDs: executableCallIDs,
 				result:            result,
 			},
-		}},
+		},
 	}
 }
 
 func steerUserMessageWithFlushIntent(msg llm.Message) steeringIntent {
-	intent := steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{msg})
 	var provenance *TranscriptCommittedRowProvenance
-	intent.items[0].message.provenanceDestination = &provenance
-	intent.items[0].message.emitUserFlushEvent = true
-	return intent
+	return steeringIntent{items: []steeringMutation{&steeringMessage{
+		message:               msg,
+		eventPolicy:           steeringMessageEventNone,
+		persist:               true,
+		provenanceDestination: &provenance,
+		emitUserFlushEvent:    true,
+	}}}
 }
 
 func steerLocalEntryIntent(entry storedLocalEntry) steeringIntent {
 	copyEntry := entry
 	return steeringIntent{
-		priority: steeringPriorityNormal,
-		items: []steeringItem{{localEntry: &steeringLocalEntry{
+		items: []steeringMutation{&steeringLocalEntry{
 			entry: copyEntry,
-		}}},
+		}},
 	}
 }
 
 func steerReasoningLocalEntryIntent(entry storedLocalEntry, identity TranscriptReasoningTraceIdentity) steeringIntent {
 	copyEntry := entry
 	return steeringIntent{
-		priority: steeringPriorityNormal,
-		items: []steeringItem{{localEntry: &steeringLocalEntry{
+		items: []steeringMutation{&steeringLocalEntry{
 			entry:                  copyEntry,
 			reasoningTraceIdentity: &identity,
-		}}},
+		}},
 	}
 }
 
 func steerReviewerFeedbackIntent(suggestions []string, visibility transcript.EntryVisibility) steeringIntent {
-	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerFeedback: &steeringReviewerFeedback{
+	return steeringIntent{items: []steeringMutation{&steeringReviewerFeedback{
 		suggestions: append([]string(nil), suggestions...), visibility: visibility,
-	}}}}
+	}}}
 }
 
 func steerReviewerErrorIntent(detail string) steeringIntent {
-	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerError: &steeringReviewerError{detail: detail}}}}
+	return steeringIntent{items: []steeringMutation{&steeringReviewerError{detail: detail}}}
 }
 
 func steerHistoryReplacementIntent(engine string, mode compactionMode, compactionNumber int, pendingHandoffFutureMessage string, lastCommittedAssistantFinalAnswer *string, items []llm.ResponseItem) steeringIntent {
@@ -291,19 +454,17 @@ func steerHistoryReplacementIntent(engine string, mode compactionMode, compactio
 		Items:                             llm.CloneResponseItems(preparedItems),
 	}
 	return steeringIntent{
-		priority: steeringPriorityNormal,
-		items: []steeringItem{{historyReplace: &steeringHistoryReplacement{
+		items: []steeringMutation{&steeringHistoryReplacement{
 			payload:          payload,
 			projectedEntries: transcriptEntriesFromHistoryReplacement(payload.Items, payload.CompactionNumber),
-		}}},
+		}},
 	}
 }
 
 func steerToolCompletionIntent(result tools.Result) steeringIntent {
 	copyResult := cloneToolResult(result)
 	return steeringIntent{
-		priority: steeringPriorityNormal,
-		items:    []steeringItem{{toolCompletion: &copyResult}},
+		items: []steeringMutation{&steeringToolCompletion{result: copyResult}},
 	}
 }
 
@@ -315,26 +476,12 @@ func steerResultGroupReportIntent(
 ) steeringIntent {
 	copyUnit := cloneResultGroupUnit(unit)
 	return steeringIntent{
-		priority: steeringPriorityNormal,
-		items: []steeringItem{{resultGroupReport: &steeringResultGroupReport{
+		items: []steeringMutation{&steeringResultGroupReport{
 			collector: collector,
 			callID:    callID,
 			unit:      &copyUnit,
 			outcome:   outcome,
-		}}},
-	}
-}
-
-func steerResultGroupOperationalFailureIntent(
-	collector *resultGroupCollector,
-	cause error,
-) steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityNormal,
-		items: []steeringItem{{resultGroupReport: &steeringResultGroupReport{
-			collector:          collector,
-			operationalFailure: cause,
-		}}},
+		}},
 	}
 }
 
@@ -343,76 +490,92 @@ func steerResultGroupFlushIntent(
 	reason ResultGroupFlushReason,
 ) steeringIntent {
 	return steeringIntent{
-		priority: steeringPriorityNormal,
-		items: []steeringItem{{resultGroupFlush: &steeringResultGroupFlush{
+		items: []steeringMutation{&steeringResultGroupFlush{
 			collector: collector,
 			reason:    reason,
-		}}},
-	}
-}
-
-func steerResultGroupCloseIntent(collector *resultGroupCollector) steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityNormal,
-		items: []steeringItem{{resultGroupClose: &steeringResultGroupClose{
-			collector: collector,
-		}}},
+		}},
 	}
 }
 
 func steerQueuedUserMessageFlushIntent(message llm.Message, batch []string, queueItems []QueuedUserMessage) steeringIntent {
 	return steeringIntent{
-		priority: steeringPriorityUser,
-		items: []steeringItem{{queuedFlush: &steeringQueuedUserMessageFlush{
+		items: []steeringMutation{&steeringQueuedUserMessageFlush{
 			message:    message,
 			batch:      append([]string(nil), batch...),
 			queueItems: append([]QueuedUserMessage(nil), queueItems...),
-		}}},
+		}},
 	}
 }
 
 func steerQueuedUserMessageRestoreIntent(items []queuedUserMessage) steeringIntent {
 	return steeringIntent{
-		priority: steeringPriorityUser,
-		items: []steeringItem{{queuedRestore: &steeringQueuedUserMessageRestore{
+		items: []steeringMutation{&steeringQueuedUserMessageRestore{
 			items: append([]queuedUserMessage(nil), items...),
-		}}},
+		}},
 	}
 }
 
 func steerEventIntent(evt Event) steeringIntent {
 	copyEvent := evt
 	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{event: &copyEvent}},
+		items: []steeringMutation{&steeringEvent{event: copyEvent}},
 	}
 }
 
 func steerGoalNoticeAndStatusIntent(message llm.Message, update GoalStatusUpdate) steeringIntent {
 	return steeringIntent{
-		priority: steeringPriorityRuntimeContext,
-		items: []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{
+		items: []steeringMutation{&steeringGoalNoticeAndStatus{
 			message: message,
 			update:  update,
-		}}},
+		}},
 	}
 }
 
-func steerLiveToolAbortIntent(reason string) steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{liveToolAbort: &steeringLiveToolAbort{reason: strings.TrimSpace(reason)}}},
-	}
+func steerThinkingLevelIntent(level string) steeringIntent {
+	return steeringIntent{items: []steeringMutation{&steeringThinkingLevel{level: level}}}
+}
+
+func steerFastModeIntent(enabled bool, feedback func(bool) string, changed *bool) steeringIntent {
+	return steeringIntent{items: []steeringMutation{&steeringFastMode{
+		enabled: enabled, feedback: feedback, changed: changed,
+	}}}
+}
+
+func steerReviewerModeIntent(
+	enabled bool,
+	feedback func(bool, string, bool) string,
+	changed *bool,
+	mode *string,
+) steeringIntent {
+	return steeringIntent{items: []steeringMutation{&steeringReviewerMode{
+		enabled: enabled, feedback: feedback, changed: changed, mode: mode,
+	}}}
+}
+
+func steerAutoCompactionIntent(enabled bool, changed *bool, resultEnabled *bool) steeringIntent {
+	return steeringIntent{items: []steeringMutation{&steeringAutoCompaction{
+		enabled: enabled, changed: changed, resultEnabled: resultEnabled,
+	}}}
+}
+
+func steerQuestionsIntent(
+	enabled bool,
+	feedback func(bool, bool) string,
+	changed *bool,
+	resultEnabled *bool,
+) steeringIntent {
+	return steeringIntent{items: []steeringMutation{&steeringQuestions{
+		enabled: enabled, feedback: feedback, changed: changed, resultEnabled: resultEnabled,
+	}}}
 }
 
 func steerCommittedAssistantMessageIntent(msg llm.Message, coordinate *committedAssistantCoordinate, provenances ...*TranscriptCommittedRowProvenance) steeringIntent {
 	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items: []steeringItem{{committedAssistant: &steeringCommittedAssistantMessage{
+		items: []steeringMutation{&steeringCommittedAssistantMessage{
 			message:    msg,
 			coordinate: cloneCommittedAssistantCoordinate(coordinate),
 			provenance: firstTranscriptCommittedRowProvenance(provenances),
-		}}},
+		}},
 	}
 }
 
@@ -450,44 +613,30 @@ func completedResponseAbortInstruction() completedResponseResolutionInstruction 
 	}
 }
 
-func steerCompletedResponseResolutionIntent(instruction completedResponseResolutionInstruction, outcome *completedResponseResolutionOutcome) steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items: []steeringItem{{completedResponseResolution: &steeringCompletedResponseResolution{
-			instruction: instruction,
-			outcome:     outcome,
-		}}},
-	}
-}
-
 func steerAssistantDeltaIntent(delta llm.AssistantDelta) steeringIntent {
 	copyDelta := delta
 	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{assistantDelta: &copyDelta}}},
+		items: []steeringMutation{&steeringStreamingOutput{assistantDelta: &copyDelta}},
 	}
 }
 
 func steerReasoningDeltaIntent(delta llm.ReasoningSummaryDelta) steeringIntent {
 	copyDelta := delta
 	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{reasoningDelta: &copyDelta}}},
+		items: []steeringMutation{&steeringStreamingOutput{reasoningDelta: &copyDelta}},
 	}
 }
 
 func steerClearStreamingStateIntent() steeringIntent {
 	reason := AssistantStreamAbortSuperseded
 	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: &reason}}},
+		items: []steeringMutation{&steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: &reason}},
 	}
 }
 
 func steerClearReasoningStateIntent() steeringIntent {
 	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearReasoning: true}}},
+		items: []steeringMutation{&steeringStreamingOutput{clearReasoning: true}},
 	}
 }
 
@@ -502,20 +651,7 @@ func (e *Engine) resetReasoningAndClearStreamingState(stepID string) error {
 
 func steerResetReasoningStateIntent() steeringIntent {
 	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{reasoningReset: &steeringReasoningReset{}}}},
-	}
-}
-
-func steerCacheWarningIntent(warning transcript.CacheWarning, visibility transcript.EntryVisibility, emit bool) steeringIntent {
-	copyWarning := warning
-	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items: []steeringItem{{cacheWarning: &steeringCacheWarning{
-			warning:    copyWarning,
-			visibility: normalizeRuntimeEntryVisibility(visibility),
-			emit:       emit,
-		}}},
+		items: []steeringMutation{&steeringStreamingOutput{reasoningReset: &steeringReasoningReset{}}},
 	}
 }
 
@@ -526,15 +662,14 @@ func steerCacheObservationIntent(records []session.EventRecordPayload, response 
 		copyWarning = *warning
 	}
 	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items: []steeringItem{{cacheObservation: &steeringCacheObservation{
+		items: []steeringMutation{&steeringCacheObservation{
 			records:    copyRecords,
 			response:   response,
 			warning:    copyWarning,
 			hasWarning: warning != nil,
 			visibility: normalizeRuntimeEntryVisibility(visibility),
 			emit:       emit,
-		}}},
+		}},
 	}
 }
 
@@ -542,14 +677,8 @@ func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
 	if e.closed.Load() {
 		return ErrEngineClosed
 	}
-	return e.steerOrdered(stepID, intents...)
-}
-
-func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) error {
-	if e == nil {
-		return nil
-	}
-	return e.steerOrdered(stepID, intents...)
+	_, err := e.enqueueOutputSteering(stepID, false, intents...)
+	return err
 }
 
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
@@ -559,65 +688,596 @@ func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (s
 			len(intent.items),
 		)
 	}
-	receipt := session.CommitReceipt{}
-	intent.items[0].commitReceipt = &receipt
-	err := e.steer(stepID, intent)
-	return receipt, err
+	return e.enqueueOutputSteering(stepID, true, intent)
 }
 
-func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
-	ordered := make([]steeringIntent, 0, len(intents))
+func (e *Engine) enqueueOutputSteering(
+	stepID string,
+	commitReceipt bool,
+	intents ...steeringIntent,
+) (session.CommitReceipt, error) {
+	if e == nil || e.steering == nil {
+		return session.CommitReceipt{}, errors.New("Runtime Steering is unavailable")
+	}
+	entry := newOutputSteeringQueueEntry(stepID, commitReceipt, intents...)
+	if strings.TrimSpace(stepID) != "" {
+		if err := e.stepLifecycle.ValidateExactOutput(stepID, exactOutputAllowsClosing(intents)); err != nil {
+			if completeErr := entry.completeOutput(steeringOutputReply{err: err}); completeErr != nil {
+				return session.CommitReceipt{}, e.runtimeInvariant("complete rejected exact Runtime output", completeErr)
+			}
+			return entry.waitOutput(context.Background())
+		}
+		reply := e.applySteeringQueueEntry(entry)
+		if err := entry.completeOutput(reply); err != nil {
+			return session.CommitReceipt{}, e.runtimeInvariant("complete exact Runtime output", err)
+		}
+		return entry.waitOutput(context.Background())
+	}
+	wake, err := e.steering.append(entry)
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	if wake {
+		e.wakeSteeringDrain()
+	}
+	return entry.waitOutput(context.Background())
+}
+
+func exactOutputAllowsClosing(intents []steeringIntent) bool {
 	for _, intent := range intents {
-		if len(intent.items) == 0 {
+		for _, mutation := range intent.items {
+			switch mutation.(type) {
+			case *steeringResultGroupReport,
+				*steeringResultGroupFlush,
+				*steeringResultGroupClose,
+				*steeringToolCompletion,
+				*steeringCompletedResponseResolution,
+				*steeringCommittedAssistantMessage,
+				*steeringLiveToolAbort,
+				*steeringStreamingOutput:
+			default:
+				return false
+			}
+		}
+	}
+	return len(intents) != 0
+}
+
+func (e *Engine) wakeSteeringDrain() {
+	if e == nil || e.steering == nil {
+		return
+	}
+	if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok &&
+		lifecycle.Snapshot() != nil {
+		return
+	}
+	if !e.launchLifecycleTask(func(context.Context) *resultGroupFatal {
+		e.drainSteeringIncludingDeferredHuman(true)
+		return nil
+	}) {
+		e.steering.close()
+	}
+}
+
+func (e *Engine) wakeSteeringBoundaryDrain() {
+	if e == nil || e.steering == nil {
+		return
+	}
+	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
+		e.drainSteeringIncludingDeferredHumanWithContext(ctx, true)
+		return nil
+	}) {
+		e.steering.close()
+	}
+}
+
+func (e *Engine) drainSteering() {
+	e.drainSteeringIncludingDeferredHuman(e.stepLifecycle.Snapshot() == nil)
+}
+
+func (e *Engine) drainSteeringIncludingDeferredHuman(includeDeferredHuman bool) {
+	e.ensureLifecycle()
+	e.drainSteeringIncludingDeferredHumanWithContext(e.lifecycleCtx, includeDeferredHuman)
+}
+
+func (e *Engine) drainSteeringIncludingDeferredHumanWithContext(
+	ctx context.Context,
+	includeDeferredHuman bool,
+) {
+	if e == nil || e.steering == nil {
+		return
+	}
+	for {
+		entry, ok := e.steering.beginNext(includeDeferredHuman)
+		if !ok {
+			if !includeDeferredHuman && e.steering.pauseForDeferredHuman() {
+				return
+			}
+			if e.steering.finishDrain(e.releaseEmptyDrainDecision) {
+				return
+			}
 			continue
 		}
-		ordered = append(ordered, intent)
+		fatal := false
+		switch {
+		case entry.output != nil:
+			reply := e.applySteeringQueueEntry(entry)
+			if err := entry.completeOutput(reply); err != nil {
+				e.surfaceRunError(e.runtimeInvariant("complete Runtime Steering output", err))
+				e.closeAdmissionAfterRuntimeAbort()
+				return
+			}
+			fatal = steeringFailureRequiresRuntimeClose(reply)
+		case entry.start != nil:
+			reply := e.applyWorkflowAssignmentQueueEntry(entry)
+			entry.start.reply <- reply
+			close(entry.start.reply)
+			fatal = steeringFailureRequiresRuntimeClose(reply)
+		case entry.shell != nil:
+			result, err := e.applyUserShellQueueEntry(entry.shell)
+			if completeErr := entry.completeShell(userShellReply{result: result, err: err}); completeErr != nil {
+				e.surfaceRunError(e.runtimeInvariant("complete user-shell Steering output", completeErr))
+				e.closeAdmissionAfterRuntimeAbort()
+				return
+			}
+			fatal = errors.Is(err, session.ErrMutationDefinitelyUncommitted)
+		case entry.worktree != nil:
+			err := e.applyWorktreeTransitionQueueEntry(entry.worktree)
+			fatal = errors.Is(err, session.ErrMutationDefinitelyUncommitted)
+			if err != nil && !fatal {
+				e.queueRuntimeErrorFeedback(err)
+			}
+		case entry.compaction != nil:
+			lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle)
+			if !ok {
+				err := errors.New("manual compaction requires the default Agent Step lifecycle")
+				entry.compaction.reply <- compactionReply{err: err}
+				close(entry.compaction.reply)
+				e.surfaceRunError(err)
+				break
+			}
+			receipt, err := e.executePendingCompaction(ctx, lifecycle, entry.compaction)
+			entry.compaction.reply <- compactionReply{receipt: receipt, err: err}
+			close(entry.compaction.reply)
+			if err != nil &&
+				!errors.Is(err, ErrManualCompactionTooSoon) &&
+				!errors.Is(err, errCompactionDisabledModeNone) {
+				e.queueRuntimeErrorFeedback(err)
+			}
+		default:
+			e.surfaceRunError(e.runtimeInvariant("apply Runtime Steering current head", errors.New("Steering queue head has no concrete operation")))
+			e.closeAdmissionAfterRuntimeAbort()
+			return
+		}
+		if err := e.steering.finishCurrent(entry); err != nil {
+			e.surfaceRunError(e.runtimeInvariant("finish Runtime Steering current head", err))
+			e.closeAdmissionAfterRuntimeAbort()
+			return
+		}
+		if fatal {
+			e.closeAdmissionAfterSteeringFailure(entry)
+			return
+		}
 	}
-	if len(ordered) == 0 {
+}
+
+func (e *Engine) SubmitWorktreeTransition(
+	operation func(context.Context, func(clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+) error {
+	if e == nil || e.steering == nil {
+		return ErrSteeringUnavailable
+	}
+	entry := newWorktreeTransitionQueueEntry(operation)
+	wake, err := e.steering.append(entry)
+	if err != nil {
+		return err
+	}
+	if wake {
+		e.wakeSteeringDrain()
+	}
+	return nil
+}
+
+func (e *Engine) applyWorktreeTransitionQueueEntry(work *steeringWorktreeTransition) error {
+	if work == nil || work.operation == nil {
+		return errors.New("Worktree Steering operation is required")
+	}
+	e.ensureLifecycle()
+	err := work.operation(e.lifecycleCtx, func(target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+		if e.cfg.ApplyWorktreeTarget == nil {
+			return errors.New("Runtime Worktree target applier is unavailable")
+		}
+		if err := e.cfg.ApplyWorktreeTarget(target, reminder); err != nil {
+			return err
+		}
+		e.SetTranscriptWorkingDir(target.EffectiveWorkdir)
+		return e.SetWorktreeReminderState(reminder)
+	})
+	if err == nil {
 		return nil
 	}
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].priority < ordered[j].priority
+	persistErr := e.applyRuntimeMutations("", steerMessagesWithPersistenceIntent(
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeErrorFeedback),
+			Content:     textutil.Value(fmt.Sprintf("Scheduled Worktree operation failed: %s", err)),
+		}},
+	).items, nil)
+	return errors.Join(err, persistErr)
+}
+
+func (e *Engine) applyUserShellQueueEntry(shell *steeringUserShell) (tools.Result, error) {
+	if shell == nil {
+		return tools.Result{}, errors.New("user-shell Steering operation is required")
+	}
+	if shell.onActive != nil {
+		shell.onActive()
+	}
+	e.ensureLifecycle()
+	call := llm.ToolCall{
+		ID:   uuid.NewString(),
+		Name: string(toolspec.ToolExecCommand),
+		Input: mustJSON(map[string]any{
+			"cmd":            shell.command,
+			"user_initiated": true,
+		}),
+	}
+	receipt := session.CommitReceipt{}
+	err := e.applyRuntimeMutations("", steerMessagesWithPersistenceIntent(
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
+	).items, &receipt)
+	if err != nil || !receipt.Committed {
+		return tools.Result{}, err
+	}
+	handler, registered := e.registry.Get(toolspec.ToolExecCommand)
+	if !registered {
+		result := tools.Result{
+			CallID:  call.ID,
+			Name:    toolspec.ToolExecCommand,
+			IsError: true,
+			Output:  mustJSON(map[string]any{"error": "unknown tool"}),
+			Summary: textutil.Value("unknown tool"),
+		}
+		return result, errors.Join(e.applyRuntimeMutations("", steerToolCompletionIntent(result).items, nil), errUnknownTool)
+	}
+	result, callErr := handler.Call(e.lifecycleCtx, tools.Call{
+		ID:    call.ID,
+		Name:  toolspec.ToolExecCommand,
+		Input: call.Input,
 	})
-	for _, intent := range ordered {
-		for _, item := range intent.items {
-			if err := e.applySteeringItem(stepID, item); err != nil {
-				return err
-			}
-			if item.historyReplace == nil {
-				e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(
-					workflowPostCompletionActivityForSteeringItem(item),
-				)
-			}
+	if !toolResultHasCompletedOutcome(result) && callErr != nil {
+		result = tools.Result{
+			CallID:  call.ID,
+			Name:    toolspec.ToolExecCommand,
+			IsError: true,
+			Output:  mustJSON(map[string]any{"error": callErr.Error()}),
+			Summary: textutil.Value(callErr.Error()),
+		}
+	}
+	result.CallID = call.ID
+	result.Name = toolspec.ToolExecCommand
+	result = tools.MaterializeModelWarnings(result)
+	if e.closed.Load() {
+		return result, errors.Join(callErr, &resultGroupFatal{Cause: ErrEngineClosed})
+	}
+	persistErr := e.applyRuntimeMutations("", steerToolCompletionIntent(result).items, nil)
+	return result, errors.Join(callErr, persistErr)
+}
+
+func (e *Engine) releaseEmptyDrainDecision() {
+	if err := e.startPendingGoalLoop(); err != nil {
+		e.surfaceRunError(err)
+	}
+}
+
+func (e *Engine) drainSteeringAtBoundary(ctx context.Context, stepID string) error {
+	if e == nil || e.steering == nil {
+		return nil
+	}
+	e.ensureLifecycle()
+	drainCtx, cancelDrain := context.WithCancelCause(ctx)
+	stopLifecycleCancellation := context.AfterFunc(e.lifecycleCtx, func() {
+		cancelDrain(context.Cause(e.lifecycleCtx))
+	})
+	defer func() {
+		stopLifecycleCancellation()
+		cancelDrain(context.Canceled)
+	}()
+	e.steering.bindDeferredHumanStep(stepID)
+	e.steering.requestWake()
+	e.drainSteeringIncludingDeferredHumanWithContext(drainCtx, true)
+	return e.steering.waitUntilMutationsApplied(drainCtx)
+}
+
+func (e *Engine) AcceptHumanSteering(text string, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.acceptHumanMessageSteering(
+		llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
+		accept,
+	)
+}
+
+func (e *Engine) AcceptAgentSteering(steer AgentSteer, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.acceptHumanMessageSteering(steer.Message(), accept)
+}
+
+func (e *Engine) acceptHumanMessageSteering(message llm.Message, accept CommandAcceptance) (QueuedUserMessage, error) {
+	if e == nil || e.steering == nil || e.workflowControl == nil {
+		return QueuedUserMessage{}, ErrSteeringUnavailable
+	}
+	if message.Content == nil || strings.TrimSpace(*message.Content) == "" {
+		return QueuedUserMessage{}, errors.New("empty message")
+	}
+	if err := e.workflowControl.validateSteering(steeringAdmissionSend); err != nil {
+		return QueuedUserMessage{}, err
+	}
+	item := QueuedUserMessage{
+		ID:      runtimeids.NewQueueItemID().String(),
+		Message: message,
+	}
+	committed, err := runCommandAcceptance(accept, func() (bool, error) {
+		if err := e.workflowControl.validateSteering(steeringAdmissionSend); err != nil {
+			return false, err
+		}
+		entry := newHumanSteeringQueueEntry(item)
+		var scope *runtimeids.ExecutionScopeID
+		if execution, active := e.currentNodeExecutionConfig(); active {
+			scopeID := execution.ScopeID
+			scope = &scopeID
+		}
+		wake, err := e.steering.appendHuman(entry, scope, e.stepLifecycle.Snapshot() == nil)
+		if err != nil {
+			return false, err
+		}
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+		if wake {
+			e.wakeSteeringDrain()
+		}
+		return true, nil
+	})
+	if err := commandAcceptanceResult(committed, err); err != nil {
+		return QueuedUserMessage{}, err
+	}
+	return item, nil
+}
+
+func (e *Engine) HasPendingSteering() bool {
+	return e != nil && e.steering != nil && e.steering.pendingWork()
+}
+
+func (e *Engine) RemoveStoppedHumanSteering(scopeID runtimeids.ExecutionScopeID) []QueuedUserMessage {
+	if e == nil || e.steering == nil {
+		return nil
+	}
+	removed := e.steering.removeHumanByScope(scopeID)
+	removed = append(removed, e.messageFlow.DrainPendingUserInjectionsByScope(scopeID)...)
+	if len(removed) == 0 {
+		return nil
+	}
+	sort.SliceStable(removed, func(i, j int) bool {
+		return removed[i].ordinal < removed[j].ordinal
+	})
+	items := make([]QueuedUserMessage, 0, len(removed))
+	eventItems := make([]InterruptedHumanInput, 0, len(removed))
+	for _, removedItem := range removed {
+		item := removedItem.item
+		text, err := item.DisplayText()
+		if err != nil {
+			e.surfaceRunError(fmt.Errorf("interrupted human input: %w", err))
+			continue
+		}
+		items = append(items, item)
+		eventItems = append(eventItems, InterruptedHumanInput{
+			QueueItemID: item.ID,
+			Text:        text,
+		})
+	}
+	if len(eventItems) != 0 {
+		e.emitRaw(Event{
+			Kind: EventHumanInputInterrupted,
+			HumanInputInterrupted: &HumanInputInterruptedEvent{
+				Items: eventItems,
+			},
+		})
+	}
+	return items
+}
+
+func (e *Engine) applySteeringQueueEntry(entry *steeringQueueEntry) steeringOutputReply {
+	if err := entry.validate(); err != nil {
+		return steeringOutputReply{err: err}
+	}
+	if entry.output == nil {
+		return steeringOutputReply{err: errors.New("unsupported Steering queue operation")}
+	}
+	operation := entry.output
+	if !operation.commitReceipt {
+		items := make([]steeringMutation, 0)
+		for _, intent := range operation.intents {
+			items = append(items, intent.items...)
+		}
+		reply := steeringOutputReply{err: e.applyRuntimeMutations(operation.stepID, items, nil)}
+		e.finishHumanSteering(operation, reply.err)
+		return reply
+	}
+	receipt := session.CommitReceipt{}
+	intent := operation.intents[0]
+	err := e.applyRuntimeMutations(operation.stepID, intent.items, &receipt)
+	e.finishHumanSteering(operation, err)
+	return steeringOutputReply{receipt: receipt, err: err}
+}
+
+func (e *Engine) finishHumanSteering(operation *steeringOutputOperation, err error) {
+	if operation == nil || operation.humanItem == nil {
+		return
+	}
+	item := *operation.humanItem
+	if err != nil {
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureRuntimeUnavailable, true)
+		return
+	}
+	e.emitQueuedUserMessageStatus(item, QueuedUserMessageSubmitted, "", false)
+}
+
+func (e *Engine) applyWorkflowAssignmentQueueEntry(entry *steeringQueueEntry) steeringOutputReply {
+	start := entry.start
+	assignment := start.assignment
+	if start.persisted {
+		if err := e.validatePersistedWorkflowAssignment(start.reference, assignment); err != nil {
+			return steeringOutputReply{err: err}
+		}
+		return steeringOutputReply{receipt: session.CommitReceipt{Committed: true}}
+	}
+	message, err := buildWorkflowAssignmentMessage(assignment)
+	if err != nil {
+		return steeringOutputReply{err: err}
+	}
+	intent := steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+		true,
+		[]llm.Message{message},
+	)
+	receipt := session.CommitReceipt{}
+	err = e.applyRuntimeMutations("", intent.items, &receipt)
+	return steeringOutputReply{receipt: receipt, err: err}
+}
+
+func steeringFailureRequiresRuntimeClose(reply steeringOutputReply) bool {
+	if errors.Is(reply.err, session.ErrStoreRecoveryRequired) {
+		panic(fmt.Sprintf("Runtime Steering lost coherent Session mutation authority: %v", reply.err))
+	}
+	return errors.Is(reply.err, session.ErrMutationDefinitelyUncommitted)
+}
+
+func (e *Engine) closeAdmissionAfterSteeringFailure(failed *steeringQueueEntry) {
+	if e == nil {
+		return
+	}
+	interrupted := e.steering.pendingHumanForFailure(failed)
+	if e.messageFlow != nil {
+		interrupted = append(interrupted, e.messageFlow.DrainInterruptedUserInjections()...)
+	}
+	sort.SliceStable(interrupted, func(i, j int) bool {
+		return interrupted[i].ordinal < interrupted[j].ordinal
+	})
+	eventItems := make([]InterruptedHumanInput, 0, len(interrupted))
+	for _, input := range interrupted {
+		text, err := input.item.DisplayText()
+		if err != nil {
+			e.surfaceRunError(fmt.Errorf("fatal Steering human input: %w", err))
+			continue
+		}
+		eventItems = append(eventItems, InterruptedHumanInput{
+			QueueItemID: input.item.ID,
+			Text:        text,
+		})
+	}
+	e.closeAdmissionAfterRuntimeAbort()
+	if len(eventItems) != 0 {
+		e.emitRaw(Event{
+			Kind: EventHumanInputInterrupted,
+			HumanInputInterrupted: &HumanInputInterruptedEvent{
+				Items: eventItems,
+			},
+		})
+	}
+}
+
+func (e *Engine) validatePersistedWorkflowAssignment(
+	reference workflow.CurrentNodeReference,
+	assignment WorkflowAssignment,
+) error {
+	if err := reference.Validate(); err != nil {
+		return err
+	}
+	if assignment.Prompt.Identity != workflowruntime.CurrentNodePromptIdentity(reference) {
+		return fmt.Errorf("persisted Workflow assignment does not match Current Node %v", reference)
+	}
+	messages := e.transcriptRuntimeState().SnapshotMessages()
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.MessageType == nil || *message.MessageType != llm.MessageTypeWorkflowMode {
+			continue
+		}
+		if message.SourcePath == nil ||
+			*message.SourcePath != workflowruntime.CurrentNodePromptIdentity(reference) {
+			return fmt.Errorf("persisted Workflow assignment does not match Current Node %v", reference)
+		}
+		return nil
+	}
+	return fmt.Errorf("persisted Workflow assignment for Current Node %v is absent", reference)
+}
+
+func (e *Engine) applyRuntimeMutations(
+	stepID string,
+	items []steeringMutation,
+	commitReceipt *session.CommitReceipt,
+) error {
+	for _, item := range items {
+		if err := e.applySteeringMutation(stepID, item, commitReceipt); err != nil {
+			return err
+		}
+		if _, replacesHistory := item.(*steeringHistoryReplacement); !replacesHistory {
+			e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(
+				workflowPostCompletionActivityForSteeringMutation(item),
+			)
 		}
 	}
 	return nil
 }
 
-func workflowPostCompletionActivityForSteeringItem(item steeringItem) workflowPostCompletionActivity {
-	if item.message != nil {
-		return workflowPostCompletionMessageActivity(item.message.message)
+func (e *Engine) applyNestedRuntimeMutation(
+	stepID string,
+	mutation steeringMutation,
+	commitReceipt *session.CommitReceipt,
+) error {
+	return e.applySteeringMutation(stepID, mutation, commitReceipt)
+}
+
+func (e *Engine) applyExactRuntimeMutation(stepID string, mutation steeringMutation) error {
+	if e == nil {
+		return nil
 	}
-	if item.assistantCommit != nil ||
-		item.committedAssistant != nil ||
-		item.completedResponseResolution != nil ||
-		item.goalNoticeAndStatus != nil ||
-		item.reviewerFeedback != nil ||
-		item.reviewerError != nil ||
-		item.toolCompletion != nil ||
-		(item.resultGroupFlush != nil && item.resultGroupFlush.committed) ||
-		(item.missingToolOutputRepair != nil && item.missingToolOutputRepair.repaired > 0) ||
-		item.queuedFlush != nil {
+	if err := validateSteeringMutation(mutation); err != nil {
+		return err
+	}
+	return e.applyRuntimeMutations(stepID, []steeringMutation{mutation}, nil)
+}
+
+func workflowPostCompletionActivityForSteeringMutation(mutation steeringMutation) workflowPostCompletionActivity {
+	if message, ok := mutation.(*steeringMessage); ok {
+		return workflowPostCompletionMessageActivity(message.message)
+	}
+	switch mutation := mutation.(type) {
+	case *steeringAssistantCommit,
+		*steeringCommittedAssistantMessage,
+		*steeringCompletedResponseResolution,
+		*steeringGoalNoticeAndStatus,
+		*steeringReviewerFeedback,
+		*steeringReviewerError,
+		*steeringToolCompletion,
+		*steeringQueuedUserMessageFlush:
 		return workflowPostCompletionDurableActivity
+	case *steeringResultGroupFlush:
+		if mutation.committed {
+			return workflowPostCompletionDurableActivity
+		}
+	case *steeringMissingToolOutputRepair:
+		if mutation.repaired > 0 {
+			return workflowPostCompletionDurableActivity
+		}
 	}
 	return workflowPostCompletionNoActivity
 }
 
 func (e *Engine) resolveCompletedResponseStream(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
 	outcome := completedResponseResolutionOutcome{}
-	if err := e.steerOrdered(stepID, steerCompletedResponseResolutionIntent(instruction, &outcome)); err != nil {
+	if err := e.applyExactRuntimeMutation(stepID, &steeringCompletedResponseResolution{
+		instruction: instruction,
+		outcome:     &outcome,
+	}); err != nil {
 		return completedResponseResolutionOutcome{}, err
 	}
 	if outcome.kind == completedResponseResolutionInvalid {
@@ -626,15 +1286,59 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 	return outcome, nil
 }
 
-func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
-	if item.missingToolOutputRepair != nil {
-		repair := item.missingToolOutputRepair
+func (e *Engine) applySteeringMutation(stepID string, mutation steeringMutation, commitReceipt *session.CommitReceipt) error {
+	switch mutation := mutation.(type) {
+	case *steeringMissingToolOutputRepair:
+		repair := mutation
 		repaired, err := e.repairMissingToolOutputsByAppendingRaw(repair.repairStepID, repair.disposition)
 		repair.repaired = repaired
 		return err
-	}
-	if item.resultGroupReport != nil {
-		report := item.resultGroupReport
+	case *steeringThinkingLevel:
+		return e.applyThinkingLevel(mutation.level)
+	case *steeringFastMode:
+		changed, receipt, err := e.applyFastModeWithCommittedFeedback(mutation.enabled, mutation.feedback, func(feedback steeringMutation, receipt *session.CommitReceipt) error {
+			return e.applyNestedRuntimeMutation(stepID, feedback, receipt)
+		})
+		recordSteeringCommitReceipt(commitReceipt, receipt)
+		if mutation.changed != nil {
+			*mutation.changed = changed
+		}
+		return err
+	case *steeringReviewerMode:
+		changed, mode, receipt, err := e.applyReviewerWithCommittedFeedback(mutation.enabled, mutation.feedback, func(feedback steeringMutation, receipt *session.CommitReceipt) error {
+			return e.applyNestedRuntimeMutation(stepID, feedback, receipt)
+		})
+		recordSteeringCommitReceipt(commitReceipt, receipt)
+		if mutation.changed != nil {
+			*mutation.changed = changed
+		}
+		if mutation.mode != nil {
+			*mutation.mode = mode
+		}
+		return err
+	case *steeringAutoCompaction:
+		changed, enabled := e.applyAutoCompaction(mutation.enabled)
+		if mutation.changed != nil {
+			*mutation.changed = changed
+		}
+		if mutation.resultEnabled != nil {
+			*mutation.resultEnabled = enabled
+		}
+		return nil
+	case *steeringQuestions:
+		changed, enabled, receipt, err := e.applyQuestionsWithCommittedFeedback(mutation.enabled, mutation.feedback, func(feedback steeringMutation, receipt *session.CommitReceipt) error {
+			return e.applyNestedRuntimeMutation(stepID, feedback, receipt)
+		})
+		recordSteeringCommitReceipt(commitReceipt, receipt)
+		if mutation.changed != nil {
+			*mutation.changed = changed
+		}
+		if mutation.resultEnabled != nil {
+			*mutation.resultEnabled = enabled
+		}
+		return err
+	case *steeringResultGroupReport:
+		report := mutation
 		if report.collector == nil {
 			return errors.New("result group report requires collector")
 		}
@@ -676,9 +1380,8 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		}
 		*report.outcome = outcome
 		return nil
-	}
-	if item.resultGroupFlush != nil {
-		flush := item.resultGroupFlush
+	case *steeringResultGroupFlush:
+		flush := mutation
 		if flush.collector == nil {
 			return e.flushResultGroup(stepID, nil, flush.reason)
 		}
@@ -686,31 +1389,15 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		err := e.flushResultGroup(stepID, flush.collector, flush.reason)
 		flush.committed = err == nil && flush.collector.cursor > cursor
 		return err
-	}
-	if item.resultGroupClose != nil {
-		return e.closeResultGroup(stepID, item.resultGroupClose.collector)
-	}
-	if item.assistantCommit != nil {
-		commit := item.assistantCommit
+	case *steeringResultGroupClose:
+		return e.closeResultGroup(stepID, mutation.collector)
+	case *steeringAssistantCommit:
+		commit := mutation
 		if commit.result == nil {
 			return errors.New("assistant commit steering item requires a result destination")
 		}
-		if committedAssistantMessageFinalizesStreaming(commit.message) {
-			streamed, _, _ := e.transcriptRuntimeState().StreamingSnapshot()
-			finalText := ""
-			if commit.message.Content != nil {
-				finalText = *commit.message.Content
-			}
-			if streamed != "" && !llm.AssistantResponseTextExtendsStream(streamed, finalText) {
-				outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, completedResponseAbortInstruction())
-				commit.result.resolution = outcome
-				if resolveErr != nil {
-					return resolveErr
-				}
-			}
-		}
 		receipt, err := e.appendMessageRaw(stepID, commit.message, steeringMessageEventNone, true, &commit.result.provenance)
-		item.recordCommitReceipt(receipt)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if err != nil || !receipt.Committed {
 			return err
 		}
@@ -744,29 +1431,21 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, completedResponseAbortInstruction())
 		commit.result.resolution = outcome
 		return resolveErr
-	}
-	if item.message != nil {
+	case *steeringMessage:
 		receipt, err := e.appendMessageRaw(
-			stepID,
-			item.message.message,
-			item.message.eventPolicy,
-			item.message.persist,
-			item.message.provenanceDestination,
+			stepID, mutation.message, mutation.eventPolicy, mutation.persist, mutation.provenanceDestination,
 		)
-		item.recordCommitReceipt(receipt)
-		if err == nil && receipt.Committed && item.message.emitUserFlushEvent {
+		recordSteeringCommitReceipt(commitReceipt, receipt)
+		if err == nil && receipt.Committed && mutation.emitUserFlushEvent {
 			if flushed := flushedUserMessageEvent(
-				*item.message.provenanceDestination,
-				item.message.message,
-				stepID,
+				*mutation.provenanceDestination, mutation.message, stepID,
 			); flushed != nil {
 				err = errors.Join(err, e.emitRaw(*flushed))
 			}
 		}
 		return err
-	}
-	if item.goalNoticeAndStatus != nil {
-		notice := item.goalNoticeAndStatus
+	case *steeringGoalNoticeAndStatus:
+		notice := mutation
 		receipt, noticeErr := e.appendMessageRaw(
 			stepID,
 			notice.message,
@@ -774,7 +1453,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			true,
 			nil,
 		)
-		item.recordCommitReceipt(receipt)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if !receipt.Committed {
 			return noticeErr
 		}
@@ -784,12 +1463,19 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			GoalStatus: &notice.update,
 		})
 		return errors.Join(noticeErr, statusErr)
-	}
-	if item.committedAssistant != nil {
-		return e.emitCommittedAssistantMessageRaw(stepID, *item.committedAssistant)
-	}
-	if item.completedResponseResolution != nil {
-		resolution := item.completedResponseResolution
+	case *steeringGoalMutation:
+		result, err := e.applyGoalMutation(stepID, mutation.mutation, func(notice *steeringGoalNoticeAndStatus, receipt *session.CommitReceipt) error {
+			return e.applyNestedRuntimeMutation(stepID, notice, receipt)
+		})
+		if mutation.result != nil {
+			*mutation.result = result
+		}
+		recordSteeringCommitReceipt(commitReceipt, result.MetadataReceipt)
+		return err
+	case *steeringCommittedAssistantMessage:
+		return e.emitCommittedAssistantMessageRaw(stepID, *mutation)
+	case *steeringCompletedResponseResolution:
+		resolution := mutation
 		if resolution.outcome == nil {
 			return errors.New("completed response stream resolution requires an outcome destination")
 		}
@@ -799,25 +1485,21 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		}
 		*resolution.outcome = outcome
 		return nil
-	}
-	if item.localEntry != nil {
+	case *steeringLocalEntry:
 		receipt, _, err := e.appendPersistedLocalEntryRecordRaw(
-			stepID,
-			item.localEntry.entry,
-			item.localEntry.reasoningTraceIdentity,
+			stepID, mutation.entry, mutation.reasoningTraceIdentity,
 		)
-		item.recordCommitReceipt(receipt)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		return err
-	}
-	if item.reviewerFeedback != nil {
+	case *steeringReviewerFeedback:
 		id := runtimeids.NewReviewerFeedbackID()
-		visibility, visibilityErr := sessionEntryVisibilityFromRuntime(item.reviewerFeedback.visibility)
+		visibility, visibilityErr := sessionEntryVisibilityFromRuntime(mutation.visibility)
 		if visibilityErr != nil {
 			return visibilityErr
 		}
-		record := session.ReviewerFeedbackRecord{ID: id, Suggestions: append([]string(nil), item.reviewerFeedback.suggestions...), Visibility: visibility}
+		record := session.ReviewerFeedbackRecord{ID: id, Suggestions: append([]string(nil), mutation.suggestions...), Visibility: visibility}
 		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
-		item.recordCommitReceipt(receipt)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if receipt.Committed {
 			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
 			err = errors.Join(err, provenanceErr)
@@ -829,12 +1511,11 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return err
-	}
-	if item.reviewerError != nil {
+	case *steeringReviewerError:
 		id := runtimeids.NewReviewerErrorID()
-		record := session.ReviewerErrorRecord{ID: id, Detail: item.reviewerError.detail}
+		record := session.ReviewerErrorRecord{ID: id, Detail: mutation.detail}
 		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
-		item.recordCommitReceipt(receipt)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if receipt.Committed {
 			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
 			err = errors.Join(err, provenanceErr)
@@ -846,16 +1527,14 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return err
-	}
-	if item.historyReplace != nil {
-		receipt, err := e.replaceHistoryRaw(stepID, *item.historyReplace)
-		item.recordCommitReceipt(receipt)
+	case *steeringHistoryReplacement:
+		receipt, err := e.replaceHistoryRaw(stepID, *mutation)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		return err
-	}
-	if item.toolCompletion != nil {
-		completion := e.finalizeLiveToolCompletion(*item.toolCompletion)
+	case *steeringToolCompletion:
+		completion := e.finalizeLiveToolCompletion(mutation.result)
 		receipt, provenance, feedbackProvenance, err := e.persistFinalizedToolCompletionRaw(stepID, completion)
-		item.recordCommitReceipt(receipt)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if receipt.Committed {
 			err = errors.Join(err, e.publishCommittedFinalizedToolCompletion(
 				stepID,
@@ -866,21 +1545,18 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			))
 		}
 		return err
-	}
-	if item.queuedFlush != nil {
-		receipt, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.message, item.queuedFlush.batch, item.queuedFlush.queueItems)
-		item.recordCommitReceipt(receipt)
+	case *steeringQueuedUserMessageFlush:
+		receipt, err := e.appendQueuedUserMessageFlush(stepID, mutation.message, mutation.batch, mutation.queueItems)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		return err
-	}
-	if item.queuedRestore != nil {
-		e.messageFlow.RestorePendingUserInjections(item.queuedRestore.items)
-		for _, pending := range item.queuedRestore.items {
+	case *steeringQueuedUserMessageRestore:
+		e.messageFlow.RestorePendingUserInjections(mutation.items)
+		for _, pending := range mutation.items {
 			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
 		}
 		return nil
-	}
-	if item.event != nil {
-		evt := *item.event
+	case *steeringEvent:
+		evt := mutation.event
 		if evt.StepID == "" {
 			evt.StepID = stepID
 		}
@@ -914,16 +1590,15 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			}
 		}
 		return e.emitRaw(evt)
-	}
-	if item.cacheWarning != nil {
-		warning := item.cacheWarning.warning
-		visibility := normalizeRuntimeEntryVisibility(item.cacheWarning.visibility)
+	case *steeringCacheWarning:
+		warning := mutation.warning
+		visibility := normalizeRuntimeEntryVisibility(mutation.visibility)
 		record, adaptErr := sessionCacheWarningRecordFromRuntime(warning)
 		if adaptErr != nil {
 			return fmt.Errorf("adapt cache warning record: %w", adaptErr)
 		}
 		appended, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
-		item.recordCommitReceipt(receipt)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if appendErr != nil && !receipt.Committed {
 			return appendErr
 		}
@@ -932,15 +1607,14 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			return errors.Join(appendErr, provenanceErr)
 		}
 		e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility, &provenance)
-		if item.cacheWarning.emit {
+		if mutation.emit {
 			appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return appendErr
-	}
-	if item.cacheObservation != nil {
-		observation := item.cacheObservation
+	case *steeringCacheObservation:
+		observation := mutation
 		records, receipt, appendErr := e.eventLog.AppendRecordsAtomic(textutil.OptionalExactString(stepID), observation.records)
-		item.recordCommitReceipt(receipt)
+		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if !receipt.Committed {
 			return appendErr
 		}
@@ -972,21 +1646,19 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			}
 		}
 		return appendErr
-	}
-	if item.liveToolAbort != nil {
-		return e.emitLiveToolAbortsRaw(stepID, item.liveToolAbort.reason)
-	}
-	if item.streaming != nil {
-		if item.streaming.reasoningReset != nil {
+	case *steeringLiveToolAbort:
+		return e.emitLiveToolAbortsRaw(stepID, mutation.reason)
+	case *steeringStreamingOutput:
+		if mutation.reasoningReset != nil {
 			e.transcriptRuntimeState().ResetReasoningTraces(stepID)
 			return e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID})
 		}
-		if item.streaming.clearReasoning {
+		if mutation.clearReasoning {
 			e.transcriptRuntimeState().ClearReasoningState(stepID)
 			return nil
 		}
-		if item.streaming.assistantDelta != nil {
-			delta := *item.streaming.assistantDelta
+		if mutation.assistantDelta != nil {
+			delta := *mutation.assistantDelta
 			if delta.Text == "" {
 				return nil
 			}
@@ -994,29 +1666,11 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			if err != nil {
 				return err
 			}
-			appended := e.transcriptRuntimeState().AppendStreamingDelta(stepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
-			if appended.supersededStreamID != nil {
-				reason := AssistantStreamAbortSuperseded
-				if err := e.emitStreamingAssistantCleanupEventsRaw(
-					stepID,
-					appended.supersededMetadata,
-					appended.supersededStreamID,
-					&reason,
-				); err != nil {
-					return err
-				}
-			}
-			return e.emitRaw(Event{
-				Kind:                        EventAssistantDelta,
-				StepID:                      stepID,
-				AssistantDelta:              delta.Text,
-				AssistantDeltaPhase:         delta.Phase,
-				AssistantStreamMetadata:     appended.metadata,
-				AssistantTranscriptStreamID: appended.transcriptStreamID,
-			})
+			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(stepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
+			return e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
 		}
-		if item.streaming.reasoningDelta != nil {
-			delta := *item.streaming.reasoningDelta
+		if mutation.reasoningDelta != nil {
+			delta := *mutation.reasoningDelta
 			identity, err := e.transcriptRuntimeState().SetReasoningState(stepID, delta)
 			if err != nil {
 				return err
@@ -1030,20 +1684,21 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		}
 		var clearedMetadata *AssistantStreamMetadata
 		var clearedStreamID *uuid.UUID
-		if item.streaming.clearState {
+		if mutation.clearState {
 			clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
 		}
-		if item.streaming.resetEvents {
-			return e.emitStreamingAssistantCleanupEventsRaw(stepID, clearedMetadata, clearedStreamID, item.streaming.abortReason)
+		if mutation.resetEvents {
+			return e.emitStreamingAssistantCleanupEventsRaw(stepID, clearedMetadata, clearedStreamID, mutation.abortReason)
 		}
 		return nil
 	}
-	return nil
+	return fmt.Errorf("unsupported Runtime mutation %T", mutation)
+
 }
 
-func (item steeringItem) recordCommitReceipt(receipt session.CommitReceipt) {
-	if item.commitReceipt != nil {
-		*item.commitReceipt = receipt
+func recordSteeringCommitReceipt(destination *session.CommitReceipt, receipt session.CommitReceipt) {
+	if destination != nil {
+		*destination = receipt
 	}
 }
 
@@ -1083,6 +1738,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	if replacement.payload.CompactionNumber != nil {
 		e.compactionRuntimeState().SetCount(*replacement.payload.CompactionNumber)
 	}
+	e.resetCurrentPreciseInputTracking()
 	e.resetLocalDiagnostics()
 	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
 		stepID,

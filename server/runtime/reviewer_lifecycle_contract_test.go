@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -32,7 +33,7 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 			Content: textutil.Value("original"),
 		},
 		Usage: llm.Usage{WindowTokens: 200000},
-	}}}, newTestToolRegistry(t), Config{
+	}}}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			events = append(events, event)
@@ -45,16 +46,22 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 		messages: engine.messageFlow,
 	}
 
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, runErr := engine.runStepLoopWithOptions(
-			ctx,
-			stepID,
-			"all",
-			&fakeClient{},
-			false,
-		)
-		return runErr
-	})
+	var err error
+	runErr := engine.stepLifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
+		func(ctx context.Context, stepID string) error {
+			_, err = engine.runStepLoopWithOptions(
+				ctx,
+				stepID,
+				"all",
+				&fakeClient{},
+				false,
+			)
+			return err
+		},
+	)
+	err = errors.Join(err, runErr)
 	if !errors.Is(err, fatalErr) {
 		t.Fatalf("outer Agent Step error = %v, want %v", err, fatalErr)
 	}
@@ -82,7 +89,7 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 }
 
 func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	var events []Event
 	engine.cfg.OnEvent = func(event Event) {
 		events = append(events, event)
@@ -106,7 +113,7 @@ func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *tes
 }
 
 func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	stepID := "11111111-1111-4111-8111-111111111111"
 	engine.cfg.OnEvent = func(event Event) {
 		switch event.Kind {
@@ -129,7 +136,7 @@ func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
 }
 
 func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	stepID := "11111111-1111-4111-8111-111111111111"
 	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
 		t.Fatalf("publish Reviewer start: %v", err)
@@ -196,7 +203,7 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 					engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
 						Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("answer")},
 						Usage:     llm.Usage{WindowTokens: 200000},
-					}}}, newTestToolRegistry(t), Config{
+					}}}, tools.NewRegistry(), Config{
 						Model:   "gpt-5",
 						OnEvent: func(event Event) { events = append(events, event) },
 					})
@@ -215,10 +222,7 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 						engine: engine, phase: engine.phaseProtocol, reviewer: pipeline,
 						messages: engine.messageFlow,
 					}
-					runErr := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-						_, err := engine.runStepLoopWithOptions(ctx, stepID, "all", &fakeClient{}, false)
-						return err
-					})
+					_, runErr := engine.runStepLoopWithOptions(context.Background(), "11111111-1111-4111-8111-111111111111", "all", &fakeClient{}, false)
 					if blocker != nil {
 						if err := blocker.Restore(); err != nil {
 							t.Fatalf("restore append blocker: %v", err)

@@ -1,16 +1,16 @@
 package runtime
 
 import (
-	"context"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 )
 
 func newTranscriptHydrationSnapshotTestEngine(t *testing.T, client llm.Client) *Engine {
 	t.Helper()
-	return mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	return mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
 }
 
 func hydrationSnapshot(t *testing.T, engine *Engine) TranscriptHydrationSnapshot {
@@ -40,8 +40,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 			t.Fatalf("tool %s: %v", call.ID, err)
 		}
 	}
-	first := mustQueueUserMessageWithClientRequestID(t, engine, "first", "client-1")
-	second := mustQueueUserMessageWithClientRequestID(t, engine, "second", "client-2")
+	first := mustQueueUserMessage(t, engine, "first")
+	second := mustQueueUserMessage(t, engine, "second")
 	snapshot := hydrationSnapshot(t, engine)
 	if snapshot.ActiveThinkingStatus == nil || snapshot.ActiveThinkingStatus.StepID != stepID ||
 		snapshot.ActiveThinkingStatus.Text != "Planning" ||
@@ -109,69 +109,5 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 	if snapshot.ActiveReviewer != nil || snapshot.ActiveCompaction != nil || snapshot.CompactionCount != 7 {
 		t.Fatalf("terminal owner state = reviewer %+v compaction %+v count %d",
 			snapshot.ActiveReviewer, snapshot.ActiveCompaction, snapshot.CompactionCount)
-	}
-}
-
-func TestFailedQueueFlushRestoresAcceptedStateAcrossHydrationRace(t *testing.T) {
-	store := mustCreateTestSession(t)
-	statuses := make(chan QueuedUserMessageStatusEvent, 4)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
-		Model: "gpt-5",
-		OnEvent: func(event Event) {
-			if event.QueuedUserMessageStatus != nil {
-				statuses <- *event.QueuedUserMessageStatus
-			}
-		},
-	})
-	if err := engine.ensureMetaContextForRequest(context.Background(), "queue-flush"); err != nil {
-		t.Fatalf("prepare queue flush: %v", err)
-	}
-	queued := mustQueueUserMessageWithClientRequestID(t, engine, "queued input", "request-id")
-	blocker := mustBlockTestEventLogAppends(t, store)
-	flushDone := make(chan error, 1)
-	go func() {
-		_, _, err := engine.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
-		flushDone <- err
-	}()
-	var duringFlush TranscriptHydrationSnapshot
-	hydrationDone := make(chan struct{})
-	go func() {
-		err := engine.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
-			duringFlush = snapshot
-			close(hydrationDone)
-			return nil
-		})
-		if err != nil {
-			t.Errorf("hydrate during queue flush: %v", err)
-		}
-	}()
-	flushErr := <-flushDone
-	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event-log append: %v", err)
-	}
-	<-hydrationDone
-	if flushErr == nil {
-		t.Fatal("failed queue flush returned nil error")
-	}
-	restored := hydrationSnapshot(t, engine)
-	if len(restored.QueuedMessages) != 1 || restored.QueuedMessages[0].ID != queued.ID {
-		t.Fatalf("restored queue = %+v", restored.QueuedMessages)
-	}
-	accepted := 0
-	for {
-		select {
-		case status := <-statuses:
-			if status.QueueItemID == queued.ID && status.Status == QueuedUserMessageAccepted {
-				accepted++
-			}
-		default:
-			if accepted != 2 {
-				t.Fatalf("accepted queue statuses = %d", accepted)
-			}
-			if len(duringFlush.QueuedMessages) > 0 && duringFlush.QueuedMessages[0].ID != queued.ID {
-				t.Fatalf("hydration queue = %+v", duringFlush.QueuedMessages)
-			}
-			return
-		}
 	}
 }

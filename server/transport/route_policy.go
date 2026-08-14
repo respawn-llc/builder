@@ -57,7 +57,7 @@ type routePreflightResult struct {
 }
 
 func (e routePolicyExecutor) preflight(ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) routePreflightResult {
-	params, err := e.decodeRouteParams(route, req.Params)
+	params, err := decodeRouteParams(route, req.Params)
 	if err != nil {
 		var structured protocol.StructuredRPCError
 		if errors.As(err, &structured) {
@@ -73,24 +73,6 @@ func (e routePolicyExecutor) preflight(ctx context.Context, state *connectionSta
 		return routePreflightResult{resp: responseForError(req.ID, err), failed: true}
 	}
 	return routePreflightResult{params: params}
-}
-
-func (e routePolicyExecutor) decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error) {
-	if route.Method == protocol.MethodOnboardingFinalize && e.gateway != nil {
-		params, err := e.gateway.onboardingFinalizeRequestContract.Decode(raw)
-		if err != nil {
-			return nil, fmt.Errorf("decode params: %w", err)
-		}
-		return params, nil
-	}
-	if route.Method == protocol.MethodSessionGetExecutionEnvironment && e.gateway != nil {
-		params, err := e.gateway.sessionExecutionRequestContract.Decode(raw)
-		if err != nil {
-			return nil, fmt.Errorf("decode params: %w", err)
-		}
-		return params, nil
-	}
-	return decodeRouteParams(route, raw)
 }
 
 type gatewayRouteError struct {
@@ -415,6 +397,8 @@ func routeProcessID(params any) (string, bool) {
 	case serverapi.ProcessKillRequest:
 		return p.ProcessID, true
 	case serverapi.ProcessInlineOutputRequest:
+		return p.ProcessID, true
+	case serverapi.ProcessOutputSubscribeRequest:
 		return p.ProcessID, true
 	default:
 		return "", false

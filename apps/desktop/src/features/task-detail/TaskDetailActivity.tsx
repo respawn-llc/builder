@@ -147,17 +147,17 @@ export function CommentRow({
       className={cx("grid gap-[var(--space-2)] p-[var(--space-2)]", taskDetailIslandRadiusClassName)}
       level={1}
     >
-      <header className="flex min-w-0 items-center gap-[var(--space-2)]">
+      <header className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-[var(--space-2)]">
         <CommentAuthorIcon authorKind={comment.authorKind} />
         {editing ? (
-          <AuthorText author={authorLabel} className="basis-0 grow-[0.5]" />
+          <AuthorText author={authorLabel} />
         ) : (
           <button
             aria-label={t("task.editCommentBy", {
               author: authorLabel,
               defaultValue: `Edit comment by ${authorLabel}`,
             })}
-            className="min-w-0 basis-0 grow-[0.5] rounded-[var(--radius-m)] p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+            className="min-w-0 rounded-[var(--radius-m)] p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
             disabled={interactionDisabled}
             onClick={() => {
               onEdit(comment);
@@ -167,8 +167,7 @@ export function CommentRow({
             <AuthorText author={authorLabel} />
           </button>
         )}
-        <span aria-hidden="true" className="min-w-0 flex-1" />
-        <time className="min-w-0 basis-0 flex-1 whitespace-nowrap text-right text-sm text-[var(--color-muted)]">
+        <time className="whitespace-nowrap text-sm text-[var(--color-muted)]">
           {formatRelativeTime(comment.createdAt)}
         </time>
         <button
@@ -196,13 +195,13 @@ function CommentAuthorIcon({ authorKind }: Readonly<{ authorKind: TaskComment["a
   );
 }
 
-function AuthorText({ author, className }: Readonly<{ author: string; className?: string | undefined }>) {
-  return <EllipsisText className={cx("font-bold text-[var(--color-on-island)]", className)} text={author} />;
+function AuthorText({ author }: Readonly<{ author: string }>) {
+  return <EllipsisText className="font-bold text-[var(--color-on-island)]" text={author} />;
 }
 
 function EllipsisText({ className, text }: Readonly<{ className?: string | undefined; text: string }>) {
   return (
-    <span className={cx("block min-w-0 truncate", className)} title={text}>
+    <span className={cx("min-w-0 truncate", className)} title={text}>
       {text}
     </span>
   );

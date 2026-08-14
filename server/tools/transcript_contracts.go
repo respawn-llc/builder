@@ -3,13 +3,14 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"core/shared/jsoncontract"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -191,23 +192,16 @@ func patchToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage
 
 func editToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage) transcript.ToolCallMeta {
 	return func(ctx ToolCallContext, raw json.RawMessage) transcript.ToolCallMeta {
-		value, err := jsoncontract.DecodeValue(raw)
+		in, err := ParseEditInput(raw)
 		if err != nil {
 			meta := defaultToolCallMeta(toolID)(ctx, raw)
+			if path := strings.TrimSpace(in.Path); path != "" {
+				meta.Command = path
+				meta.CompactText = path
+			}
 			meta.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
 			return meta
 		}
-		path, pathPresent := stringField(value, "path")
-		oldString, oldStringPresent := exactStringField(value, "old_string")
-		newString, newStringPresent := exactStringField(value, "new_string")
-		if !pathPresent || path == "" ||
-			!oldStringPresent || !newStringPresent ||
-			oldString == newString {
-			meta := defaultToolCallMeta(toolID)(ctx, raw)
-			meta.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
-			return meta
-		}
-		in := EditInput{Path: path, OldString: oldString, NewString: newString}
 		rendered := patchformat.RenderEdit(in.Path, in.OldString, in.NewString, ctx.WorkingDir)
 		detail := rendered.DetailText()
 		compact := rendered.SummaryText()
@@ -752,18 +746,19 @@ func decodeHostedWebSearchOutput(item HostedToolOutput) (HostedExecution, bool) 
 }
 
 func formatToolInput(toolID toolspec.ID, raw json.RawMessage) (string, string) {
-	payload, err := jsoncontract.DecodeValue(raw)
-	if err != nil {
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
 		return strings.TrimSpace(string(raw)), ""
 	}
-	if _, err := payload.ObjectFields(); err != nil {
+	obj, ok := payload.(map[string]any)
+	if !ok {
 		return renderPlain(payload), ""
 	}
 	if toolID == toolspec.ToolWriteStdin {
-		sessionID, _ := intField(payload, "session_id")
-		chars, _ := stringField(payload, "chars")
+		sessionID, _ := asInt(obj["session_id"])
+		chars, _ := asString(obj["chars"])
 		if chars == "" {
-			if yieldTimeMS, ok := intField(payload, "yield_time_ms"); ok && yieldTimeMS > 0 {
+			if yieldTimeMS, ok := asInt(obj["yield_time_ms"]); ok && yieldTimeMS > 0 {
 				pollDuration := time.Duration(yieldTimeMS) * time.Millisecond
 				pollDurationText := "0s"
 				if pollDuration > 0 {
@@ -776,28 +771,28 @@ func formatToolInput(toolID toolspec.ID, raw json.RawMessage) (string, string) {
 		return fmt.Sprintf("write stdin session %d", sessionID), ""
 	}
 	if toolID == toolspec.ToolExecCommand {
-		if cmd, ok := stringField(payload, "cmd"); ok {
+		if cmd, ok := asString(obj["cmd"]); ok {
 			return cmd, ""
 		}
-		if cmd, ok := stringField(payload, "command"); ok {
+		if cmd, ok := asString(obj["command"]); ok {
 			return cmd, ""
 		}
 	}
-	if cmd, ok := stringField(payload, "command"); ok {
+	if cmd, ok := asString(obj["command"]); ok {
 		inlineMeta := ""
-		if secs, ok := intField(payload, "timeout_seconds"); ok && secs > 0 {
+		if secs, ok := asInt(obj["timeout_seconds"]); ok && secs > 0 {
 			inlineMeta = "timeout: " + formatDurationShort(time.Duration(secs)*time.Second)
 		}
 		return cmd, inlineMeta
 	}
 	if toolID == toolspec.ToolWebSearch {
-		if query, ok := stringField(payload, "query"); ok {
+		if query, ok := asString(obj["query"]); ok {
 			return strings.TrimSpace(query), ""
 		}
 		return "", ""
 	}
 	if toolID == toolspec.ToolAskQuestion {
-		if question, ok := stringField(payload, "question"); ok {
+		if question, ok := asString(obj["question"]); ok {
 			return question, ""
 		}
 	}
@@ -823,28 +818,29 @@ func formatToolInput(toolID toolspec.ID, raw json.RawMessage) (string, string) {
 }
 
 func formatOutputDefault(raw json.RawMessage) string {
-	payload, err := jsoncontract.DecodeValue(raw)
-	if err != nil {
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
 		return strings.TrimSpace(string(raw))
 	}
-	if _, err := payload.ObjectFields(); err != nil {
-		formatted, err := payload.CompactJSON()
+	obj, ok := payload.(map[string]any)
+	if !ok {
+		formatted, err := json.Marshal(payload)
 		if err != nil {
 			return strings.TrimSpace(string(raw))
 		}
 		return string(formatted)
 	}
 
-	if msg, ok := stringField(payload, "error"); ok {
+	if msg, ok := asString(obj["error"]); ok {
 		return msg
 	}
-	if out, ok := stringField(payload, "output"); ok {
+	if out, ok := asString(obj["output"]); ok {
 		out = strings.TrimSpace(out)
 		if out == "" {
 			out = noOutputText
 		}
 		var notes []string
-		if code, ok := intField(payload, "exit_code"); ok && code != 0 {
+		if code, ok := asInt(obj["exit_code"]); ok && code != 0 {
 			notes = append(notes, fmt.Sprintf("exit code %d", code))
 		}
 		if len(notes) == 0 {
@@ -852,10 +848,10 @@ func formatOutputDefault(raw json.RawMessage) string {
 		}
 		return out + "\n" + strings.Join(notes, ", ")
 	}
-	if answer, ok := stringField(payload, "answer"); ok {
+	if answer, ok := asString(obj["answer"]); ok {
 		return answer
 	}
-	formatted, err := payload.CompactJSON()
+	formatted, err := json.Marshal(payload)
 	if err != nil {
 		return strings.TrimSpace(string(raw))
 	}
@@ -947,25 +943,22 @@ func formatDurationShort(d time.Duration) string {
 	return strings.Join(parts, "")
 }
 
-func renderPlain(value jsoncontract.Value) string {
-	if value.IsNull() {
+func renderPlain(v any) string {
+	switch x := v.(type) {
+	case nil:
 		return ""
-	}
-	if text, ok := value.String(); ok {
-		return text
-	}
-	if boolean, ok := value.Bool(); ok {
-		return strconv.FormatBool(boolean)
-	}
-	if number, ok := value.NumberText(); ok {
-		return number
-	}
-	if items, err := value.ArrayItems(); err == nil {
-		if len(items) == 0 {
+	case string:
+		return x
+	case bool:
+		return strconv.FormatBool(x)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case []any:
+		if len(x) == 0 {
 			return "[]"
 		}
-		lines := make([]string, 0, len(items))
-		for _, item := range items {
+		lines := make([]string, 0, len(x))
+		for _, item := range x {
 			rendered := strings.TrimSpace(renderPlain(item))
 			if rendered == "" {
 				continue
@@ -977,54 +970,45 @@ func renderPlain(value jsoncontract.Value) string {
 			}
 		}
 		return strings.Join(lines, "\n")
-	}
-	if fields, err := value.ObjectFields(); err == nil {
-		if len(fields) == 0 {
+	case map[string]any:
+		if len(x) == 0 {
 			return "{}"
 		}
-		lines := make([]string, 0, len(fields))
-		for _, field := range fields {
-			rendered := strings.TrimSpace(renderPlain(field.Value))
+		keys := slices.Sorted(maps.Keys(x))
+		lines := make([]string, 0, len(keys))
+		for _, k := range keys {
+			rendered := strings.TrimSpace(renderPlain(x[k]))
 			if rendered == "" {
-				lines = append(lines, field.Name+":")
+				lines = append(lines, k+":")
 				continue
 			}
 			valueLines := strings.Split(rendered, "\n")
-			lines = append(lines, field.Name+": "+valueLines[0])
+			lines = append(lines, k+": "+valueLines[0])
 			for _, line := range valueLines[1:] {
 				lines = append(lines, "  "+line)
 			}
 		}
 		return strings.Join(lines, "\n")
+	default:
+		return fmt.Sprintf("%v", x)
 	}
-	compact, err := value.CompactJSON()
-	if err != nil {
-		return ""
-	}
-	return string(compact)
 }
 
-func stringField(value jsoncontract.Value, name string) (string, bool) {
-	field, ok := value.Field(name)
+func asString(v any) (string, bool) {
+	s, ok := v.(string)
 	if !ok {
 		return "", false
 	}
-	text, ok := field.String()
-	return strings.TrimSpace(text), ok
+	return strings.TrimSpace(s), true
 }
 
-func exactStringField(value jsoncontract.Value, name string) (string, bool) {
-	field, ok := value.Field(name)
-	if !ok {
-		return "", false
-	}
-	return field.String()
-}
-
-func intField(value jsoncontract.Value, name string) (int, bool) {
-	field, ok := value.Field(name)
-	if !ok {
+func asInt(v any) (int, bool) {
+	switch x := v.(type) {
+	case float64:
+		return int(x), true
+	case int:
+		return x, true
+	default:
 		return 0, false
 	}
-	return field.Int()
 }

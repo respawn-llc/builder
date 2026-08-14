@@ -17,7 +17,6 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			SessionStatus:          transcriptTestSessionStatus(),
 			RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
 			CommittedRows:          []TranscriptCommittedRow{},
-			GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 			ActiveStep: &TranscriptStepState{
 				RunID:      runID,
 				StepID:     stepID,
@@ -184,9 +183,8 @@ func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *test
 		CreatedAt: time.Unix(1_700_000_000, 0),
 	}
 	submittedQueue := TranscriptQueuedMessageState{
-		ClientRequestID: transcriptTestClientRequestID(t),
-		QueueItemID:     transcriptTestQueueItemID(t),
-		Status:          QueuedUserMessageSubmitted,
+		QueueItemID: transcriptTestQueueItemID(t),
+		Status:      QueuedUserMessageSubmitted,
 	}
 	terminalBackground := TranscriptBackgroundActivity{
 		ActivityID:  transcriptTestBackgroundActivityID(t),

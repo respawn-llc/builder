@@ -29,13 +29,6 @@ kent service uninstall
 
 All service commands accept `--persistence-root` and honor `KENT_PERSISTENCE_ROOT`. The root you install with is remembered, so pass the same root on `status`/`start`/`stop`/`restart`/`uninstall` to target that instance.
 
-### Service recovery
-On Linux, status `2` suppresses automatic crash recovery for the active service-manager activation, while other exits continue restoration; macOS retains restoration after every server exit.
-On Windows, an observed numeric status `2` stops the service cleanly without recovery, and every other observed numeric status continues restoration; an unexpected service-host failure retains recovery.
-If Windows cannot confirm termination, the service retains ownership and neither reports `Stopped` nor launches a replacement.
-If Windows confirms termination without a numeric status, the service releases the server, launches no replacement, and stops cleanly.
-A human start or restart, or `kent service install` without `--no-start`, begins a new activation; `--no-start` installs without starting. A later independent operating-system, login, or service-manager activation may start the installed service again.
-
 ## Backends
 
 | OS | Service |

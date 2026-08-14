@@ -10,7 +10,8 @@ var (
 	// ErrSessionFileSymlink is returned when the event log is a symlink, which is
 	// rejected for security reasons. It is exported so external callers of the
 	// public snapshot/open API can detect it.
-	ErrSessionFileSymlink = errors.New("session file must not be a symlink")
+	ErrSessionFileSymlink            = errors.New("session file must not be a symlink")
+	ErrMutationDefinitelyUncommitted = errors.New("session mutation definitely did not commit")
 
 	// errPersistedSessionResolverRequired is returned when a persisted session is
 	// opened without its authoritative structured-metadata resolver.
@@ -29,3 +30,10 @@ var (
 	errResolverRecordSessionIDMismatch  = errors.New("resolver returned persisted session metadata with a different session id")
 	errResolverRecordSessionDirMismatch = errors.New("resolver returned a different session dir than the scoped open path")
 )
+
+func DefinitelyUncommittedMutation(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.Join(ErrMutationDefinitelyUncommitted, err)
+}

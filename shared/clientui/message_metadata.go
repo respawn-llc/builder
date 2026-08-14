@@ -34,7 +34,7 @@ const (
 	MessageTypeWorktreeModeExit               MessageType = "worktree_mode_exit"
 	MessageTypeGoal                           MessageType = "goal"
 	MessageTypeActiveGoalContinuation         MessageType = "active_goal_continuation"
-	MessageTypeAgentSteer                     MessageType = MessageType(transcript.MessageTypeAgentSteer)
+	MessageTypeAgentSteer                     MessageType = "agent_steer"
 )
 
 const GoalNudgeCompactLabel = "Goal nudge"

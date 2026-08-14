@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/session"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -30,16 +30,14 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 		},
 		Usage: llm.Usage{InputTokens: 100, WindowTokens: 200_000},
 	}}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:          "gpt-5",
 		CompactionMode: "native",
 		OnEvent:        func(event Event) { events = append(events, event) },
 	})
 	if err := engine.steer(
 		"input",
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventNone,
+		steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 			true,
 			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 		),
@@ -70,7 +68,7 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 		t,
 		reopenedStore,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
@@ -139,7 +137,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
@@ -186,11 +184,6 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 	}
 	if len(live) != 4 {
 		t.Fatalf("projected transcript facts = %+v, want summary, two preserved messages, and environment", live)
-	}
-	for index, fact := range live {
-		if fact.Provenance == nil || fact.Provenance.CommittedAtUnixMs != nil {
-			t.Fatalf("ineligible replacement fact %d provenance = %+v", index, fact.Provenance)
-		}
 	}
 	wantMessageTypes := []llm.MessageType{
 		llm.MessageTypeCompactionSummary,
@@ -243,7 +236,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		t,
 		mustOpenTestSession(t, store.Dir()),
 		providerClient,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
@@ -265,130 +258,5 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 			item.Content == nil || *item.Content != wantContent {
 			t.Fatalf("provider item %d changed across compaction: %+v", index, item)
 		}
-	}
-}
-
-func TestEligibleHistoryReplacementTimestampParityAcrossPersistedAndLiveProjection(t *testing.T) {
-	t.Parallel()
-	var events []Event
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(
-		t,
-		store,
-		&fakeClient{},
-		newTestToolRegistry(t),
-		Config{
-			Model:   "gpt-5",
-			OnEvent: func(event Event) { events = append(events, event) },
-		},
-	)
-	items := llm.ItemsFromMessages([]llm.Message{
-		{
-			Role:        llm.RoleUser,
-			MessageType: textutil.Value(llm.MessageTypeAgentsMD),
-			Content:     textutil.Value("replacement user"),
-		},
-		{
-			Role:    llm.RoleAssistant,
-			Content: textutil.Value("replacement assistant"),
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-		},
-		{
-			Role:        llm.RoleUser,
-			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-			Content:     textutil.Value("replacement summary"),
-		},
-	})
-	if err := engine.steer(
-		"eligible replacement",
-		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", nil, items),
-	); err != nil {
-		t.Fatalf("persist eligible history replacement: %v", err)
-	}
-
-	var liveFacts []TranscriptCommittedRowFact
-	for _, event := range events {
-		liveFacts = append(liveFacts, TranscriptCommittedRowFactsFromEvent(event)...)
-	}
-	replacementTime := assertEligibleReplacementFacts(t, liveFacts)
-	pageFacts := TranscriptCommittedRowFactsFromSnapshot(mustEngineNewestSegmentPage(t, engine).Snapshot)
-	assertReplacementFactsMatch(t, pageFacts, replacementTime)
-	eventLog := mustMaterializeTestEventLog(t, store)
-	window, err := eventLog.ReadRecentRecords(32)
-	if err != nil {
-		t.Fatalf("read persisted replacement records: %v", err)
-	}
-	var persistedReplacementTime *transcript.CommittedAtUnixMs
-	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	for _, record := range window.Records {
-		if kind := mustSessionEventKind(record); kind == session.EventKindHistoryReplace {
-			persistedReplacementTime = record.CommittedAtUnixMs()
-		}
-		if err := scan.ApplyPersistedEvent(record); err != nil {
-			t.Fatalf("scan persisted replacement record: %v", err)
-		}
-	}
-	if persistedReplacementTime == nil || persistedReplacementTime.UnixMs() != replacementTime.UnixMs() {
-		t.Fatalf("persisted replacement time = %v, live = %d", persistedReplacementTime, replacementTime.UnixMs())
-	}
-	persistedFacts := TranscriptCommittedRowFactsFromSnapshot(scan.CollectedPageSnapshot())
-	assertReplacementFactsMatch(t, persistedFacts, replacementTime)
-	if err := engine.Close(); err != nil {
-		t.Fatalf("close eligible replacement engine: %v", err)
-	}
-	reopened := mustNewTestEngine(
-		t,
-		mustOpenTestSession(t, store.Dir()),
-		&fakeClient{},
-		newTestToolRegistry(t),
-		Config{Model: "gpt-5"},
-	)
-	restartedFacts := TranscriptCommittedRowFactsFromSnapshot(mustEngineNewestSegmentPage(t, reopened).Snapshot)
-	assertReplacementFactsMatch(t, restartedFacts, replacementTime)
-}
-
-func assertEligibleReplacementFacts(
-	t *testing.T,
-	facts []TranscriptCommittedRowFact,
-) transcript.CommittedAtUnixMs {
-	t.Helper()
-	if len(facts) != 3 ||
-		facts[0].Kind != TranscriptCommittedRowFactUser ||
-		facts[0].User == nil ||
-		facts[1].Kind != TranscriptCommittedRowFactAssistant ||
-		facts[1].Assistant == nil ||
-		facts[2].Kind != TranscriptCommittedRowFactNotice ||
-		facts[2].Notice == nil ||
-		facts[2].Notice.MessageType != llm.MessageTypeCompactionSummary {
-		t.Fatalf("replacement facts = %+v, want ordered user, assistant, summary rows", facts)
-	}
-	if facts[0].User.CommittedAtUnixMs == nil {
-		t.Fatal("replacement user has no committed time")
-	}
-	if facts[1].Assistant.CommittedAtUnixMs == nil {
-		t.Fatal("replacement assistant has no committed time")
-	}
-	if facts[1].Assistant.CommittedAtUnixMs.UnixMs() != facts[0].User.CommittedAtUnixMs.UnixMs() {
-		t.Fatalf(
-			"assistant replacement time = %v, user = %v",
-			facts[1].Assistant.CommittedAtUnixMs,
-			facts[0].User.CommittedAtUnixMs,
-		)
-	}
-	if facts[2].Provenance == nil {
-		t.Fatal("replacement notice has no provenance")
-	}
-	return *facts[0].User.CommittedAtUnixMs
-}
-
-func assertReplacementFactsMatch(
-	t *testing.T,
-	facts []TranscriptCommittedRowFact,
-	want transcript.CommittedAtUnixMs,
-) {
-	t.Helper()
-	got := assertEligibleReplacementFacts(t, facts)
-	if got.UnixMs() != want.UnixMs() {
-		t.Fatalf("replacement time = %d, want %d", got.UnixMs(), want.UnixMs())
 	}
 }

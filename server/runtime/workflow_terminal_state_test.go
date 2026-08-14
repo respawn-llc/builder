@@ -30,9 +30,9 @@ func TestWorkflowSessionStateRequiresValidTaskAndWorkflowIdentity(t *testing.T) 
 				},
 			}
 			engine := &Engine{
-				cfg:                  Config{CurrentNodeExecution: execution},
-				currentNodeExecution: newCurrentNodeExecutionState(execution),
+				currentNodeExecution: newCurrentNodeExecutionState(),
 			}
+			engine.currentNodeExecution.config = execution
 
 			state, err := engine.WorkflowSessionState()
 			if testCase.wantState && err != nil {

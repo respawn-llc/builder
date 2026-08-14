@@ -43,7 +43,6 @@ func transcriptBrokerHydration(t *testing.T) clientui.TranscriptEvent {
 			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable},
 		},
 		CommittedRows: []clientui.TranscriptCommittedRow{},
-		GoalStatus:    &clientui.TranscriptGoalStatus{Availability: func() *clientui.GoalAvailability { value := clientui.GoalAvailabilityAvailable; return &value }()},
 	}
 	return clientui.NewTranscriptEvent(hydration)
 }

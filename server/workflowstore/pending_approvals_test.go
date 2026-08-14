@@ -103,7 +103,7 @@ func TestPendingApprovalFreezesSelectedAgentExecutionWithoutCatalogResolution(t 
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
 		edge.RequiresApproval = true
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{{
@@ -314,7 +314,7 @@ func seedParallelCurrentApprovalSources(
 DELETE FROM task_current_nodes
 WHERE task_id = ?
   AND node_id = ?
-  AND transition_branch_key IS NULL`, string(serialSource.TaskID), testGraphEntityBlob(t, string(serialSource.NodeID))); err != nil {
+  AND transition_branch_key IS NULL`, string(serialSource.TaskID), string(serialSource.NodeID)); err != nil {
 		t.Fatalf("delete serial current node: %v", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO task_active_fanouts (task_id) VALUES (?)`, string(taskID)); err != nil {
@@ -326,7 +326,7 @@ WHERE task_id = ?
 			t.Fatalf("parallel source %v has no branch key", branch.Reference)
 		}
 		var subagentRole string
-		if err := tx.QueryRowContext(ctx, `SELECT subagent_role FROM workflow_nodes WHERE id = ?`, testGraphEntityBlob(t, string(branch.Reference.NodeID))).Scan(&subagentRole); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT subagent_role FROM workflow_nodes WHERE id = ?`, string(branch.Reference.NodeID)).Scan(&subagentRole); err != nil {
 			t.Fatalf("resolve branch Agent fallback %q: %v", branchKey, err)
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -354,7 +354,7 @@ INSERT INTO task_current_nodes (
     assignee_origin
 ) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', NULL, 'ready', NULL, NULL, NULL, ?, 'configured_fallback')`,
 			string(branch.Reference.TaskID),
-			testGraphEntityBlob(t, string(branch.Reference.NodeID)),
+			string(branch.Reference.NodeID),
 			string(branchKey),
 			subagentRole,
 		); err != nil {

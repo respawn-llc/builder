@@ -20,17 +20,11 @@ func NewWorkflowGraphSaveRequest(definition workflow.Definition, expectedVersion
 		groupKeyByID[group.ID] = string(group.Key)
 	}
 	for _, node := range definition.Nodes {
-		groupID, groupPresent := workflow.NodeGroupID(node)
-		var groupIDPointer *string
-		groupKey := ""
-		if groupPresent {
-			groupIDPointer = &groupID
-			groupKey = groupKeyByID[groupID]
-		}
+		groupID := workflow.NodeGroupID(node)
 		request.Nodes = append(request.Nodes, NodeRecord{
 			ID: workflow.NodeIDOf(node), WorkflowID: definition.ID, Key: workflow.NodeKey(node),
 			Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node),
-			GroupID: groupIDPointer, GroupKey: groupKey,
+			GroupID: groupID, GroupKey: groupKeyByID[groupID],
 			SubagentRole:       workflow.NodeSubagentRole(node),
 			CompletionMode:     workflow.NodeCompletionMode(node),
 			ScriptPath:         workflow.NodeScriptPath(node).String(),

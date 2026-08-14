@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["query"],
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Required search query string. Keep it specific and concise; include concrete keywords (entity + property + timeframe) and optionally a site hint."
+    },
+    "allowed_domains": {
+      "type": "array",
+      "description": "Optional allowlist of domains to constrain sources to preferred/authoritative sites.",
+      "items": {"type": "string"}
+    },
+    "blocked_domains": {
+      "type": "array",
+      "description": "Optional blocklist of domains to exclude low-quality or irrelevant sources.",
+      "items": {"type": "string"}
+    }
+  }
+}

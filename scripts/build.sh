@@ -14,8 +14,8 @@ Builds Kent repository targets.
 
 Targets:
   server   Build the Go server/CLI binary. Selected by default.
-  tui      Build the frozen Rust TUI workspace only when explicitly requested.
-  desktop  Build desktop frontend assets.
+  tui      Build the Rust TUI workspace. Selected by default.
+  desktop  Build desktop frontend assets. Selected by default.
 
 Options:
   --output   Output path for the Go server/CLI binary. Defaults to ./bin/kent when server is selected.
@@ -28,8 +28,7 @@ Options:
 
 Examples:
   scripts/build.sh
-  scripts/build.sh desktop
-  scripts/build.sh tui
+  scripts/build.sh tui desktop
   scripts/build.sh server --output ./bin/kent
 USAGE
 }
@@ -199,7 +198,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "${#targets[@]}" -eq 0 ]; then
-	targets=(server)
+	targets=(server tui desktop)
 fi
 
 export KENT_SKIP_FRONTEND="$skip_frontend"

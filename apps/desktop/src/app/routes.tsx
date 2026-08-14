@@ -2,12 +2,10 @@ import { createRoute, createRouter, createRootRoute } from "@tanstack/react-rout
 import { z } from "zod";
 
 import { workflowIDSchema } from "@/api";
-import { desktopChatEnabled } from "@/shared/feature-flags";
 import { createNativeDialogRoutes, workspaceUnlinkNativeDialogPath } from "./nativeDialogRoutes";
 import {
   HomeShellRoute,
   ProjectRoute,
-  ProjectTasksRoute,
   RootRoute,
   TaskRoute,
   WorkflowEditorShellRoute,
@@ -26,16 +24,11 @@ const workflowEditorSearchSchema = z.object({
   projectId: optionalSearchString,
 });
 
-const homeSearchSchema = z.object({
-  projectId: z.string().min(1).optional(),
-});
-
 const rootRoute = createRootRoute({ component: RootRoute });
 
 const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  validateSearch: (search: Record<string, unknown>) => homeSearchSchema.parse(search),
   component: HomeShellRoute,
 });
 
@@ -44,12 +37,6 @@ const projectRoute = createRoute({
   path: "/projects/$projectId",
   validateSearch: (search: Record<string, unknown>) => projectSearchSchema.parse(search),
   component: ProjectRoute,
-});
-
-const projectTasksRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/projects/$projectId/tasks",
-  component: ProjectTasksRoute,
 });
 
 const workflowLibraryRoute = createRoute({
@@ -76,7 +63,6 @@ const nativeDialogRoutes = createNativeDialogRoutes(rootRoute);
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
-  ...(desktopChatEnabled ? [projectTasksRoute] : []),
   projectRoute,
   workflowLibraryRoute,
   workflowEditorRoute,

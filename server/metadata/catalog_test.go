@@ -7,7 +7,11 @@ import (
 
 func TestListMetadataSchemaDefinitionsUsesDependencyOrder(t *testing.T) {
 	t.Parallel()
-	store := openInMemoryMetadataTestStore(t, t.TempDir())
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 
 	rows, err := store.Queries().ListMetadataSchemaDefinitions(context.Background())
 	if err != nil {

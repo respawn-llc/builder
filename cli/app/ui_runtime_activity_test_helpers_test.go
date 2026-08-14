@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
@@ -30,7 +29,6 @@ func (m *uiModel) setRuntimeActivityBusyForTest(busy bool) {
 func submitRuntimeClientForTest(t *testing.T, client clientui.RuntimeClient, text string) (clientui.UserTurnSubmission, error) {
 	t.Helper()
 	return client.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		Input:           runtimeinput.Text(text),
+		Input: runtimeinput.Text(text),
 	})
 }

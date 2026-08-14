@@ -51,11 +51,10 @@ func TestSessionRuntimeAttachmentValidation(t *testing.T) {
 func TestActivateBuildsRequest(t *testing.T) {
 	service := &fakeRuntimeService{}
 	_, err := Activate(context.Background(), service, Request{
-		SessionID:                "session-1",
-		EnabledTools:             []toolspec.ID{"shell", "patch"},
-		ActiveSettings:           config.Settings{Model: "gpt-test"},
-		ThinkingOverrideExplicit: true,
-		Source:                   config.SourceReport{SettingsPath: "/config.toml"},
+		SessionID:      "session-1",
+		EnabledTools:   []toolspec.ID{"shell", "patch"},
+		ActiveSettings: config.Settings{Model: "gpt-test"},
+		Source:         config.SourceReport{SettingsPath: "/config.toml"},
 	})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
@@ -64,8 +63,8 @@ func TestActivateBuildsRequest(t *testing.T) {
 		t.Fatalf("activate requests = %d, want 1", len(service.activateRequests))
 	}
 	req := service.activateRequests[0]
-	if req.ClientRequestID == "" || req.SessionID != "session-1" {
-		t.Fatalf("request ids = %+v, want non-empty client id and session id", req)
+	if req.SessionID != "session-1" {
+		t.Fatalf("request = %+v, want session id", req)
 	}
 	if !reflect.DeepEqual(req.EnabledToolIDs, []string{"shell", "patch"}) {
 		t.Fatalf("enabled tools = %#v, want shell/patch", req.EnabledToolIDs)
@@ -73,12 +72,9 @@ func TestActivateBuildsRequest(t *testing.T) {
 	if req.ActiveSettings.Model != "gpt-test" || req.Source.SettingsPath != "/config.toml" {
 		t.Fatalf("request config = %+v source = %+v", req.ActiveSettings, req.Source)
 	}
-	if !req.ThinkingOverrideExplicit {
-		t.Fatal("explicit Thinking override was not forwarded")
-	}
 }
 
-func TestActivateReactivatesRuntimeWithFreshRequestID(t *testing.T) {
+func TestActivateReactivatesRuntimeWithStableOwner(t *testing.T) {
 	service := &fakeRuntimeService{}
 	lease, err := Activate(context.Background(), service, Request{
 		SessionID: "session-1",
@@ -88,11 +84,6 @@ func TestActivateReactivatesRuntimeWithFreshRequestID(t *testing.T) {
 	}
 	if err := lease.Reactivate(context.Background()); err != nil {
 		t.Fatalf("Reactivate: %v", err)
-	}
-	firstID := service.activateRequests[0].ClientRequestID
-	secondID := service.activateRequests[1].ClientRequestID
-	if firstID == "" || secondID == "" || firstID == secondID {
-		t.Fatalf("request ids = %q,%q, want two distinct non-empty fresh ids", firstID, secondID)
 	}
 	ownerID := service.activateRequests[0].OwnerID
 	if ownerID == "" {
@@ -129,8 +120,8 @@ func TestFailedReactivationPreservesAttachment(t *testing.T) {
 		t.Fatalf("release requests = %d, want 1", len(service.releaseRequests))
 	}
 	req := service.releaseRequests[0]
-	if req.Attachment.SessionID != "session-1" || req.Attachment.Generation != 1 || req.ClientRequestID == "" || !req.DropOwner || req.OwnerID == "" {
-		t.Fatalf("release request = %+v, want exact attachment/request/owner ids", req)
+	if req.Attachment.SessionID != "session-1" || req.Attachment.Generation != 1 || !req.DropOwner || req.OwnerID == "" {
+		t.Fatalf("release request = %+v, want exact attachment and owner ids", req)
 	}
 }
 

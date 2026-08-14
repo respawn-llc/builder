@@ -43,7 +43,7 @@ export function StartupGate({ children }: StartupGateProps): ReactElement {
     if (location.pathname === "/") {
       return;
     }
-    void navigate({ to: "/", search: {}, replace: true });
+    void navigate({ to: "/", replace: true });
   }, [location.pathname, navigate, startupTitleKey]);
 
   if (startup.kind === "loading") {

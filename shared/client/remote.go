@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
-	"core/shared/serverjsoncontract"
 )
 
 type InvalidResponseError struct {
@@ -42,18 +40,16 @@ func validateRuntimeLiveResponseSession(operation string, requestedSessionID str
 }
 
 type Remote struct {
-	plan                             remoteDialPlan
-	transport                        rpcwire.ClientTransport
-	mu                               sync.Mutex
-	control                          *remoteControlConn
-	identity                         protocol.ServerIdentity
-	attachIntent                     *remoteAttachmentIntent
-	attachment                       *protocol.AttachResponse
-	updateStatusResponseContract     serverjsoncontract.UpdateStatusResponse
-	sessionExecutionResponseContract serverjsoncontract.SessionExecutionEnvironmentResponse
-	expectedRootID                   atomic.Value // string; empty disables root validation
-	noAuthAck                        atomic.Bool
-	closed                           atomic.Bool
+	plan           remoteDialPlan
+	transport      rpcwire.ClientTransport
+	mu             sync.Mutex
+	control        *remoteControlConn
+	identity       protocol.ServerIdentity
+	attachIntent   *remoteAttachmentIntent
+	attachment     *protocol.AttachResponse
+	expectedRootID atomic.Value // string; empty disables root validation
+	noAuthAck      atomic.Bool
+	closed         atomic.Bool
 }
 
 func DialRemoteURL(ctx context.Context, rpcURL string) (*Remote, error) {
@@ -219,11 +215,13 @@ func (c *Remote) GetServerReadiness(ctx context.Context, req serverapi.ServerRea
 }
 
 func (c *Remote) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	var raw json.RawMessage
-	if err := c.callDedicated(ctx, apicontract.UpdateStatusDedicatedRequestID, protocol.MethodServerUpdateStatusGet, req, &raw); err != nil {
-		return serverapi.UpdateStatusResponse{}, err
-	}
-	return c.updateStatusResponseContract.Decode(raw)
+	return callDedicatedRPC[serverapi.UpdateStatusRequest, serverapi.UpdateStatusResponse](
+		c,
+		ctx,
+		apicontract.UpdateStatusDedicatedRequestID,
+		protocol.MethodServerUpdateStatusGet,
+		req,
+	)
 }
 
 func (c *Remote) ProjectID() string {
@@ -325,21 +323,7 @@ func (c *Remote) CreateProject(ctx context.Context, req serverapi.ProjectCreateR
 }
 
 func (c *Remote) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditGetRequest) (serverapi.ProjectEditGetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
-	}
-	response, err := callUnscopedRPC[serverapi.ProjectEditGetRequest, serverapi.ProjectEditGetResponse](c, ctx, protocol.MethodProjectEditGet, req)
-	if err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
-	}
-	if strings.TrimSpace(response.ProjectID) != req.ProjectID {
-		return serverapi.ProjectEditGetResponse{}, fmt.Errorf(
-			"Project Settings response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
-		)
-	}
-	return response, nil
+	return callUnscopedRPC[serverapi.ProjectEditGetRequest, serverapi.ProjectEditGetResponse](c, ctx, protocol.MethodProjectEditGet, req)
 }
 
 func (c *Remote) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
@@ -358,70 +342,7 @@ func (c *Remote) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectD
 }
 
 func (c *Remote) ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
-	response, err := callUnscopedRPC[serverapi.ProjectWorkspaceListRequest, serverapi.ProjectWorkspaceListResponse](c, ctx, protocol.MethodProjectWorkspaceList, req)
-	if err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf("project workspace catalog response is invalid: %w", err)
-	}
-	if response.ProjectID != req.ProjectID {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
-			"project workspace catalog response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
-		)
-	}
-	if response.Offset != req.Offset {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
-			"project workspace catalog response offset %d does not match request offset %d",
-			response.Offset,
-			req.Offset,
-		)
-	}
-	if len(response.Workspaces) > req.Limit {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
-			"project workspace catalog response returned %d rows for limit %d",
-			len(response.Workspaces),
-			req.Limit,
-		)
-	}
-	if response.NextOffset != nil {
-		expected := req.Offset + req.Limit
-		if len(response.Workspaces) != req.Limit || *response.NextOffset != expected {
-			return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
-				"project workspace catalog response next_offset %d does not continue request offset %d with limit %d",
-				*response.NextOffset,
-				req.Offset,
-				req.Limit,
-			)
-		}
-	}
-	return response, nil
-}
-
-func (c *Remote) GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, err
-	}
-	response, err := callUnscopedRPC[serverapi.ProjectWorkspaceGetRequest, serverapi.ProjectWorkspaceGetResponse](c, ctx, protocol.MethodProjectWorkspaceGet, req)
-	if err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf("exact Project Workspace response is invalid: %w", err)
-	}
-	if response.ProjectID != req.ProjectID {
-		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf(
-			"exact Project Workspace response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
-		)
-	}
-	return response, nil
+	return callUnscopedRPC[serverapi.ProjectWorkspaceListRequest, serverapi.ProjectWorkspaceListResponse](c, ctx, protocol.MethodProjectWorkspaceList, req)
 }
 
 func (c *Remote) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
@@ -440,24 +361,7 @@ func (c *Remote) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteR
 }
 
 func (c *Remote) AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
-	}
-	response, err := callUnscopedRPC[serverapi.ProjectAttachWorkspaceRequest, serverapi.ProjectAttachWorkspaceResponse](c, ctx, protocol.MethodProjectAttachWorkspace, req)
-	if err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf("Project Workspace attach response is invalid: %w", err)
-	}
-	if response.Binding.ProjectID != req.ProjectID {
-		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf(
-			"Project Workspace attach response project %q does not match request project %q",
-			response.Binding.ProjectID,
-			req.ProjectID,
-		)
-	}
-	return response, nil
+	return callUnscopedRPC[serverapi.ProjectAttachWorkspaceRequest, serverapi.ProjectAttachWorkspaceResponse](c, ctx, protocol.MethodProjectAttachWorkspace, req)
 }
 
 func (c *Remote) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
@@ -687,10 +591,6 @@ func (c *Remote) ListWorkflowTaskActivity(ctx context.Context, req serverapi.Wor
 	return validateWorkflowTaskBoundResponse("list workflow task activity", strings.TrimSpace(req.TaskID), response, err)
 }
 
-func (c *Remote) ListWorkflowTaskSessions(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskSessionListResponse](c, ctx, protocol.MethodWorkflowTaskSessionList, req)
-}
-
 func (c *Remote) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	response, err := callUnscopedRPC[serverapi.WorkflowTaskListRequest, serverapi.WorkflowTaskListResponse](c, ctx, protocol.MethodWorkflowTaskList, req)
 	return validateWorkflowResponse("list workflow tasks", response, err)
@@ -760,28 +660,12 @@ func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanReque
 
 func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
 	var resp serverapi.WorkspaceChatDraftResponse
-	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp); err != nil {
-		return resp, err
-	}
-	if err := resp.Validate(); err != nil {
-		return serverapi.WorkspaceChatDraftResponse{}, invalidResponseError("workspace Chat draft", err)
-	}
-	return resp, nil
-}
-
-func (c *Remote) MaterializeWorkspaceChat(ctx context.Context, req serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
-	var resp serverapi.WorkspaceChatMaterializeResponse
-	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatMaterialize, req, &resp); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, err
-	}
-	if err := resp.Validate(); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, invalidResponseError("workspace Chat materialization", err)
-	}
-	return resp, nil
+	return resp, c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp)
 }
 
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-	return callValidatedControlRPC[serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](c, ctx, protocol.MethodSessionGetMainView, req)
+	var resp serverapi.SessionMainViewResponse
+	return resp, c.call(ctx, protocol.MethodSessionGetMainView, req, &resp)
 }
 
 func (c *Remote) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
@@ -801,11 +685,8 @@ func (c *Remote) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req
 }
 
 func (c *Remote) GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
-	var raw json.RawMessage
-	if err := c.call(ctx, protocol.MethodSessionGetExecutionEnvironment, req, &raw); err != nil {
-		return serverapi.SessionExecutionEnvironmentResponse{}, err
-	}
-	return c.sessionExecutionResponseContract.Decode(raw)
+	var resp serverapi.SessionExecutionEnvironmentResponse
+	return resp, c.call(ctx, protocol.MethodSessionGetExecutionEnvironment, req, &resp)
 }
 
 func (c *Remote) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
@@ -989,39 +870,27 @@ func (c *Remote) RecordPromptHistory(ctx context.Context, req serverapi.RuntimeR
 }
 
 func (c *Remote) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalShow, req)
+	return callControlRPC[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalShow, req)
 }
 
-func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
+func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
 }
 
-func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
+func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
 }
 
-func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
+func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
 }
 
-func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
+func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
 }
 
-func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
-}
-
-func callValidatedControlRPC[Request any, Response interface{ Validate() error }](c *Remote, ctx context.Context, method string, req Request) (Response, error) {
-	response, err := callControlRPC[Request, Response](c, ctx, method, req)
-	if err != nil {
-		return response, err
-	}
-	if err := response.Validate(); err != nil {
-		var zero Response
-		return zero, invalidResponseError(method, err)
-	}
-	return response, nil
+func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
 }
 
 func (c *Remote) ListProcesses(ctx context.Context, req serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
@@ -1185,6 +1054,7 @@ var _ apicontract.RuntimeControlService = (*Remote)(nil)
 var _ apicontract.RuntimeLiveControlService = (*Remote)(nil)
 var _ apicontract.ProcessViewService = (*Remote)(nil)
 var _ apicontract.ProcessControlService = (*Remote)(nil)
+var _ apicontract.ProcessOutputService = (*Remote)(nil)
 var _ apicontract.SessionTranscriptService = (*Remote)(nil)
 var _ apicontract.AttentionNotificationService = (*Remote)(nil)
 var _ apicontract.RunPromptService = (*Remote)(nil)

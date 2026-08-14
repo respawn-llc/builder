@@ -176,8 +176,9 @@ export function useWorkspaceAttach() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: WorkspaceAttachInput): Promise<ProjectBinding> =>
-      (await api.attachWorkspace(input.projectID, input.workspaceRoot)).binding,
-    onSuccess: async () => {
+      api.attachWorkspace(input.projectID, input.workspaceRoot),
+    onSuccess: async (_binding, input) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.workspaces(input.projectID) });
       await queryClient.invalidateQueries({ queryKey: queryKeys.projects });
     },
   });

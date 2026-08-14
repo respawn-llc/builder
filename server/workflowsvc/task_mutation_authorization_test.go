@@ -482,12 +482,12 @@ func bindWorkflowServiceSessionToTask(
 	t.Helper()
 	sessionID := createPersistedWorkflowServiceSession(t, metadataStore, binding)
 	reference := workflowServiceCurrentNodeReference(t, taskID, currentNode)
-	if _, err := service.store.BindSessionToCurrentNode(t.Context(), workflowstore.CurrentNodeSessionBindingRequest{
-		Association: workflowstore.TaskSessionAssociationRequest{
-			SessionID: sessionID, CurrentNode: reference, AssociatedAt: time.Now().UTC(),
-		},
+	if _, err := service.store.AssociateTaskSession(t.Context(), workflowstore.TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  reference,
+		AssociatedAt: time.Now().UTC(),
 	}); err != nil {
-		t.Fatalf("BindSessionToCurrentNode: %v", err)
+		t.Fatalf("AssociateTaskSession: %v", err)
 	}
 	return sessionID
 }

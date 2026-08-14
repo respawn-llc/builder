@@ -12,12 +12,11 @@ import {
   commentListResponse,
   emptyTaskAttentionResponse,
   mountTaskDetailSurface,
-  questionAttention,
   taskDetailResponse,
 } from "@/test-support/task-detail";
 
 describe("Task Detail retained sidebar state", () => {
-  it("restores the selected Activity feed but opens back at the top after visiting another Task", async () => {
+  it("restores the selected Activity feed and pixel offset after visiting another Task", async () => {
     const pageNavigator = createTestSidebarNavigator();
     const taskB = taskDetailWithID("task-2", "Dependency target");
     const services = mountTaskDetailSurface(taskDetailResponse, {
@@ -61,10 +60,10 @@ describe("Task Detail retained sidebar state", () => {
     const retainedState = capture();
     expect(retainedState).toEqual(
       expect.objectContaining({
+        scrollOffsetPx: 1200,
         selectedTab: "activity",
       }),
     );
-    expect(retainedState).not.toHaveProperty("scrollOffsetPx");
 
     services.rerenderTaskDetail("task-2");
     await screen.findByDisplayValue("Dependency target");
@@ -75,33 +74,7 @@ describe("Task Detail retained sidebar state", () => {
     });
     await waitFor(() => {
       expect(restoredActivityTab).toHaveAttribute("aria-selected", "true");
-      expect(screen.getByTestId("task-detail-island-stack").scrollTop).toBe(0);
-    });
-  });
-
-  it("lets an attention deep-link override retained Task Detail state", async () => {
-    const scrollIntoView = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-      configurable: true,
-      value: scrollIntoView,
-    });
-
-    mountTaskDetailSurface(taskDetailResponse, {
-      attention: { generated_at_unix_ms: 3, items: [questionAttention] },
-      initialFocus: { kind: "question", askIDs: ["ask-1"] },
-      retainedState: {
-        base: { body: "Need operator input", title: "Resolve blocker" },
-        descriptionPresentation: { editing: false, expanded: false },
-        draft: { body: "Need operator input", title: "Resolve blocker" },
-        editingComment: null,
-        newCommentBody: "",
-        selectedTab: "comments",
-      },
-    });
-
-    await screen.findByText("Choose snack");
-    await waitFor(() => {
-      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "start" });
+      expect(screen.getByTestId("task-detail-island-stack").scrollTop).toBe(1200);
     });
   });
 
@@ -114,6 +87,7 @@ describe("Task Detail retained sidebar state", () => {
       editingComment: { body: "Unsaved edited comment", id: "comment-1" },
       newCommentBody: "Unsaved new comment",
       questionSelections: { "ask-1": ["not-retained"] },
+      scrollOffsetPx: 240,
       selectedTab: "comments",
     };
 
@@ -156,6 +130,7 @@ describe("Task Detail retained sidebar state", () => {
         draft: { body: "Old body", title: "Old title" },
         editingComment: null,
         newCommentBody: "",
+        scrollOffsetPx: 0,
         selectedTab: "comments",
       },
     });
@@ -203,7 +178,7 @@ describe("Task Detail retained sidebar state", () => {
     mountTaskDetailSurface(taskDetailResponse, {
       initialFocus: { kind: "dependencies" },
       navigator,
-      retainedState: { selectedTab: "unknown" },
+      retainedState: { scrollOffsetPx: -1 },
     });
     expect(await screen.findByDisplayValue("Resolve blocker")).toBeInTheDocument();
     await waitFor(() => {

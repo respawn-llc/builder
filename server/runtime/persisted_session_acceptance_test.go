@@ -50,12 +50,13 @@ func (*persistedBoundaryClient) ProviderCapabilities(
 	context.Context,
 ) (llm.ProviderCapabilities, error) {
 	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsPromptCacheKey:        true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
 	}, nil
 }
 
@@ -174,7 +175,7 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	customInput := "later custom input"
@@ -244,7 +245,7 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		t,
 		firstStore,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	assertFreshResourceRepairOnEngine(t, first, firstStore, calls[0].ID)
@@ -287,7 +288,7 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		t,
 		secondStore,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	for _, call := range calls {
@@ -320,7 +321,7 @@ func TestPersistedSessionGroupCommitPrecedesNextProviderAndStepCompletion(t *tes
 		t,
 		store,
 		client,
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -439,7 +440,7 @@ func runPersistedEffectRecoveryCase(
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID:      toolID,
 			Handler: fixture.handler,
 		}),

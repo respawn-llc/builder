@@ -3,12 +3,14 @@ package blackbox_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/blackbox"
 	"core/server/llm"
 	"core/shared/textutil"
@@ -20,12 +22,6 @@ type staticTransportAuth struct{}
 
 func (staticTransportAuth) AuthorizationHeader(context.Context) (string, error) {
 	return "Bearer test", nil
-}
-
-type oauthStaticTransportAuth struct{ staticTransportAuth }
-
-func (oauthStaticTransportAuth) OpenAIAuthMetadata(context.Context) (string, string, error) {
-	return "oauth", "test-account", nil
 }
 
 func TestResponsesStubRejectsUnexpectedDeveloperMessageCount(t *testing.T) {
@@ -147,7 +143,7 @@ func TestResponsesStubCancelsHeldSSEAndReturnsDeclaredProviderFailure(t *testing
 		t.Fatalf("StartResponsesStub compact failure: %v", err)
 	}
 	t.Cleanup(compact.Close)
-	response, err = http.Post(compact.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":[{"type":"compaction_trigger"}]}`))
+	response, err = http.Post(compact.URL()+"/responses/compact", "application/json", bytes.NewBufferString(`{"input":[]}`))
 	if err != nil {
 		t.Fatalf("POST compact provider failure: %v", err)
 	}
@@ -214,6 +210,7 @@ func TestResponsesStubAcceptsLosslessResponseDTOAndStaticAdaptiveDefaults(t *tes
 		path   string
 		body   string
 	}{
+		{method: http.MethodPost, path: "/responses/input_tokens", body: `{"input":[]}`},
 		{method: http.MethodGet, path: "/models/gpt-5", body: ""},
 	} {
 		httpRequest, err := http.NewRequest(request.method, stub.URL()+request.path, bytes.NewBufferString(request.body))
@@ -229,7 +226,7 @@ func TestResponsesStubAcceptsLosslessResponseDTOAndStaticAdaptiveDefaults(t *tes
 			t.Fatalf("adaptive request %s status = %d, want %d", request.path, response.StatusCode, http.StatusOK)
 		}
 	}
-	if snapshot := stub.Snapshot(); snapshot.RequiredIndex != 0 || len(snapshot.Observed) != 1 {
+	if snapshot := stub.Snapshot(); snapshot.RequiredIndex != 0 || len(snapshot.Observed) != 2 {
 		t.Fatalf("adaptive defaults affected required proof: %#v", snapshot)
 	}
 
@@ -246,7 +243,7 @@ func TestResponsesStubAcceptsLosslessResponseDTOAndStaticAdaptiveDefaults(t *tes
 	if err != nil {
 		t.Fatalf("NewRequest response: %v", err)
 	}
-	request.Header.Set("session-id", cacheKey)
+	request.Header.Set("session_id", cacheKey)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST response: %v", err)
@@ -274,7 +271,7 @@ func TestResponsesStubAcceptsCompactedSessionCacheKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest response: %v", err)
 	}
-	request.Header.Set("session-id", sessionID)
+	request.Header.Set("session_id", sessionID)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST response: %v", err)
@@ -303,7 +300,7 @@ func TestResponsesStubAcceptsSupervisorCompactedSessionCacheKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest response: %v", err)
 	}
-	request.Header.Set("session-id", sessionKey)
+	request.Header.Set("session_id", sessionKey)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST response: %v", err)
@@ -368,6 +365,24 @@ func TestResponsesStubRejectsMalformedRouteDTO(t *testing.T) {
 		t.Fatal("Verify accepted malformed DTO")
 	}
 
+	inputMissing, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub input DTO: %v", err)
+	}
+	t.Cleanup(inputMissing.Close)
+	response, err = http.Post(inputMissing.URL()+"/responses/input_tokens", "application/json", bytes.NewBufferString(`{"model":"gpt-5"}`))
+	if err != nil {
+		t.Fatalf("POST missing input DTO: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing input DTO status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+	if err := inputMissing.Verify(); err == nil {
+		t.Fatal("Verify accepted missing input DTO")
+	}
 }
 
 func TestResponsesStubRecordsUnsupportedRouteAsProtocolFailure(t *testing.T) {
@@ -439,9 +454,28 @@ func TestResponsesStubRejectsInvalidDeclaredOperationBeforeListening(t *testing.
 		"oversized output": {
 			ID: uuid.New(), Route: blackbox.RouteResponses, Output: &oversized, Outcome: blackbox.OutcomeJSON,
 		},
+		"non-responses stream": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeStream,
+		},
+		"non-responses held stream": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeHoldSSE,
+		},
+		"non-responses probe": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON, Probe: &invalidProbe,
+		},
+		"non-responses developer message count": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON,
+			DeveloperMessageCount: &negative,
+		},
+		"non-responses output": {
+			ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON, Output: &output,
+		},
 		"non-responses response phase": {
 			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON,
 			ResponsePhase: blackbox.NewResponsePhase(blackbox.ResponsePhaseFinal),
+		},
+		"non-responses session cache key": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON, SessionCacheKey: true,
 		},
 		"emitted message missing phase": {
 			ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON, Output: &output,
@@ -620,6 +654,33 @@ func TestResponsesStubBoundsObservedDiagnosticsAndEnforcesRequiredOrder(t *testi
 		t.Fatal("Verify accepted required operation order mismatch")
 	}
 
+	diagnostics, err := blackbox.StartResponsesStub(nil)
+	if err != nil {
+		t.Fatalf("StartResponsesStub diagnostics: %v", err)
+	}
+	t.Cleanup(diagnostics.Close)
+	body := []byte(`{"input":"` + strings.Repeat("d", 64*1024-32) + `"}`)
+	for requestNumber := 0; ; requestNumber++ {
+		response, err = http.Post(diagnostics.URL()+"/responses/input_tokens", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST diagnostics request %d: %v", requestNumber, err)
+		}
+		status := response.StatusCode
+		_ = response.Body.Close()
+		if status == http.StatusRequestEntityTooLarge {
+			break
+		}
+		if status != http.StatusOK {
+			t.Fatalf("diagnostic request %d status = %d", requestNumber, status)
+		}
+		if requestNumber > 32 {
+			t.Fatal("model diagnostics did not enforce their aggregate bound")
+		}
+	}
+	var limit *analyzer.EvidenceLimitExceeded
+	if !errors.As(diagnostics.Snapshot().Failure, &limit) {
+		t.Fatalf("diagnostic overflow failure = %T %v, want EvidenceLimitExceeded", diagnostics.Snapshot().Failure, diagnostics.Snapshot().Failure)
+	}
 }
 
 func TestResponsesStubRejectsRequiredQueueExhaustionAndProvidesProviderFailuresForAllRoutes(t *testing.T) {
@@ -656,6 +717,7 @@ func TestResponsesStubRejectsRequiredQueueExhaustionAndProvidesProviderFailuresF
 		path   string
 		body   string
 	}{
+		{route: blackbox.RouteInputTokens, method: http.MethodPost, path: "/responses/input_tokens", body: `{"input":[]}`},
 		{route: blackbox.RouteModel, method: http.MethodGet, path: "/models/gpt-5"},
 	} {
 		stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
@@ -701,7 +763,6 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	var deltas []string
 	response, err := transport.GenerateStream(context.Background(), llm.OpenAIRequest{
 		Model:          "gpt-5",
-		SessionID:      textutil.Value("session-1"),
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(probe)}}),
 	}, func(delta string) {
@@ -721,7 +782,7 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	}
 }
 
-func TestResponsesStubServesCompactAndModelMetadataTransportRoutes(t *testing.T) {
+func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *testing.T) {
 	t.Parallel()
 
 	compact, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
@@ -731,20 +792,37 @@ func TestResponsesStubServesCompactAndModelMetadataTransportRoutes(t *testing.T)
 		t.Fatalf("StartResponsesStub compact: %v", err)
 	}
 	t.Cleanup(compact.Close)
-	compactTransport := llm.NewHTTPTransport(oauthStaticTransportAuth{})
-	compactTransport.BaseURL = compact.URL()
-	compactTransport.BaseURLExplicit = true
-	compactTransport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
+	compactTransport := newStubTransport(compact)
 	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
-		Model:         "gpt-5",
-		SessionID:     textutil.Value("session-1"),
-		CodexDispatch: testCodexDispatch(t, "session-1", llm.CodexRequestKindCompaction),
-		InputItems:    llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
+		Model:      "gpt-5",
+		InputItems: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
 	}); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
 	if err := compact.Verify(); err != nil {
 		t.Fatalf("Verify compact: %v", err)
+	}
+
+	inputTokens, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub input_tokens: %v", err)
+	}
+	t.Cleanup(inputTokens.Close)
+	count, err := newStubTransport(inputTokens).CountRequestInputTokens(context.Background(), llm.OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
+	})
+	if err != nil {
+		t.Fatalf("CountRequestInputTokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("input token count = %d, want 0", count)
+	}
+	if err := inputTokens.Verify(); err != nil {
+		t.Fatalf("Verify input_tokens: %v", err)
 	}
 
 	model, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
@@ -766,19 +844,6 @@ func TestResponsesStubServesCompactAndModelMetadataTransportRoutes(t *testing.T)
 	if err := model.Verify(); err != nil {
 		t.Fatalf("Verify model metadata: %v", err)
 	}
-}
-
-func testCodexDispatch(t *testing.T, sessionID string, requestKind llm.CodexRequestKind) *llm.CodexDispatchContext {
-	t.Helper()
-	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
-		SessionID:   sessionID,
-		RunID:       "run-1",
-		RequestKind: requestKind.Optional(),
-	})
-	if err != nil {
-		t.Fatalf("NewCodexDispatchContext: %v", err)
-	}
-	return dispatch
 }
 
 func newStubTransport(stub *blackbox.ResponsesStub) *llm.HTTPTransport {

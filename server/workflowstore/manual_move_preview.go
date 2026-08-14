@@ -114,9 +114,7 @@ type ManualMovePreview struct {
 }
 
 func (s *Store) PreviewManualMove(ctx context.Context, req ManualMoveRequest) (ManualMovePreview, error) {
-	preview, err := s.resolveManualMove(ctx, s.queries, req)
-	reportWorkflowInvariantError(s.invariantPolicy, err)
-	return preview, err
+	return s.resolveManualMove(ctx, s.queries, req)
 }
 
 func (s *Store) resolveManualMove(ctx context.Context, q *sqlitegen.Queries, req ManualMoveRequest) (ManualMovePreview, error) {
@@ -130,7 +128,7 @@ func (s *Store) resolveManualMove(ctx context.Context, q *sqlitegen.Queries, req
 	if err != nil {
 		return ManualMovePreview{}, err
 	}
-	currentNodes, err := s.listTaskCurrentNodes(ctx, q, req.TaskID)
+	currentNodes, err := listTaskCurrentNodes(ctx, q, req.TaskID)
 	if err != nil {
 		return ManualMovePreview{}, err
 	}
@@ -227,7 +225,7 @@ func (s *Store) resolveManualMoveExecutablePreview(
 			SourceNode:    source,
 			Edges:         append([]workflow.Edge(nil), edgesByGroup[group.ID]...),
 		}
-		contextUnavailableForCandidate, err := s.manualMoveContextUnavailable(ctx, q, definition, req.TaskID, candidate, currentNodes)
+		contextUnavailableForCandidate, err := manualMoveContextUnavailable(ctx, q, definition, req.TaskID, candidate, currentNodes)
 		if err != nil {
 			return ManualMovePreview{}, err
 		}
@@ -284,7 +282,7 @@ func (s *Store) resolveManualMoveExecutablePreview(
 	return ManualMovePreview{Outcome: ManualMovePreviewOutcomeTransition, Choices: candidates}, nil
 }
 
-func (s *Store) manualMoveContextUnavailable(
+func manualMoveContextUnavailable(
 	ctx context.Context,
 	q *sqlitegen.Queries,
 	definition workflow.Definition,
@@ -300,22 +298,7 @@ func (s *Store) manualMoveContextUnavailable(
 		if edge.ContextMode == workflow.ContextModeNewSession {
 			continue
 		}
-		target, targetErr := currentNodeDefinitionNode(definition, edge.TargetNodeID)
-		if targetErr != nil {
-			return false, targetErr
-		}
-		_, err := resolveTransitionContext(
-			ctx,
-			q,
-			definition,
-			edge,
-			currentNodes[0].Reference.TaskID,
-			contextSource,
-			nil,
-			choice.SourceNode,
-			target,
-			true,
-		)
+		_, err := resolveTransitionTargetSession(ctx, q, definition, edge, currentNodes[0].Reference.TaskID, contextSource, nil, choice.SourceNode, true)
 		if err == nil {
 			continue
 		}
@@ -667,7 +650,7 @@ func (s *Store) manualMoveValueEnvironment(
 		return manualMoveValueEnvironment{}, err
 	}
 	for _, row := range rows {
-		approval, err := pendingApprovalFromRow(ctx, q, pendingApprovalRecordFromListRow(row))
+		approval, err := pendingApprovalFromRow(ctx, q, row)
 		if err != nil {
 			return manualMoveValueEnvironment{}, err
 		}

@@ -21,13 +21,13 @@ func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
 		store := mustCreateTestSession(t)
 		mustBlockTestEventLogAppends(t, store)
 
-		_, err := SteerPersistedWorkflowAssignment(
+		_, err := PersistWorkflowAssignment(
 			store,
 			workflowAssignmentForCommitReceiptTest(),
 			persistedWorkflowAssignmentContextForTest(t),
 		)
 		if err == nil {
-			t.Fatal("SteerPersistedWorkflowAssignment did not return preparation failure")
+			t.Fatal("PersistWorkflowAssignment did not return preparation failure")
 		}
 	})
 
@@ -38,14 +38,16 @@ func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
 		if err != nil {
 			t.Fatalf("prepare persisted steering engine: %v", err)
 		}
+		mustBlockTestEventLogAppends(t, store)
+
 		message, err := buildWorkflowAssignmentMessage(workflowAssignmentForCommitReceiptTest())
 		if err != nil {
 			t.Fatalf("build workflow assignment: %v", err)
 		}
-		mustBlockTestEventLogAppends(t, store)
-
-		steer := completePersistedWorkflowAssignment(engine, message)
-		receipt, waitErr := steer.Wait(t.Context())
+		receipt, waitErr := engine.steerWithCommitReceipt("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+			true,
+			[]llm.Message{message},
+		))
 		if waitErr == nil {
 			t.Fatal("workflow assignment completion did not surface append failure")
 		}
@@ -61,15 +63,11 @@ func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
 		seedPersistedWorkflowBaseContextForCommitReceiptTest(t, store)
 		gate.FailNext(observerErr)
 
-		steer, err := SteerPersistedWorkflowAssignment(
+		receipt, waitErr := PersistWorkflowAssignment(
 			store,
 			workflowAssignmentForCommitReceiptTest(),
 			persistedWorkflowAssignmentContextForTest(t),
 		)
-		if err != nil {
-			t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
-		}
-		receipt, waitErr := steer.Wait(t.Context())
 		if !errors.Is(waitErr, observerErr) {
 			t.Fatalf("workflow assignment completion error = %v, want %v", waitErr, observerErr)
 		}
@@ -91,16 +89,16 @@ func TestPersistedWorkflowAssignmentDoesNotRepairExistingSession(t *testing.T) {
 		t.Fatalf("seed existing workflow assignment = %+v, %v; want committed", receipt, err)
 	}
 
-	steer, err := SteerPersistedWorkflowAssignment(
+	receipt, err = PersistWorkflowAssignment(
 		store,
 		assignment,
 		persistedWorkflowAssignmentContextForTest(t),
 	)
 	if err != nil {
-		t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
+		t.Fatalf("PersistWorkflowAssignment: %v", err)
 	}
-	if receipt, err := steer.Wait(t.Context()); err != nil || !receipt.Committed {
-		t.Fatalf("wait for workflow assignment = %+v, %v; want committed", receipt, err)
+	if !receipt.Committed {
+		t.Fatalf("workflow assignment = %+v, want committed", receipt)
 	}
 
 	eventLog, err := store.MaterializeEventLog()
@@ -177,15 +175,13 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 	t.Run("uncommitted error", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		var events []Event
-		eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		})
 		mustBlockTestEventLogAppends(t, store)
 
-		err := eng.steer("step-1", steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventDefault,
+		err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
 			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("uncommitted")}},
 		))
@@ -205,15 +201,13 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 		var events []Event
-		eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		})
 		gate.FailNext(observerErr)
 
-		err := eng.steer("step-1", steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventDefault,
+		err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
 			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("committed")}},
 		))
@@ -270,7 +264,7 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 		{
 			name: "reviewer",
 			newEngine: func(t *testing.T, store *session.Store) *Engine {
-				return mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
+				return mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{
 					ID:      toolspec.ToolExecCommand,
 					Handler: fakeTool{name: toolspec.ToolExecCommand},
 				}), Config{

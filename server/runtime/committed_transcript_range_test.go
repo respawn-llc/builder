@@ -21,7 +21,7 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:            "gpt-5",
 			CacheWarningMode: config.CacheWarningModeVerbose,
@@ -56,9 +56,7 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 	}
 	if err := engine.steer(
 		"step",
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventNone,
+		steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 			true,
 			[]llm.Message{assistant},
 		),
@@ -104,7 +102,7 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -194,7 +192,7 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 		t,
 		mustCreateTestSession(t),
 		client,
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -203,10 +201,7 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
-	if err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, err := engine.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
-		return err
-	}); err != nil {
+	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -269,17 +264,14 @@ func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
 		t,
 		store,
 		client,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
 
-	if err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, err := engine.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
-		return err
-	}); err != nil {
+	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -432,7 +424,7 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 		}
 	}
 
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	var hydration TranscriptHydrationSnapshot
 	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
 		hydration = snapshot
@@ -454,7 +446,7 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, role := range []string{
 		string(transcript.EntryRoleSystem),
 		string(transcript.EntryRoleSystem),
@@ -492,7 +484,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 		t,
 		mustOpenTestSession(t, store.Dir()),
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
@@ -528,7 +520,7 @@ func TestHistoryReplacementPublishesPreservedUserMessageBeforeFollowingLocalEntr
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },

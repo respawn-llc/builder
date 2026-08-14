@@ -70,14 +70,15 @@ func (f *fakeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabili
 		return f.caps, nil
 	}
 	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsPromptCacheKey:        true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsNativeWebSearch:        true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
+		IsOpenAIFirstParty:             true,
 	}, nil
 }
 
@@ -110,14 +111,15 @@ func (c *hookClient) ProviderCapabilities(context.Context) (llm.ProviderCapabili
 		return c.caps, nil
 	}
 	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsPromptCacheKey:        true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsNativeWebSearch:        true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
+		IsOpenAIFirstParty:             true,
 	}, nil
 }
 
@@ -128,6 +130,10 @@ type fakeCompactionClient struct {
 	errors    []error
 	calls     []llm.Request
 
+	inputTokenCount      int
+	inputTokenCountFn    func(req llm.Request) int
+	countInputTokenCalls int
+
 	compactionResponses []llm.CompactionResponse
 	compactionErr       error
 	compactionErrors    []error
@@ -136,17 +142,43 @@ type fakeCompactionClient struct {
 	caps llm.ProviderCapabilities
 }
 
-type contextWindowClient struct {
-	contextWindow int
+type preciseCompactionClient struct {
+	inputTokenCount int
+	contextWindow   int
+	countErr        error
+	countSupported  *bool
+	supportErr      error
 
+	countCalls   int
 	resolveCalls int
 }
 
-func (c *contextWindowClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+func (c *preciseCompactionClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 
-func (c *contextWindowClient) ResolveModelContextWindow(_ context.Context, _ string) (int, error) {
+func (c *preciseCompactionClient) CountRequestInputTokens(_ context.Context, _ llm.Request) (int, error) {
+	c.countCalls++
+	if c.countErr != nil {
+		return 0, c.countErr
+	}
+	if c.inputTokenCount < 0 {
+		return 0, nil
+	}
+	return c.inputTokenCount, nil
+}
+
+func (c *preciseCompactionClient) SupportsRequestInputTokenCount(_ context.Context) (bool, error) {
+	if c.supportErr != nil {
+		return false, c.supportErr
+	}
+	if c.countSupported != nil {
+		return *c.countSupported, nil
+	}
+	return true, nil
+}
+
+func (c *preciseCompactionClient) ResolveModelContextWindow(_ context.Context, _ string) (int, error) {
 	c.resolveCalls++
 	if c.contextWindow <= 0 {
 		return 0, nil
@@ -154,16 +186,21 @@ func (c *contextWindowClient) ResolveModelContextWindow(_ context.Context, _ str
 	return c.contextWindow, nil
 }
 
-func (c *contextWindowClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+func (c *preciseCompactionClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	supportsExactCount := true
+	if c.countSupported != nil {
+		supportsExactCount = *c.countSupported
+	}
 	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsPromptCacheKey:        true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: supportsExactCount,
+		SupportsPromptCacheKey:         true,
+		SupportsNativeWebSearch:        true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
+		IsOpenAIFirstParty:             true,
 	}, nil
 }
 
@@ -184,6 +221,23 @@ func (f *fakeCompactionClient) Generate(_ context.Context, req llm.Request) (llm
 	resp := f.responses[0]
 	f.responses = f.responses[1:]
 	return resp, nil
+}
+
+func (f *fakeCompactionClient) CountRequestInputTokens(_ context.Context, req llm.Request) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.countInputTokenCalls++
+	if f.inputTokenCountFn != nil {
+		count := f.inputTokenCountFn(req)
+		if count < 0 {
+			return 0, nil
+		}
+		return count, nil
+	}
+	if f.inputTokenCount < 0 {
+		return 0, nil
+	}
+	return f.inputTokenCount, nil
 }
 
 func (f *fakeCompactionClient) Compact(_ context.Context, req llm.CompactionRequest) (llm.CompactionResponse, error) {
@@ -211,14 +265,15 @@ func (f *fakeCompactionClient) Compact(_ context.Context, req llm.CompactionRequ
 func (f *fakeCompactionClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	if strings.TrimSpace(f.caps.ProviderID) == "" {
 		return llm.ProviderCapabilities{
-			ProviderID:                    "openai",
-			SupportsResponsesAPI:          true,
-			SupportsResponsesCompact:      true,
-			SupportsPromptCacheKey:        true,
-			SupportsNativeWebSearch:       true,
-			SupportsReasoningEncrypted:    true,
-			SupportsServerSideContextEdit: true,
-			IsOpenAIFirstParty:            true,
+			ProviderID:                     "openai",
+			SupportsResponsesAPI:           true,
+			SupportsResponsesCompact:       true,
+			SupportsRequestInputTokenCount: true,
+			SupportsPromptCacheKey:         true,
+			SupportsNativeWebSearch:        true,
+			SupportsReasoningEncrypted:     true,
+			SupportsServerSideContextEdit:  true,
+			IsOpenAIFirstParty:             true,
 		}, nil
 	}
 	return f.caps, nil
@@ -299,14 +354,15 @@ type fakeReasoningStreamClient struct{}
 
 func defaultTestProviderCapabilities() llm.ProviderCapabilities {
 	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsPromptCacheKey:        true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsNativeWebSearch:        true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
+		IsOpenAIFirstParty:             true,
 	}
 }
 
@@ -362,11 +418,11 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReminderEntries(t *testin
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value("heads up")}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value("heads up")}})); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 
@@ -379,12 +435,12 @@ func TestLastCommittedAssistantFinalAnswerClearsAtBlankFinal(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, message := range []llm.Message{
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")},
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("")},
 	} {
-		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 			t.Fatalf("append assistant final: %v", err)
 		}
 	}
@@ -398,11 +454,11 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingErrorFeedback(t *testing.
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value("phase mismatch")}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value("phase mismatch")}})); err != nil {
 		t.Fatalf("append warning: %v", err)
 	}
 
@@ -415,11 +471,11 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingHandoffFutureMessage(t *t
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHandoffFutureMessage), Content: textutil.Value("resume with tests")}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHandoffFutureMessage), Content: textutil.Value("resume with tests")}})); err != nil {
 		t.Fatalf("append handoff future message: %v", err)
 	}
 
@@ -432,11 +488,11 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReviewerFeedback(t *testi
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value("reviewer suggestions")}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value("reviewer suggestions")}})); err != nil {
 		t.Fatalf("append reviewer feedback: %v", err)
 	}
 
@@ -449,11 +505,11 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingGoalFeedback(t *testing.T
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeGoal), Content: textutil.Value(prompts.RenderGoalSetPrompt("ship goal mode")), CompactContent: textutil.Value("Goal set: \"ship goal mode\"")}, eng.transcriptWorkingDir())})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeGoal), Content: textutil.Value(prompts.RenderGoalSetPrompt("ship goal mode")), CompactContent: textutil.Value("Goal set: \"ship goal mode\"")}, eng.transcriptWorkingDir())})); err != nil {
 		t.Fatalf("append goal feedback: %v", err)
 	}
 
@@ -466,11 +522,11 @@ func TestLastCommittedAssistantFinalAnswerDoesNotSkipTrailingUntypedDeveloperMes
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("User ran shell command directly:\npwd")}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("User ran shell command directly:\npwd")}})); err != nil {
 		t.Fatalf("append developer message: %v", err)
 	}
 
@@ -639,7 +695,7 @@ func TestLocksAtFirstDispatch(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:         "gpt-5",
 		Temperature:   1,
 		ThinkingLevel: "xhigh",
@@ -686,7 +742,7 @@ func TestHeadlessSessionLocksToolPreamblesOff(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:         "gpt-5",
 		Temperature:   1,
 		ThinkingLevel: "high",
@@ -715,7 +771,7 @@ func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
-	firstEngine := mustNewTestEngine(t, store, firstClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	firstEngine := mustNewTestEngine(t, store, firstClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:         "gpt-5",
 		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand},
 		ToolPreambles: false,
@@ -731,7 +787,7 @@ func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
-	resumedEngine := mustNewTestEngine(t, store, resumedClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	resumedEngine := mustNewTestEngine(t, store, resumedClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:         "gpt-5",
 		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand},
 		ToolPreambles: true,
@@ -752,7 +808,7 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 		Usage:     llm.Usage{WindowTokens: 272_000},
 	}}}
-	firstEngine := mustNewTestEngine(t, store, firstClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	firstEngine := mustNewTestEngine(t, store, firstClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:               "gpt-5",
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 272_000,
@@ -780,7 +836,7 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")},
 		Usage:     llm.Usage{WindowTokens: 400_000},
 	}}}
-	resumedEngine := mustNewTestEngine(t, store, resumedClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	resumedEngine := mustNewTestEngine(t, store, resumedClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:               "gpt-5",
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 400_000,
@@ -830,7 +886,7 @@ func TestSystemPromptSnapshotUsesLocalFileAndSurvivesMidSessionFileChanges(t *te
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                "gpt-5",
 		EnabledTools:         []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens:  272_000,
@@ -860,7 +916,7 @@ func TestSystemPromptSnapshotUsesLocalFileAndSurvivesMidSessionFileChanges(t *te
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")},
 		Usage:     llm.Usage{WindowTokens: 400000},
 	}}}
-	reopenedEngine := mustNewTestEngine(t, reopened, reopenedClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	reopenedEngine := mustNewTestEngine(t, reopened, reopenedClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                "gpt-5",
 		EnabledTools:         []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens:  400_000,
@@ -898,7 +954,7 @@ func TestSystemPromptSnapshotRefreshesAfterCompaction(t *testing.T) {
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}, Usage: llm.Usage{WindowTokens: 200000}},
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("third")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                 "gpt-5",
 		EnabledTools:          []toolspec.ID{toolspec.ToolExecCommand},
 		CompactionMode:        "local",
@@ -1061,7 +1117,7 @@ func TestLockedRequestShapeSurvivesRuntimeConfigToolAndWebSearchToggles(t *testi
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t,
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
 		tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: fakeTool{name: toolspec.ToolAskQuestion}},
 		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},

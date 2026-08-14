@@ -1,9 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import type { ProjectWorkspaceAttachResponse } from "@/api";
+import type { ProjectBinding } from "@/api";
 import { errorMessage } from "@/api";
-import { invalidateProjectBoardQueries, invalidateProjectDeleteQueries } from "@/app-facade";
+import { invalidateProjectDeleteQueries } from "@/app-facade";
 import type { AppServices } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -15,10 +15,12 @@ type NativeWorkspaceUnlinkTarget = Parameters<Parameters<ProjectWorkspaceBridge[
 
 export function useProjectEdit(projectID: string) {
   const { api } = useAppServices();
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: queryKeys.projectEdit(projectID),
-    queryFn: async () => api.getProjectEdit(projectID),
+    queryFn: async ({ pageParam }) => api.getProjectEdit(projectID, pageParam),
+    initialPageParam: "",
     enabled: projectID.length > 0,
+    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
   });
 }
 
@@ -40,7 +42,7 @@ export function useProjectDefaultWorkspaceSave(projectID: string) {
   return useMutation({
     mutationFn: async (workspaceID: string) => api.setDefaultWorkspace(projectID, workspaceID),
     onSuccess: async () => {
-      await invalidateProjectWorkspaceOwners(queryClient, projectID);
+      await invalidateProjectEditQueries(queryClient, projectID);
     },
   });
 }
@@ -49,10 +51,10 @@ export function useProjectWorkspaceAttach(projectID: string) {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (workspaceRoot: string): Promise<ProjectWorkspaceAttachResponse> =>
+    mutationFn: async (workspaceRoot: string): Promise<ProjectBinding> =>
       api.attachWorkspace(projectID, workspaceRoot),
     onSuccess: async () => {
-      await invalidateProjectWorkspaceOwners(queryClient, projectID);
+      await invalidateProjectEditQueries(queryClient, projectID);
     },
   });
 }
@@ -63,7 +65,7 @@ export function useProjectWorkspaceUnlink(projectID: string) {
   return useMutation({
     mutationFn: async (workspaceID: string) => api.unlinkWorkspace(projectID, workspaceID),
     onSuccess: async () => {
-      await invalidateProjectWorkspaceOwners(queryClient, projectID);
+      await invalidateProjectEditQueries(queryClient, projectID);
     },
   });
 }
@@ -124,7 +126,7 @@ export function useProjectWorkspaceChangedEvents(nativeBridge: NativeBridge, pro
     let unlisten: (() => void) | null = null;
     const handler = (event: NativeProjectWorkspaceChanged) => {
       if (active && event.projectID === projectID) {
-        void invalidateProjectWorkspaceOwners(queryClient, projectID);
+        void invalidateProjectEditQueries(queryClient, projectID);
       }
     };
     void nativeBridge.projectWorkspace
@@ -155,16 +157,6 @@ async function invalidateProjectEditQueries(
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
     queryClient.invalidateQueries({ queryKey: queryKeys.projectEdit(projectID) }),
-  ]);
-}
-
-async function invalidateProjectWorkspaceOwners(
-  queryClient: ReturnType<typeof useQueryClient>,
-  projectID: string,
-): Promise<void> {
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.projectEdit(projectID) }),
-    invalidateProjectBoardQueries(queryClient, projectID),
+    queryClient.invalidateQueries({ queryKey: queryKeys.workspaces(projectID) }),
   ]);
 }

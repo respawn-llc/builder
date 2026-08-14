@@ -53,7 +53,7 @@ func (c compactionPreservedContextCoordinator) appendHandoffFutureMessage(stepID
 	}
 	receipt, err := e.steerWithCommitReceipt(
 		stepID,
-		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{futureMessage}),
+		steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{futureMessage}),
 	)
 	if receipt.Committed {
 		e.handoffRuntimeState().ClearFutureMessage()

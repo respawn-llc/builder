@@ -8,7 +8,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/subagentpolicy"
-	"core/shared/textutil"
 )
 
 type BootstrapRequest struct {
@@ -71,12 +70,8 @@ func ResolveBootstrapPlan(persistenceRoot string, req BootstrapRequest) (Bootstr
 	if req.OpenAIBaseURLExplicit {
 		return plan, nil
 	}
-	if meta.Continuation != nil {
-		baseURL, present := textutil.OptionalTrimmed(meta.Continuation.OpenAIBaseURL)
-		if !present {
-			return plan, nil
-		}
-		plan.OpenAIBaseURL = baseURL
+	if meta.Continuation != nil && strings.TrimSpace(meta.Continuation.OpenAIBaseURL) != "" {
+		plan.OpenAIBaseURL = strings.TrimSpace(meta.Continuation.OpenAIBaseURL)
 		plan.UseOpenAIBaseURL = true
 	}
 	return plan, nil

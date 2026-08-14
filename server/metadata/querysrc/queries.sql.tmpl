@@ -23,46 +23,6 @@
 )
 {{end}}
 
-{{define "nullableWorkflowNodeGroupIDText"}}CASE
-        WHEN group_id IS NULL THEN NULL
-        ELSE kent_graph_entity_id_text_v1(group_id)
-    END{{end}}
-
-{{define "nullableCurrentNodeEnteredByEdgeIDText"}}CASE
-        WHEN current_node.entered_by_edge_id IS NULL THEN NULL
-        ELSE kent_graph_entity_id_text_v1(current_node.entered_by_edge_id)
-    END{{end}}
-
-{{define "pendingApprovalEnteredByEdgeIDBlob"}}CASE
-{{.}}    WHEN json_type(branch.target_snapshot_json, '$.entered_by_edge_id') = 'text'
-{{.}}    THEN kent_graph_entity_id_blob_v1(
-{{.}}        json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
-{{.}}    )
-{{.}}    ELSE NULL
-{{.}}END{{end}}
-
-{{define "taskSessionProjectionFields"}}
-SELECT
-    session.id AS session_id,
-    session.name AS session_name,
-    node.display_name AS node_name,
-    session.continuation_json,
-    session.created_at_unix_ms
-{{end}}
-
-{{define "taskSessionProjectionJoins"}}
-LEFT JOIN session_workflow_node_associations association
-    ON association.rowid = (
-        SELECT candidate.rowid
-        FROM session_workflow_node_associations candidate
-            INDEXED BY session_workflow_node_associations_session_recency_idx
-        WHERE candidate.session_id = session.id
-        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
-        LIMIT 1
-    )
-LEFT JOIN workflow_nodes node ON node.id = association.node_id
-{{end}}
-
 -- name: ListWorkspaceBindingsByCanonicalRoot :many
 SELECT
     p.id AS project_id,
@@ -133,15 +93,6 @@ SELECT
     project_key
 FROM projects
 ORDER BY created_at_unix_ms ASC, rowid ASC;
-
--- name: GetProjectEditMetadata :one
-SELECT
-    id,
-    display_name,
-    project_key
-FROM projects
-WHERE id = sqlc.arg(project_id)
-LIMIT 1;
 
 -- name: GetProjectKeyState :one
 SELECT
@@ -429,7 +380,7 @@ INSERT INTO workflow_nodes (
     group_id,
     sort_order
 ) VALUES (
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT)),
+    sqlc.arg(id),
     sqlc.arg(workflow_id),
     sqlc.arg(node_key),
     sqlc.arg(kind),
@@ -438,26 +389,23 @@ INSERT INTO workflow_nodes (
     sqlc.arg(completion_mode),
     sqlc.narg(script_path),
     sqlc.arg(join_input_providers_json),
-    CASE
-        WHEN CAST(sqlc.narg(group_id) AS TEXT) IS NULL THEN NULL
-        ELSE kent_graph_entity_id_blob_v1(CAST(sqlc.narg(group_id) AS TEXT))
-    END,
+    sqlc.narg(group_id),
     sqlc.arg(sort_order)
 );
 
 -- name: DeleteWorkflowNodeGroup :execrows
 DELETE FROM workflow_node_groups
-WHERE id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT))
+WHERE id = sqlc.arg(id)
   AND workflow_id = sqlc.arg(workflow_id);
 
 -- name: DeleteWorkflowTransitionGroupByID :execrows
 DELETE FROM workflow_transition_groups
-WHERE id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT));
+WHERE id = sqlc.arg(id);
 
 -- name: UpsertWorkflowNodeGroup :execrows
 INSERT INTO workflow_node_groups (id, workflow_id, group_key, display_name, sort_order)
 VALUES (
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT)),
+    sqlc.arg(id),
     sqlc.arg(workflow_id),
     sqlc.arg(group_key),
     sqlc.arg(display_name),
@@ -472,7 +420,7 @@ WHERE workflow_node_groups.workflow_id = excluded.workflow_id;
 -- name: UpsertWorkflowNode :execrows
 INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, completion_mode, script_path, join_input_providers_json, group_id, sort_order)
 VALUES (
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT)),
+    sqlc.arg(id),
     sqlc.arg(workflow_id),
     sqlc.arg(node_key),
     sqlc.arg(kind),
@@ -481,10 +429,7 @@ VALUES (
     sqlc.arg(completion_mode),
     sqlc.narg(script_path),
     sqlc.arg(join_input_providers_json),
-    CASE
-        WHEN CAST(sqlc.narg(group_id) AS TEXT) IS NULL THEN NULL
-        ELSE kent_graph_entity_id_blob_v1(CAST(sqlc.narg(group_id) AS TEXT))
-    END,
+    sqlc.narg(group_id),
     sqlc.arg(sort_order)
 )
 ON CONFLICT(id) DO UPDATE SET
@@ -502,8 +447,8 @@ WHERE workflow_nodes.workflow_id = excluded.workflow_id;
 -- name: UpsertWorkflowTransitionGroup :execrows
 INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name, description, sort_order)
 SELECT
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT)),
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(source_node_id) AS TEXT)),
+    sqlc.arg(id),
+    sqlc.arg(source_node_id),
     sqlc.arg(transition_id),
     sqlc.arg(display_name),
     sqlc.arg(description),
@@ -511,7 +456,7 @@ SELECT
 WHERE EXISTS (
     SELECT 1
     FROM workflow_nodes source
-    WHERE source.id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(source_node_id) AS TEXT))
+    WHERE source.id = sqlc.arg(source_node_id)
       AND source.workflow_id = sqlc.arg(workflow_id)
 )
 ON CONFLICT(id) DO UPDATE SET
@@ -534,10 +479,10 @@ WHERE EXISTS (
 -- name: UpsertWorkflowEdge :execrows
 INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, assignee_selection, thinking_selection, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
 SELECT
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT)),
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(transition_group_id) AS TEXT)),
+    sqlc.arg(id),
+    sqlc.arg(transition_group_id),
     sqlc.arg(edge_key),
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(target_node_id) AS TEXT)),
+    sqlc.arg(target_node_id),
     sqlc.arg(assignee_selection),
     sqlc.arg(thinking_selection),
     sqlc.arg(requires_approval),
@@ -553,9 +498,8 @@ WHERE EXISTS (
     SELECT 1
     FROM workflow_transition_groups tg
     JOIN workflow_nodes source ON source.id = tg.source_node_id
-    JOIN workflow_nodes target
-        ON target.id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(target_node_id) AS TEXT))
-    WHERE tg.id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(transition_group_id) AS TEXT))
+    JOIN workflow_nodes target ON target.id = sqlc.arg(target_node_id)
+    WHERE tg.id = sqlc.arg(transition_group_id)
       AND source.workflow_id = sqlc.arg(workflow_id)
       AND target.workflow_id = sqlc.arg(workflow_id)
 )
@@ -589,7 +533,7 @@ WHERE EXISTS (
 
 -- name: ListWorkflowNodeGroups :many
 SELECT
-    CAST(kent_graph_entity_id_text_v1(id) AS TEXT) AS id,
+    id,
     workflow_id,
     group_key,
     display_name,
@@ -600,7 +544,7 @@ ORDER BY sort_order ASC, rowid ASC;
 
 -- name: ListWorkflowNodes :many
 SELECT
-    CAST(kent_graph_entity_id_text_v1(id) AS TEXT) AS id,
+    id,
     workflow_id,
     node_key,
     kind,
@@ -609,7 +553,7 @@ SELECT
     completion_mode,
     script_path,
     join_input_providers_json,
-    {{template "nullableWorkflowNodeGroupIDText"}} AS group_id,
+    group_id,
     sort_order
 FROM workflow_nodes
 WHERE workflow_id = sqlc.arg(workflow_id)
@@ -617,7 +561,7 @@ ORDER BY sort_order ASC, rowid ASC;
 
 -- name: GetWorkflowNode :one
 SELECT
-    CAST(kent_graph_entity_id_text_v1(id) AS TEXT) AS id,
+    id,
     workflow_id,
     node_key,
     kind,
@@ -626,21 +570,21 @@ SELECT
     completion_mode,
     script_path,
     join_input_providers_json,
-    {{template "nullableWorkflowNodeGroupIDText"}} AS group_id,
+    group_id,
     sort_order
 FROM workflow_nodes
-WHERE id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT))
+WHERE id = sqlc.arg(id)
 LIMIT 1;
 
 -- name: DeleteWorkflowNode :execrows
 DELETE FROM workflow_nodes
-WHERE id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT));
+WHERE id = sqlc.arg(id);
 
 -- name: ListWorkflowTransitionGroups :many
 SELECT
-    CAST(kent_graph_entity_id_text_v1(tg.id) AS TEXT) AS id,
+    tg.id,
     source.workflow_id AS workflow_id,
-    CAST(kent_graph_entity_id_text_v1(tg.source_node_id) AS TEXT) AS source_node_id,
+    tg.source_node_id,
     tg.transition_id,
     tg.display_name,
     tg.description,
@@ -652,11 +596,11 @@ ORDER BY tg.sort_order ASC, tg.rowid ASC;
 
 -- name: ListWorkflowEdges :many
 SELECT
-    CAST(kent_graph_entity_id_text_v1(e.id) AS TEXT) AS id,
+    e.id,
     source.workflow_id AS workflow_id,
-    CAST(kent_graph_entity_id_text_v1(e.transition_group_id) AS TEXT) AS transition_group_id,
+    e.transition_group_id,
     e.edge_key,
-    CAST(kent_graph_entity_id_text_v1(e.target_node_id) AS TEXT) AS target_node_id,
+    e.target_node_id,
     e.assignee_selection,
     e.thinking_selection,
     e.requires_approval,
@@ -676,7 +620,7 @@ ORDER BY e.sort_order ASC, e.rowid ASC;
 
 -- name: DeleteWorkflowEdge :execrows
 DELETE FROM workflow_edges
-WHERE id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(id) AS TEXT));
+WHERE id = sqlc.arg(id);
 
 -- name: ClearProjectDefaultWorkflowLinks :exec
 UPDATE projects
@@ -928,19 +872,13 @@ WHERE id = sqlc.arg(id);
 -- name: CountTaskNodeReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
-    SELECT current_node.task_id
-    FROM task_current_nodes current_node
-    WHERE current_node.node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+    SELECT current_node.task_id FROM task_current_nodes current_node WHERE current_node.node_id = sqlc.arg(node_id)
     UNION ALL
-    SELECT approval.id
-    FROM task_pending_approvals approval
-    WHERE approval.source_node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+    SELECT approval.id FROM task_pending_approvals approval WHERE approval.source_node_id = sqlc.arg(node_id)
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE kent_graph_entity_id_blob_v1(
-        json_extract(branch.target_snapshot_json, '$.node_id')
-    ) = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+    WHERE json_extract(branch.target_snapshot_json, '$.node_id') = sqlc.arg(node_id)
 );
 
 -- name: CountCurrentTaskNodeAnchorReferences :one
@@ -948,17 +886,15 @@ SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
     SELECT current_node.task_id
     FROM task_current_nodes current_node
-    WHERE current_node.node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+    WHERE current_node.node_id = sqlc.arg(node_id)
     UNION ALL
     SELECT approval.id
     FROM task_pending_approvals approval
-    WHERE approval.source_node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+    WHERE approval.source_node_id = sqlc.arg(node_id)
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE kent_graph_entity_id_blob_v1(
-        json_extract(branch.target_snapshot_json, '$.node_id')
-    ) = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+    WHERE json_extract(branch.target_snapshot_json, '$.node_id') = sqlc.arg(node_id)
 );
 
 -- name: CountTaskEdgeReferences :one
@@ -966,11 +902,11 @@ SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
     SELECT current_node.task_id
     FROM task_current_nodes current_node
-    WHERE current_node.entered_by_edge_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(edge_id) AS TEXT))
+    WHERE current_node.entered_by_edge_id = sqlc.arg(edge_id)
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE {{template "pendingApprovalEnteredByEdgeIDBlob" "    "}} = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(edge_id) AS TEXT))
+    WHERE json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = sqlc.arg(edge_id)
 );
 
 -- name: CountAllTaskEdgeReferences :one
@@ -978,11 +914,11 @@ SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
     SELECT current_node.task_id
     FROM task_current_nodes current_node
-    WHERE current_node.entered_by_edge_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(edge_id) AS TEXT))
+    WHERE current_node.entered_by_edge_id = sqlc.arg(edge_id)
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE {{template "pendingApprovalEnteredByEdgeIDBlob" "    "}} = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(edge_id) AS TEXT))
+    WHERE json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = sqlc.arg(edge_id)
 );
 
 -- name: GetWorkflowEdgeParameterEditPolicyImpact :one
@@ -992,7 +928,7 @@ SELECT
         FROM task_current_nodes current_node
         JOIN task_records task ON task.id = current_node.task_id
         WHERE task.workflow_id = sqlc.arg(workflow_id)
-          AND current_node.entered_by_edge_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(edge_id) AS TEXT))
+          AND current_node.entered_by_edge_id = sqlc.arg(edge_id)
           AND (
               current_node.scheduling_state IS NULL
               OR current_node.scheduling_state != 'interrupted'
@@ -1003,7 +939,7 @@ SELECT
         FROM task_current_nodes current_node
         JOIN task_records task ON task.id = current_node.task_id
         WHERE task.workflow_id = sqlc.arg(workflow_id)
-          AND current_node.entered_by_edge_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(edge_id) AS TEXT))
+          AND current_node.entered_by_edge_id = sqlc.arg(edge_id)
           AND current_node.transition_branch_key IS NOT NULL
     ) AS unresolved_parallel_branch_count,
     (
@@ -1012,7 +948,7 @@ SELECT
         JOIN task_records task ON task.id = approval.source_task_id
         JOIN task_pending_approval_branches branch ON branch.approval_id = approval.id
         WHERE task.workflow_id = sqlc.arg(workflow_id)
-          AND {{template "pendingApprovalEnteredByEdgeIDBlob" "          "}} = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(edge_id) AS TEXT))
+          AND json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = sqlc.arg(edge_id)
     ) AS pending_approval_count;
 
 -- name: GetWorkflowGraphActiveWorkPolicyImpact :one
@@ -1336,7 +1272,7 @@ effective_current_nodes AS (
       AND t.workflow_id = sqlc.arg(workflow_id)
 )
 SELECT
-    CAST(kent_graph_entity_id_text_v1(node_id) AS TEXT) AS node_id,
+    node_id,
     CAST(COUNT(DISTINCT task_id) AS INTEGER) AS task_count
 FROM effective_current_nodes
 JOIN label_filter_args
@@ -1381,9 +1317,7 @@ args AS (
 ),
 visible_columns AS (
     SELECT
-        kent_graph_entity_id_blob_v1(
-            CAST(json_extract(value, '$.node_id') AS TEXT)
-        ) AS node_id,
+        CAST(json_extract(value, '$.node_id') AS TEXT) AS node_id,
         CAST(json_extract(value, '$.node_key') AS TEXT) AS node_key,
         CAST(json_extract(value, '$.node_kind') AS TEXT) AS node_kind,
         CAST(json_extract(value, '$.status_order') AS INTEGER) AS column_rank
@@ -2183,34 +2117,7 @@ ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, w.creat
 LIMIT sqlc.arg(limit_rows)
 OFFSET sqlc.arg(offset_rows);
 
--- name: ListProjectWorkspaceCatalogPage :many
-WITH catalog_page AS (
-    SELECT
-        w.id AS workspace_id,
-        w.canonical_root_path AS canonical_root,
-        CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_default,
-        w.created_at_unix_ms
-    FROM projects p
-    JOIN workspaces w ON w.project_id = p.id
-    WHERE p.id = sqlc.arg(project_id)
-    ORDER BY is_default DESC, w.created_at_unix_ms DESC, w.id ASC
-    LIMIT sqlc.arg(limit_rows)
-    OFFSET sqlc.arg(offset_rows)
-)
-SELECT
-    p.id AS project_id,
-    catalog_page.workspace_id,
-    catalog_page.canonical_root,
-    catalog_page.is_default
-FROM projects p
-LEFT JOIN catalog_page ON TRUE
-WHERE p.id = sqlc.arg(project_id)
-ORDER BY
-    catalog_page.is_default DESC,
-    catalog_page.created_at_unix_ms DESC,
-    catalog_page.workspace_id ASC;
-
--- name: ListSessionPage :many
+-- name: ListNewestSessionPage :many
 SELECT
     id,
     name,
@@ -2222,8 +2129,49 @@ WHERE project_id = sqlc.arg(project_id)
   AND launch_visible <> 0
   AND COALESCE(category, 'main') = sqlc.arg(category)
 ORDER BY updated_at_unix_ms DESC, id DESC
-LIMIT sqlc.arg(page_limit)
-OFFSET sqlc.arg(page_offset);
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListOlderSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = sqlc.arg(project_id)
+  AND launch_visible <> 0
+  AND COALESCE(category, 'main') = sqlc.arg(category)
+  AND (
+      updated_at_unix_ms < sqlc.arg(boundary_updated_at_unix_ms)
+      OR (
+          updated_at_unix_ms = sqlc.arg(boundary_updated_at_unix_ms)
+          AND id < sqlc.arg(boundary_session_id)
+      )
+  )
+ORDER BY updated_at_unix_ms DESC, id DESC
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListNewerSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = sqlc.arg(project_id)
+  AND launch_visible <> 0
+  AND COALESCE(category, 'main') = sqlc.arg(category)
+  AND (
+      updated_at_unix_ms > sqlc.arg(boundary_updated_at_unix_ms)
+      OR (
+          updated_at_unix_ms = sqlc.arg(boundary_updated_at_unix_ms)
+          AND id > sqlc.arg(boundary_session_id)
+      )
+  )
+ORDER BY updated_at_unix_ms ASC, id ASC
+LIMIT sqlc.arg(page_limit);
 
 -- name: ListProjectSessionIDs :many
 SELECT id
@@ -2351,13 +2299,9 @@ WHERE sessions.id = sqlc.arg(session_id)
 
 -- name: BindSessionToSerialCurrentNode :execrows
 UPDATE task_current_nodes
-SET
-    session_id = sqlc.arg(session_id),
-    continuation_source_kind = 'exact',
-    continuation_source_session_id = sqlc.arg(source_session_id),
-    legacy_materialized = 0
+SET session_id = sqlc.arg(session_id)
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL
   AND (
       session_id = sqlc.arg(session_id)
@@ -2370,13 +2314,9 @@ WHERE task_id = sqlc.arg(task_id)
 
 -- name: BindSessionToBranchCurrentNode :execrows
 UPDATE task_current_nodes
-SET
-    session_id = sqlc.arg(session_id),
-    continuation_source_kind = 'exact',
-    continuation_source_session_id = sqlc.arg(source_session_id),
-    legacy_materialized = 0
+SET session_id = sqlc.arg(session_id)
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND (
       session_id = sqlc.arg(session_id)
@@ -2387,168 +2327,34 @@ WHERE task_id = sqlc.arg(task_id)
       OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
   );
 
--- name: BindLegacySessionToSerialCurrentNode :execrows
-UPDATE task_current_nodes
-SET session_id = sqlc.arg(session_id)
-WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
-  AND transition_branch_key IS NULL
-  AND legacy_materialized = 1
-  AND continuation_source_kind IS NULL
-  AND continuation_source_session_id IS NULL
-  AND (
-      session_id = sqlc.arg(session_id)
-      OR (
-          CAST(sqlc.narg(expected_current_session_id) AS TEXT) IS NULL
-          AND session_id IS NULL
-      )
-      OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
-  );
-
--- name: BindLegacySessionToBranchCurrentNode :execrows
-UPDATE task_current_nodes
-SET session_id = sqlc.arg(session_id)
-WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
-  AND transition_branch_key = sqlc.arg(transition_branch_key)
-  AND legacy_materialized = 1
-  AND continuation_source_kind IS NULL
-  AND continuation_source_session_id IS NULL
-  AND (
-      session_id = sqlc.arg(session_id)
-      OR (
-          CAST(sqlc.narg(expected_current_session_id) AS TEXT) IS NULL
-          AND session_id IS NULL
-      )
-      OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
-  );
-
--- name: AppendLegacySerialSessionWorkflowNodeHistory :execrows
+-- name: UpsertSerialSessionWorkflowNodeAssociation :exec
 INSERT INTO session_workflow_node_associations (
-    task_id,
     session_id,
     node_id,
     transition_branch_key,
-    association_status,
-    source_session_id,
     associated_at_unix_ms
 ) VALUES (
-    sqlc.arg(task_id),
     sqlc.arg(session_id),
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT)),
-    NULL,
-    'historical',
+    sqlc.arg(node_id),
     NULL,
     sqlc.arg(associated_at_unix_ms)
 )
 ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
-    task_id = excluded.task_id,
-    association_status = 'historical',
-    source_session_id = NULL,
-    associated_at_unix_ms = excluded.associated_at_unix_ms
-WHERE session_workflow_node_associations.association_status = 'historical';
-
--- name: AppendLegacyBranchSessionWorkflowNodeHistory :execrows
-INSERT INTO session_workflow_node_associations (
-    task_id,
-    session_id,
-    node_id,
-    transition_branch_key,
-    association_status,
-    source_session_id,
-    associated_at_unix_ms
-) VALUES (
-    sqlc.arg(task_id),
-    sqlc.arg(session_id),
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT)),
-    sqlc.arg(transition_branch_key),
-    'historical',
-    NULL,
-    sqlc.arg(associated_at_unix_ms)
-)
-ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
-    task_id = excluded.task_id,
-    association_status = 'historical',
-    source_session_id = NULL,
-    associated_at_unix_ms = excluded.associated_at_unix_ms
-WHERE session_workflow_node_associations.association_status = 'historical';
-
--- name: ResolveDeferredSelfTaskActiveFanoutBranchSource :execrows
-UPDATE task_active_fanout_branches
-SET
-    continuation_source_kind = 'exact',
-    continuation_source_session_id = sqlc.arg(source_session_id),
-    legacy_materialized = 0
-WHERE task_id = sqlc.arg(task_id)
-  AND transition_branch_key = sqlc.arg(transition_branch_key)
-  AND continuation_source_kind = 'deferred_self'
-  AND continuation_source_session_id IS NULL
-  AND legacy_materialized = 0;
-
--- name: RetireSerialCurrentSessionWorkflowNodeAssociation :exec
-UPDATE session_workflow_node_associations
-SET association_status = 'historical'
-WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
-  AND transition_branch_key IS NULL
-  AND association_status = 'current'
-  AND session_id != sqlc.arg(session_id);
-
--- name: DesignateSerialCurrentSessionWorkflowNodeAssociation :exec
-INSERT INTO session_workflow_node_associations (
-    task_id,
-    session_id,
-    node_id,
-    transition_branch_key,
-    association_status,
-    source_session_id,
-    associated_at_unix_ms
-) VALUES (
-    sqlc.arg(task_id),
-    sqlc.arg(session_id),
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT)),
-    NULL,
-    'current',
-    sqlc.arg(source_session_id),
-    sqlc.arg(associated_at_unix_ms)
-)
-ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
-    task_id = excluded.task_id,
-    association_status = 'current',
-    source_session_id = excluded.source_session_id,
     associated_at_unix_ms = excluded.associated_at_unix_ms;
 
--- name: RetireBranchCurrentSessionWorkflowNodeAssociation :exec
-UPDATE session_workflow_node_associations
-SET association_status = 'historical'
-WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
-  AND transition_branch_key = sqlc.arg(transition_branch_key)
-  AND association_status = 'current'
-  AND session_id != sqlc.arg(session_id);
-
--- name: DesignateBranchCurrentSessionWorkflowNodeAssociation :exec
+-- name: UpsertBranchSessionWorkflowNodeAssociation :exec
 INSERT INTO session_workflow_node_associations (
-    task_id,
     session_id,
     node_id,
     transition_branch_key,
-    association_status,
-    source_session_id,
     associated_at_unix_ms
 ) VALUES (
-    sqlc.arg(task_id),
     sqlc.arg(session_id),
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT)),
+    sqlc.arg(node_id),
     sqlc.arg(transition_branch_key),
-    'current',
-    sqlc.arg(source_session_id),
     sqlc.arg(associated_at_unix_ms)
 )
 ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
-    task_id = excluded.task_id,
-    association_status = 'current',
-    source_session_id = excluded.source_session_id,
     associated_at_unix_ms = excluded.associated_at_unix_ms;
 
 -- name: CountTaskSessions :one
@@ -2556,77 +2362,32 @@ SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions
 WHERE task_id = sqlc.arg(task_id);
 
--- name: ListIdleWorkflowTaskSessions :many
-{{template "taskSessionProjectionFields" .}}
-FROM sessions session INDEXED BY sessions_task_activity_idx
-{{template "taskSessionProjectionJoins" .}}
+-- name: GetLatestSerialTaskSessionAssociationForNode :one
+SELECT
+    association.session_id,
+    association.node_id,
+    association.associated_at_unix_ms
+FROM session_workflow_node_associations association
+JOIN sessions session ON session.id = association.session_id
 WHERE session.task_id = sqlc.arg(task_id)
-  AND NOT EXISTS (
-      SELECT 1
-      FROM json_each(CAST(sqlc.arg(excluded_session_ids_json) AS TEXT)) excluded
-      WHERE CAST(excluded.value AS TEXT) = session.id
-  )
-ORDER BY
-    session.created_at_unix_ms DESC,
-    CAST('session_started:' || session.id AS TEXT) DESC
-LIMIT sqlc.arg(page_limit)
-OFFSET sqlc.arg(page_offset);
-
--- name: ListActiveWorkflowTaskSessions :many
-{{template "taskSessionProjectionFields" .}}
-FROM json_each(CAST(sqlc.arg(session_ids_json) AS TEXT)) active
-CROSS JOIN sessions session
-    INDEXED BY sqlite_autoindex_sessions_1
-    ON session.id = CAST(active.value AS TEXT)
-{{template "taskSessionProjectionJoins" .}}
-WHERE session.task_id = sqlc.arg(task_id);
-
--- name: GetCurrentSerialTaskSessionAssociationForNode :one
-SELECT
-    association.session_id,
-    CAST(kent_graph_entity_id_text_v1(association.node_id) AS TEXT) AS node_id,
-    association.source_session_id,
-    association.associated_at_unix_ms
-FROM session_workflow_node_associations association
-WHERE association.task_id = sqlc.arg(task_id)
-  AND association.node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND association.node_id = sqlc.arg(node_id)
   AND association.transition_branch_key IS NULL
-  AND association.association_status = 'current'
+ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
 LIMIT 1;
 
--- name: GetCurrentBranchTaskSessionAssociationForNode :one
+-- name: GetLatestBranchTaskSessionAssociationForNode :one
 SELECT
     association.session_id,
-    CAST(kent_graph_entity_id_text_v1(association.node_id) AS TEXT) AS node_id,
+    association.node_id,
     association.transition_branch_key,
-    association.source_session_id,
     association.associated_at_unix_ms
 FROM session_workflow_node_associations association
-WHERE association.task_id = sqlc.arg(task_id)
-  AND association.node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+JOIN sessions session ON session.id = association.session_id
+WHERE session.task_id = sqlc.arg(task_id)
+  AND association.node_id = sqlc.arg(node_id)
   AND association.transition_branch_key = sqlc.arg(transition_branch_key)
-  AND association.association_status = 'current'
+ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
 LIMIT 1;
-
--- name: HasHistoricalSerialTaskSessionAssociationForNode :one
-SELECT EXISTS (
-    SELECT 1
-    FROM session_workflow_node_associations association
-    WHERE association.task_id = sqlc.arg(task_id)
-      AND association.node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
-      AND association.transition_branch_key IS NULL
-      AND association.association_status = 'historical'
-) AS has_historical;
-
--- name: HasHistoricalBranchTaskSessionAssociationForNode :one
-SELECT EXISTS (
-    SELECT 1
-    FROM session_workflow_node_associations association
-    WHERE association.task_id = sqlc.arg(task_id)
-      AND association.node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
-      AND association.transition_branch_key = sqlc.arg(transition_branch_key)
-      AND association.association_status = 'historical'
-) AS has_historical;
 
 -- name: RetargetSessionWorkspaceProject :execrows
 UPDATE sessions
@@ -2676,31 +2437,21 @@ FROM sessions
 WHERE worktree_id = sqlc.arg(worktree_id)
 ORDER BY updated_at_unix_ms DESC, rowid DESC;
 
--- name: InsertSessionPromptHistoryEntry :execrows
+-- name: InsertSessionPromptHistoryEntry :one
 INSERT INTO session_prompt_history_entries (
     session_id,
-    source_id,
     text,
     created_at_unix_ms
 ) VALUES (
     sqlc.arg(session_id),
-    sqlc.arg(source_id),
     sqlc.arg(text),
     sqlc.arg(created_at_unix_ms)
 )
-ON CONFLICT DO NOTHING;
-
--- name: GetSessionPromptHistoryEntryBySourceID :one
-SELECT
+RETURNING
     sequence,
     session_id,
-    source_id,
     text,
-    created_at_unix_ms
-FROM session_prompt_history_entries
-WHERE session_id = sqlc.arg(session_id)
-  AND source_id = sqlc.arg(source_id)
-LIMIT 1;
+    created_at_unix_ms;
 
 -- name: ListSessionPromptHistoryText :many
 SELECT text
@@ -2768,7 +2519,7 @@ WITH durable_attention (
         'interrupted' AS kind,
         CAST('interrupted:' || json_object(
             'task_id', current_node.task_id,
-            'node_id', CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT),
+            'node_id', current_node.node_id,
             'transition_branch_key', current_node.transition_branch_key
         ) AS TEXT) AS id,
         task.project_id,
@@ -2777,7 +2528,7 @@ WITH durable_attention (
         task.short_id,
         task.title,
         CAST(NULL AS TEXT) AS approval_id,
-        CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT) AS node_id,
+        CAST(current_node.node_id AS TEXT) AS node_id,
         CAST(current_node.transition_branch_key AS TEXT) AS transition_branch_key,
         current_node.session_id,
         CAST(current_node.interruption_reason AS TEXT) AS interruption_reason,
@@ -2799,7 +2550,7 @@ WITH durable_attention (
               AND (
                   'interrupted:' || json_object(
                       'task_id', current_node.task_id,
-                      'node_id', CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT),
+                      'node_id', current_node.node_id,
                       'transition_branch_key', current_node.transition_branch_key
                   )
               ) < sqlc.arg(cursor_item_id)
@@ -2931,15 +2682,12 @@ ORDER BY
 -- name: ListTaskCurrentNodes :many
 SELECT
     current_node.task_id,
-    CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT) AS node_id,
+    current_node.node_id,
     current_node.transition_branch_key,
-    {{template "nullableCurrentNodeEnteredByEdgeIDText"}} AS entered_by_edge_id,
+    current_node.entered_by_edge_id,
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
-    current_node.continuation_source_kind,
-    current_node.continuation_source_session_id,
-    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -2958,15 +2706,12 @@ ORDER BY
 -- name: ListTaskCurrentNodesByTasks :many
 SELECT
     current_node.task_id,
-    CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT) AS node_id,
+    current_node.node_id,
     current_node.transition_branch_key,
-    {{template "nullableCurrentNodeEnteredByEdgeIDText"}} AS entered_by_edge_id,
+    current_node.entered_by_edge_id,
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
-    current_node.continuation_source_kind,
-    current_node.continuation_source_session_id,
-    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -2987,7 +2732,7 @@ ORDER BY
 UPDATE task_current_nodes
 SET scheduling_state = 'admitted'
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL
   AND scheduling_state = 'ready'
   AND NOT EXISTS (
@@ -3002,7 +2747,7 @@ WHERE task_id = sqlc.arg(task_id)
 UPDATE task_current_nodes
 SET scheduling_state = 'admitted'
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND scheduling_state = 'ready'
   AND NOT EXISTS (
@@ -3020,7 +2765,7 @@ SET scheduling_state = 'ready',
     interruption_detail_json = NULL,
     interrupted_at_unix_ms = NULL
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL
   AND scheduling_state = 'interrupted'
   AND NOT EXISTS (
@@ -3038,7 +2783,7 @@ SET scheduling_state = 'ready',
     interruption_detail_json = NULL,
     interrupted_at_unix_ms = NULL
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND scheduling_state = 'interrupted'
   AND NOT EXISTS (
@@ -3056,7 +2801,7 @@ SET scheduling_state = 'interrupted',
     interruption_detail_json = sqlc.arg(interruption_detail_json),
     interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL
   AND scheduling_state = 'admitted';
 
@@ -3067,7 +2812,7 @@ SET scheduling_state = 'interrupted',
     interruption_detail_json = sqlc.arg(interruption_detail_json),
     interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND scheduling_state = 'admitted';
 
@@ -3078,7 +2823,7 @@ SET scheduling_state = 'interrupted',
     interruption_detail_json = sqlc.arg(interruption_detail_json),
     interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL
   AND scheduling_state IN ('ready', 'admitted');
 
@@ -3089,23 +2834,9 @@ SET scheduling_state = 'interrupted',
     interruption_detail_json = sqlc.arg(interruption_detail_json),
     interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND scheduling_state IN ('ready', 'admitted');
-
--- name: ReplaceUserInterruptionWithAssignmentFailure :execrows
-UPDATE task_current_nodes
-SET interruption_reason = 'workflow_runtime_start_failed',
-    interruption_detail_json = sqlc.arg(interruption_detail_json),
-    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
-WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
-  AND (
-      (sqlc.narg(transition_branch_key) IS NULL AND transition_branch_key IS NULL)
-      OR transition_branch_key = sqlc.narg(transition_branch_key)
-  )
-  AND scheduling_state = 'interrupted'
-  AND interruption_reason = 'user_interrupt';
 
 -- name: RecoverExecutableCurrentNodes :many
 UPDATE task_current_nodes
@@ -3124,10 +2855,7 @@ WHERE scheduling_state IN ('ready', 'admitted')
             OR approval.source_transition_branch_key = task_current_nodes.transition_branch_key
         )
   )
-RETURNING
-    task_id,
-    CAST(kent_graph_entity_id_text_v1(node_id) AS TEXT) AS node_id,
-    transition_branch_key;
+RETURNING task_id, node_id, transition_branch_key;
 
 -- name: InsertTaskCurrentNode :exec
 INSERT INTO task_current_nodes (
@@ -3138,9 +2866,6 @@ INSERT INTO task_current_nodes (
     current_input_values_json,
     prior_node_values_json,
     session_id,
-    continuation_source_kind,
-    continuation_source_session_id,
-    legacy_materialized,
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
@@ -3150,18 +2875,12 @@ INSERT INTO task_current_nodes (
     assignee_origin
 ) VALUES (
     sqlc.arg(task_id),
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT)),
+    sqlc.arg(node_id),
     sqlc.arg(transition_branch_key),
-    CASE
-        WHEN CAST(sqlc.narg(entered_by_edge_id) AS TEXT) IS NULL THEN NULL
-        ELSE kent_graph_entity_id_blob_v1(CAST(sqlc.narg(entered_by_edge_id) AS TEXT))
-    END,
+    sqlc.arg(entered_by_edge_id),
     sqlc.arg(current_input_values_json),
     sqlc.arg(prior_node_values_json),
     sqlc.arg(session_id),
-    sqlc.narg(continuation_source_kind),
-    sqlc.narg(continuation_source_session_id),
-    sqlc.arg(legacy_materialized),
     sqlc.arg(scheduling_state),
     sqlc.arg(interruption_reason),
     sqlc.arg(interruption_detail_json),
@@ -3174,13 +2893,13 @@ INSERT INTO task_current_nodes (
 -- name: DeleteSerialTaskCurrentNode :execrows
 DELETE FROM task_current_nodes
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL;
 
 -- name: DeleteTaskCurrentNode :execrows
 DELETE FROM task_current_nodes
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND (
       (transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
       OR transition_branch_key = sqlc.narg(transition_branch_key)
@@ -3199,18 +2918,12 @@ INSERT INTO task_active_fanout_branches (
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json,
-    continuation_source_kind,
-    continuation_source_session_id,
-    legacy_materialized
+    arrival_values_json
 ) VALUES (
     sqlc.arg(task_id),
     sqlc.arg(transition_branch_key),
     'pending',
-    NULL,
-    sqlc.narg(continuation_source_kind),
-    sqlc.narg(continuation_source_session_id),
-    sqlc.arg(legacy_materialized)
+    NULL
 );
 
 -- name: UpdateTaskActiveFanoutBranchArrival :execrows
@@ -3218,16 +2931,6 @@ UPDATE task_active_fanout_branches
 SET
     arrival_state = 'arrived',
     arrival_values_json = sqlc.arg(arrival_values_json)
-WHERE task_id = sqlc.arg(task_id)
-  AND transition_branch_key = sqlc.arg(transition_branch_key)
-  AND arrival_state = 'pending';
-
--- name: UpdateTaskActiveFanoutBranchContinuationSource :execrows
-UPDATE task_active_fanout_branches
-SET
-    continuation_source_kind = sqlc.narg(continuation_source_kind),
-    continuation_source_session_id = sqlc.narg(continuation_source_session_id),
-    legacy_materialized = sqlc.arg(legacy_materialized)
 WHERE task_id = sqlc.arg(task_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND arrival_state = 'pending';
@@ -3250,7 +2953,7 @@ INSERT INTO task_pending_approvals (
 ) VALUES (
     sqlc.arg(id),
     sqlc.arg(source_task_id),
-    kent_graph_entity_id_blob_v1(CAST(sqlc.arg(source_node_id) AS TEXT)),
+    sqlc.arg(source_node_id),
     sqlc.arg(source_transition_branch_key),
     sqlc.arg(source_session_id),
     sqlc.arg(workflow_version),
@@ -3287,7 +2990,7 @@ SELECT EXISTS (
     SELECT 1
     FROM task_pending_approvals
     WHERE source_task_id = sqlc.arg(task_id)
-      AND source_node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+      AND source_node_id = sqlc.arg(node_id)
       AND (
           (source_transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
           OR source_transition_branch_key = sqlc.narg(transition_branch_key)
@@ -3304,10 +3007,7 @@ SELECT
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json,
-    continuation_source_kind,
-    continuation_source_session_id,
-    legacy_materialized
+    arrival_values_json
 FROM task_active_fanout_branches
 WHERE task_id = sqlc.arg(task_id)
 ORDER BY transition_branch_key;
@@ -3316,7 +3016,7 @@ ORDER BY transition_branch_key;
 SELECT
     id,
     source_task_id,
-    CAST(kent_graph_entity_id_text_v1(source_node_id) AS TEXT) AS source_node_id,
+    source_node_id,
     source_transition_branch_key,
     source_session_id,
     workflow_version,
@@ -3331,7 +3031,7 @@ ORDER BY created_at_unix_ms, id;
 SELECT
     id,
     source_task_id,
-    CAST(kent_graph_entity_id_text_v1(source_node_id) AS TEXT) AS source_node_id,
+    source_node_id,
     source_transition_branch_key,
     source_session_id,
     workflow_version,
@@ -3349,7 +3049,7 @@ ORDER BY source_task_id, created_at_unix_ms, id;
 SELECT
     id,
     source_task_id,
-    CAST(kent_graph_entity_id_text_v1(source_node_id) AS TEXT) AS source_node_id,
+    source_node_id,
     source_transition_branch_key,
     source_session_id,
     workflow_version,
@@ -3602,7 +3302,7 @@ WITH board_node_tasks AS (
               SELECT 1
               FROM task_current_nodes current_node
               WHERE current_node.task_id = t.id
-                AND current_node.node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+                AND current_node.node_id = sqlc.arg(node_id)
           )
       )
 ),
@@ -3689,7 +3389,7 @@ WHERE workspace_id = sqlc.arg(workspace_id);
 UPDATE task_current_nodes
 SET scheduling_state = scheduling_state
 WHERE task_id = sqlc.arg(task_id)
-  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND node_id = sqlc.arg(node_id)
   AND (
       (transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
       OR transition_branch_key = sqlc.narg(transition_branch_key)
@@ -3737,36 +3437,6 @@ JOIN task_search_documents document
   ON document.document_id = task_search_fts.rowid
 WHERE task_search_fts MATCH sqlc.arg(fts5_expression)
 LIMIT 1;
-
-{{define "workflowSessionDependencyInvalidation"}}
-UPDATE session_workflow_node_associations
-SET association_status = 'historical'
-WHERE task_id = ?1
-  AND association_status = 'current'
-  AND (?4 IS NULL OR transition_branch_key = ?4)
-  AND session_id IN (
-      WITH RECURSIVE dependent_sessions(session_id) AS (
-          SELECT association.session_id
-          FROM session_workflow_node_associations association
-          WHERE association.task_id = ?1
-            AND association.association_status = 'current'
-            AND association.source_session_id = ?2
-            AND association.session_id != ?3
-            AND (?4 IS NULL OR association.transition_branch_key = ?4)
-          UNION
-          SELECT association.session_id
-          FROM session_workflow_node_associations association
-          JOIN dependent_sessions dependency
-            ON association.source_session_id = dependency.session_id
-          WHERE association.task_id = ?1
-            AND association.association_status = 'current'
-            AND association.session_id != ?3
-            AND (?4 IS NULL OR association.transition_branch_key = ?4)
-      )
-      SELECT session_id
-      FROM dependent_sessions
-  );
-{{end}}
 
 {{define "taskSearchSchemaContract"}}
 WITH

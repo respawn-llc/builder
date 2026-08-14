@@ -174,6 +174,7 @@ func providerFact(caps llm.ProviderCapabilities, role string) serverapi.LLMProvi
 		Role:                          role,
 		SupportsResponsesAPI:          caps.SupportsResponsesAPI,
 		SupportsNativeCompaction:      caps.SupportsResponsesCompact,
+		SupportsInputTokenCount:       caps.SupportsRequestInputTokenCount,
 		SupportsPromptCacheKey:        caps.SupportsPromptCacheKey,
 		SupportsNativeWebSearch:       caps.SupportsNativeWebSearch,
 		SupportsReasoningEncryption:   caps.SupportsReasoningEncrypted,

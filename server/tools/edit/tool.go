@@ -3,9 +3,7 @@ package edit
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,7 +12,6 @@ import (
 
 	"core/server/tools"
 	"core/shared/config"
-	"core/shared/toolspec"
 )
 
 const (
@@ -52,29 +49,10 @@ func New(filesystemContext tools.FilesystemContext, opts ...Option) (*Tool, erro
 	return &Tool{fileAccess: fileAccess}, nil
 }
 
-func StaticContractSource() tools.StaticContractSource {
-	return tools.StaticContractSource{
-		ID:    toolspec.ToolEdit,
-		Input: tools.EditInput{},
-		Aliases: []tools.InputAliases{
-			{Canonical: "path", Aliases: []string{"file_path", "filePath"}},
-			{Canonical: "old_string", Aliases: []string{"oldString", "oldText"}},
-			{Canonical: "new_string", Aliases: []string{"newString", "newText"}},
-			{Canonical: "replace_all", Aliases: []string{"replaceAll"}},
-		},
-	}
-}
-
 func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
-	var in tools.EditInput
-	if err := json.Unmarshal(c.Input, &in); err != nil {
-		return editErrorResult(c, fmt.Errorf("invalid input: %w", err)), nil
-	}
-	if strings.TrimSpace(in.Path) == "" {
-		return editErrorResult(c, failf("path is required.")), nil
-	}
-	if in.OldString == in.NewString {
-		return editErrorResult(c, failf("old_string and new_string must be different.")), nil
+	in, err := tools.ParseEditInput(c.Input)
+	if err != nil {
+		return editErrorResult(c, err), nil
 	}
 	resolved, err := t.resolvePath(ctx, in.Path)
 	if err != nil {

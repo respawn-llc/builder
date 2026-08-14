@@ -81,9 +81,8 @@ func TestRemoteSessionLaunchPreservesTypedIntent(t *testing.T) {
 			defer func() { _ = remote.Close() }()
 
 			if _, err := remote.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-				ClientRequestID: "remote-request-" + test.name,
-				Mode:            serverapi.SessionLaunchModeInteractive,
-				Intent:          test.intent,
+				Mode:   serverapi.SessionLaunchModeInteractive,
+				Intent: test.intent,
 			}); err != nil {
 				t.Fatalf("PlanSession: %v", err)
 			}
@@ -112,9 +111,8 @@ func TestRemoteSessionLaunchPropagatesTypedIntentRejection(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	_, err = remote.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "legacy-request",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	})
 	if err == nil {
 		t.Fatal("PlanSession accepted a request rejected by the remote gateway")

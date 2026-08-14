@@ -15,13 +15,13 @@ import (
 	"time"
 )
 
-func runJobs(jobs []testJob, workers int, fresh bool) error {
+func runJobs(jobs []testJob, workers int) error {
 	orderJobs(jobs)
 	runStartedAt := time.Now()
 	var outputMu sync.Mutex
 	var eventMu sync.Mutex
 	return runScheduledJobs(jobs, workers, func(job testJob) error {
-		return runJob(job, fresh, runStartedAt, &outputMu, &eventMu)
+		return runJob(job, runStartedAt, &outputMu, &eventMu)
 	})
 }
 
@@ -89,7 +89,7 @@ func runScheduledJobs(jobs []testJob, workers int, runner func(testJob) error) e
 	return errors.Join(errs...)
 }
 
-func runJob(job testJob, fresh bool, runStartedAt time.Time, outputMu, eventMu *sync.Mutex) error {
+func runJob(job testJob, runStartedAt time.Time, outputMu, eventMu *sync.Mutex) error {
 	startedAt := time.Now()
 	writeJobEvent(eventMu, jobEvent{
 		Event:           "started",
@@ -102,7 +102,7 @@ func runJob(job testJob, fresh bool, runStartedAt time.Time, outputMu, eventMu *
 		PackageShard:    job.packageShardIndex,
 		StartedSecs:     startedAt.Sub(runStartedAt).Seconds(),
 	})
-	arguments := goTestArguments(job, fresh)
+	arguments := goTestArguments(job)
 	command := exec.Command("go", arguments...)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -119,18 +119,15 @@ func runJob(job testJob, fresh bool, runStartedAt time.Time, outputMu, eventMu *
 	return err
 }
 
-func goTestArguments(job testJob, fresh bool) []string {
+func goTestArguments(job testJob) []string {
 	// Every shard selects one package. The scheduler owns test concurrency, so
 	// each child must not independently fan out package builds or parallel tests.
 	arguments := []string{
-		"test", "-json",
+		"test", "-json", "-count=1",
 		"-p", "1",
 		"-parallel", "4",
+		job.packagePath,
 	}
-	if fresh {
-		arguments = append(arguments, "-count=1")
-	}
-	arguments = append(arguments, job.packagePath)
 	if len(job.testNames) > 0 {
 		arguments = append(arguments, "-run", exactTestExpression(job.testNames))
 	}

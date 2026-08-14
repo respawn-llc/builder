@@ -22,11 +22,6 @@ type ActiveStepSnapshotProvider interface {
 	ActiveStepSnapshot() *runtime.RunSnapshot
 }
 
-type ActiveSessionSnapshot struct {
-	SessionID string
-	Activity  clientui.RuntimeActivity
-}
-
 func ActiveStepFromProvider(provider ActiveStepSnapshotProvider) *ActiveStepSnapshot {
 	if provider == nil {
 		return nil
@@ -44,14 +39,6 @@ func ClientActiveKindFromRuntime(kind runtime.ActiveKind) (clientui.RuntimeActiv
 		return clientui.RuntimeActivityActiveKindWorkflowTurn, nil
 	case runtime.ActiveKindCompaction:
 		return clientui.RuntimeActivityActiveKindCompaction, nil
-	case runtime.ActiveKindPreSubmitCompaction:
-		return clientui.RuntimeActivityActiveKindPreSubmitCompaction, nil
-	case runtime.ActiveKindUserShell:
-		return clientui.RuntimeActivityActiveKindUserShell, nil
-	case runtime.ActiveKindBackground:
-		return clientui.RuntimeActivityActiveKindBackground, nil
-	case runtime.ActiveKindRuntimeMaintenance:
-		return clientui.RuntimeActivityActiveKindRuntimeMaintenance, nil
 	default:
 		return "", fmt.Errorf("unmapped runtime active kind %q", kind)
 	}

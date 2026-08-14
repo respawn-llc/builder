@@ -174,27 +174,22 @@ function inferReconnectEndpoint(edge: Edge, connection: Connection): WorkflowGra
 
 function groupIDFromElement(element: Element | null): string | null {
   const group = element?.closest("[data-workflow-group-id]");
-  return group instanceof HTMLElement ? groupIDFromGroupElement(group) : null;
+  return group instanceof HTMLElement ? (group.dataset.workflowGroupId ?? null) : null;
 }
 
 function groupIDFromBounds(x: number, y: number): string | null {
   const candidates = Array.from(document.querySelectorAll<HTMLElement>("[data-workflow-group-id]"))
-    .flatMap((group) => {
-      const groupID = groupIDFromGroupElement(group);
-      if (groupID === null) {
-        return [];
-      }
+    .map((group) => {
       const bounds = group.getBoundingClientRect();
-      return [
-        {
-          bounds,
-          groupID,
-          area: bounds.width * bounds.height,
-        },
-      ];
+      return {
+        bounds,
+        groupID: group.dataset.workflowGroupId ?? "",
+        area: bounds.width * bounds.height,
+      };
     })
     .filter(
       (candidate) =>
+        candidate.groupID.length > 0 &&
         x >= candidate.bounds.left &&
         x <= candidate.bounds.right &&
         y >= candidate.bounds.top &&
@@ -202,9 +197,4 @@ function groupIDFromBounds(x: number, y: number): string | null {
     )
     .sort((left, right) => left.area - right.area);
   return candidates[0]?.groupID ?? null;
-}
-
-function groupIDFromGroupElement(group: HTMLElement): string | null {
-  const groupID = group.dataset.workflowGroupId;
-  return groupID === undefined || groupID.length === 0 ? null : groupID;
 }

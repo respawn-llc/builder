@@ -459,7 +459,7 @@ func (s *TaskStatusDurableSnapshot) projectedStatuses(
 func (s *TaskStatusDurableSnapshot) PendingApprovalsByTask(
 	ctx context.Context,
 	taskIDs []workflow.TaskID,
-) (map[workflow.TaskID][]sqlitegen.ListTaskPendingApprovalsByTasksRow, error) {
+) (map[workflow.TaskID][]sqlitegen.TaskPendingApproval, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
@@ -472,7 +472,7 @@ func (s *TaskStatusDurableSnapshot) PendingApprovalsByTask(
 		return nil, err
 	}
 	requested := taskIDSet(encodedTaskIDs.values)
-	approvals := make(map[workflow.TaskID][]sqlitegen.ListTaskPendingApprovalsByTasksRow, len(encodedTaskIDs.values))
+	approvals := make(map[workflow.TaskID][]sqlitegen.TaskPendingApproval, len(encodedTaskIDs.values))
 	for _, taskID := range encodedTaskIDs.values {
 		approvals[taskID] = nil
 	}
@@ -517,7 +517,7 @@ func (s *TaskStatusDurableSnapshot) CurrentNodesByTask(
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
-	return s.workflowStore.ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
+	return workflowstore.ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
 }
 
 func (s *TaskStatusDurableSnapshot) Definition(

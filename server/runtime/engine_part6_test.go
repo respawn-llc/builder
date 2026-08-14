@@ -46,7 +46,7 @@ func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *te
 		reviewerEventOrder         []Event
 		eng                        *Engine
 	)
-	eng = mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng = mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			if evt.Kind == EventLocalEntryAdded || evt.Kind == EventAssistantMessage || evt.Kind == EventReviewerCompleted {
@@ -204,7 +204,7 @@ func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *te
 func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var events []Event
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			events = append(events, evt)
@@ -233,11 +233,11 @@ func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
 
 func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:    "gpt-5",
 		Reviewer: ReviewerConfig{Model: "gpt-5"},
 	})
-	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first request")}})); err != nil {
+	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first request")}})); err != nil {
 		t.Fatalf("append first message: %v", err)
 	}
 
@@ -281,7 +281,7 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 		blocker       *testEventLogAppendBlocker
 		blockErr      error
 	)
-	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                 "gpt-5",
 		AutoCompactTokenLimit: 1_000_000,
 		OnEvent: func(evt Event) {
@@ -299,12 +299,12 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 			Client:    reviewerClient,
 		},
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("do task")}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("do task")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	blockReviewer = true
 
-	_, err := runStepLoopInActiveTestRun(t, context.Background(), eng)
+	_, err := eng.runStepLoop(context.Background(), "step-1")
 	if err == nil {
 		t.Fatal("expected runStepLoop to fail when reviewer status persistence fails")
 	}
@@ -370,7 +370,7 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 		events          []Event
 		assistantEvents int
 	)
-	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			eventsMu.Lock()
@@ -459,7 +459,7 @@ func TestRestoreMessagesKeepsStoredReviewerEntriesVerbatim(t *testing.T) {
 		t.Fatalf("append legacy reviewer_error: %v", err)
 	}
 
-	restored := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	snapshot := restored.ChatSnapshot()
 	if len(snapshot.Entries) != 3 {
 		t.Fatalf("expected 3 restored legacy entries, got %+v", snapshot.Entries)
@@ -485,7 +485,7 @@ func TestRestoreMessagesPreservesStoredLocalEntryNoticeID(t *testing.T) {
 		t.Fatalf("append local entry: %v", err)
 	}
 
-	restored := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	snapshot := restored.ChatSnapshot()
 	if len(snapshot.Entries) != 1 {
 		t.Fatalf("expected 1 restored entry, got %+v", snapshot.Entries)
@@ -519,7 +519,7 @@ func TestAppendPersistedLocalEntryRejectsInvalidRecords(t *testing.T) {
 		},
 	}
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if err := eng.steer("step-1", steerLocalEntryIntent(test.entry)); err == nil {
@@ -542,7 +542,7 @@ func TestAppendPersistedLocalEntryRejectsInvalidRecords(t *testing.T) {
 func TestAppendCommittedEntryWithCondensedTextSkipsBlankEntries(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var events []Event
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
@@ -579,7 +579,7 @@ func TestRestoreMessagesKeepsStoredToolCallPresentationPayload(t *testing.T) {
 		t.Fatalf("append assistant tool call message: %v", err)
 	}
 
-	restored := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	snapshot := restored.ChatSnapshot()
 	var toolEntry *ChatEntry
 	for index := range snapshot.Entries {
@@ -651,23 +651,22 @@ func assertReviewerPresentation(t *testing.T, snapshot ChatSnapshot, wantSuggest
 }
 
 func TestParseReviewerSuggestionsObjectSupportsStructuredPayload(t *testing.T) {
-	contract := mustReviewerSuggestionsContract(t)
-	suggestions := parseReviewerSuggestionsObject(contract, `{"suggestions":["one"," two ","one"," ","NO_OP","no_op"]}`)
+	suggestions := parseReviewerSuggestionsObject(`{"suggestions":["one"," two ","one"," ","NO_OP","no_op"]}`)
 	if len(suggestions) != 5 || suggestions[0] != "one" || suggestions[1] != " two " || suggestions[2] != "one" || suggestions[3] != "NO_OP" || suggestions[4] != "no_op" {
 		t.Fatalf("unexpected suggestions from object payload: %+v", suggestions)
 	}
 
-	suggestions = parseReviewerSuggestionsObject(contract, `[" ","NO_OP"]`)
+	suggestions = parseReviewerSuggestionsObject(`[" ","NO_OP"]`)
 	if len(suggestions) != 0 {
 		t.Fatalf("expected invalid non-object payload to be ignored, got %+v", suggestions)
 	}
 
-	suggestions = parseReviewerSuggestionsObject(contract, "")
+	suggestions = parseReviewerSuggestionsObject("")
 	if len(suggestions) != 0 {
 		t.Fatalf("expected empty payload to be ignored, got %+v", suggestions)
 	}
 
-	suggestions = parseReviewerSuggestionsObject(contract, `not-json`)
+	suggestions = parseReviewerSuggestionsObject(`not-json`)
 	if len(suggestions) != 0 {
 		t.Fatalf("expected invalid payload to be ignored, got %+v", suggestions)
 	}
@@ -682,7 +681,7 @@ func TestParseReviewerSuggestionsObjectPreservesAcceptedMarkdownBytes(t *testing
 	if err != nil {
 		t.Fatalf("marshal Reviewer payload: %v", err)
 	}
-	suggestions := parseReviewerSuggestionsObject(mustReviewerSuggestionsContract(t), string(payload))
+	suggestions := parseReviewerSuggestionsObject(string(payload))
 	if len(suggestions) != 3 || suggestions[0] != first || suggestions[1] != "NO_OP" || suggestions[2] != second {
 		t.Fatalf("suggestions lost exact Markdown bytes: %#v", suggestions)
 	}

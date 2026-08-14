@@ -108,6 +108,9 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 	saveReadyAppAuthState(t, workspace)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
+			return
+		}
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -168,7 +171,7 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 	if meta.FirstPromptPreview != "hello from user" {
 		t.Fatalf("first prompt preview = %q, want %q", meta.FirstPromptPreview, "hello from user")
 	}
-	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL == nil || *meta.Continuation.OpenAIBaseURL != server.URL {
+	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL != server.URL {
 		t.Fatalf("unexpected continuation context: %+v", meta.Continuation)
 	}
 
@@ -311,12 +314,13 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 		"",
 		"[subagents.fast.provider_capabilities]",
 		"provider_id = \"openai\"",
-		"supports_responses_api = true",
-		"is_openai_first_party = true",
 	}, "\n")
 
 	requestBodies := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
+			return
+		}
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -357,7 +361,7 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 		t.Fatalf("model payload = %#v, want gpt-5.6-terra", got)
 	}
 	store := openAuthoritativeWorkspaceSessionStore(t, workspace, server.URL, result.SessionID)
-	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL == nil || *store.Meta().Continuation.OpenAIBaseURL != server.URL {
+	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != server.URL {
 		t.Fatalf("unexpected continuation context: %+v", store.Meta().Continuation)
 	}
 }
@@ -366,6 +370,9 @@ func newFakeResponsesServer(t *testing.T, assistantReplies []string) (*httptest.
 	t.Helper()
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
+			return
+		}
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -385,6 +392,9 @@ func newNoAuthFakeResponsesServer(t *testing.T, assistantReplies []string) (*htt
 	t.Helper()
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
+			return
+		}
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}

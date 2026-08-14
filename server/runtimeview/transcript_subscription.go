@@ -43,10 +43,7 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	hydration.ActiveReviewer = transcriptReviewerStateFromRuntime(runtimeSnapshot.ActiveReviewer)
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
-	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalAvailability, runtimeSnapshot.GoalSuspended)
-	if err := hydration.GoalStatus.Validate(); err != nil {
-		return clientui.TranscriptHydration{}, fmt.Errorf("project goal hydration: %w", err)
-	}
+	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalSuspended)
 	return hydration, nil
 }
 
@@ -89,10 +86,9 @@ func transcriptQueuedMessagesFromRuntime(messages []runtime.QueuedUserMessage) (
 			return nil, fmt.Errorf("queued message %d: %w", index, err)
 		}
 		out = append(out, clientui.TranscriptQueuedMessageState{
-			ClientRequestID: mustTranscriptClientRequestID(message.ClientRequestID, fmt.Sprintf("hydrated queued message %d", index)),
-			QueueItemID:     mustTranscriptQueueItemID(message.ID, fmt.Sprintf("hydrated queued message %d", index)),
-			Status:          clientui.QueuedUserMessageAccepted,
-			Text:            textutil.Value(text),
+			QueueItemID: mustTranscriptQueueItemID(message.ID, fmt.Sprintf("hydrated queued message %d", index)),
+			Status:      clientui.QueuedUserMessageAccepted,
+			Text:        textutil.Value(text),
 		})
 	}
 	return out, nil
@@ -135,27 +131,17 @@ func transcriptContextUsageFromRuntime(usage *runtime.ContextUsage) *clientui.Tr
 	return projected
 }
 
-func transcriptGoalStatusFromRuntime(goal *session.GoalState, availability session.GoalAvailability, suspended bool) *clientui.TranscriptGoalStatus {
-	projected := GoalFromSessionState(goal, availability, suspended)
-	if projected == nil || projected.Goal == nil {
-		return &clientui.TranscriptGoalStatus{Availability: projected.Availability}
+func transcriptGoalStatusFromRuntime(goal *session.GoalState, suspended bool) *clientui.TranscriptGoalStatus {
+	projected := GoalFromSessionState(goal, suspended)
+	if projected == nil {
+		return nil
 	}
 	return &clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
-		Goal:      projected.Goal,
+		ID:        projected.ID,
+		Objective: projected.Objective,
+		Status:    projected.Status,
 		Suspended: projected.Suspended,
-	}, Availability: projected.Availability}
-}
-
-func transcriptGoalStatusFromUpdate(goal *session.GoalState, availability *session.GoalAvailability, suspended bool) clientui.TranscriptGoalStatus {
-	status := clientui.TranscriptGoalStatus{}
-	if availability != nil {
-		projected := GoalAvailabilityFromSession(*availability)
-		status.Availability = &projected
-	}
-	if goal != nil {
-		status.Goal = &clientui.TranscriptGoal{Goal: GoalCoreFromSessionState(goal), Suspended: suspended}
-	}
-	return status
+	}}
 }
 
 func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) []clientui.TranscriptToolStart {
@@ -253,16 +239,15 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		return transcriptToolAbortMessages(evt)
 	case runtime.EventQueuedUserMessageStatus:
 		return transcriptQueuedMessageStateMessages(evt)
+	case runtime.EventHumanInputInterrupted:
+		return transcriptHumanInputInterruptedMessages(evt)
 	case runtime.EventRunStateChanged:
 		return transcriptStepStateMessages(evt)
 	case runtime.EventLiveRunFinished:
 		return transcriptLiveRunFinishedMessages(evt)
 	case runtime.EventReviewerStarted, runtime.EventReviewerCompleted:
 		return transcriptReviewerStateMessages(evt)
-	case runtime.EventSleepGuardFailed,
-		runtime.EventPromptHistoryPersistFailed,
-		runtime.EventInFlightClearFailed,
-		runtime.EventProviderTurnStateInvalid:
+	case runtime.EventSleepGuardFailed, runtime.EventPromptHistoryPersistFailed, runtime.EventInFlightClearFailed:
 		return transcriptOperationalDiagnosticMessages(evt)
 	case runtime.EventUserMessageFlushed:
 		messages := transcriptFeedStateMessages(evt)
@@ -355,11 +340,14 @@ func transcriptCompactionStatus(evt runtime.Event) clientui.TranscriptCompaction
 }
 
 func transcriptGoalStatus(update runtime.GoalStatusUpdate) clientui.TranscriptGoalStatus {
-	var state *session.GoalState
-	if !update.Cleared {
-		state = &update.State
+	if update.Cleared {
+		return clientui.TranscriptGoalStatus{}
 	}
-	return transcriptGoalStatusFromUpdate(state, update.Availability, false)
+	return clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
+		ID:        strings.TrimSpace(update.State.ID),
+		Objective: update.State.Objective,
+		Status:    clientui.RuntimeGoalStatus(strings.TrimSpace(string(update.State.Status))),
+	}}
 }
 
 type transcriptBackgroundActivityFacts struct {
@@ -491,14 +479,6 @@ func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptEven
 	return out
 }
 
-func transcriptRowsFromFacts(facts []runtime.TranscriptCommittedRowFact) []clientui.TranscriptCommittedRow {
-	rows, err := transcriptRowsFromFactsChecked(facts)
-	if err != nil {
-		panic(err)
-	}
-	return rows
-}
-
 func transcriptRowsFromFactsChecked(facts []runtime.TranscriptCommittedRowFact) ([]clientui.TranscriptCommittedRow, error) {
 	if len(facts) == 0 {
 		return []clientui.TranscriptCommittedRow{}, nil
@@ -590,17 +570,16 @@ func transcriptQueuedMessageStateMessages(evt runtime.Event) []clientui.Transcri
 	}
 	status := evt.QueuedUserMessageStatus
 	state := clientui.TranscriptQueuedMessageState{
-		ClientRequestID: mustTranscriptClientRequestID(status.ClientRequestID, "queued-message state"),
-		QueueItemID:     mustTranscriptQueueItemID(status.QueueItemID, "queued-message state"),
-		Status:          clientui.QueuedUserMessageStatus(status.Status),
+		QueueItemID: mustTranscriptQueueItemID(status.QueueItemID, "queued-message state"),
+		Status:      clientui.QueuedUserMessageStatus(status.Status),
 	}
 	switch status.Status {
 	case runtime.QueuedUserMessageAccepted:
-		state.Text = textutil.OptionalTrimmedString(status.RestoreText)
+		state.Text = textutil.OptionalTrimmedString(status.Text)
 	case runtime.QueuedUserMessageFailed:
 		reason := clientui.QueuedUserMessageFailureReason(status.FailureReason)
 		state.FailureReason = &reason
-		state.Text = textutil.OptionalTrimmedString(status.RestoreText)
+		state.Text = textutil.OptionalTrimmedString(status.Text)
 	case runtime.QueuedUserMessageSubmitted, runtime.QueuedUserMessageDiscarded:
 	default:
 		panic(fmt.Sprintf("runtime queued-message event has unknown status %q", status.Status))
@@ -608,20 +587,31 @@ func transcriptQueuedMessageStateMessages(evt runtime.Event) []clientui.Transcri
 	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(state)}
 }
 
+func transcriptHumanInputInterruptedMessages(evt runtime.Event) []clientui.TranscriptEvent {
+	if evt.HumanInputInterrupted == nil || len(evt.HumanInputInterrupted.Items) == 0 {
+		return nil
+	}
+	items := make([]clientui.TranscriptInterruptedHumanInputItem, 0, len(evt.HumanInputInterrupted.Items))
+	for index, item := range evt.HumanInputInterrupted.Items {
+		items = append(items, clientui.TranscriptInterruptedHumanInputItem{
+			QueueItemID: mustTranscriptQueueItemID(item.QueueItemID, fmt.Sprintf("interrupted human input %d", index)),
+			Text:        item.Text,
+		})
+	}
+	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(
+		clientui.TranscriptHumanInputInterrupted{Items: items},
+	)}
+}
+
 func transcriptUserMessageFlushedMessages(evt runtime.Event) []clientui.TranscriptEvent {
 	if len(evt.UserMessageBatchQueuedItems) == 0 {
 		return nil
 	}
-	messages := make([]clientui.QueuedUserMessageIdentity, 0, len(evt.UserMessageBatchQueuedItems))
 	for index, item := range evt.UserMessageBatchQueuedItems {
-		messages = append(messages, clientui.QueuedUserMessageIdentity{
-			ClientRequestID: mustTranscriptClientRequestID(item.ClientRequestID, fmt.Sprintf("flushed queued message %d", index)),
-			QueueItemID:     mustTranscriptQueueItemID(item.QueueItemID, fmt.Sprintf("flushed queued message %d", index)),
-		})
+		mustTranscriptQueueItemID(item.QueueItemID, fmt.Sprintf("flushed queued message %d", index))
 	}
 	flushed := clientui.TranscriptUserMessageFlushed{
-		StepID:   mustTranscriptStepID(evt.StepID, "user-message flush"),
-		Messages: messages,
+		StepID: mustTranscriptStepID(evt.StepID, "user-message flush"),
 	}
 	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(flushed)}
 }
@@ -661,28 +651,22 @@ func transcriptReviewerStateMessages(evt runtime.Event) []clientui.TranscriptEve
 }
 
 func transcriptOperationalDiagnosticMessages(evt runtime.Event) []clientui.TranscriptEvent {
-	var stepID *runtimeids.StepID
+	diagnostic := clientui.TranscriptOperationalDiagnostic{Detail: strings.TrimSpace(evt.Error)}
 	if strings.TrimSpace(evt.StepID) != "" {
-		parsed := mustTranscriptStepID(evt.StepID, "operational diagnostic")
-		stepID = &parsed
-	}
-	diagnostic := func(code clientui.OperationalDiagnosticCode, detail string) []clientui.TranscriptEvent {
-		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
-			Code: code, StepID: stepID, Detail: detail,
-		})}
+		stepID := mustTranscriptStepID(evt.StepID, "operational diagnostic")
+		diagnostic.StepID = &stepID
 	}
 	switch evt.Kind {
 	case runtime.EventSleepGuardFailed:
-		return diagnostic(clientui.OperationalDiagnosticSleepGuardFailed, strings.TrimSpace(evt.Error))
+		diagnostic.Code = clientui.OperationalDiagnosticSleepGuardFailed
 	case runtime.EventPromptHistoryPersistFailed:
-		return diagnostic(clientui.OperationalDiagnosticPromptHistoryPersistFailed, strings.TrimSpace(evt.Error))
+		diagnostic.Code = clientui.OperationalDiagnosticPromptHistoryPersistFailed
 	case runtime.EventInFlightClearFailed:
-		return diagnostic(clientui.OperationalDiagnosticInFlightClearFailed, strings.TrimSpace(evt.Error))
-	case runtime.EventProviderTurnStateInvalid:
-		return diagnostic(clientui.OperationalDiagnosticProviderTurnStateInvalid, "")
+		diagnostic.Code = clientui.OperationalDiagnosticInFlightClearFailed
 	default:
 		panic(fmt.Sprintf("runtime event %q is not an operational diagnostic", evt.Kind))
 	}
+	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(diagnostic)}
 }
 
 func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.TranscriptCommittedRow {
@@ -698,11 +682,10 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row.Kind = clientui.TranscriptRowUser
 		row.User = &clientui.TranscriptUserRow{
-			StepID:            mustTranscriptStepID(fact.StepID, "committed user row"),
-			Text:              fact.User.Text,
-			CondensedText:     optionalNonBlankString(fact.User.CondensedText),
-			RollbackTargetID:  textutil.Pointer(fact.User.RollbackTargetID),
-			CommittedAtUnixMs: textutil.Pointer(fact.User.CommittedAtUnixMs),
+			StepID:           mustTranscriptStepID(fact.StepID, "committed user row"),
+			Text:             fact.User.Text,
+			CondensedText:    optionalNonBlankString(fact.User.CondensedText),
+			RollbackTargetID: textutil.Pointer(fact.User.RollbackTargetID),
 		}
 	case runtime.TranscriptCommittedRowFactAssistant:
 		if fact.Assistant == nil {
@@ -710,11 +693,10 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row.Kind = clientui.TranscriptRowAssistant
 		row.Assistant = &clientui.TranscriptAssistantRow{
-			StepID:            mustTranscriptStepID(fact.StepID, "committed assistant row"),
-			Text:              fact.Assistant.Text,
-			CondensedText:     optionalNonBlankString(fact.Assistant.CondensedText),
-			Phase:             transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
-			CommittedAtUnixMs: textutil.Pointer(fact.Assistant.CommittedAtUnixMs),
+			StepID:        mustTranscriptStepID(fact.StepID, "committed assistant row"),
+			Text:          fact.Assistant.Text,
+			CondensedText: optionalNonBlankString(fact.Assistant.CondensedText),
+			Phase:         transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
 		}
 		if fact.Assistant.StreamID != nil {
 			streamID := mustTranscriptAssistantStreamID(fact.Assistant.StreamID, "committed assistant row")
@@ -846,9 +828,6 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 	if fact.ToolOutputRepair != nil {
 		notice.ToolOutputRepair = textutil.Pointer(fact.ToolOutputRepair)
 	}
-	if fact.ProviderModelMismatch != nil {
-		notice.ProviderModelMismatch = textutil.Pointer(fact.ProviderModelMismatch)
-	}
 	diagnosticCode := strings.TrimSpace(fact.DiagnosticCode)
 	diagnosticDetail := fact.DiagnosticDetail
 	if diagnosticCode != "" || strings.TrimSpace(diagnosticDetail) != "" {
@@ -970,14 +949,6 @@ func mustTranscriptAssistantStreamID(raw *uuid.UUID, owner string) runtimeids.As
 	id, err := runtimeids.ParseAssistantStreamID(raw.String())
 	if err != nil {
 		panic(fmt.Sprintf("%s has invalid assistant stream id %q: %v", owner, raw.String(), err))
-	}
-	return id
-}
-
-func mustTranscriptClientRequestID(raw string, owner string) runtimeids.RuntimeClientRequestID {
-	id, err := runtimeids.ParseRuntimeClientRequestID(strings.TrimSpace(raw))
-	if err != nil {
-		panic(fmt.Sprintf("%s has invalid client request id %q: %v", owner, raw, err))
 	}
 	return id
 }

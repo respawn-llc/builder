@@ -86,7 +86,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if errText, blocked := m.slashCommandInputBlocked(trimmedText); blocked {
 			return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		if handled, next, cmd := c.handleQueuedSlashCommandInput(submittedText); handled {
+		if handled, next, cmd := c.handleQueuedSlashCommandInput(trimmedText); handled {
 			return next, cmd
 		}
 		return c.queueOrStartSubmission(submittedText)
@@ -159,7 +159,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
 		if m.blocksRuntimeInput() {
-			if handled, next, cmd := c.handleEnteredSlashCommandInput(submittedText); handled {
+			if handled, next, cmd := c.handleEnteredSlashCommandInput(trimmedText); handled {
 				return next, cmd
 			}
 		}
@@ -183,19 +183,14 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.restoreCapturedPromptHistoryDraft(draft)
 			return c.flushQueuedInputs(queueDrainOne)
 		}
-		if handled, next, cmd := c.handleEnteredSlashCommandInput(submittedText); handled {
+		if handled, next, cmd := c.handleEnteredSlashCommandInput(trimmedText); handled {
 			return next, cmd
 		}
 		if commandResult := m.commandRegistry.Execute(trimmedText); commandResult.Handled {
 			command, _ := m.commandRegistry.Command(trimmedText)
 			recordCmd := m.recordPromptHistory(trimmedText)
 			m.clearCommandInput(command, draft)
-			next, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(
-				commandResult,
-				preSubmitQueueBack,
-				activeSubmitOriginDirect,
-				submittedText,
-			)
+			next, cmd := c.applyCommandResultWithPreSubmitQueuePosition(commandResult, preSubmitQueueBack)
 			return next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 		}
 		m.clearInput()

@@ -2,7 +2,6 @@ package workflowstore
 
 import (
 	"testing"
-	"time"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
@@ -49,13 +48,13 @@ func TestCurrentNodeSelectionRoundTripsForAgentAndRejectsNonAgentAssignment(t *t
 	if err != nil {
 		t.Fatalf("NewCurrentNode without selection: %v", err)
 	}
-	if err := insertTaskCurrentNode(ctx, store.queries, withoutSelection, time.Now().UTC()); err == nil {
+	if err := insertTaskCurrentNode(ctx, store.queries, withoutSelection); err == nil {
 		t.Fatal("insert Agent current node without selection succeeded")
 	}
-	if err := insertTaskCurrentNode(ctx, store.queries, agentCurrentNode, time.Now().UTC()); err != nil {
+	if err := insertTaskCurrentNode(ctx, store.queries, agentCurrentNode); err != nil {
 		t.Fatalf("insert agent current node: %v", err)
 	}
-	reloaded, err := store.currentNodeForReference(ctx, store.queries, agentReference)
+	reloaded, err := currentNodeForReference(ctx, store.queries, agentReference)
 	if err != nil {
 		t.Fatalf("currentNodeForReference agent: %v", err)
 	}
@@ -84,7 +83,7 @@ func TestCurrentNodeSelectionRoundTripsForAgentAndRejectsNonAgentAssignment(t *t
 	if err != nil {
 		t.Fatalf("NewCurrentNodeWithExecutionSelection terminal: %v", err)
 	}
-	if err := insertTaskCurrentNode(ctx, store.queries, terminalCurrentNode, time.Now().UTC()); err == nil {
+	if err := insertTaskCurrentNode(ctx, store.queries, terminalCurrentNode); err == nil {
 		t.Fatal("insert terminal current node with assignment succeeded")
 	}
 }

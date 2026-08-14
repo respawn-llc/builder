@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type KeyboardEventHandler } from "react";
 import { useTranslation } from "react-i18next";
 import { Link2Off, Star, Unlink } from "lucide-react";
 
-import type { WorkspaceCatalogRow } from "@/api";
+import type { WorkspaceSummary } from "@/api";
 import { errorMessage } from "@/api";
 import { formatHomeRelativePath } from "@/app-facade";
 import type { AppServices } from "@/app-facade";
@@ -127,19 +127,21 @@ export function ProjectKeyField({
 }
 
 export function WorkspaceRow({
+  defaultWorkspaceID,
   disabled,
   onMakeDefault,
   onUnlink,
   workspace,
 }: Readonly<{
+  defaultWorkspaceID: string;
   disabled: boolean;
   onMakeDefault: () => void;
   onUnlink: () => void;
-  workspace: WorkspaceCatalogRow;
+  workspace: WorkspaceSummary;
 }>) {
   const { t } = useTranslation();
   const { homePath, nativeBridge } = useAppServices();
-  const isDefault = workspace.isDefault;
+  const isDefault = workspace.id === defaultWorkspaceID;
   const workspacePathLabel = formatHomeRelativePath(
     workspace.rootPath,
     homePath,

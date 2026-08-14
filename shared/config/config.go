@@ -230,15 +230,16 @@ type ModelCapabilitiesOverride struct {
 }
 
 type ProviderCapabilitiesOverride struct {
-	ProviderID                    string
-	SupportsResponsesAPI          bool
-	SupportsResponsesCompact      bool
-	SupportsPromptCacheKey        bool
-	SupportsNativeWebSearch       bool
-	SupportsReasoningEncrypted    bool
-	SupportsServerSideContextEdit bool
-	SupportsProviderVerbosity     bool
-	IsOpenAIFirstParty            bool
+	ProviderID                     string
+	SupportsResponsesAPI           bool
+	SupportsResponsesCompact       bool
+	SupportsRequestInputTokenCount bool
+	SupportsPromptCacheKey         bool
+	SupportsNativeWebSearch        bool
+	SupportsReasoningEncrypted     bool
+	SupportsServerSideContextEdit  bool
+	SupportsProviderVerbosity      bool
+	IsOpenAIFirstParty             bool
 }
 
 type ReviewerSettings struct {

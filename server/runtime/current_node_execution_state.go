@@ -17,6 +17,72 @@ type CurrentNodeExecutionBinding struct {
 	err     error
 }
 
+type CurrentNodeExecutionPublication struct {
+	engine *Engine
+	state  *currentNodeExecutionState
+	config *workflowruntime.CurrentNodeExecutionConfig
+	locked bool
+	done   bool
+}
+
+func (e *Engine) PrepareCurrentNodeExecutionPublication(
+	config *workflowruntime.CurrentNodeExecutionConfig,
+) (*CurrentNodeExecutionPublication, error) {
+	if e == nil {
+		return nil, errors.New("runtime engine is required")
+	}
+	if err := validateCurrentNodeExecutionConfig(config); err != nil {
+		return nil, err
+	}
+	state := e.currentNodeExecution
+	if state == nil {
+		return nil, errors.New("current node execution state is unavailable")
+	}
+	cloned := cloneCurrentNodeExecutionConfig(config)
+	return &CurrentNodeExecutionPublication{engine: e, state: state, config: cloned}, nil
+}
+
+func (p *CurrentNodeExecutionPublication) Begin() error {
+	if p == nil || p.state == nil || p.done || p.locked {
+		return errors.New("current node execution publication is invalid")
+	}
+	p.state.mu.Lock()
+	if p.state.owner != nil {
+		p.state.mu.Unlock()
+		return fmt.Errorf("current node execution scope %s cannot publish while scope %s owns the state", p.config.ScopeID, p.state.owner.scopeID)
+	}
+	if p.state.config != nil && p.state.config.ScopeID == p.config.ScopeID &&
+		!p.state.config.Instructions.CurrentNode.Equal(p.config.Instructions.CurrentNode) {
+		p.state.mu.Unlock()
+		return fmt.Errorf("current node execution scope %s cannot change Current Node", p.config.ScopeID)
+	}
+	p.locked = true
+	return nil
+}
+
+func (p *CurrentNodeExecutionPublication) Commit() *CurrentNodeExecutionBinding {
+	if p == nil || p.state == nil || p.done || !p.locked {
+		panic("Current Node execution publication must be validated and locked before commit")
+	}
+	p.done = true
+	p.state.config = p.config
+	p.state.delivery = newWorkflowPromptDeliveryState(p.config)
+	p.state.owner = &currentNodeExecutionOwner{scopeID: p.config.ScopeID}
+	p.state.mu.Unlock()
+	p.engine.mu.Lock()
+	p.engine.workflowTerminal = WorkflowTerminalState{}
+	p.engine.mu.Unlock()
+	return &CurrentNodeExecutionBinding{engine: p.engine, scopeID: p.config.ScopeID}
+}
+
+func (p *CurrentNodeExecutionPublication) Cancel() {
+	if p == nil || p.state == nil || p.done || !p.locked {
+		return
+	}
+	p.done = true
+	p.state.mu.Unlock()
+}
+
 type currentNodeExecutionSnapshot struct {
 	config   *workflowruntime.CurrentNodeExecutionConfig
 	delivery *workflowPromptDeliveryState
@@ -33,81 +99,10 @@ type currentNodeExecutionOwner struct {
 	scopeID runtimeids.ExecutionScopeID
 }
 
-func newCurrentNodeExecutionState(config *workflowruntime.CurrentNodeExecutionConfig) *currentNodeExecutionState {
-	state := &currentNodeExecutionState{
+func newCurrentNodeExecutionState() *currentNodeExecutionState {
+	return &currentNodeExecutionState{
 		delivery: newWorkflowPromptDeliveryState(nil),
 	}
-	if config != nil {
-		state.config = cloneCurrentNodeExecutionConfig(config)
-		state.delivery = newWorkflowPromptDeliveryState(state.config)
-	}
-	return state
-}
-
-func (e *Engine) BindCurrentNodeExecution(
-	config *workflowruntime.CurrentNodeExecutionConfig,
-) (*CurrentNodeExecutionBinding, error) {
-	if e == nil {
-		return nil, errors.New("runtime engine is required")
-	}
-	if config == nil {
-		return nil, errors.New("current node execution config is required")
-	}
-	if err := validateCurrentNodeExecutionConfig(config); err != nil {
-		return nil, err
-	}
-	preparedContract, err := config.Contract.Prepare()
-	if err != nil {
-		return nil, fmt.Errorf("prepare current node completion contract: %w", err)
-	}
-	state := e.currentNodeExecution
-	if state == nil {
-		return nil, errors.New("current node execution state is unavailable")
-	}
-	cloned := cloneCurrentNodeExecutionConfig(config)
-	cloned.Contract = preparedContract
-	state.mu.Lock()
-	if state.owner != nil {
-		current := state.config
-		owner := state.owner
-		state.mu.Unlock()
-		if current == nil {
-			return nil, errors.New("current node execution state is bound without an active config")
-		}
-		return nil, fmt.Errorf(
-			"current node execution scope %s for %v cannot bind while scope %s for %v already owns the state",
-			cloned.ScopeID,
-			cloned.Instructions.CurrentNode,
-			owner.scopeID,
-			current.Instructions.CurrentNode,
-		)
-	}
-	if state.config != nil {
-		current := state.config
-		if current.ScopeID == cloned.ScopeID &&
-			!current.Instructions.CurrentNode.Equal(cloned.Instructions.CurrentNode) {
-			state.mu.Unlock()
-			return nil, fmt.Errorf(
-				"current node execution scope %s cannot change from %v to %v",
-				cloned.ScopeID,
-				current.Instructions.CurrentNode,
-				cloned.Instructions.CurrentNode,
-			)
-		}
-		if current.ScopeID != cloned.ScopeID {
-			state.config = cloned
-			state.delivery = newWorkflowPromptDeliveryState(cloned)
-		}
-	} else {
-		state.config = cloned
-		state.delivery = newWorkflowPromptDeliveryState(cloned)
-	}
-	state.owner = &currentNodeExecutionOwner{scopeID: cloned.ScopeID}
-	state.mu.Unlock()
-	e.mu.Lock()
-	e.workflowTerminal = WorkflowTerminalState{}
-	e.mu.Unlock()
-	return &CurrentNodeExecutionBinding{engine: e, scopeID: cloned.ScopeID}, nil
 }
 
 func (b *CurrentNodeExecutionBinding) Close() error {
@@ -137,15 +132,13 @@ func (b *CurrentNodeExecutionBinding) Close() error {
 		}
 		state.mu.Unlock()
 		if b.err == nil {
-			b.err = b.engine.FinishCurrentNodeExecutionActivation()
+			b.err = b.engine.finishCurrentNodeExecution()
 		}
 	})
 	return b.err
 }
 
-// FinishCurrentNodeExecutionActivation releases terminal workflow state after
-// either an exact workflow binding or an ordinary retained-Session activation.
-func (e *Engine) FinishCurrentNodeExecutionActivation() error {
+func (e *Engine) finishCurrentNodeExecution() error {
 	if e == nil {
 		return errors.New("runtime engine is required")
 	}

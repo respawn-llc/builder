@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,11 +17,9 @@ import (
 	"core/server/auth"
 	"core/shared/config"
 	"core/shared/llmerrors"
-	"core/shared/textutil"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -43,13 +42,6 @@ type OpenAIAuthMetadataProvider interface {
 type OpenAIAuthMode struct {
 	IsOAuth   bool
 	AccountID string
-}
-
-type openAIDispatchPreparation struct {
-	authHeader   string
-	mode         OpenAIAuthMode
-	providerCaps ProviderCapabilities
-	projection   *codexDispatchProjection
 }
 
 type HTTPTransport struct {
@@ -94,71 +86,51 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
-	preparation, err := t.prepareDispatch(
-		ctx,
-		request.SessionID,
-		request.Model,
-		request.CodexDispatch,
-		request.FastMode,
-	)
-	if err != nil {
-		return OpenAIResponse{}, err
-	}
 	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
 
-	payload, err := t.buildDispatchPayload(request, preparation.mode, preparation.providerCaps, preparation.projection)
+	authHeader, mode, err := t.resolveAuth(ctx)
+	if err != nil {
+		return OpenAIResponse{}, err
+	}
+	providerCaps, err := t.providerCapabilitiesForMode(mode)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
 
-	requestClient := t.Client
-	if preparation.mode.IsOAuth {
-		requestClient = t.streamingHTTPClient()
+	payload, err := t.buildPayload(request, mode, providerCaps)
+	if err != nil {
+		return OpenAIResponse{}, err
 	}
+
 	service := responses.NewResponseService(
-		option.WithBaseURL(t.serviceBaseURL(preparation.mode)),
-		option.WithHTTPClient(requestClient),
+		option.WithBaseURL(t.serviceBaseURL(mode)),
+		option.WithHTTPClient(t.Client),
 		option.WithMaxRetries(0),
 	)
-	reqOpts := t.buildRequestOptions(preparation.authHeader, preparation.mode, request.SessionID, preparation.projection, request.CodexDispatch)
+	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
-	if preparation.mode.IsOAuth {
-		stream := service.NewStreaming(ctx, payload, reqOpts...)
-		defer func() { _ = stream.Close() }()
-		return consumeResponsesStream(
-			ctx,
-			stream,
-			rawResp,
-			request.CodexDispatch,
-			preparation.providerCaps.ProviderID,
-			windowTokens,
-			StreamCallbacks{},
-		)
-	}
-
 	decoded, err := service.New(ctx, payload, reqOpts...)
 	if err != nil {
-		return OpenAIResponse{}, newOpenAIRequestErrorMapper(preparation.providerCaps.ProviderID).Map(err, rawResp, "openai responses request failed")
+		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "openai responses request failed")
 	}
 	if decoded == nil {
 		return OpenAIResponse{}, fmt.Errorf("openai responses request failed: empty response")
 	}
+
 	outputItems, assistantText, _, providerPhase, toolCalls, reasoning, reasoningItems, parseErr := parseOutputItems(decoded.Output)
 	if parseErr != nil {
-		return OpenAIResponse{}, newOpenAIProviderContractError(preparation.providerCaps.ProviderID, rawResp, parseErr)
+		return OpenAIResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), parseErr)
 	}
 	return OpenAIResponse{
-		AssistantText:     assistantText,
-		ProviderPhase:     providerPhase,
-		ServedModel:       servedModelMetadata(rawResp, string(decoded.Model)),
-		ReasoningIncluded: reasoningIncludedMetadata(rawResp),
-		ToolCalls:         toolCalls,
-		Reasoning:         normalizeReasoningEntries(reasoning),
-		ReasoningItems:    reasoningItems,
-		OutputItems:       outputItems,
-		Usage:             usageFromSDK(decoded.Usage, windowTokens),
+		AssistantText:  assistantText,
+		ProviderPhase:  providerPhase,
+		ToolCalls:      toolCalls,
+		Reasoning:      normalizeReasoningEntries(reasoning),
+		ReasoningItems: reasoningItems,
+		OutputItems:    outputItems,
+		Usage:          usageFromSDK(decoded.Usage, windowTokens),
 	}, nil
 }
 
@@ -176,104 +148,70 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
-	preparation, err := t.prepareDispatch(
-		ctx,
-		request.SessionID,
-		request.Model,
-		request.CodexDispatch,
-		request.FastMode,
-	)
+	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
+
+	authHeader, mode, err := t.resolveAuth(ctx)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
+	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	if err != nil {
+		return OpenAIResponse{}, err
+	}
 
-	payload, err := t.buildDispatchPayload(request, preparation.mode, preparation.providerCaps, preparation.projection)
+	payload, err := t.buildPayload(request, mode, providerCaps)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
 
 	service := responses.NewResponseService(
-		option.WithBaseURL(t.serviceBaseURL(preparation.mode)),
+		option.WithBaseURL(t.serviceBaseURL(mode)),
 		option.WithHTTPClient(t.streamingHTTPClient()),
 		option.WithMaxRetries(0),
 	)
-	reqOpts := t.buildRequestOptions(preparation.authHeader, preparation.mode, request.SessionID, preparation.projection, request.CodexDispatch)
+	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
 	stream := service.NewStreaming(ctx, payload, reqOpts...)
-	defer func() { _ = stream.Close() }()
+	defer stream.Close()
 
-	var turnStateObserver *CodexDispatchContext
-	if preparation.mode.IsOAuth {
-		turnStateObserver = request.CodexDispatch
-	}
-	return consumeResponsesStream(
-		ctx,
-		stream,
-		rawResp,
-		turnStateObserver,
-		preparation.providerCaps.ProviderID,
-		windowTokens,
-		callbacks,
-	)
-}
-
-func consumeResponsesStream(
-	ctx context.Context,
-	stream *ssestream.Stream[responses.ResponseStreamEventUnion],
-	rawResp *http.Response,
-	dispatch *CodexDispatchContext,
-	providerID string,
-	windowTokens int,
-	callbacks StreamCallbacks,
-) (OpenAIResponse, error) {
 	accumulator := newResponseStreamAccumulator(callbacks, windowTokens)
-	headersObserved := false
-	observeCodexTurnStateResponseHeader(dispatch, rawResp, &headersObserved)
 	for stream.Next() {
-		observeCodexTurnStateResponseHeader(dispatch, rawResp, &headersObserved)
 		if callbacks.OnStreamActivity != nil {
 			callbacks.OnStreamActivity()
 		}
-		event := stream.Current()
-		accumulator.Consume(event)
-		if err := accumulator.Err(providerID, newOpenAIResponseStatus(rawResp)); err != nil {
-			return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerID).Map(err, rawResp, "read responses stream events")
+		accumulator.Consume(stream.Current())
+		if err := accumulator.Err(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp)); err != nil {
+			return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 		}
 	}
-	observeCodexTurnStateResponseHeader(dispatch, rawResp, &headersObserved)
 	if err := stream.Err(); err != nil {
 		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
-			return responseFromStreamAccumulator(accumulator, providerID, rawResp)
+			return responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
 		}
-		if rawResp != nil && isOpenAIResponsesStreamFramingError(err) {
-			return OpenAIResponse{}, fmt.Errorf(
-				"read responses stream events: %w",
-				newOpenAIProviderContractError(
-					providerID,
-					rawResp,
-					fmt.Errorf("%s: %w", openAIResponsesStreamEndedBeforeTerminalMessage, err),
-				),
-			)
+		responseStatus := newOpenAIResponseStatus(rawResp)
+		if responseStatus != nil && isOpenAIResponsesStreamFramingError(err) {
+			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
+				providerCaps.ProviderID,
+				responseStatus.Code,
+				fmt.Errorf("%s: %w", openAIResponsesStreamEndedBeforeTerminalMessage, err),
+			))
 		}
-		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerID).Map(err, rawResp, "read responses stream events")
+		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 	}
 	if !accumulator.hasCompleted() {
-		if rawResp == nil {
+		responseStatus := newOpenAIResponseStatus(rawResp)
+		if responseStatus == nil {
 			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", errors.New(openAIResponsesStreamEndedBeforeTerminalMessage))
 		}
-		return OpenAIResponse{}, fmt.Errorf(
-			"read responses stream events: %w",
-			newOpenAIProviderContractError(
-				providerID,
-				rawResp,
-				errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
-			),
-		)
+		return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
+			providerCaps.ProviderID,
+			responseStatus.Code,
+			errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
+		))
 	}
-	return responseFromStreamAccumulator(accumulator, providerID, rawResp)
+	return responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
 }
 
 func responseFromStreamAccumulator(accumulator *responseStreamAccumulator, providerID string, rawResp *http.Response) (OpenAIResponse, error) {
@@ -281,11 +219,9 @@ func responseFromStreamAccumulator(accumulator *responseStreamAccumulator, provi
 	if err != nil {
 		return OpenAIResponse{}, fmt.Errorf(
 			"read responses stream events: %w",
-			newOpenAIProviderContractError(providerID, rawResp, err),
+			newOpenAIProviderContractError(providerID, newOpenAIResponseStatus(rawResp), err),
 		)
 	}
-	response.ServedModel = servedModelMetadata(rawResp, optionalStringValue(response.ServedModel))
-	response.ReasoningIncluded = reasoningIncludedMetadata(rawResp)
 	return response, nil
 }
 
@@ -328,13 +264,11 @@ func newOpenAIResponseStatus(rawResp *http.Response) *openAIResponseStatus {
 	return &openAIResponseStatus{Code: rawResp.StatusCode}
 }
 
-func newOpenAIProviderContractError(providerID string, rawResp *http.Response, cause error) error {
-	if rawResp == nil {
+func newOpenAIProviderContractError(providerID string, status *openAIResponseStatus, cause error) error {
+	if status == nil {
 		return &providerContractErrorWithoutStatus{ProviderID: providerID, Err: cause}
 	}
-	providerErr := llmerrors.NewProviderContractError(providerID, rawResp.StatusCode, cause)
-	enrichProviderAPIErrorFromResponseHeaders(providerErr, rawResp)
-	return providerErr
+	return llmerrors.NewProviderContractError(providerID, status.Code, cause)
 }
 
 func callerCanceledStreamRead(ctx context.Context) bool {
@@ -356,140 +290,117 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
-	preparation, err := t.prepareDispatch(
-		ctx,
-		request.SessionID,
-		request.Model,
-		request.CodexDispatch,
-		request.FastMode,
-	)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
-	}
-	variant, err := t.providerVariantForMode(preparation.mode)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
-	}
 	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
-	switch variant.RemoteCompactionProtocol {
-	case remoteCompactionResponsesTriggerV2:
-		return t.compactResponsesTriggerV2(ctx, request, preparation.authHeader, preparation.mode, preparation.providerCaps, windowTokens, preparation.projection)
-	default:
-		return OpenAICompactionResponse{}, fmt.Errorf("provider %s does not support remote compaction", preparation.providerCaps.ProviderID)
-	}
-}
 
-func (t *HTTPTransport) prepareDispatch(
-	ctx context.Context,
-	sessionID *string,
-	model string,
-	dispatch *CodexDispatchContext,
-	fastMode bool,
-) (openAIDispatchPreparation, error) {
-	if sessionID == nil {
-		return openAIDispatchPreparation{}, fmt.Errorf("%w: Session identity is required for dispatch", ErrInvalidRequest)
-	}
-	if err := validateSessionDispatchPairing(sessionID, dispatch); err != nil {
-		return openAIDispatchPreparation{}, err
-	}
 	authHeader, mode, err := t.resolveAuth(ctx)
 	if err != nil {
-		return openAIDispatchPreparation{}, err
+		return OpenAICompactionResponse{}, err
 	}
 	providerCaps, err := t.providerCapabilitiesForMode(mode)
 	if err != nil {
-		return openAIDispatchPreparation{}, err
+		return OpenAICompactionResponse{}, err
 	}
-	projection, err := validateOpenAIDispatchForMode(
-		*sessionID,
-		model,
-		dispatch,
-		mode,
-		effectiveServiceTier(fastMode, providerCaps),
-	)
+
+	payload, err := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, ProviderCapabilities{}).BuildCompact(request)
 	if err != nil {
-		return openAIDispatchPreparation{}, err
+		return OpenAICompactionResponse{}, err
 	}
-	return openAIDispatchPreparation{
-		authHeader:   authHeader,
-		mode:         mode,
-		providerCaps: providerCaps,
-		projection:   projection,
+
+	service := responses.NewResponseService(
+		option.WithBaseURL(t.serviceBaseURL(mode)),
+		option.WithHTTPClient(t.Client),
+		option.WithMaxRetries(0),
+	)
+	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	var rawResp *http.Response
+	var rawBody []byte
+	reqOpts = append(reqOpts,
+		option.WithResponseInto(&rawResp),
+		option.WithResponseBodyInto(&rawBody),
+	)
+
+	decoded, err := service.Compact(ctx, payload, reqOpts...)
+	if err != nil {
+		return OpenAICompactionResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "openai responses compact request failed")
+	}
+	if len(bytes.TrimSpace(rawBody)) > 0 {
+		var parsed responses.CompactedResponse
+		if err := json.Unmarshal(rawBody, &parsed); err != nil {
+			return OpenAICompactionResponse{}, fmt.Errorf("openai responses compact request failed: invalid compact response body: %w", err)
+		}
+		decoded = &parsed
+	}
+	if decoded == nil {
+		return OpenAICompactionResponse{}, fmt.Errorf("openai responses compact request failed: empty response")
+	}
+
+	outputItems, _, _, _, _, _, _, parseErr := parseOutputItems(decoded.Output)
+	if parseErr != nil {
+		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), parseErr)
+	}
+	return OpenAICompactionResponse{
+		OutputItems:       outputItems,
+		Usage:             usageFromSDK(decoded.Usage, windowTokens),
+		TrimmedItemsCount: nil,
 	}, nil
 }
 
-func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request OpenAICompactionRequest, authHeader string, mode OpenAIAuthMode, providerCaps ProviderCapabilities, windowTokens int, projection *codexDispatchProjection) (OpenAICompactionResponse, error) {
-	payload, err := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, providerCaps).BuildCompactV2(request)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
+func (t *HTTPTransport) CountRequestInputTokens(ctx context.Context, request OpenAIRequest) (int, error) {
+	if t.Client == nil {
+		t.Client = NewHTTPClient(120 * time.Second)
 	}
-	applyCodexClientMetadata(&payload, projection)
-	service := responses.NewResponseService(
+
+	authHeader, mode, err := t.resolveAuth(ctx)
+	if err != nil {
+		return 0, err
+	}
+	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	if err != nil {
+		return 0, err
+	}
+
+	payload, err := t.buildInputTokenCountParams(request, providerCaps)
+	if err != nil {
+		return 0, err
+	}
+
+	service := responses.NewInputTokenService(
 		option.WithBaseURL(t.serviceBaseURL(mode)),
-		option.WithHTTPClient(t.streamingHTTPClient()),
+		option.WithHTTPClient(t.Client),
 		option.WithMaxRetries(0),
 	)
-	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID, projection, request.CodexDispatch)
+	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
-	watchdog := newStreamIdleWatchdog(ctx, t.Client.Timeout)
-	defer watchdog.stop()
-	stream := service.NewStreaming(watchdog.ctx, payload, reqOpts...)
-	defer func() { _ = stream.Close() }()
 
-	accumulator := newResponseStreamAccumulator(StreamCallbacks{}, windowTokens)
-	var turnStateObserver *CodexDispatchContext
-	if mode.IsOAuth {
-		turnStateObserver = request.CodexDispatch
-	}
-	headersObserved := false
-	observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
-	for stream.Next() {
-		observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
-		watchdog.ping()
-		event := stream.Current()
-		accumulator.Consume(event)
-		if err := accumulator.Err(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp)); err != nil {
-			return OpenAICompactionResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses compaction stream events")
-		}
-	}
-	observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
-	if err := stream.Err(); err != nil {
-		if errors.Is(context.Cause(watchdog.ctx), ErrModelStreamStalled) {
-			return OpenAICompactionResponse{}, fmt.Errorf("model stream stalled: %w", ErrModelStreamStalled)
-		}
-		return OpenAICompactionResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses compaction stream events")
-	}
-	if !accumulator.hasCompleted() {
-		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, rawResp, errors.New(openAIResponsesStreamEndedBeforeTerminalMessage))
-	}
-	response, err := responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
+	decoded, err := service.Count(ctx, payload, reqOpts...)
 	if err != nil {
-		return OpenAICompactionResponse{}, err
+		return 0, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "openai responses input_tokens request failed")
 	}
-	checkpoint, err := requireSingleEncryptedCompactionOutput(response.OutputItems)
-	if err != nil {
-		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, rawResp, err)
+	if decoded == nil {
+		return 0, fmt.Errorf("openai responses input_tokens request failed: empty response")
 	}
-	return OpenAICompactionResponse{OutputItems: []ResponseItem{checkpoint}, Usage: response.Usage}, nil
+	resolvedWindow := parseContextWindowTokens(decoded.RawJSON())
+	if resolvedWindow <= 0 {
+		resolvedWindow = parseContextWindowTokensFromHeaders(rawResp)
+	}
+	t.cacheModelContextWindow(request.Model, resolvedWindow)
+	if decoded.InputTokens < 0 {
+		return 0, nil
+	}
+	return int(decoded.InputTokens), nil
 }
 
-func requireSingleEncryptedCompactionOutput(items []ResponseItem) (ResponseItem, error) {
-	counts := make(map[ResponseItemType]int)
-	compactions := make([]ResponseItem, 0, 1)
-	for _, item := range items {
-		counts[item.Type]++
-		if item.Type == ResponseItemTypeCompaction {
-			compactions = append(compactions, item)
-		}
+func (t *HTTPTransport) SupportsRequestInputTokenCount(ctx context.Context) (bool, error) {
+	_, mode, err := t.resolveAuth(ctx)
+	if err != nil {
+		return false, err
 	}
-	if len(compactions) != 1 {
-		return ResponseItem{}, fmt.Errorf("Responses compaction V2 requires exactly one compaction output (compaction_count=%d output_count=%d types=%v)", len(compactions), len(items), counts)
+	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	if err != nil {
+		return false, err
 	}
-	if _, ok := textutil.OptionalTrimmed(compactions[0].EncryptedContent); !ok {
-		return ResponseItem{}, fmt.Errorf("Responses compaction V2 compaction output is missing encrypted_content (compaction_count=1 output_count=%d types=%v)", len(items), counts)
-	}
-	return compactions[0], nil
+	return providerCaps.SupportsRequestInputTokenCount, nil
 }
 
 func (t *HTTPTransport) ResolveModelContextWindow(ctx context.Context, model string) (int, error) {
@@ -523,7 +434,7 @@ func (t *HTTPTransport) ResolveModelContextWindow(ctx context.Context, model str
 			option.WithHTTPClient(t.Client),
 			option.WithMaxRetries(0),
 		)
-		reqOpts := t.buildRequestOptions(authHeader, mode, nil, nil, nil)
+		reqOpts := t.buildRequestOptions(authHeader, mode, "")
 		var rawResp *http.Response
 		reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 		modelResponse, modelErr := service.Get(ctx, strings.TrimSpace(model), reqOpts...)

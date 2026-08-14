@@ -9,7 +9,7 @@ Before writing, rewriting, reviewing, or validating a spec, follow the
 Area specs:
 
 - `core-runtime-tools.md`: product scope, sessions, authentication, configuration, tools, runtime control, and compaction.
-- `openai-provider-dispatch.md`: OpenAI-family request identity, ChatGPT Codex routing metadata, and retry-local provider turn state.
+- `runtime-steering-loop.md`: Active Session Runtime mutation ownership, Steering Queue behavior, protected Agent Steps, Step Boundaries, and next-Step selection.
 - `cli-commands.md`: CLI command behavior, accepted inputs, human output, machine-readable output, and exit codes.
 - `project-workspaces.md`: Project-workspace relationships, detach safety, and API selection.
 - `tui-transcript.md`: terminal modes, transcript visibility, rendering, input, slash commands, worktrees, notifications.

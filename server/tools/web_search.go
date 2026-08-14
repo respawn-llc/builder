@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-
-	"core/shared/toolspec"
 )
 
 const (
@@ -19,13 +17,9 @@ const (
 var ErrInvalidWebSearchQuery = errors.New(InvalidWebSearchQueryMessage)
 
 type WebSearchInput struct {
-	Query          string   `json:"query" jsonschema_description:"Required search query string. Keep it specific and concise; include concrete keywords (entity + property + timeframe) and optionally a site hint."`
-	AllowedDomains []string `json:"allowed_domains,omitempty" jsonschema_description:"Optional allowlist of domains to constrain sources to preferred or authoritative sites."`
-	BlockedDomains []string `json:"blocked_domains,omitempty" jsonschema_description:"Optional blocklist of domains to exclude low-quality or irrelevant sources."`
-}
-
-func WebSearchStaticContractSource() StaticContractSource {
-	return StaticContractSource{ID: toolspec.ToolWebSearch, Input: WebSearchInput{}}
+	Query          string   `json:"query"`
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
 func ParseWebSearchInput(raw json.RawMessage) (WebSearchInput, error) {

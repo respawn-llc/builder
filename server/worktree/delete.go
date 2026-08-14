@@ -30,12 +30,6 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		force:       req.ForceFolderRemoval,
 		cleanup:     req.BranchCleanupPolicy,
 	}
-	if ack, ok := s.replayPendingWorktreeTransition(transitionRequest); ok {
-		return serverapi.WorktreeDeleteResult{
-			Kind:      serverapi.WorktreeDeleteResultKindScheduled,
-			Scheduled: &ack,
-		}, nil
-	}
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
@@ -65,10 +59,10 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 			return serverapi.WorktreeDeleteResult{}, err
 		}
 		release()
-		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, _ transitionAuthority, sync transitionTargetSync) error {
+		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, sync transitionTargetSync) error {
 			_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
 			return err
-		}, req.WorktreeTransitionHeader.Origin)
+		})
 		if err != nil {
 			return serverapi.WorktreeDeleteResult{}, err
 		}
@@ -147,9 +141,8 @@ func (s *Service) executeDeleteLocked(
 	if err := s.ensureDeleteFolderRemovalAuthorized(ctx, entry, req.ForceFolderRemoval); err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
-	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
-		retargetCompensation, err = s.retargetDeleteSessions(mutationCtx, workspaceCtx, *record, currentSync)
+		err = s.retargetDeleteSessions(mutationCtx, workspaceCtx, *record, currentSync)
 		if err != nil {
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
@@ -168,7 +161,7 @@ func (s *Service) executeDeleteLocked(
 			if errors.As(err, &recoveryError) && recoveryError.Destructive {
 				return serverapi.WorktreeDeleteCompletedResult{}, err
 			}
-			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
+			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
 	}
 	if record != nil && !retainRecord {
@@ -320,6 +313,15 @@ func (s *Service) acquireDeleteTargetActivity(
 			}
 			if active {
 				activeBlockers = append(activeBlockers, target.blocker)
+				continue
+			}
+			retired, err := s.authority.RetireIdleRuntime(lease.ctx, target.id.String())
+			if err != nil {
+				lease.Close()
+				return deleteTargetActivityLease{}, err
+			}
+			if !retired {
+				activeBlockers = append(activeBlockers, target.blocker)
 			}
 		}
 		if len(activeBlockers) > 0 {
@@ -356,7 +358,7 @@ func (s *Service) retargetDeleteSessions(
 	workspaceCtx sessionWorkspaceContext,
 	record metadata.WorktreeRecord,
 	currentSync transitionTargetSync,
-) (worktreeSessionRetargetCompensation, error) {
+) error {
 	return s.retargetSessionsFromWorktree(
 		ctx,
 		workspaceCtx.workspaceID,
@@ -372,7 +374,6 @@ func (s *Service) retargetDeleteSessions(
 			) error {
 				return s.syncDeleteSession(syncCtx, workspaceCtx.sessionID, sessionID, target, reminder, currentSync)
 			},
-			rollbackOnError: true,
 		},
 	)
 }

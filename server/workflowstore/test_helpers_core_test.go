@@ -201,11 +201,9 @@ func setWorkflowGraphSaveNodeGroup(nodes []NodeRecord, nodeID workflow.NodeID, g
 	changed := make([]NodeRecord, 0, len(nodes))
 	for _, node := range nodes {
 		if node.ID == nodeID {
+			node.GroupID = groupID
 			if groupID == "" {
-				node.GroupID = nil
 				node.GroupKey = ""
-			} else {
-				node.GroupID = &groupID
 			}
 		}
 		changed = append(changed, node)

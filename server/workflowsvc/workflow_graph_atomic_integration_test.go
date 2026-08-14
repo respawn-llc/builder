@@ -22,18 +22,18 @@ func TestServiceWorkflowGraphSaveAtomicallyRepairsSavedInvalidWorkflow(t *testin
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, created.Workflow.ID)
 	startID := workflowServiceNodeIDByKind(t, before, "start")
 	terminalID := workflowServiceNodeIDByKind(t, before, "terminal")
-	agentID := workflowServiceGraphEntityID("node-agent-" + created.Workflow.ID.String())
+	agentID := "node-agent-" + created.Workflow.ID.String()
 	graph := serverapi.WorkflowGraphDraftFromDefinition(before)
 	graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
 		ID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder",
 	})
 	graph.TransitionGroups = append(graph.TransitionGroups,
-		serverapi.WorkflowGraphDraftTransitionGroup{ID: workflowServiceGraphEntityID("group-start"), SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
-		serverapi.WorkflowGraphDraftTransitionGroup{ID: workflowServiceGraphEntityID("group-done"), SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: "group-start", SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: "group-done", SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 	)
 	graph.Edges = append(graph.Edges,
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-start"), workflowServiceGraphEntityID("group-start"), "start", agentID, "Do work."),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-done"), workflowServiceGraphEntityID("group-done"), "done", terminalID, ""),
+		workflowGraphAtomicEdge("edge-start", "group-start", "start", agentID, "Do work."),
+		workflowGraphAtomicEdge("edge-done", "group-done", "done", terminalID, ""),
 	)
 	assertWorkflowGraphAtomicChangedSave(t, ctx, service, before, graph)
 }
@@ -43,7 +43,7 @@ func TestServiceWorkflowGraphSaveAtomicallyDeletesFanOutTransitionBranch(t *test
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
 	graph := serverapi.WorkflowGraphDraftFromDefinition(before)
 	graph.Edges = slices.DeleteFunc(graph.Edges, func(edge serverapi.WorkflowGraphDraftEdge) bool {
-		return edge.ID == workflowServiceGraphEntityID("edge-split-b-"+workflowID.String())
+		return edge.ID == "edge-split-b-"+workflowID.String()
 	})
 	assertWorkflowGraphAtomicChangedSave(t, ctx, service, before, graph)
 }
@@ -65,8 +65,8 @@ func TestServiceWorkflowGraphSaveAtomicallyChangesFanOutSource(t *testing.T) {
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
 	graph := serverapi.WorkflowGraphDraftFromDefinition(before)
 	for index := range graph.TransitionGroups {
-		if graph.TransitionGroups[index].ID == workflowServiceGraphEntityID("group-split-"+workflowID.String()) {
-			graph.TransitionGroups[index].SourceNodeID = workflowServiceGraphEntityID("node-prep-" + workflowID.String())
+		if graph.TransitionGroups[index].ID == "group-split-"+workflowID.String() {
+			graph.TransitionGroups[index].SourceNodeID = "node-prep-" + workflowID.String()
 		}
 	}
 	assertWorkflowGraphAtomicChangedSave(t, ctx, service, before, graph)
@@ -132,13 +132,12 @@ func TestServiceWorkflowGraphSavePendingApprovalDeletionIsBlocked(t *testing.T) 
 	task := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
 		ProjectID: binding.ProjectID, WorkflowID: &workflowID, Title: "Pending Approval reference", LabelIDs: []string{},
 	})
-	startWorkflowServiceTask(t, ctx, service, task.Task.ID)
-	service.currentNodeExecution = newWorkflowGraphAtomicCompletionExecution(service)
-	completed, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
-		ActorKind: serverapi.WorkflowTaskCompleteActorUser, TaskID: task.Task.ID,
-		TransitionID: "next", OutputValues: map[string]string{"prior_summary": "approved"}, Force: true,
+	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	source := workflowServiceCurrentNodeReference(t, workflow.TaskID(task.Task.ID), started.CurrentNodes[0])
+	completed, err := service.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+		Source: source, TransitionID: "next", OutputValues: map[string]string{"prior_summary": "approved"},
 	})
-	if err != nil || completed.PendingApprovalID == nil {
+	if err != nil || completed.PendingApproval == nil {
 		t.Fatalf("CompleteWorkflowTask = %+v, err = %v", completed, err)
 	}
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
@@ -171,7 +170,7 @@ func TestServiceWorkflowGraphSaveAllowsCompletedSessionProvenanceDeletion(t *tes
 	taskID := workflow.TaskID(task.Task.ID)
 	reference := workflowServiceCurrentNodeReference(t, taskID, started.CurrentNodes[0])
 	sessionID := bindWorkflowServiceSessionToTask(t, service, metadataStore, binding, taskID, started.CurrentNodes[0])
-	service.currentNodeExecution = newWorkflowGraphAtomicCompletionExecution(service)
+	service.currentNodeExecution = newManualMoveExecutionStub(service)
 	completed, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
 		ActorKind: serverapi.WorkflowTaskCompleteActorUser, TaskID: task.Task.ID, TransitionID: "next",
 		OutputValues: map[string]string{"prior_summary": "completed"}, Force: true,
@@ -197,36 +196,10 @@ func TestServiceWorkflowGraphSaveAllowsCompletedSessionProvenanceDeletion(t *tes
 	if owner, err := service.store.TaskIDForSession(ctx, sessionID); err != nil || owner == nil || *owner != taskID {
 		t.Fatalf("retained Session owner = %v, err = %v", owner, err)
 	}
-	if association, err := service.store.CurrentTaskSessionForNode(ctx, reference); err != nil ||
+	if association, err := service.store.LatestTaskSessionForNode(ctx, reference); err != nil ||
 		association.SessionID != sessionID || !association.CurrentNode.Equal(reference) {
 		t.Fatalf("retained Session association = %+v, err = %v", association, err)
 	}
-}
-
-type workflowGraphAtomicCompletionExecution struct {
-	*currentNodeCompletionExecutionStub
-}
-
-func newWorkflowGraphAtomicCompletionExecution(service *Service) *workflowGraphAtomicCompletionExecution {
-	return &workflowGraphAtomicCompletionExecution{
-		currentNodeCompletionExecutionStub: &currentNodeCompletionExecutionStub{store: service.store},
-	}
-}
-
-func (e *workflowGraphAtomicCompletionExecution) CompleteIdleCurrentNode(
-	ctx context.Context,
-	selector workflowstore.IdleCurrentNodeSelector,
-	transitionID string,
-	outputValues map[string]string,
-	commentary string,
-) (workflowstore.CurrentNodeCompletionResult, error) {
-	source, err := e.store.ResolveIdleExecutableCurrentNode(ctx, selector)
-	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, err
-	}
-	return e.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
-		Source: source.Reference, TransitionID: transitionID, OutputValues: outputValues, Commentary: commentary,
-	})
 }
 
 func workflowGraphDraftWithoutNode(
@@ -283,11 +256,11 @@ func newWorkflowGraphAtomicFanOutFixture(t *testing.T) (context.Context, *Servic
 	current := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
 	startID := workflowServiceNodeIDByKind(t, current, "start")
 	terminalID := workflowServiceNodeIDByKind(t, current, "terminal")
-	planID := workflowServiceGraphEntityID("node-plan-" + workflowID.String())
-	prepID := workflowServiceGraphEntityID("node-prep-" + workflowID.String())
-	branchAID := workflowServiceGraphEntityID("node-a-" + workflowID.String())
-	branchBID := workflowServiceGraphEntityID("node-b-" + workflowID.String())
-	joinID := workflowServiceGraphEntityID("node-join-" + workflowID.String())
+	planID := "node-plan-" + workflowID.String()
+	prepID := "node-prep-" + workflowID.String()
+	branchAID := "node-a-" + workflowID.String()
+	branchBID := "node-b-" + workflowID.String()
+	joinID := "node-join-" + workflowID.String()
 	graph := serverapi.WorkflowGraphDraftFromDefinition(current)
 	graph.Nodes = append(graph.Nodes,
 		serverapi.WorkflowGraphDraftNode{ID: planID, Key: "plan", Kind: "agent", DisplayName: "Plan", SubagentRole: "coder"},
@@ -296,14 +269,14 @@ func newWorkflowGraphAtomicFanOutFixture(t *testing.T) (context.Context, *Servic
 		serverapi.WorkflowGraphDraftNode{ID: branchBID, Key: "b", Kind: "agent", DisplayName: "B", SubagentRole: "coder"},
 		serverapi.WorkflowGraphDraftNode{ID: joinID, Key: "join", Kind: "join", DisplayName: "Join"},
 	)
-	startGroup := workflowServiceGraphEntityID("group-start-" + workflowID.String())
-	prepGroup := workflowServiceGraphEntityID("group-prep-" + workflowID.String())
-	splitGroup := workflowServiceGraphEntityID("group-split-" + workflowID.String())
-	alternateGroup := workflowServiceGraphEntityID("group-alternate-" + workflowID.String())
-	prepDoneGroup := workflowServiceGraphEntityID("group-prep-done-" + workflowID.String())
-	joinAGroup := workflowServiceGraphEntityID("group-join-a-" + workflowID.String())
-	joinBGroup := workflowServiceGraphEntityID("group-join-b-" + workflowID.String())
-	joinDoneGroup := workflowServiceGraphEntityID("group-join-done-" + workflowID.String())
+	startGroup := "group-start-" + workflowID.String()
+	prepGroup := "group-prep-" + workflowID.String()
+	splitGroup := "group-split-" + workflowID.String()
+	alternateGroup := "group-alternate-" + workflowID.String()
+	prepDoneGroup := "group-prep-done-" + workflowID.String()
+	joinAGroup := "group-join-a-" + workflowID.String()
+	joinBGroup := "group-join-b-" + workflowID.String()
+	joinDoneGroup := "group-join-done-" + workflowID.String()
 	graph.TransitionGroups = append(graph.TransitionGroups,
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: startGroup, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: prepGroup, SourceNodeID: planID, TransitionID: "prepare", DisplayName: "Prepare"},
@@ -315,15 +288,15 @@ func newWorkflowGraphAtomicFanOutFixture(t *testing.T) (context.Context, *Servic
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: joinDoneGroup, SourceNodeID: joinID, TransitionID: "join_done", DisplayName: "Done"},
 	)
 	graph.Edges = append(graph.Edges,
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-start-"+workflowID.String()), startGroup, "start", planID, "Plan."),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-prep-"+workflowID.String()), prepGroup, "prepare", prepID, "Prepare."),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-split-a-"+workflowID.String()), splitGroup, "a", branchAID, "A."),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-split-b-"+workflowID.String()), splitGroup, "b", branchBID, "B."),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-alternate-"+workflowID.String()), alternateGroup, "alternate", branchBID, "B."),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-prep-done-"+workflowID.String()), prepDoneGroup, "prep_done", terminalID, ""),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-join-a-"+workflowID.String()), joinAGroup, "join_a", joinID, ""),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-join-b-"+workflowID.String()), joinBGroup, "join_b", joinID, ""),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-join-done-"+workflowID.String()), joinDoneGroup, "join_done", terminalID, ""),
+		workflowGraphAtomicEdge("edge-start-"+workflowID.String(), startGroup, "start", planID, "Plan."),
+		workflowGraphAtomicEdge("edge-prep-"+workflowID.String(), prepGroup, "prepare", prepID, "Prepare."),
+		workflowGraphAtomicEdge("edge-split-a-"+workflowID.String(), splitGroup, "a", branchAID, "A."),
+		workflowGraphAtomicEdge("edge-split-b-"+workflowID.String(), splitGroup, "b", branchBID, "B."),
+		workflowGraphAtomicEdge("edge-alternate-"+workflowID.String(), alternateGroup, "alternate", branchBID, "B."),
+		workflowGraphAtomicEdge("edge-prep-done-"+workflowID.String(), prepDoneGroup, "prep_done", terminalID, ""),
+		workflowGraphAtomicEdge("edge-join-a-"+workflowID.String(), joinAGroup, "join_a", joinID, ""),
+		workflowGraphAtomicEdge("edge-join-b-"+workflowID.String(), joinBGroup, "join_b", joinID, ""),
+		workflowGraphAtomicEdge("edge-join-done-"+workflowID.String(), joinDoneGroup, "join_done", terminalID, ""),
 	)
 	saved := previewWorkflowGraphAtomicDraft(t, ctx, service, current, graph)
 	response := saveWorkflowGraphAtomicPreview(t, ctx, service, current, graph, saved)

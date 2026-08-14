@@ -2,24 +2,23 @@ package serverapi
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 )
 
-func TestResolveOffsetWindowDefaultsAndValidatesBounds(t *testing.T) {
-	window, err := ResolveOffsetWindow(nil, nil)
+func TestResolveWorkflowOffsetWindowDefaultsAndValidatesBounds(t *testing.T) {
+	window, err := ResolveWorkflowOffsetWindow(nil, nil)
 	if err != nil {
-		t.Fatalf("ResolveOffsetWindow defaults: %v", err)
+		t.Fatalf("ResolveWorkflowOffsetWindow defaults: %v", err)
 	}
-	if window.Offset != 0 || window.Limit != OffsetPaginationMaxLimit {
-		t.Fatalf("default window = %+v, want offset 0 and limit %d", window, OffsetPaginationMaxLimit)
+	if window.Offset != 0 || window.Limit != WorkflowPaginationMaxLimit {
+		t.Fatalf("default window = %+v, want offset 0 and limit %d", window, WorkflowPaginationMaxLimit)
 	}
 
 	zero := 0
 	limit := 1
-	window, err = ResolveOffsetWindow(&zero, &limit)
+	window, err = ResolveWorkflowOffsetWindow(&zero, &limit)
 	if err != nil {
-		t.Fatalf("ResolveOffsetWindow explicit values: %v", err)
+		t.Fatalf("ResolveWorkflowOffsetWindow explicit values: %v", err)
 	}
 	if window.Offset != zero || window.Limit != limit {
 		t.Fatalf("explicit window = %+v, want offset %d and limit %d", window, zero, limit)
@@ -27,7 +26,7 @@ func TestResolveOffsetWindowDefaultsAndValidatesBounds(t *testing.T) {
 
 	negativeOffset := -1
 	zeroLimit := 0
-	overLimit := OffsetPaginationMaxLimit + 1
+	overLimit := WorkflowPaginationMaxLimit + 1
 	for _, test := range []struct {
 		name   string
 		offset *int
@@ -39,20 +38,11 @@ func TestResolveOffsetWindowDefaultsAndValidatesBounds(t *testing.T) {
 		{name: "limit above maximum", limit: &overLimit, field: "limit"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := ResolveOffsetWindow(test.offset, test.limit)
-			var windowError *offsetWindowError
-			if !errors.As(err, &windowError) || windowError.Field != test.field {
-				t.Fatalf("ResolveOffsetWindow error = %v, want %s OffsetWindowError", err, test.field)
+			_, err := ResolveWorkflowOffsetWindow(test.offset, test.limit)
+			if !hasWorkflowRequestError(err, test.field, WorkflowRequestErrorInvalidMode) {
+				t.Fatalf("ResolveWorkflowOffsetWindow error = %v, want typed %s error", err, test.field)
 			}
 		})
-	}
-}
-
-func TestResolveWorkflowOffsetWindowPreservesWorkflowErrors(t *testing.T) {
-	negativeOffset := -1
-	_, err := ResolveWorkflowOffsetWindow(&negativeOffset, nil)
-	if !hasWorkflowRequestError(err, "offset", WorkflowRequestErrorInvalidMode) {
-		t.Fatalf("ResolveWorkflowOffsetWindow error = %v, want typed offset error", err)
 	}
 }
 
@@ -158,24 +148,16 @@ func TestWorkflowTaskOffsetPageJSONContractUsesItemsAndNextOffset(t *testing.T) 
 	}
 }
 
-func TestTrimOffsetLookaheadCalculatesNextOffset(t *testing.T) {
-	nextOffset := 2
-	items, next := TrimOffsetLookahead(OffsetWindow{Offset: 0, Limit: 2}, []string{"a", "b", "c"})
-	if len(items) != 2 || items[0] != "a" || items[1] != "b" ||
-		next == nil || *next != nextOffset {
-		t.Fatalf("items = %v, next = %v", items, next)
-	}
-
-	items, next = TrimOffsetLookahead(OffsetWindow{Offset: 2, Limit: 2}, []string{"c"})
-	if len(items) != 1 || next != nil {
-		t.Fatalf("terminal items = %v, next = %v", items, next)
-	}
-}
-
-func TestFinalizeWorkflowOffsetPageUsesSharedLookahead(t *testing.T) {
+func TestFinalizeWorkflowOffsetPageTrimsLookaheadAndCalculatesContinuation(t *testing.T) {
 	nextOffset := 2
 	page := FinalizeWorkflowOffsetPage(WorkflowOffsetWindow{Offset: 0, Limit: 2}, []string{"a", "b", "c"})
-	if len(page.Items) != 2 || page.NextOffset == nil || *page.NextOffset != nextOffset {
+	if len(page.Items) != 2 || page.Items[0] != "a" || page.Items[1] != "b" ||
+		page.NextOffset == nil || *page.NextOffset != nextOffset {
 		t.Fatalf("page = %+v", page)
+	}
+
+	terminal := FinalizeWorkflowOffsetPage(WorkflowOffsetWindow{Offset: 2, Limit: 2}, []string{"c"})
+	if len(terminal.Items) != 1 || terminal.NextOffset != nil {
+		t.Fatalf("terminal page = %+v", terminal)
 	}
 }

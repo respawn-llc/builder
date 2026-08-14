@@ -7,7 +7,6 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -74,7 +73,6 @@ type goalRuntimeDoneMsg struct {
 	operation      goalRuntimeOperation
 	objective      string
 	goal           *clientui.RuntimeGoal
-	mutation       clientui.GoalMutationResult
 	err            error
 }
 
@@ -120,10 +118,7 @@ type injectedQueueDiscardDoneMsg struct {
 }
 
 type compactDoneMsg struct {
-	submittedText string
-	origin        uiCompactionOrigin
-	invoked       bool
-	err           error
+	err error
 }
 
 type activeSubmitOrigin uint8
@@ -140,7 +135,6 @@ type activeSubmitState struct {
 	text            string
 	queuedID        string
 	origin          activeSubmitOrigin
-	clientRequestID runtimeids.RuntimeClientRequestID
 	submissionOrder inputSubmissionOrder
 }
 

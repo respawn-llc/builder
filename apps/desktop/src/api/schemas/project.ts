@@ -7,29 +7,27 @@ import type {
   ProjectMutationResponse,
   ProjectPage,
   ProjectSummary,
-  ProjectWorkspaceAttachResponse,
-  ProjectWorkspaceResult,
-  WorkspaceCatalogPage,
-  WorkspaceCatalogRow,
+  WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "../models";
 import { projectBindingSchema, workflowIDSchema, workspaceSummarySchema } from "./common";
-import { canonicalProjectIDSchema, workspaceOffsetSchema } from "./catalog";
+import { canonicalProjectIDSchema, workspaceContinuationWireSchema } from "./catalog";
 
-export const workspaceCatalogRowSchema: z.ZodType<WorkspaceCatalogRow> = z
-  .object({
-    workspace_id: canonicalProjectIDSchema,
-    display_name: z.string(),
-    root_path: z.string().min(1),
-    is_default: z.boolean(),
-  })
-  .strict()
-  .transform((value) => ({
-    id: value.workspace_id,
-    name: value.display_name,
-    rootPath: value.root_path,
-    isDefault: value.is_default,
-  }));
+const workspaceListRowSchema = workspaceSummarySchema.superRefine((value, context) => {
+  if (!canonicalProjectIDSchema.safeParse(value.id).success) {
+    context.addIssue({ code: "custom", path: ["id"], message: "Workspace ID is not canonical." });
+  }
+  if (value.rootPath.length === 0) {
+    context.addIssue({ code: "custom", path: ["rootPath"], message: "Workspace root path is required." });
+  }
+  if (!Number.isFinite(value.updatedAt) || !Number.isInteger(value.updatedAt) || value.updatedAt <= 0) {
+    context.addIssue({ code: "custom", path: ["updatedAt"], message: "Workspace recency is invalid." });
+  }
+});
+
+export const workspaceContinuationSchema = workspaceContinuationWireSchema
+  .optional()
+  .transform((value) => (value === undefined || value === "" ? null : value));
 
 export const projectSummarySchema = z
   .object({
@@ -71,68 +69,38 @@ export const projectPageSchema: z.ZodType<ProjectPage> = z
     generatedAt: value.generated_at_unix_ms,
   }));
 
-export const workspaceCatalogPageSchema: z.ZodType<WorkspaceCatalogPage> = z
+export const workspaceListSchema: z.ZodType<WorkspaceList> = z
   .object({
     project_id: canonicalProjectIDSchema,
-    offset: workspaceOffsetSchema,
-    workspaces: z.array(workspaceCatalogRowSchema).max(100),
-    next_offset: workspaceOffsetSchema.nullable(),
+    workspaces: z.array(workspaceListRowSchema).max(100),
+    default_workspace_id: canonicalProjectIDSchema,
+    next_page_token: workspaceContinuationSchema,
   })
   .strict()
   .transform((value) => ({
     projectID: value.project_id,
-    offset: value.offset,
     workspaces: value.workspaces,
-    nextOffset: value.next_offset,
+    defaultWorkspaceID: value.default_workspace_id,
+    nextPageToken: value.next_page_token,
   }));
 
 export const projectEditSchema: z.ZodType<ProjectEdit> = z
   .object({
-    project_id: canonicalProjectIDSchema,
+    project_id: z.string(),
     project_key: z.string(),
     display_name: z.string(),
+    default_workspace_id: z.string(),
+    workspaces: z.array(workspaceSummarySchema),
+    next_page_token: z.string().optional().default(""),
   })
-  .strict()
   .transform((value) => ({
     projectID: value.project_id,
     projectKey: value.project_key,
     displayName: value.display_name,
+    defaultWorkspaceID: value.default_workspace_id,
+    workspaces: value.workspaces,
+    nextPageToken: value.next_page_token,
   }));
-
-export const projectWorkspaceResultSchema: z.ZodType<
-  Readonly<{ projectID: string; result: ProjectWorkspaceResult }>
-> = z
-  .discriminatedUnion("result", [
-    z
-      .object({
-        project_id: canonicalProjectIDSchema,
-        result: z.literal("attached"),
-        workspace: workspaceCatalogRowSchema,
-      })
-      .strict(),
-    z
-      .object({
-        project_id: canonicalProjectIDSchema,
-        result: z.literal("not_attached"),
-        workspace: z.null(),
-      })
-      .strict(),
-  ])
-  .transform((value) => ({
-    projectID: value.project_id,
-    result:
-      value.result === "attached"
-        ? { kind: "attached" as const, workspace: value.workspace }
-        : { kind: "not_attached" as const },
-  }));
-
-export const projectWorkspaceAttachResponseSchema: z.ZodType<ProjectWorkspaceAttachResponse> = z
-  .object({
-    binding: projectBindingSchema,
-    outcome: z.enum(["attached", "already_attached"]),
-  })
-  .strict()
-  .transform((value) => ({ binding: value.binding, outcome: value.outcome }));
 
 export const projectMutationResponseSchema: z.ZodType<ProjectMutationResponse> = z
   .object({

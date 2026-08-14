@@ -1,0 +1,27 @@
+{
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "path",
+        "old_string",
+        "new_string"
+    ],
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "File path to edit. Relative paths resolve from the workspace root; absolute paths are allowed."
+        },
+        "old_string": {
+            "type": "string",
+            "description": "Exact current text to replace. Include enough surrounding context to make the match unique. Use an empty string only to write from a missing or empty file."
+        },
+        "new_string": {
+            "type": "string",
+            "description": "Replacement text. Use an empty string to delete the matched text."
+        },
+        "replace_all": {
+            "type": "boolean",
+            "description": "Replace all occurrences of the selected match. Defaults to false."
+        }
+    }
+}

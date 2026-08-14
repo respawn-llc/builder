@@ -17,7 +17,6 @@ import (
 type WorkflowInterruptSelection struct {
 	Interruptible []ExecutionHandle
 	Queued        []ExecutionHandle
-	Finalizing    []ExecutionHandle
 }
 
 var (
@@ -69,7 +68,6 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		case executionPhaseQueued:
 			selection.Queued = append(selection.Queued, executionHandle{execution: execution})
 		case executionPhaseFinalizing:
-			selection.Finalizing = append(selection.Finalizing, executionHandle{execution: execution})
 		default:
 			panic(fmt.Sprintf("workflow execution scope %s has invalid phase", execution.scope.ID()))
 		}
@@ -205,23 +203,9 @@ func (a *Authority) WithWorkflowInterruptSelection(
 				selection.Interruptible = append(selection.Interruptible, handle)
 			}
 		default:
-			if execution.phase != executionPhaseFinalizing {
-				panic("workflow execution has an invalid interrupt phase")
-			}
-			if sessionID == nil {
-				if execution.scope.Kind() != ExecutionScopeScript {
-					panic("workflow execution finalizing phase is not a script")
-				}
-				selection.Finalizing = append(selection.Finalizing, handle)
-			}
+			panic("workflow execution has an invalid interrupt phase")
 		}
-	}
-	a.mu.Unlock()
-	defer func() {
-		for index := len(promptLocked) - 1; index >= 0; index-- {
-			promptLocked[index].prompts.mu.RUnlock()
-		}
-	}()
+	})
 	if len(selection.Interruptible) == 0 {
 		if hasQuestion {
 			return ErrWorkflowQuestionPending

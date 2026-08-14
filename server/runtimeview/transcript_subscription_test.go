@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
-	"time"
 
 	"core/internal/testharness/scriptedllm"
 	"core/server/llm"
@@ -209,7 +208,7 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 }
 
 func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
-	clientRequestID, queueItemID := runtimeids.NewRuntimeClientRequestID(), runtimeids.NewQueueItemID()
+	queueItemID := runtimeids.NewQueueItemID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
 		ActiveThinkingStatus: &runtime.TranscriptThinkingStatusState{
 			StepID: transcriptProjectionStepID, Text: "Planning",
@@ -223,12 +222,11 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 			Text: "inspect",
 		}},
 		InFlightTools:    []runtime.TranscriptLiveToolStart{{StepID: transcriptProjectionStepID, ToolCallID: "call-1", ToolName: "shell"}},
-		QueuedMessages:   []runtime.QueuedUserMessage{{ID: queueItemID.String(), ClientRequestID: clientRequestID.String(), Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value("queued")}}},
+		QueuedMessages:   []runtime.QueuedUserMessage{{ID: queueItemID.String(), Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value("queued")}}},
 		ActiveReviewer:   &runtime.TranscriptReviewerState{StepID: transcriptProjectionStepID},
 		ActiveCompaction: &runtime.TranscriptCompactionState{StepID: transcriptProjectionStepID, Mode: "auto", Count: 3},
 		ContextUsage:     &runtime.ContextUsage{UsedTokens: 123, WindowTokens: 4000, CacheHitPercent: 25, HasCacheHitPercentage: true},
-		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)},
-		GoalAvailability: session.GoalAvailable,
+		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive},
 		GoalSuspended:    true,
 	})
 	if hydration.ActiveThinkingStatus == nil || hydration.ActiveThinkingStatus.Text != "Planning" ||

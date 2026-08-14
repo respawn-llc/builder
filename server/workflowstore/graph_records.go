@@ -2,32 +2,11 @@ package workflowstore
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
-
-func nullableGraphIdentity(value any) (*string, error) {
-	switch typed := value.(type) {
-	case nil:
-		return nil, nil
-	case string:
-		copy := typed
-		return &copy, nil
-	default:
-		return nil, fmt.Errorf("graph identity has unexpected SQLite type %T", value)
-	}
-}
-
-func nullableGraphIdentityArgument(value *string) sql.NullString {
-	if value == nil {
-		return sql.NullString{}
-	}
-	return sql.NullString{String: *value, Valid: true}
-}
 
 func workflowDefinitionFromPreparedGraph(
 	prepared preparedWorkflowGraphSave,
@@ -52,8 +31,8 @@ func workflowDefinitionFromPreparedGraph(
 		})
 	}
 	for _, node := range prepared.nodes {
-		if node.GroupID != nil {
-			groupMemberIDs[*node.GroupID] = append(groupMemberIDs[*node.GroupID], node.ID)
+		if node.GroupID != "" {
+			groupMemberIDs[node.GroupID] = append(groupMemberIDs[node.GroupID], node.ID)
 		}
 		workflowNode, err := workflowNodeFromRecord(node)
 		if err != nil {
@@ -113,19 +92,15 @@ func currentWorkflowGraphSavePrepared(ctx context.Context, q *sqlitegen.Queries,
 		if err := workflow.UnmarshalString(node.JoinInputProvidersJson, &joinProviders); err != nil {
 			return preparedWorkflowGraphSave{}, err
 		}
-		groupID, err := nullableGraphIdentity(node.GroupID)
-		if err != nil {
-			return preparedWorkflowGraphSave{}, err
+		groupID := ""
+		if node.GroupID.Valid {
+			groupID = node.GroupID.String
 		}
 		scriptPath := ""
 		if node.ScriptPath.Valid {
 			scriptPath = node.ScriptPath.String
 		}
-		groupKey := ""
-		if groupID != nil {
-			groupKey = groupKeyByID[*groupID]
-		}
-		prepared.nodes = append(prepared.nodes, NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: node.WorkflowID, Key: workflow.ModelKey(node.NodeKey), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: groupID, GroupKey: groupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: scriptPath, JoinInputProviders: joinProviders, SortOrder: node.SortOrder})
+		prepared.nodes = append(prepared.nodes, NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: node.WorkflowID, Key: workflow.ModelKey(node.NodeKey), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: scriptPath, JoinInputProviders: joinProviders, SortOrder: node.SortOrder})
 	}
 	for _, group := range transitionGroups {
 		prepared.transitionGroups = append(prepared.transitionGroups, TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflowID, SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description, SortOrder: group.SortOrder})

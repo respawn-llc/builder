@@ -80,9 +80,7 @@ func prepareSimpleResultGroupCall(
 	}, engine.transcriptWorkingDir())
 	if err := engine.steer(
 		stepID,
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventNone,
+		steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 			true,
 			[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
 		),
@@ -271,7 +269,7 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
@@ -287,9 +285,7 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 	}
 	if err := engine.steer(
 		"step",
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventNone,
+		steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 			true,
 			[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: normalized}},
 		),

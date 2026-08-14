@@ -22,7 +22,6 @@ const (
 	OperationalDiagnosticSleepGuardFailed           OperationalDiagnosticCode = "sleep_guard_failed"
 	OperationalDiagnosticPromptHistoryPersistFailed OperationalDiagnosticCode = "prompt_history_persist_failed"
 	OperationalDiagnosticInFlightClearFailed        OperationalDiagnosticCode = "in_flight_clear_failed"
-	OperationalDiagnosticProviderTurnStateInvalid   OperationalDiagnosticCode = "provider_turn_state_invalid"
 )
 
 type TranscriptOperationalDiagnostic struct {
@@ -77,18 +76,14 @@ func (d TranscriptOperationalDiagnostic) Validate() error {
 	case OperationalDiagnosticSleepGuardFailed,
 		OperationalDiagnosticPromptHistoryPersistFailed,
 		OperationalDiagnosticInFlightClearFailed:
-		if strings.TrimSpace(d.Detail) == "" {
-			return fmt.Errorf("operational diagnostic detail is required")
-		}
-	case OperationalDiagnosticProviderTurnStateInvalid:
-		if d.Detail != "" {
-			return fmt.Errorf("provider turn-state diagnostic cannot carry detail")
-		}
 	default:
 		return fmt.Errorf("unknown operational diagnostic code %q", d.Code)
 	}
 	if d.StepID != nil && d.StepID.IsZero() {
 		return fmt.Errorf("operational diagnostic step id is invalid")
+	}
+	if strings.TrimSpace(d.Detail) == "" {
+		return fmt.Errorf("operational diagnostic detail is required")
 	}
 	return nil
 }

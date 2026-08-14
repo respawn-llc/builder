@@ -32,13 +32,12 @@ import type {
   ProjectDeleteResponse,
   ProjectEdit,
   ProjectMutationResponse,
-  ProjectWorkspaceAttachResponse,
-  ProjectWorkspaceResult,
   ProjectPage,
   ProjectWorkflowLink,
   ServerReadiness,
   SessionCatalogPage,
   SessionCategory,
+  SessionPagePosition,
   TaskAttention,
   TaskApproveResponse,
   TaskComment,
@@ -61,7 +60,7 @@ import type {
   WorkflowPage,
   WorkflowRecord,
   WorkflowValidation,
-  WorkspaceCatalogPage,
+  WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "./models";
 import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
@@ -86,16 +85,16 @@ export interface ApiService {
 
   getReadiness(): Promise<ServerReadiness>;
   listProjects(pageToken: string): Promise<ProjectPage>;
-  listSessionPage(projectID: string, category: SessionCategory, offset: number): Promise<SessionCatalogPage>;
-  listWorkspaces(projectID: string, offset: number): Promise<WorkspaceCatalogPage>;
-  getProjectWorkspace(
+  listSessionPage(
     projectID: string,
-    selector: Readonly<{ workspaceID: string } | { workspaceRoot: string }>,
-  ): Promise<ProjectWorkspaceResult>;
-  getProjectEdit(projectID: string): Promise<ProjectEdit>;
+    category: SessionCategory,
+    position: SessionPagePosition,
+  ): Promise<SessionCatalogPage>;
+  listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList>;
+  getProjectEdit(projectID: string, pageToken?: string): Promise<ProjectEdit>;
   planWorkspace(path: string): Promise<BindingPlan>;
   createProject(displayName: string, projectKey: string, workspaceRoot: string): Promise<ProjectBinding>;
-  attachWorkspace(projectID: string, workspaceRoot: string): Promise<ProjectWorkspaceAttachResponse>;
+  attachWorkspace(projectID: string, workspaceRoot: string): Promise<ProjectBinding>;
   updateProject(
     projectID: string,
     displayName: string,

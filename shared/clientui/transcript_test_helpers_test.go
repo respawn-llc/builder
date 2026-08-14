@@ -6,8 +6,6 @@ import (
 	"core/shared/runtimeids"
 )
 
-func testGoalAvailability() *GoalAvailability { value := GoalAvailabilityAvailable; return &value }
-
 func transcriptTestSessionID(t *testing.T) runtimeids.SessionID {
 	t.Helper()
 	id, err := runtimeids.ParseSessionID("session-1")
@@ -33,15 +31,6 @@ func transcriptTestRunID(t *testing.T) runtimeids.RunID {
 		t.Fatalf("parse run id: %v", err)
 	}
 	return runID
-}
-
-func transcriptTestClientRequestID(t *testing.T) runtimeids.RuntimeClientRequestID {
-	t.Helper()
-	id, err := runtimeids.ParseRuntimeClientRequestID("33333333-3333-4333-8333-333333333333")
-	if err != nil {
-		t.Fatalf("parse client request id: %v", err)
-	}
-	return id
 }
 
 func transcriptTestQueueItemID(t *testing.T) runtimeids.QueueItemID {

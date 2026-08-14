@@ -24,36 +24,29 @@ import (
 )
 
 type fakeWorkflowController struct {
-	completed                           atomic.Int64
-	completeErr                         error
-	completeResult                      *workflowruntime.CompletionResult
-	violations                          atomic.Int64
-	protocolBudgetResets                atomic.Int64
-	protocolBudgetResetErr              error
-	maxHits                             atomic.Int64
-	completionObservations              atomic.Int64
-	completeExternallyAfterObservations int64
-	completedExternally                 atomic.Bool
-	mu                                  sync.Mutex
-	requests                            []workflowruntime.CompletionRequest
+	completed              atomic.Int64
+	completeErr            error
+	violations             atomic.Int64
+	protocolBudgetResets   atomic.Int64
+	protocolBudgetResetErr error
+	maxHits                atomic.Int64
+	mu                     sync.Mutex
+	requests               []workflowruntime.AgentCompletionRequest
 }
 
-func (c *fakeWorkflowController) CompleteCurrentNode(_ context.Context, req workflowruntime.CompletionRequest) (workflowruntime.CompletionResult, error) {
+func (c *fakeWorkflowController) CompleteAgentCurrentNode(_ context.Context, req workflowruntime.AgentCompletionRequest) (workflowruntime.CompletionResult, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, req)
 	c.mu.Unlock()
-	if c.completeResult != nil {
-		result := *c.completeResult
-		if result.IsApplied() {
-			c.completed.Add(1)
-		}
-		return result, c.completeErr
-	}
 	if c.completeErr != nil {
 		return workflowruntime.CompletionResult{}, c.completeErr
 	}
 	c.completed.Add(1)
 	return workflowruntime.CompletionResult{TransitionID: "transition-applied", State: "applied"}, nil
+}
+
+func (c *fakeWorkflowController) CompleteScriptCurrentNode(context.Context, workflowruntime.ScriptCompletionRequest) (workflowruntime.CompletionResult, error) {
+	return workflowruntime.CompletionResult{}, errors.New("unexpected Script completion")
 }
 
 func (c *fakeWorkflowController) RecordProtocolViolation(_ context.Context, req workflowruntime.ViolationRequest) (workflowruntime.ViolationResult, error) {
@@ -74,30 +67,10 @@ func (c *fakeWorkflowController) ResetProtocolViolationBudget(_ context.Context,
 	return nil
 }
 
-func (c *fakeWorkflowController) ObserveCurrentNodeCompletion(_ context.Context, _ workflowruntime.CompletionObservationRequest) (workflowruntime.CompletionObservationResult, error) {
-	count := c.completionObservations.Add(1)
-	completed := c.completedExternally.Load()
-	if c.completeExternallyAfterObservations > 0 && count >= c.completeExternallyAfterObservations {
-		completed = true
-	}
-	return workflowruntime.CompletionObservationResult{Completed: completed}, nil
-}
-
-func (c *fakeWorkflowController) completionRequests() []workflowruntime.CompletionRequest {
+func (c *fakeWorkflowController) completionRequests() []workflowruntime.AgentCompletionRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]workflowruntime.CompletionRequest(nil), c.requests...)
-}
-
-func newAppliedDiagnosticWorkflowController(diagnostic error) *fakeWorkflowController {
-	applied := workflowruntime.CompletionResult{
-		TransitionID: "transition-applied",
-		State:        workflowruntime.CompletionStateApplied,
-	}
-	return &fakeWorkflowController{
-		completeErr:    diagnostic,
-		completeResult: &applied,
-	}
+	return append([]workflowruntime.AgentCompletionRequest(nil), c.requests...)
 }
 
 type fakeTaskAwarenessSource struct {
@@ -236,16 +209,52 @@ func (t *countingTool) Call(_ context.Context, c tools.Call) (tools.Result, erro
 }
 
 type externalCompletionTool struct {
-	controller *fakeWorkflowController
-	count      atomic.Int64
+	complete func() error
+	count    atomic.Int64
 }
 
 func (t *externalCompletionTool) Call(_ context.Context, c tools.Call) (tools.Result, error) {
 	t.count.Add(1)
-	if t.controller != nil {
-		t.controller.completedExternally.Store(true)
+	if t.complete != nil {
+		if err := t.complete(); err != nil {
+			return tools.ErrorResult(c, err.Error()), nil
+		}
 	}
 	return tools.Result{CallID: c.ID, Name: c.Name, Output: json.RawMessage(`{"completed":true}`)}, nil
+}
+
+func bindExternalAgentCompletion(
+	t *testing.T,
+	engine *Engine,
+	controller *fakeWorkflowController,
+	scopeID runtimeids.ExecutionScopeID,
+) func() error {
+	t.Helper()
+	return func() error {
+		run := engine.ActiveRun()
+		if run == nil {
+			return errors.New("test Agent completion has no active Run")
+		}
+		runID, err := runtimeids.ParseRunID(run.RunID)
+		if err != nil {
+			return err
+		}
+		stepID, err := runtimeids.ParseStepID(run.StepID)
+		if err != nil {
+			return err
+		}
+		return engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, func() error {
+			_, err := controller.CompleteAgentCurrentNode(context.Background(), workflowruntime.AgentCompletionRequest{
+				Provenance: workflowruntime.AgentCompletionProvenance{
+					ScopeID: scopeID,
+					RunID:   runID,
+					StepID:  stepID,
+				},
+				SessionID: runtimeids.NewSessionID(),
+			})
+			return err
+		})
+	}
 }
 
 func testWorkflowConfig(controller workflowruntime.Controller, mode config.WorkflowCompletionMode) *workflowruntime.CurrentNodeExecutionConfig {
@@ -331,7 +340,7 @@ func TestPhaseProtocolRejectsInconsistentProviderAndLegacyPhaseFacts(t *testing.
 			Usage:         llm.Usage{WindowTokens: 200000},
 		}},
 	}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{})
 
 	_, err := eng.SubmitUserMessage(context.Background(), "run")
 	if err == nil {
@@ -368,7 +377,7 @@ func TestWorkflowToolModeExposesCompleteNodeDespiteEnabledTools(t *testing.T) {
 func TestCompleteNodeNotAdvertisedOutsideWorkflow(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolCompleteNode},
 	})
 	req, err := eng.buildRequest(context.Background(), "step", true)
@@ -418,15 +427,15 @@ func TestWorkflowRequiredToolChoiceIncludesLocalAndHostedTools(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t,
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
 		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
 	), Config{
-		Model:                "gpt-5",
-		CurrentNodeExecution: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
-		EnabledTools:         []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
-		WebSearchMode:        "native",
+		Model:         "gpt-5",
+		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
+		WebSearchMode: "native",
 	})
+	publishTestWorkflowExecution(t, eng, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand))
 	req, err := eng.buildRequest(context.Background(), "step", true)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
@@ -442,14 +451,14 @@ func TestWorkflowRequiredToolChoiceIncludesLocalAndHostedTools(t *testing.T) {
 func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t,
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
 	), Config{
-		Model:                "gpt-5",
-		CurrentNodeExecution: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
-		EnabledTools:         []toolspec.ID{toolspec.ToolWebSearch},
-		WebSearchMode:        "native",
+		Model:         "gpt-5",
+		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
+		WebSearchMode: "native",
 	})
+	publishTestWorkflowExecution(t, eng, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand))
 	req, err := eng.buildRequest(context.Background(), "step", true)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
@@ -462,10 +471,10 @@ func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
 func TestWorkflowRequiredToolChoiceRejectsEmptyEffectiveToolSet(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
-		Model:                "gpt-5",
-		CurrentNodeExecution: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
 	})
+	publishTestWorkflowExecution(t, eng, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand))
 	_, err := eng.buildRequest(context.Background(), "step", true)
 	if !errors.Is(err, llm.ErrInvalidRequest) {
 		t.Fatalf("buildRequest() error = %v, want ErrInvalidRequest", err)
@@ -524,9 +533,9 @@ func testAcceptedLiveWorkflowSteeringToolChoice(t *testing.T, useAutomaticToolCh
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active workflow request")
 	}
-	_, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "steer active workflow", "req-steer")
+	_, queued, err := eng.SubmitUserMessageOrSteerWithAcceptance(context.Background(), "steer active workflow", nil)
 	if err != nil {
-		t.Fatalf("SubmitUserMessageOrSteer: %v", err)
+		t.Fatalf("SubmitUserMessageOrSteerWithAcceptance: %v", err)
 	}
 	if queued == nil {
 		t.Fatal("expected accepted live steering to queue on active workflow")
@@ -781,9 +790,8 @@ func TestWorkflowMixedCompleteNodeRunsSideEffects(t *testing.T) {
 		),
 		commentaryResponse("complete", completeNodeCall("call_complete_2", json.RawMessage(`{"commentary":"complete","summary":"done"}`))),
 	}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: sideEffect}), Config{
-		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
-	})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: sideEffect}), Config{})
+	publishTestWorkflowExecution(t, eng, testWorkflowConfig(controller, config.WorkflowCompletionModeTool))
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -818,8 +826,7 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 				Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
 			},
 		},
-		Usage:       llm.Usage{WindowTokens: 200000},
-		ServedModel: textutil.Value("served-model"),
+		Usage: llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
@@ -837,14 +844,7 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 	}
 	hostedCallPersisted := false
 	hostedResultPersisted := false
-	modelMismatchWarnings := 0
 	for _, evt := range events {
-		if evt.Kind == "local_entry" {
-			if persistedLocalEntryForTest(t, evt).ProviderModelMismatch != nil {
-				modelMismatchWarnings++
-			}
-			continue
-		}
 		if evt.Kind != "message" {
 			continue
 		}
@@ -862,12 +862,6 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 	}
 	if !hostedCallPersisted || !hostedResultPersisted {
 		t.Fatalf("hosted call/result persisted = %v/%v, want both", hostedCallPersisted, hostedResultPersisted)
-	}
-	if modelMismatchWarnings != 1 {
-		t.Fatalf("provider-model mismatch warnings = %d, want one for terminal accepted response", modelMismatchWarnings)
-	}
-	if store.Meta().UsageState == nil {
-		t.Fatal("terminal accepted response did not persist usage")
 	}
 }
 
@@ -932,16 +926,12 @@ func TestWorkflowDuplicateCompleteNodePreflightSkipsSideEffects(t *testing.T) {
 func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	var events []Event
-	diagnostic := errors.New("successor assignment observer failed")
-	controller := newAppliedDiagnosticWorkflowController(diagnostic)
+	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
 		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
 		structuredFinalResponse("unexpected"),
 	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput), Config{
-		OnEvent: func(event Event) { events = append(events, event) },
-	})
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput), Config{})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -953,22 +943,17 @@ func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceStructuredOutput {
 		t.Fatalf("terminal state = %+v, want structured completion", terminal)
 	}
-	assertWorkflowCompletionOperatorDiagnostic(t, events, diagnostic)
 }
 
 func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	var events []Event
-	diagnostic := errors.New("successor assignment observer failed")
-	controller := newAppliedDiagnosticWorkflowController(diagnostic)
+	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
 		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
 		structuredFinalResponse("unexpected"),
 	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{
-		OnEvent: func(event Event) { events = append(events, event) },
-	})
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -989,72 +974,6 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 	terminal := eng.WorkflowTerminalState()
 	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceUnstructured {
 		t.Fatalf("terminal state = %+v, want unstructured completion", terminal)
-	}
-	assertWorkflowCompletionOperatorDiagnostic(t, events, diagnostic)
-}
-
-func TestWorkflowOperationalCompletionErrorDoesNotConsumeProtocolBudget(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name            string
-		mode            config.WorkflowCompletionMode
-		response        llm.Response
-		wantSubmitError bool
-	}{
-		{
-			name:            "structured output",
-			mode:            config.WorkflowCompletionModeStructuredOutput,
-			response:        structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
-			wantSubmitError: true,
-		},
-		{
-			name:            "unstructured output",
-			mode:            config.WorkflowCompletionModeUnstructured,
-			response:        structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
-			wantSubmitError: true,
-		},
-		{
-			name: "complete node tool",
-			mode: config.WorkflowCompletionModeTool,
-			response: commentaryResponse(
-				"complete",
-				completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
-			),
-			wantSubmitError: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			source, err := workflow.NewCurrentNodeReference("task-legacy", "node-source", nil)
-			if err != nil {
-				t.Fatalf("NewCurrentNodeReference: %v", err)
-			}
-			operationalErr := workflow.LegacyContinuationSourceUnresolvedError{
-				Source:       source,
-				TargetNodeID: "node-target",
-				EdgeID:       "edge-target",
-				Scope:        workflow.LegacyContinuationSourceCurrentNode,
-			}
-			controller := &fakeWorkflowController{completeErr: operationalErr}
-			client := &fakeClient{responses: []llm.Response{tt.response}}
-			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, tt.mode), Config{})
-
-			_, submitErr := eng.SubmitUserMessage(context.Background(), "run")
-			if tt.wantSubmitError {
-				if !errors.As(submitErr, &operationalErr) {
-					t.Fatalf("submit error = %v, want LegacyContinuationSourceUnresolvedError", submitErr)
-				}
-			} else if submitErr != nil {
-				t.Fatalf("submit: %v", submitErr)
-			}
-			if got := controller.violations.Load(); got != 0 {
-				t.Fatalf("protocol violations = %d, want 0", got)
-			}
-			if got := controller.maxHits.Load(); got != 0 {
-				t.Fatalf("protocol budget max hits = %d, want 0", got)
-			}
-		})
 	}
 }
 
@@ -1209,9 +1128,9 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for commentary response")
 	}
-	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "accepted steering", liveRunTestRequestID(t), nil)
-	if err != nil || !accepted {
-		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	_, err := eng.AcceptHumanSteering("accepted steering", nil)
+	if err != nil {
+		t.Fatalf("AcceptHumanSteering: %v", err)
 	}
 	releaseRun()
 	if err := <-submitDone; err != nil {
@@ -1275,7 +1194,7 @@ func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T)
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for workflow turn")
 	}
-	queued := mustQueueUserMessageWithClientRequestID(t, eng, "do not submit after run release", "req-after-release")
+	queued := mustQueueUserMessage(t, eng, "do not submit after run release")
 	releaseRun()
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit: %v", err)
@@ -1287,7 +1206,7 @@ func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T)
 	if len(statuses) != 2 || statuses[0].Status != QueuedUserMessageAccepted || statuses[1].Status != QueuedUserMessageFailed {
 		t.Fatalf("queued statuses = %+v, want accepted then failed", statuses)
 	}
-	if statuses[1].QueueItemID != queued.ID || statuses[1].ClientRequestID != "req-after-release" || statuses[1].RestoreText != "do not submit after run release" || statuses[1].FailureReason != QueuedUserMessageFailureTerminalWorkflowCompletion {
+	if statuses[1].QueueItemID != queued.ID || statuses[1].Text != "do not submit after run release" || statuses[1].FailureReason != QueuedUserMessageFailureTerminalWorkflowCompletion {
 		t.Fatalf("failed queue status = %+v, want terminal completion failure for %q", statuses[1], queued.ID)
 	}
 }
@@ -1298,42 +1217,11 @@ func hookClientCallCount(client *hookClient) int {
 	return len(client.calls)
 }
 
-func TestWorkflowDurableCompletionAfterModelResponseSkipsStalePersistence(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	client := &hookClient{
-		response: commentaryResponse("stale assistant",
-			llm.ToolCall{ID: "call_shell", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"kent task complete"}`)},
-		),
-		beforeReturn: func() error {
-			controller.completedExternally.Store(true)
-			return nil
-		},
-	}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand), Config{})
-
-	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("model calls = %d, want 1", len(client.calls))
-	}
-	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if msg.Role == llm.RoleAssistant && strings.Contains(messageContent(msg), "stale assistant") {
-			t.Fatalf("stale assistant response was persisted after external completion: %+v", eng.transcriptRuntimeState().SnapshotMessages())
-		}
-		if msg.Role == llm.RoleTool && msg.ToolCallID != nil && *msg.ToolCallID == "call_shell" {
-			t.Fatalf("stale tool result was persisted after external completion: %+v", eng.transcriptRuntimeState().SnapshotMessages())
-		}
-	}
-}
-
 func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
-	shellTool := &externalCompletionTool{controller: controller}
+	shellTool := &externalCompletionTool{}
 	events := &liveRunEventCollector{}
 	client := &fakeClient{responses: []llm.Response{
 		commentaryResponse("run completion command",
@@ -1341,10 +1229,13 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 		),
 		structuredFinalResponse("unexpected"),
 	}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
-		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
-		OnEvent:              events.accept,
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
+		OnEvent: events.accept,
 	})
+	workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand)
+	publishTestWorkflowExecution(t, eng, workflowConfig)
+	publishTestWorkflowAgentAssociation(t, eng, workflowConfig)
+	shellTool.complete = bindExternalAgentCompletion(t, eng, controller, workflowConfig.ScopeID)
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -1353,8 +1244,8 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 	if got := shellTool.count.Load(); got != 1 {
 		t.Fatalf("shell tool calls = %d, want 1", got)
 	}
-	if got := controller.completed.Load(); got != 0 {
-		t.Fatalf("runtime completions = %d, want external completion only", got)
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("runtime completions = %d, want one exact external completion", got)
 	}
 	assertToolMessageWithCallID(t, eng, "call_shell")
 	result := events.single(t)
@@ -1363,81 +1254,6 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 		result.NoFinalReason != LiveRunNoFinalAnswerReasonWorkflow ||
 		result.AssistantMessage.Content != nil {
 		t.Fatalf("shell-command workflow completion result = %+v, want workflow no-final terminal fact", result)
-	}
-}
-
-func TestWorkflowStoppedQueuedFlushDoesNotFinalizeWithoutOutcome(t *testing.T) {
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	shellTool := &externalCompletionTool{controller: controller}
-	var (
-		eng        *Engine
-		firstID    string
-		tailID     string
-		stopMarked bool
-	)
-	client := &hookClient{response: commentaryResponse("continue working")}
-	client.beforeReturn = func() error {
-		first, accepted, err := eng.QueueUserMessageForActiveRun(
-			context.Background(),
-			"queued correction",
-			runtimeids.NewRuntimeClientRequestID(),
-			nil,
-		)
-		if err != nil {
-			return err
-		}
-		if !accepted {
-			return errors.New("workflow queued correction was not accepted")
-		}
-		steer, err := NewAgentSteer(runtimeids.NewSessionID(), "queued agent correction")
-		if err != nil {
-			return err
-		}
-		tail, accepted, err := eng.QueueAgentSteerForActiveRun(
-			context.Background(),
-			steer,
-			runtimeids.NewRuntimeClientRequestID(),
-			nil,
-		)
-		if err != nil {
-			return err
-		}
-		if !accepted {
-			return errors.New("workflow queued agent correction was not accepted")
-		}
-		firstID = first.ID
-		tailID = tail.ID
-		return nil
-	}
-	eng = mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
-		ID:      toolspec.ToolExecCommand,
-		Handler: shellTool,
-	}), Config{
-		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
-		OnEvent: func(event Event) {
-			if stopMarked ||
-				event.QueuedUserMessageStatus == nil ||
-				event.QueuedUserMessageStatus.QueueItemID != firstID ||
-				event.QueuedUserMessageStatus.Status != QueuedUserMessageSubmitted {
-				return
-			}
-			stopMarked = true
-			eng.liveRun.mu.Lock()
-			eng.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{
-				mustQueueItemID(tailID): {},
-			})
-			eng.liveRun.mu.Unlock()
-		},
-	})
-
-	_, err := eng.SubmitWorkflowTurn(context.Background())
-	var stopped *queuedUserFlushStoppedError
-	if !errors.As(err, &stopped) {
-		t.Fatalf("submit workflow turn error = %v, want stopped queued flush", err)
-	}
-	if !stopMarked {
-		t.Fatal("workflow queued flush never marked its tail stopped")
 	}
 }
 
@@ -1498,10 +1314,13 @@ func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecove
 			name: "shell command",
 			mode: config.WorkflowCompletionModeShellCommand,
 			newEngine: func(t *testing.T, store *session.Store, client *fakeClient, controller *fakeWorkflowController) *Engine {
-				shellTool := &externalCompletionTool{controller: controller}
-				return mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
-					CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
-				})
+				shellTool := &externalCompletionTool{}
+				engine := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{})
+				workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand)
+				publishTestWorkflowExecution(t, engine, workflowConfig)
+				publishTestWorkflowAgentAssociation(t, engine, workflowConfig)
+				shellTool.complete = bindExternalAgentCompletion(t, engine, controller, workflowConfig.ScopeID)
+				return engine
 			},
 		},
 	}

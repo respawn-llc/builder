@@ -19,5 +19,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["tooling/*.ts", "eslint.config.js"]
+  "include": ["tooling/vite.config.ts", "eslint.config.js"]
 }

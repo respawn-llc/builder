@@ -9,6 +9,7 @@ import (
 	"io"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 )
 
@@ -60,7 +61,7 @@ func (h *windowsServiceHandler) Execute(_ []string, r <-chan svc.ChangeRequest, 
 		select {
 		case <-done:
 			changes <- svc.Status{State: svc.Stopped}
-			return serviceCompletionStatus()
+			return false, uint32(windows.ERROR_PROCESS_ABORTED)
 		case request := <-r:
 			switch request.Cmd {
 			case svc.Interrogate:

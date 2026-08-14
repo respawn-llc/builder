@@ -6,7 +6,7 @@ export type NodeLayoutOffset = Readonly<{ x: number; y: number }>;
 const layoutNumberSchema = z.union([z.number(), z.string().transform((value) => Number.parseFloat(value))]);
 
 export type WorkflowGraphNodeRect = Readonly<{
-  groupID: string | null;
+  groupID: string;
   height: number;
   kind: WorkflowNodeKind;
   width: number;

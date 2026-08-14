@@ -1,11 +1,13 @@
 package runtime
 
 import (
-	"core/server/llm"
-	"core/shared/textutil"
 	"errors"
 	"strings"
 	"sync"
+
+	"core/server/llm"
+	"core/shared/runtimeids"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -18,40 +20,88 @@ type queuedUserMessageStore struct {
 }
 
 type queuedUserMessage struct {
-	message QueuedUserMessage
+	message   QueuedUserMessage
+	admission uint64
+	scope     *runtimeids.ExecutionScopeID
 }
 
 func newQueuedUserMessageStore() *queuedUserMessageStore {
 	return &queuedUserMessageStore{}
 }
 
-func (s *queuedUserMessageStore) Queue(text string, clientRequestID ...string) (QueuedUserMessage, error) {
-	requestID := ""
-	if len(clientRequestID) > 0 {
-		requestID = clientRequestID[0]
-	}
+func (s *queuedUserMessageStore) Queue(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	return s.QueueItem(QueuedUserMessage{
-		ID:              uuid.NewString(),
-		ClientRequestID: strings.TrimSpace(requestID),
-		Message:         llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
-	})
+		ID:      uuid.NewString(),
+		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
+	}, association...)
 }
 
-func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage) (QueuedUserMessage, error) {
+type queuedUserMessageAssociation struct {
+	admission uint64
+	scope     *runtimeids.ExecutionScopeID
+}
+
+func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	item.ID = strings.TrimSpace(item.ID)
 	if item.ID == "" {
 		item.ID = uuid.NewString()
 	}
-	item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
 	if item.Message.Content == nil ||
 		strings.TrimSpace(*item.Message.Content) == "" ||
 		item.Message.Role == "" {
 		return QueuedUserMessage{}, errInvalidQueuedUserMessage
 	}
+	var association queuedUserMessageAssociation
+	if len(associations) != 0 {
+		association = associations[0]
+	}
 	s.mu.Lock()
-	s.pending = append(s.pending, queuedUserMessage{message: item})
+	s.pending = append(s.pending, queuedUserMessage{
+		message:   item,
+		admission: association.admission,
+		scope:     cloneExecutionScopeID(association.scope),
+	})
 	s.mu.Unlock()
 	return item, nil
+}
+
+func (s *queuedUserMessageStore) DrainByScope(scopeID runtimeids.ExecutionScopeID) []interruptedHumanSteering {
+	if s == nil || scopeID.IsZero() {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := make([]interruptedHumanSteering, 0)
+	remaining := s.pending[:0]
+	for _, pending := range s.pending {
+		if pending.scope == nil || *pending.scope != scopeID {
+			remaining = append(remaining, pending)
+			continue
+		}
+		removed = append(removed, interruptedHumanSteering{
+			ordinal: pending.admission,
+			item:    pending.message,
+		})
+	}
+	s.pending = remaining
+	return removed
+}
+
+func (s *queuedUserMessageStore) DrainInterrupted() []interruptedHumanSteering {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]interruptedHumanSteering, 0, len(s.pending))
+	for _, pending := range s.pending {
+		items = append(items, interruptedHumanSteering{
+			ordinal: pending.admission,
+			item:    pending.message,
+		})
+	}
+	s.pending = nil
+	return items
 }
 
 func (m QueuedUserMessage) DisplayText() (string, error) {
@@ -126,14 +176,6 @@ func (s *queuedUserMessageStore) RestoreFront(items []queuedUserMessage) {
 	s.mu.Lock()
 	s.pending = append(restored, s.pending...)
 	s.mu.Unlock()
-}
-
-func queuedUserMessageWithID(id, text, clientRequestID string) QueuedUserMessage {
-	return QueuedUserMessage{
-		ID:              strings.TrimSpace(id),
-		ClientRequestID: strings.TrimSpace(clientRequestID),
-		Message:         llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
-	}
 }
 
 func (s *queuedUserMessageStore) HasPending() bool {

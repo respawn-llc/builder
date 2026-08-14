@@ -16,8 +16,6 @@ import (
 	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 type launchMode string
@@ -42,9 +40,6 @@ type sessionLaunchPlan struct {
 	SessionTitle               *string
 	PromptHistory              []string
 	ModelContractLocked        bool
-	QuestionsEnabled           bool
-	AutoCompactionEnabled      bool
-	ThinkingOverrideExplicit   bool
 	StatusConfig               uiStatusConfig
 	ExecutionTarget            clientui.SessionExecutionTarget
 	Source                     config.SourceReport
@@ -144,10 +139,9 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		return sessionLaunchPlan{}, err
 	}
 	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, serverapi.SessionPlanRequest{
-		ClientRequestID: uuid.NewString(),
-		Mode:            serverapi.SessionLaunchMode(req.Mode),
-		Intent:          req.Intent,
-		Overrides:       mergeSessionPlanOverrides(sessionPlanOverridesFromConfig(p.server.Config()), req.Overrides),
+		Mode:      serverapi.SessionLaunchMode(req.Mode),
+		Intent:    req.Intent,
+		Overrides: mergeSessionPlanOverrides(sessionPlanOverridesFromConfig(p.server.Config()), req.Overrides),
 	})
 	if err != nil {
 		return sessionLaunchPlan{}, err
@@ -170,17 +164,14 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		return sessionLaunchPlan{}, err
 	}
 	return sessionLaunchPlan{
-		Mode:                     req.Mode,
-		SessionID:                resp.Plan.SessionID,
-		ActiveSettings:           activeSettings,
-		EnabledTools:             enabledTools,
-		ConfiguredModelName:      resp.Plan.ConfiguredModelName,
-		SessionTitle:             sessionTitle,
-		PromptHistory:            append([]string(nil), resp.Plan.PromptHistory...),
-		ModelContractLocked:      resp.Plan.ModelContractLocked,
-		QuestionsEnabled:         resp.Plan.QuestionsEnabled,
-		AutoCompactionEnabled:    resp.Plan.AutoCompactionEnabled,
-		ThinkingOverrideExplicit: resp.Plan.ThinkingOverrideExplicit,
+		Mode:                req.Mode,
+		SessionID:           resp.Plan.SessionID,
+		ActiveSettings:      activeSettings,
+		EnabledTools:        enabledTools,
+		ConfiguredModelName: resp.Plan.ConfiguredModelName,
+		SessionTitle:        sessionTitle,
+		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
+		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{
 			WorkspaceRoot:   executionTarget.EffectiveWorkdir,
 			ExecutionTarget: executionTarget,

@@ -111,7 +111,6 @@ type WorkflowTaskExecutionState struct {
 	WaitingQuestions int
 	WaitingApprovals int
 	Queued           int
-	Finalizing       int
 }
 
 func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (WorkflowTaskExecutionState, error) {
@@ -155,7 +154,6 @@ func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (W
 				state.Running++
 			}
 		case executionPhaseFinalizing:
-			state.Finalizing++
 		default:
 			return WorkflowTaskExecutionState{}, fmt.Errorf("workflow execution scope %s has invalid phase", execution.scope.ID())
 		}

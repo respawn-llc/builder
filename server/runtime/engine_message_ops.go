@@ -201,6 +201,7 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 	hasBackgroundSession bool,
 	provenance *TranscriptCommittedRowProvenance,
 ) {
+	e.markCurrentRequestShapeDirtyForSignificantMutation()
 	e.transcriptRuntimeState().RecordStoredToolCompletion(payload, provenance)
 	if hasBackgroundSession {
 		e.ensureOrchestrationCollaborators()
@@ -322,14 +323,11 @@ func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, error)
 	if entry.Role == "" {
 		return storedLocalEntry{}, errors.New("role is required")
 	}
-	if entry.Text == "" && entry.ToolOutputRepair == nil && entry.ProviderModelMismatch == nil {
-		return storedLocalEntry{}, errors.New("text or typed notice facts are required")
+	if entry.Text == "" && entry.ToolOutputRepair == nil {
+		return storedLocalEntry{}, errors.New("text or tool-output repair facts are required")
 	}
 	if entry.ToolOutputRepair != nil && !entry.ToolOutputRepair.Valid() {
 		return storedLocalEntry{}, errors.New("tool-output repair facts are invalid")
-	}
-	if entry.ProviderModelMismatch != nil && !entry.ProviderModelMismatch.Valid() {
-		return storedLocalEntry{}, errors.New("provider-model mismatch facts are invalid")
 	}
 	return entry, nil
 }
@@ -338,14 +336,13 @@ func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
 	condensedText, _ := textutil.OptionalExact(entry.CondensedText)
 	noticeID, _ := textutil.OptionalExact(entry.NoticeID)
 	return &ChatEntry{
-		Visibility:            normalizeRuntimeEntryVisibility(entry.Visibility),
-		Role:                  strings.TrimSpace(entry.Role),
-		Text:                  strings.TrimSpace(entry.Text),
-		DurationMs:            textutil.Pointer(entry.DurationMs),
-		CondensedText:         condensedText,
-		NoticeID:              noticeID,
-		ToolOutputRepair:      textutil.Pointer(entry.ToolOutputRepair),
-		ProviderModelMismatch: textutil.Pointer(entry.ProviderModelMismatch),
+		Visibility:       normalizeRuntimeEntryVisibility(entry.Visibility),
+		Role:             strings.TrimSpace(entry.Role),
+		Text:             strings.TrimSpace(entry.Text),
+		DurationMs:       textutil.Pointer(entry.DurationMs),
+		CondensedText:    condensedText,
+		NoticeID:         noticeID,
+		ToolOutputRepair: textutil.Pointer(entry.ToolOutputRepair),
 	}
 }
 
@@ -383,8 +380,9 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 }
 
 type preparedMessageProjection struct {
-	message llm.Message
-	record  session.MessageRecord
+	message  llm.Message
+	record   session.MessageRecord
+	mutation tokenUsageMutation
 }
 
 func (e *Engine) prepareMessageProjection(stepID string, msg llm.Message) (preparedMessageProjection, error) {
@@ -400,10 +398,15 @@ func (e *Engine) prepareMessageProjection(stepID string, msg llm.Message) (prepa
 	if err != nil {
 		return preparedMessageProjection{}, fmt.Errorf("adapt message record: %w", err)
 	}
-	return preparedMessageProjection{message: msg, record: record}, nil
+	return preparedMessageProjection{message: msg, record: record, mutation: tokenUsageMutationForMessage(msg)}, nil
 }
 
 func (e *Engine) applyPreparedMessageProjection(stepID string, prepared preparedMessageProjection, provenance *TranscriptCommittedRowProvenance) error {
+	if prepared.mutation == tokenUsageMutationSignificant {
+		e.markCurrentRequestShapeDirtyForSignificantMutation()
+	} else {
+		e.markCurrentRequestShapeDirty()
+	}
 	return e.transcriptRuntimeState().AppendMessage(stepID, prepared.message, provenance)
 }
 
@@ -560,18 +563,15 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, message llm.Message
 	}
 	e.emitRaw(event)
 	for _, item := range normalizedItems {
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitRaw(Event{
 			Kind: EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &QueuedUserMessageStatusEvent{
-				SessionID:       e.SessionID(),
-				QueueItemID:     item.ID,
-				ClientRequestID: item.ClientRequestID,
-				Status:          QueuedUserMessageSubmitted,
+				SessionID:   e.SessionID(),
+				QueueItemID: item.ID,
+				Status:      QueuedUserMessageSubmitted,
 			},
 		})
 	}
-	e.completeLiveRunQueueItems(queuedUserMessageIDSet(normalizedItems))
 	return appended.CommitReceipt, appendErr
 }
 
@@ -580,7 +580,6 @@ func normalizedQueuedUserMessageStatusItems(raw []QueuedUserMessage) []QueuedUse
 	seen := map[string]bool{}
 	for _, item := range raw {
 		item.ID = strings.TrimSpace(item.ID)
-		item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
 		if item.ID == "" || seen[item.ID] {
 			continue
 		}
@@ -607,8 +606,7 @@ func queuedUserMessageIdentities(items []QueuedUserMessage) []QueuedUserMessageI
 	identities := make([]QueuedUserMessageIdentity, 0, len(items))
 	for _, item := range items {
 		identities = append(identities, QueuedUserMessageIdentity{
-			QueueItemID:     strings.TrimSpace(item.ID),
-			ClientRequestID: strings.TrimSpace(item.ClientRequestID),
+			QueueItemID: strings.TrimSpace(item.ID),
 		})
 	}
 	return identities
@@ -638,11 +636,10 @@ func (e *Engine) emitQueuedUserMessageStatus(
 		return
 	}
 	event := &QueuedUserMessageStatusEvent{
-		SessionID:       e.SessionID(),
-		QueueItemID:     item.ID,
-		ClientRequestID: item.ClientRequestID,
-		Status:          status,
-		FailureReason:   reason,
+		SessionID:     e.SessionID(),
+		QueueItemID:   item.ID,
+		Status:        status,
+		FailureReason: reason,
 	}
 	text, err := item.DisplayText()
 	if err != nil {
@@ -650,26 +647,22 @@ func (e *Engine) emitQueuedUserMessageStatus(
 		return
 	}
 	if restore {
-		event.RestoreText = text
+		event.Text = text
 	}
 	if status == QueuedUserMessageAccepted {
-		event.RestoreText = text
+		event.Text = text
 	}
 	e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
 }
 
 func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
-	e.outputMutationMu.Lock()
 	pending := e.messageFlow.DrainPendingUserInjections()
 	messages := make([]QueuedUserMessage, 0, len(pending))
 	for _, item := range pending {
 		messages = append(messages, item)
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
 	}
-	e.outputMutationMu.Unlock()
-	e.completeLiveRunQueueItems(queuedUserMessageIDSet(messages))
 	return messages
 }
 

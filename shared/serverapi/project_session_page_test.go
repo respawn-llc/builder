@@ -10,125 +10,92 @@ import (
 	"core/shared/sessioncontract"
 )
 
-func TestSessionPageRequestUsesOptionalOffsetWindow(t *testing.T) {
-	request := SessionPageRequest{
-		ProjectID: "project-1",
-		Category:  sessioncontract.SessionCategoryMain,
-	}
-	if err := request.Validate(); err != nil {
-		t.Fatalf("Validate defaults: %v", err)
-	}
-	window, err := request.ResolveWindow()
+func TestSessionPageRequestPositionsValidateAndRoundTrip(t *testing.T) {
+	continuation, err := ParseSessionPageContinuation("opaque-token")
 	if err != nil {
-		t.Fatalf("ResolveWindow defaults: %v", err)
+		t.Fatalf("ParseSessionPageContinuation: %v", err)
 	}
-	if window.Offset != 0 || window.Limit != MaxSessionPageSize {
-		t.Fatalf("default window = %+v, want offset 0 and limit %d", window, MaxSessionPageSize)
-	}
-
-	offset := 0
-	limit := 20
-	request.Offset = &offset
-	request.Limit = &limit
-	if err := request.Validate(); err != nil {
-		t.Fatalf("Validate explicit window: %v", err)
-	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	var shape map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &shape); err != nil {
-		t.Fatalf("decode request shape: %v", err)
-	}
-	if _, ok := shape["offset"]; !ok {
-		t.Fatalf("offset missing from %s", encoded)
-	}
-	if _, ok := shape["limit"]; !ok {
-		t.Fatalf("limit missing from %s", encoded)
-	}
-	for _, obsolete := range []string{"page_size", "position", "token"} {
-		if _, ok := shape[obsolete]; ok {
-			t.Fatalf("obsolete field %q encoded in %s", obsolete, encoded)
-		}
-	}
-
-	var decoded SessionPageRequest
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if err := decoded.Validate(); err != nil {
-		t.Fatalf("decoded Validate: %v", err)
-	}
-	decodedWindow, err := decoded.ResolveWindow()
-	if err != nil {
-		t.Fatalf("decoded ResolveWindow: %v", err)
-	}
-	if decodedWindow.Offset != offset || decodedWindow.Limit != limit {
-		t.Fatalf("decoded window = %+v, want offset %d and limit %d", decodedWindow, offset, limit)
-	}
-}
-
-func TestSessionPageRequestRejectsInvalidOffsetWindow(t *testing.T) {
-	negativeOffset := -1
-	zeroLimit := 0
-	overLimit := MaxSessionPageSize + 1
-	for _, test := range []struct {
-		name   string
-		offset *int
-		limit  *int
+	tests := []struct {
+		name     string
+		position SessionPagePosition
+		kind     SessionPagePositionKind
+		hasToken bool
 	}{
-		{name: "negative offset", offset: &negativeOffset},
-		{name: "zero limit", limit: &zeroLimit},
-		{name: "limit above maximum", limit: &overLimit},
-	} {
+		{name: "newest", position: NewestSessionPagePosition(), kind: SessionPagePositionNewest},
+		{name: "older", position: OlderSessionPagePosition(continuation), kind: SessionPagePositionOlder, hasToken: true},
+		{name: "newer", position: NewerSessionPagePosition(continuation), kind: SessionPagePositionNewer, hasToken: true},
+	}
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			request := SessionPageRequest{
 				ProjectID: "project-1",
 				Category:  sessioncontract.SessionCategoryMain,
-				Offset:    test.offset,
-				Limit:     test.limit,
+				PageSize:  20,
+				Position:  test.position,
 			}
-			if err := request.Validate(); err == nil {
-				t.Fatalf("Validate accepted request %+v", request)
+			if err := request.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			encoded, err := json.Marshal(request)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var decoded SessionPageRequest
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if err := decoded.Validate(); err != nil {
+				t.Fatalf("decoded Validate: %v", err)
+			}
+			if decoded.Position.Kind() != test.kind {
+				t.Fatalf("position kind = %q, want %q", decoded.Position.Kind(), test.kind)
+			}
+			token, ok := decoded.Position.Continuation()
+			if ok != test.hasToken {
+				t.Fatalf("position continuation present = %v, want %v", ok, test.hasToken)
+			}
+			if ok && token.String() != continuation.String() {
+				t.Fatalf("position continuation = %q, want %q", token.String(), continuation.String())
 			}
 		})
 	}
 }
 
-func TestSessionPageRequestStrictDecodeRejectsObsoleteFields(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		body string
-	}{
-		{
-			name: "old only",
-			body: `{"project_id":"project-1","category":"main","page_size":20,"position":{"kind":"newest"}}`,
-		},
-		{
-			name: "mixed position and offset",
-			body: `{"project_id":"project-1","category":"main","offset":0,"limit":20,"position":{"kind":"newest"}}`,
-		},
-		{
-			name: "mixed token and offset",
-			body: `{"project_id":"project-1","category":"main","offset":20,"limit":20,"token":"opaque"}`,
-		},
+func TestSessionPageRequestRejectsMalformedDiscriminatedPositions(t *testing.T) {
+	for _, body := range []string{
+		`{"project_id":"project-1","category":"main","page_size":20}`,
+		`{"project_id":"project-1","category":"main","page_size":20,"position":{"kind":""}}`,
+		`{"project_id":"project-1","category":"main","page_size":20,"position":{"kind":"unknown"}}`,
+		`{"project_id":"project-1","category":"main","page_size":20,"position":{"kind":"newest","token":"unexpected"}}`,
+		`{"project_id":"project-1","category":"main","page_size":20,"position":{"kind":"older"}}`,
+		`{"project_id":"project-1","category":"main","page_size":20,"position":{"kind":"older","token":""}}`,
+		`{"project_id":"project-1","category":"main","page_size":20,"position":{"kind":"newer","token":" token"}}`,
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(body, func(t *testing.T) {
 			var request SessionPageRequest
-			if err := json.Unmarshal([]byte(test.body), &request); err == nil {
-				t.Fatalf("Unmarshal accepted obsolete fields: %s", test.body)
+			if err := json.Unmarshal([]byte(body), &request); err == nil {
+				if err := request.Validate(); err == nil {
+					t.Fatalf("request accepted malformed position: %s", body)
+				}
 			}
 		})
 	}
+	for _, raw := range []string{"", " ", " token", "token "} {
+		if _, err := ParseSessionPageContinuation(raw); err == nil {
+			t.Fatalf("ParseSessionPageContinuation(%q) succeeded", raw)
+		}
+	}
 }
 
-func TestSessionPageResponseUsesOptionalPositiveNextOffset(t *testing.T) {
+func TestSessionPageResponseUsesOptionalValidatedContinuations(t *testing.T) {
 	sessionID, err := runtimeids.ParseSessionID("session-1")
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	nextOffset := 20
+	older, err := ParseSessionPageContinuation("older-token")
+	if err != nil {
+		t.Fatalf("parse older continuation: %v", err)
+	}
 	response := SessionPageResponse{
 		ProjectID: "project-1",
 		Category:  sessioncontract.SessionCategoryMain,
@@ -137,7 +104,7 @@ func TestSessionPageResponseUsesOptionalPositiveNextOffset(t *testing.T) {
 			Category:  sessioncontract.SessionCategoryMain,
 			UpdatedAt: time.Unix(1, 0).UTC(),
 		}},
-		NextOffset: &nextOffset,
+		Older: &older,
 	}
 	if err := response.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -146,64 +113,15 @@ func TestSessionPageResponseUsesOptionalPositiveNextOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	var shape map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &shape); err != nil {
-		t.Fatalf("decode response shape: %v", err)
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("decode response wire: %v", err)
 	}
-	if _, ok := shape["next_offset"]; !ok {
-		t.Fatalf("next_offset missing from %s", encoded)
+	if _, ok := wire["older"]; !ok {
+		t.Fatal("older continuation missing")
 	}
-	for _, obsolete := range []string{"older", "newer", "continuation", "token"} {
-		if _, ok := shape[obsolete]; ok {
-			t.Fatalf("obsolete field %q encoded in %s", obsolete, encoded)
-		}
-	}
-
-	response.NextOffset = nil
-	encoded, err = json.Marshal(response)
-	if err != nil {
-		t.Fatalf("Marshal terminal response: %v", err)
-	}
-	shape = nil
-	if err := json.Unmarshal(encoded, &shape); err != nil {
-		t.Fatalf("decode terminal response shape: %v", err)
-	}
-	if _, ok := shape["next_offset"]; ok {
-		t.Fatalf("absent next offset encoded in %s", encoded)
-	}
-
-	for _, invalid := range []int{0, -1} {
-		response.NextOffset = &invalid
-		if err := response.Validate(); err == nil {
-			t.Fatalf("Validate accepted next offset %d", invalid)
-		}
-	}
-}
-
-func TestSessionPageResponseStrictDecodeRejectsObsoleteFields(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		body string
-	}{
-		{
-			name: "old only",
-			body: `{"project_id":"project-1","category":"main","sessions":[],"older":"opaque"}`,
-		},
-		{
-			name: "mixed older and next offset",
-			body: `{"project_id":"project-1","category":"main","sessions":[],"next_offset":20,"older":"opaque"}`,
-		},
-		{
-			name: "mixed newer and next offset",
-			body: `{"project_id":"project-1","category":"main","sessions":[],"next_offset":20,"newer":"opaque"}`,
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var response SessionPageResponse
-			if err := json.Unmarshal([]byte(test.body), &response); err == nil {
-				t.Fatalf("Unmarshal accepted obsolete fields: %s", test.body)
-			}
-		})
+	if _, ok := wire["newer"]; ok {
+		t.Fatal("absent newer continuation was encoded")
 	}
 }
 

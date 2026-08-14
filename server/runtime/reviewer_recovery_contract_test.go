@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -19,7 +20,7 @@ func TestReviewerSkippedWhenNoToolCalls(t *testing.T) {
 
 func TestReviewerInstructionAppendFailureKeepsOriginalFinalIdentity(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"},
 		ProviderCapabilitiesOverride: &llm.ProviderCapabilities{ProviderID: "test"},
 	})
@@ -44,7 +45,7 @@ func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
 	finals := 0
 	var blocker interface{ Restore() error }
 	var events []Event
-	engine := mustNewTestEngine(t, store, main, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, main, tools.NewRegistry(), Config{
 		Model:    "gpt-5",
 		Reviewer: ReviewerConfig{Frequency: "all", Model: "gpt-5", Client: reviewer},
 		OnEvent: func(event Event) {
@@ -88,7 +89,7 @@ func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
 func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var events []Event
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5", OnEvent: func(event Event) { events = append(events, event) },
 	})
 	blocker := mustBlockTestEventLogAppends(t, store)

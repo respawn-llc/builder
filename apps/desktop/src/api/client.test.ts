@@ -5,11 +5,7 @@ import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { protocolVersion } from "./jsonRpcSocket";
 import { canonicalBoardFilter } from "./workflowBoardFilters";
-import {
-  workflowBoundaryGraphIDs as boundaryGraphIDs,
-  workflowGraphDraft,
-  workflowGraphDraftIDs,
-} from "./clientWorkflowGraph.testFixtures";
+import { workflowGraphDraft } from "./clientWorkflowGraph.testFixtures";
 
 const startTaskParamsSchema = z.object({
   task_id: z.literal("task-1"),
@@ -182,8 +178,8 @@ describe("ApiClient", () => {
         canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null }),
       ),
     ).resolves.toMatchObject({
-      groups: [{ id: boundaryGraphIDs.nodeGroup, nodeIDs: [boundaryGraphIDs.node] }],
-      columns: [{ id: boundaryGraphIDs.node, kind: "agent" }],
+      groups: [{ id: "group-1", nodeIDs: ["node-agent"] }],
+      columns: [{ id: "node-agent", kind: "agent" }],
     });
   });
 
@@ -251,7 +247,7 @@ describe("ApiClient", () => {
     });
   });
 
-  it("uses metadata-only Project Settings and mutation RPC contracts", async () => {
+  it("uses project edit workspace pagination and mutation RPC contracts", async () => {
     const transport = new FakeRpcTransport([
       {
         method: "project.edit.get",
@@ -259,6 +255,9 @@ describe("ApiClient", () => {
           project_id: "project-1",
           project_key: "PROJ",
           display_name: "Project",
+          default_workspace_id: "workspace-1",
+          workspaces: [workspaceResponse],
+          next_page_token: "cursor-2",
         },
       },
       { method: "project.update", result: { project: projectSummaryResponse } },
@@ -274,8 +273,9 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.getProjectEdit("project-1")).resolves.toMatchObject({
+    await expect(client.getProjectEdit("project-1", "cursor-1")).resolves.toMatchObject({
       projectID: "project-1",
+      nextPageToken: "cursor-2",
     });
     await client.updateProject("project-1", "Renamed");
     await client.updateProject("project-1", "Renamed", "ABC");
@@ -286,7 +286,7 @@ describe("ApiClient", () => {
 
     expect(transport.calls).toContainEqual({
       method: "project.edit.get",
-      params: { project_id: "project-1" },
+      params: { project_id: "project-1", page_size: 100, page_token: "cursor-1" },
     });
     expect(transport.calls).toContainEqual({
       method: "project.update",
@@ -319,7 +319,7 @@ describe("ApiClient", () => {
       derivedWiring: {
         edges: [
           {
-            edgeID: boundaryGraphIDs.edge,
+            edgeID: "edge-1",
             inputBindings: [{ field: "summary", name: "summary", source: "transition_output" }],
             requiredProvisionFields: [{ description: "Summary", name: "summary" }],
             assigneeSelectionApplicability: { available: true, reason: "eligible" },
@@ -328,37 +328,31 @@ describe("ApiClient", () => {
         ],
       },
       workflow: { id: "11111111-1111-4111-8111-111111111111", name: "Delivery", version: 9 },
-      nodeGroups: [{ id: boundaryGraphIDs.nodeGroup, key: "core", name: "Core", nodeIDs: [] }],
+      nodeGroups: [{ id: "group-1", key: "core", name: "Core", nodeIDs: [] }],
       transitionGroups: [
         {
           description: "Choose this when implementation is complete.",
-          id: boundaryGraphIDs.transitionGroup,
-          sourceNodeID: boundaryGraphIDs.node,
+          id: "tg-1",
+          sourceNodeID: "node-1",
           transitionID: "done",
         },
       ],
       edges: [
         {
           contextSource: { kind: "selected_node", nodeKey: "implement" },
-          id: boundaryGraphIDs.edge,
+          id: "edge-1",
           assigneeSelection: "configured",
           thinkingSelection: "configured",
           parameters: [{ description: "Summary", key: "summary", purpose: "ordinary" }],
           promptTemplate: "Summarize the implementation.",
-          targetNodeID: boundaryGraphIDs.doneNode,
-          transitionGroupID: boundaryGraphIDs.transitionGroup,
+          targetNodeID: "done",
+          transitionGroupID: "tg-1",
         },
       ],
     });
     expect(definition.nodes).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          groupID: boundaryGraphIDs.nodeGroup,
-          id: boundaryGraphIDs.node,
-          name: "Implement",
-          subagentRole: "coder",
-        }),
-        expect.objectContaining({ groupID: null, id: boundaryGraphIDs.doneNode, name: "Done" }),
+        expect.objectContaining({ id: "node-1", name: "Implement", subagentRole: "coder" }),
       ]),
     );
     await expect(
@@ -369,16 +363,16 @@ describe("ApiClient", () => {
         {
           code: "workflow.validation.invalid",
           workflowID: "11111111-1111-4111-8111-111111111111",
-          nodeID: boundaryGraphIDs.node,
-          transitionGroupID: boundaryGraphIDs.transitionGroup,
-          edgeID: boundaryGraphIDs.edge,
+          nodeID: "node-1",
+          transitionGroupID: "tg-1",
+          edgeID: "edge-1",
           details: {
             fieldName: "",
             inputName: "summary",
             placeholder: ".Params.summary",
-            providerEdgeID: null,
+            providerEdgeID: "",
           },
-          relatedIDs: [boundaryGraphIDs.relatedEdge],
+          relatedIDs: ["edge-2"],
           blocksContext: true,
         },
       ],
@@ -423,7 +417,7 @@ describe("ApiClient", () => {
       edges: [
         {
           contextSource: { kind: "previous_target_or_new", nodeKey: "" },
-          id: boundaryGraphIDs.edge,
+          id: "edge-1",
         },
       ],
     });
@@ -617,7 +611,7 @@ describe("ApiClient", () => {
           derived_wiring: {
             edges: [
               {
-                edge_id: workflowGraphDraftIDs.startEdge,
+                edge_id: "edge-start",
                 input_bindings: [{ name: "brief", source: "transition_output", field: "brief" }],
                 required_provision_fields: [{ name: "brief", description: "Brief" }],
                 assignee_selection_applicability: {
@@ -647,7 +641,7 @@ describe("ApiClient", () => {
               code: "confirmation_required",
               message: "Confirm removal.",
               count: 1,
-              affected_entities: [{ entity_type: "edge", entity_id: workflowGraphDraftIDs.startEdge }],
+              affected_entities: [{ entity_type: "edge", entity_id: "edge-start" }],
             },
           ],
           can_save: false,
@@ -693,7 +687,7 @@ describe("ApiClient", () => {
       derivedWiring: {
         edges: [
           {
-            edgeID: workflowGraphDraftIDs.startEdge,
+            edgeID: "edge-start",
             inputBindings: [{ field: "brief", name: "brief", source: "transition_output" }],
             requiredProvisionFields: [{ description: "Brief", name: "brief" }],
           },
@@ -759,7 +753,7 @@ describe("ApiClient", () => {
           node_groups: [],
           nodes: [
             {
-              id: workflowGraphDraftIDs.startNode,
+              id: "node-start",
               key: "backlog",
               kind: "start",
               display_name: "Backlog",
@@ -769,8 +763,8 @@ describe("ApiClient", () => {
           ],
           transition_groups: [
             {
-              id: workflowGraphDraftIDs.startTransitionGroup,
-              source_node_id: workflowGraphDraftIDs.startNode,
+              id: "group-start",
+              source_node_id: "node-start",
               transition_id: "start",
               display_name: "Start",
               description: "Start the workflow.",
@@ -778,10 +772,10 @@ describe("ApiClient", () => {
           ],
           edges: [
             {
-              id: workflowGraphDraftIDs.startEdge,
-              transition_group_id: workflowGraphDraftIDs.startTransitionGroup,
+              id: "edge-start",
+              transition_group_id: "group-start",
               key: "start",
-              target_node_id: workflowGraphDraftIDs.agentNode,
+              target_node_id: "node-agent",
               assignee_selection: "configured",
               thinking_selection: "configured",
               requires_approval: false,
@@ -842,24 +836,21 @@ const boardWithJoinResponse = {
     },
     groups: [
       {
-        group_id: boundaryGraphIDs.nodeGroup,
+        group_id: "group-1",
         key: "review",
         display_name: "Review",
         sort_order: 1,
-        node_ids: [boundaryGraphIDs.node, boundaryGraphIDs.joinNode],
+        node_ids: ["node-agent", "node-join"],
       },
       {
-        group_id: boundaryGraphIDs.joinOnlyNodeGroup,
+        group_id: "group-join-only",
         key: "join_only",
         display_name: "Join Only",
         sort_order: 2,
-        node_ids: [boundaryGraphIDs.joinNode],
+        node_ids: ["node-join"],
       },
     ],
-    columns: [
-      boardColumnResponse(boundaryGraphIDs.node, "agent"),
-      boardColumnResponse(boundaryGraphIDs.joinNode, "join"),
-    ],
+    columns: [boardColumnResponse("node-agent", "agent"), boardColumnResponse("node-join", "join")],
   },
 };
 
@@ -873,7 +864,7 @@ function boardColumnResponse(nodeID: string, kind: string) {
       assignee_role: "",
       output_fields: [],
     },
-    group_id: boundaryGraphIDs.nodeGroup,
+    group_id: "group-1",
     sort_order: 1,
     is_backlog: false,
     is_done: false,
@@ -992,7 +983,7 @@ const workflowDefinitionResponse = {
     },
     node_groups: [
       {
-        group_id: boundaryGraphIDs.nodeGroup,
+        group_id: "group-1",
         workflow_id: "11111111-1111-4111-8111-111111111111",
         group_key: "core",
         display_name: "Core",
@@ -1001,29 +992,28 @@ const workflowDefinitionResponse = {
     ],
     nodes: [
       {
-        id: boundaryGraphIDs.node,
+        id: "node-1",
         workflow_id: "11111111-1111-4111-8111-111111111111",
         key: "implement",
         kind: "agent",
         display_name: "Implement",
-        group_id: boundaryGraphIDs.nodeGroup,
+        group_id: "group-1",
         group_key: "core",
         subagent_role: "coder",
       },
       {
-        id: boundaryGraphIDs.doneNode,
+        id: "done",
         workflow_id: "11111111-1111-4111-8111-111111111111",
         key: "done",
         kind: "terminal",
         display_name: "Done",
-        group_id: null,
       },
     ],
     transition_groups: [
       {
-        id: boundaryGraphIDs.transitionGroup,
+        id: "tg-1",
         workflow_id: "11111111-1111-4111-8111-111111111111",
-        source_node_id: boundaryGraphIDs.node,
+        source_node_id: "node-1",
         transition_id: "done",
         display_name: "Done",
         description: "Choose this when implementation is complete.",
@@ -1031,11 +1021,11 @@ const workflowDefinitionResponse = {
     ],
     edges: [
       {
-        id: boundaryGraphIDs.edge,
+        id: "edge-1",
         workflow_id: "11111111-1111-4111-8111-111111111111",
-        transition_group_id: boundaryGraphIDs.transitionGroup,
+        transition_group_id: "tg-1",
         key: "done",
-        target_node_id: boundaryGraphIDs.doneNode,
+        target_node_id: "done",
         assignee_selection: "configured",
         thinking_selection: "configured",
         requires_approval: false,
@@ -1053,19 +1043,19 @@ const workflowDefinitionResponse = {
     derived_wiring: {
       nodes: [
         {
-          node_id: boundaryGraphIDs.node,
+          node_id: "node-1",
           possible_provision_fields: [{ name: "summary", description: "Summary" }],
         },
       ],
       transition_groups: [
         {
-          transition_group_id: boundaryGraphIDs.transitionGroup,
+          transition_group_id: "tg-1",
           required_provision_fields: [{ name: "summary", description: "Summary" }],
         },
       ],
       edges: [
         {
-          edge_id: boundaryGraphIDs.edge,
+          edge_id: "edge-1",
           input_bindings: [{ name: "summary", source: "transition_output", field: "summary" }],
           required_provision_fields: [{ name: "summary", description: "Summary" }],
           assignee_selection_applicability: { available: true, parameter_visible: true, reason: "eligible" },
@@ -1083,15 +1073,14 @@ const workflowValidationResponse = {
       code: "workflow.validation.invalid",
       message: "Invalid edge",
       workflow_id: "11111111-1111-4111-8111-111111111111",
-      node_id: boundaryGraphIDs.node,
-      transition_group_id: boundaryGraphIDs.transitionGroup,
-      edge_id: boundaryGraphIDs.edge,
+      node_id: "node-1",
+      transition_group_id: "tg-1",
+      edge_id: "edge-1",
       details: {
         input_name: "summary",
         placeholder: ".Params.summary",
-        provider_edge_id: null,
       },
-      related_ids: [boundaryGraphIDs.relatedEdge],
+      related_ids: ["edge-2"],
       blocks_context: true,
     },
   ],
@@ -1136,8 +1125,8 @@ const workflowGraphSaveImpactResponse = {
   removed_transition_group_count: 0,
   removed_edge_count: 1,
   removed_entities: [
-    { entity_type: "edge", entity_id: workflowGraphDraftIDs.startEdge },
-    { entity_type: "node_group", entity_id: boundaryGraphIDs.nodeGroup },
+    { entity_type: "edge", entity_id: "edge-start" },
+    { entity_type: "node_group", entity_id: "group-1" },
   ],
   node_task_reference_count: 0,
   edge_task_reference_count: 0,

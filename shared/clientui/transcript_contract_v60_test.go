@@ -12,7 +12,6 @@ func TestTranscriptContractHydratesAtOneThenCarriesAtomicRuntimeReadModelUpdateA
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
 		CommittedRows:          []TranscriptCommittedRow{},
-		GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 	}))
 	if err := hydration.Validate(); err != nil {
 		t.Fatalf("validate hydration: %v", err)
@@ -52,9 +51,12 @@ func TestTranscriptContractRejectsUninitializedEvents(t *testing.T) {
 	}
 }
 
-func TestRuntimeReadModelUpdateOwnsVersion(t *testing.T) {
+func TestRuntimeReadModelUpdateCarriesVersionWithoutReconciliation(t *testing.T) {
 	if _, present := reflect.TypeOf(RuntimeReadModelUpdate{}).FieldByName("Version"); !present {
 		t.Fatal("RuntimeReadModelUpdate.Version is required")
+	}
+	if _, present := reflect.TypeOf(RuntimeReadModelUpdate{}).FieldByName("InputReconciliation"); present {
+		t.Fatal("RuntimeReadModelUpdate must not expose generic reconciliation")
 	}
 }
 

@@ -22,59 +22,36 @@ const (
 	QueuedUserMessageFailureClosing                    QueuedUserMessageFailureReason = "closing"
 	QueuedUserMessageFailureTerminalWorkflowCompletion QueuedUserMessageFailureReason = "terminal_workflow_completion"
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
-	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
 )
 
 type TranscriptUserMessageFlushed struct {
-	StepID   runtimeids.StepID
-	Messages []QueuedUserMessageIdentity
-}
-
-type QueuedUserMessageIdentity struct {
-	ClientRequestID runtimeids.RuntimeClientRequestID
-	QueueItemID     runtimeids.QueueItemID
+	StepID runtimeids.StepID
 }
 
 type TranscriptQueuedMessageState struct {
-	ClientRequestID runtimeids.RuntimeClientRequestID
-	QueueItemID     runtimeids.QueueItemID
-	Status          QueuedUserMessageStatus
-	FailureReason   *QueuedUserMessageFailureReason
-	Text            *string
+	QueueItemID   runtimeids.QueueItemID
+	Status        QueuedUserMessageStatus
+	FailureReason *QueuedUserMessageFailureReason
+	Text          *string
+}
+
+type TranscriptInterruptedHumanInputItem struct {
+	QueueItemID runtimeids.QueueItemID
+	Text        string
+}
+
+type TranscriptHumanInputInterrupted struct {
+	Items []TranscriptInterruptedHumanInputItem
 }
 
 func (f TranscriptUserMessageFlushed) Validate() error {
 	if f.StepID.IsZero() {
 		return fmt.Errorf("user-message flush step id is required")
 	}
-	if len(f.Messages) == 0 {
-		return fmt.Errorf("user-message flush requires queued-message identities")
-	}
-	seenClientRequests := make(map[runtimeids.RuntimeClientRequestID]struct{}, len(f.Messages))
-	seenQueueItems := make(map[runtimeids.QueueItemID]struct{}, len(f.Messages))
-	for index, message := range f.Messages {
-		if message.ClientRequestID.IsZero() {
-			return fmt.Errorf("user-message flush identity %d requires client request id", index)
-		}
-		if message.QueueItemID.IsZero() {
-			return fmt.Errorf("user-message flush identity %d requires queue item id", index)
-		}
-		if _, exists := seenClientRequests[message.ClientRequestID]; exists {
-			return fmt.Errorf("user-message flush repeats client request id %q", message.ClientRequestID.String())
-		}
-		if _, exists := seenQueueItems[message.QueueItemID]; exists {
-			return fmt.Errorf("user-message flush repeats queue item id %q", message.QueueItemID.String())
-		}
-		seenClientRequests[message.ClientRequestID] = struct{}{}
-		seenQueueItems[message.QueueItemID] = struct{}{}
-	}
 	return nil
 }
 
 func (s TranscriptQueuedMessageState) Validate() error {
-	if s.ClientRequestID.IsZero() {
-		return fmt.Errorf("queued-message state requires client request id")
-	}
 	if s.QueueItemID.IsZero() {
 		return fmt.Errorf("queued-message state requires queue item id")
 	}
@@ -99,8 +76,7 @@ func (s TranscriptQueuedMessageState) Validate() error {
 		switch *s.FailureReason {
 		case QueuedUserMessageFailureClosing,
 			QueuedUserMessageFailureTerminalWorkflowCompletion,
-			QueuedUserMessageFailureRuntimeUnavailable,
-			QueuedUserMessageFailureStopped:
+			QueuedUserMessageFailureRuntimeUnavailable:
 		default:
 			return fmt.Errorf("unknown queued-message failure reason %q", *s.FailureReason)
 		}
@@ -108,6 +84,26 @@ func (s TranscriptQueuedMessageState) Validate() error {
 	default:
 		return fmt.Errorf("unknown queued-message state %q", s.Status)
 	}
+}
+
+func (e TranscriptHumanInputInterrupted) Validate() error {
+	if len(e.Items) == 0 {
+		return fmt.Errorf("interrupted human input requires at least one item")
+	}
+	seen := make(map[runtimeids.QueueItemID]struct{}, len(e.Items))
+	for index, item := range e.Items {
+		if item.QueueItemID.IsZero() {
+			return fmt.Errorf("interrupted human input item %d requires queue item id", index)
+		}
+		if _, exists := seen[item.QueueItemID]; exists {
+			return fmt.Errorf("interrupted human input repeats queue item id %s", item.QueueItemID)
+		}
+		seen[item.QueueItemID] = struct{}{}
+		if strings.TrimSpace(item.Text) == "" {
+			return fmt.Errorf("interrupted human input item %d requires text", index)
+		}
+	}
+	return nil
 }
 
 func validateRequiredOptionalText(owner string, text *string) error {

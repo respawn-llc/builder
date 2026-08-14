@@ -163,7 +163,7 @@ func TestPersistedTranscriptScanSurfacesPersistedCompactionSummaries(t *testing.
 func TestPersistedTranscriptScanPreservesErrorLocalEntries(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	record := appendPersistedTranscriptRecord(t, store, storedLocalEntry{Role: "error", Text: "Persisted runtime error"})
+	record := appendPersistedTranscriptRecord(t, store, storedLocalEntry{Role: "error", Text: "Exact token counting failed"})
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	applyPersistedTranscriptRecords(t, scan, []session.EventRecord{record})
 
@@ -171,7 +171,7 @@ func TestPersistedTranscriptScanPreservesErrorLocalEntries(t *testing.T) {
 	if len(snapshot.Entries) != 1 {
 		t.Fatalf("entry count = %d, want 1", len(snapshot.Entries))
 	}
-	if got := snapshot.Entries[0]; got.Role != "error" || got.Text != "Persisted runtime error" {
+	if got := snapshot.Entries[0]; got.Role != "error" || got.Text != "Exact token counting failed" {
 		t.Fatalf("entry[0] = %+v, want persisted error entry", got)
 	}
 }

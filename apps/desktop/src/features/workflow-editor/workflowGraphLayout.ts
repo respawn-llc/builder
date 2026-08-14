@@ -25,7 +25,7 @@ export type WorkflowGraphNodeData = Readonly<{
   [key: string]: unknown;
   entityID: string;
   entityKind: "node";
-  groupID: string | null;
+  groupID: string;
   endpointPorts?: readonly WorkflowGraphEndpointPort[] | undefined;
   creationHandleID?: string | undefined;
   key: string;
@@ -360,14 +360,14 @@ function groupNodeID(id: string): string {
 function validationMarkers(validation: WorkflowValidation) {
   return {
     edgeIDs: new Set(
-      validation.errors.flatMap((error) => [error.edgeID, error.details.providerEdgeID]).filter(isPresent),
+      validation.errors.flatMap((error) => [error.edgeID, error.details.providerEdgeID]).filter(nonEmpty),
     ),
-    nodeIDs: new Set(validation.errors.map((error) => error.nodeID).filter(isPresent)),
-    relatedIDs: new Set(validation.errors.flatMap((error) => error.relatedIDs)),
-    transitionGroupIDs: new Set(validation.errors.map((error) => error.transitionGroupID).filter(isPresent)),
+    nodeIDs: new Set(validation.errors.map((error) => error.nodeID).filter(nonEmpty)),
+    relatedIDs: new Set(validation.errors.flatMap((error) => error.relatedIDs).filter(nonEmpty)),
+    transitionGroupIDs: new Set(validation.errors.map((error) => error.transitionGroupID).filter(nonEmpty)),
   };
 }
 
-function isPresent(value: string | null): value is string {
-  return value !== null;
+function nonEmpty(value: string): boolean {
+  return value.length > 0;
 }

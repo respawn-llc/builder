@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 )
 
@@ -14,8 +15,8 @@ type WorkflowCompletionSource string
 const (
 	WorkflowCompletionSourceTool             WorkflowCompletionSource = "tool"
 	WorkflowCompletionSourceStructuredOutput WorkflowCompletionSource = "structured_output"
+	WorkflowCompletionSourceShellCommand     WorkflowCompletionSource = "shell_command"
 	WorkflowCompletionSourceUnstructured     WorkflowCompletionSource = "unstructured_output"
-	WorkflowCompletionSourceObserved         WorkflowCompletionSource = "observed"
 )
 
 type WorkflowTerminalState struct {
@@ -23,6 +24,21 @@ type WorkflowTerminalState struct {
 	Generation  int64
 	Source      WorkflowCompletionSource
 	CompletedAt time.Time
+}
+
+func workflowCompletionSource(mode workflowruntime.CompletionMode) WorkflowCompletionSource {
+	switch mode {
+	case workflowruntime.CompletionModeTool:
+		return WorkflowCompletionSourceTool
+	case workflowruntime.CompletionModeStructuredOutput:
+		return WorkflowCompletionSourceStructuredOutput
+	case workflowruntime.CompletionModeShellCommand:
+		return WorkflowCompletionSourceShellCommand
+	case workflowruntime.CompletionModeUnstructuredOutput:
+		return WorkflowCompletionSourceUnstructured
+	default:
+		return ""
+	}
 }
 
 type WorkflowSessionState struct {
@@ -59,39 +75,27 @@ func (e *Engine) WorkflowTerminalState() WorkflowTerminalState {
 	return e.workflowTerminal
 }
 
-// failQueuedUserWorkIfTerminal abandons queued user steering once the run has
-// terminally completed, reporting whether it did so. It is the single place that
-// ties workflow completion to queued-user-work failure, so scheduling and
-// submission code can gate on terminal completion without inspecting workflow
-// state directly.
-func (e *Engine) failQueuedUserWorkIfTerminal() bool {
-	if e == nil || !e.WorkflowTerminalState().Completed {
-		return false
+func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) (bool, error) {
+	switch source {
+	case WorkflowCompletionSourceTool,
+		WorkflowCompletionSourceStructuredOutput,
+		WorkflowCompletionSourceShellCommand,
+		WorkflowCompletionSourceUnstructured:
+	default:
+		return false, e.runtimeInvariant(
+			"record Workflow terminal state",
+			fmt.Errorf("unsupported Workflow completion source %q", source),
+		)
 	}
-	e.FailQueuedUserMessages(QueuedUserMessageFailureTerminalWorkflowCompletion)
-	return true
-}
-
-func (e *Engine) setWorkflowTerminalState(source WorkflowCompletionSource) {
-	if e == nil || !e.currentNodeExecutionActive() {
-		return
-	}
-	transitioned := e.recordWorkflowTerminalState(source)
-	if transitioned {
-		e.cascadeCompleteActiveGoalOnWorkflowCompletion()
-	}
-}
-
-func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.workflowTerminal.Completed {
-		return false
+		return false, nil
 	}
 	e.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
 		Source:      source,
 		CompletedAt: time.Now(),
 	}
-	return true
+	return true, nil
 }

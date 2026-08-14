@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"core/server/llm"
 	"core/server/tools"
@@ -62,150 +61,6 @@ func assertRequestHasUserMessage(t *testing.T, request llm.Request, content stri
 	}
 }
 
-func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFirst(t *testing.T) {
-	client, started, release := newGatedHookClient(
-		llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	)
-
-	events := make([]Event, 0, 12)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		OnEvent: func(evt Event) {
-			events = append(events, evt)
-		},
-	})
-
-	submitDone := make(chan struct {
-		message llm.Message
-		err     error
-	}, 1)
-	go func() {
-		message, err := eng.SubmitUserMessage(context.Background(), "start")
-		submitDone <- struct {
-			message llm.Message
-			err     error
-		}{message: message, err: err}
-	}()
-	select {
-	case <-started:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for first final request")
-	}
-	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", liveRunTestRequestID(t), nil); err != nil || !accepted {
-		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
-	}
-	release()
-	result := <-submitDone
-	if result.err != nil {
-		t.Fatalf("submit: %v", result.err)
-	}
-	if messageContent(result.message) != "after flush" {
-		t.Fatalf("assistant content = %q, want after flush", messageContent(result.message))
-	}
-
-	assistantIndex := -1
-	flushIndex := -1
-	for idx, evt := range events {
-		if evt.Kind == EventAssistantMessage && messageContent(evt.Message) == "first final" {
-			assistantIndex = idx
-		}
-		if evt.Kind == EventUserMessageFlushed && evt.UserMessage == "steer now" {
-			flushIndex = idx
-		}
-	}
-	if assistantIndex < 0 {
-		t.Fatalf("expected first final assistant event before queued flush, got %+v", events)
-	}
-	if flushIndex < 0 {
-		t.Fatalf("expected queued user flush event, got %+v", events)
-	}
-	if assistantIndex > flushIndex {
-		t.Fatalf("first final assistant event index %d must be before queued flush index %d; events=%+v", assistantIndex, flushIndex, events)
-	}
-
-	assistant := events[assistantIndex]
-	flushed := events[flushIndex]
-	assistantEntries := TranscriptEntriesFromEvent(assistant)
-	if len(assistantEntries) == 0 {
-		t.Fatalf("assistant event carried no transcript entries: %+v", assistant)
-	}
-	wantFlushStart := assistant.CommittedEntryStart + len(assistantEntries)
-	if flushed.CommittedEntryStart != wantFlushStart {
-		t.Fatalf("queued user flush start = %d, want %d after assistant event; assistant=%+v flush=%+v", flushed.CommittedEntryStart, wantFlushStart, assistant, flushed)
-	}
-}
-
-func TestQueuedUserMessageFlushBlankFinalSupersedesDeferredAnswer(t *testing.T) {
-	client, started, release := newGatedHookClient(
-		llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(""), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	)
-	reviewerClient := &fakeClient{}
-	var reviewerStarts int
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
-		Reviewer: ReviewerConfig{
-			Frequency: "all",
-			Model:     "gpt-5",
-			Client:    reviewerClient,
-		},
-		OnEvent: func(evt Event) {
-			if evt.Kind == EventReviewerStarted {
-				reviewerStarts++
-			}
-		},
-	})
-
-	submitDone := make(chan struct {
-		message llm.Message
-		err     error
-	}, 1)
-	go func() {
-		message, err := eng.SubmitUserMessage(context.Background(), "start")
-		submitDone <- struct {
-			message llm.Message
-			err     error
-		}{message: message, err: err}
-	}()
-	select {
-	case <-started:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for first final request")
-	}
-	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", liveRunTestRequestID(t), nil); err != nil || !accepted {
-		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
-	}
-	release()
-
-	result := <-submitDone
-	if result.err != nil {
-		t.Fatalf("submit: %v", result.err)
-	}
-	if result.message.Content != nil {
-		t.Fatalf("blank final returned deferred assistant content %q", *result.message.Content)
-	}
-	if len(reviewerClient.calls) != 0 || reviewerStarts != 0 {
-		t.Fatalf("blank final ran reviewer: calls=%d starts=%d", len(reviewerClient.calls), reviewerStarts)
-	}
-	client.mu.Lock()
-	mainCalls := len(client.calls)
-	client.mu.Unlock()
-	if mainCalls != 2 {
-		t.Fatalf("main model calls = %d, want first final plus blank final", mainCalls)
-	}
-}
-
 func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistantFirst(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{
@@ -223,7 +78,7 @@ func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistan
 	}}
 
 	events := make([]Event, 0, 12)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		OnEvent: func(evt Event) {
 			events = append(events, evt)
 		},
@@ -301,11 +156,11 @@ func TestModelResponseEventCarriesContextUsage(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-		Usage:     llm.Usage{InputTokens: 420},
+		Usage:     llm.Usage{InputTokens: 420, WindowTokens: 1_000},
 	}}}
 	var usage *ContextUsage
 	autoCompactionEnabled := false
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
 		ContextWindowTokens:   1_000,
 		AutoCompactionEnabled: &autoCompactionEnabled,
 		OnEvent: func(evt Event) {
@@ -320,8 +175,8 @@ func TestModelResponseEventCarriesContextUsage(t *testing.T) {
 	if usage == nil {
 		t.Fatal("expected model response event to carry context usage")
 	}
-	if usage.WindowTokens != 1_000 || usage.UsedTokens <= 0 {
-		t.Fatalf("context usage = %+v, want canonical positive usage with configured window", usage)
+	if usage.UsedTokens != 420 || usage.WindowTokens != 1_000 {
+		t.Fatalf("context usage = %+v, want used=420 window=1000", usage)
 	}
 }
 
@@ -337,7 +192,7 @@ func TestDirectUserMessageFlushDoesNotEmitConversationUpdated(t *testing.T) {
 		eventIndex int
 		flushIndex = -1
 	)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		OnEvent: func(evt Event) {
 			events = append(events, evt)
 			eventIndex++
@@ -368,9 +223,9 @@ func TestRequestMessagesPreserveANSIEscapes(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(seedContent)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(seedContent)}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -416,7 +271,7 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 		},
 	}}
 
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "one"); err != nil {
 		t.Fatalf("first submit: %v", err)
@@ -482,7 +337,7 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 
 func TestDiscardQueuedUserMessageRemovesExactQueuedEntry(t *testing.T) {
 	t.Parallel()
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
 	first := mustQueueUserMessage(t, eng, "same")
 	mustQueueUserMessage(t, eng, "other")
@@ -506,7 +361,7 @@ func TestContextUsageUsesLastUsageWhenAvailable(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
 	eng.setLastUsage(llm.Usage{InputTokens: 1234, OutputTokens: 66, WindowTokens: 399_000})
 
 	usage := eng.ContextUsage()
@@ -520,8 +375,8 @@ func TestContextUsageUsesLastUsageWhenAvailable(t *testing.T) {
 
 func TestContextUsageFallsBackToEstimatedTokens(t *testing.T) {
 	t.Parallel()
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("estimate me")}})); err != nil {
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("estimate me")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -536,7 +391,7 @@ func TestContextUsageFallsBackToEstimatedTokens(t *testing.T) {
 
 func TestContextUsageTracksWeightedCacheHitPercentageFromModelUsage(t *testing.T) {
 	t.Parallel()
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
 
 	if usage := eng.ContextUsage(); usage.HasCacheHitPercentage {
 		t.Fatalf("expected cache hit percentage to be unavailable before model usage, got %+v", usage)
@@ -557,9 +412,9 @@ func TestContextUsageTracksWeightedCacheHitPercentageFromModelUsage(t *testing.T
 
 func TestContextUsageUsesEstimatedTokensWhenLastUsageIsStale(t *testing.T) {
 	t.Parallel()
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
 	eng.setLastUsage(llm.Usage{InputTokens: 100, OutputTokens: 0, WindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("x", 1600))}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("x", 1600))}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -577,13 +432,13 @@ func TestContextUsageUsesEstimatedTokensWhenLastUsageIsStale(t *testing.T) {
 
 func TestContextUsageAddsOnlyPostCheckpointEstimateDelta(t *testing.T) {
 	t.Parallel()
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("seed-", 100))}})); err != nil {
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("seed-", 100))}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	checkpointEstimate := estimateItemsTokens(eng.transcriptRuntimeState().SnapshotItems())
 	eng.setLastUsage(llm.Usage{InputTokens: 900, OutputTokens: 120, WindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("delta-", 40))}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("delta-", 40))}})); err != nil {
 		t.Fatalf("append delta message: %v", err)
 	}
 
@@ -624,9 +479,9 @@ func TestContextUsageDoesNotInflateInlineImagePayloadByBase64Length(t *testing.T
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 410_000})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 410_000})
 	eng.setLastUsage(llm.Usage{InputTokens: 100, OutputTokens: 0, WindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{
 		Role:       llm.RoleTool,
 		ToolCallID: textutil.Value("call-1"),
 		Name:       textutil.Value(string(toolspec.ToolViewImage)),
@@ -670,7 +525,7 @@ func TestPreSubmitCompactionTokenLimitUsesFixedRunwayReserve(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := mustCreateTestSession(t)
 
-			eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+			eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 				Model:                         "gpt-5",
 				AutoCompactTokenLimit:         tt.limit,
 				ContextWindowTokens:           1_000_000,

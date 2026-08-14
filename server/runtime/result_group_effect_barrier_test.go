@@ -88,9 +88,7 @@ func persistAcceptedToolCallIntents(
 			t.Fatalf("unsupported accepted response call source %d", ref.source)
 		}
 	}
-	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventDefault,
+	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: ordered}},
 	)); err != nil {
@@ -115,7 +113,7 @@ func TestQuestionBarrierCommitsReadyHostedSiblingBeforeInteraction(t *testing.T)
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID:      toolspec.ToolAskQuestion,
 			Handler: tools.NewAskQuestionTool(broker, func() bool { return true }),
 		}),
@@ -190,7 +188,7 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: approvalBarrierProbe{broker: broker},
 		}),
@@ -200,7 +198,7 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 	calls.local[0] = llm.ToolCall{
 		ID:    "patch",
 		Name:  string(toolspec.ToolPatch),
-		Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: approval-barrier.txt\n+approved\n*** End Patch\n"}`),
+		Input: json.RawMessage(`{}`),
 	}
 
 	results, err := engine.executeAcceptedToolCalls(context.Background(), "step", calls)

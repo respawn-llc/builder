@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"core/server/tools"
 )
 
 func TestEnvironmentContextRequiresModel(t *testing.T) {
@@ -20,7 +22,7 @@ func TestEngineNewRequiresModel(t *testing.T) {
 		store,
 		mustMaterializeTestEventLog(t, store),
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{},
 	)
 	if !errors.Is(err, ErrModelRequired) {

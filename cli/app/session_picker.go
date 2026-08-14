@@ -73,11 +73,11 @@ type sessionPickerModel struct {
 }
 
 type sessionPickerPageLoadedMsg struct {
-	category        sessioncontract.SessionCategory
-	generation      uint64
-	requestedOffset int
-	response        serverapi.SessionPageResponse
-	err             error
+	category   sessioncontract.SessionCategory
+	generation uint64
+	position   serverapi.SessionPagePosition
+	response   serverapi.SessionPageResponse
+	err        error
 }
 
 type sessionPickerSpinnerTickMsg struct {
@@ -272,18 +272,17 @@ func (m *sessionPickerModel) moveSelection(delta int) tea.Cmd {
 		if len(tab.segments) == 0 {
 			return nil
 		}
-		nextOffset := tab.segments[len(tab.segments)-1].nextOffset
-		if nextOffset == nil {
+		continuation := tab.segments[len(tab.segments)-1].older
+		if continuation == nil {
 			return nil
 		}
-		return m.startDirectionalRequest(tab, *nextOffset, delta)
+		return m.startDirectionalRequest(tab, serverapi.OlderSessionPagePosition(*continuation), delta)
 	}
 	if !tab.containsNewestEdge() {
-		requestedOffset := tab.segments[0].requestedOffset - sessionPickerPageSize
-		if requestedOffset < 0 {
-			requestedOffset = 0
+		continuation := tab.segments[0].newer
+		if continuation != nil {
+			return m.startDirectionalRequest(tab, serverapi.NewerSessionPagePosition(*continuation), delta)
 		}
-		return m.startDirectionalRequest(tab, requestedOffset, delta)
 	}
 	return nil
 }
@@ -319,9 +318,9 @@ func (m *sessionPickerModel) moveSelectionPage(direction int) tea.Cmd {
 	}
 	if direction > 0 {
 		if len(tab.segments) > 0 {
-			nextOffset := tab.segments[len(tab.segments)-1].nextOffset
-			if nextOffset != nil {
-				return m.startDirectionalRequest(tab, *nextOffset, direction)
+			continuation := tab.segments[len(tab.segments)-1].older
+			if continuation != nil {
+				return m.startDirectionalRequest(tab, serverapi.OlderSessionPagePosition(*continuation), direction)
 			}
 		}
 		if tab.itemCount() > 0 {
@@ -330,11 +329,10 @@ func (m *sessionPickerModel) moveSelectionPage(direction int) tea.Cmd {
 		return nil
 	}
 	if !tab.containsNewestEdge() {
-		requestedOffset := tab.segments[0].requestedOffset - sessionPickerPageSize
-		if requestedOffset < 0 {
-			requestedOffset = 0
+		continuation := tab.segments[0].newer
+		if continuation != nil {
+			return m.startDirectionalRequest(tab, serverapi.NewerSessionPagePosition(*continuation), direction)
 		}
-		return m.startDirectionalRequest(tab, requestedOffset, direction)
 	}
 	if tab.itemCount() > 0 {
 		return m.selectTabIndex(tab, 0)
@@ -359,52 +357,50 @@ func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCa
 	}
 	tab.generation++
 	request := &sessionPickerBodyRequest{
-		kind:            kind,
-		generation:      tab.generation,
-		requestedOffset: 0,
+		kind:       kind,
+		generation: tab.generation,
+		position:   serverapi.NewestSessionPagePosition(),
 	}
 	tab.bodyRequest = request
 	tab.bodyPhase = sessionPickerBodyInitialLoading
-	load := m.loadPageCmd(category, request.generation, request.requestedOffset)
+	load := m.loadPageCmd(category, request.generation, request.position)
 	if kind == sessionPickerBodyRequestRetry {
 		return tea.Batch(load, m.reconcileSpinnerTick())
 	}
 	return load
 }
 
-func (m *sessionPickerModel) startDirectionalRequest(tab *sessionPickerTab, requestedOffset int, move int) tea.Cmd {
+func (m *sessionPickerModel) startDirectionalRequest(tab *sessionPickerTab, position serverapi.SessionPagePosition, move int) tea.Cmd {
 	if tab.bodyRequest != nil || tab.directional != nil {
 		return nil
 	}
 	tab.generation++
 	tab.directional = &sessionPickerDirectionalRequest{
-		generation:      tab.generation,
-		requestedOffset: requestedOffset,
-		move:            move,
+		generation: tab.generation,
+		position:   position,
+		move:       move,
 	}
 	return tea.Batch(
-		m.loadPageCmd(tab.category, tab.generation, requestedOffset),
+		m.loadPageCmd(tab.category, tab.generation, position),
 		m.reconcileSpinnerTick(),
 	)
 }
 
-func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategory, generation uint64, requestedOffset int) tea.Cmd {
-	offset := requestedOffset
-	limit := sessionPickerPageSize
+func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategory, generation uint64, position serverapi.SessionPagePosition) tea.Cmd {
 	request := serverapi.SessionPageRequest{
 		ProjectID: m.loader.ProjectID(),
 		Category:  category,
-		Offset:    &offset,
-		Limit:     &limit,
+		PageSize:  sessionPickerPageSize,
+		Position:  position,
 	}
 	return func() tea.Msg {
 		response, err := m.loader.ListSessionPage(m.requestContext, request)
 		return sessionPickerPageLoadedMsg{
-			category:        category,
-			generation:      generation,
-			requestedOffset: requestedOffset,
-			response:        response,
-			err:             err,
+			category:   category,
+			generation: generation,
+			position:   position,
+			response:   response,
+			err:        err,
 		}
 	}
 }
@@ -445,7 +441,7 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 	tab := m.tab(message.category)
 	if tab.bodyRequest != nil &&
 		tab.bodyRequest.generation == message.generation &&
-		tab.bodyRequest.requestedOffset == message.requestedOffset {
+		sessionPagePositionsEqual(tab.bodyRequest.position, message.position) {
 		tab.bodyRequest = nil
 		if message.err != nil {
 			tab.resetForFreshLoad()
@@ -459,14 +455,14 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 			m.recordPickerFailureForTab(tab, sessionPickerOperationBodyPage, message.generation, sessionPickerFailurePageContract, err)
 			return nil
 		}
-		tab.replaceSegments(message.requestedOffset, message.response)
+		tab.replaceSegments(message.response)
 		m.clearPickerFailureForTab(tab, sessionPickerOperationBodyPage, message.generation)
 		m.ensureSelectedVisible(tab)
 		return m.maybeCompleteAllEmpty()
 	}
 	if tab.directional == nil ||
 		tab.directional.generation != message.generation ||
-		tab.directional.requestedOffset != message.requestedOffset {
+		!sessionPagePositionsEqual(tab.directional.position, message.position) {
 		return nil
 	}
 	directional := *tab.directional
@@ -483,46 +479,28 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 		m.recordPickerFailureForTab(tab, sessionPickerOperationDirectionalPage, message.generation, sessionPickerFailurePageContract, err)
 		return nil
 	}
-	segment := newSessionPickerPageSegment(message.requestedOffset, message.response)
-	switch {
-	case directional.move > 0:
+	segment := newSessionPickerPageSegment(message.response)
+	switch message.position.Kind() {
+	case serverapi.SessionPagePositionOlder:
 		tab.segments = append(tab.segments, segment)
 		if len(tab.segments) > 2 {
 			tab.segments = tab.segments[len(tab.segments)-2:]
 		}
+		tab.rebuildResidentIDs()
 		appended := tab.segments[len(tab.segments)-1]
 		if directional.move > 0 && len(appended.sessions) > 0 {
 			tab.selected = newSessionPickerSessionSelection(appended.sessions[0].SessionID)
 		}
-	case directional.move < 0:
+	case serverapi.SessionPagePositionNewer:
 		tab.segments = append([]sessionPickerPageSegment{segment}, tab.segments...)
 		if len(tab.segments) > 2 {
 			tab.segments = tab.segments[:2]
 		}
+		tab.rebuildResidentIDs()
 		prepended := tab.segments[0]
 		if directional.move < 0 && len(prepended.sessions) > 0 {
 			tab.selected = newSessionPickerSessionSelection(prepended.sessions[len(prepended.sessions)-1].SessionID)
 		}
-	default:
-		err := fmt.Errorf(
-			"session picker directional request requires movement: category=%q generation=%d requested_offset=%d",
-			tab.category,
-			directional.generation,
-			directional.requestedOffset,
-		)
-		if m.header.StatusRequest.Settings.Debug {
-			panic(err)
-		}
-		tab.resetForFreshLoad()
-		tab.bodyPhase = sessionPickerBodyFailed
-		m.recordPickerFailureForTab(
-			tab,
-			sessionPickerOperationDirectionalPage,
-			message.generation,
-			sessionPickerFailurePageContract,
-			err,
-		)
-		return nil
 	}
 	tab.bodyPhase = sessionPickerBodyReady
 	m.clearPickerFailureForTab(tab, sessionPickerOperationDirectionalPage, message.generation)

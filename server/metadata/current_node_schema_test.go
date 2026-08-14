@@ -72,8 +72,8 @@ func TestTaskCurrentNodeSchemaRejectsDeletingPendingApprovalSource(t *testing.T)
 	insertTaskPendingApproval(t, store.db, "approval-1", "task-1", "node-start", nil, now)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `DELETE FROM task_current_nodes
 WHERE task_id = 'task-1'
-  AND node_id = ?
-  AND transition_branch_key IS NULL`, workflowGraphSeedID(t, store.db, "node-start"))
+  AND node_id = 'node-start'
+  AND transition_branch_key IS NULL`)
 }
 
 func TestTaskCurrentNodeSchemaRejectsFlattenedPriorValueUpdate(t *testing.T) {
@@ -166,8 +166,8 @@ func TestTaskCurrentNodeSchemaRejectsSerialUpdateWhileFanoutExists(t *testing.T)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE task_current_nodes
 SET transition_branch_key = NULL
 WHERE task_id = 'task-1'
-  AND node_id = ?
-  AND transition_branch_key = 'implementation'`, workflowGraphSeedID(t, store.db, "node-start"))
+  AND node_id = 'node-start'
+  AND transition_branch_key = 'implementation'`)
 }
 
 func TestTaskCurrentNodeSchemaRejectsNodeOutsideTaskWorkflow(t *testing.T) {
@@ -198,7 +198,11 @@ WHERE task_id = 'task-1'`)
 
 func TestTaskCurrentNodeSchemaUsesNaturalReferencesAndLeanFanoutStorage(t *testing.T) {
 	t.Parallel()
-	store := openInMemoryMetadataTestStore(t, t.TempDir())
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 
 	for _, table := range []string{
 		"task_current_nodes",
@@ -214,19 +218,15 @@ func TestTaskCurrentNodeSchemaUsesNaturalReferencesAndLeanFanoutStorage(t *testi
 		"task_id": {},
 	})
 	assertExactTableColumns(t, store.db, "task_active_fanout_branches", map[string]struct{}{
-		"task_id":                        {},
-		"transition_branch_key":          {},
-		"arrival_state":                  {},
-		"arrival_values_json":            {},
-		"continuation_source_kind":       {},
-		"continuation_source_session_id": {},
-		"legacy_materialized":            {},
+		"task_id":               {},
+		"transition_branch_key": {},
+		"arrival_state":         {},
+		"arrival_values_json":   {},
 	})
 }
 
 type currentNodeSchemaSQLExecutor interface {
 	Exec(string, ...any) (sql.Result, error)
-	QueryRow(string, ...any) *sql.Row
 }
 
 const insertTaskCurrentNodeSQL = `INSERT INTO task_current_nodes (
@@ -263,19 +263,18 @@ func currentSchemaBranch(value string) *string {
 
 func insertTaskCurrentNode(t *testing.T, executor currentNodeSchemaSQLExecutor, taskID, nodeID string, branch *string) {
 	t.Helper()
-	if _, err := executor.Exec(insertTaskCurrentNodeSQL, taskCurrentNodeArgs(t, executor, taskID, nodeID, branch)...); err != nil {
+	if _, err := executor.Exec(insertTaskCurrentNodeSQL, taskCurrentNodeArgs(taskID, nodeID, branch)...); err != nil {
 		t.Fatalf("insert current node %s/%s: %v", taskID, nodeID, err)
 	}
 }
 
 func assertTaskCurrentNodeConstraint(t *testing.T, db *sql.DB, wantCode int, taskID, nodeID string, branch *string) {
 	t.Helper()
-	assertSQLiteConstraint(t, db, wantCode, insertTaskCurrentNodeSQL, taskCurrentNodeArgs(t, db, taskID, nodeID, branch)...)
+	assertSQLiteConstraint(t, db, wantCode, insertTaskCurrentNodeSQL, taskCurrentNodeArgs(taskID, nodeID, branch)...)
 }
 
-func taskCurrentNodeArgs(t *testing.T, db workflowGraphSeedQueryer, taskID, nodeID string, branch *string) []any {
-	t.Helper()
-	return []any{taskID, workflowGraphSeedID(t, db, nodeID), nullableCurrentNodeSchemaBranch(branch)}
+func taskCurrentNodeArgs(taskID, nodeID string, branch *string) []any {
+	return []any{taskID, nodeID, nullableCurrentNodeSchemaBranch(branch)}
 }
 
 func insertTaskActiveFanout(t *testing.T, executor currentNodeSchemaSQLExecutor, taskID string) {
@@ -298,19 +297,18 @@ func insertTaskActiveFanoutBranch(t *testing.T, executor currentNodeSchemaSQLExe
 
 func insertTaskPendingApproval(t *testing.T, executor currentNodeSchemaSQLExecutor, approvalID, taskID, nodeID string, branch *string, now int64) {
 	t.Helper()
-	if _, err := executor.Exec(insertTaskPendingApprovalSQL, taskPendingApprovalArgs(t, executor, approvalID, taskID, nodeID, branch, now)...); err != nil {
+	if _, err := executor.Exec(insertTaskPendingApprovalSQL, taskPendingApprovalArgs(approvalID, taskID, nodeID, branch, now)...); err != nil {
 		t.Fatalf("insert pending approval %s: %v", approvalID, err)
 	}
 }
 
 func assertTaskPendingApprovalConstraint(t *testing.T, db *sql.DB, approvalID, taskID, nodeID string, branch *string, now int64) {
 	t.Helper()
-	assertSQLiteConstraint(t, db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, insertTaskPendingApprovalSQL, taskPendingApprovalArgs(t, db, approvalID, taskID, nodeID, branch, now)...)
+	assertSQLiteConstraint(t, db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, insertTaskPendingApprovalSQL, taskPendingApprovalArgs(approvalID, taskID, nodeID, branch, now)...)
 }
 
-func taskPendingApprovalArgs(t *testing.T, db workflowGraphSeedQueryer, approvalID, taskID, nodeID string, branch *string, now int64) []any {
-	t.Helper()
-	return []any{approvalID, taskID, workflowGraphSeedID(t, db, nodeID), nullableCurrentNodeSchemaBranch(branch), now}
+func taskPendingApprovalArgs(approvalID, taskID, nodeID string, branch *string, now int64) []any {
+	return []any{approvalID, taskID, nodeID, nullableCurrentNodeSchemaBranch(branch), now}
 }
 
 func nullableCurrentNodeSchemaBranch(branch *string) any {

@@ -40,21 +40,6 @@ func TestInferProviderCapabilities_UsesRegistryContracts(t *testing.T) {
 	}
 }
 
-func TestRemoteCompactionProtocolsAreProviderOwned(t *testing.T) {
-	openAI, ok := lookupProviderVariantContract("openai")
-	if !ok || openAI.Variant.RemoteCompactionProtocol != remoteCompactionResponsesTriggerV2 {
-		t.Fatalf("openai compaction protocol = %v, want Responses-trigger V2", openAI.Variant.RemoteCompactionProtocol)
-	}
-	codex, ok := lookupProviderVariantContract("chatgpt-codex")
-	if !ok || codex.Variant.RemoteCompactionProtocol != remoteCompactionResponsesTriggerV2 {
-		t.Fatalf("chatgpt-codex compaction protocol = %v, want Responses-trigger V2", codex.Variant.RemoteCompactionProtocol)
-	}
-	compatible, ok := lookupProviderVariantContract("openai-compatible")
-	if !ok || compatible.Variant.RemoteCompactionProtocol != remoteCompactionUnsupported {
-		t.Fatalf("openai-compatible compaction protocol = %v, want unsupported", compatible.Variant.RemoteCompactionProtocol)
-	}
-}
-
 func TestInferProviderCapabilities_UnknownProviderFailsExplicitly(t *testing.T) {
 	_, err := InferProviderCapabilities("custom-provider")
 	if !errors.Is(err, ErrUnsupportedProvider) {
@@ -203,6 +188,9 @@ func TestKnownNonFirstPartyProviderContractsRemainLocalCompactionOnly(t *testing
 		}
 		if caps.SupportsPromptCacheKey {
 			t.Fatalf("expected prompt cache key unsupported for %s, got %+v", providerID, caps)
+		}
+		if caps.SupportsRequestInputTokenCount {
+			t.Fatalf("expected exact input-token counting unsupported for %s, got %+v", providerID, caps)
 		}
 		if caps.SupportsNativeWebSearch {
 			t.Fatalf("expected native web search unsupported for %s, got %+v", providerID, caps)
@@ -357,10 +345,28 @@ func TestSupportsPromptCacheKeyProvider(t *testing.T) {
 
 func TestProviderCapabilitiesFromLockedHandlesExplicitAndLegacyCapabilities(t *testing.T) {
 	tests := []struct {
-		name               string
-		locked             session.LockedProviderCapabilities
-		wantPromptCacheKey bool
+		name                       string
+		locked                     session.LockedProviderCapabilities
+		wantRequestInputTokenCount bool
+		wantPromptCacheKey         bool
 	}{
+		{
+			name: "explicit request input token count false is preserved",
+			locked: session.LockedProviderCapabilities{
+				ProviderID:                        "openai-compatible",
+				SupportsResponsesAPI:              true,
+				SupportsRequestInputTokenCount:    false,
+				HasSupportsRequestInputTokenCount: true,
+			},
+		},
+		{
+			name: "legacy request input token count inherits conservative compatible default",
+			locked: session.LockedProviderCapabilities{
+				ProviderID:                     "openai-compatible",
+				SupportsResponsesAPI:           true,
+				SupportsRequestInputTokenCount: false,
+			},
+		},
 		{
 			name: "explicit prompt cache false is preserved",
 			locked: session.LockedProviderCapabilities{
@@ -369,6 +375,7 @@ func TestProviderCapabilitiesFromLockedHandlesExplicitAndLegacyCapabilities(t *t
 				SupportsPromptCacheKey:    false,
 				HasSupportsPromptCacheKey: true,
 			},
+			wantRequestInputTokenCount: true,
 		},
 		{
 			name: "legacy prompt cache inherits openai support",
@@ -376,7 +383,8 @@ func TestProviderCapabilitiesFromLockedHandlesExplicitAndLegacyCapabilities(t *t
 				ProviderID:           "openai",
 				SupportsResponsesAPI: true,
 			},
-			wantPromptCacheKey: true,
+			wantRequestInputTokenCount: true,
+			wantPromptCacheKey:         true,
 		},
 	}
 	for _, tt := range tests {
@@ -384,6 +392,9 @@ func TestProviderCapabilitiesFromLockedHandlesExplicitAndLegacyCapabilities(t *t
 			caps, ok := ProviderCapabilitiesFromLocked(&session.LockedContract{ProviderContract: tt.locked})
 			if !ok {
 				t.Fatal("expected locked provider capabilities")
+			}
+			if caps.SupportsRequestInputTokenCount != tt.wantRequestInputTokenCount {
+				t.Fatalf("request input token count = %v, want %v, caps=%+v", caps.SupportsRequestInputTokenCount, tt.wantRequestInputTokenCount, caps)
 			}
 			if caps.SupportsPromptCacheKey != tt.wantPromptCacheKey {
 				t.Fatalf("prompt cache key = %v, want %v, caps=%+v", caps.SupportsPromptCacheKey, tt.wantPromptCacheKey, caps)

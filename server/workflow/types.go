@@ -149,7 +149,7 @@ type NodeIdentity struct {
 	ID          NodeID
 	Key         ModelKey
 	DisplayName string
-	GroupID     *string
+	GroupID     string
 }
 
 type OptionalScriptPath struct {
@@ -288,15 +288,11 @@ func NodeDisplayName(node Node) string {
 	return node.Identity().DisplayName
 }
 
-func NodeGroupID(node Node) (string, bool) {
+func NodeGroupID(node Node) string {
 	if node == nil {
-		return "", false
+		return ""
 	}
-	groupID := node.Identity().GroupID
-	if groupID == nil {
-		return "", false
-	}
-	return *groupID, true
+	return node.Identity().GroupID
 }
 
 func IsExecutableNode(node Node) bool {

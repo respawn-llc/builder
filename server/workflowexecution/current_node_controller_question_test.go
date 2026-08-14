@@ -35,33 +35,12 @@ func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescen
 		_, _ = pending.handle.Wait(context.Background())
 	})
 
-	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   "project-test",
-		WorkflowID:  currentNodeControllerTestWorkflowID,
-		CurrentNode: running,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	runningHandle, err := fixture.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
+	runningHandle := startLiveTestWorkflowScript(t, fixture.controller, fixture.authority, running, sessionruntime.ScriptExecutionRequest{
 		Command: sessionruntime.ScriptCommand{
 			Path: shellPath,
 			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
-	}
-	runningKey, err := running.Key()
-	if err != nil {
-		t.Fatalf("running Current Node key: %v", err)
-	}
-	fixture.controller.mu.Lock()
-	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
-	fixture.controller.liveByNode[runningKey] = lease.ScopeID()
-	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.Interrupt(context.Background(), InterruptSelector{TaskID: running.TaskID}); err != nil {
@@ -170,33 +149,12 @@ func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSib
 		pending.handle.RequestStop()
 		_, _ = pending.handle.Wait(context.Background())
 	})
-	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   "project-test",
-		WorkflowID:  currentNodeControllerTestWorkflowID,
-		CurrentNode: running,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	runningHandle, err := fixture.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
+	runningHandle := startLiveTestWorkflowScript(t, fixture.controller, fixture.authority, running, sessionruntime.ScriptExecutionRequest{
 		Command: sessionruntime.ScriptCommand{
 			Path: shellPath,
 			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
-	}
-	key, err := running.Key()
-	if err != nil {
-		t.Fatalf("running Current Node key: %v", err)
-	}
-	fixture.controller.mu.Lock()
-	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
-	fixture.controller.liveByNode[key] = lease.ScopeID()
-	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID, nil); !errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {

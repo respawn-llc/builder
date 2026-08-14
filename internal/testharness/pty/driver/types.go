@@ -10,8 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxCommandTimeout = 5 * time.Second
-
 type SessionSpec struct {
 	Path       string
 	Args       []string

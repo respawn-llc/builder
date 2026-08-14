@@ -280,11 +280,16 @@ func (e *Engine) SetSessionName(name string) error {
 }
 
 func (e *Engine) SetThinkingLevel(level string) error {
-	normalized := strings.TrimSpace(level)
-	if normalized == "" {
-		return errors.New("thinking level is required")
+	normalized, ok := NormalizeThinkingLevel(level)
+	if !ok {
+		return fmt.Errorf("invalid thinking level %q (expected low|medium|high|xhigh)", strings.TrimSpace(level))
 	}
-	return e.setThinkingValue(normalized)
+	_, err := e.enqueueOutputSteering("", false, steerThinkingLevelIntent(normalized))
+	return err
+}
+
+func (e *Engine) applyThinkingLevel(level string) error {
+	return e.setThinkingValue(level)
 }
 
 // SetWorkflowThinkingValue applies a workflow-owned thinking value. Workflow
@@ -307,6 +312,7 @@ func (e *Engine) setThinkingValue(value string) error {
 	e.mu.Lock()
 	e.cfg.ThinkingLevel = strings.TrimSpace(value)
 	e.mu.Unlock()
+	e.markCurrentRequestShapeDirty()
 	return nil
 }
 
@@ -314,11 +320,22 @@ func (e *Engine) SetFastModeEnabled(enabled bool) (bool, error) {
 	if enabled && !e.FastModeAvailable() {
 		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
+	if state := e.fastModeState(); state != nil {
+		changed := state.SetEnabled(enabled)
+		if changed {
+			e.markCurrentRequestShapeDirty()
+		}
+		return changed, nil
+	}
 	changed := e.localFastModeEnabledChange(enabled)
 	e.applyFastModeEnabled(enabled)
 	return changed, nil
+}
+
+func (e *Engine) fastModeState() *FastModeState {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cfg.FastModeState
 }
 
 func (e *Engine) localFastModeEnabledChange(enabled bool) bool {
@@ -336,11 +353,25 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 	}
 	e.mu.Unlock()
 	if changed {
+		e.markCurrentRequestShapeDirty()
 	}
 	return changed
 }
 
 func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
+	var changed, resultEnabled bool
+	_, err := e.enqueueOutputSteering(
+		"",
+		false,
+		steerAutoCompactionIntent(enabled, &changed, &resultEnabled),
+	)
+	if err != nil {
+		return false, e.AutoCompactionEnabled()
+	}
+	return changed, resultEnabled
+}
+
+func (e *Engine) applyAutoCompaction(enabled bool) (bool, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	current := true
@@ -367,8 +398,6 @@ func (e *Engine) QuestionsEnabled() bool {
 }
 
 func (e *Engine) SetQuestionsEnabled(enabled bool) (bool, bool) {
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
 	changed, current := e.questionsEnabledChange(enabled)
 	if changed {
 		e.applyQuestionsEnabled(enabled)
@@ -405,45 +434,12 @@ func (e *Engine) applyQuestionsEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
 	changed, mode, err := e.reviewerEnabledChange(enabled)
 	if err != nil {
 		return false, mode, err
 	}
 	e.applyReviewerEnabled(enabled, mode)
 	return changed, mode, nil
-}
-
-func (e *Engine) PrepareReviewerFrequency(frequency string) (string, error) {
-	normalized, ok := NormalizeReviewerFrequency(frequency)
-	if !ok {
-		return "", fmt.Errorf("invalid reviewer frequency %q", strings.TrimSpace(frequency))
-	}
-	if normalized != "off" {
-		if err := e.initReviewerClient(); err != nil {
-			return "", err
-		}
-	}
-	return normalized, nil
-}
-
-func (e *Engine) setReviewerFrequency(frequency string) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	current, ok := NormalizeReviewerFrequency(e.cfg.Reviewer.Frequency)
-	if !ok {
-		current = "off"
-	}
-	if current == frequency {
-		return false
-	}
-	e.cfg.Reviewer.Frequency = frequency
-	return true
-}
-
-func (e *Engine) SetReviewerFrequency(frequency string) bool {
-	return e.setReviewerFrequency(frequency)
 }
 
 func (e *Engine) reviewerEnabledChange(enabled bool) (bool, string, error) {
@@ -461,7 +457,11 @@ func (e *Engine) reviewerEnabledChange(enabled bool) (bool, string, error) {
 		if err := e.initReviewerClient(); err != nil {
 			return false, current, err
 		}
-		return true, "edits", nil
+		e.mu.Lock()
+		reviewerState := e.reviewerRuntimeStateLocked()
+		target := reviewerState.ResumeFrequency("edits")
+		e.mu.Unlock()
+		return true, target, nil
 	}
 
 	if current == "off" {
@@ -480,13 +480,18 @@ func (e *Engine) applyReviewerEnabled(enabled bool, targetMode string) (bool, st
 	if !ok {
 		current = "off"
 	}
+	reviewerState := e.reviewerRuntimeStateLocked()
+	if current != "off" {
+		reviewerState.RecordResumeFrequency(current)
+	}
+
 	if enabled {
 		if current != "off" {
 			return false, current
 		}
 		target, ok := NormalizeReviewerFrequency(targetMode)
 		if !ok || target == "off" {
-			target = "edits"
+			target = reviewerState.ResumeFrequency("edits")
 		}
 		e.cfg.Reviewer.Frequency = target
 		return true, target
@@ -508,10 +513,15 @@ func (e *Engine) ThinkingLevel() string {
 func (e *Engine) FastModeEnabled() bool {
 	e.mu.Lock()
 	enabled := e.cfg.FastModeEnabled
+	if e.cfg.FastModeState != nil {
+		enabled = e.cfg.FastModeState.Enabled()
+	}
 	e.mu.Unlock()
 	if !enabled {
 		return false
 	}
+	// The shared state stores the user's preference; callers need the
+	// provider-supported effective state so status and requests stay valid.
 	return e.FastModeAvailable()
 }
 
@@ -713,15 +723,14 @@ func mustJSON(v any) json.RawMessage {
 }
 
 type storedLocalEntry struct {
-	Visibility            transcript.EntryVisibility              `json:"visibility,omitempty"`
-	Role                  string                                  `json:"role"`
-	Text                  string                                  `json:"text"`
-	DurationMs            *int64                                  `json:"duration_ms,omitempty"`
-	CondensedText         *string                                 `json:"condensed_text,omitempty"`
-	DiagnosticKey         *string                                 `json:"diagnostic_key,omitempty"`
-	NoticeID              *string                                 `json:"notice_id,omitempty"`
-	ToolOutputRepair      *transcript.ToolOutputRepairNotice      `json:"tool_output_repair,omitempty"`
-	ProviderModelMismatch *transcript.ProviderModelMismatchNotice `json:"provider_model_mismatch,omitempty"`
+	Visibility       transcript.EntryVisibility         `json:"visibility,omitempty"`
+	Role             string                             `json:"role"`
+	Text             string                             `json:"text"`
+	DurationMs       *int64                             `json:"duration_ms,omitempty"`
+	CondensedText    *string                            `json:"condensed_text,omitempty"`
+	DiagnosticKey    *string                            `json:"diagnostic_key,omitempty"`
+	NoticeID         *string                            `json:"notice_id,omitempty"`
+	ToolOutputRepair *transcript.ToolOutputRepairNotice `json:"tool_output_repair,omitempty"`
 	// AfterToolCallID keeps atomically persisted operator feedback visually
 	// attached after the tool result that caused it.
 	AfterToolCallID *string `json:"after_tool_call_id,omitempty"`
@@ -752,10 +761,6 @@ func (e *Engine) recordLastUsage(usage llm.Usage) (session.CommitReceipt, error)
 	if e != nil {
 		baselineEstimate = e.transcriptRuntimeState().EstimatedProviderTokens()
 	}
-	return e.recordLastUsageWithBaseline(usage, baselineEstimate)
-}
-
-func (e *Engine) recordLastUsageWithBaseline(usage llm.Usage, baselineEstimate int) (session.CommitReceipt, error) {
 	normalizedUsage, totalInputTokens, totalCachedInputTokens := e.usageTrackingState().Next(usage)
 	receipt := session.CommitReceipt{Committed: true}
 	var persistenceErr error

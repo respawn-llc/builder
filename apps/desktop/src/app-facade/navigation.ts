@@ -11,8 +11,6 @@ export type AppNavigation = Readonly<{
   back(): Promise<void>;
   forward(): Promise<void>;
   openHome(): Promise<void>;
-  selectHomeProject(projectID: string | null): Promise<void>;
-  openProjectTasks(projectID: string): Promise<void>;
   openProject(projectID: string, workflowID?: string): Promise<void>;
   openWorkflowEditor(input: Readonly<{ workflowID: string; projectID?: string | undefined }>): Promise<void>;
   openWorkflowLibrary(): Promise<"completed" | "failed">;
@@ -31,12 +29,6 @@ export type NavigationStackState = Readonly<{
 export function useAppNavigation(): AppNavigation {
   const navigate = useNavigate();
   const router = useRouter();
-  const location = useRouterState({
-    select: (state) => ({
-      pathname: state.location.pathname,
-      searchStr: state.location.searchStr,
-    }),
-  });
   const { logger } = useAppServices();
   const runNavigation = useCallback(
     async (action: () => Promise<void>): Promise<"completed" | "failed"> => {
@@ -73,43 +65,11 @@ export function useAppNavigation(): AppNavigation {
         });
       },
       async openHome() {
-        if (isHomeLocation(location.pathname, location.searchStr, null)) {
-          return;
-        }
-        if (location.pathname === "/") {
-          await runImmediateNavigation(async () => {
-            await navigate({ to: "/", search: {} });
-          });
-          return;
-        }
         await runNavigation(async () => {
-          await navigate({ to: "/", search: {} });
-        });
-      },
-      async selectHomeProject(projectID) {
-        if (isHomeLocation(location.pathname, location.searchStr, projectID)) {
-          return;
-        }
-        await runImmediateNavigation(async () => {
-          await navigate({ to: "/", search: projectID === null ? {} : { projectId: projectID } });
-        });
-      },
-      async openProjectTasks(projectID) {
-        if (location.pathname === `/projects/${projectID}/tasks`) {
-          return;
-        }
-        await runNavigation(async () => {
-          await navigate({ to: "/projects/$projectId/tasks", params: { projectId: projectID } });
+          await navigate({ to: "/" });
         });
       },
       async openProject(projectID, workflowID) {
-        if (
-          location.pathname === `/projects/${projectID}` &&
-          searchValue(location.searchStr, "workflowId") === (workflowID ?? null) &&
-          searchValue(location.searchStr, "taskId") === null
-        ) {
-          return;
-        }
         await runNavigation(async () => {
           await navigate({
             to: "/projects/$projectId",
@@ -165,21 +125,8 @@ export function useAppNavigation(): AppNavigation {
         });
       },
     }),
-    [location.pathname, location.searchStr, navigate, router.history, runImmediateNavigation, runNavigation],
+    [navigate, router.history, runImmediateNavigation, runNavigation],
   );
-}
-
-function isHomeLocation(
-  pathname: string,
-  searchStr: string,
-  projectID: string | null,
-): boolean {
-  return pathname === "/" && searchValue(searchStr, "projectId") === projectID;
-}
-
-function searchValue(searchStr: string, key: string): string | null {
-  const value = new URLSearchParams(searchStr).get(key);
-  return value === null || value.length === 0 ? null : value;
 }
 
 export function useNavigationStackState(): NavigationStackState {

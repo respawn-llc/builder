@@ -151,18 +151,6 @@ export const englishResources = {
       primaryWorkspace: "Primary workspace",
       openProject: "Open project",
       editProject: "Edit {{name}}",
-      prototype: {
-        projectContent: "Project content",
-        tasks: "Tasks",
-        sessions: "Sessions",
-        subagents: "Subagents",
-        newChatUnavailable: "New chat is not available in this prototype",
-        taskListStubTitle: "Task list goes here",
-        taskListStubBody: "This slot owns the embedded Project Task List.",
-        noSessionsTitle: "No sessions",
-        noSessionsBody: "Persisted chats will appear here.",
-        noPromptPreview: "No prompt preview",
-      },
     },
     projectEdit: {
       title: "Project",

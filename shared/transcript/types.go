@@ -7,8 +7,6 @@ import (
 	patchformat "core/shared/transcript/patchformat"
 )
 
-const MessageTypeAgentSteer = "agent_steer"
-
 type ToolPresentationKind string
 
 const (

@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["patch"],
+  "properties": {
+    "patch": {
+      "type": "string",
+      "description": "Patch text in freeform format."
+    }
+  }
+}

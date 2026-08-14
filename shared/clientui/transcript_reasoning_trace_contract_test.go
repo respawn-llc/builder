@@ -36,7 +36,6 @@ func TestTranscriptReasoningTraceContractSeparatesThinkingStatusAndOrderedTraces
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
 		CommittedRows:          []TranscriptCommittedRow{},
-		GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 		ActiveThinkingStatus:   &status,
 		ActiveReasoningTraces:  []TranscriptReasoningTraceUpdate{trace},
 	}

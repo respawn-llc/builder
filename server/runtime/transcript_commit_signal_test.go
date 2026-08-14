@@ -22,7 +22,7 @@ func TestSubmitUserMessageDoesNotEmitCommittedConversationUpdatedAfterFlushedUse
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	events := make([]Event, 0, 16)
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
@@ -49,7 +49,7 @@ func TestSubmitUserMessageWithToolCallDoesNotEmitCommittedConversationUpdatedAft
 		},
 	}}
 	events := make([]Event, 0, 32)
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
@@ -84,7 +84,7 @@ func TestPatchToolCallStartedUsesTranscriptWorkingDir(t *testing.T) {
 		},
 	}}
 	var started *transcript.ToolCallMeta
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch}}), Config{
 		Model:                "gpt-5",
 		TranscriptWorkingDir: "/worktree",
 		OnEvent: func(evt Event) {
@@ -136,7 +136,7 @@ func TestHostedToolOnlyTurnUsesCommittedToolCompletionBeforeFollowUpAssistantMes
 	}
 	events := make([]Event, 0, 24)
 	autoCompactionEnabled := false
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                 "gpt-5",
 		WebSearchMode:         "native",
 		EnabledTools:          []toolspec.ID{toolspec.ToolWebSearch},
@@ -190,7 +190,7 @@ func TestHostedToolOnlyMissingPhaseTurnUsesCommittedToolCompletion(t *testing.T)
 	}
 	events := make([]Event, 0, 24)
 	autoCompactionEnabled := false
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                 "gpt-5",
 		WebSearchMode:         "native",
 		EnabledTools:          []toolspec.ID{toolspec.ToolWebSearch},
@@ -230,7 +230,7 @@ func TestReviewerTranscriptPathsUseRichEventsWithoutCommittedConversationUpdated
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	events := make([]Event, 0, 48)
-	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",

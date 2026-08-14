@@ -470,7 +470,7 @@ function WorkflowGraphCanvasInner({
             onAddNodeToGroup?.(node.data.entityID, groupID);
             return;
           }
-          if (groupID === null && node.data.groupID !== null) {
+          if (groupID === null && node.data.groupID.length > 0) {
             onExtractNodeFromGroup?.(node.data.entityID);
           }
         }}

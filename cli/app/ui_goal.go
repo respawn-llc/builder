@@ -45,11 +45,11 @@ func (m *uiModel) workflowSessionActive() bool {
 }
 
 func goalIsActive(goal *clientui.RuntimeGoal) bool {
-	return goal != nil && goal.Goal != nil && goal.Status == clientui.RuntimeGoalStatusActive
+	return goal != nil && goal.Status == clientui.RuntimeGoalStatusActive
 }
 
 func goalIsPresent(goal *clientui.RuntimeGoal) bool {
-	if goal == nil || goal.Goal == nil {
+	if goal == nil {
 		return false
 	}
 	switch goal.Status {
@@ -212,11 +212,11 @@ func (m *uiModel) goalRuntimeCommand(operation goalRuntimeOperation, objective s
 	client := m.runtimeClient()
 	objective = strings.TrimSpace(objective)
 	sessionID := strings.TrimSpace(m.sessionID)
+	mutationSerial := m.goalRuntimeMutationSerial
 	token, shouldStart := m.beginGoalRuntimeMutation(operation, sessionID, objective)
 	if !shouldStart {
 		return nil
 	}
-	mutationSerial := m.goalRuntimeMutationSerial
 	if client == nil {
 		return func() tea.Msg {
 			return goalRuntimeDoneMsg{token: token, mutationSerial: mutationSerial, operation: operation, objective: objective}
@@ -228,15 +228,15 @@ func (m *uiModel) goalRuntimeCommand(operation goalRuntimeOperation, objective s
 		case goalRuntimeShow, goalRuntimeCheckSet, goalRuntimeCheckClear:
 			msg.goal, msg.err = client.ShowGoal()
 		case goalRuntimeSet:
-			msg.mutation, msg.err = client.SetGoal(objective)
+			msg.goal, msg.err = client.SetGoal(objective)
 		case goalRuntimePause:
-			msg.mutation, msg.err = client.PauseGoal()
+			msg.goal, msg.err = client.PauseGoal()
 		case goalRuntimeResume:
-			msg.mutation, msg.err = client.ResumeGoal()
+			msg.goal, msg.err = client.ResumeGoal()
 		case goalRuntimeComplete:
-			msg.mutation, msg.err = client.CompleteGoal()
+			msg.goal, msg.err = client.CompleteGoal()
 		case goalRuntimeClear:
-			msg.mutation, msg.err = client.ClearGoal()
+			msg.goal, msg.err = client.ClearGoal()
 		}
 		return msg
 	}
@@ -283,11 +283,7 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 	}
 	switch msg.operation {
 	case goalRuntimeShow:
-		if msg.mutationSerial != m.goalRuntimeMutationSerial {
-			return followUpCmd
-		}
-		m.goal.goal = goalCoreFromRuntimeGoal(msg.goal)
-		m.goal.pending = nil
+		m.goal.goal = cloneRuntimeGoal(msg.goal)
 		m.goal.error = ""
 		return followUpCmd
 	case goalRuntimeCheckSet:
@@ -309,32 +305,23 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		}
 		return sequenceCmds(m.goalRuntimeCommand(goalRuntimeClear, ""), followUpCmd)
 	case goalRuntimeSet:
-		if msg.mutationSerial != m.goalRuntimeMutationSerial {
-			return followUpCmd
-		}
-		m.goal.goal = goalCoreFromMutationResult(msg.mutation)
-		m.goal.pending = msg.mutation.Pending
+		m.goal.goal = cloneRuntimeGoal(msg.goal)
 		overlayCmd := tea.Cmd(nil)
-		if msg.mutation.Pending != nil {
-			m.goal.open = true
-			m.goal.confirmMode = ""
-			m.setInputMode(uiInputModeGoal)
-			overlayCmd = m.activateSurface(uiSurfaceGoal)
-		} else if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
-			m.goal.confirmMode = ""
+		if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
+			overlayCmd = m.inputController().stopGoalFlowCmd()
 		}
 		return sequenceCmds(overlayCmd, followUpCmd)
-	case goalRuntimePause, goalRuntimeResume, goalRuntimeComplete:
-		if msg.mutationSerial != m.goalRuntimeMutationSerial {
-			return followUpCmd
-		}
-		m.goal.pending = nil
-		if goal := goalCoreFromMutationResult(msg.mutation); goal != nil {
-			m.goal.goal = goal
-		}
+	case goalRuntimePause:
+		m.goal.goal = cloneRuntimeGoal(msg.goal)
+		return followUpCmd
+	case goalRuntimeResume:
+		m.goal.goal = cloneRuntimeGoal(msg.goal)
+		return followUpCmd
+	case goalRuntimeComplete:
+		m.goal.goal = cloneRuntimeGoal(msg.goal)
 		return followUpCmd
 	case goalRuntimeClear:
-		m.goal.pending = nil
+		m.goal.goal = nil
 		overlayCmd := tea.Cmd(nil)
 		if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
 			overlayCmd = m.inputController().stopGoalFlowCmd()
@@ -348,8 +335,7 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 func (m *uiModel) openGoalOverlay(goal *clientui.RuntimeGoal, err error) {
 	m.goal.open = true
 	m.goal.scroll = 0
-	m.goal.goal = goalCoreFromRuntimeGoal(goal)
-	m.goal.pending = nil
+	m.goal.goal = cloneRuntimeGoal(goal)
 	m.goal.error = ""
 	if err != nil {
 		m.goal.error = err.Error()
@@ -485,21 +471,20 @@ func (l uiViewLayout) goalOverlayContentLines(width int) []string {
 		builder.appendWrapped("Could not load goal: "+m.goal.error, warningStyle)
 		return builder.lines
 	}
-	if m.goal.goal == nil && m.goal.pending == nil {
+	if m.goal.goal == nil {
 		builder.appendGap()
 		builder.appendWrapped(noGoalHint, subtleStyle)
 		return builder.lines
 	}
 	goal := m.goal.goal
-	status, objective := goalDisplay(goal, m.goal.pending)
 	builder.appendGap()
-	builder.appendWrapped("Status: "+strings.TrimSpace(string(status)), boldStyle)
-	if goal != nil && strings.TrimSpace(goal.ID) != "" {
+	builder.appendWrapped("Status: "+strings.TrimSpace(string(goal.Status)), boldStyle)
+	if strings.TrimSpace(goal.ID) != "" {
 		builder.appendWrapped("ID: "+strings.TrimSpace(goal.ID), subtleStyle)
 	}
 	builder.appendGap()
 	builder.appendWrapped("Objective", titleStyle)
-	builder.appendMarkdown(objective)
+	builder.appendMarkdown(goal.Objective)
 	builder.appendGap()
 	builder.appendWrapped("Esc/q closes. /goal pause, /goal resume, /goal clear manage lifecycle.", subtleStyle)
 	return builder.lines
@@ -535,33 +520,4 @@ func (l uiViewLayout) goalConfirmContentLines(width int, titleStyle, boldStyle, 
 	builder.lines = append(builder.lines, padANSIRight(renderUIChoiceGroupLine(width, m.theme, uiChoiceGroupKindButton, buttons, m.goal.confirmSelection), builder.width))
 	builder.appendWrapped("Tab/←/→ select. Enter confirms. ↑/↓ scroll. Esc cancels.", subtleStyle)
 	return builder.lines
-}
-
-func goalDisplay(goal *clientui.Goal, pending *clientui.GoalPreview) (clientui.RuntimeGoalStatus, string) {
-	if goal != nil {
-		return goal.Status, goal.Objective
-	}
-	if pending != nil {
-		return pending.Status, pending.Objective
-	}
-	return "", ""
-}
-
-func goalCoreFromMutationResult(result clientui.GoalMutationResult) *clientui.Goal {
-	return cloneGoalCore(result.Goal)
-}
-
-func goalCoreFromRuntimeGoal(runtimeGoal *clientui.RuntimeGoal) *clientui.Goal {
-	if runtimeGoal == nil {
-		return nil
-	}
-	return cloneGoalCore(runtimeGoal.Goal)
-}
-
-func cloneGoalCore(source *clientui.Goal) *clientui.Goal {
-	if source == nil {
-		return nil
-	}
-	goal := *source
-	return &goal
 }

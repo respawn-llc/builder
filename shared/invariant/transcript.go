@@ -14,16 +14,6 @@ func ValidateTranscriptCommittedRow(row clientui.TranscriptCommittedRow) error {
 	if err := row.Locator.Validate(); err != nil {
 		return fmt.Errorf("committed row locator: %w", err)
 	}
-	if row.User != nil {
-		if err := transcript.ValidateCommittedAtUnixMs(row.User.CommittedAtUnixMs); err != nil {
-			return fmt.Errorf("committed user row timestamp: %w", err)
-		}
-	}
-	if row.Assistant != nil {
-		if err := transcript.ValidateCommittedAtUnixMs(row.Assistant.CommittedAtUnixMs); err != nil {
-			return fmt.Errorf("committed assistant row timestamp: %w", err)
-		}
-	}
 	if err := row.ValidateStructure(); err != nil {
 		return err
 	}

@@ -20,10 +20,9 @@
 ## /goal
 
 - `/goal` and `/goal show` open the overlay. `set <objective>`, `pause`, `resume`, and `clear` act directly.
-- An accepted queued Set or replacement shows the preview defined by `core-runtime-tools.md` directly as non-authoritative command feedback. The TUI does not cache or reconcile the preview; Goal updates and reads remain authoritative.
 - Overlay shows goal status, goal ID, and the objective rendered as Markdown; a no-goal state shows a hint to start one; load errors render inline in the overlay.
 - Setting an objective while a goal is active opens a Replace confirmation (current vs new objective); clearing an active goal opens a Clear confirmation. Both use a Cancel/Confirm button group (Cancel default) with `y`/`n` shortcuts; confirming issues the mutation and closes the confirm state. Paused goals clear without confirmation.
-- Only one Goal change applies at a time for a Session. If the user requests another state while one is pending, the newest requested state replaces the older pending state. Kent does not replay intermediate states.
+- Goal changes for an Active Session Runtime enter Steering as distinct typed intents in acceptance order. The overlay does not replace, coalesce, or replay an earlier accepted Goal change.
 
 ## /ps
 

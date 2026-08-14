@@ -87,6 +87,7 @@ func hasProviderCapabilitiesOverride(override ProviderCapabilitiesOverride) bool
 	return strings.TrimSpace(override.ProviderID) != "" ||
 		override.SupportsResponsesAPI ||
 		override.SupportsResponsesCompact ||
+		override.SupportsRequestInputTokenCount ||
 		override.SupportsPromptCacheKey ||
 		override.SupportsNativeWebSearch ||
 		override.SupportsReasoningEncrypted ||
@@ -122,6 +123,9 @@ func inheritReviewerProviderCapabilities(settings *Settings, sources map[string]
 	}
 	if !hasConfiguredSource(sources, "reviewer.provider_capabilities.supports_responses_compact") {
 		settings.Reviewer.ProviderCapabilities.SupportsResponsesCompact = settings.ProviderCapabilities.SupportsResponsesCompact
+	}
+	if !hasConfiguredSource(sources, "reviewer.provider_capabilities.supports_request_input_token_count") {
+		settings.Reviewer.ProviderCapabilities.SupportsRequestInputTokenCount = settings.ProviderCapabilities.SupportsRequestInputTokenCount
 	}
 	if !hasConfiguredSource(sources, "reviewer.provider_capabilities.supports_prompt_cache_key") {
 		settings.Reviewer.ProviderCapabilities.SupportsPromptCacheKey = settings.ProviderCapabilities.SupportsPromptCacheKey
@@ -172,6 +176,7 @@ var mainProviderCapabilitySourceKeys = newProviderCapabilitySourceKeys(
 	"provider_capabilities.provider_id",
 	"provider_capabilities.supports_responses_api",
 	"provider_capabilities.supports_responses_compact",
+	"provider_capabilities.supports_request_input_token_count",
 	"provider_capabilities.supports_prompt_cache_key",
 	"provider_capabilities.supports_native_web_search",
 	"provider_capabilities.supports_reasoning_encrypted",
@@ -184,6 +189,7 @@ var reviewerProviderCapabilitySourceKeys = newProviderCapabilitySourceKeys(
 	"reviewer.provider_capabilities.provider_id",
 	"reviewer.provider_capabilities.supports_responses_api",
 	"reviewer.provider_capabilities.supports_responses_compact",
+	"reviewer.provider_capabilities.supports_request_input_token_count",
 	"reviewer.provider_capabilities.supports_prompt_cache_key",
 	"reviewer.provider_capabilities.supports_native_web_search",
 	"reviewer.provider_capabilities.supports_reasoning_encrypted",

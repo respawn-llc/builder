@@ -1,53 +1,19 @@
 package serverapi_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
-	"core/shared/jsoncontract"
 	"core/shared/serverapi"
-	"core/shared/serverjsoncontract"
 )
 
-func TestOnboardingFinalizeRequestContractValidatesStructuralShapes(t *testing.T) {
-	contract, err := serverjsoncontract.PrepareOnboardingFinalizeRequest(jsoncontract.NewPreparer(false))
-	if err != nil {
-		t.Fatalf("prepare onboarding request contract: %v", err)
-	}
-	for _, raw := range []string{
-		`{}`,
-		`{"theme":null}`,
-		`{"skills_import":null}`,
-		`{"skills_import":{"mode":"none","provider_uuid":null}}`,
-	} {
-		if _, err := contract.Decode([]byte(raw)); err != nil {
-			t.Fatalf("onboarding request contract rejected %s: %v", raw, err)
-		}
-	}
-	for _, raw := range []string{
-		`null`,
-		`{"skills_import":{}}`,
-		`{"skills_import":{"mode":"none","provider_uuid":7}}`,
-		`{"skills_import":{"mode":"none","extra":true}}`,
-		`{"unknown":true}`,
-		`{"theme":"auto"} {}`,
-	} {
-		if _, err := contract.Decode([]byte(raw)); err == nil {
-			t.Fatalf("onboarding request contract accepted %s", raw)
-		}
-	}
-}
-
 func TestOnboardingFinalizeRequestDomainValidationOwnsMalformedProviderUUID(t *testing.T) {
-	contract, err := serverjsoncontract.PrepareOnboardingFinalizeRequest(jsoncontract.NewPreparer(false))
-	if err != nil {
-		t.Fatalf("prepare onboarding request contract: %v", err)
-	}
-	req, err := contract.Decode([]byte(`{"skills_import":{"mode":"symlink_source","provider_uuid":"not-a-uuid"}}`))
-	if err != nil {
+	var req serverapi.OnboardingFinalizeRequest
+	if err := json.Unmarshal([]byte(`{"skills_import":{"mode":"symlink_source","provider_uuid":"not-a-uuid"}}`), &req); err != nil {
 		t.Fatalf("decode request: %v", err)
 	}
-	err = serverapi.ValidateOnboardingFinalizeRequest(req)
+	err := serverapi.ValidateOnboardingFinalizeRequest(req)
 	var finalizeErr *serverapi.OnboardingFinalizeError
 	if !errors.As(err, &finalizeErr) {
 		t.Fatalf("validation error = %T %v, want OnboardingFinalizeError", err, err)
@@ -62,17 +28,45 @@ func TestOnboardingFinalizeRequestDomainValidationOwnsMalformedProviderUUID(t *t
 }
 
 func TestOnboardingFinalizeRequestRejectsUnknownTopLevelConfigKeys(t *testing.T) {
-	contract, err := serverjsoncontract.PrepareOnboardingFinalizeRequest(jsoncontract.NewPreparer(false))
-	if err != nil {
-		t.Fatalf("prepare onboarding request contract: %v", err)
+	var req serverapi.OnboardingFinalizeRequest
+	if err := json.Unmarshal([]byte(`{"compaction_mode":"bogus"}`), &req); err != nil {
+		t.Fatalf("decode request: %v", err)
 	}
-	if _, err := contract.Decode([]byte(`{"compaction_mode":"bogus"}`)); err == nil {
-		t.Fatal("onboarding request contract accepted an unknown field")
+	err := serverapi.ValidateOnboardingFinalizeRequest(req)
+	var finalizeErr *serverapi.OnboardingFinalizeError
+	if !errors.As(err, &finalizeErr) {
+		t.Fatalf("validation error = %T %v, want OnboardingFinalizeError", err, err)
+	}
+	details := finalizeErr.Details.(serverapi.OnboardingInvalidRequestDetails)
+	if len(details.FieldErrors) != 1 || details.FieldErrors[0].Field != "compaction_mode" || details.FieldErrors[0].Code != "unknown_field" {
+		t.Fatalf("field errors = %+v", details.FieldErrors)
+	}
+}
+
+func TestOnboardingFinalizeRequestSortsUnknownTopLevelConfigKeys(t *testing.T) {
+	var req serverapi.OnboardingFinalizeRequest
+	if err := json.Unmarshal([]byte(`{"z_unknown":true,"a_unknown":true}`), &req); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	err := serverapi.ValidateOnboardingFinalizeRequest(req)
+	var finalizeErr *serverapi.OnboardingFinalizeError
+	if !errors.As(err, &finalizeErr) {
+		t.Fatalf("validation error = %T %v, want OnboardingFinalizeError", err, err)
+	}
+	details := finalizeErr.Details.(serverapi.OnboardingInvalidRequestDetails)
+	if len(details.FieldErrors) != 2 {
+		t.Fatalf("field errors = %+v, want 2", details.FieldErrors)
+	}
+	if details.FieldErrors[0].Field != "a_unknown" || details.FieldErrors[1].Field != "z_unknown" {
+		t.Fatalf("field errors = %+v, want sorted unknown fields", details.FieldErrors)
 	}
 }
 
 func TestOnboardingFinalizeRequestRejectsEmptyMainProviderValues(t *testing.T) {
-	req := decodeOnboardingFinalizeRequest(t, `{"main_provider":{"provider_override":"","openai_base_url":""}}`)
+	var req serverapi.OnboardingFinalizeRequest
+	if err := json.Unmarshal([]byte(`{"main_provider":{"provider_override":"","openai_base_url":""}}`), &req); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
 	err := serverapi.ValidateOnboardingFinalizeRequest(req)
 	var finalizeErr *serverapi.OnboardingFinalizeError
 	if !errors.As(err, &finalizeErr) {
@@ -85,7 +79,10 @@ func TestOnboardingFinalizeRequestRejectsEmptyMainProviderValues(t *testing.T) {
 }
 
 func TestOnboardingFinalizeRequestRejectsInvalidToolOverrides(t *testing.T) {
-	req := decodeOnboardingFinalizeRequest(t, `{"tool_overrides":[{"id":"shell","enabled":false},{"id":"ask_question","enabled":false},{"id":"patch","enabled":true},{"id":"patch","enabled":false}]}`)
+	var req serverapi.OnboardingFinalizeRequest
+	if err := json.Unmarshal([]byte(`{"tool_overrides":[{"id":"shell","enabled":false},{"id":"ask_question","enabled":false},{"id":"patch","enabled":true},{"id":"patch","enabled":false}]}`), &req); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
 	err := serverapi.ValidateOnboardingFinalizeRequest(req)
 	var finalizeErr *serverapi.OnboardingFinalizeError
 	if !errors.As(err, &finalizeErr) {
@@ -98,17 +95,4 @@ func TestOnboardingFinalizeRequestRejectsInvalidToolOverrides(t *testing.T) {
 		details.FieldErrors[2].Field != "tool_overrides.3.id" || details.FieldErrors[2].Code != "duplicate" {
 		t.Fatalf("field errors = %+v", details.FieldErrors)
 	}
-}
-
-func decodeOnboardingFinalizeRequest(t *testing.T, raw string) serverapi.OnboardingFinalizeRequest {
-	t.Helper()
-	contract, err := serverjsoncontract.PrepareOnboardingFinalizeRequest(jsoncontract.NewPreparer(false))
-	if err != nil {
-		t.Fatalf("prepare onboarding request contract: %v", err)
-	}
-	request, err := contract.Decode([]byte(raw))
-	if err != nil {
-		t.Fatalf("decode onboarding request: %v", err)
-	}
-	return request
 }

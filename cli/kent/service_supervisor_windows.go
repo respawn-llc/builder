@@ -23,6 +23,7 @@ import (
 const (
 	supervisorInitialBackoff = 1 * time.Second
 	supervisorMaxBackoff     = 30 * time.Second
+	stillActiveExitCode      = 259
 
 	supervisorStopGracePeriod = 15 * time.Second
 
@@ -63,9 +64,7 @@ func (s *serverSupervisor) run(ctx context.Context) {
 		}
 		session := s.wanted.Load()
 		if session == 0 {
-			if s.stopChild().Complete {
-				return
-			}
+			s.stopChild()
 			select {
 			case <-ctx.Done():
 				return
@@ -74,15 +73,10 @@ func (s *serverSupervisor) run(ctx context.Context) {
 			}
 		}
 		s.mu.Lock()
-		needLaunch := s.child == nil || (s.child.session != session && !s.child.retained)
+		needLaunch := s.child == nil || s.child.session != session || !s.child.alive()
 		s.mu.Unlock()
 		if needLaunch {
-			if s.stopChild().Complete {
-				return
-			}
-			if ctx.Err() != nil || s.wanted.Load() != session {
-				continue
-			}
+			s.stopChild()
 			child, err := launchServerAsUser(s.spec, session)
 			if err != nil {
 				s.logf("launch failed for session %d: %v", session, err)
@@ -90,12 +84,6 @@ func (s *serverSupervisor) run(ctx context.Context) {
 					return
 				}
 				backoff = growBackoff(backoff)
-				continue
-			}
-			if ctx.Err() != nil || s.wanted.Load() != session {
-				if settleStaleLaunchedCandidate(s.settlementTarget(child)).Complete {
-					return
-				}
 				continue
 			}
 			s.mu.Lock()
@@ -112,17 +100,16 @@ func (s *serverSupervisor) run(ctx context.Context) {
 			s.stopChild()
 			return
 		case <-s.wake:
-			if child.retained {
-				continue
-			}
-			if routeManagedChildWake(child.session, s.wanted.Load(), func() managedChildSettlementDecision {
-				return settleManagedChild(s.settlementTarget(child), child.terminate(s.spec))
-			}).Complete {
-				return
-			}
 			continue
-		case observation := <-child.observed:
-			if settleManagedChild(s.settlementTarget(child), observation).Complete {
+		case <-child.exited:
+			child.release()
+			s.mu.Lock()
+			if s.child == child {
+				s.child = nil
+			}
+			s.mu.Unlock()
+			s.clearPID()
+			if ctx.Err() != nil {
 				return
 			}
 			if !s.sleep(ctx, backoff) {
@@ -146,21 +133,17 @@ func (s *serverSupervisor) sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (s *serverSupervisor) stopChild() managedChildSettlementDecision {
+func (s *serverSupervisor) stopChild() {
 	s.mu.Lock()
 	child := s.child
+	s.child = nil
 	s.mu.Unlock()
-	if child == nil {
-		s.clearPID()
-		return managedChildSettlementDecision{Replace: true}
+	if child != nil {
+		child.terminate()
 	}
-	return settleManagedChild(s.settlementTarget(child), child.terminate(s.spec))
+	s.clearPID()
 }
 
-func (s *serverSupervisor) settlementTarget(child *managedChild) managedChildSettlementTarget {
-	return managedChildSettlementTarget{func() serviceTerminationObservation { return child.terminate(s.spec) }, func() { child.release(); s.setChild(nil); s.clearPID() }, func() { child.retained = true; s.setChild(child); s.writePID(child.pid) }}
-}
-func (s *serverSupervisor) setChild(child *managedChild) { s.mu.Lock(); s.child = child; s.mu.Unlock() }
 func (s *serverSupervisor) writePID(pid uint32) {
 	_ = os.MkdirAll(windowsServiceDir(s.spec), 0o755)
 	_ = os.WriteFile(windowsServerPIDPath(s.spec), []byte(fmt.Sprintf("%d", pid)), 0o644)
@@ -260,55 +243,38 @@ type managedChild struct {
 	profile  windows.Handle
 	shutdown windows.Handle
 	job      windows.Handle
-	observed chan serviceTerminationObservation
-	retained bool
+	exited   chan struct{}
 	released sync.Once
 }
 
-func (c *managedChild) watch(spec serviceSpec) {
-	result, waitErr := windows.WaitForSingleObject(c.process, windows.INFINITE)
-	observation := serviceTerminationObservation{TerminationConfirmed: waitErr == nil && result == windows.WAIT_OBJECT_0}
-	if waitErr != nil {
-		appendServiceLog(spec, "wait for server process failed: %v", waitErr)
-	} else if !observation.TerminationConfirmed {
-		appendServiceLog(spec, "wait for server process returned %d", result)
-	}
-	if observation.TerminationConfirmed {
-		var status uint32
-		if err := windows.GetExitCodeProcess(c.process, &status); err != nil {
-			appendServiceLog(spec, "read server process exit status failed: %v", err)
-		} else {
-			observation.ExitStatus = &status
-		}
-	}
-	c.observed <- observation
+func (c *managedChild) watch() {
+	_, _ = windows.WaitForSingleObject(c.process, windows.INFINITE)
+	close(c.exited)
 }
 
-func (c *managedChild) terminate(spec serviceSpec) serviceTerminationObservation {
-	if c.shutdown == 0 {
-		appendServiceLog(spec, "shutdown handle unavailable: pid %d", c.pid)
-	} else if err := windows.SetEvent(c.shutdown); err != nil {
-		appendServiceLog(spec, "shutdown signal failed: pid %d: %v", c.pid, err)
-	} else {
+func (c *managedChild) alive() bool {
+	var code uint32
+	if err := windows.GetExitCodeProcess(c.process, &code); err != nil {
+		return false
+	}
+	return code == stillActiveExitCode
+}
+
+func (c *managedChild) terminate() {
+	if c.shutdown != 0 && windows.SetEvent(c.shutdown) == nil {
 		select {
-		case observation := <-c.observed:
-			if serviceTerminationConfirmed(observation) {
-				return observation
-			}
+		case <-c.exited:
+			c.release()
+			return
 		case <-time.After(supervisorStopGracePeriod):
-			appendServiceLog(spec, "shutdown timeout pid %d", c.pid)
 		}
 	}
-	if err := windows.TerminateProcess(c.process, 1); err != nil {
-		appendServiceLog(spec, "terminate server process %d failed: %v", c.pid, err)
-	}
+	_ = windows.TerminateProcess(c.process, 1)
 	select {
-	case observation := <-c.observed:
-		return observation
+	case <-c.exited:
 	case <-time.After(5 * time.Second):
-		appendServiceLog(spec, "termination wait timeout pid %d", c.pid)
-		return serviceTerminationObservation{}
 	}
+	c.release()
 }
 
 func (c *managedChild) release() {
@@ -424,9 +390,9 @@ func launchServerAsUser(spec serviceSpec, session uint32) (child *managedChild, 
 		profile:  profile,
 		shutdown: shutdown,
 		job:      job,
-		observed: make(chan serviceTerminationObservation, 1),
+		exited:   make(chan struct{}),
 	}
-	go c.watch(spec)
+	go c.watch()
 	committed = true
 	return c, nil
 }

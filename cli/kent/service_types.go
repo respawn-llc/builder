@@ -25,60 +25,6 @@ const (
 	serviceStdoutLogName      = "server.log"
 	serviceStderrLogName      = "server.err.log"
 )
-const serviceNoRestartExitStatus uint32 = 2
-
-type serviceTerminationObservation struct {
-	TerminationConfirmed bool
-	ExitStatus           *uint32
-}
-type managedChildSettlementTarget struct {
-	terminate       func() serviceTerminationObservation
-	release, retain func()
-}
-type managedChildSettlementDecision struct{ Replace, Complete bool }
-
-func serviceTerminationConfirmed(o serviceTerminationObservation) bool { return o.TerminationConfirmed }
-func serviceRestartDecision(s *uint32) bool                            { return s != nil && *s != serviceNoRestartExitStatus }
-func settleManagedChild(target managedChildSettlementTarget, observation serviceTerminationObservation) managedChildSettlementDecision {
-	if !serviceTerminationConfirmed(observation) {
-		target.retain()
-		return managedChildSettlementDecision{}
-	}
-	target.release()
-	replace := serviceRestartDecision(observation.ExitStatus)
-	return managedChildSettlementDecision{Replace: replace, Complete: !replace}
-}
-func routeManagedChildWake(currentSession, wantedSession uint32, settle func() managedChildSettlementDecision) managedChildSettlementDecision {
-	if currentSession == wantedSession {
-		return managedChildSettlementDecision{}
-	}
-	return settle()
-}
-func settleStaleLaunchedCandidate(target managedChildSettlementTarget) managedChildSettlementDecision {
-	return settleManagedChild(target, target.terminate())
-}
-func serviceCompletionStatus() (bool, uint32) { return false, 0 }
-func renderSystemdUnitText(description, execStart, stdoutLogPath, stderrLogPath string) string {
-	lines := []string{
-		"[Unit]",
-		"Description=" + description,
-		"After=network-online.target",
-		"",
-		"[Service]",
-		"Type=simple",
-		"ExecStart=" + execStart,
-		"Restart=always",
-		fmt.Sprintf("RestartPreventExitStatus=%d", serviceNoRestartExitStatus),
-		"RestartSec=2",
-		"StandardOutput=append:" + stdoutLogPath,
-		"StandardError=append:" + stderrLogPath,
-		"",
-		"[Install]",
-		"WantedBy=default.target",
-		"",
-	}
-	return strings.Join(lines, "\n")
-}
 
 type serviceSpec struct {
 	Config        config.App

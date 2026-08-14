@@ -51,7 +51,6 @@ func persistedMetaFromMetadata(metadata session.Meta) session.Meta {
 		HeadlessActive:                  metadata.HeadlessActive,
 		CompactionSoonReminderIssued:    metadata.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: metadata.GeneratedRecoveredWarningIssued,
-		PendingModelRecovery:            metadata.PendingModelRecovery,
 		WorktreeReminder:                metadata.WorktreeReminder,
 		UsageState:                      metadata.UsageState,
 		Goal:                            metadata.Goal,

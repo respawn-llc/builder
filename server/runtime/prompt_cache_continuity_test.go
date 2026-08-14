@@ -80,7 +80,7 @@ func TestHeadlessToInteractiveReopenPreservesPromptCachePrefix(t *testing.T) {
 	}()
 
 	store := mustCreateTestSession(t)
-	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}})
+	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}})
 	headlessResponse := finalOutputItemResponse("headless-ok")
 	headlessResponse.Usage.CachedInputTokens = textutil.Value(4096)
 	headlessClient := &fakeClient{responses: []llm.Response{headlessResponse}}
@@ -139,7 +139,7 @@ func TestSkillsPolicyChangesOnlyAtMainContextReconstruction(t *testing.T) {
 		SupportsPromptCacheKey:   true,
 		IsOpenAIFirstParty:       true,
 	}
-	registry := newTestToolRegistry(t)
+	registry := tools.NewRegistry()
 	enabledClient := &fakeClient{
 		caps:      caps,
 		responses: []llm.Response{finalOutputItemResponse("enabled response")},
@@ -249,7 +249,7 @@ func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
 			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 		}},
 	}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:                        "gpt-5",
 		CompactionMode:               "native",
 		PromptFacingSnapshotReloader: reloader,
@@ -313,7 +313,7 @@ func TestBuildRequest_ReopenPreservesShellStringToolOutputPayload(t *testing.T) 
 		},
 		finalOutputItemResponse("done"),
 	}}
-	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: stringOutputTool{name: toolspec.ToolExecCommand}})
+	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: stringOutputTool{name: toolspec.ToolExecCommand}})
 	engine := mustNewTestEngine(t, store, client, registry, Config{
 		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand},
 		ToolPreambles: false,
@@ -340,8 +340,8 @@ func TestBuildRequest_ReopenPreservesShellStringToolOutputPayload(t *testing.T) 
 }
 
 func TestPromptCacheReplayPreservesMultiToolHTMLUnescapeShape(t *testing.T) {
-	liveReq := seq21To28ShapeRequest(t, json.RawMessage(`{"cmd":"git diff --cached && git diff","workdir":"/workspace","max_output_tokens":20000}`))
-	replayedReq := seq21To28ShapeRequest(t, json.RawMessage(`{"cmd":"git diff --cached \u0026\u0026 git diff","workdir":"/workspace","max_output_tokens":20000}`))
+	liveReq := seq21To28ShapeRequest(json.RawMessage(`{"cmd":"git diff --cached && git diff","workdir":"/workspace","max_output_tokens":20000}`))
+	replayedReq := seq21To28ShapeRequest(json.RawMessage(`{"cmd":"git diff --cached \u0026\u0026 git diff","workdir":"/workspace","max_output_tokens":20000}`))
 
 	liveShape, err := summarizePromptCacheRequest(liveReq)
 	if err != nil {
@@ -407,7 +407,7 @@ func newPromptCacheContinuityFixture(t *testing.T) *promptCacheContinuityFixture
 	}
 	client := &fakeClient{caps: clientCaps}
 	reviewerClient := &fakeClient{caps: clientCaps}
-	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}, tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: fakeTool{name: toolspec.ToolAskQuestion}})
+	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}, tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: fakeTool{name: toolspec.ToolAskQuestion}})
 	cfg := Config{
 		Model:         "gpt-5",
 		ThinkingLevel: "medium",
@@ -453,10 +453,10 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	if err := engine.steerBaseMetaContextIfNeeded("seed-meta"); err != nil {
 		t.Fatalf("inject agents: %v", err)
 	}
-	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Need a prompt cache continuity test that survives a server restart.")}})); err != nil {
+	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Need a prompt cache continuity test that survives a server restart.")}})); err != nil {
 		t.Fatalf("append first user message: %v", err)
 	}
-	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), Content: textutil.Value("I am reconstructing the live runtime state before comparing serialized OpenAI payloads.")}})); err != nil {
+	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), Content: textutil.Value("I am reconstructing the live runtime state before comparing serialized OpenAI payloads.")}})); err != nil {
 		t.Fatalf("append assistant commentary: %v", err)
 	}
 	toolCall := llm.ToolCall{
@@ -467,7 +467,7 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 			"workdir": ".",
 		}),
 	}
-	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), ToolCalls: []llm.ToolCall{toolCall}}})); err != nil {
+	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), ToolCalls: []llm.ToolCall{toolCall}}})); err != nil {
 		t.Fatalf("append tool call: %v", err)
 	}
 	toolResult := tools.Result{
@@ -481,10 +481,10 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	if err := engine.steer("turn-1", steerToolCompletionIntent(toolResult)); err != nil {
 		t.Fatalf("persist tool completion: %v", err)
 	}
-	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(toolResult.CallID), Name: textutil.Value(string(toolResult.Name)), Content: textutil.Value(string(toolResult.Output))}})); err != nil {
+	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(toolResult.CallID), Name: textutil.Value(string(toolResult.Name)), Content: textutil.Value(string(toolResult.Output))}})); err != nil {
 		t.Fatalf("append tool result message: %v", err)
 	}
-	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("Keep the persisted transcript byte-stable across hydrate and restart before sending the next model request.")}})); err != nil {
+	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("Keep the persisted transcript byte-stable across hydrate and restart before sending the next model request.")}})); err != nil {
 		t.Fatalf("append developer entry: %v", err)
 	}
 	if err := engine.steer("turn-1", steerLocalEntryIntent(storedLocalEntry{
@@ -495,10 +495,10 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	})); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
-	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("The runtime state is seeded. I only need the post-restart payload comparison now.")}})); err != nil {
+	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("The runtime state is seeded. I only need the post-restart payload comparison now.")}})); err != nil {
 		t.Fatalf("append assistant final answer: %v", err)
 	}
-	if err := engine.steer("turn-2", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Continue after restart and compare the exact OpenAI payload bytes.")}})); err != nil {
+	if err := engine.steer("turn-2", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Continue after restart and compare the exact OpenAI payload bytes.")}})); err != nil {
 		t.Fatalf("append second user message: %v", err)
 	}
 }
@@ -734,7 +734,7 @@ func skillMessageContent(messages []llm.Message) (string, bool) {
 	return "", false
 }
 
-func seq21To28ShapeRequest(t testing.TB, thirdCallInput json.RawMessage) llm.Request {
+func seq21To28ShapeRequest(thirdCallInput json.RawMessage) llm.Request {
 	return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model:        "gpt-5",
 		SystemPrompt: "system",
@@ -753,7 +753,7 @@ func seq21To28ShapeRequest(t testing.TB, thirdCallInput json.RawMessage) llm.Req
 			{Role: llm.RoleTool, ToolCallID: textutil.Value("call-search"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`"docs/dev/specs/README.md:1:# Product Specs"`)},
 			{Role: llm.RoleTool, ToolCallID: textutil.Value("call-status"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`"M\tdocs/dev/specs/README.md"`)},
 		}),
-		Tools: []llm.Tool{{Name: string(toolspec.ToolExecCommand), Description: "execute command", Schema: mustTestFunctionSchema(t)}},
+		Tools: []llm.Tool{{Name: string(toolspec.ToolExecCommand), Description: "execute command", Schema: json.RawMessage(`{"type":"object"}`)}},
 	}
 }
 

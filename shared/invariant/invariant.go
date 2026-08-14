@@ -1,6 +1,8 @@
 package invariant
 
 import (
+	"errors"
+	"fmt"
 	"os"
 )
 
@@ -27,6 +29,26 @@ type Policy struct {
 }
 
 type Option func(*policyConfig)
+
+func OperationalError(sentinel error, debug bool, operation string, cause error) error {
+	if sentinel == nil {
+		sentinel = errors.New("ownership invariant failed")
+	}
+	OperationalPolicy(debug).Check(false, FailureDiagnostic(
+		ScopeWorkflowExecution,
+		operation,
+		cause,
+	))
+	return fmt.Errorf("%w: %s: %v", sentinel, operation, cause)
+}
+
+func OperationalPolicy(debug bool) Policy {
+	mode := ModeDiagnostic
+	if debug {
+		mode = ModePanic
+	}
+	return NewPolicy(WithMode(mode))
+}
 
 type policyConfig struct {
 	modeSet bool

@@ -30,9 +30,6 @@ export function sidebarTitle(
     }
     return t("workflowEditor.inspectEdge");
   }
-  if (destination.kind === "workflowSettings") {
-    return t("workflowEditor.editWorkflowTooltip");
-  }
   if (destination.kind === "workflowEditor") {
     return t("workflowEditor.title");
   }

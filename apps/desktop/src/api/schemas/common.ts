@@ -37,10 +37,6 @@ export { workflowIDSchema } from "./workflowID";
 
 export const emptyString = z.string().optional().default("");
 export const nonBlankString = z.string().trim().min(1);
-export const nullableGraphEntityIDSchema = z
-  .string()
-  .refine((value) => value.trim().length > 0)
-  .nullable();
 export const nullableWorkflowIDSchema = workflowIDSchema.nullish().transform((value) => value ?? null);
 export const numberValue = z.number().default(0);
 export const nullableString = z
@@ -167,7 +163,7 @@ const validationErrorDetailsSchema = z
       field_name: emptyString,
       input_name: emptyString,
       placeholder: emptyString,
-      provider_edge_id: nullableGraphEntityIDSchema.default(null),
+      provider_edge_id: emptyString,
       role: nullableNonBlankString,
       required_tool: nullableNonBlankString,
     }),
@@ -186,9 +182,9 @@ export const validationErrorSchema: z.ZodType<WorkflowValidationError> = z
     code: z.string(),
     message: z.string(),
     workflow_id: nullableWorkflowIDSchema,
-    node_id: nullableGraphEntityIDSchema,
-    transition_group_id: nullableGraphEntityIDSchema,
-    edge_id: nullableGraphEntityIDSchema,
+    node_id: emptyString,
+    transition_group_id: emptyString,
+    edge_id: emptyString,
     details: validationErrorDetailsSchema,
     related_ids: stringList,
     blocks_context: z.boolean().default(false),
@@ -294,7 +290,7 @@ export const boardColumnSchema: z.ZodType<BoardColumn> = z
         .nullish()
         .transform((value) => value ?? []),
     }),
-    group_id: nullableGraphEntityIDSchema,
+    group_id: emptyString,
     sort_order: z.number(),
     is_backlog: z.boolean(),
     is_done: z.boolean(),

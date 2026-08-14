@@ -3,12 +3,11 @@ package transcript
 import "strings"
 
 const (
-	NoticeReasonCacheWarning          = "cache_warning"
-	NoticeReasonCompaction            = "compaction"
-	NoticeReasonLegacyUntypedNotice   = "legacy_untyped_notice"
-	NoticeReasonRuntimeDiagnostic     = "runtime_diagnostic"
-	NoticeReasonToolOutputRepair      = "tool_output_repair"
-	NoticeReasonProviderModelMismatch = "provider_model_mismatch"
+	NoticeReasonCacheWarning        = "cache_warning"
+	NoticeReasonCompaction          = "compaction"
+	NoticeReasonLegacyUntypedNotice = "legacy_untyped_notice"
+	NoticeReasonRuntimeDiagnostic   = "runtime_diagnostic"
+	NoticeReasonToolOutputRepair    = "tool_output_repair"
 
 	NoticeSeverityInfo    = "info"
 	NoticeSeverityWarning = "warning"
@@ -25,16 +24,6 @@ const (
 type ToolOutputRepairNotice struct {
 	Kind  ToolOutputRepairKind `json:"kind"`
 	Count int                  `json:"count"`
-}
-
-type ProviderModelMismatchNotice struct {
-	RequestedModel string `json:"requested_model"`
-	ServedModel    string `json:"served_model"`
-}
-
-func (n ProviderModelMismatchNotice) Valid() bool {
-	return strings.TrimSpace(n.RequestedModel) != "" &&
-		strings.TrimSpace(n.ServedModel) != ""
 }
 
 func (n ToolOutputRepairNotice) Valid() bool {

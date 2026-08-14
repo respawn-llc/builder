@@ -24,13 +24,11 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 	}}}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})
-	if err := engine.steer("before", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("before", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 			ID:               preBoundaryID,
@@ -53,9 +51,7 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 	if err != nil || !receipt.Committed {
 		t.Fatalf("persist compaction checkpoint: receipt=%+v error=%v", receipt, err)
 	}
-	if err := engine.steer("after", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("after", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 			ID:               postBoundaryID,
@@ -111,15 +107,13 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 		t,
 		store,
 		client,
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: probe,
 		}),
 		Config{Model: "gpt-5", CompactionMode: "local"},
 	)
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -153,13 +147,11 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 func TestManualCompactionDisabledWhenModeNone(t *testing.T) {
 	t.Parallel()
 	client := &fakeCompactionClient{}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
 		Model:          "gpt-5",
 		CompactionMode: "none",
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {

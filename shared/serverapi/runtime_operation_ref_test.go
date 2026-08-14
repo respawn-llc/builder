@@ -4,11 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
-func TestRuntimeInputRequestsUseRequestIdentityWithoutOperationRefs(t *testing.T) {
+func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
 	requests := []struct {
 		name      string
 		request   interface{ Validate() error }
@@ -17,35 +16,31 @@ func TestRuntimeInputRequestsUseRequestIdentityWithoutOperationRefs(t *testing.T
 		{
 			name: "submit",
 			request: RuntimeSubmitUserTurnRequest{
-				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-				SessionID:       "session-1",
-				Input:           runtimeinput.Text("hello"),
+				SessionID: "session-1",
+				Input:     runtimeinput.Text("hello"),
 			},
 			forbidden: []string{"operation_ref", "pre_submit_compaction_operation_ref"},
 		},
 		{
 			name: "shell",
 			request: RuntimeSubmitUserShellCommandRequest{
-				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-				SessionID:       "session-1",
-				Command:         "pwd",
+				SessionID: "session-1",
+				Command:   "pwd",
 			},
 			forbidden: []string{"operation_ref"},
 		},
 		{
 			name: "compact",
 			request: RuntimeCompactContextRequest{
-				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-				SessionID:       "session-1",
-				Args:            "notes",
+				SessionID: "session-1",
+				Args:      "notes",
 			},
 			forbidden: []string{"operation_ref"},
 		},
 		{
 			name: "interrupt",
 			request: RuntimeInterruptRequest{
-				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-				SessionID:       "session-1",
+				SessionID: "session-1",
 			},
 			forbidden: []string{"target_operation_ref", "pending_operation_refs"},
 		},
@@ -69,18 +64,5 @@ func TestRuntimeInputRequestsUseRequestIdentityWithoutOperationRefs(t *testing.T
 				}
 			}
 		})
-	}
-}
-
-func TestRuntimeSubmitUserShellCommandRequestRejectsBlankCommand(t *testing.T) {
-	request := RuntimeSubmitUserShellCommandRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       "session-1",
-	}
-	for _, command := range []string{"", " \t\n"} {
-		request.Command = command
-		if err := request.Validate(); err == nil {
-			t.Fatalf("accepted blank shell command %q", command)
-		}
 	}
 }

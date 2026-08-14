@@ -11,7 +11,6 @@ import (
 	"core/internal/testharness/filemode"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
-	"core/shared/textutil"
 )
 
 func appendSessionTestRecord(
@@ -1062,7 +1061,7 @@ func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testi
 	contract.SystemPrompt = "parent system prompt snapshot"
 	contract.ReviewerPrompt = "parent reviewer prompt snapshot"
 	markSessionTestLocked(t, parent, contract)
-	if err := parent.SetContinuationContext(ContinuationContext{OpenAIBaseURL: textutil.Value("http://parent.local/v1")}); err != nil {
+	if err := parent.SetContinuationContext(ContinuationContext{OpenAIBaseURL: "http://parent.local/v1"}); err != nil {
 		t.Fatalf("SetContinuationContext parent: %v", err)
 	}
 	if _, err := parent.SetUsageState(&UsageState{InputTokens: 123}); err != nil {
@@ -1116,7 +1115,7 @@ func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testi
 	if meta.Locked.ToolPreambles == parent.Meta().Locked.ToolPreambles {
 		t.Fatal("expected locked tool preambles pointer to be deep-copied")
 	}
-	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL == nil || *meta.Continuation.OpenAIBaseURL != "http://parent.local/v1" {
+	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL != "http://parent.local/v1" {
 		t.Fatalf("continuation = %+v, want parent continuation", meta.Continuation)
 	}
 	if meta.UsageState != nil {
@@ -1135,10 +1134,10 @@ func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testi
 
 func TestSetContinuationContextStaysLazyUntilFirstWrite(t *testing.T) {
 	store := newSessionTestLazyStore(t)
-	if err := store.SetContinuationContext(ContinuationContext{OpenAIBaseURL: textutil.Value("http://example.local/v1")}); err != nil {
+	if err := store.SetContinuationContext(ContinuationContext{OpenAIBaseURL: "http://example.local/v1"}); err != nil {
 		t.Fatalf("set continuation context: %v", err)
 	}
-	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL == nil || *store.Meta().Continuation.OpenAIBaseURL != "http://example.local/v1" {
+	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != "http://example.local/v1" {
 		t.Fatalf("expected in-memory continuation context, got %+v", store.Meta().Continuation)
 	}
 	if _, err := os.Stat(store.Dir()); !os.IsNotExist(err) {
@@ -1146,37 +1145,8 @@ func TestSetContinuationContextStaysLazyUntilFirstWrite(t *testing.T) {
 	}
 	appendSessionTestRecord(t, store, "step1", sessionTestMessage(MessageRoleUser, "persist continuation"))
 	opened := mustOpenSessionTestStore(t, store)
-	if opened.Meta().Continuation == nil || opened.Meta().Continuation.OpenAIBaseURL == nil || *opened.Meta().Continuation.OpenAIBaseURL != "http://example.local/v1" {
+	if opened.Meta().Continuation == nil || opened.Meta().Continuation.OpenAIBaseURL != "http://example.local/v1" {
 		t.Fatalf("expected persisted continuation context, got %+v", opened.Meta().Continuation)
-	}
-}
-
-func TestPendingModelRecoveryPersistsOnlyMetadata(t *testing.T) {
-	store := newSessionTestStore(t)
-	recovery := PendingModelRecovery{
-		RecoveryID:             "recovery-1",
-		StepID:                 "step-1",
-		Reason:                 "interrupted_or_crashed_step",
-		OutstandingToolCallIDs: []string{"call-1"},
-	}
-	if err := store.SetPendingModelRecovery(recovery); err != nil {
-		t.Fatalf("SetPendingModelRecovery: %v", err)
-	}
-	if got := store.Meta().PendingModelRecovery; got == nil || got.RecoveryID != recovery.RecoveryID || got.StepID != recovery.StepID {
-		t.Fatalf("pending model recovery metadata = %+v", got)
-	}
-	if err := store.ClearPendingModelRecovery(); err != nil {
-		t.Fatalf("ClearPendingModelRecovery: %v", err)
-	}
-	if got := store.Meta().PendingModelRecovery; got != nil {
-		t.Fatalf("pending model recovery after clear = %+v, want nil", got)
-	}
-	events, err := collectEvents(store)
-	if err != nil {
-		t.Fatalf("collect events: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("recovery metadata mutation emitted events: %+v", events)
 	}
 }
 

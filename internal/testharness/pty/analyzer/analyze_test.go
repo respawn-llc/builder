@@ -1,6 +1,10 @@
 package analyzer_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -392,6 +396,47 @@ func TestAnalyzeSplitEscapeSequencePreservesParserState(t *testing.T) {
 	requireOperation(t, analysis, pty.OperationCursorMove, pty.Region{Top: 1, Bottom: 2, Left: 2, Right: 3})
 	if got := analysis.Screen.TextInRegion(pty.Region{Top: 1, Bottom: 2, Left: 2, Right: 3}); got != "x" {
 		t.Fatalf("split cursor target cell = %q, want %q", got, "x")
+	}
+}
+
+func TestAnalyzerDoesNotUseRegexOrSubstringTerminalDetection(t *testing.T) {
+	t.Parallel()
+
+	matches, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob analyzer files: %v", err)
+	}
+	for _, path := range matches {
+		if filepath.Base(path) == "analyze_test.go" {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, imported := range file.Imports {
+			if imported.Path.Value == `"regexp"` {
+				t.Fatalf("%s imports regexp; terminal byte analysis must use parser/emulator types", path)
+			}
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := selector.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if (ident.Name == "bytes" || ident.Name == "strings") && (selector.Sel.Name == "Contains" || selector.Sel.Name == "Index") {
+				t.Fatalf("%s uses %s.%s; terminal byte analysis must not use substring detection", path, ident.Name, selector.Sel.Name)
+			}
+			return true
+		})
 	}
 }
 

@@ -12,7 +12,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
-	"core/shared/sessionenv"
 )
 
 type taskPaginationStub struct {
@@ -608,52 +607,10 @@ func TestTaskMoveSetupRecoveryPreservesStructuredInput(t *testing.T) {
 	}
 }
 
-func TestWorktreeRuntimeOriginHeaderAndBranchCleanupPolicy(t *testing.T) {
-	const (
-		runID  = "018fdd67-89ab-4cde-8123-456789abc001"
-		stepID = "018fdd67-89ab-4cde-8123-456789abc002"
-	)
-	t.Setenv(sessionenv.RunIDEnv, runID)
-	t.Setenv(sessionenv.StepIDEnv, stepID)
-	origin, err := worktreeCommandRuntimeOrigin()
-	if err != nil || origin == nil || origin.RunID != runID || origin.StepID != stepID {
-		t.Fatalf("origin=%+v err=%v", origin, err)
-	}
+func TestWorktreeHeaderAndBranchCleanupPolicy(t *testing.T) {
 	header, err := newWorktreeCommandTransitionHeader("session-1")
-	if err != nil || header.SessionID != "session-1" || header.Origin == nil ||
-		header.Origin.RunID != runID || header.Origin.StepID != stepID ||
-		header.OperationID.String() == "" {
+	if err != nil || header.SessionID != "session-1" || header.OperationID.String() == "" {
 		t.Fatalf("header=%+v err=%v", header, err)
-	}
-
-	for _, invalid := range []struct {
-		run  string
-		step string
-	}{
-		{run: runID},
-		{step: stepID},
-		{run: "invalid", step: stepID},
-		{run: runID, step: "invalid"},
-	} {
-		t.Run(invalid.run+"/"+invalid.step, func(t *testing.T) {
-			t.Setenv(sessionenv.RunIDEnv, invalid.run)
-			t.Setenv(sessionenv.StepIDEnv, invalid.step)
-			if _, err := worktreeCommandRuntimeOrigin(); err == nil {
-				t.Fatal("invalid origin accepted")
-			}
-			if _, err := newWorktreeCommandTransitionHeader("session-1"); err == nil {
-				t.Fatal("header accepted invalid origin")
-			}
-		})
-	}
-
-	unsetEnvironmentForTaskContractTest(t, sessionenv.RunIDEnv)
-	unsetEnvironmentForTaskContractTest(t, sessionenv.StepIDEnv)
-	if origin, err := worktreeCommandRuntimeOrigin(); err != nil || origin != nil {
-		t.Fatalf("absent origin=%+v err=%v", origin, err)
-	}
-	if header, err := newWorktreeCommandTransitionHeader("session-1"); err != nil || header.Origin != nil {
-		t.Fatalf("external header=%+v err=%v", header, err)
 	}
 
 	for _, test := range []struct {

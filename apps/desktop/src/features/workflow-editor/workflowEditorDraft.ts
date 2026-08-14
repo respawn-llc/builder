@@ -444,7 +444,7 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
     })),
     nodeGroups: definition.nodeGroups.map((group) => ({ id: group.id, key: group.key, name: group.name })),
     nodes: definition.nodes.map((node) => ({
-      groupID: node.groupID,
+      groupID: node.groupID.length > 0 ? node.groupID : null,
       id: node.id,
       key: node.key,
       kind: node.kind,

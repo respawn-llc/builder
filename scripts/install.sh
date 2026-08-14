@@ -64,7 +64,7 @@ cleanup() {
 	if command -v trash >/dev/null 2>&1; then
 		trash "$tmpdir" >/dev/null 2>&1 || true
 	else
-		find "$tmpdir" -depth -delete >/dev/null 2>&1 || true
+		rm -rf "$tmpdir"
 	fi
 }
 trap cleanup EXIT

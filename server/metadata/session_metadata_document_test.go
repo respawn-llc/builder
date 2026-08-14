@@ -19,12 +19,7 @@ func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
 		HeadlessActive:                  true,
 		CompactionSoonReminderIssued:    true,
 		GeneratedRecoveredWarningIssued: true,
-		PendingModelRecovery: &session.PendingModelRecovery{
-			RecoveryID: "recovery",
-			Reason:     "provider",
-			CreatedAt:  createdAt,
-		},
-		WorktreeReminder: &session.WorktreeReminderState{Mode: session.WorktreeReminderModeEnter},
+		WorktreeReminder:                &session.WorktreeReminderState{Mode: session.WorktreeReminderModeEnter},
 		Goal: &session.GoalState{
 			ID:        "goal",
 			Objective: "finish",

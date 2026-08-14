@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"core/internal/testharness/filemode"
-	"core/internal/testharness/toolfixture"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -19,36 +18,12 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowruntime"
-	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
-
-func newTestToolRegistry(t testing.TB, registrations ...tools.HandlerRegistration) *tools.Registry {
-	t.Helper()
-	return toolfixture.NewRegistry(t, registrations...)
-}
-
-func mustReviewerSuggestionsContract(t testing.TB) jsoncontract.Structured {
-	t.Helper()
-	contract, err := prepareReviewerSuggestionsContract(jsoncontract.NewPreparer(false))
-	if err != nil {
-		t.Fatalf("prepare reviewer suggestions contract: %v", err)
-	}
-	return contract
-}
-
-func mustTestFunctionSchema(t testing.TB) jsoncontract.Function {
-	t.Helper()
-	contract, err := jsoncontract.NewPreparer(false).Function("runtime test function", struct{}{})
-	if err != nil {
-		t.Fatalf("prepare runtime test function schema: %v", err)
-	}
-	return contract
-}
 
 type testPersistedEvent struct {
 	Kind   string
@@ -64,123 +39,6 @@ func withGenerateRetryDelays(t *testing.T, delays []time.Duration) {
 	t.Cleanup(func() {
 		generateRetryDelays = previous
 	})
-}
-
-func withActiveTestRun(
-	t *testing.T,
-	engine *Engine,
-	activeKind ActiveKind,
-	fn func(context.Context, string) error,
-) error {
-	t.Helper()
-	return withActiveTestRunContext(t, context.Background(), engine, activeKind, fn)
-}
-
-func withActiveTestRunContext(
-	t *testing.T,
-	ctx context.Context,
-	engine *Engine,
-	activeKind ActiveKind,
-	fn func(context.Context, string) error,
-) error {
-	t.Helper()
-	engine.ensureOrchestrationCollaborators()
-	return engine.stepLifecycle.Run(
-		ctx,
-		exclusiveStepOptions{ActiveKind: activeKind},
-		fn,
-	)
-}
-
-func runReviewerSuggestionsInActiveTestRun(
-	t *testing.T,
-	engine *Engine,
-	reviewerClient llm.Client,
-) (reviewerSuggestionsResult, error) {
-	t.Helper()
-	var result reviewerSuggestionsResult
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var runErr error
-		result, runErr = engine.runReviewerSuggestions(ctx, stepID, reviewerClient)
-		return runErr
-	})
-	return result, err
-}
-
-func runStepLoopInActiveTestRun(
-	t *testing.T,
-	ctx context.Context,
-	engine *Engine,
-) (llm.Message, error) {
-	t.Helper()
-	var message llm.Message
-	err := withActiveTestRunContext(t, ctx, engine, ActiveKindUserTurn, func(runCtx context.Context, stepID string) error {
-		var runErr error
-		message, runErr = engine.runStepLoop(runCtx, stepID)
-		return runErr
-	})
-	return message, err
-}
-
-func buildActiveTurnRequestForTest(
-	t *testing.T,
-	engine *Engine,
-	extra []llm.ResponseItem,
-	allowTools bool,
-) llm.Request {
-	t.Helper()
-	var request llm.Request
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var buildErr error
-		request, buildErr = engine.buildActiveTurnDispatchRequest(ctx, stepID, extra, allowTools)
-		return buildErr
-	})
-	if err != nil {
-		t.Fatalf("build active turn request: %v", err)
-	}
-	return request
-}
-
-func buildReviewerDispatchRequestForTest(
-	t *testing.T,
-	engine *Engine,
-	reviewerClient llm.Client,
-) llm.Request {
-	t.Helper()
-	var request llm.Request
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var buildErr error
-		request, buildErr = engine.buildReviewerDispatchRequest(ctx, stepID, reviewerClient)
-		return buildErr
-	})
-	if err != nil {
-		t.Fatalf("build Reviewer dispatch request: %v", err)
-	}
-	return request
-}
-
-func compactNowInActiveTestRun(
-	t *testing.T,
-	engine *Engine,
-	mode compactionMode,
-	instructions compactionInstructionsInput,
-	includePreservedUserMessage bool,
-) (compactionResult, session.CommitReceipt, error) {
-	t.Helper()
-	var result compactionResult
-	var receipt session.CommitReceipt
-	err := withActiveTestRun(t, engine, ActiveKindCompaction, func(ctx context.Context, stepID string) error {
-		var compactErr error
-		result, receipt, compactErr = engine.compactNow(
-			ctx,
-			stepID,
-			mode,
-			instructions,
-			includePreservedUserMessage,
-		)
-		return compactErr
-	})
-	return result, receipt, err
 }
 
 type blockingStepLifecycleSink struct {
@@ -376,21 +234,6 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	t.Helper()
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
-	}
-	if cfg.CurrentNodeExecution != nil {
-		if cfg.CurrentNodeExecution.ScopeID.IsZero() {
-			cfg.CurrentNodeExecution.ScopeID = runtimeids.NewExecutionScopeID()
-		}
-		instructions := &cfg.CurrentNodeExecution.Instructions
-		if instructions.CurrentNode.TaskID == "" && instructions.CurrentNode.NodeID == "" {
-			reference, err := workflow.NewCurrentNodeReference("test-task", "test-current-node", nil)
-			if err != nil {
-				t.Fatalf("create test current node reference: %v", err)
-			}
-			instructions.CurrentNode = reference
-		} else if err := instructions.CurrentNode.Validate(); err != nil {
-			t.Fatalf("invalid test current node reference: %v", err)
-		}
 	}
 	eventLog := mustMaterializeTestEventLog(t, store)
 	engine, err := New(store, eventLog, client, registry, cfg)
@@ -616,7 +459,7 @@ func mustNewFakeToolEngine(t *testing.T, store *session.Store, client llm.Client
 	for _, id := range toolIDs {
 		handlers = append(handlers, tools.HandlerRegistration{ID: id, Handler: fakeTool{name: id}})
 	}
-	return mustNewTestEngine(t, store, client, newTestToolRegistry(t, handlers...), cfg)
+	return mustNewTestEngine(t, store, client, tools.NewRegistry(handlers...), cfg)
 }
 
 func mustNewExecTestEngine(t *testing.T, store *session.Store, client llm.Client, cfg Config) *Engine {
@@ -635,17 +478,47 @@ func mustNewHandoffTestEngine(t *testing.T, store *session.Store, client llm.Cli
 
 func mustNewWorkflowTestEngine(t *testing.T, store *session.Store, client llm.Client, workflowCfg *workflowruntime.CurrentNodeExecutionConfig, cfg Config) *Engine {
 	t.Helper()
-	cfg.CurrentNodeExecution = workflowCfg
-	toolIDs := []toolspec.ID{toolspec.ToolExecCommand}
-	seen := map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
-	for _, id := range cfg.EnabledTools {
-		if id == toolspec.ToolCompleteNode || id == toolspec.ToolWebSearch || seen[id] {
-			continue
-		}
-		seen[id] = true
-		toolIDs = append(toolIDs, id)
+	engine := mustNewExecTestEngine(t, store, client, cfg)
+	publishTestWorkflowExecution(t, engine, workflowCfg)
+	return engine
+}
+
+func publishTestWorkflowExecution(t *testing.T, engine *Engine, workflowCfg *workflowruntime.CurrentNodeExecutionConfig) {
+	t.Helper()
+	if workflowCfg == nil {
+		t.Fatal("workflow execution config is required")
 	}
-	return mustNewFakeToolEngine(t, store, client, cfg, toolIDs...)
+	if workflowCfg.ScopeID.IsZero() {
+		workflowCfg.ScopeID = runtimeids.NewExecutionScopeID()
+	}
+	instructions := &workflowCfg.Instructions
+	if instructions.CurrentNode.TaskID == "" && instructions.CurrentNode.NodeID == "" {
+		reference, err := workflow.NewCurrentNodeReference("test-task", "test-current-node", nil)
+		if err != nil {
+			t.Fatalf("create test current node reference: %v", err)
+		}
+		instructions.CurrentNode = reference
+	} else if err := instructions.CurrentNode.Validate(); err != nil {
+		t.Fatalf("invalid test current node reference: %v", err)
+	}
+	publication, err := engine.PrepareCurrentNodeExecutionPublication(workflowCfg)
+	if err != nil {
+		t.Fatalf("prepare workflow execution publication: %v", err)
+	}
+	if err := publication.Begin(); err != nil {
+		t.Fatalf("begin workflow execution publication: %v", err)
+	}
+	binding := publication.Commit()
+	t.Cleanup(func() {
+		if err := binding.Close(); err != nil && !errors.Is(err, ErrEngineClosed) {
+			t.Errorf("close workflow execution binding: %v", err)
+		}
+	})
+}
+
+func publishTestWorkflowAgentAssociation(t *testing.T, engine *Engine, workflowCfg *workflowruntime.CurrentNodeExecutionConfig) {
+	t.Helper()
+	publishTestWorkflowExecution(t, engine, workflowCfg)
 }
 
 func mustTestCurrentNodeReference(t *testing.T, taskID string, nodeID string, branchKey *workflow.TransitionBranchKey) workflow.CurrentNodeReference {

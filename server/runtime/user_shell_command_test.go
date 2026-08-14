@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/toolspec"
 )
 
@@ -13,7 +14,7 @@ func TestSubmitUserShellCommandPersistsErrorWithoutRegisteredHandler(t *testing.
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 
 	result, err := engine.SubmitUserShellCommand(context.Background(), "pwd")
 	if !errors.Is(err, errUnknownTool) {

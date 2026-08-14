@@ -3,9 +3,6 @@ package clientui
 import (
 	"fmt"
 	"strings"
-
-	"core/shared/runtimeids"
-	"core/shared/runtimeinput"
 )
 
 type ReadModelVersion struct {
@@ -60,14 +57,10 @@ const (
 type RuntimeActivityActiveKind string
 
 const (
-	RuntimeActivityActiveKindUserTurn            RuntimeActivityActiveKind = "user_turn"
-	RuntimeActivityActiveKindWorkflowTurn        RuntimeActivityActiveKind = "workflow_turn"
-	RuntimeActivityActiveKindGoalLoop            RuntimeActivityActiveKind = "goal_loop"
-	RuntimeActivityActiveKindCompaction          RuntimeActivityActiveKind = "compaction"
-	RuntimeActivityActiveKindPreSubmitCompaction RuntimeActivityActiveKind = "pre_submit_compaction"
-	RuntimeActivityActiveKindUserShell           RuntimeActivityActiveKind = "user_shell"
-	RuntimeActivityActiveKindBackground          RuntimeActivityActiveKind = "background"
-	RuntimeActivityActiveKindRuntimeMaintenance  RuntimeActivityActiveKind = "runtime_maintenance"
+	RuntimeActivityActiveKindUserTurn     RuntimeActivityActiveKind = "user_turn"
+	RuntimeActivityActiveKindWorkflowTurn RuntimeActivityActiveKind = "workflow_turn"
+	RuntimeActivityActiveKindGoalLoop     RuntimeActivityActiveKind = "goal_loop"
+	RuntimeActivityActiveKindCompaction   RuntimeActivityActiveKind = "compaction"
 )
 
 func (k RuntimeActivityActiveKind) Validate() error {
@@ -75,44 +68,9 @@ func (k RuntimeActivityActiveKind) Validate() error {
 	case RuntimeActivityActiveKindUserTurn,
 		RuntimeActivityActiveKindWorkflowTurn,
 		RuntimeActivityActiveKindGoalLoop,
-		RuntimeActivityActiveKindCompaction,
-		RuntimeActivityActiveKindPreSubmitCompaction,
-		RuntimeActivityActiveKindUserShell,
-		RuntimeActivityActiveKindBackground,
-		RuntimeActivityActiveKindRuntimeMaintenance:
+		RuntimeActivityActiveKindCompaction:
 		return nil
 	default:
 		return fmt.Errorf("unknown runtime activity active kind %q", k)
 	}
-}
-
-type RuntimeSubmitRequest struct {
-	ClientRequestID runtimeids.RuntimeClientRequestID
-	Input           runtimeinput.Input
-}
-
-func (r RuntimeSubmitRequest) Validate() error {
-	if r.ClientRequestID.IsZero() {
-		return fmt.Errorf("runtime submit requires client request id")
-	}
-	return r.Input.Validate()
-}
-
-type RuntimeShellRequest struct {
-	Command string
-}
-
-func (r RuntimeShellRequest) Validate() error {
-	if strings.TrimSpace(r.Command) == "" {
-		return fmt.Errorf("shell command is required")
-	}
-	return nil
-}
-
-type RuntimeCompactRequest struct {
-	Args string
-}
-
-func (r RuntimeCompactRequest) Validate() error {
-	return nil
 }

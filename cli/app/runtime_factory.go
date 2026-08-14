@@ -15,6 +15,7 @@ type runtimeWiring struct {
 	runtimeClient         clientui.RuntimeClient
 	worktrees             apicontract.WorktreeService
 	processControls       apicontract.ProcessControlService
+	processOutput         apicontract.ProcessOutputService
 	processViews          apicontract.ProcessViewService
 	promptHistory         []string
 	lifecycleHookIssues   <-chan lifecycleHookIssue

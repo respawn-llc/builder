@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-
-	"core/shared/transcript"
 )
 
 type recordAppendOutcome struct {
@@ -16,10 +14,8 @@ type recordAppendOutcome struct {
 }
 
 type EventRecordAppendInput struct {
-	StepID              *string
-	Payload             EventRecordPayload
-	committedAtUnixMs   *transcript.CommittedAtUnixMs
-	preserveCommittedAt bool
+	StepID  *string
+	Payload EventRecordPayload
 }
 
 type recordMetadataTransition func(*Meta) (bool, error)
@@ -37,6 +33,9 @@ func (c MaterializedEventLog) AppendRecord(
 	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
 		StepID: stepID, Payload: payload,
 	}}, nil)
+	if err != nil && !outcome.committed {
+		err = DefinitelyUncommittedMutation(err)
+	}
 	if len(outcome.records) != 1 {
 		return EventRecord{}, CommitReceipt{Committed: outcome.committed}, errors.Join(
 			err,
@@ -62,6 +61,9 @@ func (c MaterializedEventLog) AppendRecordsAtomic(
 
 func (c MaterializedEventLog) AppendRecordBatchAtomic(inputs []EventRecordAppendInput) ([]EventRecord, CommitReceipt, error) {
 	outcome, err := c.appendRecordInputsAtomic(inputs, nil)
+	if err != nil && !outcome.committed {
+		err = DefinitelyUncommittedMutation(err)
+	}
 	return outcome.records, CommitReceipt{Committed: outcome.committed}, err
 }
 
@@ -98,10 +100,8 @@ func (c MaterializedEventLog) appendReplayRecords(
 			)
 		}
 		inputs[index] = EventRecordAppendInput{
-			StepID:              record.StepID(),
-			Payload:             payload,
-			committedAtUnixMs:   record.CommittedAtUnixMs(),
-			preserveCommittedAt: true,
+			StepID:  record.StepID(),
+			Payload: payload,
 		}
 	}
 	outcome, err := c.appendRecordInputsAtomic(inputs, nil)
@@ -124,6 +124,9 @@ func (c MaterializedEventLog) AppendCompactionHistoryReplacement(
 		meta.UsageState = nil
 		return true, nil
 	})
+	if err != nil && !outcome.committed {
+		err = DefinitelyUncommittedMutation(err)
+	}
 	if len(outcome.records) != 1 {
 		return EventRecord{}, CommitReceipt{Committed: outcome.committed}, errors.Join(
 			err,
@@ -148,6 +151,9 @@ func (c MaterializedEventLog) AppendGeneratedRecoveredWarning(
 		meta.GeneratedRecoveredWarningIssued = true
 		return true, nil
 	})
+	if err != nil && !outcome.committed {
+		err = DefinitelyUncommittedMutation(err)
+	}
 	receipt := CommitReceipt{Committed: outcome.committed}
 	if err != nil {
 		return receipt, err
@@ -177,6 +183,9 @@ func (c MaterializedEventLog) AppendRecordWithEndByteCursor(
 	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
 		StepID: stepID, Payload: payload,
 	}}, nil)
+	if err != nil && !outcome.committed {
+		err = DefinitelyUncommittedMutation(err)
+	}
 	result := EventRecordAppendResult{
 		CommitReceipt: CommitReceipt{Committed: outcome.committed},
 		EndByteCursor: outcome.endByteCursor,
@@ -235,35 +244,9 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	}
 	records := make([]EventRecord, 0, len(inputs))
 	sequence := log.lastSequence
-	appendNow := storeTimestamp(s.options)
-	appendTimeUnixMs, err := transcript.NewCommittedAtUnixMs(appendNow.UnixMilli())
-	if err != nil {
-		s.mu.Unlock()
-		return recordAppendOutcome{}, fmt.Errorf("store clock committed time: %w", err)
-	}
 	for index, input := range inputs {
 		sequence++
-		committedAtUnixMs := input.committedAtUnixMs
-		if !input.preserveCommittedAt {
-			eligible, err := eventPayloadEligibleForCommittedTime(input.Payload)
-			if err != nil {
-				s.mu.Unlock()
-				return recordAppendOutcome{}, fmt.Errorf(
-					"evaluate committed time eligibility for event record %d: %w",
-					index,
-					err,
-				)
-			}
-			if eligible {
-				committedAtUnixMs = &appendTimeUnixMs
-			}
-		}
-		record, err := newEventRecord(
-			sequence,
-			input.StepID,
-			input.Payload,
-			committedAtUnixMs,
-		)
+		record, err := NewEventRecord(sequence, input.StepID, input.Payload)
 		if err != nil {
 			s.mu.Unlock()
 			return recordAppendOutcome{}, fmt.Errorf(
@@ -310,7 +293,7 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 
 	postMeta := cloneMeta(s.meta)
 	postMeta.LastSequence = records[len(records)-1].Seq()
-	postMeta.UpdatedAt = appendNow
+	postMeta.UpdatedAt = s.options.now()
 	endOffset, err := s.appendCurrentRecordsLocked(log, records, previousMeta, postMeta)
 	if err != nil {
 		s.meta = previousMeta

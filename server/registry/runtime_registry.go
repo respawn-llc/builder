@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -326,35 +325,6 @@ func (r *RuntimeRegistry) RuntimeReadModelSnapshot(ctx context.Context, sessionI
 		Version:  update.Version,
 		Activity: update.Activity,
 	}, nil
-}
-
-func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(ctx context.Context) ([]runtimeactivity.ActiveSessionSnapshot, error) {
-	if r == nil {
-		return []runtimeactivity.ActiveSessionSnapshot{}, nil
-	}
-	r.runStateMu.Lock()
-	sessionIDs := make([]string, 0, len(r.blockingActivitySessions))
-	for sessionID := range r.blockingActivitySessions {
-		sessionIDs = append(sessionIDs, sessionID)
-	}
-	r.runStateMu.Unlock()
-	sort.Strings(sessionIDs)
-
-	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		snapshot, err := r.RuntimeReadModelSnapshot(ctx, sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if !snapshot.Activity.ActiveForControl() {
-			continue
-		}
-		snapshots = append(snapshots, runtimeactivity.ActiveSessionSnapshot{
-			SessionID: sessionID,
-			Activity:  snapshot.Activity,
-		})
-	}
-	return snapshots, nil
 }
 
 func (r *RuntimeRegistry) RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error) {

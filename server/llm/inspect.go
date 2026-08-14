@@ -4,12 +4,11 @@ import (
 	"encoding/json"
 )
 
-// MarshalOpenAIWirePayload builds the responses.ResponseNewParams that the
+// MarshalOpenAIWirePayload builds the exact responses.ResponseNewParams that the
 // OpenAI / openai-compatible HTTP transport would POST, using the production
-// buildPayload path, and marshals a request-shape-equivalent diagnostic JSON.
-// JSON escaping may differ from the openai-go SDK HTTP body. No HTTP is
-// performed. This does not reproduce provider token accounting or
-// compaction/context decisions.
+// buildPayload path, and marshals them as semantically equivalent diagnostic
+// JSON. JSON escaping may differ from the openai-go SDK HTTP body. No HTTP is
+// performed.
 //
 // This is an operator-only diagnostic seam used by offline inspection tooling to
 // capture a request payload for a session without executing a model turn.

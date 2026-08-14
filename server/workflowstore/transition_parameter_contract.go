@@ -50,7 +50,7 @@ func (s *Store) planTransitionParameterContract(
 			RequireExecutionDescriptions: requireExecutionDescriptions,
 		})
 	}
-	contextResolution, err := resolveTransitionContext(
+	sessionID, err := resolveTransitionTargetSession(
 		ctx,
 		q,
 		definition,
@@ -59,7 +59,6 @@ func (s *Store) planTransitionParameterContract(
 		currentSource,
 		transitionBranchKey,
 		source,
-		target,
 		manualMoveContext,
 	)
 	if err != nil {
@@ -67,12 +66,8 @@ func (s *Store) planTransitionParameterContract(
 			(!errors.Is(err, sql.ErrNoRows) && !errors.Is(err, ErrManualMoveTransitionNotUsable)) {
 			return workflow.TransitionParameterContract{}, err
 		}
-		contextResolution = transitionContextResolution{
-			TargetSession: workflow.CreateTargetSessionIntent(),
-			ActiveSource:  incomingTransitionActiveSource(currentSource),
-		}
+		sessionID = nil
 	}
-	sessionID := contextResolution.targetSessionID()
 
 	var retainedTargetRole *workflow.TargetAgentRole
 	sessionPolicy := workflow.AssigneeSessionPolicyEstablishTarget

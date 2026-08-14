@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 
+	"core/server/workflow"
 	"core/shared/boundedio"
+	"core/shared/runtimeids"
 )
 
 const (
@@ -28,9 +31,178 @@ type ScriptCommand struct {
 }
 
 type ScriptExecutionRequest struct {
-	Workflow *WorkflowExecutionLease
 	Command  ScriptCommand
 	Finalize func(context.Context, ExecutionScope, ScriptResult, error) error
+}
+
+type DetachedScriptExecutionRequest struct {
+	Workflow WorkflowExecutionRef
+	Command  ScriptCommand
+	Finalize func(context.Context, ExecutionScope, ScriptResult, error) error
+}
+
+type DetachedScriptExecution struct {
+	authority   *Authority
+	execution   *execution
+	process     *scriptProcess
+	workflowKey workflow.CurrentNodeReferenceKey
+	finalize    func(context.Context, ExecutionScope, ScriptResult, error) error
+	mu          sync.Mutex
+	settled     bool
+}
+
+func (a *Authority) PrepareDetachedScriptExecution(
+	ctx context.Context,
+	req DetachedScriptExecutionRequest,
+) (*DetachedScriptExecution, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	if err := req.Workflow.Validate(); err != nil {
+		return nil, err
+	}
+	process, err := prepareAuthorityScriptProcess(req.Command)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return nil, ErrAuthorityClosed
+	}
+	workflowKey, err := workflowExecutionKeyFor(req.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	if a.workflowExecutionLocked(req.Workflow, workflowKey) != nil {
+		return nil, fmt.Errorf("workflow current node %v is already live", req.Workflow.CurrentNode)
+	}
+	executionGeneration := a.nextExecutionGenerationLocked()
+	a.nextResource++
+	resourceGeneration := a.nextResource
+	if resourceGeneration == 0 {
+		a.closed = true
+		return nil, a.invariant(
+			"allocate detached Script resource generation",
+			errors.New("Session Runtime resource generation overflow"),
+		)
+	}
+	scopeID := runtimeids.NewExecutionScopeID()
+	scope := newScriptExecutionScope(scopeID, executionGeneration, resourceGeneration, &req.Workflow)
+	runCtx, cancel := context.WithCancel(a.lifecycleCtx)
+	execution := &execution{
+		authority: a, scope: scope, script: &TaskScriptExecutionTarget{Path: req.Command.Path},
+		ctx: runCtx, cancel: cancel, done: make(chan struct{}),
+		prompts: newExecutionPromptStore(a, scope, a.promptFeed), phase: executionPhaseQueued,
+	}
+	return &DetachedScriptExecution{
+		authority: a, execution: execution, process: process,
+		workflowKey: workflowKey, finalize: req.Finalize,
+	}, nil
+}
+
+func (d *DetachedScriptExecution) Scope() (ExecutionScope, error) {
+	if d == nil || d.execution == nil {
+		return ExecutionScope{}, sessionRuntimeInvariant(
+			d != nil && d.authority != nil && d.authority.options.debug,
+			"read detached Script execution Scope",
+			errors.New("detached Script execution is uninitialized"),
+		)
+	}
+	return d.execution.scope, nil
+}
+
+func (d *DetachedScriptExecution) Publish(
+	ctx context.Context,
+	admit func() error,
+	published func(ExecutionHandle),
+) (ExecutionHandle, func(), error) {
+	if d == nil || d.authority == nil || d.execution == nil || d.process == nil {
+		return nil, nil, errors.New("detached Script execution is required")
+	}
+	if admit == nil {
+		return nil, nil, errors.New("detached Script admission is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, nil, err
+	}
+	d.mu.Lock()
+	if d.settled {
+		d.mu.Unlock()
+		return nil, nil, ErrExecutionNoLongerLive
+	}
+	d.settled = true
+	d.mu.Unlock()
+	d.authority.mu.Lock()
+	d.execution.exactMu.Lock()
+	workflowRef, _ := d.execution.scope.Workflow()
+	if d.authority.closed || d.authority.workflowExecutionLocked(workflowRef, d.workflowKey) != nil {
+		d.execution.exactMu.Unlock()
+		d.authority.mu.Unlock()
+		d.execution.cancel()
+		return nil, nil, ErrExecutionNoLongerLive
+	}
+	if err := admit(); err != nil {
+		d.execution.exactMu.Unlock()
+		d.authority.mu.Unlock()
+		d.execution.cancel()
+		return nil, nil, err
+	}
+	d.authority.byScope[d.execution.scope.ID()] = d.execution
+	d.authority.addWorkflowExecutionLocked(workflowRef, d.workflowKey, d.execution)
+	d.execution.phase = executionPhaseRunning
+	d.execution.exactMu.Unlock()
+	d.authority.mu.Unlock()
+	handle := executionHandle{execution: d.execution}
+	if published != nil {
+		published(handle)
+	}
+	return handle, func() { go d.run() }, nil
+}
+
+func (d *DetachedScriptExecution) Cancel() {
+	if d == nil || d.execution == nil {
+		return
+	}
+	d.mu.Lock()
+	if d.settled {
+		d.mu.Unlock()
+		return
+	}
+	d.settled = true
+	d.mu.Unlock()
+	d.execution.cancel()
+}
+
+func (d *DetachedScriptExecution) run() {
+	if err := context.Cause(d.execution.ctx); err != nil {
+		invariantErr := d.execution.beginWorkflowFinalization()
+		var finalizeErr error
+		if d.finalize != nil {
+			finalizeErr = d.finalize(context.WithoutCancel(d.execution.ctx), d.execution.scope, ScriptResult{}, err)
+		}
+		d.execution.finish(ExecutionResult{}, errors.Join(err, invariantErr, finalizeErr), nil)
+		return
+	}
+	if startErr := d.process.cmd.Start(); startErr != nil {
+		invariantErr := d.execution.beginWorkflowFinalization()
+		var finalizeErr error
+		if d.finalize != nil {
+			finalizeErr = d.finalize(context.WithoutCancel(d.execution.ctx), d.execution.scope, ScriptResult{}, startErr)
+		}
+		d.execution.finish(ExecutionResult{}, errors.Join(startErr, invariantErr, finalizeErr), nil)
+		return
+	}
+	result, runErr, stopErr := d.process.wait(d.execution.ctx)
+	invariantErr := d.execution.beginWorkflowFinalization()
+	var finalizeErr error
+	if d.finalize != nil {
+		finalizeErr = d.finalize(context.WithoutCancel(d.execution.ctx), d.execution.scope, result.clone(), runErr)
+	}
+	d.execution.finish(ExecutionResult{Script: &result}, errors.Join(runErr, invariantErr, finalizeErr), stopErr)
 }
 
 type ScriptResult struct {
@@ -79,48 +251,27 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 	}
 	handle := executionHandle{execution: execution}
 	a.byScope[execution.scope.ID()] = execution
-	if workflowRef, ok := execution.scope.Workflow(); ok {
-		workflowKey, keyErr := workflowExecutionKeyFor(workflowRef)
-		if keyErr != nil {
-			a.mu.Unlock()
-			return nil, keyErr
-		}
-		a.addWorkflowExecutionLocked(workflowRef, workflowKey, execution)
-	}
 	a.mu.Unlock()
 
 	go func() {
-		if req.Workflow != nil {
-			if waitErr := req.Workflow.wait(execution.ctx); waitErr != nil {
-				execution.finish(ExecutionResult{}, waitErr, nil)
-				return
-			}
-		}
 		if startErr := process.cmd.Start(); startErr != nil {
 			// A failed start never becomes running. Its completion finalizer
 			// retains exact ownership without publishing queued/running state.
-			execution.beginWorkflowFinalization()
+			invariantErr := execution.beginWorkflowFinalization()
 			var finalizeErr error
 			if req.Finalize != nil {
-				finalizeErr = a.runExecutionCallback("script_finalizer", execution.scope, func() error {
-					return req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, ScriptResult{}, startErr)
-				})
+				finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, ScriptResult{}, startErr)
 			}
-			execution.finish(ExecutionResult{}, errors.Join(startErr, finalizeErr), nil)
+			execution.finish(ExecutionResult{}, errors.Join(startErr, invariantErr, finalizeErr), nil)
 			return
 		}
-		if req.Workflow != nil {
-			a.beginWorkflowExecution(execution)
-		}
 		result, runErr, stopErr := process.wait(execution.ctx)
-		execution.beginWorkflowFinalization()
+		invariantErr := execution.beginWorkflowFinalization()
 		var finalizeErr error
 		if req.Finalize != nil {
-			finalizeErr = a.runExecutionCallback("script_finalizer", execution.scope, func() error {
-				return req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, result.clone(), runErr)
-			})
+			finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, result.clone(), runErr)
 		}
-		execution.finish(ExecutionResult{Script: &result}, errors.Join(runErr, finalizeErr), stopErr)
+		execution.finish(ExecutionResult{Script: &result}, errors.Join(runErr, invariantErr, finalizeErr), stopErr)
 	}()
 	return handle, nil
 }

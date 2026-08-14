@@ -101,8 +101,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
 	var workflowController *workflowexecution.CurrentNodeController
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: cfg.PersistenceRoot,
 		Debug:           cfg.Settings.Debug,
+		PersistenceRoot: cfg.PersistenceRoot,
 		AuthManager:     authSupport.AuthManager,
 		Background:      runtimeSupport.Background,
 		StoreOptions:    storeOptions,
@@ -150,7 +150,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	askService := promptcontrol.NewAskViewService(runtimeRegistry)
 	approvalService := promptcontrol.NewApprovalViewService(runtimeRegistry)
 	processService := processview.NewProcessViewService(runtimeSupport.Background)
-	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeAuthority, sessionruntime.APIOptions{
+	processOutputService := processview.NewProcessOutputService(runtimeSupport.Background, runtimeSupport.Background)
+	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeSupport.FastModeState, runtimeAuthority, sessionruntime.APIOptions{
 		RuntimeClientFactory:   opts.RuntimeClientFactory,
 		ManagedWorktreeBaseDir: cfg.Settings.Worktrees.BaseDir,
 		RecoveredWarningProvider: func() (string, bool, error) {
@@ -180,11 +181,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore).
-		WithChatSettingsPreparationResolver(sessionChatSettingsPreparationResolver{
-			metadataStore:   metadataStore,
-			authManager:     authSupport.AuthManager,
-			persistenceRoot: cfg.PersistenceRoot,
-		}).
 		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
 	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
 		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{
@@ -231,11 +227,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		}
 	}
 	workflowRoleResolver := configRoleResolver{settings: cfg.Settings}
-	workflowStore, err := workflowstore.New(
-		metadataStore,
-		workflowstore.WithRoleResolver(workflowRoleResolver),
-		workflowstore.WithDebug(cfg.Settings.Debug),
-	)
+	workflowStore, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflowRoleResolver))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: store: %w", err)
@@ -272,10 +264,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)
 	}
 	runtimeRegistry.WithWorkflowEventPublisher(workflowStore.PublishWorkflowEvent)
-	workflowTaskMutations := workflowexecution.NewTaskMutationCoordinator()
+	workflowMutationPermit := workflowexecution.NewMutationPermit()
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{
 		RuntimeClientFactory: opts.RuntimeClientFactory,
 		RuntimeAuthority:     runtimeAuthority,
+		MutationPermit:       workflowMutationPermit,
 		TaskDependencies:     workflowTaskDependencyCounter,
 	})
 	if err != nil {
@@ -286,7 +279,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowStore,
 		workflowRuntimeStarter,
 		runtimeAuthority,
-		workflowTaskMutations,
+		workflowMutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  cfg.Settings.Workflow.Concurrency,
 			Attention:         workflowAttentionFinalizer,
@@ -336,12 +329,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
-	workflowTaskSessions, err := workflowview.NewTaskSessions(metadataStore, runtimeRegistry)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: Task Sessions: %w", err)
-	}
-	projectService.WithWorkflowExecution(workflowTaskMutations, workflowController, workflowStore)
+	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController, workflowStore)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions:      workflowDefinitions,
 		Board:            workflowBoard,
@@ -349,11 +337,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		TaskSearch:       workflowTaskSearch,
 		TaskDetail:       workflowTaskDetail,
 		TaskDependencies: workflowTaskDependencies,
-		TaskSessions:     workflowTaskSessions,
 		Activity:         workflowActivity,
 		Attention:        workflowAttention,
 		Approvals:        approvalService,
-	}, workflowRoleResolver, workflowTaskMutations, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer), workflowsvc.WithWorkflowTaskSetupEventPublisher(worktreeService))
+	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer), workflowsvc.WithWorkflowTaskSetupEventPublisher(worktreeService))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -373,6 +360,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		askService:              askService,
 		approvalService:         approvalService,
 		processService:          processService,
+		processOutputService:    processOutputService,
 		promptControlService:    promptControlService,
 		attentionService:        runtimeRegistry,
 		runtimeControlService:   runtimeControlService,

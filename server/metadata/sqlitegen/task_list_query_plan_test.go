@@ -6,7 +6,7 @@ import (
 )
 
 func TestListWorkflowTaskListRowsUsesProjectLinkAndTaskIndexes(t *testing.T) {
-	db := openSQLiteFixture(t)
+	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE workflows (

@@ -57,8 +57,7 @@ type resultGroupCallIdentity struct {
 }
 
 type resultGroupUnit struct {
-	result                       tools.Result
-	workflowCompletionDiagnostic error
+	result tools.Result
 }
 
 type resultGroupSlot struct {
@@ -350,10 +349,10 @@ func (e *Engine) abortResultGroupForOperationalFailure(
 	if fatal := collector.fatalSnapshot(); fatal != nil {
 		return fatal
 	}
-	steerErr := e.steerRuntimeClose(
-		stepID,
-		steerResultGroupOperationalFailureIntent(collector, cause),
-	)
+	steerErr := e.applyExactRuntimeMutation(stepID, &steeringResultGroupReport{
+		collector:          collector,
+		operationalFailure: cause,
+	})
 	fatal := collector.fatalSnapshot()
 	if fatal == nil {
 		fatal, _ = collector.abortOperational(errors.Join(cause, steerErr))
@@ -390,10 +389,7 @@ func (c *resultGroupCollector) close() error {
 }
 
 func cloneResultGroupUnit(unit resultGroupUnit) resultGroupUnit {
-	return resultGroupUnit{
-		result:                       cloneToolResult(unit.result),
-		workflowCompletionDiagnostic: unit.workflowCompletionDiagnostic,
-	}
+	return resultGroupUnit{result: cloneToolResult(unit.result)}
 }
 
 type resultGroupPreparedUnit struct {
@@ -553,19 +549,7 @@ func (e *Engine) prepareResultGroupProjection(
 		if unit.result.CallID != slot.call.CallID {
 			return resultGroupProjectionPlan{}, fmt.Errorf("result group unit call %q does not match slot %q at ordinal %d", unit.result.CallID, slot.call.CallID, slot.ordinal)
 		}
-		finalized := e.finalizeLiveToolCompletion(unit.result)
-		if unit.workflowCompletionDiagnostic != nil {
-			if finalized.OperatorFeedback != nil {
-				panic("workflow completion diagnostic conflicts with existing tool operator feedback")
-			}
-			callID := finalized.Result.CallID
-			feedback := workflowCompletionOperatorDiagnostic(
-				unit.workflowCompletionDiagnostic,
-				&callID,
-			)
-			finalized.OperatorFeedback = &feedback
-		}
-		completion, err := e.prepareFinalizedToolCompletion(finalized)
+		completion, err := e.prepareFinalizedToolCompletion(e.finalizeLiveToolCompletion(unit.result))
 		if err != nil {
 			return resultGroupProjectionPlan{}, fmt.Errorf("prepare result group completion %q: %w", slot.call.CallID, err)
 		}

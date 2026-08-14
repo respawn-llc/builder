@@ -2,7 +2,6 @@ import { useId, useMemo, useState, type ReactNode } from "react";
 
 import { DisabledInteractionGuard } from "./DisabledInteractionGuard";
 import { FieldShell, type FieldError } from "./Field";
-import { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 import { SelectOptionsList, SelectTrigger } from "./SelectFieldParts";
 import { DropdownMenu, DropdownMenuTrigger } from "./radix/dropdown-menu";
 
@@ -17,7 +16,7 @@ export type SelectFieldOption = Readonly<{
 export type SelectFieldProps = Readonly<{
   label: string;
   labelHelp?: string | undefined;
-  value: string | undefined;
+  value: string;
   options: readonly SelectFieldOption[];
   onValueChange: (value: string) => void;
   className?: string | undefined;
@@ -27,15 +26,6 @@ export type SelectFieldProps = Readonly<{
   disabled?: boolean | undefined;
   disabledReason?: string | undefined;
   name?: string | undefined;
-  paging?: SelectFieldPaging | undefined;
-}>;
-
-export type SelectFieldPaging = Readonly<{
-  hasNextPage: boolean;
-  initialBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
-  loadKey?: string | undefined;
-  nextBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
-  onLoadNext: () => void;
 }>;
 
 export function SelectField({
@@ -51,7 +41,6 @@ export function SelectField({
   disabled = false,
   disabledReason,
   name,
-  paging,
 }: SelectFieldProps) {
   const inputId = useId();
   const hintId = `${inputId}-hint`;
@@ -70,7 +59,6 @@ export function SelectField({
       name={name}
       onValueChange={onValueChange}
       options={options}
-      paging={paging}
       placeholder={placeholder}
       value={value}
     />
@@ -86,24 +74,19 @@ export function SelectField({
       label={label}
       labelHelp={labelHelp}
     >
-      <>
-        {disabled && disabledReason !== undefined && disabledReason.length > 0 ? (
-          <DisabledInteractionGuard disabled reason={disabledReason}>
-            {control}
-          </DisabledInteractionGuard>
-        ) : (
-          control
-        )}
-        {options.length === 0 && paging?.initialBoundary !== undefined ? (
-          <InfiniteListBoundary direction="initial" state={paging.initialBoundary} />
-        ) : null}
-      </>
+      {disabled && disabledReason !== undefined && disabledReason.length > 0 ? (
+        <DisabledInteractionGuard disabled reason={disabledReason}>
+          {control}
+        </DisabledInteractionGuard>
+      ) : (
+        control
+      )}
     </FieldShell>
   );
 }
 
 type SelectFieldControlProps = Readonly<{
-  value: string | undefined;
+  value: string;
   options: readonly SelectFieldOption[];
   onValueChange: (value: string) => void;
   inputId: string;
@@ -114,7 +97,6 @@ type SelectFieldControlProps = Readonly<{
   className?: string | undefined;
   disabled: boolean;
   name?: string | undefined;
-  paging?: SelectFieldPaging | undefined;
 }>;
 
 function SelectFieldControl({
@@ -129,7 +111,6 @@ function SelectFieldControl({
   className,
   disabled,
   name,
-  paging,
 }: SelectFieldControlProps) {
   const [open, setOpen] = useState(false);
   const menuId = `${inputId}-menu`;
@@ -158,9 +139,7 @@ function SelectFieldControl({
           selectedOption={selectedOption}
         />
       </DropdownMenuTrigger>
-      {name === undefined || interactiveDisabled ? null : (
-        <input name={name} type="hidden" value={value ?? ""} />
-      )}
+      {name === undefined || interactiveDisabled ? null : <input name={name} type="hidden" value={value} />}
       {interactiveDisabled ? null : (
         <SelectOptionsList
           menuId={menuId}
@@ -169,7 +148,6 @@ function SelectFieldControl({
             setOpen(false);
           }}
           options={options}
-          paging={paging}
           value={value}
         />
       )}

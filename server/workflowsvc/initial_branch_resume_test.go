@@ -36,7 +36,7 @@ func TestServiceTaskResumeEligibilityRejectsExplicitBranchBeforePendingMutation(
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.taskMutations,
+		service.mutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},
@@ -225,7 +225,7 @@ func TestServiceTaskResumeReturnsAppliedBeforeFinalBranchCollisionInterruptsCurr
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.taskMutations,
+		service.mutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},
@@ -366,7 +366,7 @@ func TestServiceTaskResumePreflightsLockedBranchBeforeAsynchronousRestoration(t 
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.taskMutations,
+		service.mutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},

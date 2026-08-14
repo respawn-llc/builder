@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,7 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 		t,
 		store,
 		client,
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
 		Config{Model: "gpt-5", GlobalConfigDir: globalConfigDir},
@@ -57,18 +58,16 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	if err := store.SetHeadlessActive(true); err != nil {
 		t.Fatalf("enable headless context: %v", err)
 	}
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
-	_, receipt, err := compactNowInActiveTestRun(
-		t,
-		engine,
+	_, receipt, err := engine.compactNow(
+		context.Background(),
+		"compact",
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

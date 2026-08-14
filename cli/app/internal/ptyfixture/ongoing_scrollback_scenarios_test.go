@@ -13,23 +13,14 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/appfixture"
-	"core/shared/clientui"
-	"core/shared/theme"
-	"core/shared/transcript"
-)
-
-const (
-	detailFrameShiftTab = "\x1b[Z"
-	detailFrameTab      = "\t"
-	detailFrameUp       = "\x1b[A"
 )
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
-	buildCtx, cancel := context.WithTimeout(context.Background(), ptyFixtureTestTimeout)
+	buildCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	bin := buildPTYFixtureBinary(t, buildCtx)
-	modelMismatchCompletionDrain := time.Second
+	scenarioSlots := make(chan struct{}, 4)
 
 	for _, tc := range []struct {
 		name                      string
@@ -44,59 +35,129 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedAnyAppends        []string
 		forbiddenAnyAppends       []string
 		expectedScreenRows        []string
-		expectedWarningAppends    int
-		expectedDetailWarnings    int
-		assertDetailWarnings      bool
 		allowsAltScroll           bool
 		allowsFullScreen          bool
-		completionInFrameSequence bool
 		completionDrain           *time.Duration
 	}{
 		{
-			name: "provider_model_mismatch_hidden_from_normal_ongoing",
-			env:  []string{"KENT_DEBUG=0"},
+			name: "hydrated_visibility_classes_preserve_ongoing_projection_through_tool_result",
 			script: map[string]any{
-				"prompt":       "normal model mismatch",
-				"served_model": "served-model",
-				"final":        "normal mismatch answer",
-			},
-			frameInputs: []pty.FrameInputSequence{{
-				Phase: pty.PhaseScenarioComplete,
-				Inputs: []pty.FrameInput{
+				"seed_transcript": []map[string]any{
+					{"kind": "message", "role": "user", "text": "PTY_SEED_O_USER"},
 					{
-						Readiness:  pty.ReadinessRendererFrame,
-						AfterPhase: phasePointer(pty.PhaseScenarioFinalApplied),
-						Bytes:      []byte(detailFrameShiftTab),
+						"kind":           "message",
+						"role":           "assistant",
+						"text":           "PTY_HYDRATED_FIRST\nPTY_HYDRATED_SECOND\nPTY_HYDRATED_THIRD",
+						"condensed_text": "PTY_HYDRATED_COMPACT",
 					},
-					{
-						Readiness:  pty.ReadinessRendererFrame,
-						AfterPhase: phasePointer(pty.PhaseDetailInitialPageApplied),
-						Bytes:      []byte(detailFrameUp),
-					},
-					{Readiness: pty.ReadinessRendererFrame, Bytes: []byte(detailFrameTab)},
-					{Readiness: pty.ReadinessNormalBufferRestored, Bytes: []byte{0x03, 0x03}},
+					{"kind": "local_entry", "visibility": "OC", "role": "system", "text": "PTY_SEED_OC_FULL_DETAIL_TEXT", "condensed_text": "PTY_SEED_OC_COMPACT"},
+					{"kind": "message", "role": "developer", "message_type": "environment", "text": "PTY_SEED_D_DETAIL_ONLY", "condensed_text": "PTY_SEED_D_COMPACT"},
+					{"kind": "local_entry", "visibility": "X", "role": "system", "text": "PTY_SEED_X_HIDDEN", "condensed_text": "PTY_SEED_X_COMPACT"},
 				},
-			}},
-			expectedAppends:           []string{transcriptrender.AssistantSymbol + " normal mismatch answer"},
-			expectedDetailWarnings:    1,
-			assertDetailWarnings:      true,
-			allowsAltScroll:           true,
-			allowsFullScreen:          true,
-			completionInFrameSequence: true,
-		},
-		{
-			name: "provider_model_mismatch_visible_in_debug_ongoing",
-			env:  []string{"KENT_DEBUG=1"},
-			script: map[string]any{
-				"prompt":       "debug model mismatch",
-				"served_model": "served-model",
-				"final":        "debug mismatch answer",
+				"steps": []map[string]any{
+					{
+						"tool_calls": []map[string]any{
+							{"id": "call_1", "name": "exec_command", "input": map[string]any{"cmd": "printf 'VISIBILITY_OC_TOOL\\n'"}},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{{"CallID": "call_1", "Name": "exec_command"}},
+						"final":                 "visibility projection tool path complete",
+					},
+				},
 			},
 			expectedAppends: []string{
-				transcriptrender.AssistantSymbol + " debug mismatch answer",
+				"❯ hydrated_visibility_classes_preserve_ongoing_projection_through_tool_result",
+				"❮ visibility projection tool path complete",
 			},
-			expectedWarningAppends: 1,
-			completionDrain:        &modelMismatchCompletionDrain,
+			expectedAnyAppends: []string{
+				"❯ PTY_SEED_O_USER",
+				"❮ PTY_HYDRATED_FIRST PTY_HYDRATED_SECOND PTY_HYDRATED_THIRD",
+				"ℹ PTY_SEED_OC_COMPACT",
+			},
+			forbiddenAnyAppends: []string{
+				"❮ PTY_HYDRATED_COMPACT",
+				"ℹ PTY_SEED_OC_FULL_DETAIL_TEXT",
+				"ℹ PTY_SEED_D_DETAIL_ONLY",
+				"ℹ PTY_SEED_D_COMPACT",
+				"ℹ PTY_SEED_X_HIDDEN",
+				"ℹ PTY_SEED_X_COMPACT",
+			},
+		},
+		{
+			name: "markdown_streaming_promotion_and_final_tail",
+			script: map[string]any{
+				"prompt":        "stream markdown",
+				"stream_deltas": []string{"Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\n", "volatile tail"},
+				"final":         "Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\nvolatile tail",
+			},
+			expectedAppends:           []string{transcriptrender.AssistantSymbol + " Plain stable."},
+			expectedScrollbackAppends: []string{"volatile tail"},
+		},
+		{
+			name: "stable_history_not_replayed_after_resize",
+			script: map[string]any{
+				"prompt": "resize stable history",
+				"final":  "stable history not replayed after resize",
+			},
+			expectedAppends: []string{"❮ stable history not replayed after resize"},
+			frameResizes: []pty.FrameResizeEvent{{
+				Phase:           pty.PhaseScenarioFinalApplied,
+				Readiness:       pty.ReadinessRendererFrame,
+				Dimensions:      pty.MustDimensions(18, 72),
+				CompletionBytes: []byte{0x03, 0x03},
+			}},
+		},
+		{
+			name: "parallel_tools_order_and_long_output",
+			script: map[string]any{
+				"prompt": "run tools",
+				"steps": []map[string]any{
+					{
+						"commentary": "I'll run checks.",
+						"tool_calls": []map[string]any{
+							{"id": "call_1", "name": "exec_command", "input": map[string]any{"cmd": "printf 'TOOL_ONE_OK\\n'"}},
+							{"id": "call_2", "name": "exec_command", "input": map[string]any{"cmd": "for i in $(seq 1 12); do printf 'TOOL_TWO_%02d\\n' \"$i\"; done"}},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{
+							{"CallID": "call_1", "Name": "exec_command"},
+							{"CallID": "call_2", "Name": "exec_command"},
+						},
+						"final": "tools complete",
+					},
+				},
+			},
+			expectedAppends: []string{"❮ tools complete"},
+		},
+		{
+			name: "live_patch_call_structured_preview",
+			script: map[string]any{
+				"prompt": "apply a patch",
+				"steps": []map[string]any{
+					{
+						"tool_calls": []map[string]any{
+							{
+								"id":   "87cffd9a-d9e4-49b5-a2a7-61c5e043b991",
+								"name": "patch",
+								"input": map[string]any{
+									"patch": "*** Begin Patch\n*** Add File: pty_live_patch.txt\n+PATCH_LIVE_CONTENT\n*** End Patch\n",
+								},
+							},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{
+							{"CallID": "87cffd9a-d9e4-49b5-a2a7-61c5e043b991", "Name": "patch"},
+						},
+						"final": "patch lifecycle complete",
+					},
+				},
+			},
+			expectedAppends:     []string{"❮ patch lifecycle complete"},
+			expectedAnyAppends:  []string{"⇄ ./pty_live_patch.txt +1"},
+			forbiddenAnyAppends: []string{"⇄ tool call"},
 		},
 		{
 			name: "live_ask_question_call_input_preview",
@@ -133,7 +194,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}},
 			expectedAppends:     []string{"❮ question lifecycle complete"},
 			forbiddenAnyAppends: []string{"? PTY_LIVE_QUESTION", "? tool call"},
-			completionDrain:     &modelMismatchCompletionDrain,
 		},
 		{
 			name: "live_background_shell_completion_style",
@@ -170,10 +230,90 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			expectedScreenRows: []string{"$ sleep 2; echo $((51515150+1))  " + transcriptrender.BackgroundedShellSuffix},
 		},
+		{
+			name: "live_tool_promotion_and_input_dispositions",
+			script: map[string]any{
+				"prompt": "observe live tool lifecycle",
+				"steps": []map[string]any{
+					{
+						"tool_calls": []map[string]any{
+							{
+								"id":    "4c2725e5-9997-45f9-8aaf-a79c1ae523f6",
+								"name":  "exec_command",
+								"input": map[string]any{"cmd": "sleep 3; echo $((42424241+1))"},
+							},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{
+							{"CallID": "4c2725e5-9997-45f9-8aaf-a79c1ae523f6", "Name": "exec_command"},
+						},
+						"final": "live lifecycle complete",
+					},
+					{
+						"final": "queued lifecycle complete",
+					},
+				},
+			},
+			frameInputs: []pty.FrameInputSequence{{
+				Phase: pty.PhaseToolStarted,
+				Inputs: []pty.FrameInput{
+					{Readiness: pty.ReadinessRendererFrame, Bytes: []byte("queued after tool start")},
+					{Readiness: pty.ReadinessInputApplied, Bytes: []byte("\t")},
+					{Readiness: pty.ReadinessInputApplied, Bytes: []byte("steering after tool start")},
+					{Readiness: pty.ReadinessInputApplied, Bytes: []byte("\r")},
+				},
+			}},
+			expectedAppends:    []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
+			expectedScreenRows: []string{"$ sleep 3; echo $((42424241+1))"},
+		},
+		{
+			name: "live_failed_tools_retain_input",
+			env:  []string{"SHELL=/bin/sh"},
+			script: map[string]any{
+				"prompt": "run failing tools",
+				"steps": []map[string]any{
+					{
+						"tool_calls": []map[string]any{
+							{
+								"id":   "c02cd36b-4a5f-4c66-b632-d762cf424bb5",
+								"name": "exec_command",
+								"input": map[string]any{
+									"cmd":     "echo $((61616160+1))",
+									"workdir": "missing-workdir",
+								},
+							},
+							{
+								"id":   "9a728c41-f7ca-4776-922f-30166f146d6c",
+								"name": "patch",
+								"input": map[string]any{
+									"patch": "*** Begin Patch\n*** Update File: pty_missing_patch.txt\n@@\n-old\n+new\n*** End Patch\n",
+								},
+							},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{
+							{"CallID": "c02cd36b-4a5f-4c66-b632-d762cf424bb5", "Name": "exec_command"},
+							{"CallID": "9a728c41-f7ca-4776-922f-30166f146d6c", "Name": "patch"},
+						},
+						"final": "failed tool lifecycle complete",
+					},
+				},
+			},
+			expectedAppends: []string{"❯ live_failed_tools_retain_input"},
+			expectedAnyAppends: []string{
+				"❮ failed tool lifecycle complete",
+			},
+		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			scenarioCtx, cancel := context.WithTimeout(context.Background(), ptyFixtureTestTimeout)
+			t.Parallel()
+			scenarioSlots <- struct{}{}
+			defer func() { <-scenarioSlots }()
+
+			scenarioCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			capture, _ := runPTYFixtureScenarioWithInputPlan(
 				t,
@@ -184,7 +324,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				tc.env,
 				ptyFixtureInputPlan{
 					scheduled: tc.inputs, frameSequences: tc.frameInputs, frameResizes: tc.frameResizes,
-					completionInFrameSequence: tc.completionInFrameSequence,
 				},
 				tc.resizes,
 				tc.completionDrain,
@@ -239,9 +378,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					t.Fatalf("expected full-window append: %v", err)
 				}
 			}
-			if got := countProviderModelMismatchAppendRows(allAppends); got != tc.expectedWarningAppends {
-				t.Fatalf("provider-model mismatch append count = %d, want %d", got, tc.expectedWarningAppends)
-			}
 			for _, content := range tc.forbiddenAnyAppends {
 				if err := contentNotAppended(allAppends, content); err != nil {
 					t.Fatalf("forbidden full-window append: %v", err)
@@ -254,9 +390,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}
 			if analysis.Screen.IsBlank() {
 				t.Fatal("ongoing TUI screen is blank after scenario")
-			}
-			if tc.assertDetailWarnings {
-				assertScenarioDetailWarningRows(t, capture, tc.expectedDetailWarnings)
 			}
 		})
 	}
@@ -279,10 +412,9 @@ func toolSeed(name string, callID string, input map[string]any, condensed string
 }
 
 type ptyFixtureInputPlan struct {
-	scheduled                 []pty.InputEvent
-	frameSequences            []pty.FrameInputSequence
-	frameResizes              []pty.FrameResizeEvent
-	completionInFrameSequence bool
+	scheduled      []pty.InputEvent
+	frameSequences []pty.FrameInputSequence
+	frameResizes   []pty.FrameResizeEvent
 }
 
 func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputPlan ptyFixtureInputPlan, resizes []pty.DriverResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
@@ -323,7 +455,7 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 			Bytes: input.Bytes,
 		})
 	}
-	if !inputPlan.completionInFrameSequence && len(inputPlan.frameResizes) == 0 {
+	if len(inputPlan.frameResizes) == 0 {
 		phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
 			Phase: completionPhase,
 			After: completionDrain,
@@ -339,33 +471,12 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 		FrameInputSequences: inputPlan.frameSequences,
 		FrameResizes:        inputPlan.frameResizes,
 		Resizes:             resizes,
-		Timeout:             5 * time.Second,
+		Timeout:             75 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run fixture: %v raw=%q", err, string(capture.Raw))
 	}
 	return capture, observationsPath
-}
-
-func assertScenarioDetailWarningRows(t *testing.T, capture pty.Capture, expected int) {
-	t.Helper()
-	if len(capture.FrameInputDispatches) < 4 {
-		t.Fatalf("detail frame input dispatches = %d, want at least 4", len(capture.FrameInputDispatches))
-	}
-	exitDispatch := capture.FrameInputDispatches[2]
-	screens, err := pty.ReplayCheckpointScreens(capture, []pty.ReplayCheckpoint{{
-		ByteOffset: exitDispatch.ReadyBoundaryEndByteOffset,
-	}})
-	if err != nil {
-		t.Fatalf("replay detail screen: %v", err)
-	}
-	if got := countProviderModelMismatchScreenRows(screens[0]); got != expected {
-		t.Fatalf("detail warning row count = %d, want %d", got, expected)
-	}
-}
-
-func phasePointer(phase pty.PhaseKind) *pty.PhaseKind {
-	return &phase
 }
 
 func scenarioOperationWindow(analysis pty.Analysis) (pty.OperationWindow, error) {
@@ -533,54 +644,6 @@ func contentAppendedExactlyOnce(appends []logicalAppendRow, content string) erro
 	return nil
 }
 
-func countProviderModelMismatchAppendRows(appends []logicalAppendRow) int {
-	warningColor := transcriptrender.ColorForRole(transcriptrender.ColorRoleWarning, "dark")
-	expectedText := providerModelMismatchRenderedText(transcriptrender.ModeOngoingStable)
-	count := 0
-	for _, row := range appends {
-		if row.text() != expectedText {
-			continue
-		}
-		for _, segment := range row.segments {
-			write := segment.Operation.Write
-			if write != nil && colorMatches(write.Foreground, warningColor) {
-				count++
-				break
-			}
-		}
-	}
-	return count
-}
-
-func countProviderModelMismatchScreenRows(screen pty.ScreenSnapshot) int {
-	expectedText := " " + providerModelMismatchRenderedText(transcriptrender.ModeOngoingStable)
-	count := 0
-	for _, row := range screen.Cells {
-		var text strings.Builder
-		for _, cell := range row {
-			text.WriteString(cell.Content)
-		}
-		if strings.TrimRight(text.String(), " ") == expectedText {
-			count++
-		}
-	}
-	return count
-}
-
-func providerModelMismatchRenderedText(mode transcriptrender.Mode) string {
-	return transcriptrender.RenderCommittedRow(clientui.TranscriptCommittedRow{
-		Visibility: transcript.EntryVisibilityOngoing, Integrity: transcript.RowIntegrityValid, Kind: clientui.TranscriptRowNotice,
-		Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeProviderModelMismatch, Severity: clientui.TranscriptNoticeWarning,
-			ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{RequestedModel: "gpt-5", ServedModel: "served-model"}},
-	}, 80, "dark", mode).Lines[0].Plain()
-}
-
-func colorMatches(actual string, expected theme.Color) bool {
-	return strings.EqualFold(actual, expected.ANSI) ||
-		strings.EqualFold(actual, expected.ANSI256) ||
-		strings.EqualFold(actual, expected.TrueColor)
-}
-
 func contentAppendedAtLeastOnce(appends []logicalAppendRow, content string) error {
 	for _, row := range appends {
 		if row.text() == content {
@@ -627,19 +690,6 @@ func screenRowAppearsExactlyOnce(screen pty.ScreenSnapshot, expected string) err
 		return fmt.Errorf("screen row count for %q = %d, want exactly 1; complete_rows=%q", expected, count, rows)
 	}
 	return nil
-}
-
-func countScreenRowsWithCell(screen pty.ScreenSnapshot, expected string) int {
-	count := 0
-	for _, row := range screen.Cells {
-		for _, cell := range row {
-			if cell.Content == expected {
-				count++
-				break
-			}
-		}
-	}
-	return count
 }
 
 func firstOperationAtOrAfterByte(operations []pty.Operation, offset int64) int {

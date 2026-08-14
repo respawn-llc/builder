@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"core/shared/jsoncontract"
 )
 
 type ModelWarningKind string
@@ -37,17 +35,17 @@ func MaterializeModelWarnings(result Result) Result {
 		return result
 	}
 	warnings := strings.Join(lines, "\n")
-	value, err := jsoncontract.DecodeValue(result.Output)
-	if err == nil {
-		if object, objectErr := value.WithStringField("warning", warnings); objectErr == nil {
-			result.Output, _ = object.CompactJSON()
-		} else if text, ok := value.String(); ok {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(result.Output, &object) == nil && object != nil {
+		object["warning"], _ = json.Marshal(warnings)
+		result.Output, _ = json.Marshal(object)
+	} else {
+		var text string
+		if json.Unmarshal(result.Output, &text) == nil {
 			result.Output, _ = json.Marshal(strings.TrimSpace(text) + "\n" + warnings)
 		} else {
 			result.Output, _ = json.Marshal(fmt.Sprintf("%s\n%s", strings.TrimSpace(string(result.Output)), warnings))
 		}
-	} else {
-		result.Output, _ = json.Marshal(fmt.Sprintf("%s\n%s", strings.TrimSpace(string(result.Output)), warnings))
 	}
 	if result.Summary != nil {
 		summary := strings.TrimSpace(*result.Summary) + "\n" + warnings

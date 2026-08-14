@@ -43,7 +43,7 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory}),
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -68,11 +68,11 @@ func TestRuntimeClientFactoryRejectsDirectClientOverride(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		requiredRuntimeWireTestOptions(RuntimeWiringOptions{
+		RuntimeWiringOptions{
 			FilesystemContext: runtimeWireFilesystemContext(t, root),
 			Client:            &runtimewireCaptureClient{},
 			ClientFactory:     RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) { return nil, nil }),
-		}),
+		},
 	)
 	if !errors.Is(err, ErrRuntimeClientFactoryConflict) {
 		t.Fatalf("error = %v, want ErrRuntimeClientFactoryConflict", err)
@@ -105,11 +105,11 @@ func TestReviewerRuntimeClientFactoryCanPairWithDirectMainClient(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		requiredRuntimeWireTestOptions(RuntimeWiringOptions{
+		RuntimeWiringOptions{
 			FilesystemContext:     runtimeWireFilesystemContext(t, root),
 			Client:                &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}},
 			ReviewerClientFactory: factory,
-		}),
+		},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -146,7 +146,7 @@ func TestRuntimeClientFactoryReceivesActivationContext(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Context: ctx, ClientFactory: factory}),
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Context: ctx, ClientFactory: factory},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -173,10 +173,10 @@ func TestRuntimeClientFactoryErrorDoesNotFallBackToProvider(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) {
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) {
 			calls++
 			return nil, wantErr
-		})}),
+		})},
 	)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want factory error", err)
@@ -196,9 +196,11 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
 		Model: "operator-alias",
 		ProviderContract: session.LockedProviderCapabilities{
-			ProviderID:                "custom-provider",
-			SupportsResponsesAPI:      true,
-			SupportsProviderVerbosity: &lockedVerbosity,
+			ProviderID:                        "custom-provider",
+			SupportsResponsesAPI:              true,
+			SupportsRequestInputTokenCount:    true,
+			HasSupportsRequestInputTokenCount: true,
+			SupportsProviderVerbosity:         &lockedVerbosity,
 		},
 	}); err != nil {
 		t.Fatalf("lock session: %v", err)
@@ -260,7 +262,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 		nil,
 		nil,
 		nil,
-		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory}),
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -268,20 +270,14 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	t.Cleanup(func() { _ = wiring.Close() })
 
 	request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
-		Model:     "operator-alias",
-		SessionID: textutil.Value(store.Meta().SessionID),
-		Items:     llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}}),
-	}
-	request.CodexDispatch, err = llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
-		SessionID:   *request.SessionID,
-		RunID:       uuid.NewString(),
-		RequestKind: llm.CodexRequestKindTurn.Optional(),
-	})
-	if err != nil {
-		t.Fatalf("create generation dispatch identity: %v", err)
+		Model: "operator-alias",
+		Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}}),
 	}
 	if _, err := mainClient.Generate(context.Background(), request); err != nil {
 		t.Fatalf("generate through resumed main client: %v", err)
+	}
+	if _, err := mainClient.(llm.RequestInputTokenCountClient).CountRequestInputTokens(context.Background(), request); err != nil {
+		t.Fatalf("count input tokens through resumed main client: %v", err)
 	}
 
 	observed := recorder.Snapshot().Observed

@@ -22,15 +22,9 @@ type stubExclusiveStepLifecycle struct {
 	mu           sync.Mutex
 	busy         bool
 	runCalls     int
-	runNextCalls int
 	runFn        func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
-	snapshotFn   func() *RunSnapshot
 	snapshot     *RunSnapshot
 	activeStepID string
-}
-
-type stubBackgroundNoticeScheduler struct {
-	scheduleIfIdle func()
 }
 
 type callbackStepLifecycleSink struct {
@@ -68,24 +62,6 @@ func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) boo
 	return false
 }
 
-func (s *stubBackgroundNoticeScheduler) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
-func (s *stubBackgroundNoticeScheduler) RecordBackgroundShellUpdate(BackgroundShellEvent) error {
-	return nil
-}
-func (s *stubBackgroundNoticeScheduler) QueueBackgroundShellContinuation(BackgroundShellEvent) {}
-func (s *stubBackgroundNoticeScheduler) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
-	return nil
-}
-func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message)           {}
-func (s *stubBackgroundNoticeScheduler) flushPendingNotices(string) (int, error)    { return 0, nil }
-func (s *stubBackgroundNoticeScheduler) HasPendingNotices() bool                    { return false }
-func (s *stubBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(string) bool { return false }
-func (s *stubBackgroundNoticeScheduler) ScheduleIfIdle() {
-	if s != nil && s.scheduleIfIdle != nil {
-		s.scheduleIfIdle()
-	}
-}
-
 func (s *stubExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
 	s.mu.Lock()
 	s.runCalls++
@@ -96,18 +72,6 @@ func (s *stubExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveS
 	return fn(ctx, "stub-step")
 }
 
-func (s *stubExclusiveStepLifecycle) RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
-	s.mu.Lock()
-	s.runNextCalls++
-	s.mu.Unlock()
-	if s.runFn != nil {
-		return s.runFn(ctx, options, fn)
-	}
-	return fn(ctx, "stub-step")
-}
-
-func (s *stubExclusiveStepLifecycle) AcquireReservation(*exclusiveStepReservation) error { return nil }
-func (s *stubExclusiveStepLifecycle) ReleaseReservation(*exclusiveStepReservation)       {}
 func (s *stubExclusiveStepLifecycle) Interrupt() error {
 	return nil
 }
@@ -120,10 +84,6 @@ func (s *stubExclusiveStepLifecycle) InterruptCurrentAgentTurn(func(*RunSnapshot
 	return nil, nil
 }
 
-func (s *blockingBackgroundStepLifecycle) InterruptCurrentAgentTurn(func(*RunSnapshot)) (*RunSnapshot, error) {
-	return nil, nil
-}
-
 func (s *stubExclusiveStepLifecycle) IsBusy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -131,9 +91,6 @@ func (s *stubExclusiveStepLifecycle) IsBusy() bool {
 }
 
 func (s *stubExclusiveStepLifecycle) Snapshot() *RunSnapshot {
-	if s.snapshotFn != nil {
-		return s.snapshotFn()
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneRunSnapshot(s.snapshot)
@@ -159,10 +116,27 @@ func (s *stubExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply fun
 	return apply()
 }
 
-func (s *stubExclusiveStepLifecycle) DrainAgentStepBoundary(context.Context) error {
+func (s *stubExclusiveStepLifecycle) ApplyForExactGoalStep(runID string, stepID string, apply func() error) error {
+	s.mu.Lock()
+	activeStepID := s.activeStepID
+	snapshot := cloneRunSnapshot(s.snapshot)
+	s.mu.Unlock()
+	if activeStepID == "" || activeStepID != stepID || snapshot == nil ||
+		snapshot.RunID != runID || snapshot.StepID != stepID || apply == nil {
+		return ErrActiveStepInactive
+	}
+	return apply()
+}
+
+func (s *stubExclusiveStepLifecycle) ValidateExactOutput(stepID string, _ bool) error {
+	s.mu.Lock()
+	activeStepID := s.activeStepID
+	s.mu.Unlock()
+	if activeStepID == "" || activeStepID != stepID {
+		return ErrActiveStepInactive
+	}
 	return nil
 }
-func (s *stubExclusiveStepLifecycle) EndAgentStepBoundary() {}
 
 func (s *stubExclusiveStepLifecycle) setBusy(busy bool) {
 	s.mu.Lock()
@@ -173,15 +147,16 @@ func (s *stubExclusiveStepLifecycle) setBusy(busy bool) {
 func (s *stubExclusiveStepLifecycle) calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.runCalls + s.runNextCalls
+	return s.runCalls
 }
 
 func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
 	started := make(chan struct{})
 	release := make(chan struct{})
 	firstDone := make(chan error, 1)
@@ -218,7 +193,7 @@ func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
 func TestExclusiveStepLifecycleRejectsCanceledContextBeforeActiveRun(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -234,168 +209,10 @@ func TestExclusiveStepLifecycleRejectsCanceledContextBeforeActiveRun(t *testing.
 	}
 }
 
-func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	sink := newBlockingStepLifecycleSink()
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", StepLifecycle: sink})
-
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
-	if err := lifecycle.AcquireReservation(reservation); err != nil {
-		t.Fatalf("acquire reservation: %v", err)
-	}
-	if !lifecycle.IsBusy() {
-		t.Fatal("held reservation must keep exclusive lifecycle busy")
-	}
-	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil }); !errors.Is(err, ErrAgentBusy) {
-		t.Fatalf("ordinary run with held reservation err = %v, want busy", err)
-	}
-	maintenanceDone := make(chan error, 1)
-	go func() {
-		maintenanceDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
-			return nil
-		})
-	}()
-	releaseStep := make(chan struct{})
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindCompaction, Reservation: reservation}, func(context.Context, string) error {
-			<-releaseStep
-			return nil
-		})
-	}()
-
-	close(releaseStep)
-	select {
-	case <-sink.endedStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for terminal publication")
-	}
-	if snapshot := lifecycle.Snapshot(); snapshot != nil {
-		t.Fatalf("active snapshot must be cleared before terminal publication, got %+v", snapshot)
-	}
-	if !lifecycle.IsBusy() {
-		t.Fatal("terminal publication must keep exclusive lifecycle busy")
-	}
-	err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil })
-	if !errors.Is(err, ErrAgentBusy) {
-		t.Fatalf("successor run while terminal publication is pending err = %v, want ErrAgentBusy", err)
-	}
-	err = lifecycle.AcquireReservation(&exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction})
-	if !errors.Is(err, ErrExclusiveStepReservationPending) {
-		t.Fatalf("duplicate reservation during terminal publication err = %v, want pending rejection", err)
-	}
-
-	close(sink.releaseEnded)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	err = lifecycle.AcquireReservation(&exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction})
-	if !errors.Is(err, ErrExclusiveStepReservationPending) {
-		t.Fatalf("duplicate reservation after terminal publication err = %v, want pending rejection", err)
-	}
-	select {
-	case err := <-maintenanceDone:
-		t.Fatalf("non-holder RunNext finished before reservation release: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	lifecycle.ReleaseReservation(reservation)
-	if err := <-maintenanceDone; err != nil {
-		t.Fatalf("maintenance after reservation release: %v", err)
-	}
-}
-
-func TestRunNextPreservesOrderAcrossTerminalPublicationAndCancellation(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	sink := newBlockingStepLifecycleSink()
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5", StepLifecycle: sink})
-	eng.ensureOrchestrationCollaborators()
-	lifecycle := eng.stepLifecycle.(*defaultExclusiveStepLifecycle)
-	releaseStep := make(chan struct{})
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
-			<-releaseStep
-			return nil
-		})
-	}()
-
-	close(releaseStep)
-	select {
-	case <-sink.endedStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for terminal publication")
-	}
-	waitQueued := func(want int) {
-		t.Helper()
-		for deadline := time.Now().Add(runtimeTestSynchronizationTimeout); time.Now().Before(deadline); {
-			lifecycle.mu.Lock()
-			got := len(lifecycle.nextWaiters)
-			lifecycle.mu.Unlock()
-			if got == want {
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-		t.Fatalf("queued RunNext callers did not reach %d", want)
-	}
-	firstCtx, cancelFirst := context.WithCancel(context.Background())
-	started := make(chan string, 2)
-	firstQueuedDone := make(chan error, 1)
-	go func() {
-		firstQueuedDone <- lifecycle.RunNext(firstCtx, exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(stepCtx context.Context, _ string) error {
-			started <- "first"
-			<-stepCtx.Done()
-			return stepCtx.Err()
-		})
-	}()
-	waitQueued(1)
-	secondQueuedDone := make(chan error, 1)
-	go func() {
-		secondQueuedDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
-			started <- "second"
-			return nil
-		})
-	}()
-	waitQueued(2)
-	select {
-	case got := <-started:
-		t.Fatalf("RunNext caller %q started before terminal publication completed", got)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(sink.releaseEnded)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	select {
-	case got := <-started:
-		if got != "first" {
-			t.Fatalf("first admitted RunNext caller = %q, want first", got)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for first queued RunNext caller")
-	}
-	cancelFirst()
-	if err := <-firstQueuedDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("first queued RunNext error = %v, want context canceled", err)
-	}
-	<-sink.endedStarted
-	if got := <-started; got != "second" {
-		t.Fatalf("second admitted RunNext caller = %q, want second", got)
-	}
-	<-sink.endedStarted
-	if err := <-secondQueuedDone; err != nil {
-		t.Fatalf("second queued RunNext: %v", err)
-	}
-}
-
 func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	stepCtx, stepID, err := lifecycle.begin(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn})
 	if err != nil {
@@ -431,7 +248,7 @@ func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.
 func TestExclusiveStepAuthorityRejectsInterruptedStepBeforeFinalDrain(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	eng.stepLifecycle = lifecycle
 	stepCtx, stepID, err := lifecycle.begin(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn})
@@ -457,9 +274,10 @@ func TestExclusiveStepAuthorityRejectsInterruptedStepBeforeFinalDrain(t *testing
 func TestExclusiveStepLifecycleSnapshotTracksActiveRun(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
 	started := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan error, 1)
@@ -507,7 +325,7 @@ func TestExclusiveStepLifecycleEmitsCompletedRunStatePayloads(t *testing.T) {
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -517,6 +335,7 @@ func TestExclusiveStepLifecycleEmitsCompletedRunStatePayloads(t *testing.T) {
 	})
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
 	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn, EmitRunState: true}, func(context.Context, string) error {
 		return nil
 	}); err != nil {
@@ -556,7 +375,7 @@ func TestExclusiveStepLifecycleEmitsInterruptedRunStatePayloads(t *testing.T) {
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -566,6 +385,7 @@ func TestExclusiveStepLifecycleEmitsInterruptedRunStatePayloads(t *testing.T) {
 	})
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -627,7 +447,7 @@ func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := mustCreateTestSession(t)
-			eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+			eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 			canceled := false
 			lifecycle := &defaultExclusiveStepLifecycle{
 				engine: eng,
@@ -656,92 +476,11 @@ func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testin
 	}
 }
 
-func TestExclusiveStepLifecycleAgentTurnInterruptKeepsSuccessorBehindPersistence(t *testing.T) {
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: eng,
-		active: &exclusiveRunState{
-			sequence:   1,
-			activeKind: ActiveKindUserTurn,
-			cancel:     func() {},
-			runID:      uuid.NewString(),
-			stepID:     uuid.NewString(),
-			startedAt:  time.Now().UTC(),
-		},
-	}
-	persistEntered, releasePersist := gate.BlockNext()
-
-	type interruptResult struct {
-		snapshot *RunSnapshot
-		err      error
-	}
-	interruptDone := make(chan interruptResult, 1)
-	go func() {
-		snapshot, err := lifecycle.InterruptCurrentAgentTurn(nil)
-		interruptDone <- interruptResult{snapshot: snapshot, err: err}
-	}()
-	select {
-	case <-persistEntered:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Agent Turn interruption persistence")
-	}
-
-	terminalDone := make(chan struct{})
-	go func() {
-		lifecycle.beginTerminalPublication()
-		lifecycle.finishTerminalPublication()
-		close(terminalDone)
-	}()
-	select {
-	case <-terminalDone:
-		t.Fatal("terminal publication finished before Agent Turn interruption persisted")
-	case <-time.After(50 * time.Millisecond):
-	}
-	successorStarted := make(chan struct{})
-	successorDone := make(chan error, 1)
-	go func() {
-		successorDone <- lifecycle.RunNext(
-			context.Background(),
-			exclusiveStepOptions{ActiveKind: ActiveKindUserShell},
-			func(context.Context, string) error {
-				close(successorStarted)
-				return nil
-			},
-		)
-	}()
-	select {
-	case <-successorStarted:
-		t.Fatal("shell successor started before Agent Turn interruption persisted")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	releasePersist()
-	result := <-interruptDone
-	if result.err != nil || result.snapshot == nil || result.snapshot.ActiveKind != ActiveKindUserTurn {
-		t.Fatalf("agent-turn interrupt = (%+v, %v), want persisted user Agent Turn", result.snapshot, result.err)
-	}
-	select {
-	case <-terminalDone:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for terminal publication after interruption persistence")
-	}
-	select {
-	case <-successorStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for shell successor")
-	}
-	if err := <-successorDone; err != nil {
-		t.Fatalf("shell successor: %v", err)
-	}
-}
-
 func TestExclusiveStepLifecycleAgentTurnPersistenceFailureDoesNotCancel(t *testing.T) {
 	persistErr := errors.New("interruption persistence failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	canceled := false
 	lifecycle := &defaultExclusiveStepLifecycle{
 		engine: eng,
@@ -768,80 +507,10 @@ func TestExclusiveStepLifecycleAgentTurnPersistenceFailureDoesNotCancel(t *testi
 	}
 }
 
-func TestRunNextRetriesWhenPublicationStartsAfterBoundarySignal(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: eng,
-		active: &exclusiveRunState{
-			sequence:   1,
-			activeKind: ActiveKindUserTurn,
-			cancel:     func() {},
-			runID:      uuid.NewString(),
-			stepID:     uuid.NewString(),
-			startedAt:  time.Now().UTC(),
-		},
-	}
-	successorStarted := make(chan struct{})
-	successorDone := make(chan error, 1)
-	go func() {
-		successorDone <- lifecycle.RunNext(
-			context.Background(),
-			exclusiveStepOptions{ActiveKind: ActiveKindUserShell},
-			func(context.Context, string) error {
-				close(successorStarted)
-				return nil
-			},
-		)
-	}()
-
-	var waiter *exclusiveStepWaiter
-	for deadline := time.Now().Add(runtimeTestSynchronizationTimeout); time.Now().Before(deadline); {
-		lifecycle.mu.Lock()
-		if len(lifecycle.nextWaiters) == 1 {
-			waiter = lifecycle.nextWaiters[0]
-		}
-		lifecycle.mu.Unlock()
-		if waiter != nil {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if waiter == nil {
-		t.Fatal("timed out waiting for queued successor")
-	}
-
-	lifecycle.mu.Lock()
-	lifecycle.boundaryReady = true
-	close(waiter.ready)
-	lifecycle.beginPublicationLocked()
-	lifecycle.boundaryReady = false
-	lifecycle.active = nil
-	lifecycle.mu.Unlock()
-
-	select {
-	case err := <-successorDone:
-		t.Fatalf("successor finished during publication fence: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	lifecycle.mu.Lock()
-	lifecycle.finishPublicationLocked()
-	lifecycle.mu.Unlock()
-	select {
-	case <-successorStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for successor after publication")
-	}
-	if err := <-successorDone; err != nil {
-		t.Fatalf("successor after publication: %v", err)
-	}
-}
-
 func TestExclusiveStepLifecycleInterruptPreservesPendingRecoveryUntilTerminalCleanup(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	started := make(chan struct{})
@@ -863,14 +532,8 @@ func TestExclusiveStepLifecycleInterruptPreservesPendingRecoveryUntilTerminalCle
 	if err := lifecycle.Interrupt(); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
-	if store.Meta().PendingModelRecovery != nil {
-		t.Fatal("interrupt request created model recovery before provider-visible output")
-	}
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled run, got %v", err)
-	}
-	if store.Meta().PendingModelRecovery != nil {
-		t.Fatal("expected pending recovery to remain cleared after interrupted run exits")
 	}
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
@@ -896,7 +559,7 @@ func TestExclusiveStepLifecycleDiscardsStreamingMessageOnInterrupt(t *testing.T)
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -906,6 +569,7 @@ func TestExclusiveStepLifecycleDiscardsStreamingMessageOnInterrupt(t *testing.T)
 	})
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -948,7 +612,7 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			events = append(events, evt)
@@ -956,6 +620,7 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 	})
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
 	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn, EmitRunState: true}, func(context.Context, string) error {
 		return nil
 	}); err != nil {
@@ -966,7 +631,7 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 	}
 }
 
-func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T) {
+func TestExclusiveStepRuntimeAbortClosesAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	lifecycleErr := errors.New("step-ended publication failed")
@@ -980,18 +645,10 @@ func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5", StepLifecycle: stepLifecycle},
 	)
-	var idleSchedules int
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: eng,
-		background: &stubBackgroundNoticeScheduler{
-			scheduleIfIdle: func() {
-				idleSchedules++
-			},
-		},
-	}
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	cause := errors.New("result group persistence failed")
 	fatal := &resultGroupFatal{Committed: false, Cause: cause}
 	err := lifecycle.Run(
@@ -1001,14 +658,6 @@ func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T
 			EmitRunState: true,
 		},
 		func(_ context.Context, stepID string) error {
-			if markerErr := store.SetPendingModelRecovery(session.PendingModelRecovery{
-				RecoveryID: "runtime-abort",
-				StepID:     stepID,
-				Reason:     "test",
-				CreatedAt:  time.Now().UTC(),
-			}); markerErr != nil {
-				t.Fatalf("set pending model recovery: %v", markerErr)
-			}
 			return fatal
 		},
 	)
@@ -1023,12 +672,6 @@ func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T
 	}
 	if diagnostics != 1 {
 		t.Fatalf("runtime abort terminal-publication diagnostics = %d, want one", diagnostics)
-	}
-	if marker := store.Meta().PendingModelRecovery; marker == nil {
-		t.Fatal("runtime abort cleared PendingModelRecovery")
-	}
-	if idleSchedules != 0 {
-		t.Fatalf("runtime abort idle schedules = %d, want none", idleSchedules)
 	}
 	if _, submitErr := eng.SubmitUserMessage(context.Background(), "later"); !errors.Is(submitErr, ErrEngineClosed) {
 		t.Fatalf("later submission error = %v, want ErrEngineClosed", submitErr)
@@ -1049,154 +692,6 @@ func collectRunStateEvents(events []Event) []RunState {
 	return runEvents
 }
 
-func TestExclusiveStepLifecycleInterruptSkipsStaleRunCleanup(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-	lifecycle.active = &exclusiveRunState{sequence: 1, cancel: func() {
-		lifecycle.mu.Lock()
-		lifecycle.active = &exclusiveRunState{sequence: 2}
-		lifecycle.mu.Unlock()
-	}}
-	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "stale", StepID: "step-stale", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("set pending recovery: %v", err)
-	}
-
-	if err := lifecycle.Interrupt(); err != nil {
-		t.Fatalf("interrupt: %v", err)
-	}
-	if store.Meta().PendingModelRecovery == nil {
-		t.Fatal("expected stale interrupt to leave pending recovery intact")
-	}
-	if len(eng.transcriptRuntimeState().SnapshotMessages()) != 0 {
-		t.Fatalf("expected stale interrupt to avoid appending interruption message, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
-	}
-}
-
-func TestExclusiveStepLifecycleInterruptPersistsForRemainingCurrentRun(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	suspended := &exclusiveRunState{
-		sequence:   2,
-		activeKind: ActiveKindGoalLoop,
-		cancel:     func() {},
-		runID:      uuid.NewString(),
-		stepID:     uuid.NewString(),
-		startedAt:  time.Now().UTC(),
-	}
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine:    eng,
-		suspended: suspended,
-	}
-	lifecycle.active = &exclusiveRunState{
-		sequence:   1,
-		activeKind: ActiveKindCompaction,
-		cancel: func() {
-			lifecycle.mu.Lock()
-			lifecycle.active = &exclusiveRunState{sequence: 3}
-			lifecycle.mu.Unlock()
-		},
-		runID:     uuid.NewString(),
-		stepID:    uuid.NewString(),
-		startedAt: time.Now().UTC(),
-	}
-
-	if err := lifecycle.Interrupt(); err != nil {
-		t.Fatalf("interrupt: %v", err)
-	}
-	if !suspended.interrupted {
-		t.Fatal("remaining suspended run was not marked interrupted")
-	}
-	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	if len(messages) != 1 || messages[0].MessageType == nil || *messages[0].MessageType != llm.MessageTypeInterruption {
-		t.Fatalf("remaining current run interruption messages = %+v", messages)
-	}
-}
-
-func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("background done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	steps := &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(context.Context, string) error) error {
-		return eng.stepLifecycle.Run(ctx, options, fn)
-	}}
-	steps.setBusy(true)
-	scheduler := &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
-	backgroundActivityID := uuid.NewString()
-
-	scheduler.QueueDeveloperNotice(llm.Message{
-		Role:        llm.RoleDeveloper,
-		MessageType: textutil.Value(llm.MessageTypeBackgroundNotice),
-		Name:        textutil.Value("1000"),
-		BackgroundActivityID: textutil.Value(
-			backgroundActivityID,
-		),
-		Content: textutil.Value("Background shell 1000 completed."),
-	})
-
-	if steps.calls() != 0 {
-		t.Fatalf("expected no scheduler run while busy, got %d", steps.calls())
-	}
-	client.mu.Lock()
-	busyCalls := len(client.calls)
-	client.mu.Unlock()
-	if busyCalls != 0 {
-		t.Fatalf("expected no model calls while scheduler busy, got %d", busyCalls)
-	}
-
-	steps.setBusy(false)
-	scheduler.ScheduleIfIdle()
-
-	deadline := time.After(runtimeTestSynchronizationTimeout)
-	for {
-		client.mu.Lock()
-		callCount := len(client.calls)
-		client.mu.Unlock()
-		if callCount == 1 {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("timed out waiting for scheduled background run, calls=%d runs=%d", callCount, steps.calls())
-		default:
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-
-	if steps.calls() != 1 {
-		t.Fatalf("expected one scheduled run after idle transition, got %d", steps.calls())
-	}
-	client.mu.Lock()
-	request := client.calls[0]
-	client.mu.Unlock()
-	foundNotice := false
-	for _, msg := range requestMessages(request) {
-		if msg.Role == llm.RoleDeveloper &&
-			msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice &&
-			msg.Name != nil && *msg.Name == "1000" &&
-			msg.BackgroundActivityID != nil && *msg.BackgroundActivityID == backgroundActivityID {
-			foundNotice = true
-			break
-		}
-	}
-	if !foundNotice {
-		t.Fatalf("expected scheduled request to include queued background notice, messages=%+v", requestMessages(request))
-	}
-	if pending := scheduler.pendingSnapshot(); len(pending) != 0 {
-		t.Fatalf("expected queued notices to be drained, got %+v", pending)
-	}
-	if err := eng.Close(); err != nil {
-		t.Fatalf("close engine: %v", err)
-	}
-}
-
 func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
@@ -1204,20 +699,17 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	steps := &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(context.Context, string) error) error {
-		return eng.stepLifecycle.Run(ctx, options, fn)
-	}}
-	compactor := &defaultContextCompactor{engine: eng, steps: steps}
-	if _, err := compactor.CompactContextWithAcceptance(context.Background(), "", nil, nil); err != nil {
+	eng.compactionRuntimeState().SetManualCompactionEligible(true)
+	if _, err := eng.compactionFlow.CompactContextWithAcceptance(context.Background(), "", nil, nil); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
-	if steps.calls() != 1 {
-		t.Fatalf("expected compaction to execute through exclusive step lifecycle once, got %d", steps.calls())
+	if snapshot := eng.stepLifecycle.Snapshot(); snapshot != nil {
+		t.Fatalf("manual compaction retained active Step: %+v", snapshot)
 	}
 	client.mu.Lock()
 	callCount := len(client.calls)

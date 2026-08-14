@@ -283,10 +283,11 @@ func TestGoTestArgumentsLimitEachShardToOnePackageBuild(t *testing.T) {
 	got := goTestArguments(testJob{
 		packagePath: "core/fixture",
 		testNames:   []string{"TestOne", "TestTwo"},
-	}, false)
+	})
 	want := []string{
 		"test",
 		"-json",
+		"-count=1",
 		"-p",
 		"1",
 		"-parallel",
@@ -294,23 +295,6 @@ func TestGoTestArgumentsLimitEachShardToOnePackageBuild(t *testing.T) {
 		"core/fixture",
 		"-run",
 		"^(TestOne|TestTwo)$",
-	}
-	if !equalStrings(got, want) {
-		t.Fatalf("arguments = %q, want %q", got, want)
-	}
-}
-
-func TestGoTestArgumentsDisableCachingOnlyWhenFresh(t *testing.T) {
-	got := goTestArguments(testJob{packagePath: "core/fixture"}, true)
-	want := []string{
-		"test",
-		"-json",
-		"-p",
-		"1",
-		"-parallel",
-		"4",
-		"-count=1",
-		"core/fixture",
 	}
 	if !equalStrings(got, want) {
 		t.Fatalf("arguments = %q, want %q", got, want)

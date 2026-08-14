@@ -162,7 +162,7 @@ func DefinitionFor(id toolspec.ID) (Definition, bool) {
 }
 
 func definitionForToolName(toolName string) (Definition, bool) {
-	id, ok := toolspec.ParseID(toolName)
+	id, ok := parseAliases[strings.TrimSpace(toolName)]
 	if !ok {
 		return Definition{}, false
 	}
@@ -236,24 +236,7 @@ func FilterRequestExposedDefinitions(defs []Definition, ctx RequestExposureConte
 
 func RequestExposedDefinitionsForSession(enabled []toolspec.ID, registered []Definition, ctx RequestExposureContext) []Definition {
 	if len(enabled) > 0 {
-		registeredByID := make(map[toolspec.ID]Definition, len(registered))
-		for _, def := range registered {
-			registeredByID[def.ID] = def
-		}
-		selected := make([]Definition, 0, len(enabled))
-		seen := make(map[toolspec.ID]struct{}, len(enabled))
-		for _, id := range enabled {
-			if _, ok := seen[id]; ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			def, ok := registeredByID[id]
-			if !ok {
-				continue
-			}
-			selected = append(selected, def)
-		}
-		return FilterRequestExposedDefinitions(selected, ctx)
+		return FilterRequestExposedDefinitions(DefinitionsFor(enabled), ctx)
 	}
 	return FilterRequestExposedDefinitions(registered, ctx)
 }

@@ -103,20 +103,22 @@ type LockedModelCapabilities struct {
 }
 
 type LockedProviderCapabilities struct {
-	ProviderID                    string `json:"provider_id,omitempty"`
-	SupportsResponsesAPI          bool   `json:"supports_responses_api,omitempty"`
-	SupportsResponsesCompact      bool   `json:"supports_responses_compact,omitempty"`
-	SupportsPromptCacheKey        bool   `json:"supports_prompt_cache_key,omitempty"`
-	HasSupportsPromptCacheKey     bool   `json:"has_supports_prompt_cache_key,omitempty"`
-	SupportsNativeWebSearch       bool   `json:"supports_native_web_search,omitempty"`
-	SupportsReasoningEncrypted    bool   `json:"supports_reasoning_encrypted,omitempty"`
-	SupportsServerSideContextEdit bool   `json:"supports_server_side_context_edit,omitempty"`
-	SupportsProviderVerbosity     *bool  `json:"supports_provider_verbosity,omitempty"`
-	IsOpenAIFirstParty            bool   `json:"is_openai_first_party,omitempty"`
+	ProviderID                        string `json:"provider_id,omitempty"`
+	SupportsResponsesAPI              bool   `json:"supports_responses_api,omitempty"`
+	SupportsResponsesCompact          bool   `json:"supports_responses_compact,omitempty"`
+	SupportsRequestInputTokenCount    bool   `json:"supports_request_input_token_count,omitempty"`
+	HasSupportsRequestInputTokenCount bool   `json:"has_supports_request_input_token_count,omitempty"`
+	SupportsPromptCacheKey            bool   `json:"supports_prompt_cache_key,omitempty"`
+	HasSupportsPromptCacheKey         bool   `json:"has_supports_prompt_cache_key,omitempty"`
+	SupportsNativeWebSearch           bool   `json:"supports_native_web_search,omitempty"`
+	SupportsReasoningEncrypted        bool   `json:"supports_reasoning_encrypted,omitempty"`
+	SupportsServerSideContextEdit     bool   `json:"supports_server_side_context_edit,omitempty"`
+	SupportsProviderVerbosity         *bool  `json:"supports_provider_verbosity,omitempty"`
+	IsOpenAIFirstParty                bool   `json:"is_openai_first_party,omitempty"`
 }
 
 type ContinuationContext struct {
-	OpenAIBaseURL *string `json:"openai_base_url"`
+	OpenAIBaseURL string  `json:"openai_base_url,omitempty"`
 	AgentRole     *string `json:"agent_role,omitempty"`
 }
 
@@ -200,7 +202,6 @@ type Meta struct {
 	WorkspaceRoot                   string                           `json:"workspace_root"`
 	WorkspaceContainer              string                           `json:"workspace_container"`
 	Continuation                    *ContinuationContext             `json:"continuation,omitempty"`
-	ChatSettings                    *ChatSettingsOverrides           `json:"chat_settings,omitempty"`
 	CreatedAt                       time.Time                        `json:"created_at"`
 	UpdatedAt                       time.Time                        `json:"updated_at"`
 	LastSequence                    int64                            `json:"last_sequence"`
@@ -210,18 +211,9 @@ type Meta struct {
 	HeadlessActive                  bool                             `json:"headless_active,omitempty"`
 	CompactionSoonReminderIssued    bool                             `json:"compaction_soon_reminder_issued,omitempty"`
 	GeneratedRecoveredWarningIssued bool                             `json:"generated_recovered_warning_issued,omitempty"`
-	PendingModelRecovery            *PendingModelRecovery            `json:"pending_model_recovery,omitempty"`
 	LegacyInFlightStepRecovery      bool                             `json:"-"`
 	WorktreeReminder                *WorktreeReminderState           `json:"worktree_reminder,omitempty"`
 	UsageState                      *UsageState                      `json:"usage_state,omitempty"`
 	Goal                            *GoalState                       `json:"goal,omitempty"`
 	Locked                          *LockedContract                  `json:"locked,omitempty"`
-}
-
-type PendingModelRecovery struct {
-	RecoveryID             string    `json:"recovery_id"`
-	StepID                 string    `json:"step_id,omitempty"`
-	Reason                 string    `json:"reason"`
-	CreatedAt              time.Time `json:"created_at"`
-	OutstandingToolCallIDs []string  `json:"outstanding_tool_call_ids,omitempty"`
 }

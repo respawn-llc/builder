@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"testing"
+
+	"core/server/tools"
 )
 
 func TestDiscardQueuedUserMessagePreservesOtherQueuedIdentities(t *testing.T) {
 	t.Parallel()
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 	})
 	first := mustQueueUserMessage(t, engine, "same")

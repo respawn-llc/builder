@@ -246,10 +246,9 @@ func TestOngoingFrameInputStillRendersClientLocalQueuedMessages(t *testing.T) {
 func TestOngoingFrameInputRendersPendingInjectedMessagesBeforeServerAcceptance(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
 	m.injectedQueue = []injectedRuntimeQueueItem{{
-		LocalID:         "11111111-1111-4111-8111-111111111111",
-		Text:            "pending injected before server acceptance",
-		ClientRequestID: "22222222-2222-4222-8222-222222222222",
-		State:           injectedRuntimeQueuePendingCreate,
+		LocalID: "11111111-1111-4111-8111-111111111111",
+		Text:    "pending injected before server acceptance",
+		State:   injectedRuntimeQueuePendingCreate,
 	}}
 	frame := m.ongoingFrameInput()
 

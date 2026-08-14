@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -17,7 +18,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 	t.Run("completed final answer", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		events := &liveRunEventCollector{}
-		eng := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{finalTextResponse("done")}}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{finalTextResponse("done")}}, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: events.accept,
 		})
@@ -38,7 +39,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		withGenerateRetryDelays(t, nil)
 		failure := errors.New("provider failed")
 		events := &liveRunEventCollector{}
-		eng := mustNewTestEngine(t, store, &fakeClient{errors: []error{failure}}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{errors: []error{failure}}, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: events.accept,
 		})
@@ -63,7 +64,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 				Content: textutil.Value(""),
 			},
 			Usage: llm.Usage{WindowTokens: 200_000},
-		}}}, newTestToolRegistry(t), Config{
+		}}}, tools.NewRegistry(), Config{
 			Model:        "gpt-5",
 			OnEvent:      events.accept,
 			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -94,7 +95,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 				Content: textutil.Value(""),
 			},
 			Usage: llm.Usage{WindowTokens: 200_000},
-		}}}, newTestToolRegistry(t), Config{
+		}}}, tools.NewRegistry(), Config{
 			Model:        "gpt-5",
 			OnEvent:      events.accept,
 			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -119,7 +120,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		started := make(chan struct{})
 		client := &interruptibleLiveRunClient{started: started}
 		events := &liveRunEventCollector{}
-		eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: events.accept,
 		})
@@ -171,7 +172,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		releaseCallback := make(chan struct{})
 		var terminalCallbacks int
 		var callbackMu sync.Mutex
-		eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 			Model:         "gpt-5",
 			StepLifecycle: stepLifecycle,
 			OnEvent: func(event Event) {

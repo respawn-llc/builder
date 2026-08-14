@@ -129,6 +129,7 @@ func (s *remoteAppServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 	}
 	return runtimeAttachmentClients{
 		ProcessControls:   s.remote,
+		ProcessOutput:     s.remote,
 		ProcessViews:      s.remote,
 		PromptControl:     s.remote,
 		RuntimeControls:   s.remote,

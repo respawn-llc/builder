@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"core/server/llm"
@@ -14,10 +13,46 @@ import (
 	"core/shared/toolspec"
 )
 
+var ErrWorkflowStartUnavailable = errors.New("Workflow start is unavailable")
+
 type WorkflowAssignment struct {
 	ContextMode    workflow.ContextMode
 	CompletionMode workflowruntime.CompletionMode
 	Prompt         workflowruntime.PromptContract
+}
+
+func (e *Engine) ApplyWorkflowAssignment(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	assignment WorkflowAssignment,
+	persisted bool,
+) (session.CommitReceipt, error) {
+	if e == nil || e.steering == nil {
+		return session.CommitReceipt{}, ErrSteeringUnavailable
+	}
+	if err := reference.Validate(); err != nil {
+		return session.CommitReceipt{}, err
+	}
+	if err := e.workflowControl.validateSteering(steeringAdmissionWorkflowAssignment); err != nil {
+		return session.CommitReceipt{}, err
+	}
+	entry := newWorkflowAssignmentQueueEntry(reference, assignment, persisted)
+	wake, err := e.steering.append(entry)
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	if wake {
+		e.wakeSteeringDrain()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case reply := <-entry.start.reply:
+		return reply.receipt, reply.err
+	case <-ctx.Done():
+		return session.CommitReceipt{}, context.Cause(ctx)
+	}
 }
 
 // PersistedWorkflowAssignmentContext supplies the runtime-owned context needed
@@ -32,117 +67,25 @@ type PersistedWorkflowAssignmentContext struct {
 	EnabledTools            []toolspec.ID
 }
 
-type WorkflowAssignmentSteer struct {
-	state *workflowAssignmentSteerState
-}
-
-type workflowAssignmentSteerState struct {
-	done    chan struct{}
-	once    sync.Once
-	receipt session.CommitReceipt
-	err     error
-}
-
-type queuedWorkflowAssignment struct {
-	intent steeringIntent
-	steer  WorkflowAssignmentSteer
-}
-
-func newWorkflowAssignmentSteer() WorkflowAssignmentSteer {
-	return WorkflowAssignmentSteer{state: &workflowAssignmentSteerState{done: make(chan struct{})}}
-}
-
-func CompletedWorkflowAssignmentSteer(receipt session.CommitReceipt, err error) WorkflowAssignmentSteer {
-	steer := newWorkflowAssignmentSteer()
-	steer.complete(receipt, err)
-	return steer
-}
-
-func (s WorkflowAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
-	if s.state == nil {
-		return session.CommitReceipt{}, errors.New("workflow assignment steer is uninitialized")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-s.state.done:
-		return s.state.receipt, s.state.err
-	case <-ctx.Done():
-		return session.CommitReceipt{}, context.Cause(ctx)
-	}
-}
-
-func (s WorkflowAssignmentSteer) complete(receipt session.CommitReceipt, err error) {
-	if s.state == nil {
-		return
-	}
-	if err == nil && !receipt.Committed {
-		err = errors.New("workflow assignment message was not committed")
-	}
-	s.state.once.Do(func() {
-		s.state.receipt = receipt
-		s.state.err = err
-		close(s.state.done)
-	})
-}
-
-func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (WorkflowAssignmentSteer, error) {
-	message, err := buildWorkflowAssignmentMessage(assignment)
-	if err != nil {
-		return WorkflowAssignmentSteer{}, err
-	}
-	steer := newWorkflowAssignmentSteer()
-	intent := steerMessagesWithPersistenceIntent(
-		steeringPriorityRuntimeContext,
-		steeringMessageEventDefault,
-		true,
-		[]llm.Message{message},
-	)
-	e.ensureOrchestrationCollaborators()
-	active, err := e.stepLifecycle.WithActiveStep(func(string) error {
-		e.workflowAssignmentMu.Lock()
-		defer e.workflowAssignmentMu.Unlock()
-		if e.closed.Load() {
-			return ErrEngineClosed
-		}
-		e.pendingWorkflowAssignments = append(e.pendingWorkflowAssignments, queuedWorkflowAssignment{
-			intent: intent,
-			steer:  steer,
-		})
-		return nil
-	})
-	if err != nil {
-		steer.complete(session.CommitReceipt{}, err)
-		return steer, err
-	}
-	if active {
-		return steer, nil
-	}
-	receipt, err := e.steerWithCommitReceipt("", intent)
-	steer.complete(receipt, err)
-	return steer, nil
-}
-
-func SteerPersistedWorkflowAssignment(
+func PersistWorkflowAssignment(
 	store *session.Store,
 	assignment WorkflowAssignment,
 	deliveryContext PersistedWorkflowAssignmentContext,
-) (WorkflowAssignmentSteer, error) {
+) (session.CommitReceipt, error) {
 	if store == nil {
-		return WorkflowAssignmentSteer{}, errors.New("session store is required")
+		return session.CommitReceipt{}, errors.New("session store is required")
 	}
 	message, err := buildWorkflowAssignmentMessage(assignment)
 	if err != nil {
-		return WorkflowAssignmentSteer{}, err
+		return session.CommitReceipt{}, err
 	}
 	engine, err := newPersistedSteeringEngine(store)
 	if err != nil {
-		return WorkflowAssignmentSteer{}, err
+		return session.CommitReceipt{}, err
 	}
 	recent, err := engine.eventLog.ReadRecentRecords(1)
 	if err != nil {
-		return WorkflowAssignmentSteer{}, err
+		return session.CommitReceipt{}, err
 	}
 	// Dormant admission must call this before appending any other event. A
 	// pre-existing record is the durable witness that base meta context has
@@ -159,53 +102,11 @@ func SteerPersistedWorkflowAssignment(
 			time.Now(),
 		).withSubagents(deliveryContext.SubagentCatalogSettings, deliveryContext.EnabledTools)
 		if err := engine.steerBaseMetaContext("", builder, config.SubagentInvocationContextWorkflow); err != nil {
-			return WorkflowAssignmentSteer{}, err
+			return session.CommitReceipt{}, err
 		}
 	}
-	return completePersistedWorkflowAssignment(engine, message), nil
-}
-
-func completePersistedWorkflowAssignment(engine *Engine, message llm.Message) WorkflowAssignmentSteer {
-	receipt, err := engine.steerWithCommitReceipt("", steerMessagesWithPersistenceIntent(
-		steeringPriorityRuntimeContext,
-		steeringMessageEventDefault,
+	return engine.steerWithCommitReceipt("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		[]llm.Message{message},
 	))
-	return CompletedWorkflowAssignmentSteer(receipt, err)
-}
-
-func (e *Engine) flushPendingWorkflowAssignments(stepID string) error {
-	e.workflowAssignmentMu.Lock()
-	pending := append([]queuedWorkflowAssignment(nil), e.pendingWorkflowAssignments...)
-	e.pendingWorkflowAssignments = nil
-	e.workflowAssignmentMu.Unlock()
-	for index, assignment := range pending {
-		receipt, err := e.steerWithCommitReceipt(stepID, assignment.intent)
-		assignment.steer.complete(receipt, err)
-		if err != nil {
-			for _, remaining := range pending[index+1:] {
-				remaining.steer.complete(session.CommitReceipt{}, err)
-			}
-			return err
-		}
-		if !receipt.Committed {
-			err = errors.New("workflow assignment message was not committed")
-			for _, remaining := range pending[index+1:] {
-				remaining.steer.complete(session.CommitReceipt{}, err)
-			}
-			return err
-		}
-	}
-	return nil
-}
-
-func (e *Engine) failPendingWorkflowAssignments(err error) {
-	e.workflowAssignmentMu.Lock()
-	pending := append([]queuedWorkflowAssignment(nil), e.pendingWorkflowAssignments...)
-	e.pendingWorkflowAssignments = nil
-	e.workflowAssignmentMu.Unlock()
-	for _, assignment := range pending {
-		assignment.steer.complete(session.CommitReceipt{}, err)
-	}
 }

@@ -2,27 +2,28 @@ package runtime
 
 import (
 	"context"
-	"fmt"
 
 	"core/server/llm"
-	"core/shared/jsoncontract"
 	"core/shared/transcript"
 )
 
-type reviewerSuggestionsPayload struct {
-	Suggestions []string `json:"suggestions"`
-}
-
-func prepareReviewerSuggestionsContract(
-	preparer jsoncontract.Preparer,
-) (jsoncontract.Structured, error) {
-	return preparer.Structured("reviewer suggestions", reviewerSuggestionsPayload{})
-}
-
-func reviewerSuggestionsStructuredOutput(contract jsoncontract.Structured) *llm.StructuredOutput {
+func reviewerSuggestionsStructuredOutput() *llm.StructuredOutput {
 	return &llm.StructuredOutput{
-		Name:   "reviewer_suggestions",
-		Schema: contract,
+		Name: "reviewer_suggestions",
+		Schema: mustJSON(map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"suggestions": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "string",
+					},
+				},
+			},
+			"required": []string{"suggestions"},
+		}),
+		Strict: true,
 	}
 }
 
@@ -44,10 +45,11 @@ func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Cl
 		ReasoningEffort:         reviewerCfg.ThinkingLevel,
 		SupportsReasoningEffort: reviewerCfg.ModelCapabilities.SupportsReasoningEffort,
 		SystemPrompt:            systemPrompt,
+		SessionID:               reviewerSessionID(e.store.Meta().SessionID),
 		Items:                   reviewerItems,
 		Tools:                   []llm.Tool{},
 		ToolChoiceMode:          llm.ToolChoiceModeAutomatic,
-		StructuredOutput:        reviewerSuggestionsStructuredOutput(e.reviewerSuggestionsContract),
+		StructuredOutput:        reviewerSuggestionsStructuredOutput(),
 	}
 	if supportsPromptCacheKeyForClient(ctx, reviewerClient) {
 		if cacheKey := e.conversationPromptCacheKey(reviewerSessionID(e.store.Meta().SessionID)); cacheKey != "" {
@@ -59,32 +61,4 @@ func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Cl
 		return llm.Request{}, err
 	}
 	return req, nil
-}
-
-func (e *Engine) buildReviewerDispatchRequest(
-	ctx context.Context,
-	stepID string,
-	reviewerClient llm.Client,
-) (llm.Request, error) {
-	req, err := e.buildReviewerRequest(ctx, reviewerClient)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	runID := activeRunIDForStep(e, stepID)
-	if runID == "" {
-		return llm.Request{}, fmt.Errorf(
-			"%w: enclosing Agent Turn Run identity is required for Reviewer dispatch",
-			llm.ErrInvalidRequest,
-		)
-	}
-	factory, err := newDispatchRequestFactory(dispatchRequestIdentity{
-		SessionID:            reviewerSessionID(e.store.Meta().SessionID),
-		RunID:                runID,
-		CompactionGeneration: e.compactionRuntimeState().Count(),
-		RequestKind:          llm.CodexRequestKindTurn.Optional(),
-	})
-	if err != nil {
-		return llm.Request{}, err
-	}
-	return factory.generation(req)
 }

@@ -9,9 +9,8 @@ func runPromptStringPtr(value string) *string { return &value }
 
 func TestRunPromptOverridesAgentRoleJSONRoundTrip(t *testing.T) {
 	req := SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            SessionLaunchModeHeadless,
-		Intent:          CreateNewSessionLaunchIntent(IndependentSessionCreateOrigin()),
+		Mode:   SessionLaunchModeHeadless,
+		Intent: CreateNewSessionLaunchIntent(IndependentSessionCreateOrigin()),
 		Overrides: RunPromptOverrides{
 			AgentRole: runPromptStringPtr("default"),
 		},
@@ -35,9 +34,8 @@ func TestRunPromptOverridesAgentRoleJSONRoundTrip(t *testing.T) {
 func TestRunPromptRequestParentIntentJSONRoundTrip(t *testing.T) {
 	parentID := mustSessionLaunchIntentID(t, "parent-session")
 	req := RunPromptRequest{
-		ClientRequestID: "req-1",
-		Intent:          CreateNewSessionLaunchIntent(ParentAgentSessionCreateOrigin(parentID)),
-		Prompt:          "hello",
+		Intent: CreateNewSessionLaunchIntent(ParentAgentSessionCreateOrigin(parentID)),
+		Prompt: "hello",
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
@@ -56,9 +54,10 @@ func TestRunPromptRequestParentIntentJSONRoundTrip(t *testing.T) {
 
 func TestRunPromptRequestJSONRejectsUnknownAndRemovedFields(t *testing.T) {
 	for _, raw := range []string{
-		`{"client_request_id":"req-1","intent":{"kind":"create_new","origin":{"kind":"independent"}},"prompt":"hello","unknown":true}`,
-		`{"client_request_id":"req-1","intent":{"kind":"create_new","origin":{"kind":"independent"}},"selected_session_id":"legacy","prompt":"hello"}`,
-		`{"client_request_id":"req-1","intent":{"kind":"create_new","origin":{"kind":"independent"}},"parent_session_id":"legacy","prompt":"hello"}`,
+		`{"intent":{"kind":"create_new","origin":{"kind":"independent"}},"prompt":"hello","unknown":true}`,
+		`{"client_request_id":"req-1","intent":{"kind":"create_new","origin":{"kind":"independent"}},"prompt":"hello"}`,
+		`{"intent":{"kind":"create_new","origin":{"kind":"independent"}},"selected_session_id":"legacy","prompt":"hello"}`,
+		`{"intent":{"kind":"create_new","origin":{"kind":"independent"}},"parent_session_id":"legacy","prompt":"hello"}`,
 	} {
 		var request RunPromptRequest
 		if err := json.Unmarshal([]byte(raw), &request); err == nil {
@@ -68,7 +67,7 @@ func TestRunPromptRequestJSONRejectsUnknownAndRemovedFields(t *testing.T) {
 }
 
 func TestRunPromptRequestJSONRequiresTypedIntentWhenLegacySelectorIsMixed(t *testing.T) {
-	raw := `{"client_request_id":"req-1","selected_session_id":"legacy","intent":{"kind":"open_existing","session_id":"target"},"prompt":"hello"}`
+	raw := `{"selected_session_id":"legacy","intent":{"kind":"open_existing","session_id":"target"},"prompt":"hello"}`
 	var request RunPromptRequest
 	if err := json.Unmarshal([]byte(raw), &request); err == nil {
 		t.Fatalf("Unmarshal(%s) succeeded, want legacy field rejection", raw)
@@ -77,7 +76,7 @@ func TestRunPromptRequestJSONRequiresTypedIntentWhenLegacySelectorIsMixed(t *tes
 
 func TestRunPromptOverridesAgentRoleContract(t *testing.T) {
 	var got SessionPlanRequest
-	if err := json.Unmarshal([]byte(`{"client_request_id":"req-1","mode":"headless","intent":{"kind":"create_new","origin":{"kind":"independent"}},"overrides":{"agent_role":"worker"}}`), &got); err != nil {
+	if err := json.Unmarshal([]byte(`{"mode":"headless","intent":{"kind":"create_new","origin":{"kind":"independent"}},"overrides":{"agent_role":"worker"}}`), &got); err != nil {
 		t.Fatalf("Unmarshal request: %v", err)
 	}
 	if got.Overrides.AgentRole == nil || *got.Overrides.AgentRole != "worker" {

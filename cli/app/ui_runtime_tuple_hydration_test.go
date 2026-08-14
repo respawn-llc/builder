@@ -168,12 +168,11 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	if m.currentRunID == "" || m.currentStepID == "" || !m.runtimeActivityBusy() {
 		t.Fatalf("hydrated running state missing: activity=%+v run=%q step=%q", m.runtimeActivityProjection, m.currentRunID, m.currentStepID)
 	}
-	m.goal.open = true
-	m.goal.pending = &clientui.GoalPreview{Objective: "queued", Status: clientui.RuntimeGoalStatusActive}
-	goal := runtimeClientTestGoal("goal-1", "hydrated", clientui.RuntimeGoalStatusPaused)
-	m.applyAdmittedTranscriptMessageState(hydration, runtimeTupleMergeResult{view: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{Goal: goal}}}})
-	if m.goal.pending != nil || *m.goal.goal != *goal {
-		t.Fatal("hydration did not replace queued Goal preview")
+	if len(m.injectedQueue) != 0 {
+		t.Fatalf("foreign hydrated queue created local restoration ownership: %+v", m.injectedQueue)
+	}
+	if len(controller.liveReadModel.sections) == 0 {
+		t.Fatal("hydrated tools/prompts/queue did not reach controller live state")
 	}
 }
 
@@ -516,10 +515,9 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 	}}
 	queuedText := "queued hydration"
 	hydration.QueuedMessages = []clientui.TranscriptQueuedMessageState{{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		QueueItemID:     runtimeids.NewQueueItemID(),
-		Status:          clientui.QueuedUserMessageAccepted,
-		Text:            &queuedText,
+		QueueItemID: runtimeids.NewQueueItemID(),
+		Status:      clientui.QueuedUserMessageAccepted,
+		Text:        &queuedText,
 	}}
 	hydration.PendingPrompts = []clientui.TranscriptPrompt{
 		testQuestionPrompt("prompt-1", "Approve hydration?", "yes"),

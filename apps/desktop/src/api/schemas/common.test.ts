@@ -280,14 +280,7 @@ describe("taskStatusSchema", () => {
 });
 
 describe("validationErrorSchema", () => {
-  const base = {
-    code: "code",
-    message: "message",
-    blocks_context: true,
-    edge_id: null,
-    node_id: null,
-    transition_group_id: null,
-  };
+  const base = { code: "code", message: "message", blocks_context: true };
 
   it("normalizes omitted or null role-tool details to null", () => {
     const omitted = validationErrorSchema.parse(base);
@@ -297,29 +290,6 @@ describe("validationErrorSchema", () => {
     });
     expect(omitted.details).toMatchObject({ role: null, requiredTool: null });
     expect(present.details).toMatchObject({ role: "coder", requiredTool: "ask_question" });
-  });
-
-  it("preserves absent graph identities as null", () => {
-    expect(validationErrorSchema.parse(base)).toMatchObject({
-      edgeID: null,
-      nodeID: null,
-      transitionGroupID: null,
-      details: { providerEdgeID: null },
-    });
-  });
-
-  it("rejects omitted, empty, or blank graph identity fields", () => {
-    for (const field of ["edge_id", "node_id", "transition_group_id"] as const) {
-      const omitted = { ...base };
-      Reflect.deleteProperty(omitted, field);
-      expect(() => validationErrorSchema.parse(omitted)).toThrow();
-      for (const invalid of ["", " "]) {
-        expect(() => validationErrorSchema.parse({ ...base, [field]: invalid })).toThrow();
-      }
-    }
-    for (const invalid of ["", " "]) {
-      expect(() => validationErrorSchema.parse({ ...base, details: { provider_edge_id: invalid } })).toThrow();
-    }
   });
 
   it("rejects present blank role-tool details", () => {

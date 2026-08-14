@@ -47,9 +47,10 @@ const (
 type Route string
 
 const (
-	RouteResponses Route = "responses"
-	RouteCompact   Route = "compact"
-	RouteModel     Route = "model_metadata"
+	RouteResponses   Route = "responses"
+	RouteCompact     Route = "compact"
+	RouteInputTokens Route = "input_tokens"
+	RouteModel       Route = "model_metadata"
 )
 
 func (operation RequiredOperation) Validate() error {
@@ -57,7 +58,7 @@ func (operation RequiredOperation) Validate() error {
 		return errors.New("model operation id must be UUIDv4")
 	}
 	switch operation.Route {
-	case RouteResponses, RouteCompact, RouteModel:
+	case RouteResponses, RouteCompact, RouteInputTokens, RouteModel:
 	default:
 		return fmt.Errorf("unsupported model route %q", operation.Route)
 	}
@@ -70,12 +71,8 @@ func (operation RequiredOperation) Validate() error {
 	if operation.DeveloperMessageCount != nil && *operation.DeveloperMessageCount < 0 {
 		return errors.New("developer message count must be nonnegative")
 	}
-	inputBearingRoute := operation.Route == RouteResponses || operation.Route == RouteCompact
-	if !inputBearingRoute && (operation.Probe != nil || operation.DeveloperMessageCount != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
-		return errors.New("only responses and compaction operations may declare input shape, session cache key, stream, or hold outcome")
-	}
-	if operation.Route != RouteResponses && (operation.Output != nil || operation.ResponsePhase != nil) {
-		return errors.New("only responses operations may declare assistant output or response phase")
+	if operation.Route != RouteResponses && (operation.Probe != nil || operation.DeveloperMessageCount != nil || operation.Output != nil || operation.ResponsePhase != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
+		return errors.New("only responses operations may declare input shape, output, response phase, session cache key, stream, or hold outcome")
 	}
 	emitsAssistantMessage := operation.Route == RouteResponses && (operation.Output != nil || operation.Outcome == OutcomeStream)
 	if emitsAssistantMessage {

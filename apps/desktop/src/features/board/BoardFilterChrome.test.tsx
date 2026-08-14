@@ -130,38 +130,14 @@ describe("BoardFilterChrome", () => {
       labelFilter: { kind: "none" },
       dependencyFilter: true,
     };
-    render(
-      <BoardFilterRow
-        activeWorkflow={{
-          description: "",
-          id: "workflow-1",
-          isProjectDefault: true,
-          name: "Main",
-          validForTaskCreation: true,
-          validationErrors: [],
-          version: 1,
-        }}
-        canCreateTask
-        onLinkWorkflow={vi.fn()}
-        onNewTask={vi.fn()}
-        onOpenTask={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onSelectWorkflow={vi.fn()}
-        projectID="project-1"
-        workflows={[]}
-      />,
-    );
+    render(<BoardFilterRow onOpenTask={vi.fn()} projectID="project-1" />);
 
     const controls = screen.getAllByRole("button");
-    expect(controls).toHaveLength(6);
-    const newTask = controlAt(controls, 0);
-    const workflow = controlAt(controls, 1);
-    const labels = controlAt(controls, 2);
-    const sort = controlAt(controls, 3);
-    const unblocked = controlAt(controls, 4);
-    const search = controlAt(controls, 5);
-    expect(newTask.compareDocumentPosition(workflow) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-    expect(workflow.compareDocumentPosition(labels) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(controls).toHaveLength(4);
+    const labels = controlAt(controls, 0);
+    const sort = controlAt(controls, 1);
+    const unblocked = controlAt(controls, 2);
+    const search = controlAt(controls, 3);
     expect(labels.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(sort.compareDocumentPosition(unblocked) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(unblocked.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);

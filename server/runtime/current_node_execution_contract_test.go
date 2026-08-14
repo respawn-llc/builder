@@ -3,53 +3,21 @@ package runtime
 import (
 	"testing"
 
-	"core/server/workflow"
+	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 )
 
-func TestCurrentNodeExecutionConfigurationCarriesOnlyLiveScopeAndNaturalNodeIdentity(t *testing.T) {
+func TestDetachedPublicationRejectsCurrentNodeExecutionWithoutScope(t *testing.T) {
 	t.Parallel()
-	branch := workflow.TransitionBranchKey("implementation")
-	reference, err := workflow.NewCurrentNodeReference("task-1", "node-1", &branch)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference: %v", err)
-	}
-	scopeID := runtimeids.NewExecutionScopeID()
-	config := Config{CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-		ScopeID: scopeID,
+	engine := mustNewTestEngine(t, mustCreateTestSessionAt(t, t.TempDir()), &fakeClient{}, tools.NewRegistry(), Config{})
+	_, err := engine.PrepareCurrentNodeExecutionPublication(&workflowruntime.CurrentNodeExecutionConfig{
 		Instructions: workflowruntime.TaskInstructions{
-			CurrentNode: reference,
+			CurrentNode: mustTestCurrentNodeReference(t, "task-zero-scope", "node-zero-scope", nil),
 		},
-	}}
-	if config.CurrentNodeExecution == nil || config.CurrentNodeExecution.ScopeID != scopeID {
-		t.Fatalf("live Current Node execution scope = %+v, want %s", config.CurrentNodeExecution, scopeID)
-	}
-	if !config.CurrentNodeExecution.Instructions.CurrentNode.Equal(reference) {
-		t.Fatalf("Current Node execution identity = %+v, want %+v", config.CurrentNodeExecution.Instructions.CurrentNode, reference)
-	}
-}
-
-func TestRuntimeRejectsCurrentNodeExecutionWithoutScope(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSessionAt(t, t.TempDir())
-	reference := mustTestCurrentNodeReference(t, "task-zero-scope", "node-zero-scope", nil)
-
-	engine, err := New(
-		store,
-		mustMaterializeTestEventLog(t, store),
-		&fakeClient{},
-		newTestToolRegistry(t),
-		Config{
-			Model: "gpt-5",
-			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-				Instructions: workflowruntime.TaskInstructions{CurrentNode: reference},
-			},
-		},
-	)
+	})
 	if err == nil {
-		_ = engine.Close()
-		t.Fatal("runtime accepted a Current Node execution without an exact scope")
+		t.Fatal("detached publication accepted a Current Node execution without an exact scope")
 	}
 }
 
@@ -64,19 +32,24 @@ func TestCurrentNodeExecutionBindingHasOneOwner(t *testing.T) {
 			WorkflowID:  workflowID,
 		},
 	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
-		CurrentNodeExecution: execution,
-	})
-
-	first, err := engine.BindCurrentNodeExecution(execution)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	first, err := engine.PrepareCurrentNodeExecutionPublication(execution)
 	if err != nil {
-		t.Fatalf("claim configured Current Node execution: %v", err)
+		t.Fatalf("prepare Current Node execution: %v", err)
 	}
-	if duplicate, err := engine.BindCurrentNodeExecution(execution); err == nil {
-		_ = duplicate.Close()
-		t.Fatal("runtime granted a second Current Node execution binding")
+	if err := first.Begin(); err != nil {
+		t.Fatalf("begin Current Node execution publication: %v", err)
 	}
-	if err := first.Close(); err != nil {
+	binding := first.Commit()
+	duplicate, err := engine.PrepareCurrentNodeExecutionPublication(execution)
+	if err != nil {
+		t.Fatalf("prepare duplicate Current Node execution: %v", err)
+	}
+	if err := duplicate.Begin(); err == nil {
+		duplicate.Cancel()
+		t.Fatal("runtime granted a second Current Node execution publication")
+	}
+	if err := binding.Close(); err != nil {
 		t.Fatalf("close Current Node execution binding: %v", err)
 	}
 	retained, err := engine.WorkflowSessionState()
@@ -93,47 +66,19 @@ func TestCurrentNodeExecutionBindingHasOneOwner(t *testing.T) {
 			WorkflowID:  workflowID,
 		},
 	}
-	rebound, err := engine.BindCurrentNodeExecution(successor)
+	rebound, err := engine.PrepareCurrentNodeExecutionPublication(successor)
 	if err != nil {
-		t.Fatalf("bind successor Current Node execution after owner close: %v", err)
+		t.Fatalf("prepare successor Current Node execution after owner close: %v", err)
 	}
-	if err := rebound.Close(); err != nil {
+	if err := rebound.Begin(); err != nil {
+		t.Fatalf("begin successor Current Node execution: %v", err)
+	}
+	successorBinding := rebound.Commit()
+	if err := successorBinding.Close(); err != nil {
 		t.Fatalf("close rebound Current Node execution: %v", err)
 	}
-	if !engine.CurrentNodeExecutionConfigured() {
+	if !engine.currentNodeExecutionActive() {
 		t.Fatal("successor completion contract was discarded when exact scope ownership ended")
-	}
-}
-
-func TestCurrentNodeExecutionBindingPreparesCompletionContract(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSessionAt(t, t.TempDir())
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
-	execution := &workflowruntime.CurrentNodeExecutionConfig{
-		ScopeID: runtimeids.NewExecutionScopeID(),
-		Contract: workflowruntime.CompletionContract{
-			Transitions: []workflowruntime.CompletionTransition{{ID: "done"}},
-		},
-		Instructions: workflowruntime.TaskInstructions{
-			CurrentNode: mustTestCurrentNodeReference(t, "task-binding-contract", "node-binding-contract", nil),
-		},
-	}
-
-	binding, err := engine.BindCurrentNodeExecution(execution)
-	if err != nil {
-		t.Fatalf("bind Current Node execution: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := binding.Close(); err != nil {
-			t.Errorf("close Current Node execution binding: %v", err)
-		}
-	})
-	bound, active := engine.currentNodeExecutionConfig()
-	if !active {
-		t.Fatal("bound Current Node execution is unavailable")
-	}
-	if _, err := workflowruntime.FunctionSchema(bound.Contract); err != nil {
-		t.Fatalf("bound completion contract is not prepared: %v", err)
 	}
 }
 
@@ -147,14 +92,16 @@ func TestCurrentNodeExecutionBindingClearsCompletedContract(t *testing.T) {
 			WorkflowID:  runtimeids.NewWorkflowID(),
 		},
 	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
-		CurrentNodeExecution: execution,
-	})
-	binding, err := engine.BindCurrentNodeExecution(execution)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	publication, err := engine.PrepareCurrentNodeExecutionPublication(execution)
 	if err != nil {
-		t.Fatalf("bind Current Node execution: %v", err)
+		t.Fatalf("prepare Current Node execution: %v", err)
 	}
-	if !engine.CurrentNodeExecutionConfigured() {
+	if err := publication.Begin(); err != nil {
+		t.Fatalf("begin Current Node execution: %v", err)
+	}
+	binding := publication.Commit()
+	if !engine.currentNodeExecutionActive() {
 		t.Fatal("bound Current Node execution has no completion contract")
 	}
 	beforeClose, err := engine.WorkflowSessionState()
@@ -166,41 +113,17 @@ func TestCurrentNodeExecutionBindingClearsCompletedContract(t *testing.T) {
 		beforeClose.WorkflowID != execution.Instructions.WorkflowID {
 		t.Fatalf("WorkflowSessionState before completed binding close = %+v, want configured workflow identity", beforeClose)
 	}
-	engine.setWorkflowTerminalState(WorkflowCompletionSourceTool)
+	if _, err := engine.recordWorkflowTerminalState(WorkflowCompletionSourceTool); err != nil {
+		t.Fatalf("record Workflow terminal state: %v", err)
+	}
 
 	if err := binding.Close(); err != nil {
 		t.Fatalf("close completed Current Node execution binding: %v", err)
 	}
-	if engine.CurrentNodeExecutionConfigured() {
+	if engine.currentNodeExecutionActive() {
 		t.Fatal("completed Current Node execution retained its completion contract")
 	}
 	if state, err := engine.WorkflowSessionState(); err != nil || state != nil {
 		t.Fatalf("completed Workflow Session state = %+v error=%v, want absent", state, err)
-	}
-}
-
-func TestIdleCompletionActivationClearsRetainedContract(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSessionAt(t, t.TempDir())
-	execution := &workflowruntime.CurrentNodeExecutionConfig{
-		ScopeID: runtimeids.NewExecutionScopeID(),
-		Instructions: workflowruntime.TaskInstructions{
-			CurrentNode: mustTestCurrentNodeReference(t, "task-idle-completion", "node-idle-completion", nil),
-			WorkflowID:  runtimeids.NewWorkflowID(),
-		},
-	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
-		CurrentNodeExecution: execution,
-	})
-	engine.setWorkflowTerminalState(WorkflowCompletionSourceTool)
-
-	if err := engine.FinishCurrentNodeExecutionActivation(); err != nil {
-		t.Fatalf("finish idle-completion activation: %v", err)
-	}
-	if engine.CurrentNodeExecutionConfigured() {
-		t.Fatal("idle-completed retained Session kept its Current Node contract")
-	}
-	if terminal := engine.WorkflowTerminalState(); terminal.Completed {
-		t.Fatalf("idle-completed retained Session kept terminal state: %+v", terminal)
 	}
 }

@@ -1,1 +1,1 @@
-export { useCreateTask, useUpdateTask } from "./useTaskMutations";
+export { useCreateTask, useUpdateTask, useWorkspaces } from "./useTaskMutations";

@@ -32,7 +32,6 @@ const (
 	MethodProjectUpdate                                 = "project.update"
 	MethodProjectSetDefaultWorkspace                    = "project.defaultWorkspace.set"
 	MethodProjectWorkspaceList                          = "project.workspace.list"
-	MethodProjectWorkspaceGet                           = "project.workspace.get"
 	MethodProjectUnlinkWorkspace                        = "project.unlinkWorkspace"
 	MethodProjectDelete                                 = "project.delete"
 	MethodProjectAttachWorkspace                        = "project.attachWorkspace"
@@ -83,7 +82,6 @@ const (
 	MethodWorkflowTaskCommentReplace                    = "workflow.task.comment.replace"
 	MethodWorkflowTaskCommentDelete                     = "workflow.task.comment.delete"
 	MethodWorkflowTaskActivityList                      = "workflow.task.activity.list"
-	MethodWorkflowTaskSessionList                       = "workflow.task.session.list"
 	MethodWorkflowTaskList                              = "workflow.task.list"
 	MethodWorkflowTaskSearch                            = "workflow.task.search"
 	MethodWorkflowBoardGet                              = "workflow.board.get"
@@ -98,7 +96,6 @@ const (
 	MethodWorkflowTaskObserve                           = "workflow.task.observe"
 	MethodSessionPlan                                   = "session.plan"
 	MethodSessionWorkspaceChatDraft                     = "session.workspaceChatDraft"
-	MethodSessionWorkspaceChatMaterialize               = "session.materializeWorkspaceChat"
 	MethodSessionGetMainView                            = "session.getMainView"
 	MethodSessionGetExecutionEnvironment                = "session.getExecutionEnvironment"
 	MethodSessionGetTranscriptPage                      = "session.getTranscriptPage"
@@ -167,6 +164,9 @@ const (
 	MethodSessionSubscribeTranscript                    = "session.subscribeTranscript"
 	MethodSessionTranscriptEvent                        = "session.transcript"
 	MethodSessionTranscriptComplete                     = "session.transcript.complete"
+	MethodProcessSubscribeOutput                        = "process.subscribeOutput"
+	MethodProcessOutputEvent                            = "process.output"
+	MethodProcessOutputComplete                         = "process.output.complete"
 )
 
 type HandshakeRequest struct {
@@ -800,6 +800,10 @@ type SubscribeResponse struct {
 
 type SessionTranscriptEventParams struct {
 	Message clientui.TranscriptMessage `json:"message"`
+}
+
+type ProcessOutputEventParams struct {
+	Chunk clientui.ProcessOutputChunk `json:"chunk"`
 }
 
 type AttentionNotificationEventParams struct {

@@ -1,10 +1,12 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -18,7 +20,11 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 		remoteCompactionReplacement(1_000, 100, 200_000),
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{
+		activeStepID: "input",
+		snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: "input"},
+	}
 
 	t.Run("inactive goal transition sequence", func(t *testing.T) {
 		t.Run("absent", func(t *testing.T) {
@@ -62,6 +68,10 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 			},
 			Config{Model: "gpt-5"},
 		)
+		workflowEngine.stepLifecycle = &stubExclusiveStepLifecycle{
+			activeStepID: "input",
+			snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: "input"},
+		}
 		if _, err := workflowEngine.SetGoal("goal", session.GoalActorUser); err != nil {
 			t.Fatalf("set workflow goal: %v", err)
 		}
@@ -71,17 +81,16 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 
 func assertInactiveGoalCompaction(t *testing.T, engine *Engine, name string) {
 	t.Helper()
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	stepID := engine.stepLifecycle.Snapshot().StepID
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input " + name)}},
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	_, receipt, err := compactNowInActiveTestRun(
-		t,
-		engine,
+	_, receipt, err := engine.compactNow(
+		context.Background(),
+		stepID,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

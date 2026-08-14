@@ -40,7 +40,7 @@ func (e *Engine) activeMetaContextBuilder(model string, skillPolicy config.Skill
 		withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
 }
 
-func (e *Engine) steerMetaContextIfChanged(stepID string, priority steeringPriority, messages []llm.Message) error {
+func (e *Engine) steerMetaContextIfChanged(stepID string, messages []llm.Message) error {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -55,7 +55,7 @@ func (e *Engine) steerMetaContextIfChanged(stepID string, priority steeringPrior
 	if len(pending) == 0 {
 		return nil
 	}
-	return e.steer(stepID, steerMessagesWithPersistenceIntent(priority, steeringMessageEventDefault, true, pending))
+	return e.steer(stepID, steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, pending))
 }
 
 func latestActiveMetaContextMatches(items []llm.ResponseItem, desired llm.Message) bool {
@@ -218,9 +218,7 @@ func (e *Engine) steerBaseMetaContext(
 			Text:       warning,
 		}))
 	}
-	intents = append(intents, steerMessagesWithPersistenceIntent(
-		steeringPriorityRuntimeContext,
-		steeringMessageEventDefault,
+	intents = append(intents, steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		metaResult.OrderedBaseMessages(),
 	))
@@ -248,7 +246,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 		if err != nil {
 			return err
 		}
-		if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Headless); err != nil {
+		if err := e.steerMetaContextIfChanged(stepID, metaResult.Headless); err != nil {
 			return err
 		}
 		return e.store.SetHeadlessActive(true)
@@ -257,7 +255,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 	if err != nil {
 		return err
 	}
-	if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.HeadlessExit); err != nil {
+	if err := e.steerMetaContextIfChanged(stepID, metaResult.HeadlessExit); err != nil {
 		return err
 	}
 	return e.store.SetHeadlessActive(false)
@@ -302,7 +300,7 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 		if err != nil {
 			return err
 		}
-		return e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Workflow)
+		return e.steerMetaContextIfChanged(stepID, metaResult.Workflow)
 	})
 }
 

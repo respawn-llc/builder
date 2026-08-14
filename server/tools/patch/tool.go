@@ -8,17 +8,12 @@ import (
 	"strings"
 
 	"core/server/tools"
-	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 )
 
 type input struct {
-	Patch string `json:"patch" jsonschema_description:"Patch text in freeform format."`
-}
-
-func StaticContractSource() tools.StaticContractSource {
-	return tools.StaticContractSource{ID: toolspec.ToolPatch, Input: input{}}
+	Patch string `json:"patch"`
 }
 
 type Tool struct {

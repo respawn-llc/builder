@@ -31,6 +31,16 @@ func TestManagerRetainsMostRecentlyAccessedCompletedShellsWithoutEvictingRunning
 	}
 
 	victimID := completedIDs[0]
+	victimSnapshot, err := manager.Snapshot(victimID)
+	if err != nil {
+		t.Fatalf("snapshot eviction victim: %v", err)
+	}
+	victimCompletionPath := victimSnapshot.LogPath + ".completion"
+	for _, path := range []string{victimSnapshot.LogPath, victimCompletionPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("retained shell artifact %s: %v", path, err)
+		}
+	}
 	for _, id := range completedIDs[1:] {
 		if _, err := manager.Snapshot(id); err != nil {
 			t.Fatalf("refresh completed shell %s: %v", id, err)
@@ -52,6 +62,11 @@ func TestManagerRetainsMostRecentlyAccessedCompletedShellsWithoutEvictingRunning
 
 	if _, err := manager.Snapshot(victimID); !errors.Is(err, ErrResultUnavailable) {
 		t.Fatalf("least-recently-accessed completed shell error = %v, want %v", err, ErrResultUnavailable)
+	}
+	for _, path := range []string{victimSnapshot.LogPath, victimCompletionPath} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("evicted shell artifact %s still exists: %v", path, err)
+		}
 	}
 	if _, err := manager.Snapshot(completedIDs[1]); err != nil {
 		t.Fatalf("recently accessed completed shell was evicted: %v", err)
@@ -119,8 +134,12 @@ func startRetainedShell(
 	index int,
 ) ExecResult {
 	t.Helper()
+	command := fmt.Sprintf("while [ ! -f %s ]; do sleep 0.01; done", releaseName)
+	if index == 0 {
+		command += "; printf retained"
+	}
 	result, err := manager.Start(context.Background(), ExecRequest{
-		Command:        []string{"/bin/sh", "-c", fmt.Sprintf("while [ ! -f %s ]; do sleep 0.01; done", releaseName)},
+		Command:        []string{"/bin/sh", "-c", command},
 		DisplayCommand: "wait for release",
 		Workdir:        workdir,
 		YieldTime:      time.Millisecond,

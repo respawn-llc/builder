@@ -51,7 +51,6 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			SessionIdentity:        transcriptTestSessionIdentity(t),
 			SessionStatus:          transcriptTestSessionStatus(),
 			CommittedRows:          []TranscriptCommittedRow{},
-			GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 		}), TranscriptMessageHydration},
 		{"committed row", NewTranscriptEvent(TranscriptCommittedRow{
 			Visibility: transcript.EntryVisibilityOngoing,
@@ -95,15 +94,17 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 		}), TranscriptMessageToolAbort},
 		{"user message flushed", NewTranscriptEvent(TranscriptUserMessageFlushed{
 			StepID: transcriptTestStepID(t),
-			Messages: []QueuedUserMessageIdentity{{
-				ClientRequestID: transcriptTestClientRequestID(t),
-				QueueItemID:     transcriptTestQueueItemID(t),
-			}},
 		}), TranscriptMessageUserMessageFlushed},
 		{"queued message state", NewTranscriptEvent(TranscriptQueuedMessageState{
-			ClientRequestID: transcriptTestClientRequestID(t), QueueItemID: transcriptTestQueueItemID(t),
-			Status: QueuedUserMessageAccepted, Text: &queueText,
+			QueueItemID: transcriptTestQueueItemID(t),
+			Status:      QueuedUserMessageAccepted, Text: &queueText,
 		}), TranscriptMessageQueuedMessageState},
+		{"interrupted human input", NewTranscriptEvent(TranscriptHumanInputInterrupted{
+			Items: []TranscriptInterruptedHumanInputItem{{
+				QueueItemID: transcriptTestQueueItemID(t),
+				Text:        "restore verbatim",
+			}},
+		}), TranscriptMessageHumanInputInterrupted},
 		{"step state", NewTranscriptEvent(TranscriptStepState{
 			RunID: transcriptTestRunID(t), StepID: transcriptTestStepID(t),
 			Lifecycle: StepLifecycleStarted, ActiveKind: RuntimeActivityActiveKindUserTurn, Status: RunStatusRunning,

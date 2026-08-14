@@ -26,7 +26,11 @@ func newSessionRetargetFixture(t *testing.T) sessionRetargetFixture {
 	t.Helper()
 	sourceRoot := t.TempDir()
 	cfg := loadMetadataTestConfig(t, sourceRoot, filepath.Join(t.TempDir(), "persistence"))
-	store := openInMemoryMetadataTestStore(t, cfg.PersistenceRoot)
+	store, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	source, err := store.RegisterWorkspaceBinding(context.Background(), sourceRoot)
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding source: %v", err)

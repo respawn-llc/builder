@@ -11,18 +11,13 @@ import (
 
 	"core/server/tools"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 )
 
 type writeStdinInput struct {
-	SessionID       int    `json:"session_id" jsonschema_description:"Identifier of the running exec_command session."`
-	Chars           string `json:"chars,omitempty" jsonschema_description:"Bytes to write to stdin. May be empty to poll for output."`
-	YieldTimeMS     *int   `json:"yield_time_ms,omitempty" jsonschema_description:"How long to wait in milliseconds for output before yielding."`
-	MaxOutputTokens *int   `json:"max_output_tokens,omitempty" jsonschema_description:"Optional maximum amount of output to return back. Full logs are always still available on disk. Prefer defaults unless you want to read large chunks of text."`
-}
-
-func WriteStdinStaticContractSource() tools.StaticContractSource {
-	return tools.StaticContractSource{ID: toolspec.ToolWriteStdin, Input: writeStdinInput{}}
+	SessionID       int    `json:"session_id"`
+	Chars           string `json:"chars,omitempty"`
+	YieldTimeMS     *int   `json:"yield_time_ms,omitempty"`
+	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
 }
 
 const (

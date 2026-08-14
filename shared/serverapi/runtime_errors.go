@@ -50,8 +50,6 @@ func (e *RuntimeCommandNotAcceptedError) RPCErrorData() json.RawMessage {
 		var structured protocol.StructuredRPCError
 		if errors.Is(e.Cause, context.Canceled) {
 			cause.Code = protocol.ErrCodeRequestCanceled
-		} else if errors.Is(e.Cause, ErrRuntimeUnavailable) {
-			cause.Code = protocol.ErrCodeRuntimeUnavailable
 		} else if errors.As(e.Cause, &structured) {
 			cause.Code = structured.RPCErrorCode()
 			cause.Data = structured.RPCErrorData()

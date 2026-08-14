@@ -394,9 +394,14 @@ func TestScriptedResponsesHandlesMultipleResultsStreamingErrorsAndMetadata(t *te
 			t.Fatalf("Verify cancellation error = %v, want context.Canceled", err)
 		}
 	})
-	t.Run("model and compaction", func(t *testing.T) {
-		window := 123456
-		stub := startScriptedStub(t, scriptedllm.Script{ContextWindowTokens: &window})
+	t.Run("tokens model and compaction", func(t *testing.T) {
+		tokens, window := 23, 123456
+		stub := startScriptedStub(t, scriptedllm.Script{InputTokenCount: &tokens, ContextWindowTokens: &window})
+		provider := providerClientWithWindow(t, stub, 0)
+		count, err := provider.(llm.RequestInputTokenCountClient).CountRequestInputTokens(context.Background(), request("", prepared(messageItem("count"))))
+		if err != nil || count != tokens {
+			t.Fatalf("input tokens = %d, %v", count, err)
+		}
 		modelResponse, err := http.Get(stub.URL() + "/models/gpt-5")
 		if err != nil {
 			t.Fatalf("GET model: %v", err)
@@ -408,7 +413,7 @@ func TestScriptedResponsesHandlesMultipleResultsStreamingErrorsAndMetadata(t *te
 		if err := json.NewDecoder(modelResponse.Body).Decode(&model); err != nil || model.ContextWindow != window {
 			t.Fatalf("model metadata = %+v, %v", model, err)
 		}
-		response, err := http.Post(stub.URL()+"/responses", "application/json", strings.NewReader(`{"input":[{"type":"compaction_trigger"}]}`))
+		response, err := http.Post(stub.URL()+"/responses/compact", "application/json", strings.NewReader(`{"input":[]}`))
 		if err != nil {
 			t.Fatalf("POST compact: %v", err)
 		}
@@ -431,7 +436,7 @@ func TestScriptedResponsesSetsSSEContentTypeBeforeStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	request.Header.Set("session-id", runtimeids.NewSessionID().String())
+	request.Header.Set("session_id", runtimeids.NewSessionID().String())
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST responses: %v", err)
@@ -487,7 +492,7 @@ func providerClientWithWindow(t *testing.T, stub *blackbox.ResponsesStub, window
 }
 
 func request(sessionID string, items []llm.ResponseItem) llm.Request {
-	return llm.Request{Model: "gpt-5", SessionID: textutil.Value(sessionID), Items: items, ToolChoiceMode: llm.ToolChoiceModeAutomatic}
+	return llm.Request{Model: "gpt-5", SessionID: sessionID, Items: items, ToolChoiceMode: llm.ToolChoiceModeAutomatic}
 }
 
 func generate(t *testing.T, client llm.Client, sessionID string, items []llm.ResponseItem) llm.Response {

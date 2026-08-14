@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -63,7 +64,7 @@ func TestBuildRequestUsesLatestHistoryReplacementAndActiveTail(t *testing.T) {
 		t.Fatalf("append active-tail assistant message: %v", err)
 	}
 
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	request, err := engine.buildRequest(context.Background(), "step", true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -135,10 +136,8 @@ func TestConflictingAssistantToolCallStepReturnsError(t *testing.T) {
 
 	t.Run("before persistence", func(t *testing.T) {
 		store := mustCreateTestSession(t)
-		engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-		intent := steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventDefault,
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		intent := steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
 			[]llm.Message{message},
 		)
@@ -177,7 +176,7 @@ func TestConflictingAssistantToolCallStepReturnsError(t *testing.T) {
 			store,
 			mustMaterializeTestEventLog(t, store),
 			&fakeClient{},
-			newTestToolRegistry(t),
+			tools.NewRegistry(),
 			Config{Model: "gpt-5"},
 		)
 		if err == nil {
@@ -247,7 +246,7 @@ func TestBuildRequestPreservesMaterializedToolOutputOrder(t *testing.T) {
 		}
 	}
 
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	request, err := engine.buildRequest(context.Background(), "step", true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -329,7 +328,7 @@ func TestHistoryReplacementPrunesPriorToolWorkingState(t *testing.T) {
 		t.Fatalf("append active input: %v", err)
 	}
 
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, call := range calls {
 		if _, ok := engine.transcriptRuntimeState().ToolCompletionSnapshot(call.ID); ok {
 			t.Fatalf("history replacement retained prior tool completion %q", call.ID)

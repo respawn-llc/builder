@@ -18,6 +18,15 @@ import (
 	"core/shared/textutil"
 )
 
+func mustRuntimeControlStepID(t *testing.T) runtimeids.StepID {
+	t.Helper()
+	id, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("ParseStepID: %v", err)
+	}
+	return id
+}
+
 type liveWatchAskViewStub struct {
 	asks []clientui.PendingAsk
 }

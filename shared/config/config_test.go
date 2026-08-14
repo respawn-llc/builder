@@ -965,11 +965,12 @@ func TestSettingsTOMLRoundTripsCapabilityOverrides(t *testing.T) {
 	settings := configRegistry.defaultState().Settings
 	settings.ModelCapabilities.SupportsReasoningEffort = true
 	settings.ProviderCapabilities = ProviderCapabilitiesOverride{
-		ProviderID:                    "openai-compatible",
-		SupportsResponsesAPI:          true,
-		SupportsPromptCacheKey:        true,
-		SupportsServerSideContextEdit: true,
-		SupportsProviderVerbosity:     true,
+		ProviderID:                     "openai-compatible",
+		SupportsResponsesAPI:           true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsServerSideContextEdit:  true,
+		SupportsProviderVerbosity:      true,
 	}
 	toml := settingsTOMLWithRenderingOptions(settings, true, nil, nil)
 
@@ -994,6 +995,9 @@ func TestSettingsTOMLRoundTripsCapabilityOverrides(t *testing.T) {
 	}
 	if !state.Settings.ProviderCapabilities.SupportsResponsesAPI {
 		t.Fatal("expected supports_responses_api to round-trip")
+	}
+	if !state.Settings.ProviderCapabilities.SupportsRequestInputTokenCount {
+		t.Fatal("expected supports_request_input_token_count to round-trip")
 	}
 	if !state.Settings.ProviderCapabilities.SupportsServerSideContextEdit {
 		t.Fatal("expected supports_server_side_context_edit to round-trip")

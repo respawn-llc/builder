@@ -19,7 +19,6 @@ import type {
 import { emptyWorkflowDerivedWiring } from "../models";
 import {
   emptyString,
-  nullableGraphEntityIDSchema,
   validationErrorSchema,
   workflowIDSchema,
   workflowOutputFieldSchema,
@@ -142,7 +141,7 @@ const workflowNodesSchema = z
         key: z.string(),
         kind: z.string(),
         display_name: z.string(),
-        group_id: nullableGraphEntityIDSchema,
+        group_id: emptyString,
         group_key: emptyString,
         subagent_role: emptyString,
         completion_mode: emptyString,

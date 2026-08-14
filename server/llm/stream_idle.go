@@ -14,6 +14,8 @@ type streamingModelClient interface {
 	StreamEventsClient
 	CompactionClient
 	ProviderCapabilitiesClient
+	RequestInputTokenCountClient
+	RequestInputTokenCountSupportClient
 	ModelContextWindowClient
 }
 

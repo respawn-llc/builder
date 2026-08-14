@@ -74,17 +74,23 @@ func (c *projectionBlockingClient) ProviderCapabilities(context.Context) (llm.Pr
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }
 
-type projectionUsageClient struct{}
+type projectionPreciseClient struct {
+	inputTokens int
+}
 
-func (projectionUsageClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (c projectionPreciseClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{InputTokens: 900, OutputTokens: 100, WindowTokens: 400_000},
 	}, nil
 }
 
-func (projectionUsageClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
+func (c projectionPreciseClient) CountRequestInputTokens(context.Context, llm.Request) (int, error) {
+	return c.inputTokens, nil
+}
+
+func (c projectionPreciseClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsRequestInputTokenCount: true, IsOpenAIFirstParty: true}, nil
 }
 
 func newRuntimeViewStore(t *testing.T) *session.Store {
@@ -122,10 +128,6 @@ func TestActivityFromRuntimeSnapshotCopiesRuntimeOwnedActiveKinds(t *testing.T) 
 		{name: "workflow turn", kind: runtime.ActiveKindWorkflowTurn, want: clientui.RuntimeActivityActiveKindWorkflowTurn},
 		{name: "goal loop", kind: runtime.ActiveKindGoalLoop, want: clientui.RuntimeActivityActiveKindGoalLoop},
 		{name: "compaction", kind: runtime.ActiveKindCompaction, want: clientui.RuntimeActivityActiveKindCompaction},
-		{name: "pre-submit compaction", kind: runtime.ActiveKindPreSubmitCompaction, want: clientui.RuntimeActivityActiveKindPreSubmitCompaction},
-		{name: "user shell", kind: runtime.ActiveKindUserShell, want: clientui.RuntimeActivityActiveKindUserShell},
-		{name: "background", kind: runtime.ActiveKindBackground, want: clientui.RuntimeActivityActiveKindBackground},
-		{name: "runtime maintenance", kind: runtime.ActiveKindRuntimeMaintenance, want: clientui.RuntimeActivityActiveKindRuntimeMaintenance},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -175,10 +177,10 @@ func TestTranscriptSessionStatusDoesNotAdvertiseUnavailableFastMode(t *testing.T
 		newRuntimeViewStore(t),
 		projectionUnavailableFastClient{},
 		runtime.Config{
-			Model:           "gpt-5",
-			FastModeEnabled: true,
-			ThinkingLevel:   "medium",
-			CompactionMode:  "auto",
+			Model:          "gpt-5",
+			FastModeState:  runtime.NewFastModeState(true),
+			ThinkingLevel:  "medium",
+			CompactionMode: "auto",
 		},
 	)
 
@@ -288,7 +290,9 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	store := newRuntimeViewStore(t)
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{
 		Model: "gpt-5",
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+	})
+	publication, err := eng.PrepareCurrentNodeExecutionPublication(
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: runtimeids.NewExecutionScopeID(),
 			Instructions: workflowruntime.TaskInstructions{
 				CurrentNode: workflow.CurrentNodeReference{
@@ -298,7 +302,18 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 				WorkflowID: testsetup.WorkflowID(t, "runtimeview-projection"),
 			},
 		},
-	})
+	)
+	if err != nil {
+		t.Fatalf("PrepareCurrentNodeExecutionPublication: %v", err)
+	}
+	if err := publication.Begin(); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	binding, err := publication.Commit()
+	if err != nil {
+		t.Fatalf("commit Current Node execution publication: %v", err)
+	}
+	t.Cleanup(func() { _ = binding.Close() })
 	view := mainViewFromRuntimeForTest(t, eng)
 	if view.Status.WorkflowSession == nil {
 		t.Fatalf("workflow status = %+v, want active workflow session", view.Status)
@@ -308,21 +323,24 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	}
 }
 
-func TestStatusFromRuntimeUsesResponseUsage(t *testing.T) {
-	eng := newRuntimeViewEngine(t, newRuntimeViewStore(t), projectionUsageClient{}, runtime.Config{
+func TestStatusFromRuntimeUsesFreshPreciseCurrentTokens(t *testing.T) {
+	eng := newRuntimeViewEngine(t, newRuntimeViewStore(t), projectionPreciseClient{inputTokens: 180}, runtime.Config{
 		Model:                         "gpt-5",
 		ContextWindowTokens:           400_000,
-		AutoCompactTokenLimit:         10_000,
+		AutoCompactTokenLimit:         1_000,
 		PreSubmitCompactionLeadTokens: 100,
 	})
 	if _, err := eng.SubmitUserMessage(context.Background(), "prompt"); err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
+	if _, err := eng.ShouldCompactBeforeUserMessage(context.Background(), "follow-up"); err != nil {
+		t.Fatalf("warm exact count: %v", err)
+	}
 	view, err := StatusFromRuntime(eng)
 	if err != nil {
 		t.Fatalf("project runtime status: %v", err)
 	}
-	if view.ContextUsage.UsedTokens != 901 {
-		t.Fatalf("projected used tokens=%d, want response baseline plus appended estimate 901", view.ContextUsage.UsedTokens)
+	if view.ContextUsage.UsedTokens != 180 {
+		t.Fatalf("projected used tokens=%d, want exact 180", view.ContextUsage.UsedTokens)
 	}
 }

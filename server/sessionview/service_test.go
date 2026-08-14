@@ -337,9 +337,6 @@ func TestServiceDormantReadsDoNotMutatePersistedEvents(t *testing.T) {
 	store := newSessionViewStore(t, dir, "ws", dir)
 	const stepID = "11111111-1111-4111-8111-111111111111"
 	appendSessionViewMessage(t, store, stepID, session.MessageRoleUser, "hello", nil, nil)
-	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-1", StepID: stepID, Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("set pending recovery: %v", err)
-	}
 
 	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
 	eventLog, err := store.MaterializeEventLog()

@@ -17,9 +17,7 @@ func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *t
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -63,9 +61,7 @@ func TestReopenedSessionAfterTriggerHandoffDoesNotRequeueWhenAnyCompactionAlread
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -105,9 +101,7 @@ func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t 
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -120,9 +114,7 @@ func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t 
 			"future_agent_message": "continue",
 		}),
 	}
-	if err := engine.steer("handoff", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("handoff", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{
 			Role:      llm.RoleAssistant,
@@ -177,9 +169,7 @@ func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 		},
 	}}
 	engine := mustNewHandoffTestEngine(t, store, client, Config{})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -263,9 +253,7 @@ func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWith
 			blocker, blockErr = blockTestEventLogAppends(store)
 		},
 	})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -275,17 +263,8 @@ func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWith
 	engine.handoffRuntimeState().QueueRequest("summarize", "continue")
 
 	blockFutureAppend = true
-	var applied bool
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var applyErr error
-		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
-	if err == nil {
+	if _, err := engine.applyPendingHandoffIfNeeded(context.Background(), "step"); err == nil {
 		t.Fatal("handoff future-message append unexpectedly succeeded")
-	}
-	if applied {
-		t.Fatal("handoff future-message append unexpectedly reported compaction")
 	}
 	if blockErr != nil || blocker == nil {
 		t.Fatalf("block future-message append: blocker=%v error=%v", blocker, blockErr)
@@ -336,12 +315,7 @@ func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.
 	engine.handoffRuntimeState().QueueFutureMessage("continue")
 	gate.FailNext(observerErr)
 
-	var applied bool
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var applyErr error
-		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
+	applied, err := engine.applyPendingHandoffIfNeeded(context.Background(), "step")
 	if applied || !errors.Is(err, observerErr) {
 		t.Fatalf("future-message append outcome = applied:%v error:%v", applied, err)
 	}
@@ -349,11 +323,7 @@ func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.
 		t.Fatalf("committed handoff future-message records = %d, want 1", futureMessages)
 	}
 
-	err = withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var applyErr error
-		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
+	applied, err = engine.applyPendingHandoffIfNeeded(context.Background(), "step")
 	if applied || err != nil {
 		t.Fatalf("second future-message append outcome = applied:%v error:%v", applied, err)
 	}
@@ -371,9 +341,7 @@ func TestReopenedSessionAfterTriggerHandoffUsesRotatedRequestSessionAndOmitsLing
 		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
 	}}}
 	engine := mustNewHandoffTestEngine(t, store, client, Config{})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -382,12 +350,7 @@ func TestReopenedSessionAfterTriggerHandoffUsesRotatedRequestSessionAndOmitsLing
 	persistSuccessfulTriggerHandoff(t, engine, "reopened-handoff-call")
 	engine.handoffRuntimeState().QueueRequest("summarize", "continue")
 
-	var compacted bool
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var applyErr error
-		compacted, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
+	compacted, err := engine.applyPendingHandoffIfNeeded(context.Background(), "handoff")
 	if err != nil || !compacted {
 		t.Fatalf("apply pending handoff = compacted:%v error:%v", compacted, err)
 	}
@@ -477,9 +440,7 @@ func persistSuccessfulTriggerHandoff(t *testing.T, engine *Engine, callID string
 			"future_agent_message": "continue",
 		}),
 	}
-	if err := engine.steer("handoff", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
+	if err := engine.steer("handoff", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{
 			Role:      llm.RoleAssistant,

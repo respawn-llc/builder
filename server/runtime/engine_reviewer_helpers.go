@@ -9,7 +9,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/jsoncontract"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -31,19 +30,15 @@ func (e *Engine) runReviewerSuggestions(ctx context.Context, stepID string, revi
 	return e.reviewerFlow.RunSuggestions(ctx, stepID, reviewerClient)
 }
 
-func parseReviewerSuggestionsObject(
-	contract jsoncontract.Structured,
-	content string,
-) []string {
+func parseReviewerSuggestionsObject(content string) []string {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return nil
 	}
 
-	if err := contract.Validate([]byte(trimmed)); err != nil {
-		return nil
+	var payload struct {
+		Suggestions []string `json:"suggestions"`
 	}
-	var payload reviewerSuggestionsPayload
 	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
 		return nil
 	}

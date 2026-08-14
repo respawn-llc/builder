@@ -25,54 +25,6 @@ sql:
               import: "core/shared/runtimeids"
               type: "WorkflowID"
               pointer: true
-          - column: "workflow_nodes.group_id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "workflow_node_groups.id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "workflow_nodes.id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "workflow_transition_groups.id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "workflow_transition_groups.source_node_id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "workflow_edges.id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "workflow_edges.transition_group_id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "workflow_edges.target_node_id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "task_current_nodes.node_id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "task_current_nodes.entered_by_edge_id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "task_pending_approvals.source_node_id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
-          - column: "session_workflow_node_associations.node_id"
-            go_type:
-              import: "database/sql"
-              type: "RawBytes"
           - column: "project_default_workflow_identity.workflow_id"
             go_type:
               import: "core/shared/runtimeids"

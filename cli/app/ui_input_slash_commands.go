@@ -27,11 +27,7 @@ func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea
 	if errText, blocked := m.blockedDeferredSlashCommand(selection.commandText()); blocked {
 		return true, m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", errText, ""), c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}
-	queuedText := selection.commandText()
-	if commandResult := m.commandRegistry.Execute(queuedText); isCompactCommandResult(commandResult) {
-		queuedText = text
-	}
-	next, cmd := c.queueOrStartSubmission(queuedText)
+	next, cmd := c.queueOrStartSubmission(selection.commandText())
 	return true, next, cmd
 }
 
@@ -49,8 +45,7 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 		return false, m, nil
 	}
 	command := selection.command
-	commandResult := m.commandRegistry.Execute(commandText)
-	if m.isBusy() && !isBusyLocalWorktreePicker(commandResult) {
+	if m.isBusy() {
 		switch command.ActiveRunPolicy {
 		case commands.ActiveRunPolicyAllowed:
 		default:
@@ -58,6 +53,7 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 			return true, m, c.model.sendTransientStatusWithNoticeID(fmt.Sprintf("cannot run /%s while model is working", command.Name), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
 	}
+	commandResult := m.commandRegistry.Execute(commandText)
 	if commandResult.Handled {
 		draft := m.capturePromptHistoryDraftForReuse()
 		var recordCmd tea.Cmd
@@ -65,12 +61,7 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 			recordCmd = m.recordPromptHistory(commandText)
 		}
 		m.clearCommandInput(command, draft)
-		next, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(
-			commandResult,
-			preSubmitQueueBack,
-			activeSubmitOriginDirect,
-			text,
-		)
+		next, cmd := c.applyCommandResultWithPreSubmitQueuePosition(commandResult, preSubmitQueueBack)
 		return true, next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 	}
 	return false, m, nil
@@ -150,7 +141,7 @@ func (m *uiModel) blockedDeferredSlashCommand(commandText string) (string, bool)
 			return "background process client is unavailable", true
 		}
 	case commands.ActionWorktree:
-		if m.isBusy() && !isBusyLocalWorktreePicker(commandResult) {
+		if m.isBusy() {
 			return "cannot run /worktree while model is working", true
 		}
 		if m.worktreeClient == nil {
@@ -158,14 +149,4 @@ func (m *uiModel) blockedDeferredSlashCommand(commandText string) (string, bool)
 		}
 	}
 	return "", false
-}
-
-func isBusyLocalWorktreePicker(commandResult commands.Result) bool {
-	return commandResult.Handled &&
-		commandResult.Action == commands.ActionWorktree &&
-		strings.TrimSpace(commandResult.Args) == ""
-}
-
-func isCompactCommandResult(commandResult commands.Result) bool {
-	return commandResult.Handled && commandResult.Action == commands.ActionCompact
 }

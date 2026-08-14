@@ -5,7 +5,6 @@ import (
 
 	"core/server/workflow"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 )
 
 func TestAttentionPagesTypedDurableNotificationReferences(t *testing.T) {
@@ -53,9 +52,6 @@ func TestAttentionPagesTypedDurableNotificationReferences(t *testing.T) {
 	if !ok || !interrupted.CurrentNode.Equal(firstInterrupted.currentNode) {
 		t.Fatalf("second durable reference = %#v", first.References[1])
 	}
-	if _, err := runtimeids.GraphEntityIDBlob(string(interrupted.CurrentNode.NodeID)); err != nil {
-		t.Fatalf("first interrupted durable Node ID %q is not canonical UUIDv4: %v", interrupted.CurrentNode.NodeID, err)
-	}
 
 	second, err := attention.ListDurableNotificationReferences(fixture.ctx, first.Next, 2)
 	if err != nil {
@@ -67,8 +63,5 @@ func TestAttentionPagesTypedDurableNotificationReferences(t *testing.T) {
 	interrupted, ok = second.References[0].(DurableInterruptedCurrentNodeAttentionReference)
 	if !ok || !interrupted.CurrentNode.Equal(secondInterrupted.currentNode) {
 		t.Fatalf("third durable reference = %#v", second.References[0])
-	}
-	if _, err := runtimeids.GraphEntityIDBlob(string(interrupted.CurrentNode.NodeID)); err != nil {
-		t.Fatalf("second interrupted durable Node ID %q is not canonical UUIDv4: %v", interrupted.CurrentNode.NodeID, err)
 	}
 }

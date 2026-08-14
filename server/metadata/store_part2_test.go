@@ -625,7 +625,8 @@ func assertProjectSessionListingCount(t *testing.T, ctx context.Context, store *
 	page, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: projectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     sessionPageInt(20),
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
@@ -691,7 +692,11 @@ func newMetadataTestStoreWithoutBinding(t *testing.T) (*Store, config.App) {
 func newMetadataTestStoreForWorkspace(t *testing.T, workspace string) (*Store, config.App) {
 	t.Helper()
 	cfg := loadMetadataTestConfig(t, workspace, filepath.Join(t.TempDir(), "persistence"))
-	store := openInMemoryMetadataTestStore(t, cfg.PersistenceRoot)
+	store, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	return store, cfg
 }
 

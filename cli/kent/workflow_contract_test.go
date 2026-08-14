@@ -416,11 +416,7 @@ func (s *workflowGraphApplyStub) SaveWorkflowGraph(
 
 func TestWorkflowGraphApplyTypedOutcomesAndConfirmation(t *testing.T) {
 	workflowID := mustWorkflowID(t, emptyWorkflowGraphDocumentID)
-	contract, err := prepareWorkflowGraphDocumentContract()
-	if err != nil {
-		t.Fatal(err)
-	}
-	document, err := contract.Decode([]byte(emptyWorkflowGraphDocumentJSON))
+	document, err := decodeWorkflowGraphDocument([]byte(emptyWorkflowGraphDocumentJSON))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,15 +512,9 @@ func TestWorkflowGraphApplyTypedOutcomesAndConfirmation(t *testing.T) {
 
 func TestWorkflowGraphApplyChecksStaleVersionBeforeAddedIdentity(t *testing.T) {
 	workflowID := mustWorkflowID(t, emptyWorkflowGraphDocumentID)
-	remote := &workflowGraphApplyStub{saves: []serverapi.WorkflowGraphSaveResponse{{
-		CurrentVersion:    2,
-		ValidationResults: map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{},
-		Impact:            emptyGraphImpact(),
-		Blockers: []serverapi.WorkflowGraphSaveBlocker{{
-			Code: "version_changed", Message: "changed", Count: 2,
-			AffectedEntities: []serverapi.WorkflowGraphEntityReference{},
-		}},
-	}}}
+	remote := &workflowGraphApplyStub{definition: serverapi.WorkflowDefinition{
+		Workflow: serverapi.WorkflowRecord{ID: workflowID, Version: 2},
+	}}
 	document := workflowGraphDocument{
 		WorkflowID: workflowID, ExpectedVersion: 1,
 		Graph: workflowGraphDocumentGraph{
@@ -538,7 +528,7 @@ func TestWorkflowGraphApplyChecksStaleVersionBeforeAddedIdentity(t *testing.T) {
 	}
 	outcome := runWorkflowGraphApply(t.Context(), remote, document, false)
 	if outcome.Outcome != workflowGraphApplyBlocked || len(outcome.Blockers) != 1 ||
-		outcome.Blockers[0].Code != "version_changed" || len(remote.requests) != 1 {
+		outcome.Blockers[0].Code != "version_changed" || len(remote.requests) != 0 {
 		t.Fatalf("outcome=%+v requests=%+v", outcome, remote.requests)
 	}
 	assertWorkflowGraphApplyProjection(t, outcome)
@@ -598,15 +588,33 @@ func TestWorkflowGraphApplyLoadsFileAndStdin(t *testing.T) {
 }
 
 func TestWorkflowGraphAddedIdentityAndDraftContracts(t *testing.T) {
-	workflowID := mustWorkflowID(t, emptyWorkflowGraphDocumentID)
-	groupID := "group-id"
+	const canonical = emptyWorkflowGraphDocumentID
+	if err := validateWorkflowGraphAdditionIdentities(serverapi.WorkflowDefinition{}, serverapi.WorkflowGraphDraft{
+		Nodes: []serverapi.WorkflowGraphDraftNode{{ID: canonical}},
+	}); err != nil {
+		t.Fatalf("canonical addition rejected: %v", err)
+	}
+	if err := validateWorkflowGraphAdditionIdentities(serverapi.WorkflowDefinition{}, serverapi.WorkflowGraphDraft{
+		Edges: []serverapi.WorkflowGraphDraftEdge{{ID: "edge-" + canonical}},
+	}); err == nil {
+		t.Fatal("prefixed added identity accepted")
+	}
+	if err := validateWorkflowGraphAdditionIdentities(serverapi.WorkflowDefinition{
+		NodeGroups: []serverapi.WorkflowNodeGroup{{GroupID: "legacy"}},
+	}, serverapi.WorkflowGraphDraft{
+		Nodes: []serverapi.WorkflowGraphDraftNode{{ID: "legacy"}},
+	}); err == nil {
+		t.Fatal("legacy identity reused across entity types")
+	}
+
+	workflowID := mustWorkflowID(t, canonical)
 	definition := serverapi.WorkflowDefinition{
 		Workflow: serverapi.WorkflowRecord{ID: workflowID, Version: 3},
 		NodeGroups: []serverapi.WorkflowNodeGroup{{
-			GroupID: groupID, GroupKey: "group", DisplayName: "Group",
+			GroupID: "group-id", GroupKey: "group", DisplayName: "Group",
 		}},
 		Nodes: []serverapi.WorkflowNode{{
-			ID: "node-id", Key: "node", Kind: "agent", DisplayName: "Node", GroupID: &groupID,
+			ID: "node-id", Key: "node", Kind: "agent", DisplayName: "Node", GroupID: "group-id",
 		}},
 		TransitionGroups: []serverapi.WorkflowTransitionGroup{{
 			ID: "transition-group-id", SourceNodeID: "node-id", TransitionID: "next",

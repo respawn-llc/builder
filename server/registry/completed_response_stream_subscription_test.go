@@ -35,7 +35,7 @@ func TestSessionTranscriptSubscriptionContinuesAfterConcurrentLocalToolsWithoutS
 	fixture := newStreamSubscriptionFixture(
 		t,
 		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{firstStep, secondStep}}),
-		newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: handler}),
+		tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: handler}),
 		[]toolspec.ID{toolspec.ToolExecCommand},
 	)
 	submitDone := fixture.submitUserMessage("run both")

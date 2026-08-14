@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -292,8 +294,7 @@ func TestUnlinkProjectWorkspaceBlocksReferencedWorkspaceDependencies(t *testing.
 VALUES ('session-executable-workspace', ?, ?, 'projects/project/sessions/session-executable-workspace', ?, ?)`,
 			binding.ProjectID, attached.WorkspaceID, now, now)
 		execSeed(t, store.db, "current node", `INSERT INTO task_current_nodes (task_id, node_id, current_input_values_json, prior_node_values_json, session_id)
-VALUES ('task-executable-workspace', ?, '{}', '{"transition_parameters":{}}', 'session-executable-workspace')`,
-			workflowGraphSeedID(t, store.db, "node-agent"))
+VALUES ('task-executable-workspace', 'node-agent', '{}', '{"transition_parameters":{}}', 'session-executable-workspace')`)
 
 		blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 		if err != nil {
@@ -458,6 +459,44 @@ func assertWorkspaceRetainedAfterBlockedUnlink(t *testing.T, store *Store, ctx c
 	}
 }
 
+func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	otherStore, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("open concurrent metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = otherStore.Close() })
+	seedWorkflowGraph(t, store.db, binding.ProjectID, time.Now().UTC().UnixMilli())
+
+	blockers, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, binding.ProjectID, attached.WorkspaceID, nil,
+		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			if len(preparedSessionIDs) != 0 {
+				return nil, func() {}, nil
+			}
+			mutated := make(chan error, 1)
+			go func() {
+				mutated <- addMetadataRaceSessionAndActiveTask(ctx, otherStore, cfg, binding, "unlink-race", attached.CanonicalRoot, attached.WorkspaceID)
+			}()
+			if err := <-mutated; err != nil {
+				return nil, nil, err
+			}
+			return nil, func() {}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
+	}
+	assertWorkspaceUnlinkBlocker(t, blockers, "non_terminal_tasks")
+	if _, err := store.GetWorkspaceByID(ctx, attached.WorkspaceID); err != nil {
+		t.Fatalf("workspace should remain after authoritative blocker: %v", err)
+	}
+}
+
 func TestWorkspaceUnlinkReturnsStaticAndRuntimeBlockers(t *testing.T) {
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)
@@ -478,6 +517,56 @@ func TestWorkspaceUnlinkReturnsStaticAndRuntimeBlockers(t *testing.T) {
 		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
 	}
 	assertWorkspaceUnlinkBlocker(t, blockers, "default_workspace")
+	assertWorkspaceUnlinkBlocker(t, blockers, "active_sessions")
+}
+
+func TestWorkspaceUnlinkCommitCombinesStaticAndRuntimeBlockers(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	seedWorkflowGraph(t, store.db, binding.ProjectID, time.Now().UTC().UnixMilli())
+	otherStore, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("open concurrent metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = otherStore.Close() })
+	callbackCalls := 0
+	blockers, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(
+		ctx,
+		binding.ProjectID,
+		attached.WorkspaceID,
+		nil,
+		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			callbackCalls++
+			if callbackCalls == 1 {
+				if len(preparedSessionIDs) != 0 {
+					return nil, nil, fmt.Errorf("prepared session IDs = %v, want none", preparedSessionIDs)
+				}
+				if err := addMetadataRaceSessionAndActiveTask(ctx, otherStore, cfg, binding, "commit-runtime-blocker", attached.CanonicalRoot, attached.WorkspaceID); err != nil {
+					return nil, nil, err
+				}
+				return nil, func() {}, nil
+			}
+			if len(preparedSessionIDs) == 0 {
+				return nil, nil, errors.New("commit runtime blocker check received no session IDs")
+			}
+			return []serverapi.ProjectWorkspaceUnlinkBlocker{{
+				Code:    "active_sessions",
+				Message: "Active runtime sessions still depend on this workspace.",
+				Count:   1,
+			}}, func() {}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
+	}
+	if callbackCalls != 2 {
+		t.Fatalf("runtime blocker callback calls = %d, want 2", callbackCalls)
+	}
+	assertWorkspaceUnlinkBlocker(t, blockers, "non_terminal_tasks")
 	assertWorkspaceUnlinkBlocker(t, blockers, "active_sessions")
 }
 
@@ -659,7 +748,6 @@ func assertNoWorkspaceUnlinkBlocker(t *testing.T, blockers []serverapi.ProjectWo
 }
 
 func addMetadataRaceSessionAndActiveTask(
-	t *testing.T,
 	ctx context.Context,
 	store *Store,
 	cfg config.App,
@@ -683,7 +771,7 @@ func addMetadataRaceSessionAndActiveTask(
 	if _, err := store.db.ExecContext(ctx, workflowSeedTaskSQL, taskID, "link-1", 1, "BLD-1", now, now); err != nil {
 		return fmt.Errorf("create concurrent task: %w", err)
 	}
-	if _, err := store.db.ExecContext(ctx, insertTaskCurrentNodeSQL, taskCurrentNodeArgs(t, store.db, taskID, "node-agent", nil)...); err != nil {
+	if _, err := store.db.ExecContext(ctx, insertTaskCurrentNodeSQL, taskCurrentNodeArgs(taskID, "node-agent", nil)...); err != nil {
 		return fmt.Errorf("create concurrent task current node: %w", err)
 	}
 	if strings.TrimSpace(sourceWorkspaceID) == "" {
@@ -1099,16 +1187,6 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	if err := sess.SetInputDraft("draft"); err != nil {
 		t.Fatalf("SetInputDraft: %v", err)
 	}
-	recovery := session.PendingModelRecovery{
-		RecoveryID:             "recovery-1",
-		StepID:                 "step-1",
-		Reason:                 "interrupted",
-		CreatedAt:              time.Now().UTC().Round(0),
-		OutstandingToolCallIDs: []string{"tool-call-1", "tool-call-2"},
-	}
-	if err := sess.SetPendingModelRecovery(recovery); err != nil {
-		t.Fatalf("SetPendingModelRecovery: %v", err)
-	}
 	appendMetadataMessage(t, sess, "step-2", session.MessageRoleUser, "establish conversation")
 
 	record, err := store.ResolvePersistedSession(t.Context(), sess.Meta().SessionID)
@@ -1130,22 +1208,6 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	}
 	if meta.InputDraft != "draft" {
 		t.Fatalf("input draft = %q, want draft", meta.InputDraft)
-	}
-	persistedRecovery := meta.PendingModelRecovery
-	if persistedRecovery == nil {
-		t.Fatal("pending model recovery did not round-trip through SQLite")
-	}
-	if persistedRecovery.RecoveryID != recovery.RecoveryID ||
-		persistedRecovery.StepID != recovery.StepID ||
-		persistedRecovery.Reason != recovery.Reason ||
-		!persistedRecovery.CreatedAt.Equal(recovery.CreatedAt) ||
-		len(persistedRecovery.OutstandingToolCallIDs) != len(recovery.OutstandingToolCallIDs) {
-		t.Fatalf("pending model recovery = %+v, want %+v", persistedRecovery, recovery)
-	}
-	for i, toolCallID := range recovery.OutstandingToolCallIDs {
-		if persistedRecovery.OutstandingToolCallIDs[i] != toolCallID {
-			t.Fatalf("outstanding tool call ids = %+v, want %+v", persistedRecovery.OutstandingToolCallIDs, recovery.OutstandingToolCallIDs)
-		}
 	}
 }
 
@@ -1284,6 +1346,207 @@ func TestRebindWorkspaceRetargetsDescendantWorktrees(t *testing.T) {
 	}
 	if got := reopened.Meta().WorkspaceRoot; got != rebound.CanonicalRoot {
 		t.Fatalf("reopened workspace root = %q, want %q", got, rebound.CanonicalRoot)
+	}
+}
+
+func TestRebindWorkspaceNormalizesUniqueConflictRace(t *testing.T) {
+	ctx := context.Background()
+	oldWorkspace := t.TempDir()
+	otherWorkspace := t.TempDir()
+	newWorkspace := filepath.Join(t.TempDir(), "workspace-target")
+	if err := os.MkdirAll(newWorkspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll newWorkspace: %v", err)
+	}
+	persistenceRoot := filepath.Join(t.TempDir(), "persistence")
+	cfg := loadMetadataTestConfig(t, oldWorkspace, persistenceRoot)
+	otherCfg := loadMetadataTestConfig(t, otherWorkspace, persistenceRoot)
+	storeA, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("Open storeA: %v", err)
+	}
+	defer func() { _ = storeA.Close() }()
+	storeB, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("Open storeB: %v", err)
+	}
+	defer func() { _ = storeB.Close() }()
+
+	oldBinding, err := storeA.RegisterWorkspaceBinding(ctx, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding oldWorkspace: %v", err)
+	}
+	if _, err := storeA.RegisterWorkspaceBinding(ctx, otherCfg.WorkspaceRoot); err != nil {
+		t.Fatalf("RegisterWorkspaceBinding otherWorkspace: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	rebindWorkspaceBeforeUpdateHook = func() {
+		close(started)
+		<-release
+	}
+	t.Cleanup(func() { rebindWorkspaceBeforeUpdateHook = nil })
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := storeA.RebindWorkspace(ctx, oldWorkspace, newWorkspace)
+		errCh <- err
+	}()
+	<-started
+	if _, err := storeB.AttachWorkspaceToProject(ctx, oldBinding.ProjectID, newWorkspace); err != nil {
+		close(release)
+		t.Fatalf("AttachWorkspaceToProject competing bind: %v", err)
+	}
+	close(release)
+	err = <-errCh
+	if !errors.Is(err, ErrWorkspaceAlreadyBound) {
+		t.Fatalf("RebindWorkspace race error = %v, want ErrWorkspaceAlreadyBound", err)
+	}
+	resolved, err := storeA.EnsureWorkspaceBinding(ctx, oldWorkspace)
+	if err != nil {
+		t.Fatalf("EnsureWorkspaceBinding oldWorkspace after race: %v", err)
+	}
+	if resolved.WorkspaceID != oldBinding.WorkspaceID {
+		t.Fatalf("resolved old workspace id after race = %q, want %q", resolved.WorkspaceID, oldBinding.WorkspaceID)
+	}
+	newResolved, err := storeA.EnsureWorkspaceBinding(ctx, newWorkspace)
+	if err != nil {
+		t.Fatalf("EnsureWorkspaceBinding newWorkspace after race: %v", err)
+	}
+	if newResolved.ProjectID != oldBinding.ProjectID {
+		t.Fatalf("new workspace project id after race = %q, want %q", newResolved.ProjectID, oldBinding.ProjectID)
+	}
+}
+
+func TestRebindWorkspaceExpectedBindingRejectsOldRootReuse(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, prepared := newMetadataTestStore(t)
+	otherStore, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("open second metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = otherStore.Close() })
+
+	movedRoot := t.TempDir()
+	requestedRoot := t.TempDir()
+	moved, err := otherStore.RebindWorkspace(ctx, cfg.WorkspaceRoot, movedRoot)
+	if err != nil {
+		t.Fatalf("move prepared workspace: %v", err)
+	}
+	if moved.WorkspaceID != prepared.WorkspaceID {
+		t.Fatalf("moved workspace id = %q, want %q", moved.WorkspaceID, prepared.WorkspaceID)
+	}
+	replacement, err := otherStore.AttachWorkspaceToProject(ctx, prepared.ProjectID, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("reuse old workspace root: %v", err)
+	}
+	if replacement.WorkspaceID == prepared.WorkspaceID {
+		t.Fatalf("replacement workspace id = %q, want a new identity", replacement.WorkspaceID)
+	}
+
+	_, err = store.RebindWorkspaceWithExpectedBinding(
+		ctx,
+		cfg.WorkspaceRoot,
+		requestedRoot,
+		prepared.ProjectID,
+		prepared.WorkspaceID,
+	)
+	if err == nil {
+		t.Fatal("stale expected workspace binding rebind succeeded")
+	}
+
+	currentMoved, err := store.EnsureWorkspaceBinding(ctx, movedRoot)
+	if err != nil {
+		t.Fatalf("resolve moved workspace: %v", err)
+	}
+	if currentMoved.WorkspaceID != prepared.WorkspaceID {
+		t.Fatalf("moved workspace id after stale request = %q, want %q", currentMoved.WorkspaceID, prepared.WorkspaceID)
+	}
+	currentReplacement, err := store.EnsureWorkspaceBinding(ctx, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("resolve replacement workspace: %v", err)
+	}
+	if currentReplacement.WorkspaceID != replacement.WorkspaceID {
+		t.Fatalf("replacement workspace id after stale request = %q, want %q", currentReplacement.WorkspaceID, replacement.WorkspaceID)
+	}
+	if _, err := store.EnsureWorkspaceBinding(ctx, requestedRoot); !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		t.Fatalf("requested root after stale request error = %v, want ErrWorkspaceNotRegistered", err)
+	}
+}
+
+func TestRegisterWorkspaceBindingConvergesUnderConcurrentFirstRegistration(t *testing.T) {
+	ctx := context.Background()
+	workspace := t.TempDir()
+	cfg := loadMetadataTestConfig(t, workspace, filepath.Join(t.TempDir(), "persistence"))
+	storeA, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("Open storeA: %v", err)
+	}
+	t.Cleanup(func() { _ = storeA.Close() })
+	storeB, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("Open storeB: %v", err)
+	}
+	t.Cleanup(func() { _ = storeB.Close() })
+
+	barrier := make(chan struct{})
+	var once sync.Once
+	var reached atomic.Int32
+	registerWorkspaceBindingAfterLookupMissHook = func() {
+		if reached.Add(1) == 2 {
+			once.Do(func() { close(barrier) })
+		}
+		<-barrier
+	}
+	t.Cleanup(func() {
+		registerWorkspaceBindingAfterLookupMissHook = nil
+		once.Do(func() { close(barrier) })
+	})
+
+	results := make(chan Binding, 2)
+	errs := make(chan error, 2)
+	run := func(store *Store) {
+		binding, err := store.RegisterWorkspaceBinding(ctx, cfg.WorkspaceRoot)
+		if err != nil {
+			errs <- err
+			return
+		}
+		results <- binding
+	}
+	go run(storeA)
+	go run(storeB)
+
+	bindings := make([]Binding, 0, 2)
+	for len(bindings) < 2 {
+		select {
+		case err := <-errs:
+			t.Fatalf("RegisterWorkspaceBinding concurrent call: %v", err)
+		case binding := <-results:
+			bindings = append(bindings, binding)
+		}
+	}
+	if bindings[0].ProjectID != bindings[1].ProjectID || bindings[0].WorkspaceID != bindings[1].WorkspaceID {
+		t.Fatalf("concurrent bindings diverged: %+v vs %+v", bindings[0], bindings[1])
+	}
+	resolved, err := storeA.EnsureWorkspaceBinding(ctx, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("EnsureWorkspaceBinding after concurrent registration: %v", err)
+	}
+	if resolved.ProjectID != bindings[0].ProjectID || resolved.WorkspaceID != bindings[0].WorkspaceID {
+		t.Fatalf("resolved binding mismatch: got %+v want %+v", resolved, bindings[0])
+	}
+	var projectCount int
+	if err := storeA.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM projects").Scan(&projectCount); err != nil {
+		t.Fatalf("count projects: %v", err)
+	}
+	if projectCount != 1 {
+		t.Fatalf("project count = %d, want 1", projectCount)
+	}
+	var workspaceCount int
+	if err := storeA.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workspaces").Scan(&workspaceCount); err != nil {
+		t.Fatalf("count workspaces: %v", err)
+	}
+	if workspaceCount != 1 {
+		t.Fatalf("workspace count = %d, want 1", workspaceCount)
 	}
 }
 

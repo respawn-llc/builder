@@ -47,20 +47,11 @@ func workflowGraphApplySubcommand(args []string, stdin io.Reader, stdout io.Writ
 	if !ok {
 		return exitCode
 	}
-	contract, err := prepareWorkflowGraphDocumentContract()
-	if err != nil {
-		return writeWorkflowGraphApplyOutcome(
-			stdout,
-			stderr,
-			workflowGraphApplyFailure(workflowGraphApplyRequestFailed, nil, nil, err),
-			*jsonOut,
-		)
-	}
 	data, err := loadWorkflowGraphApplyInput(positionals[0], stdin)
 	if err != nil {
 		return writeWorkflowGraphApplyOutcome(stdout, stderr, workflowGraphApplyFailure(workflowGraphApplyRequestFailed, nil, nil, err), *jsonOut)
 	}
-	document, err := contract.Decode(data)
+	document, err := decodeWorkflowGraphDocument(data)
 	if err != nil {
 		return writeWorkflowGraphApplyOutcome(stdout, stderr, workflowGraphApplyFailure(workflowGraphApplyInvalidDocument, nil, nil, err), *jsonOut)
 	}
@@ -108,34 +99,93 @@ func runWorkflowGraphApply(
 	confirmed bool,
 ) workflowGraphApplyOutcome {
 	workflowID := workflowGraphApplyPointer(document.WorkflowID)
+	current, err := resolveWorkflowDefinition(ctx, remote, document.WorkflowID)
+	if err != nil {
+		return workflowGraphApplyFailure(workflowGraphApplyRequestFailed, workflowID, nil, err)
+	}
+	currentVersion := workflowGraphApplyPointer(current.Workflow.Version)
+	if document.ExpectedVersion != current.Workflow.Version {
+		return workflowGraphApplyOutcome{
+			Outcome:        workflowGraphApplyBlocked,
+			WorkflowID:     workflowID,
+			CurrentVersion: currentVersion,
+			Blockers: []serverapi.WorkflowGraphSaveBlocker{{
+				Code:             "version_changed",
+				Message:          "Workflow changed. Refresh before saving.",
+				Count:            current.Workflow.Version,
+				AffectedEntities: []serverapi.WorkflowGraphEntityReference{},
+			}},
+		}
+	}
 	graph, err := document.WorkflowGraphDraft()
 	if err != nil {
-		return workflowGraphApplyFailure(
-			workflowGraphApplyInvalidDocument,
-			workflowID,
-			workflowGraphApplyPointer(document.ExpectedVersion),
-			err,
-		)
+		return workflowGraphApplyFailure(workflowGraphApplyInvalidDocument, workflowID, currentVersion, err)
 	}
-	outcome := saveWorkflowGraphApply(
-		ctx,
-		remote,
-		document.WorkflowID,
-		document.ExpectedVersion,
-		graph,
-		nil,
-	)
+	if err := validateWorkflowGraphAdditionIdentities(current, graph); err != nil {
+		return workflowGraphApplyFailure(workflowGraphApplyInvalidDocument, workflowID, currentVersion, err)
+	}
+	outcome := saveWorkflowGraphApply(ctx, remote, current, graph, nil)
 	if !confirmed || outcome.Outcome != workflowGraphApplyConfirmationRequired {
 		return outcome
 	}
 	return saveWorkflowGraphApply(
 		ctx,
 		remote,
-		document.WorkflowID,
-		document.ExpectedVersion,
+		current,
 		graph,
 		workflowGraphSaveConfirmationFromImpact(*outcome.Impact),
 	)
+}
+
+func validateWorkflowGraphAdditionIdentities(
+	current serverapi.WorkflowDefinition,
+	submitted serverapi.WorkflowGraphDraft,
+) error {
+	currentTypes := make(map[string]map[serverapi.WorkflowGraphEntityType]bool)
+	indexCurrent := func(entityType serverapi.WorkflowGraphEntityType, ids []string) {
+		for _, id := range ids {
+			if currentTypes[id] == nil {
+				currentTypes[id] = make(map[serverapi.WorkflowGraphEntityType]bool)
+			}
+			currentTypes[id][entityType] = true
+		}
+	}
+	indexCurrent(serverapi.WorkflowGraphEntityTypeNodeGroup, workflowGraphEntityIDs(current.NodeGroups, func(group serverapi.WorkflowNodeGroup) string { return group.GroupID }))
+	indexCurrent(serverapi.WorkflowGraphEntityTypeNode, workflowGraphEntityIDs(current.Nodes, func(node serverapi.WorkflowNode) string { return node.ID }))
+	indexCurrent(serverapi.WorkflowGraphEntityTypeTransitionGroup, workflowGraphEntityIDs(current.TransitionGroups, func(group serverapi.WorkflowTransitionGroup) string { return group.ID }))
+	indexCurrent(serverapi.WorkflowGraphEntityTypeEdge, workflowGraphEntityIDs(current.Edges, func(edge serverapi.WorkflowEdge) string { return edge.ID }))
+	collections := []struct {
+		name       string
+		entityType serverapi.WorkflowGraphEntityType
+		ids        []string
+	}{
+		{"graph.node_groups", serverapi.WorkflowGraphEntityTypeNodeGroup, workflowGraphEntityIDs(submitted.NodeGroups, func(group serverapi.WorkflowGraphDraftNodeGroup) string { return group.ID })},
+		{"graph.nodes", serverapi.WorkflowGraphEntityTypeNode, workflowGraphEntityIDs(submitted.Nodes, func(node serverapi.WorkflowGraphDraftNode) string { return node.ID })},
+		{"graph.transition_groups", serverapi.WorkflowGraphEntityTypeTransitionGroup, workflowGraphEntityIDs(submitted.TransitionGroups, func(group serverapi.WorkflowGraphDraftTransitionGroup) string { return group.ID })},
+		{"graph.edges", serverapi.WorkflowGraphEntityTypeEdge, workflowGraphEntityIDs(submitted.Edges, func(edge serverapi.WorkflowGraphDraftEdge) string { return edge.ID })},
+	}
+	for _, collection := range collections {
+		for index, id := range collection.ids {
+			if currentTypes[id][collection.entityType] {
+				continue
+			}
+			if len(currentTypes[id]) != 0 {
+				return fmt.Errorf("%s[%d].id %q matches a current entity of another type", collection.name, index, id)
+			}
+			if _, err := runtimeids.ParseCanonicalUUIDv4(id, fmt.Sprintf("%s[%d].id", collection.name, index)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func workflowGraphEntityIDs[T any](entities []T, id func(T) string) []string {
+	ids := make([]string, 0, len(entities))
+	for _, entity := range entities {
+		ids = append(ids, id(entity))
+	}
+	return ids
 }
 
 func workflowGraphSaveConfirmationFromImpact(impact serverapi.WorkflowGraphSaveImpact) *serverapi.WorkflowGraphSaveConfirmation {
@@ -152,15 +202,14 @@ func workflowGraphSaveConfirmationFromImpact(impact serverapi.WorkflowGraphSaveI
 func saveWorkflowGraphApply(
 	ctx context.Context,
 	remote apicontract.WorkflowService,
-	workflowIDValue runtimeids.WorkflowID,
-	expectedVersion int64,
+	current serverapi.WorkflowDefinition,
 	graph serverapi.WorkflowGraphDraft,
 	confirmation *serverapi.WorkflowGraphSaveConfirmation,
 ) workflowGraphApplyOutcome {
-	workflowID := workflowGraphApplyPointer(workflowIDValue)
+	workflowID := workflowGraphApplyPointer(current.Workflow.ID)
 	response, err := remote.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
-		WorkflowID:      workflowIDValue,
-		ExpectedVersion: expectedVersion,
+		WorkflowID:      current.Workflow.ID,
+		ExpectedVersion: current.Workflow.Version,
 		Graph:           graph,
 		Confirmation:    confirmation,
 	})
@@ -168,7 +217,7 @@ func saveWorkflowGraphApply(
 		return workflowGraphApplyFailure(
 			workflowGraphApplyRequestFailed,
 			workflowID,
-			workflowGraphApplyPointer(expectedVersion),
+			workflowGraphApplyPointer(current.Workflow.Version),
 			err,
 		)
 	}
@@ -323,24 +372,18 @@ func writeWorkflowGraphApplyDetails(stderr io.Writer, outcome workflowGraphApply
 			write("- %s: valid=%t\n", mode, result.Valid)
 			for _, validationError := range result.Errors {
 				write("  - [%s] %s\n", validationError.Code, validationError.Message)
-				identities := make([]struct{ name, value string }, 0, 4)
-				if validationError.WorkflowID != nil {
-					identities = append(identities, struct{ name, value string }{"workflow", validationError.WorkflowID.String()})
-				}
-				for _, identity := range []struct {
-					name  string
-					value *string
-				}{
+				identities := []struct{ name, value string }{
 					{"node", validationError.NodeID},
 					{"transition_group", validationError.TransitionGroupID},
 					{"edge", validationError.EdgeID},
-				} {
-					if identity.value != nil {
-						identities = append(identities, struct{ name, value string }{identity.name, *identity.value})
-					}
+				}
+				if validationError.WorkflowID != nil {
+					identities = append([]struct{ name, value string }{{"workflow", validationError.WorkflowID.String()}}, identities...)
 				}
 				for _, identity := range identities {
-					write("    %s: %s\n", identity.name, identity.value)
+					if identity.value != "" {
+						write("    %s: %s\n", identity.name, identity.value)
+					}
 				}
 				for _, relatedID := range validationError.RelatedIDs {
 					write("    related: %s\n", relatedID)

@@ -25,7 +25,6 @@ type TranscriptHydrationSnapshot struct {
 	CompactionCount         int
 	ContextUsage            *ContextUsage
 	Goal                    *session.GoalState
-	GoalAvailability        session.GoalAvailability
 	GoalSuspended           bool
 }
 
@@ -65,26 +64,20 @@ func (e *Engine) WithTranscriptHydrationSnapshot(fn func(TranscriptHydrationSnap
 		}
 		return fn(TranscriptHydrationSnapshot{})
 	}
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
 	if fn == nil {
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	snapshot, err := e.transcriptHydrationSegmentLocked()
-	if err != nil {
-		return err
-	}
-	return fn(snapshot)
+	return fn(e.transcriptHydrationSegmentLocked())
 }
 
-func (e *Engine) transcriptHydrationSegmentLocked() (TranscriptHydrationSnapshot, error) {
+func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot {
 	if e == nil {
-		return TranscriptHydrationSnapshot{}, nil
+		return TranscriptHydrationSnapshot{}
 	}
 	chat := e.transcriptRuntimeState().chatProjection()
 	if chat == nil {
-		return TranscriptHydrationSnapshot{}, nil
+		return TranscriptHydrationSnapshot{}
 	}
 	snapshot := chat.deliverySnapshot()
 	thinkingStatus, reasoningTraces := e.transcriptRuntimeState().ReasoningSnapshot()
@@ -92,11 +85,10 @@ func (e *Engine) transcriptHydrationSegmentLocked() (TranscriptHydrationSnapshot
 	if e.messageFlow != nil {
 		queuedMessages = e.messageFlow.PendingUserMessages()
 	}
-	usage := e.ContextUsage()
-	goalAvailability, err := e.GoalAvailability()
-	if err != nil {
-		return TranscriptHydrationSnapshot{}, err
+	if e.steering != nil {
+		queuedMessages = append(queuedMessages, e.steering.pendingHumanMessages()...)
 	}
+	usage := e.ContextUsage()
 	return TranscriptHydrationSnapshot{
 		CommittedRows:           snapshot.Rows,
 		ActiveAssistantText:     snapshot.Streaming,
@@ -112,7 +104,6 @@ func (e *Engine) transcriptHydrationSegmentLocked() (TranscriptHydrationSnapshot
 		CompactionCount:         e.CompactionCount(),
 		ContextUsage:            &usage,
 		Goal:                    e.Goal(),
-		GoalAvailability:        goalAvailability,
 		GoalSuspended:           e.GoalLoopSuspended(),
-	}, nil
+	}
 }

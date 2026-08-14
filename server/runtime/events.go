@@ -41,9 +41,9 @@ const (
 	EventBackgroundUpdated          EventKind = "background_updated"
 	EventSleepGuardFailed           EventKind = "sleep_guard_failed"
 	EventPromptHistoryPersistFailed EventKind = "prompt_history_persist_failed"
-	EventProviderTurnStateInvalid   EventKind = "provider_turn_state_invalid"
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
+	EventHumanInputInterrupted      EventKind = "human_input_interrupted"
 	EventLiveRunFinished            EventKind = "live_run_finished"
 
 	AssistantStreamAbortSuperseded AssistantStreamAbortReason = "superseded"
@@ -79,21 +79,27 @@ const (
 	QueuedUserMessageFailureClosing                    QueuedUserMessageFailureReason = "closing"
 	QueuedUserMessageFailureTerminalWorkflowCompletion QueuedUserMessageFailureReason = "terminal_workflow_completion"
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
-	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
 )
 
 type QueuedUserMessageStatusEvent struct {
-	SessionID       string
-	QueueItemID     string
-	ClientRequestID string
-	Status          QueuedUserMessageStatus
-	FailureReason   QueuedUserMessageFailureReason
-	RestoreText     string
+	SessionID     string
+	QueueItemID   string
+	Status        QueuedUserMessageStatus
+	FailureReason QueuedUserMessageFailureReason
+	Text          string
 }
 
 type QueuedUserMessageIdentity struct {
-	QueueItemID     string
-	ClientRequestID string
+	QueueItemID string
+}
+
+type InterruptedHumanInput struct {
+	QueueItemID string
+	Text        string
+}
+
+type HumanInputInterruptedEvent struct {
+	Items []InterruptedHumanInput
 }
 
 type Event struct {
@@ -133,13 +139,13 @@ type Event struct {
 	Background                   *BackgroundShellEvent
 	GoalStatus                   *GoalStatusUpdate
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
+	HumanInputInterrupted        *HumanInputInterruptedEvent
 	LiveRunResult                *LiveRunResult
 }
 
 type GoalStatusUpdate struct {
-	State        session.GoalState
-	Availability *session.GoalAvailability
-	Cleared      bool
+	State   session.GoalState
+	Cleared bool
 }
 
 type RunState struct {

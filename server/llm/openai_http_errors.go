@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -32,37 +31,12 @@ func (m openAIRequestErrorMapper) Map(err error, rawResp *http.Response, prefix 
 	}
 	reducedErr, ok := reducer.Reduce(err, rawResp)
 	if ok && reducedErr != nil {
-		enrichProviderAPIErrorFromResponseHeaders(reducedErr, rawResp)
 		return fmt.Errorf("%s: %w", prefix, reducedErr)
-	}
-	var providerErr *ProviderAPIError
-	if errors.As(err, &providerErr) {
-		enrichProviderAPIErrorFromResponseHeaders(providerErr, rawResp)
 	}
 	if err == nil {
 		return fmt.Errorf("%s: unknown error", prefix)
 	}
 	return fmt.Errorf("%s: %w", prefix, err)
-}
-
-func enrichProviderAPIErrorFromResponseHeaders(providerErr *ProviderAPIError, rawResp *http.Response) {
-	if providerErr == nil || rawResp == nil {
-		return
-	}
-	providerErr.ProviderRequestID = firstNonblankHeaderValue(rawResp.Header, "x-request-id")
-	if providerErr.ProviderRequestID == nil {
-		providerErr.ProviderRequestID = firstNonblankHeaderValue(rawResp.Header, "x-oai-request-id")
-	}
-	providerErr.AuthorizationDiagnostic = firstNonblankHeaderValue(rawResp.Header, "x-openai-authorization-error")
-}
-
-func firstNonblankHeaderValue(header http.Header, name string) *string {
-	for _, value := range header.Values(name) {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return &trimmed
-		}
-	}
-	return nil
 }
 
 func truncateError(body []byte) string {

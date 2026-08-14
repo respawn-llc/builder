@@ -5,14 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -279,18 +277,15 @@ func TestTranscriptQueuedStateOnlyMutatesMatchingLocalRestorationOwnership(t *te
 			client := &runtimeControlFakeClient{}
 			model := newProjectedTestUIModel(client)
 			testSetMainInput(model, "existing draft")
-			requestID := ongoingTestClientRequestID()
 			queueID := ongoingTestQueueItemID()
 			model.injectedQueue = []injectedRuntimeQueueItem{{
 				LocalID:         "local-queue-item",
 				Text:            localText,
-				ClientRequestID: requestID.String(),
 				State:           injectedRuntimeQueuePendingCreate,
 				submissionOrder: inputSubmissionOrder{sequence: 1},
 			}}
 			model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-				ID: queueID.String(), Text: serverText, ClientRequestID: requestID.String(),
-			})
+				ID: queueID.String(), Text: serverText})
 			if test.status == clientui.QueuedUserMessageSubmitted {
 				model.queued = []queuedInputItem{{ID: "local-draft", Text: "local draft"}}
 				if cmd := model.inputController().resumeQueuedInputsAfterIdleRuntime(); cmd != nil || len(model.queued) != 1 {
@@ -299,10 +294,9 @@ func TestTranscriptQueuedStateOnlyMutatesMatchingLocalRestorationOwnership(t *te
 			}
 
 			cmd := model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
-				ClientRequestID: requestID,
-				QueueItemID:     queueID,
-				Status:          test.status,
-				Text:            &serverText,
+				QueueItemID: queueID,
+				Status:      test.status,
+				Text:        &serverText,
 			})
 			if test.status == clientui.QueuedUserMessageSubmitted {
 				cmd = tea.Batch(cmd, model.inputController().resumeQueuedInputsAfterIdleRuntime())
@@ -376,57 +370,6 @@ func TestDirectRuntimeCommandNotAcceptedRestoresVerbatim(t *testing.T) {
 
 	if got := testMainInput(model); got != text {
 		t.Fatalf("restored composer = %q, want verbatim %q", got, text)
-	}
-}
-
-func TestAcceptedQueuedSubmissionKeepsOriginalOrderForInterruptRestoration(t *testing.T) {
-	client := &runtimeControlFakeClient{submitQueuedID: ongoingTestQueueItemID().String()}
-	model := newProjectedTestUIModel(client)
-	first := "  first queued  "
-	second := "\tsecond queued"
-	draft := " draft "
-	model.queueInput(first)
-
-	_, cmd := model.inputController().flushQueuedInputs(queueDrainOne)
-	model.queueInput(second)
-	for _, msg := range collectCmdMessages(t, cmd) {
-		model = updateUIModel(t, model, msg)
-	}
-	if len(model.injectedQueue) != 1 || len(model.queued) != 1 {
-		t.Fatalf("accepted queue state = injected=%+v queued=%+v", model.injectedQueue, model.queued)
-	}
-	if model.injectedQueue[0].submissionOrder.sequence >= model.queued[0].submissionOrder.sequence {
-		t.Fatalf(
-			"accepted Queue item lost original order: accepted=%d queued=%d",
-			model.injectedQueue[0].submissionOrder.sequence,
-			model.queued[0].submissionOrder.sequence,
-		)
-	}
-
-	requestID, err := runtimeids.ParseRuntimeClientRequestID(model.injectedQueue[0].ClientRequestID)
-	if err != nil {
-		t.Fatalf("parse accepted Queue request id: %v", err)
-	}
-	queueID, err := runtimeids.ParseQueueItemID(model.injectedQueue[0].ServerID)
-	if err != nil {
-		t.Fatalf("parse accepted Queue item id: %v", err)
-	}
-	testSetMainInput(model, draft)
-	model.setPendingInterrupt(true)
-	stopped := clientui.QueuedUserMessageFailureStopped
-	restoreCmd := model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
-		ClientRequestID: requestID,
-		QueueItemID:     queueID,
-		Status:          clientui.QueuedUserMessageFailed,
-		FailureReason:   &stopped,
-	})
-	for _, msg := range collectCmdMessages(t, restoreCmd) {
-		model = updateUIModel(t, model, msg)
-	}
-
-	want := strings.Join([]string{first, second, draft}, "\n\n")
-	if got := testMainInput(model); got != want {
-		t.Fatalf("restored composer = %q, want %q", got, want)
 	}
 }
 

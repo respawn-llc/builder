@@ -2,8 +2,6 @@ import { expect, it } from "vitest";
 
 import { workflowGraphSavePreviewSchema } from "./workflow";
 
-const edgeID = "40000000-0000-4000-8000-000000000001";
-
 const impact = {
   active_current_node_count: 0,
   edge_task_reference_count: 0,
@@ -11,7 +9,7 @@ const impact = {
   node_task_reference_count: 0,
   pending_approval_count: 0,
   removed_edge_count: 1,
-  removed_entities: [{ entity_id: edgeID, entity_type: "edge" }],
+  removed_entities: [{ entity_id: "edge-1", entity_type: "edge" }],
   removed_node_count: 0,
   removed_node_group_count: 0,
   removed_transition_group_count: 0,
@@ -23,7 +21,7 @@ it("hard-cuts over graph impact and blocker identities", () => {
   const preview = {
     blockers: [
       {
-        affected_entities: [{ entity_id: edgeID, entity_type: "edge" }],
+        affected_entities: [{ entity_id: "edge-1", entity_type: "edge" }],
         code: "confirmation_required",
         count: 1,
         message: "Confirm removal.",
@@ -38,8 +36,8 @@ it("hard-cuts over graph impact and blocker identities", () => {
   };
   expect(workflowGraphSavePreviewSchema.parse(preview)).toMatchObject({
     changed: true,
-    impact: { removedEntities: [{ entityID: edgeID, entityType: "edge" }] },
-    blockers: [{ affectedEntities: [{ entityID: edgeID, entityType: "edge" }] }],
+    impact: { removedEntities: [{ entityID: "edge-1", entityType: "edge" }] },
+    blockers: [{ affectedEntities: [{ entityID: "edge-1", entityType: "edge" }] }],
   });
   expect(
     workflowGraphSavePreviewSchema.safeParse({

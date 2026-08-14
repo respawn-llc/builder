@@ -24,7 +24,7 @@ func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID: toolspec.ToolExecCommand,
 			Handler: cancellationAwareTool{
 				started: started,
@@ -40,7 +40,7 @@ func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
 		_, err := engine.executeToolCalls(ctx, "step", []llm.ToolCall{{
 			ID:    "canceled-call",
 			Name:  string(toolspec.ToolExecCommand),
-			Input: json.RawMessage(`{"cmd":"true"}`),
+			Input: json.RawMessage(`{}`),
 		}})
 		done <- err
 	}()
@@ -68,18 +68,18 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: handler,
 		}),
 		Config{
 			Model: "gpt-5",
-			CurrentNodeExecution: testWorkflowConfig(
-				&fakeWorkflowController{},
-				config.WorkflowCompletionModeTool,
-			),
 		},
 	)
+	publishTestWorkflowExecution(t, engine, testWorkflowConfig(
+		&fakeWorkflowController{},
+		config.WorkflowCompletionModeTool,
+	))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct {
 		results []tools.Result

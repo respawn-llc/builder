@@ -275,17 +275,6 @@ type WorkflowValidationError struct {
 	Diagnostics []workflow.ValidationError
 }
 
-// WorkflowGraphIdentityOwnershipError reports an added graph identity that is
-// already owned by a current entity of another graph type.
-type WorkflowGraphIdentityOwnershipError struct {
-	Field    string
-	Identity string
-}
-
-func (e WorkflowGraphIdentityOwnershipError) Error() string {
-	return fmt.Sprintf("%s %q matches a current entity of another type", e.Field, e.Identity)
-}
-
 func (e WorkflowValidationError) Error() string {
 	diagnostics := make([]string, 0, len(e.Diagnostics))
 	for _, diagnostic := range e.Diagnostics {

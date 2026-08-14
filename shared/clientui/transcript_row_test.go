@@ -1,7 +1,6 @@
 package clientui
 
 import (
-	"encoding/json"
 	"testing"
 
 	"core/shared/textutil"
@@ -22,49 +21,6 @@ func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *
 	}
 	if err := row.Validate(); err != nil {
 		t.Fatalf("validate committed assistant row: %v", err)
-	}
-}
-
-func TestTranscriptMessageRowsValidateCommittedTime(t *testing.T) {
-	outOfRange := transcript.CommittedAtUnixMs(transcript.MaxCommittedAtUnixMs + 1)
-	user := TranscriptUserRow{StepID: transcriptTestStepID(t), Text: "user", CommittedAtUnixMs: &outOfRange}
-	if err := user.Validate(); err == nil {
-		t.Fatal("user row accepted out-of-range committed time")
-	}
-	assistant := TranscriptAssistantRow{
-		StepID:            transcriptTestStepID(t),
-		Text:              "assistant",
-		Phase:             transcript.AssistantPhaseFinal,
-		CommittedAtUnixMs: &outOfRange,
-	}
-	if err := assistant.Validate(); err == nil {
-		t.Fatal("assistant row accepted out-of-range committed time")
-	}
-}
-
-func TestTranscriptMessageRowsDecodeOutOfRangeCommittedTimeBeforeValidation(t *testing.T) {
-	userJSON := `{"text":"user","committed_at_unix_ms":8640000000000001}`
-	var user TranscriptUserRow
-	if err := json.Unmarshal([]byte(userJSON), &user); err != nil {
-		t.Fatalf("decode user row: %v", err)
-	}
-	if user.CommittedAtUnixMs == nil || user.CommittedAtUnixMs.UnixMs() != transcript.MaxCommittedAtUnixMs+1 {
-		t.Fatalf("decoded user timestamp = %+v", user.CommittedAtUnixMs)
-	}
-	if err := user.Validate(); err == nil {
-		t.Fatal("user row validation accepted out-of-range timestamp")
-	}
-
-	assistantJSON := `{"text":"assistant","phase":"final","committed_at_unix_ms":8640000000000001}`
-	var assistant TranscriptAssistantRow
-	if err := json.Unmarshal([]byte(assistantJSON), &assistant); err != nil {
-		t.Fatalf("decode assistant row: %v", err)
-	}
-	if assistant.CommittedAtUnixMs == nil || assistant.CommittedAtUnixMs.UnixMs() != transcript.MaxCommittedAtUnixMs+1 {
-		t.Fatalf("decoded assistant timestamp = %+v", assistant.CommittedAtUnixMs)
-	}
-	if err := assistant.Validate(); err == nil {
-		t.Fatal("assistant row validation accepted out-of-range timestamp")
 	}
 }
 
@@ -191,16 +147,18 @@ func TestTranscriptNoticeRowCarriesTypedToolOutputRepairFacts(t *testing.T) {
 	}
 }
 
-func TestTranscriptNoticeRowCarriesTypedProviderModelMismatchFacts(t *testing.T) {
-	if err := (TranscriptNoticeRow{
-		Reason:   TranscriptNoticeProviderModelMismatch,
-		Severity: TranscriptNoticeWarning,
-		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
-			RequestedModel: "requested-model",
-			ServedModel:    "served-model",
-		},
-	}).Validate(); err != nil {
-		t.Fatalf("validate typed provider-model mismatch notice: %v", err)
+func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
+	warning := TranscriptCacheWarning{
+		Scope:      "conversation",
+		Reason:     "cache_miss",
+		Visibility: transcript.EntryVisibilityOngoing,
+	}
+	if err := warning.Validate(); err != nil {
+		t.Fatalf("validate absent token loss: %v", err)
+	}
+	warning.LostInputTokens = textutil.Value(0)
+	if err := warning.Validate(); err == nil {
+		t.Fatal("accepted present zero token loss")
 	}
 }
 
@@ -221,10 +179,6 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 		},
 		{
 			Reason:   TranscriptNoticeToolOutputRepair,
-			Severity: TranscriptNoticeWarning,
-		},
-		{
-			Reason:   TranscriptNoticeProviderModelMismatch,
 			Severity: TranscriptNoticeWarning,
 		},
 		{
@@ -271,20 +225,5 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 		if err := notice.Validate(); err == nil {
 			t.Fatalf("accepted notice without required typed payload: %+v", notice)
 		}
-	}
-}
-
-func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
-	warning := TranscriptCacheWarning{
-		Scope:      "conversation",
-		Reason:     "cache_miss",
-		Visibility: transcript.EntryVisibilityOngoing,
-	}
-	if err := warning.Validate(); err != nil {
-		t.Fatalf("validate absent token loss: %v", err)
-	}
-	warning.LostInputTokens = textutil.Value(0)
-	if err := warning.Validate(); err == nil {
-		t.Fatal("accepted present zero token loss")
 	}
 }

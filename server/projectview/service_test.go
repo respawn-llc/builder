@@ -23,7 +23,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-	"core/shared/textutil"
 )
 
 func TestServiceDeletesProjectMetadataAndSessionArtifacts(t *testing.T) {
@@ -194,44 +193,32 @@ func TestDeleteProjectSessionArtifactsRejectsRelativeProjectIDs(t *testing.T) {
 	}
 }
 
-func TestMetadataServicePaginatesProjectWorkspaceCatalog(t *testing.T) {
+func TestMetadataServicePaginatesProjectWorkspacesForGUI(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	first := attachProjectViewWorkspace(t, store, binding.ProjectID)
-	time.Sleep(2 * time.Millisecond)
 	second := attachProjectViewWorkspace(t, store, binding.ProjectID)
 	svc := newProjectViewMetadataService(t, store)
 
-	page1, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{
-		ProjectID: binding.ProjectID,
-		Offset:    0,
-		Limit:     2,
-	})
+	page1, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{ProjectID: binding.ProjectID, PageSize: 2})
 	if err != nil {
 		t.Fatalf("ListProjectWorkspaces page1: %v", err)
 	}
-	if got := catalogWorkspaceIDs(page1.Workspaces); len(got) != 2 || got[0] != binding.WorkspaceID || got[1] != second.WorkspaceID {
+	if got := workspaceIDs(page1.Workspaces); len(got) != 2 || got[0] != binding.WorkspaceID || got[1] != second.WorkspaceID {
 		t.Fatalf("page1 workspace ids = %+v, want [%s %s]", got, binding.WorkspaceID, second.WorkspaceID)
 	}
-	if !page1.Workspaces[0].IsDefault || page1.Workspaces[1].IsDefault {
-		t.Fatalf("page1 default markers = %+v, want only first row default", page1.Workspaces)
-	}
-	if page1.NextOffset == nil || *page1.NextOffset != 2 {
-		t.Fatalf("page1 next offset = %v, want 2", page1.NextOffset)
+	if page1.NextPageToken == "" {
+		t.Fatalf("page1 next token empty: %+v", page1)
 	}
 
-	page2, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{
-		ProjectID: binding.ProjectID,
-		Offset:    *page1.NextOffset,
-		Limit:     2,
-	})
+	page2, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{ProjectID: binding.ProjectID, PageSize: 2, PageToken: page1.NextPageToken})
 	if err != nil {
 		t.Fatalf("ListProjectWorkspaces page2: %v", err)
 	}
-	if got := catalogWorkspaceIDs(page2.Workspaces); len(got) != 1 || got[0] != first.WorkspaceID {
+	if got := workspaceIDs(page2.Workspaces); len(got) != 1 || got[0] != first.WorkspaceID {
 		t.Fatalf("page2 workspace ids = %+v, want [%s]", got, first.WorkspaceID)
 	}
-	if page2.NextOffset != nil {
-		t.Fatalf("page2 next offset = %v, want nil", page2.NextOffset)
+	if page2.NextPageToken != "" {
+		t.Fatalf("page2 next token = %q, want empty", page2.NextPageToken)
 	}
 }
 
@@ -313,44 +300,6 @@ func TestMetadataServiceWorkspaceSelectorDistinguishesProjectAndBindingFailures(
 		ProjectWorkspaceSelector: unattachedSelector,
 	}); !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		t.Fatalf("unattached workspace error = %v, want ErrWorkspaceNotRegistered", err)
-	}
-}
-
-func TestMetadataServiceRepeatedAttachReturnsTypedAlreadyAttachedOutcome(t *testing.T) {
-	store, _, binding := newProjectViewMetadataStore(t)
-	svc := newProjectViewMetadataService(t, store)
-	selector, err := serverapi.NewProjectWorkspaceSelectorForID(binding.WorkspaceID)
-	if err != nil {
-		t.Fatalf("workspace selector: %v", err)
-	}
-	exact, err := svc.GetProjectWorkspace(context.Background(), serverapi.ProjectWorkspaceGetRequest{
-		ProjectID: binding.ProjectID, ProjectWorkspaceSelector: selector,
-	})
-	if err != nil || exact.Result != serverapi.ProjectWorkspaceGetResultAttached ||
-		exact.Workspace == nil || exact.Workspace.WorkspaceID != binding.WorkspaceID {
-		t.Fatalf("exact Workspace response = %+v, error = %v", exact, err)
-	}
-	root := t.TempDir()
-
-	firstAttach, err := svc.AttachWorkspaceToProject(context.Background(), serverapi.ProjectAttachWorkspaceRequest{
-		ProjectID:     binding.ProjectID,
-		WorkspaceRoot: root,
-	})
-	if err != nil {
-		t.Fatalf("first AttachWorkspaceToProject: %v", err)
-	}
-	if firstAttach.Outcome != serverapi.ProjectWorkspaceAttachOutcomeAttached {
-		t.Fatalf("first attach outcome = %q, want attached", firstAttach.Outcome)
-	}
-	repeated, err := svc.AttachWorkspaceToProject(context.Background(), serverapi.ProjectAttachWorkspaceRequest{
-		ProjectID:     binding.ProjectID,
-		WorkspaceRoot: root,
-	})
-	if err != nil {
-		t.Fatalf("repeated AttachWorkspaceToProject: %v", err)
-	}
-	if repeated.Outcome != serverapi.ProjectWorkspaceAttachOutcomeAlreadyAttached {
-		t.Fatalf("repeated attach outcome = %q, want already_attached", repeated.Outcome)
 	}
 }
 
@@ -533,29 +482,6 @@ func TestMetadataServiceWorkspaceSelectorUsesExactRootFallbackWhenCanonicalizati
 	}
 }
 
-func TestServiceListsSessionPageWithOffsetWindow(t *testing.T) {
-	store, _, binding := newProjectViewMetadataStore(t)
-	svc := newProjectViewMetadataService(t, store)
-	offset := 0
-	limit := 50
-
-	response, err := svc.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Offset:    &offset,
-		Limit:     &limit,
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage: %v", err)
-	}
-	if response.ProjectID != binding.ProjectID ||
-		response.Category != sessioncontract.SessionCategoryMain ||
-		len(response.Sessions) != 0 ||
-		response.NextOffset != nil {
-		t.Fatalf("response = %+v", response)
-	}
-}
-
 func TestMetadataServiceUnlinksOnlySelectedProjectBindingByPath(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	second, err := store.CreateProjectForWorkspace(context.Background(), t.TempDir(), "Second project")
@@ -643,12 +569,21 @@ func TestMetadataServiceGetsProjectEditForGUI(t *testing.T) {
 	attachProjectViewWorkspace(t, store, binding.ProjectID)
 	svc := newProjectViewMetadataService(t, store)
 
-	edit, err := svc.GetProjectEdit(context.Background(), serverapi.ProjectEditGetRequest{ProjectID: binding.ProjectID})
+	edit, err := svc.GetProjectEdit(context.Background(), serverapi.ProjectEditGetRequest{ProjectID: binding.ProjectID, PageSize: 1})
 	if err != nil {
 		t.Fatalf("GetProjectEdit: %v", err)
 	}
 	if edit.ProjectID != binding.ProjectID || edit.ProjectKey != binding.ProjectKey || edit.DisplayName != binding.ProjectName {
 		t.Fatalf("edit identity = %+v, want %s/%s/%s", edit, binding.ProjectID, binding.ProjectKey, binding.ProjectName)
+	}
+	if edit.DefaultWorkspaceID != binding.WorkspaceID {
+		t.Fatalf("default workspace = %q, want %q", edit.DefaultWorkspaceID, binding.WorkspaceID)
+	}
+	if got := workspaceIDs(edit.Workspaces); len(got) != 1 || got[0] != binding.WorkspaceID {
+		t.Fatalf("edit page1 workspaces = %+v, want default workspace %q", got, binding.WorkspaceID)
+	}
+	if edit.NextPageToken == "" {
+		t.Fatalf("edit next token empty: %+v", edit)
 	}
 }
 
@@ -847,7 +782,7 @@ func newProjectViewMetadataService(t testing.TB, store *metadata.Store) *Service
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	return svc.WithWorkflowExecution(workflowexecution.NewTaskMutationCoordinator(), projectViewQuiescentExecution{}, workflowStore)
+	return svc.WithWorkflowExecution(workflowexecution.NewMutationPermit(), projectViewQuiescentExecution{}, workflowStore)
 }
 
 type projectViewQuiescentExecution struct {
@@ -927,9 +862,7 @@ func newProjectViewRuntimeAuthority(
 	settings.ModelContextWindow = 200000
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:              settings,
-		QuestionsEnabled:      textutil.Value(true),
-		AutoCompactionEnabled: textutil.Value(true),
+		Settings: settings,
 		FilesystemContext: func() tools.FilesystemContext {
 			context, contextErr := runtimewire.NewFilesystemContext(sessionStore.Meta().WorkspaceRoot, sessionStore.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if contextErr != nil {
@@ -989,12 +922,4 @@ func workspaceIDs(workspaces []serverapi.ProjectWorkspaceSummary) []string {
 		out = append(out, workspace.WorkspaceID)
 	}
 	return out
-}
-
-func catalogWorkspaceIDs(workspaces []serverapi.ProjectWorkspaceCatalogRow) []string {
-	ids := make([]string, 0, len(workspaces))
-	for _, workspace := range workspaces {
-		ids = append(ids, workspace.WorkspaceID)
-	}
-	return ids
 }

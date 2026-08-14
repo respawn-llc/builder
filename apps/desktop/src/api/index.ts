@@ -36,8 +36,6 @@ export {
   defaultWorkflowExecutionTargetPolicy,
   emptyWorkflowDerivedWiring,
   hasSelectedWorkflow,
-  sessionCatalogPageSize,
-  workspaceCatalogPageSize,
 } from "./models";
 export { boardNodeCardsPageSize, defaultBoardNodeCardsSort } from "./boardNodeCardsSorting";
 export {
@@ -105,9 +103,6 @@ export type {
   ProjectDeleteResponse,
   ProjectEdit,
   ProjectMutationResponse,
-  ProjectWorkspaceAttachOutcome,
-  ProjectWorkspaceAttachResponse,
-  ProjectWorkspaceResult,
   ProjectWorkflowLink,
   ProjectSummary,
   SelectedWorkflowBoard,
@@ -186,8 +181,7 @@ export type {
   WorkflowValidation,
   WorkflowValidationError,
   WorkspaceSummary,
-  WorkspaceCatalogPage,
-  WorkspaceCatalogRow,
+  WorkspaceList,
   WorkspaceAvailability,
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
@@ -199,7 +193,12 @@ export type {
   OrdinaryQuestionPrompt,
   PromptIdentity,
 } from "./promptModels";
-export type { SessionCatalogPage, SessionCatalogSummary, SessionCategory } from "./models";
+export type {
+  SessionCatalogPage,
+  SessionCatalogSummary,
+  SessionCategory,
+  SessionPagePosition,
+} from "./models";
 export type {
   WorkflowEdgeSelectionMode,
   WorkflowParameterPurpose,

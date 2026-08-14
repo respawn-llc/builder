@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/worktreecontract"
 
 	"github.com/google/uuid"
@@ -243,12 +242,6 @@ type WorktreeDeletePreviewResponse struct {
 type WorktreeTransitionHeader struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`
-	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
-}
-
-type RuntimeStepOrigin struct {
-	RunID  string `json:"run_id"`
-	StepID string `json:"step_id"`
 }
 
 type WorktreeEnterRequest struct {
@@ -580,17 +573,7 @@ func (header WorktreeTransitionHeader) Validate() error {
 	if err := validateRequiredSessionID(header.SessionID); err != nil {
 		return err
 	}
-	if header.Origin != nil {
-		return header.Origin.Validate()
-	}
 	return nil
-}
-
-func (origin RuntimeStepOrigin) Validate() error {
-	if err := runtimeids.ValidateUUIDv4(origin.RunID, "run_id"); err != nil {
-		return err
-	}
-	return runtimeids.ValidateUUIDv4(origin.StepID, "step_id")
 }
 
 func (request WorktreeEnterRequest) Validate() error {

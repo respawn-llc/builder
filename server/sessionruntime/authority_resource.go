@@ -15,6 +15,7 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -79,6 +80,16 @@ type RuntimeOpenRequest struct {
 	SessionID runtimeids.SessionID
 	OwnerID   string
 	Runtime   *AgentRuntimePlan
+}
+
+type PersistedWorkflowRuntimeOpenRequest struct {
+	SessionID runtimeids.SessionID
+	OwnerID   string
+	Runtime   *AgentRuntimePlan
+}
+
+type PersistedWorkflowRuntimeOpen struct {
+	Attachment RuntimeAttachment
 }
 
 type RuntimeReleasePolicy uint8
@@ -158,10 +169,305 @@ type ExecutionAskHandler func(context.Context, ExecutionScope, tools.AskQuestion
 type AgentExecutionRequest struct {
 	Descriptor session.SessionDescriptor
 	Runtime    *AgentRuntimePlan
-	Workflow   *WorkflowExecutionLease
 	Resource   AgentResourceSelection
 	Ask        ExecutionAskHandler
 	Runner     AgentRunner
+}
+
+type DetachedAgentExecutionRequest struct {
+	Descriptor session.SessionDescriptor
+	Runtime    *AgentRuntimePlan
+	Workflow   WorkflowExecutionRef
+	Resource   AgentResourceSelection
+	Ask        ExecutionAskHandler
+	Runner     AgentRunner
+	Config     *workflowruntime.CurrentNodeExecutionConfig
+}
+
+type DetachedAgentExecution struct {
+	authority     *Authority
+	resource      *agentResource
+	execution     *execution
+	workflowKey   workflow.CurrentNodeReferenceKey
+	config        *workflowruntime.CurrentNodeExecutionConfig
+	correlation   *runtimeids.ExecutionCorrelation
+	closeResource bool
+	runner        AgentRunner
+	ask           ExecutionAskHandler
+	mu            sync.Mutex
+	settled       bool
+}
+
+func (a *Authority) PrepareDetachedAgentExecution(
+	ctx context.Context,
+	request DetachedAgentExecutionRequest,
+) (*DetachedAgentExecution, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	if err := request.Descriptor.Validate(); err != nil {
+		return nil, err
+	}
+	if err := request.Workflow.Validate(); err != nil {
+		return nil, err
+	}
+	if request.Resource == nil || request.Runner == nil || request.Config == nil {
+		return nil, errors.New("detached Agent execution request is incomplete")
+	}
+	gate := a.gateFor(request.Descriptor.SessionID())
+	if err := gate.lock.LockContext(ctx); err != nil {
+		return nil, err
+	}
+	if len(gate.blocks) != 0 {
+		gate.lock.Unlock()
+		return nil, sessionStartsBlockedError(request.Descriptor.SessionID())
+	}
+	resource, closeResource, err := a.selectDetachedResource(ctx, request.Descriptor, request.Runtime, request.Resource)
+	gate.lock.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return nil, ErrAuthorityClosed
+	}
+	workflowKey, err := workflowExecutionKeyFor(request.Workflow)
+	if err != nil {
+		a.mu.Unlock()
+		return nil, err
+	}
+	if a.workflowExecutionLocked(request.Workflow, workflowKey) != nil {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("workflow current node %v is already live", request.Workflow.CurrentNode)
+	}
+	executionGeneration := a.nextExecutionGenerationLocked()
+	a.mu.Unlock()
+	resource.mu.Lock()
+	if resource.current != nil {
+		resource.mu.Unlock()
+		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", request.Descriptor.SessionID()))
+	}
+	if err := resource.pinLocked(); err != nil {
+		resource.mu.Unlock()
+		return nil, err
+	}
+	resource.mu.Unlock()
+	scopeID := runtimeids.NewExecutionScopeID()
+	config := *request.Config
+	config.ScopeID = scopeID
+	scope := newAgentExecutionScope(scopeID, executionGeneration, resource.ref, &request.Workflow)
+	correlation, err := runtimeids.NewExecutionCorrelation(scope.ID(), resource.ref.Generation())
+	if err != nil {
+		_ = resource.releasePin()
+		return nil, err
+	}
+	runCtx, cancel := context.WithCancel(resource.ctx)
+	execution := &execution{
+		authority: a, resource: resource, scope: scope, ctx: runCtx, cancel: cancel,
+		done: make(chan struct{}), prompts: newExecutionPromptStore(a, scope, a.promptFeed),
+		closeResource: closeResource, phase: executionPhaseQueued,
+	}
+	return &DetachedAgentExecution{
+		authority: a, resource: resource, execution: execution, workflowKey: workflowKey,
+		config: &config, correlation: &correlation, closeResource: closeResource,
+		runner: request.Runner, ask: request.Ask,
+	}, nil
+}
+
+func (a *Authority) selectDetachedResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	selection AgentResourceSelection,
+) (*agentResource, bool, error) {
+	if _, replacing := selection.(ReplaceAgentResource); !replacing {
+		return a.selectResource(ctx, descriptor, plan, selection)
+	}
+	sessionID := descriptor.SessionID()
+	a.mu.Lock()
+	existing := a.resources[sessionID]
+	a.mu.Unlock()
+	if existing != nil {
+		existing.mu.Lock()
+		busy := existing.state == AgentResourceDraining ||
+			existing.current != nil ||
+			existing.callbacks != 0 ||
+			existing.steps != 0
+		existing.mu.Unlock()
+		if busy {
+			return nil, false, errors.Join(
+				serverapi.ErrRuntimeUnavailable,
+				fmt.Errorf("session %s runtime is draining or active", sessionID),
+			)
+		}
+	}
+	return a.selectResource(ctx, descriptor, plan, selection)
+}
+
+func (d *DetachedAgentExecution) Scope() (ExecutionScope, error) {
+	if d == nil || d.execution == nil {
+		return ExecutionScope{}, sessionRuntimeInvariant(
+			d != nil && d.authority != nil && d.authority.options.debug,
+			"read detached Agent execution Scope",
+			errors.New("detached Agent execution is uninitialized"),
+		)
+	}
+	return d.execution.scope, nil
+}
+
+func (d *DetachedAgentExecution) Publish(
+	ctx context.Context,
+	admit func() error,
+	published func(ExecutionHandle),
+) (ExecutionHandle, func(), error) {
+	if d == nil || d.authority == nil || d.execution == nil || d.resource == nil {
+		return nil, nil, errors.New("detached Agent execution is required")
+	}
+	if admit == nil {
+		return nil, nil, errors.New("detached Agent admission is required")
+	}
+	d.mu.Lock()
+	if d.settled {
+		d.mu.Unlock()
+		return nil, nil, ErrExecutionNoLongerLive
+	}
+	d.settled = true
+	d.mu.Unlock()
+	if err := context.Cause(ctx); err != nil {
+		d.discard()
+		return nil, nil, err
+	}
+	d.authority.mu.Lock()
+	d.resource.mu.Lock()
+	d.execution.exactMu.Lock()
+	workflowRef, workflowErr := workflowRefForDetachedAgent(d.execution.scope)
+	if workflowErr != nil {
+		d.execution.exactMu.Unlock()
+		d.resource.mu.Unlock()
+		d.authority.mu.Unlock()
+		invariantErr := d.authority.invariant("publish detached Agent execution", workflowErr)
+		d.discard()
+		return nil, nil, invariantErr
+	}
+	if d.authority.closed || d.resource.current != nil ||
+		d.authority.workflowExecutionLocked(workflowRef, d.workflowKey) != nil {
+		d.execution.exactMu.Unlock()
+		d.resource.mu.Unlock()
+		d.authority.mu.Unlock()
+		d.discard()
+		return nil, nil, ErrExecutionNoLongerLive
+	}
+	runtimePublication, err := d.resource.engine.PrepareCurrentNodeExecutionPublication(d.config)
+	if err != nil {
+		d.execution.exactMu.Unlock()
+		d.resource.mu.Unlock()
+		d.authority.mu.Unlock()
+		d.discard()
+		return nil, nil, err
+	}
+	if err := runtimePublication.Begin(); err != nil {
+		d.execution.exactMu.Unlock()
+		d.resource.mu.Unlock()
+		d.authority.mu.Unlock()
+		d.discard()
+		return nil, nil, err
+	}
+	var correlationPublication *runtimewire.ExecutionCorrelationPublication
+	if d.resource.localTools != nil {
+		correlationPublication, err = d.resource.localTools.PrepareExecutionCorrelation(d.correlation)
+		if err != nil {
+			runtimePublication.Cancel()
+			d.execution.exactMu.Unlock()
+			d.resource.mu.Unlock()
+			d.authority.mu.Unlock()
+			d.discard()
+			return nil, nil, err
+		}
+	}
+	if err := admit(); err != nil {
+		runtimePublication.Cancel()
+		d.execution.exactMu.Unlock()
+		d.resource.mu.Unlock()
+		d.authority.mu.Unlock()
+		d.discard()
+		return nil, nil, err
+	}
+	binding := runtimePublication.Commit()
+	d.execution.workflow = binding
+	d.resource.engine.ExitRetainedWorkflowControl()
+	if correlationPublication != nil {
+		correlationPublication.Commit()
+	}
+	if d.resource.askBroker != nil {
+		scopeID := d.execution.scope.ID()
+		askHandler := d.ask
+		if askHandler == nil {
+			askHandler = func(ctx context.Context, scope ExecutionScope, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
+				return d.authority.AwaitPromptResolution(ctx, scope.ID(), req)
+			}
+		}
+		d.resource.askBroker.SetAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
+			return askHandler(ctx, d.execution.scope, req)
+		})
+		d.resource.askScope = &scopeID
+	}
+	d.resource.current = d.execution
+	d.resource.signalLocked()
+	d.authority.byScope[d.execution.scope.ID()] = d.execution
+	d.authority.addWorkflowExecutionLocked(workflowRef, d.workflowKey, d.execution)
+	d.execution.phase = executionPhaseRunning
+	d.execution.exactMu.Unlock()
+	d.resource.mu.Unlock()
+	d.authority.mu.Unlock()
+	handle := executionHandle{execution: d.execution}
+	if published != nil {
+		published(handle)
+	}
+	return handle, func() {
+		go func() {
+			if err := context.Cause(d.execution.ctx); err != nil {
+				d.execution.finish(ExecutionResult{}, err, nil)
+				return
+			}
+			runErr := d.runner(d.execution.ctx, d.execution.scope, AgentRuntimeBridge{
+				authority: d.authority,
+				resource:  d.resource.ref,
+			})
+			d.execution.finish(ExecutionResult{}, runErr, nil)
+		}()
+	}, nil
+}
+
+func (d *DetachedAgentExecution) discard() {
+	if d == nil || d.execution == nil || d.resource == nil {
+		return
+	}
+	d.execution.cancel()
+	_ = d.resource.releasePin()
+}
+
+func (d *DetachedAgentExecution) Cancel() error {
+	if d == nil || d.execution == nil || d.resource == nil {
+		return nil
+	}
+	d.mu.Lock()
+	if d.settled {
+		d.mu.Unlock()
+		return nil
+	}
+	d.settled = true
+	d.mu.Unlock()
+	d.execution.cancel()
+	return d.resource.releasePin()
+}
+
+func workflowRefForDetachedAgent(scope ExecutionScope) (WorkflowExecutionRef, error) {
+	ref, ok := scope.Workflow()
+	if !ok {
+		return WorkflowExecutionRef{}, errors.New("detached Agent execution has no Workflow reference")
+	}
+	return ref, nil
 }
 
 type agentResource struct {
@@ -188,14 +494,9 @@ type agentResource struct {
 	current              *execution
 	pins                 int
 	callbacks            int
-	steps                []agentResourceStep
+	steps                int
 	lifecycleReady       bool
 	lifecycleDraining    bool
-}
-
-type agentResourceStep struct {
-	stepID     string
-	activeKind runtime.ActiveKind
 }
 
 func (r *agentResource) descriptorLocked() AgentResourceDescriptor {
@@ -303,6 +604,30 @@ func (r *agentResource) withStoreUnderAdmission(ctx context.Context, callback fu
 	return callback(ctx, store)
 }
 
+func (r *agentResource) withEngineUnderAdmission(
+	ctx context.Context,
+	callback func(context.Context, *runtime.Engine) error,
+) error {
+	if callback == nil {
+		return errors.New("agent resource callback is required")
+	}
+	r.mu.Lock()
+	if r.rejectsNewUseLocked() || r.engine == nil {
+		ref := r.ref
+		r.mu.Unlock()
+		return errors.Join(
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation()),
+		)
+	}
+	engine := r.engine
+	r.callbacks++
+	r.signalLocked()
+	r.mu.Unlock()
+	defer r.releaseCallbackCount()
+	return callback(ctx, engine)
+}
+
 func (r *agentResource) releaseCallbackCount() {
 	r.mu.Lock()
 	if r.callbacks <= 0 {
@@ -372,7 +697,7 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 		lifecycleErr = r.authority.options.resourceLifecycle.ResourceDraining(ctx, descriptor)
 	}
 	r.mu.Lock()
-	for r.pins != 0 || r.callbacks != 0 || len(r.steps) != 0 || r.current != nil {
+	for r.pins != 0 || r.callbacks != 0 || r.steps != 0 || r.current != nil {
 		changed := r.changed
 		r.mu.Unlock()
 		select {
@@ -402,22 +727,11 @@ func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLife
 			fmt.Errorf("agent resource %s generation %d is retiring", r.ref.SessionID(), r.ref.Generation()),
 		)
 	}
-	if len(r.steps) != 0 {
-		parent := r.steps[len(r.steps)-1]
-		if len(r.steps) != 1 || !allowsBoundaryNestedStep(parent.activeKind, snapshot.ActiveKind) {
-			r.mu.Unlock()
-			panic(fmt.Sprintf(
-				"agent resource %s generation %d admitted overlapping engine steps: active step %q kind %q, incoming step %q kind %q",
-				r.ref.SessionID(),
-				r.ref.Generation(),
-				parent.stepID,
-				parent.activeKind,
-				snapshot.StepID,
-				snapshot.ActiveKind,
-			))
-		}
+	if r.steps != 0 {
+		r.mu.Unlock()
+		panic(fmt.Sprintf("agent resource %s generation %d admitted overlapping engine steps", r.ref.SessionID(), r.ref.Generation()))
 	}
-	r.steps = append(r.steps, agentResourceStep{stepID: snapshot.StepID, activeKind: snapshot.ActiveKind})
+	r.steps++
 	r.signalLocked()
 	descriptor := r.descriptorLocked()
 	r.mu.Unlock()
@@ -429,30 +743,13 @@ func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLife
 
 func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLifecycleSnapshot) error {
 	r.mu.Lock()
-	if len(r.steps) == 0 {
+	if r.steps == 0 {
 		rejected := r.rejectsNewStepLocked()
 		r.mu.Unlock()
 		if rejected {
 			return nil
 		}
 		panic(fmt.Sprintf("agent resource %s generation %d engine step underflow", r.ref.SessionID(), r.ref.Generation()))
-	}
-	completing := r.steps[len(r.steps)-1]
-	if completing.stepID != snapshot.StepID || completing.activeKind != snapshot.ActiveKind {
-		if r.rejectsNewStepLocked() && len(r.steps) == 1 && allowsBoundaryNestedStep(completing.activeKind, snapshot.ActiveKind) {
-			r.mu.Unlock()
-			return nil
-		}
-		r.mu.Unlock()
-		panic(fmt.Sprintf(
-			"agent resource %s generation %d completed engine step out of order: active step %q kind %q, completion step %q kind %q",
-			r.ref.SessionID(),
-			r.ref.Generation(),
-			completing.stepID,
-			completing.activeKind,
-			snapshot.StepID,
-			snapshot.ActiveKind,
-		))
 	}
 	descriptor := r.descriptorLocked()
 	r.mu.Unlock()
@@ -461,30 +758,14 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 		publishErr = r.authority.options.stepLifecycle.StepEnded(ctx, descriptor, snapshot)
 	}
 	r.mu.Lock()
-	if len(r.steps) == 0 ||
-		r.steps[len(r.steps)-1].stepID != completing.stepID ||
-		r.steps[len(r.steps)-1].activeKind != completing.activeKind {
+	if r.steps != 1 {
 		r.mu.Unlock()
-		panic(fmt.Sprintf("agent resource %s generation %d engine step stack changed during completion", r.ref.SessionID(), r.ref.Generation()))
+		panic(fmt.Sprintf("agent resource %s generation %d engine step count changed during completion", r.ref.SessionID(), r.ref.Generation()))
 	}
-	r.steps = r.steps[:len(r.steps)-1]
+	r.steps--
 	r.signalLocked()
 	r.mu.Unlock()
 	return publishErr
-}
-
-func allowsBoundaryNestedStep(parent runtime.ActiveKind, nested runtime.ActiveKind) bool {
-	switch nested {
-	case runtime.ActiveKindCompaction, runtime.ActiveKindRuntimeMaintenance:
-	default:
-		return false
-	}
-	switch parent {
-	case runtime.ActiveKindUserTurn, runtime.ActiveKindWorkflowTurn, runtime.ActiveKindGoalLoop:
-		return true
-	default:
-		return false
-	}
 }
 
 func (r *agentResource) rejectsNewUseLocked() bool {
@@ -496,14 +777,6 @@ func (r *agentResource) rejectsNewStepLocked() bool {
 }
 
 func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest) (RuntimeAttachment, error) {
-	return a.openRuntime(ctx, request, nil)
-}
-
-func (a *Authority) openRuntime(
-	ctx context.Context,
-	request RuntimeOpenRequest,
-	resolvePlan func(context.Context, *session.Store) (*AgentRuntimePlan, error),
-) (RuntimeAttachment, error) {
 	if a == nil {
 		return RuntimeAttachment{}, errors.New("session runtime authority is required")
 	}
@@ -521,13 +794,7 @@ func (a *Authority) openRuntime(
 		return RuntimeAttachment{}, errors.New("runtime owner id is required")
 	}
 	gate := a.gateFor(request.SessionID)
-	if err := gate.lock.LockContext(ctx); err != nil {
-		return RuntimeAttachment{}, fmt.Errorf(
-			"wait to open session %s runtime: %w",
-			request.SessionID,
-			err,
-		)
-	}
+	gate.lock.Lock()
 	defer gate.lock.Unlock()
 	if len(gate.blocks) != 0 {
 		return RuntimeAttachment{}, sessionStartsBlockedError(request.SessionID)
@@ -536,25 +803,102 @@ func (a *Authority) openRuntime(
 	if err != nil {
 		return RuntimeAttachment{}, err
 	}
-	var admittedStore *runtimeStoreAdmission
-	if resolvePlan != nil {
-		admittedStore, err = a.materializeRuntimeStore(descriptor)
-		if err != nil {
-			return RuntimeAttachment{}, err
-		}
-		request.Runtime, err = resolvePlan(ctx, admittedStore.store)
-		if err != nil {
-			return RuntimeAttachment{}, err
-		}
-		if request.Runtime == nil {
-			return RuntimeAttachment{}, errors.New("resolved runtime plan is required")
-		}
-	}
-	resource, err := a.openResource(ctx, descriptor, request.Runtime, &ownerID, admittedStore)
+	resource, err := a.openResource(ctx, descriptor, request.Runtime, &ownerID)
 	if err != nil {
 		return RuntimeAttachment{}, err
 	}
 	return RuntimeAttachment{authority: a, resource: resource.ref, ownerID: ownerID}, nil
+}
+
+func (a *Authority) OpenPersistedWorkflowRuntime(
+	ctx context.Context,
+	request PersistedWorkflowRuntimeOpenRequest,
+) (PersistedWorkflowRuntimeOpen, error) {
+	if a == nil {
+		return PersistedWorkflowRuntimeOpen{}, errors.New("session runtime authority is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return PersistedWorkflowRuntimeOpen{}, err
+	}
+	if request.SessionID.IsZero() {
+		return PersistedWorkflowRuntimeOpen{}, errors.New("session id is required")
+	}
+	if request.Runtime == nil {
+		return PersistedWorkflowRuntimeOpen{}, errors.New("agent runtime plan is required")
+	}
+	ownerID := strings.TrimSpace(request.OwnerID)
+	if ownerID == "" {
+		return PersistedWorkflowRuntimeOpen{}, errors.New("runtime owner id is required")
+	}
+	gate := a.gateFor(request.SessionID)
+	gate.lock.Lock()
+	defer gate.lock.Unlock()
+	if len(gate.blocks) != 0 {
+		return PersistedWorkflowRuntimeOpen{}, sessionStartsBlockedError(request.SessionID)
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(request.SessionID)
+	if err != nil {
+		return PersistedWorkflowRuntimeOpen{}, err
+	}
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return PersistedWorkflowRuntimeOpen{}, ErrAuthorityClosed
+	}
+	if a.resources[request.SessionID] != nil {
+		a.mu.Unlock()
+		return PersistedWorkflowRuntimeOpen{}, errors.Join(
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("session %s already has a registered runtime", request.SessionID),
+		)
+	}
+	a.mu.Unlock()
+	resource, err := a.buildAgentResource(ctx, descriptor, request.Runtime)
+	if err != nil {
+		return PersistedWorkflowRuntimeOpen{}, err
+	}
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return PersistedWorkflowRuntimeOpen{}, errors.Join(ErrAuthorityClosed, resource.closeResource(ctx))
+	}
+	if a.resources[request.SessionID] != nil {
+		a.mu.Unlock()
+		return PersistedWorkflowRuntimeOpen{}, errors.Join(
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("session %s gained a registered runtime during Workflow open", request.SessionID),
+			resource.closeResource(ctx),
+		)
+	}
+	a.resources[request.SessionID] = resource
+	a.mu.Unlock()
+
+	if err := resource.publishReady(ctx); err != nil {
+		a.mu.Lock()
+		if a.resources[request.SessionID] == resource {
+			delete(a.resources, request.SessionID)
+		}
+		a.mu.Unlock()
+		return PersistedWorkflowRuntimeOpen{}, errors.Join(err, resource.closeResource(ctx))
+	}
+	resource.mu.Lock()
+	if resource.state != AgentResourceReady {
+		resource.mu.Unlock()
+		return PersistedWorkflowRuntimeOpen{}, fmt.Errorf("session %s runtime is not ready", request.SessionID)
+	}
+	resource.owners[ownerID] = struct{}{}
+	resource.ownerlessDisposition = agentResourceRemainAvailable
+	resource.signalLocked()
+	resource.mu.Unlock()
+	if a.options.background != nil {
+		a.options.background.RetryTerminalEvents(request.SessionID.String())
+	}
+	return PersistedWorkflowRuntimeOpen{
+		Attachment: RuntimeAttachment{authority: a, resource: resource.ref, ownerID: ownerID},
+	}, nil
 }
 
 func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRequest) (RuntimeReleaseResult, error) {
@@ -621,10 +965,11 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 		inFlight := resource.current != nil ||
 			resource.pins != 0 ||
 			resource.callbacks != 0 ||
-			len(resource.steps) != 0
-		queued := resource.engine != nil && resource.engine.HasQueuedUserWork()
-		scheduled := resource.engine != nil && resource.engine.HasScheduledQueuedUserWork()
-		if inFlight || scheduled || (!request.DropOwner && queued) {
+			resource.steps != 0
+		if !inFlight && resource.engine != nil {
+			inFlight = !resource.engine.BeginRetirement()
+		}
+		if inFlight {
 			if request.DropOwner {
 				resource.ownerlessDisposition = agentResourceRetireWhenIdle
 			}
@@ -659,11 +1004,11 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		resource.current != nil ||
 		resource.pins != 0 ||
 		resource.callbacks != 0 ||
-		len(resource.steps) != 0 {
+		resource.steps != 0 {
 		resource.mu.Unlock()
 		return nil
 	}
-	if resource.engine != nil && resource.engine.HasScheduledQueuedUserWork() {
+	if resource.engine != nil && !resource.engine.BeginRetirement() {
 		resource.mu.Unlock()
 		return nil
 	}
@@ -689,7 +1034,7 @@ func (a *Authority) retireRuntimeAbortResource(ctx context.Context, resource *ag
 		return nil
 	}
 	if resource.state != AgentResourceReady ||
-		len(resource.steps) != 0 {
+		resource.steps != 0 {
 		descriptor := resource.descriptorLocked()
 		resource.mu.Unlock()
 		return fmt.Errorf(
@@ -752,6 +1097,15 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		return nil, err
 	}
 	defer gate.lock.Unlock()
+	return a.startAgentExecutionUnderAdmission(ctx, gate, request)
+}
+
+func (a *Authority) startAgentExecutionUnderAdmission(
+	ctx context.Context,
+	gate *sessionAdmissionGate,
+	request AgentExecutionRequest,
+) (ExecutionHandle, error) {
+	sessionID := request.Descriptor.SessionID()
 	if len(gate.blocks) != 0 {
 		return nil, sessionStartsBlockedError(sessionID)
 	}
@@ -764,36 +1118,13 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.mu.Unlock()
 		return nil, ErrAuthorityClosed
 	}
-	var workflowKey workflow.CurrentNodeReferenceKey
-	var workflowRef *WorkflowExecutionRef
-	var scopeID runtimeids.ExecutionScopeID
-	var executionGeneration ExecutionGeneration
-	if request.Workflow != nil {
-		ref, leaseErr := a.validateWorkflowExecutionLeaseLocked(request.Workflow)
-		if leaseErr != nil {
-			a.mu.Unlock()
-			return nil, leaseErr
-		}
-		workflowRef = &ref
-		scopeID = request.Workflow.scopeID
-		executionGeneration = request.Workflow.executionGeneration
-		workflowKey, err = workflowExecutionKeyFor(ref)
-		if err != nil {
-			a.mu.Unlock()
-			return nil, err
-		}
-		if a.workflowExecutionLocked(ref, workflowKey) != nil {
-			a.mu.Unlock()
-			return nil, fmt.Errorf("workflow current node %v is already live", ref.CurrentNode)
-		}
-	}
 	resource.mu.Lock()
 	if resource.current != nil {
 		resource.mu.Unlock()
 		a.mu.Unlock()
 		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", sessionID))
 	}
-	if workflowRef == nil && resource.engine.CurrentNodeExecutionConfigured() {
+	if resource.engine.RetainedWorkflowControlOnly() {
 		resource.mu.Unlock()
 		a.mu.Unlock()
 		return nil, errors.Join(
@@ -801,68 +1132,32 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 			fmt.Errorf("session %s cannot start an ordinary execution while its workflow activation remains active", sessionID),
 		)
 	}
-	var workflowBinding *runtime.CurrentNodeExecutionBinding
-	closeWorkflowBinding := func() error {
-		if workflowBinding == nil {
-			return nil
-		}
-		closeErr := workflowBinding.Close()
-		workflowBinding = nil
-		return closeErr
-	}
-	if workflowRef != nil &&
-		request.Runtime != nil &&
-		request.Runtime.options.CurrentNodeExecution != nil {
-		workflowConfig := request.Runtime.options.CurrentNodeExecution
-		if workflowConfig.ScopeID != scopeID {
-			resource.mu.Unlock()
-			a.mu.Unlock()
-			return nil, fmt.Errorf(
-				"workflow execution scope %s does not match runtime config scope %s",
-				scopeID,
-				workflowConfig.ScopeID,
-			)
-		}
-		if !workflowConfig.Instructions.CurrentNode.Equal(workflowRef.CurrentNode) {
-			resource.mu.Unlock()
-			a.mu.Unlock()
-			return nil, errors.New("workflow runtime config does not match execution current node")
-		}
-		workflowBinding, err = resource.engine.BindCurrentNodeExecution(workflowConfig)
-		if err != nil {
-			resource.mu.Unlock()
-			a.mu.Unlock()
-			return nil, fmt.Errorf("bind workflow current node execution: %w", err)
-		}
-	}
 	if err := resource.pinLocked(); err != nil {
-		bindingErr := closeWorkflowBinding()
 		resource.mu.Unlock()
 		a.mu.Unlock()
-		return nil, errors.Join(err, bindingErr)
+		return nil, err
 	}
-	if scopeID.IsZero() {
-		scopeID = runtimeids.NewExecutionScopeID()
-		executionGeneration = a.nextExecutionGenerationLocked()
-	}
-	scope := newAgentExecutionScope(scopeID, executionGeneration, resource.ref, workflowRef)
+	scopeID := runtimeids.NewExecutionScopeID()
+	executionGeneration := a.nextExecutionGenerationLocked()
+	scope := newAgentExecutionScope(scopeID, executionGeneration, resource.ref, nil)
 	correlation, err := runtimeids.NewExecutionCorrelation(scope.ID(), resource.ref.Generation())
 	if err != nil {
-		bindingErr := closeWorkflowBinding()
 		resource.pins--
 		resource.signalLocked()
 		resource.mu.Unlock()
 		a.mu.Unlock()
-		panic(fmt.Sprintf("new agent execution correlation: %v", errors.Join(err, bindingErr)))
+		return nil, a.invariant(
+			"create Agent execution correlation",
+			fmt.Errorf("scope=%s resource=%v: %w", scope.ID(), resource.ref, err),
+		)
 	}
 	if resource.localTools != nil {
 		if err := resource.localTools.BindExecutionCorrelation(&correlation); err != nil {
-			bindingErr := closeWorkflowBinding()
 			resource.pins--
 			resource.signalLocked()
 			resource.mu.Unlock()
 			a.mu.Unlock()
-			return nil, errors.Join(fmt.Errorf("bind agent execution correlation: %w", err), bindingErr)
+			return nil, fmt.Errorf("bind agent execution correlation: %w", err)
 		}
 	}
 	runCtx, cancel := context.WithCancel(resource.ctx)
@@ -870,16 +1165,12 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		authority:     a,
 		resource:      resource,
 		scope:         scope,
-		workflow:      workflowBinding,
 		ctx:           runCtx,
 		cancel:        cancel,
 		done:          make(chan struct{}),
 		prompts:       newExecutionPromptStore(a, scope, a.promptFeed),
 		closeResource: closeResource,
 		phase:         executionPhaseRunning,
-	}
-	if workflowRef != nil {
-		execution.phase = executionPhaseQueued
 	}
 	if resource.askBroker != nil {
 		scopeID := scope.ID()
@@ -898,28 +1189,130 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	resource.signalLocked()
 	resource.mu.Unlock()
 	a.byScope[scope.ID()] = execution
-	if workflowRef != nil {
-		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
-	}
 	a.mu.Unlock()
-
 	go func() {
-		if request.Workflow != nil {
-			if waitErr := request.Workflow.wait(execution.ctx); waitErr != nil {
-				execution.finish(ExecutionResult{}, waitErr, nil)
-				return
-			}
-			a.beginWorkflowExecution(execution)
-		}
-		runErr := a.runExecutionCallback("agent_runner", execution.scope, func() error {
-			return request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
-				authority: a,
-				resource:  resource.ref,
-			})
+		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
+			authority: a,
+			resource:  resource.ref,
 		})
 		execution.finish(ExecutionResult{}, runErr, nil)
 	}()
 	return executionHandle{execution: execution}, nil
+}
+
+func (a *Authority) RunCurrentHumanTurn(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	accept runtime.CommandAcceptance,
+	run func(context.Context, *runtime.Engine, runtime.CommandAcceptance) error,
+) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if err := descriptor.Validate(); err != nil {
+		return err
+	}
+	if accept == nil {
+		return errors.New("human turn acceptance is required")
+	}
+	if run == nil {
+		return errors.New("human turn callback is required")
+	}
+	sessionID := descriptor.SessionID()
+	gate := a.gateFor(sessionID)
+	if err := gate.lock.LockContext(ctx); err != nil {
+		return err
+	}
+	var releaseGateOnce sync.Once
+	releaseGate := func() {
+		releaseGateOnce.Do(gate.lock.Unlock)
+	}
+	defer releaseGate()
+	if len(gate.blocks) != 0 {
+		return sessionStartsBlockedError(sessionID)
+	}
+
+	a.mu.Lock()
+	resource := a.resources[sessionID]
+	a.mu.Unlock()
+	if resource == nil {
+		return runtimeUnavailableErr(sessionID.String())
+	}
+
+	accepted := make(chan struct{})
+	var acceptedOnce sync.Once
+	admit := runtime.CommandAcceptance(func(commit func() (bool, error)) (bool, error) {
+		committed, err := accept(commit)
+		if committed {
+			acceptedOnce.Do(func() {
+				releaseGate()
+				close(accepted)
+			})
+		}
+		return committed, err
+	})
+
+	resource.mu.Lock()
+	current := resource.current
+	resource.mu.Unlock()
+	if current != nil {
+		runErr := resource.withEngineUnderAdmission(ctx, func(runCtx context.Context, engine *runtime.Engine) error {
+			return run(runCtx, engine, admit)
+		})
+		releaseGate()
+		return errors.Join(runErr, a.closeRetiringResource(context.Background(), resource))
+	}
+
+	operationContinues := make(chan bool, 1)
+	handle, err := a.startAgentExecutionUnderAdmission(ctx, gate, AgentExecutionRequest{
+		Descriptor: descriptor,
+		Resource:   CurrentAgentResource{},
+		Runner: func(executionCtx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+			callbackRan := false
+			runErr := bridge.WithEngine(executionCtx, func(_ context.Context, engine *runtime.Engine) error {
+				callbackRan = true
+				runCtx, stop := MergeContexts(executionCtx, ctx)
+				err := run(runCtx, engine, admit)
+				stop()
+				goalLoopActive := err == nil && engine.GoalLoopRunning()
+				operationContinues <- goalLoopActive
+				if err != nil || !goalLoopActive {
+					return err
+				}
+				return engine.WaitForGoalLoop(executionCtx)
+			})
+			if !callbackRan {
+				operationContinues <- false
+			}
+			return runErr
+		},
+	})
+	if err != nil {
+		return err
+	}
+	exactHandle, ok := handle.(executionHandle)
+	if !ok || exactHandle.execution == nil {
+		return a.invariant(
+			"run current human Agent turn",
+			fmt.Errorf("execution handle type=%T", handle),
+		)
+	}
+
+	select {
+	case <-accepted:
+	case <-exactHandle.execution.done:
+		releaseGate()
+	case <-ctx.Done():
+		releaseGate()
+	}
+	if <-operationContinues {
+		return nil
+	}
+	_, err = handle.Wait(context.Background())
+	return err
 }
 
 func (a *Authority) RunCurrentAgentExecution(
@@ -1008,38 +1401,6 @@ func (a *Authority) WithCurrentRuntime(ctx context.Context, sessionID runtimeids
 	return resource.withEngine(ctx, resource.ref, callback)
 }
 
-func (a *Authority) ApplyCurrentGoalOperation(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	operation runtime.CurrentGoalOperation,
-) (runtime.CurrentGoalOperationOutcome, error) {
-	if a == nil {
-		return runtime.CurrentGoalOperationOutcome{}, errors.New("session runtime authority is required")
-	}
-	if err := context.Cause(ctx); err != nil {
-		return runtime.CurrentGoalOperationOutcome{}, err
-	}
-	if sessionID.IsZero() {
-		return runtime.CurrentGoalOperationOutcome{}, errors.New("session id is required")
-	}
-	a.mu.Lock()
-	resource := a.resources[sessionID]
-	a.mu.Unlock()
-	if resource == nil {
-		return runtime.CurrentGoalOperationOutcome{}, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %s has no active runtime available", sessionID))
-	}
-	resource.mu.Lock()
-	defer resource.mu.Unlock()
-	if resource.rejectsNewUseLocked() || resource.engine == nil {
-		return runtime.CurrentGoalOperationOutcome{}, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %s has no active runtime available", sessionID))
-	}
-	ownership := runtime.CurrentGoalRetainedOnly
-	if resource.current != nil {
-		ownership = runtime.CurrentGoalExactExecution
-	}
-	return resource.engine.ApplyCurrentGoalOperation(operation, ownership)
-}
-
 func (a *Authority) WithLiveExecutionRuntime(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
@@ -1076,7 +1437,7 @@ func (a *Authority) WithRetainedWorkflowRuntime(
 		return errors.New("retained workflow runtime callback is required")
 	}
 	return a.WithCurrentRuntime(ctx, sessionID, func(ctx context.Context, engine *runtime.Engine) error {
-		if !engine.CurrentNodeExecutionConfigured() {
+		if !engine.RetainedWorkflowControlOnly() {
 			return errors.Join(
 				serverapi.ErrRuntimeNoActiveRun,
 				fmt.Errorf("session %s has no retained workflow activation", sessionID),
@@ -1184,7 +1545,7 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 		}
 		return resource, false, nil
 	case OpenAgentResource:
-		resource, err := a.openResource(ctx, descriptor, plan, nil, nil)
+		resource, err := a.openResource(ctx, descriptor, plan, nil)
 		return resource, true, err
 	case ReplaceAgentResource:
 		resource, err := a.replaceResource(ctx, descriptor, plan)
@@ -1194,13 +1555,7 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 	}
 }
 
-func (a *Authority) openResource(
-	ctx context.Context,
-	descriptor session.SessionDescriptor,
-	plan *AgentRuntimePlan,
-	ownerID *string,
-	admittedStore *runtimeStoreAdmission,
-) (*agentResource, error) {
+func (a *Authority) openResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan, ownerID *string) (*agentResource, error) {
 	sessionID := descriptor.SessionID()
 	a.mu.Lock()
 	if a.closed {
@@ -1212,7 +1567,7 @@ func (a *Authority) openResource(
 	created := false
 	if resource == nil {
 		var err error
-		resource, err = a.buildAgentResource(ctx, descriptor, plan, admittedStore)
+		resource, err = a.buildAgentResource(ctx, descriptor, plan)
 		if err != nil {
 			return nil, err
 		}
@@ -1270,7 +1625,7 @@ func (a *Authority) replaceResource(ctx context.Context, descriptor session.Sess
 			return nil, err
 		}
 	}
-	return a.openResource(ctx, descriptor, plan, nil, nil)
+	return a.openResource(ctx, descriptor, plan, nil)
 }
 
 func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *agentResource) error {
@@ -1306,7 +1661,7 @@ func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *
 			)
 		}
 
-		if resource.current != nil || resource.callbacks != 0 || len(resource.steps) != 0 {
+		if resource.current != nil || resource.callbacks != 0 || resource.steps != 0 {
 			changed := resource.changed
 			resource.mu.Unlock()
 			select {
@@ -1315,19 +1670,6 @@ func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *
 			case <-ctx.Done():
 				return context.Cause(ctx)
 			}
-		}
-		engine := resource.engine
-		if engine != nil && engine.HasQueuedUserWork() {
-			resource.mu.Unlock()
-			if err := engine.DrainQueuedUserMessagesBeforeClose(ctx); err != nil {
-				return fmt.Errorf(
-					"drain session %s runtime generation %d before replacement: %w",
-					resource.ref.SessionID(),
-					resource.ref.Generation(),
-					err,
-				)
-			}
-			continue
 		}
 		_, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
 		return closeErr

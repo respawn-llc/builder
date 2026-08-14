@@ -9,7 +9,6 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 	"core/shared/toolspec"
 
 	"github.com/google/uuid"
@@ -18,13 +17,10 @@ import (
 const ReleaseTimeout = 3 * time.Second
 
 type Request struct {
-	SessionID                string
-	ActiveSettings           config.Settings
-	EnabledTools             []toolspec.ID
-	QuestionsEnabled         bool
-	AutoCompactionEnabled    bool
-	ThinkingOverrideExplicit bool
-	Source                   config.SourceReport
+	SessionID      string
+	ActiveSettings config.Settings
+	EnabledTools   []toolspec.ID
+	Source         config.SourceReport
 }
 
 type Activation struct {
@@ -73,11 +69,10 @@ func (a *Activation) ReleaseWithClosePolicy(closePolicy serverapi.SessionRuntime
 	ctx, cancel := context.WithTimeout(context.Background(), ReleaseTimeout)
 	defer cancel()
 	_, err := a.service.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: uuid.NewString(),
-		Attachment:      a.attachment,
-		DropOwner:       true,
-		ClosePolicy:     closePolicy,
-		OwnerID:         a.ownerID,
+		Attachment:  a.attachment,
+		DropOwner:   true,
+		ClosePolicy: closePolicy,
+		OwnerID:     a.ownerID,
 	})
 	return err
 }
@@ -95,14 +90,10 @@ func activate(ctx context.Context, service servicecontract.SessionRuntimeService
 
 func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActivateRequest {
 	return serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:          uuid.NewString(),
-		SessionID:                req.SessionID,
-		OwnerID:                  ownerID,
-		ActiveSettings:           req.ActiveSettings,
-		EnabledToolIDs:           toolspec.IDStrings(req.EnabledTools),
-		QuestionsEnabled:         textutil.Value(req.QuestionsEnabled),
-		AutoCompactionEnabled:    textutil.Value(req.AutoCompactionEnabled),
-		ThinkingOverrideExplicit: req.ThinkingOverrideExplicit,
-		Source:                   req.Source,
+		SessionID:      req.SessionID,
+		OwnerID:        ownerID,
+		ActiveSettings: req.ActiveSettings,
+		EnabledToolIDs: toolspec.IDStrings(req.EnabledTools),
+		Source:         req.Source,
 	}
 }

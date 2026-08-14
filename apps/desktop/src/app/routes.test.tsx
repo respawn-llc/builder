@@ -13,12 +13,3 @@ it("rejects malformed present workflow selectors while preserving omission", () 
   });
   expect(() => validate({ workflowId: "workflow-1" })).toThrow();
 });
-
-it("normalizes omitted Home project selection", () => {
-  const validate = createAppRouter().routesById["/"].options.validateSearch;
-  if (!(validate instanceof Function)) {
-    throw new Error("Home route search validation is unavailable");
-  }
-  expect(validate({})).toEqual({});
-  expect(validate({ projectId: "project-1" })).toEqual({ projectId: "project-1" });
-});

@@ -9,6 +9,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -16,7 +17,7 @@ import (
 func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing.T) {
 	t.Run("overlapping traces and measured zero", func(t *testing.T) {
 		store := mustCreateTestSession(t)
-		engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 		now := time.Unix(100, 0)
 		state := engine.transcriptRuntimeState()
 		state.now = func() time.Time { return now }
@@ -96,7 +97,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 
 	t.Run("failed commit retries from original start", func(t *testing.T) {
 		store := mustCreateTestSession(t)
-		engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 		now := time.Unix(200, 0)
 		engine.transcriptRuntimeState().now = func() time.Time { return now }
 		executor := &defaultStepExecutor{engine: engine}
@@ -142,7 +143,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 
 	t.Run("reset starts a fresh interval and completed-only is absent", func(t *testing.T) {
 		store := mustCreateTestSession(t)
-		engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 		now := time.Unix(300, 0)
 		engine.transcriptRuntimeState().now = func() time.Time { return now }
 		executor := &defaultStepExecutor{engine: engine}
@@ -191,7 +192,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 
 func TestReasoningTraceDurationRestoresThroughPersistedTranscript(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	output, part := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
 	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
@@ -208,7 +209,7 @@ func TestReasoningTraceDurationRestoresThroughPersistedTranscript(t *testing.T) 
 		t.Fatalf("close original engine: %v", err)
 	}
 	reopenedStore := mustOpenTestSession(t, store.Dir())
-	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	if err := reopened.restoreMessages(); err != nil {
 		t.Fatalf("restore persisted transcript: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestReasoningTraceDurationRestoresThroughPersistedTranscript(t *testing.T) 
 
 func TestCompletedResponseAbortThenReasoningResetWithoutAssistantStream(t *testing.T) {
 	var events []Event
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
@@ -310,7 +311,7 @@ func TestTranscriptReasoningStateRetainsMetadataWithoutChangingPublicIdentity(t 
 }
 
 func TestReconcileReasoningRejectsInvalidCoordinateAndConsumesCommittedTrace(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	executor := &defaultStepExecutor{engine: engine}
 	invalidOutput, validPart := int64(-1), int64(0)
 	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
@@ -346,7 +347,7 @@ func TestReconcileReasoningConsumesTraceAfterCommittedObserverError(t *testing.T
 	observerErr := errors.New("reasoning observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
@@ -372,7 +373,7 @@ func TestReconcileReasoningConsumesTraceAfterCommittedObserverError(t *testing.T
 }
 
 func TestReconcileReasoningRejectsCompletedIdentityConflictWithStream(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
@@ -402,7 +403,7 @@ func TestReconcileReasoningRejectsCompletedIdentityConflictWithStream(t *testing
 
 func TestReconcileReasoningKeepsTraceWhenCommitIsNotDurable(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
@@ -428,7 +429,7 @@ func TestReconcileReasoningKeepsTraceWhenCommitIsNotDurable(t *testing.T) {
 }
 
 func TestReconcileReasoningPersistsValidUnprovisionedCoordinateAsCompletedOnly(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(8), int64(2)
 	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
@@ -449,7 +450,7 @@ func TestReconcileReasoningPersistsValidUnprovisionedCoordinateAsCompletedOnly(t
 }
 
 func TestReconcileReasoningUsesFirstSeenProvisionalOrder(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	executor := &defaultStepExecutor{engine: engine}
 	firstOutput, secondOutput, part := int64(9), int64(1), int64(0)
 	first := &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &part}
@@ -469,7 +470,7 @@ func TestReconcileReasoningUsesFirstSeenProvisionalOrder(t *testing.T) {
 		t.Fatalf("reconcile first-seen order: %v", err)
 	}
 
-	engine = mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine = mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	executor = &defaultStepExecutor{engine: engine}
 	for _, item := range []llm.ReasoningSummaryDelta{
 		{SourceCoordinate: first, Text: "first"},
@@ -488,7 +489,7 @@ func TestReconcileReasoningUsesFirstSeenProvisionalOrder(t *testing.T) {
 }
 
 func TestReconcileReasoningRejectsMalformedCompletedOnlyIdentity(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	executor := &defaultStepExecutor{engine: engine}
 	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
 		Role:         textPointer(string(transcript.EntryRoleReasoning)),
@@ -646,7 +647,7 @@ func TestReasoningResetClearsEveryTraceAndRetainsStatus(t *testing.T) {
 func TestCorrelatedReasoningCommitEmitsOneRowAndConsumesIdentity(t *testing.T) {
 	var events []Event
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5", OnEvent: func(event Event) { events = append(events, event) },
 	})
 	output, part := int64(0), int64(0)
@@ -716,7 +717,7 @@ func TestCorrelatedReasoningCommitEmitsOneRowAndConsumesIdentity(t *testing.T) {
 
 func TestReasoningProjectionDoesNotRewritePersistedText(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	raw := "**raw reasoning**"
 	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning("step", []llm.ReasoningEntry{{
 		Role: textPointer(string(transcript.EntryRoleReasoning)), Text: raw,

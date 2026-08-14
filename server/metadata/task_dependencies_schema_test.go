@@ -10,7 +10,11 @@ import (
 func TestOpenCreatesTaskDependencySchema(t *testing.T) {
 	t.Parallel()
 
-	store := openInMemoryMetadataTestStore(t, t.TempDir())
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 
 	if !tableExists(t, store.db, "task_dependencies") {
 		t.Fatal("task_dependencies table does not exist")

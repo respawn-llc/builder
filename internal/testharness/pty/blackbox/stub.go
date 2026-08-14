@@ -106,6 +106,8 @@ func startResponsesStub(required []RequiredOperation, scripted *scriptedResponse
 	}
 	router := http.NewServeMux()
 	router.HandleFunc("POST /v1/responses", stub.serveRoute(RouteResponses))
+	router.HandleFunc("POST /v1/responses/compact", stub.serveRoute(RouteCompact))
+	router.HandleFunc("POST /v1/responses/input_tokens", stub.serveRoute(RouteInputTokens))
 	router.HandleFunc("GET /v1/models/{model}", stub.serveRoute(RouteModel))
 	router.HandleFunc("/", stub.serveUnsupportedRoute)
 	stub.server = &http.Server{
@@ -270,14 +272,6 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 			http.Error(writer, "invalid request", http.StatusRequestEntityTooLarge)
 			return
 		}
-		if route == RouteResponses {
-			route, err = classifyResponsesOperation(body)
-			if err != nil {
-				s.recordFailure(err)
-				http.Error(writer, "invalid request", http.StatusBadRequest)
-				return
-			}
-		}
 		if err := validateRouteBody(route, body); err != nil {
 			s.recordFailure(err)
 			http.Error(writer, "invalid request", http.StatusBadRequest)
@@ -352,14 +346,14 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 		return nil, s.failure
 	}
 	if s.index >= len(s.required) {
-		if route == RouteModel {
+		if route == RouteInputTokens || route == RouteModel {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("unexpected model operation route=%s after required queue", route)
 	}
 	required := s.required[s.index]
 	if route != required.Route {
-		if route == RouteModel {
+		if route == RouteInputTokens || route == RouteModel {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("required model operation route=%s got=%s", required.Route, route)
@@ -374,7 +368,7 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 		return nil, fmt.Errorf("developer message count mismatch: got=%d want=%d", responseDeveloperMessageCount(body), *required.DeveloperMessageCount)
 	}
 	if required.SessionCacheKey && !hasMatchingSessionCacheKey(body, headers) {
-		return nil, errors.New("required response session-id and prompt_cache_key relation was not present")
+		return nil, errors.New("required response session_id and prompt_cache_key relation was not present")
 	}
 	s.index++
 	s.requiredInFlight = true
@@ -397,6 +391,10 @@ func (s *ResponsesStub) writeOperationResponse(ctx context.Context, writer http.
 	switch route {
 	case RouteResponses:
 		s.writeResponse(ctx, writer, operation)
+	case RouteInputTokens:
+		if err := writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0}); err != nil {
+			s.recordFailure(fmt.Errorf("write input-token response: %w", err))
+		}
 	case RouteModel:
 		if err := writeJSON(writer, http.StatusOK, map[string]any{
 			"id":             "gpt-5",
@@ -408,16 +406,9 @@ func (s *ResponsesStub) writeOperationResponse(ctx context.Context, writer http.
 			s.recordFailure(fmt.Errorf("write model metadata response: %w", err))
 		}
 	case RouteCompact:
-		writer.Header().Set("Content-Type", "text/event-stream")
-		if operation != nil && operation.Outcome == OutcomeHoldSSE {
-			<-ctx.Done()
-			return
+		if err := writeJSON(writer, http.StatusOK, map[string]any{"output": []any{}}); err != nil {
+			s.recordFailure(fmt.Errorf("write compact response: %w", err))
 		}
-		checkpoint := map[string]any{"type": "compaction", "id": "cmp_stub", "encrypted_content": "encrypted_stub_checkpoint"}
-		if !s.writeResponseCompleted(writer, "", []any{checkpoint}, llm.Usage{}) {
-			return
-		}
-		s.writeResponseDone(writer)
 	default:
 		http.Error(writer, "unsupported model route", http.StatusNotFound)
 	}
@@ -530,6 +521,20 @@ func flushResponseWriter(writer http.ResponseWriter) {
 	if flusher, ok := writer.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+func HandleInputTokenCount(writer http.ResponseWriter, request *http.Request, inputTokens int) bool {
+	if request.URL.Path != "/responses/input_tokens" {
+		return false
+	}
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return true
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	mustWriteFixtureResponse(writer, fmt.Sprintf(`{"object":"response.input_tokens","input_tokens":%d}`, inputTokens))
+	return true
 }
 
 func WriteCompletedResponseStream(writer http.ResponseWriter, assistantText string, inputTokens, outputTokens int) {
@@ -662,33 +667,6 @@ type modelRequest struct {
 	Input *json.RawMessage `json:"input"`
 }
 
-func classifyResponsesOperation(body []byte) (Route, error) {
-	var request struct {
-		Input []struct {
-			Type string `json:"type"`
-		} `json:"input"`
-	}
-	if err := json.Unmarshal(body, &request); err != nil {
-		return "", fmt.Errorf("decode responses request DTO: %w", err)
-	}
-	triggerIndex := -1
-	for index, item := range request.Input {
-		if item.Type == "compaction_trigger" {
-			if triggerIndex >= 0 {
-				return "", errors.New("responses request contains multiple compaction triggers")
-			}
-			triggerIndex = index
-		}
-	}
-	if triggerIndex < 0 {
-		return RouteResponses, nil
-	}
-	if triggerIndex != len(request.Input)-1 {
-		return "", errors.New("responses compaction trigger must be the final input item")
-	}
-	return RouteCompact, nil
-}
-
 type responseRequest struct {
 	Input          []responseInputItem `json:"input"`
 	PromptCacheKey *string             `json:"prompt_cache_key"`
@@ -699,7 +677,7 @@ func hasMatchingSessionCacheKey(body []byte, headers http.Header) bool {
 	if json.Unmarshal(body, &request) != nil || request.PromptCacheKey == nil {
 		return false
 	}
-	session, err := parseSessionCacheKey(headers.Get("session-id"))
+	session, err := parseSessionCacheKey(headers.Get("session_id"))
 	if err != nil {
 		return false
 	}

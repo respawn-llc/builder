@@ -41,7 +41,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -184,7 +184,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	registry := newTestToolRegistry(t,
+	registry := tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, manager, store.Meta().SessionID)},
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, manager)},
 	)
@@ -237,65 +237,10 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 	}
 }
 
-func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testing.T) {
-	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "completed-step", llm.Message{Role: llm.RoleUser, Content: textutil.Value("hello")}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := appendTestEvent(t, store, "completed-step", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}); err != nil {
-		t.Fatalf("append terminal assistant message: %v", err)
-	}
-	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-completed", StepID: "completed-step", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("set pending recovery: %v", err)
-	}
-
-	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
-	if err != nil {
-		t.Fatalf("re-open store: %v", err)
-	}
-	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	if reopenedStore.Meta().PendingModelRecovery != nil {
-		t.Fatal("expected reopen path to clear pending model recovery")
-	}
-	for _, msg := range restored.transcriptRuntimeState().SnapshotMessages() {
-		if msg.MessageType != nil && *msg.MessageType == llm.MessageTypeInterruption {
-			t.Fatalf("did not expect interruption marker for completed step, messages=%+v", restored.transcriptRuntimeState().SnapshotMessages())
-		}
-	}
-}
-
-func TestNewDiscardsPendingModelRecoveryWithoutConcreteStep(t *testing.T) {
-	store := mustCreateTestSession(t)
-	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery", Reason: "missing_step", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("set pending recovery: %v", err)
-	}
-
-	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
-	if err != nil {
-		t.Fatalf("re-open store: %v", err)
-	}
-	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	if reopenedStore.Meta().PendingModelRecovery != nil {
-		t.Fatal("expected reopen path to clear pending model recovery")
-	}
-	for _, msg := range restored.transcriptRuntimeState().SnapshotMessages() {
-		if msg.MessageType != nil && *msg.MessageType == llm.MessageTypeInterruption {
-			t.Fatalf("did not expect interruption marker without concrete step, messages=%+v", restored.transcriptRuntimeState().SnapshotMessages())
-		}
-	}
-	events, err := collectTestEventRecords(reopenedStore)
-	if err != nil {
-		t.Fatalf("read reopened events: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("metadata-only recovery discard emitted events: %+v", events)
-	}
-}
-
 func TestSubmitUserShellCommandPersistsDeveloperNoticeAndToolEntries(t *testing.T) {
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	result, err := eng.SubmitUserShellCommand(context.Background(), "pwd")
 	if err != nil {
@@ -359,7 +304,7 @@ func TestSubmitUserShellCommandPreservesFatalCauseWhenNoResultIsReturned(t *test
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		newTestToolRegistry(t, tools.HandlerRegistration{
+		tools.NewRegistry(tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: handler,
 		}),
@@ -377,7 +322,7 @@ func TestSubmitUserShellCommandPreservesFatalCauseWhenNoResultIsReturned(t *test
 func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *testing.T) {
 	store := mustCreateTestSession(t)
 
-	eng, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
 	result, err := eng.SubmitUserShellCommand(context.Background(), "pwd")
 	if !errors.Is(err, errUnknownTool) {
@@ -427,8 +372,8 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 			ToolCalls: []llm.ToolCall{
-				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
-				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: grouped-result.txt\n+done\n*** End Patch\n"}`)},
+				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{}`)},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -438,7 +383,7 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 		},
 	}}
 
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand, delay: 40 * time.Millisecond}}, tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 1 * time.Millisecond}}), Config{Model: "gpt-5", Temperature: 1})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand, delay: 40 * time.Millisecond}}, tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 1 * time.Millisecond}}), Config{Model: "gpt-5", Temperature: 1})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "run tools"); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -496,8 +441,8 @@ func TestParallelToolCompletionsStayPendingUntilResultGroupClose(t *testing.T) {
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 			ToolCalls: []llm.ToolCall{
-				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
-				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: grouped-result.txt\n+done\n*** End Patch\n"}`)},
+				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{}`)},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -516,7 +461,7 @@ func TestParallelToolCompletionsStayPendingUntilResultGroupClose(t *testing.T) {
 	}
 	t.Cleanup(release)
 	toolCompleted := make(chan tools.Result, 4)
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t,
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: slow},
 		tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 1 * time.Millisecond}},
 	), Config{
@@ -542,12 +487,7 @@ func TestParallelToolCompletionsStayPendingUntilResultGroupClose(t *testing.T) {
 	select {
 	case <-slow.started:
 	case submitErr := <-submitDone:
-		select {
-		case completed := <-toolCompleted:
-			t.Fatalf("submit completed before slow tool started: %v; completion=%+v", submitErr, completed)
-		default:
-			t.Fatalf("submit completed before slow tool started: %v", submitErr)
-		}
+		t.Fatalf("submit completed before slow tool started: %v", submitErr)
 	case <-watchdog.Done():
 		t.Fatalf("timed out waiting for slow tool to start: %v", watchdog.Err())
 	}
@@ -609,7 +549,7 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 		secondStarted: make(chan struct{}),
 		releaseFirst:  make(chan struct{}),
 	}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t,
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: sequencer},
 	), Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 
@@ -619,8 +559,8 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 	}, 1)
 	go func() {
 		results, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{
-			{ID: "call-ask-1", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{"question":"First?"}`)},
-			{ID: "call-ask-2", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{"question":"Second?"}`)},
+			{ID: "call-ask-1", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{}`)},
+			{ID: "call-ask-2", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{}`)},
 		})
 		done <- struct {
 			results []tools.Result
@@ -666,20 +606,20 @@ func TestWorkflowPromptCapableToolCallsSerializeWithAskQuestion(t *testing.T) {
 		secondStarted: make(chan struct{}),
 		releaseFirst:  make(chan struct{}),
 	}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t,
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: sequencer},
 		tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: sequencer},
 	), Config{
-		Model:                "gpt-5",
-		EnabledTools:         []toolspec.ID{toolspec.ToolPatch, toolspec.ToolAskQuestion},
-		CurrentNodeExecution: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool),
+		Model:        "gpt-5",
+		EnabledTools: []toolspec.ID{toolspec.ToolPatch, toolspec.ToolAskQuestion},
 	})
+	publishTestWorkflowExecution(t, eng, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool))
 
 	done := make(chan error, 1)
 	go func() {
 		_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{
-			{ID: "call-patch", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: serialized-prompt.txt\n+done\n*** End Patch\n"}`)},
-			{ID: "call-ask", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{"question":"Continue?"}`)},
+			{ID: "call-patch", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{}`)},
+			{ID: "call-ask", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{}`)},
 		})
 		done <- err
 	}()
@@ -727,7 +667,7 @@ func TestPersistedAssistantToolCallsContainNoUIDisplayMarkers(t *testing.T) {
 		},
 	}}
 
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "run tool"); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -770,17 +710,17 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 	}{
 		{
 			name:     "unknown tool name",
-			registry: newTestToolRegistry(t),
+			registry: tools.NewRegistry(),
 			callName: "not_a_tool",
 		},
 		{
 			name:     "known tool without handler",
-			registry: newTestToolRegistry(t),
+			registry: tools.NewRegistry(),
 			callName: string(toolspec.ToolExecCommand),
 		},
 		{
 			name:     "registered tool handler",
-			registry: newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}),
+			registry: tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}),
 			callName: string(toolspec.ToolExecCommand),
 		},
 	}

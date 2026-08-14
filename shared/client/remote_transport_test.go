@@ -93,7 +93,6 @@ func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "release-1",
 		Attachment: serverapi.SessionRuntimeAttachment{
 			SessionID:  "session-1",
 			Generation: 7,
@@ -767,7 +766,7 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 
 	interruptCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	if _, err := remote.Interrupt(interruptCtx, serverapi.RuntimeInterruptRequest{ClientRequestID: "interrupt-1", SessionID: "session-1"}); err != nil {
+	if _, err := remote.Interrupt(interruptCtx, serverapi.RuntimeInterruptRequest{SessionID: "session-1"}); err != nil {
 		t.Fatalf("Interrupt: %v", err)
 	}
 	select {

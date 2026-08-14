@@ -1,11 +1,7 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
-import {
-  parseCatalogResponse,
-  requireCatalogProject,
-  sessionPageCall,
-} from "./clientCatalog";
+import { parseCatalogInput, parseCatalogResponse, requireCatalogProject } from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import * as taskDependencies from "./clientTaskDependencies";
@@ -13,7 +9,6 @@ import * as taskDetail from "./clientTaskDetail";
 import * as promptAnswers from "./clientPromptAnswers";
 import * as taskSearch from "./clientTaskSearch";
 import * as worktree from "./clientWorktree";
-import * as project from "./clientProject";
 import {
   workflowGraphDraftPayload,
   workflowGraphMetadataPayload,
@@ -47,14 +42,20 @@ import { subscribeWorktreeSetup, type WorktreeSetupEventHandler } from "./worktr
 import type {
   ActivityPage,
   AttentionPage,
+  BindingPlan,
   BoardNodeCardsPage,
   CommentPage,
   PendingAsk,
   ProjectWorkflowLink,
+  ProjectBinding,
+  ProjectEdit,
+  ProjectDeleteResponse,
+  ProjectMutationResponse,
   ProjectPage,
   ServerReadiness,
   SessionCatalogPage,
   SessionCategory,
+  SessionPagePosition,
   TaskAttention,
   TaskComment,
   TaskDetail,
@@ -77,13 +78,28 @@ import type {
   WorkflowPage,
   WorkflowRecord,
   WorkflowValidation,
+  WorkspaceList,
+  WorkspaceUnlinkResponse,
 } from "./models";
 import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import {
+  bindingPlanSchema,
+  projectCreateSchema,
+  projectDeleteResponseSchema,
+  projectEditSchema,
+  projectMutationResponseSchema,
   projectPageSchema,
+  workspaceListSchema,
+  workspaceUnlinkResponseSchema,
 } from "./schemas/project";
-import { sessionPageResponseSchema } from "./schemas/catalog";
+import {
+  canonicalProjectIDSchema,
+  sessionCategorySchema,
+  sessionPagePositionSchema,
+  sessionPageResponseSchema,
+  workspacePageTokenSchema,
+} from "./schemas/catalog";
 import { CatalogContractError } from "./errors";
 import { readinessSchema } from "./schemas/status";
 import { workflowIDSchema } from "./schemas/workflowID";
@@ -143,40 +159,147 @@ export class ApiClient implements ApiService {
   async listSessionPage(
     projectID: string,
     category: SessionCategory,
-    offset: number,
+    position: SessionPagePosition,
   ): Promise<SessionCatalogPage> {
-    const request = sessionPageCall(projectID, category, offset);
+    const validatedProjectID = parseCatalogInput(
+      "session.page project ID",
+      canonicalProjectIDSchema,
+      projectID,
+    );
+    const validatedCategory = parseCatalogInput("session.page category", sessionCategorySchema, category);
+    const validatedPosition = parseCatalogInput("session.page position", sessionPagePositionSchema, position);
     const response = parseCatalogResponse(
       "session.page",
       sessionPageResponseSchema,
-      await this.#transport.call("session.page", request.params),
+      await this.#transport.call("session.page", {
+        project_id: validatedProjectID,
+        category: validatedCategory,
+        page_size: 100,
+        position: validatedPosition,
+      }),
     );
-    requireCatalogProject("session.page", request.expectedProjectID, response.projectID);
-    if (response.category !== request.expectedCategory) {
-      throw CatalogContractError.sessionCategoryMismatch(request.expectedCategory, response.category);
+    requireCatalogProject("session.page", validatedProjectID, response.projectID);
+    if (response.category !== validatedCategory) {
+      throw CatalogContractError.sessionCategoryMismatch(validatedCategory, response.category);
     }
     return response;
   }
 
-  listWorkspaces = async (projectID: string, offset: number) =>
-    project.listWorkspaces(this.#transport, projectID, offset);
-  getProjectWorkspace = async (
+  async listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList> {
+    const validatedProjectID = parseCatalogInput(
+      "project.workspace.list project ID",
+      canonicalProjectIDSchema,
+      projectID,
+    );
+    const validatedPageToken =
+      pageToken === undefined
+        ? undefined
+        : parseCatalogInput("project.workspace.list page token", workspacePageTokenSchema, pageToken);
+    const request =
+      validatedPageToken === undefined
+        ? { project_id: validatedProjectID, page_size: 100 }
+        : { project_id: validatedProjectID, page_size: 100, page_token: validatedPageToken };
+    const response = parseCatalogResponse(
+      "project.workspace.list",
+      workspaceListSchema,
+      await this.#transport.call("project.workspace.list", request),
+    );
+    requireCatalogProject("project.workspace.list", validatedProjectID, response.projectID);
+    return response;
+  }
+
+  async getProjectEdit(projectID: string, pageToken = ""): Promise<ProjectEdit> {
+    return parse(
+      "project.edit.get",
+      projectEditSchema,
+      await this.#transport.call("project.edit.get", {
+        project_id: projectID,
+        page_size: 100,
+        page_token: pageToken,
+      }),
+    );
+  }
+
+  async planWorkspace(path: string): Promise<BindingPlan> {
+    return parse(
+      "project.planWorkspaceBinding",
+      bindingPlanSchema,
+      await this.#transport.call("project.planWorkspaceBinding", { path, mode: "interactive" }),
+    );
+  }
+
+  async createProject(
+    displayName: string,
+    projectKey: string,
+    workspaceRoot: string,
+  ): Promise<ProjectBinding> {
+    return parse(
+      "project.create",
+      projectCreateSchema,
+      await this.#transport.call("project.create", {
+        display_name: displayName,
+        project_key: projectKey,
+        workspace_root: workspaceRoot,
+      }),
+    );
+  }
+
+  async attachWorkspace(projectID: string, workspaceRoot: string): Promise<ProjectBinding> {
+    return parse(
+      "project.attachWorkspace",
+      projectCreateSchema,
+      await this.#transport.call("project.attachWorkspace", {
+        project_id: projectID,
+        workspace_root: workspaceRoot,
+      }),
+    );
+  }
+
+  async updateProject(
     projectID: string,
-    selector: Readonly<{ workspaceID: string } | { workspaceRoot: string }>,
-  ) => project.getProjectWorkspace(this.#transport, projectID, selector);
-  getProjectEdit = async (projectID: string) => project.getProjectEdit(this.#transport, projectID);
-  planWorkspace = async (path: string) => project.planWorkspace(this.#transport, path);
-  createProject = async (displayName: string, projectKey: string, workspaceRoot: string) =>
-    project.createProject(this.#transport, displayName, projectKey, workspaceRoot);
-  attachWorkspace = async (projectID: string, workspaceRoot: string) =>
-    project.attachWorkspace(this.#transport, projectID, workspaceRoot);
-  updateProject = async (projectID: string, displayName: string, projectKey = "") =>
-    project.updateProject(this.#transport, projectID, displayName, projectKey);
-  setDefaultWorkspace = async (projectID: string, workspaceID: string) =>
-    project.setDefaultWorkspace(this.#transport, projectID, workspaceID);
-  unlinkWorkspace = async (projectID: string, workspaceID: string) =>
-    project.unlinkWorkspace(this.#transport, projectID, workspaceID);
-  deleteProject = async (projectID: string) => project.deleteProject(this.#transport, projectID);
+    displayName: string,
+    projectKey = "",
+  ): Promise<ProjectMutationResponse> {
+    return parse(
+      "project.update",
+      projectMutationResponseSchema,
+      await this.#transport.call("project.update", {
+        project_id: projectID,
+        display_name: displayName,
+        project_key: projectKey,
+      }),
+    );
+  }
+
+  async setDefaultWorkspace(projectID: string, workspaceID: string): Promise<ProjectMutationResponse> {
+    return parse(
+      "project.defaultWorkspace.set",
+      projectMutationResponseSchema,
+      await this.#transport.call("project.defaultWorkspace.set", {
+        project_id: projectID,
+        workspace_id: workspaceID,
+      }),
+    );
+  }
+
+  async unlinkWorkspace(projectID: string, workspaceID: string): Promise<WorkspaceUnlinkResponse> {
+    return parse(
+      "project.unlinkWorkspace",
+      workspaceUnlinkResponseSchema,
+      await this.#transport.call("project.unlinkWorkspace", {
+        project_id: projectID,
+        workspace_id: workspaceID,
+      }),
+    );
+  }
+
+  async deleteProject(projectID: string): Promise<ProjectDeleteResponse> {
+    return parse(
+      "project.delete",
+      projectDeleteResponseSchema,
+      await this.#transport.call("project.delete", { project_id: projectID }),
+    );
+  }
 
   async listProjectLabels(projectID: string): Promise<ProjectLabelCatalog> {
     return workflowLabels.listProjectLabels(this.#transport, projectID);
@@ -580,21 +703,13 @@ export class ApiClient implements ApiService {
 
   getWorktreeStatus = async (sessionID: string) => worktree.getWorktreeStatus(this.#transport, sessionID);
   listWorktrees = async (sessionID: string) => worktree.listWorktrees(this.#transport, sessionID);
-  resolveWorktreeSelector = async (sessionID: string, selector: string) =>
-    worktree.resolveWorktreeSelector(this.#transport, sessionID, selector);
-  resolveWorktreeCreateTarget = async (sessionID: string, target: string) =>
-    worktree.resolveWorktreeCreateTarget(this.#transport, sessionID, target);
-  previewWorktreeDelete = async (sessionID: string, selector: string) =>
-    worktree.previewWorktreeDelete(this.#transport, sessionID, selector);
-  createWorktree = async (input: worktreeModels.WorktreeCreateInput) =>
-    worktree.createWorktree(this.#transport, input);
-  switchWorktree = async (sessionID: string, operation: worktreeModels.WorktreeSwitch) =>
-    worktree.switchWorktree(this.#transport, sessionID, operation);
-  deleteWorktree = async (
-    sessionID: string,
-    preview: worktreeModels.WorktreeDeletePreview,
-    confirmation: worktreeModels.WorktreeDeleteConfirmationChoice,
-  ) => worktree.deleteWorktree(this.#transport, sessionID, preview, confirmation);
-  subscribeWorktreeSetup = (setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler) =>
-    subscribeWorktreeSetup(this.#transport, setupOperationID, handler);
+  resolveWorktreeSelector = async (sessionID: string, selector: string) => worktree.resolveWorktreeSelector(this.#transport, sessionID, selector);
+  resolveWorktreeCreateTarget = async (sessionID: string, target: string) => worktree.resolveWorktreeCreateTarget(this.#transport, sessionID, target);
+  previewWorktreeDelete = async (sessionID: string, selector: string) => worktree.previewWorktreeDelete(this.#transport, sessionID, selector);
+  createWorktree = async (input: worktreeModels.WorktreeCreateInput) => worktree.createWorktree(this.#transport, input);
+  switchWorktree = async (sessionID: string, operation: worktreeModels.WorktreeSwitch) => worktree.switchWorktree(this.#transport, sessionID, operation);
+  deleteWorktree = async (sessionID: string, preview: worktreeModels.WorktreeDeletePreview,
+    confirmation: worktreeModels.WorktreeDeleteConfirmationChoice) =>
+    worktree.deleteWorktree(this.#transport, sessionID, preview, confirmation);
+  subscribeWorktreeSetup = (setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler) => subscribeWorktreeSetup(this.#transport, setupOperationID, handler);
 }

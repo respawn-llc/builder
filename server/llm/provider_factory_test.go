@@ -177,6 +177,9 @@ func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsCustomModelFamily(
 	if providerCaps.SupportsResponsesCompact || providerCaps.SupportsNativeWebSearch || providerCaps.IsOpenAIFirstParty {
 		t.Fatalf("expected conservative remote provider capabilities, got %+v", providerCaps)
 	}
+	if providerCaps.SupportsRequestInputTokenCount {
+		t.Fatalf("expected generic openai-compatible provider to disable exact input-token counting, got %+v", providerCaps)
+	}
 }
 
 func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsAnonymousCapabilitiesResolution(t *testing.T) {

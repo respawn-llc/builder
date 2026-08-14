@@ -1,3 +1,5 @@
+import type { WorkspaceSummary } from "@/api";
+
 export function projectNameErrors(value: string, t: (key: string) => string): readonly string[] {
   const errors: string[] = [];
   const visibleLength = value.trim().length;
@@ -28,6 +30,13 @@ export function projectKeyErrors(value: string, t: (key: string) => string): rea
     errors.push(t("form.projectKeySymbols"));
   }
   return errors;
+}
+
+export function findWorkspaceByPath(
+  workspaces: readonly WorkspaceSummary[],
+  path: string,
+): WorkspaceSummary | undefined {
+  return workspaces.find((workspace) => workspace.rootPath === path);
 }
 
 function hasLineBreak(value: string): boolean {

@@ -9,7 +9,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimewire"
@@ -20,7 +19,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -35,11 +33,12 @@ var ErrSessionRunning = errors.New("selected session has an active run")
 var ErrHeadlessAskUnsupported = errors.New("You can't ask questions in headless/background mode. If the question is critical and materially affects the task, ask it by ending your turn after trying to do as much work as possible beforehand. Otherwise, follow best practice and mention the ambiguity in your final answer.")
 
 type promptHistoryStore interface {
-	RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error)
+	RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error)
 }
 
 type HeadlessBootstrap struct {
 	SessionLaunch    *sessionlaunch.Service
+	FastModeState    *runtime.FastModeState
 	PromptHistory    promptHistoryStore
 	RuntimeAuthority *sessionruntime.Authority
 	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
@@ -48,10 +47,7 @@ type HeadlessBootstrap struct {
 
 func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
 	launcher := &headlessPromptLauncher{boot: boot}
-	return &inProcessRunPromptService{
-		launcher: launcher,
-		runs:     requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
-	}
+	return &inProcessRunPromptService{launcher: launcher}
 }
 
 type headlessPromptLauncher struct {
@@ -69,7 +65,6 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		}
 	}
 	launchReq := serverapi.SessionPlanRequest{
-		ClientRequestID: req.ClientRequestID,
 		Mode:            serverapi.SessionLaunchModeHeadless,
 		Intent:          req.Intent,
 		CallerSessionID: req.CallerSessionID,
@@ -195,14 +190,13 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:              plan.ActiveSettings,
-		EnabledTools:          plan.EnabledTools,
-		FilesystemContext:     askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
-		Sources:               plan.Source.Sources,
-		Headless:              true,
-		QuestionsEnabled:      textutil.Value(plan.QuestionsEnabled),
-		AutoCompactionEnabled: textutil.Value(plan.AutoCompactionEnabled),
-		StartLogLines:         startLogLines,
+		Settings:          plan.ActiveSettings,
+		EnabledTools:      plan.EnabledTools,
+		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
+		Sources:           plan.Source.Sources,
+		Headless:          true,
+		FastMode:          l.boot.FastModeState,
+		StartLogLines:     startLogLines,
 		OnLoggingFailure: func(message string) {
 			if progress != nil {
 				progress.PublishRunPromptProgress(serverapi.RunPromptProgress{

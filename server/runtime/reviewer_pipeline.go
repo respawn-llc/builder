@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -12,8 +11,7 @@ import (
 )
 
 type defaultReviewerPipeline struct {
-	engine     *Engine
-	stepRunner stepLoopRunner
+	engine *Engine
 }
 
 func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool {
@@ -39,7 +37,6 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		if persistErr := e.steer(stepID, steerReviewerErrorIntent(err.Error())); persistErr != nil {
 			return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer error: %w", persistErr)
 		}
-		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
 		status := ReviewerStatus{
 			Outcome: "failed",
 			Error:   strings.TrimSpace(err.Error()),
@@ -48,12 +45,8 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	}
 	suggestions := reviewerResult.Suggestions
 	if len(suggestions) == 0 {
-		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
 		status := ReviewerStatus{Outcome: "no_suggestions"}
 		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
-	}
-	if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
-		return reviewerFollowUpResult{}, err
 	}
 	visibility := transcript.EntryVisibilityOngoingCollapsed
 	if e.cfg.Reviewer.VerboseOutput {
@@ -63,44 +56,21 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer feedback: %w", err)
 	}
 	instruction := formatReviewerDeveloperInstruction(suggestions)
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value(instruction)}})); err != nil {
+	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value(instruction)}})); err != nil {
 		return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer follow-up instruction: %w", err)
 	}
-	if r.stepRunner == nil {
-		return reviewerFollowUpResult{}, errors.New("reviewer step runner is not configured")
-	}
-
-	followUp, err := r.stepRunner.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
-		ReviewerFrequency:              "off",
-		ReviewerClient:                 nil,
-		RefreshReviewerConfigOnResolve: false,
-	})
-	if err != nil {
-		return reviewerFollowUpResult{}, fmt.Errorf("run Reviewer follow-up: %w", err)
-	}
-	if followUp.FinalAnswer == nil && !followUp.SilentFinal {
-		return reviewerFollowUpResult{}, errors.New("Reviewer follow-up returned no answer")
-	}
-	outcome := "applied"
-	if followUp.SilentFinal {
-		outcome = "noop"
-	}
 	status := ReviewerStatus{
-		Outcome:               outcome,
+		Outcome:               "pending",
 		SuggestionsCount:      len(suggestions),
 		CacheHitPercent:       reviewerResult.CacheHitPercent,
 		HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
 	}
-	finalAnswer := original
-	if followUp.FinalAnswer != nil {
-		finalAnswer = *followUp.FinalAnswer
-	}
 	return reviewerFollowUpResult{
-		Message:                    finalAnswer,
+		Message:                    original,
 		Completion:                 &status,
-		AssistantCommittedStart:    followUp.AssistantCommittedStart,
-		AssistantCommittedStartSet: followUp.AssistantCommittedStartSet,
-		AssistantEventEmitted:      !followUp.SilentFinal,
+		AssistantCommittedStart:    originalCommittedStart,
+		AssistantCommittedStartSet: originalCommittedStartSet,
+		FollowUpRequired:           true,
 	}, nil
 }
 
@@ -109,7 +79,7 @@ func (r *defaultReviewerPipeline) RunSuggestions(ctx context.Context, stepID str
 	if reviewerClient == nil {
 		return reviewerSuggestionsResult{}, nil
 	}
-	req, err := e.buildReviewerDispatchRequest(ctx, stepID, reviewerClient)
+	req, err := e.buildReviewerRequest(ctx, reviewerClient)
 	if err != nil {
 		return reviewerSuggestionsResult{}, fmt.Errorf("build reviewer request: %w", err)
 	}
@@ -125,10 +95,7 @@ func (r *defaultReviewerPipeline) RunSuggestions(ctx context.Context, stepID str
 		}, nil
 	}
 	return reviewerSuggestionsResult{
-		Suggestions: parseReviewerSuggestionsObject(
-			e.reviewerSuggestionsContract,
-			*resp.Assistant.Content,
-		),
+		Suggestions:           parseReviewerSuggestionsObject(*resp.Assistant.Content),
 		CacheHitPercent:       cachePct,
 		HasCacheHitPercentage: hasCachePct,
 	}, nil

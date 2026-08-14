@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"core/server/session"
-	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowruntime"
@@ -13,15 +12,22 @@ import (
 
 type initialBranchControllerRunner struct{}
 
-func (initialBranchControllerRunner) StartCurrentNode(
+func (initialBranchControllerRunner) PrepareAgentPublication(
 	context.Context,
 	workflow.CurrentNodeReference,
 	workflowruntime.TaskPromptDelivery,
-	*workflowexecution.CurrentNodeClassifiedAssignment,
-	sessionruntime.WorkflowExecutionLease,
+	workflowexecution.CurrentNodeAssignmentSteer,
 	workflowruntime.Controller,
-) error {
-	return errors.New("runner must not start after branch preparation failure")
+) (workflowexecution.CurrentNodeAgentPublication, error) {
+	return nil, errors.New("runner must not prepare publication after branch preparation failure")
+}
+
+func (initialBranchControllerRunner) PrepareScriptPublication(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.Controller,
+) (workflowexecution.CurrentNodeScriptPublication, error) {
+	return nil, errors.New("runner must not prepare publication after branch preparation failure")
 }
 
 type initialBranchControllerSteerer struct{}

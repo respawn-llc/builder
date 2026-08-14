@@ -11,7 +11,6 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/textutil"
 	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -470,7 +469,6 @@ func ongoingHydrationMessage(sequence uint64) clientui.TranscriptMessage {
 			},
 		},
 		CommittedRows: []clientui.TranscriptCommittedRow{},
-		GoalStatus:    &clientui.TranscriptGoalStatus{Availability: func() *clientui.GoalAvailability { value := clientui.GoalAvailabilityAvailable; return &value }()},
 	}))
 
 }
@@ -497,18 +495,13 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 	case clientui.TranscriptMessageQueuedMessageState:
 		text := "queued prompt"
 		event = clientui.NewTranscriptEvent(clientui.TranscriptQueuedMessageState{
-			ClientRequestID: ongoingTestClientRequestID(),
-			QueueItemID:     ongoingTestQueueItemID(),
-			Status:          clientui.QueuedUserMessageAccepted,
-			Text:            &text,
+			QueueItemID: ongoingTestQueueItemID(),
+			Status:      clientui.QueuedUserMessageAccepted,
+			Text:        &text,
 		})
 	case clientui.TranscriptMessageUserMessageFlushed:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptUserMessageFlushed{
 			StepID: ongoingTestStepID(),
-			Messages: []clientui.QueuedUserMessageIdentity{{
-				ClientRequestID: ongoingTestClientRequestID(),
-				QueueItemID:     ongoingTestQueueItemID(),
-			}},
 		})
 	case clientui.TranscriptMessageSessionStatus:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptSessionStatus{
@@ -543,7 +536,11 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 	case clientui.TranscriptMessageContextUsage:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptContextUsage{UsedTokens: 1200, WindowTokens: 2000})
 	case clientui.TranscriptMessageGoalStatus:
-		event = clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{Availability: textutil.Value(clientui.GoalAvailabilityAvailable)})
+		event = clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
+			ID:        "goal-1",
+			Objective: "finish review fixes",
+			Status:    clientui.RuntimeGoalStatusActive,
+		}})
 	case clientui.TranscriptMessageBackgroundActivity:
 		preview := "running tests"
 		event = clientui.NewTranscriptEvent(clientui.TranscriptBackgroundActivity{
@@ -592,14 +589,6 @@ func ongoingTestRunID() runtimeids.RunID {
 
 func ongoingTestStepID() runtimeids.StepID {
 	id, err := runtimeids.ParseStepID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
-	if err != nil {
-		panic(err)
-	}
-	return id
-}
-
-func ongoingTestClientRequestID() runtimeids.RuntimeClientRequestID {
-	id, err := runtimeids.ParseRuntimeClientRequestID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
 	if err != nil {
 		panic(err)
 	}

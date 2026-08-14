@@ -157,10 +157,13 @@ func runtimeContextUsageFromTranscript(usage clientui.TranscriptContextUsage) cl
 }
 
 func runtimeGoalFromTranscript(status clientui.TranscriptGoalStatus) *clientui.RuntimeGoal {
-	goal := &clientui.RuntimeGoal{Availability: status.Availability}
-	if status.Goal != nil {
-		goal.Goal = status.Goal.Goal
-		goal.Suspended = status.Goal.Suspended
+	if status.Goal == nil {
+		return nil
 	}
-	return goal
+	return &clientui.RuntimeGoal{
+		ID:        status.Goal.ID,
+		Objective: status.Goal.Objective,
+		Status:    status.Goal.Status,
+		Suspended: status.Goal.Suspended,
+	}
 }

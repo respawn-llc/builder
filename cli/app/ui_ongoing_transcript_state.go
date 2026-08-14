@@ -26,11 +26,6 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	}
 	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
-		m.goalRuntimeMutationSerial = nextNonZeroToken(m.goalRuntimeMutationSerial)
-		if m.goal.open {
-			m.goal.goal = goalCoreFromRuntimeGoal(admission.view.Status.Goal)
-			m.goal.pending = nil
-		}
 		return m.applyTranscriptHydration(message.Payload().(clientui.TranscriptHydration), admission)
 	case clientui.TranscriptMessageThinkingStatusUpdate:
 		m.applyTranscriptThinkingStatusUpdate(message.Payload().(clientui.TranscriptThinkingStatusUpdate))
@@ -41,6 +36,8 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return m.applyTranscriptUserMessageFlushed(message.Payload().(clientui.TranscriptUserMessageFlushed))
 	case clientui.TranscriptMessageQueuedMessageState:
 		return m.applyTranscriptQueuedMessageState(message.Payload().(clientui.TranscriptQueuedMessageState))
+	case clientui.TranscriptMessageHumanInputInterrupted:
+		return m.applyTranscriptHumanInputInterrupted(message.Payload().(clientui.TranscriptHumanInputInterrupted))
 	case clientui.TranscriptMessageStepState:
 		m.applyTranscriptStepState(message.Payload().(clientui.TranscriptStepState))
 	case clientui.TranscriptMessageReviewerState:
@@ -56,11 +53,8 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageContextUsage:
 		m.applyTranscriptContextUsage(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
-		m.goalRuntimeMutationSerial = nextNonZeroToken(m.goalRuntimeMutationSerial)
-		if m.goal.open {
-			m.goal.goal = goalCoreFromRuntimeGoal(admission.view.Status.Goal)
-			m.goal.pending = nil
-		}
+		// The runtime-client main-view cache is the goal read model used by the
+		// status line and goal flow.
 	case clientui.TranscriptMessageBackgroundActivity:
 		m.applyTranscriptBackgroundActivity(message.Payload().(clientui.TranscriptBackgroundActivity))
 		if m.processList.open {
@@ -239,34 +233,19 @@ func (m *uiModel) applyTranscriptContextUsage(usage clientui.TranscriptContextUs
 func (m *uiModel) applyTranscriptUserMessageFlushed(flushed clientui.TranscriptUserMessageFlushed) tea.Cmd {
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	m.localConversationTurn = true
-	ids := queuedMessageIdentityStrings(flushed.Messages)
-	var cmd tea.Cmd
-	for _, answer := range m.removeInjectedQueueItemsByIDs(ids) {
-		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
-	}
-	return cmd
+	return nil
 }
 
 func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQueuedMessageState) tea.Cmd {
-	if state.Status == clientui.QueuedUserMessageFailed &&
-		state.FailureReason != nil &&
-		*state.FailureReason == clientui.QueuedUserMessageFailureStopped &&
-		m.hasPendingInterrupt() {
-		return m.acknowledgePendingInterrupt()
-	}
 	if state.Status == clientui.QueuedUserMessageAccepted {
 		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-			ID:              state.QueueItemID.String(),
-			Text:            dereferenceTranscriptText(state.Text),
-			ClientRequestID: state.ClientRequestID.String(),
+			ID:   state.QueueItemID.String(),
+			Text: dereferenceTranscriptText(state.Text),
 		})
 		return nil
 	}
-	ids := []string{state.ClientRequestID.String(), state.QueueItemID.String()}
-	index := m.injectedQueueIndexByAnyID(state.ClientRequestID.String())
-	if index < 0 {
-		index = m.injectedQueueIndexByAnyID(state.QueueItemID.String())
-	}
+	ids := []string{state.QueueItemID.String()}
+	index := m.injectedQueueIndexByAnyID(state.QueueItemID.String())
 	if index < 0 {
 		return nil
 	}
@@ -288,25 +267,40 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 	))
 }
 
+func (m *uiModel) applyTranscriptHumanInputInterrupted(event clientui.TranscriptHumanInputInterrupted) tea.Cmd {
+	ids := make([]string, 0, len(event.Items))
+	texts := make([]string, 0, len(event.Items))
+	for _, item := range event.Items {
+		ids = append(ids, item.QueueItemID.String())
+		texts = append(texts, item.Text)
+	}
+	var cmd tea.Cmd
+	for _, answer := range m.removeInjectedQueueItemsByIDs(ids) {
+		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
+	}
+	m.inputController().restoreServerOrderedTextBeforeComposer(strings.Join(texts, "\n\n"))
+	if m.hasPendingInterrupt() {
+		cmd = tea.Batch(cmd, m.acknowledgePendingInterrupt())
+	}
+	return tea.Batch(cmd, m.sendTransientStatusWithNoticeID(
+		"interrupted input was restored",
+		uiStatusNoticeError,
+		transientStatusDuration,
+		uiStatusNoticeReplace,
+		"",
+	))
+}
+
 func (m *uiModel) reconcileTranscriptQueuedMessages(states []clientui.TranscriptQueuedMessageState) {
 	for _, state := range states {
 		if state.Status != clientui.QueuedUserMessageAccepted {
 			continue
 		}
 		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-			ID:              state.QueueItemID.String(),
-			Text:            dereferenceTranscriptText(state.Text),
-			ClientRequestID: state.ClientRequestID.String(),
+			ID:   state.QueueItemID.String(),
+			Text: dereferenceTranscriptText(state.Text),
 		})
 	}
-}
-
-func queuedMessageIdentityStrings(messages []clientui.QueuedUserMessageIdentity) []string {
-	ids := make([]string, 0, len(messages)*2)
-	for _, message := range messages {
-		ids = append(ids, message.ClientRequestID.String(), message.QueueItemID.String())
-	}
-	return ids
 }
 
 func dereferenceTranscriptText(text *string) string {
@@ -374,14 +368,6 @@ func (m *uiModel) applyTranscriptOperationalDiagnostic(diagnostic clientui.Trans
 	case clientui.OperationalDiagnosticInFlightClearFailed:
 		return m.sendTransientStatusWithNoticeID(
 			"run cleanup failed: "+diagnostic.Detail,
-			uiStatusNoticeError,
-			transientStatusDuration,
-			uiStatusNoticeReplace,
-			"",
-		)
-	case clientui.OperationalDiagnosticProviderTurnStateInvalid:
-		return m.sendTransientStatusWithNoticeID(
-			"Provider routing state was invalid. Kent ignored it and continued; retry if model work behaves unexpectedly.",
 			uiStatusNoticeError,
 			transientStatusDuration,
 			uiStatusNoticeReplace,

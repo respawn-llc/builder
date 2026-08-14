@@ -218,17 +218,13 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 		return clientui.RuntimeMainView{}, err
 	}
 	freshness := runtimeview.ConversationFreshnessFromSession(sessionFreshness)
-	goalAvailability, err := s.store.GoalAvailability()
-	if err != nil {
-		return clientui.RuntimeMainView{}, err
-	}
 	status := clientui.RuntimeStatus{
 		ConversationFreshness:             freshness,
 		PreviousSessionID:                 textutil.Pointer(meta.PreviousSessionID),
 		ParentAgentSessionID:              textutil.Pointer(meta.ParentAgentSessionID),
 		NavigationTargetSessionID:         session.NavigationTargetSessionID(meta),
 		LastCommittedAssistantFinalAnswer: segment.LastCommittedAssistantFinalAnswer,
-		Goal:                              runtimeview.GoalFromSessionState(meta.Goal, goalAvailability, false),
+		Goal:                              runtimeview.GoalFromSessionState(meta.Goal, false),
 	}
 	view := runtimeview.RuntimeMainViewFromActivity(
 		s.activity.Activity,

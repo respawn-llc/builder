@@ -312,6 +312,15 @@ func newSettingsRegistry() settingsRegistry {
 			func(state settingsState) bool { return state.Settings.ProviderCapabilities.SupportsResponsesCompact },
 			"KENT_PROVIDER_CAPABILITIES_SUPPORTS_RESPONSES_COMPACT",
 			settingDocOptions{commented: true}),
+		newBoolSetting("provider_capabilities.supports_request_input_token_count", false,
+			func(state *settingsState, value bool) {
+				state.Settings.ProviderCapabilities.SupportsRequestInputTokenCount = value
+			},
+			func(state settingsState) bool {
+				return state.Settings.ProviderCapabilities.SupportsRequestInputTokenCount
+			},
+			"KENT_PROVIDER_CAPABILITIES_SUPPORTS_REQUEST_INPUT_TOKEN_COUNT",
+			settingDocOptions{commented: true}),
 		newBoolSetting("provider_capabilities.supports_prompt_cache_key", false,
 			func(state *settingsState, value bool) {
 				state.Settings.ProviderCapabilities.SupportsPromptCacheKey = value
@@ -625,6 +634,15 @@ func newSettingsRegistry() settingsRegistry {
 				return state.Settings.Reviewer.ProviderCapabilities.SupportsResponsesCompact
 			},
 			"KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_RESPONSES_COMPACT",
+			settingDocOptions{commented: true}),
+		newBoolSetting("reviewer.provider_capabilities.supports_request_input_token_count", false,
+			func(state *settingsState, value bool) {
+				state.Settings.Reviewer.ProviderCapabilities.SupportsRequestInputTokenCount = value
+			},
+			func(state settingsState) bool {
+				return state.Settings.Reviewer.ProviderCapabilities.SupportsRequestInputTokenCount
+			},
+			"KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_REQUEST_INPUT_TOKEN_COUNT",
 			settingDocOptions{commented: true}),
 		newBoolSetting("reviewer.provider_capabilities.supports_prompt_cache_key", false,
 			func(state *settingsState, value bool) {

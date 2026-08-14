@@ -23,6 +23,7 @@ type runtimeAttachmentSource interface {
 
 type runtimeAttachmentClients struct {
 	ProcessControls   apicontract.ProcessControlService
+	ProcessOutput     apicontract.ProcessOutputService
 	ProcessViews      apicontract.ProcessViewService
 	PromptControl     apicontract.PromptControlService
 	RuntimeControls   apicontract.RuntimeControlService
@@ -77,13 +78,10 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 
 func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (*runtimeReactivator, *runtimeattach.Activation, error) {
 	lease, err := runtimeattach.Activate(ctx, clients.SessionRuntime, runtimeattach.Request{
-		SessionID:                plan.SessionID,
-		ActiveSettings:           plan.ActiveSettings,
-		EnabledTools:             plan.EnabledTools,
-		QuestionsEnabled:         plan.QuestionsEnabled,
-		AutoCompactionEnabled:    plan.AutoCompactionEnabled,
-		ThinkingOverrideExplicit: plan.ThinkingOverrideExplicit,
-		Source:                   plan.Source,
+		SessionID:      plan.SessionID,
+		ActiveSettings: plan.ActiveSettings,
+		EnabledTools:   plan.EnabledTools,
+		Source:         plan.Source,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -155,6 +153,7 @@ func prepareSharedRuntimeWiring(
 		runtimeClient:         runtimeClient,
 		worktrees:             clients.Worktrees,
 		processControls:       clients.ProcessControls,
+		processOutput:         clients.ProcessOutput,
 		processViews:          clients.ProcessViews,
 		promptHistory:         append([]string(nil), plan.PromptHistory...),
 	}

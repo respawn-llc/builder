@@ -545,45 +545,6 @@ func TestEventLogV1TypedRepairNoticePersistsNullText(t *testing.T) {
 	}
 }
 
-func TestEventLogV1LocalEntryRejectsMultipleTypedNoticeFacts(t *testing.T) {
-	_, err := NewEventRecord(1, nil, LocalEntryRecord{
-		Visibility: EntryVisibilityDetail, Role: "warning",
-		ToolOutputRepair:      &transcript.ToolOutputRepairNotice{Kind: transcript.ToolOutputRepairFreshResource, Count: 1},
-		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{RequestedModel: "requested", ServedModel: "served"},
-	})
-	if err == nil {
-		t.Fatal("local entry with multiple typed notice facts was accepted")
-	}
-}
-
-func TestEventLogV1ProviderModelMismatchNoticeRoundTrip(t *testing.T) {
-	record, err := NewEventRecord(1, nil, LocalEntryRecord{
-		Visibility: EntryVisibilityDetail,
-		Role:       "warning",
-		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
-			RequestedModel: " requested-model ",
-			ServedModel:    " served-model ",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	line, err := encodeEventRecordV1(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := decodeEventRecordV1(line)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry := mustEventRecordPayload(decoded).(LocalEntryRecord)
-	if entry.Text != nil || entry.ProviderModelMismatch == nil ||
-		entry.ProviderModelMismatch.RequestedModel != "requested-model" ||
-		entry.ProviderModelMismatch.ServedModel != "served-model" {
-		t.Fatalf("provider-model mismatch entry = %+v", entry)
-	}
-}
-
 func TestEventLogV1HistoryReplacementRecordRoundTrip(t *testing.T) {
 	messageRaw := json.RawMessage(`{ "type" : "message", "role" : "user", "content" : [ { "type" : "input_text", "text" : "\u0068ello" } ] }`)
 	callRaw := json.RawMessage(`{ "type" : "function_call", "call_id" : "call-1", "name" : "exec_command", "arguments" : "{\"cmd\":\"pwd\"}" }`)

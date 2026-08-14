@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 )
 
 func TestNewUsesPersistedProviderContractWhenLiveCapabilitiesUnavailable(t *testing.T) {
@@ -30,7 +31,7 @@ func TestNewUsesPersistedProviderContractWhenLiveCapabilitiesUnavailable(t *test
 		store,
 		mustMaterializeTestEventLog(t, store),
 		client,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5.3-codex"},
 	)
 	if err != nil {

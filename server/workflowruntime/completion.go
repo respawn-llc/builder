@@ -1,6 +1,8 @@
 package workflowruntime
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,11 +17,8 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
-	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
-
-	invjsonschema "github.com/invopop/jsonschema"
 )
 
 const (
@@ -50,10 +49,6 @@ type CompletionModeSelection struct {
 
 type CompletionContract struct {
 	Transitions []CompletionTransition
-	function    jsoncontract.Function
-	structured  jsoncontract.Structured
-	accepted    jsoncontract.Function
-	prepared    bool
 }
 
 type CompletionTransition struct {
@@ -142,31 +137,30 @@ type TransitionInstruction struct {
 	Description string
 }
 
-type CompletionRequest struct {
-	ScopeID      runtimeids.ExecutionScopeID
-	SessionID    *runtimeids.SessionID
+type AgentCompletionProvenance struct {
+	ScopeID runtimeids.ExecutionScopeID
+	RunID   runtimeids.RunID
+	StepID  runtimeids.StepID
+}
+
+type AgentCompletionRequest struct {
+	Provenance   AgentCompletionProvenance
+	SessionID    runtimeids.SessionID
 	TransitionID string
 	OutputValues map[string]string
 	Commentary   string
 }
 
-const CompletionStateApplied = "applied"
+type ScriptCompletionRequest struct {
+	ScopeID      runtimeids.ExecutionScopeID
+	TransitionID string
+	OutputValues map[string]string
+	Commentary   string
+}
 
 type CompletionResult struct {
 	TransitionID workflow.TransitionID
 	State        string
-}
-
-func (r CompletionResult) IsApplied() bool {
-	return r.State == CompletionStateApplied
-}
-
-type CompletionObservationRequest struct {
-	ScopeID runtimeids.ExecutionScopeID
-}
-
-type CompletionObservationResult struct {
-	Completed bool
 }
 
 // PostCompletionCompactionResult preserves a durable history-replacement
@@ -191,10 +185,6 @@ type PostTurnFinalizer interface {
 	FinalizeCurrentNodePostTurn(context.Context, runtimeids.ExecutionScopeID, runtimeids.SessionID, PostCompletionRuntime) error
 }
 
-type OperationalCompletionBlockFinalizer interface {
-	FinalizeCurrentNodeOperationalCompletionBlock(context.Context, runtimeids.ExecutionScopeID) error
-}
-
 type ViolationKind string
 
 const (
@@ -207,10 +197,10 @@ type ViolationResult struct {
 }
 
 type Controller interface {
-	CompleteCurrentNode(context.Context, CompletionRequest) (CompletionResult, error)
+	CompleteAgentCurrentNode(context.Context, AgentCompletionRequest) (CompletionResult, error)
+	CompleteScriptCurrentNode(context.Context, ScriptCompletionRequest) (CompletionResult, error)
 	RecordProtocolViolation(context.Context, ViolationRequest) (ViolationResult, error)
 	ResetProtocolViolationBudget(context.Context, ViolationResetRequest) error
-	ObserveCurrentNodeCompletion(context.Context, CompletionObservationRequest) (CompletionObservationResult, error)
 }
 
 type ViolationRequest struct {
@@ -266,168 +256,8 @@ func ParseCompletionMode(raw string) (CompletionMode, error) {
 	return sessioncontract.ParseWorkflowCompletionMode(raw)
 }
 
-type completionPayloadShape struct {
-	Transition *string `json:"transition,omitempty" jsonschema_description:"Transition to take. Required when multiple outgoing transitions are available."`
-	Commentary *string `json:"commentary,omitempty" jsonschema:"nullable" jsonschema_description:"Brief explanation of what was completed and why this transition was selected."`
-}
-
-type completionSchemaProfile uint8
-
-const (
-	completionSchemaFunction completionSchemaProfile = iota
-	completionSchemaStructured
-	completionSchemaAccepted
-)
-
-func NewCompletionContract(transitions []CompletionTransition) (CompletionContract, error) {
-	return CompletionContract{Transitions: transitions}.Prepare()
-}
-
-func (c CompletionContract) Prepare() (CompletionContract, error) {
-	if c.prepared {
-		return c, nil
-	}
-	transitions := normalizedTransitions(c.Transitions)
-	preparer := jsoncontract.NewPreparer(false)
-	function, err := preparer.Function(
-		"workflow completion function",
-		completionPayloadShape{},
-		completionSchemaCustomizer(transitions, completionSchemaFunction),
-	)
-	if err != nil {
-		return CompletionContract{}, err
-	}
-	structured, err := preparer.Structured(
-		"workflow completion structured output",
-		completionPayloadShape{},
-		completionSchemaCustomizer(transitions, completionSchemaStructured),
-	)
-	if err != nil {
-		return CompletionContract{}, err
-	}
-	accepted, err := preparer.Function(
-		"workflow completion accepted input",
-		completionPayloadShape{},
-		completionSchemaCustomizer(transitions, completionSchemaAccepted),
-	)
-	if err != nil {
-		return CompletionContract{}, err
-	}
-	return CompletionContract{
-		Transitions: transitions,
-		function:    function,
-		structured:  structured,
-		accepted:    accepted,
-		prepared:    true,
-	}, nil
-}
-
-func completionSchemaCustomizer(
-	transitions []CompletionTransition,
-	profile completionSchemaProfile,
-) jsoncontract.Customize {
-	return func(schema *invjsonschema.Schema) error {
-		if schema.Properties == nil {
-			schema.Properties = invjsonschema.NewProperties()
-		}
-		multipleTransitions := len(transitions) > 1
-		if profile == completionSchemaAccepted {
-			schema.AdditionalProperties = invjsonschema.TrueSchema
-		}
-		if multipleTransitions {
-			if profile != completionSchemaAccepted {
-				schema.Properties.Set("transition", completionTransitionSchema(transitions))
-				schema.Required = appendUnique(schema.Required, "transition")
-			}
-		} else if profile != completionSchemaAccepted {
-			schema.Properties.Delete("transition")
-			schema.Required = removeString(schema.Required, "transition")
-		}
-		if profile == completionSchemaStructured {
-			schema.Properties.Set("commentary", completionNullableStringSchema(
-				"Brief explanation of what was completed and why this transition was selected.",
-			))
-			schema.Required = appendUnique(schema.Required, "commentary")
-		}
-		for _, parameter := range schemaParameters(transitions) {
-			name := strings.TrimSpace(parameter.Key)
-			switch profile {
-			case completionSchemaAccepted:
-				schema.Properties.Set(name, &invjsonschema.Schema{
-					Description: strings.TrimSpace(parameter.Description),
-				})
-			case completionSchemaFunction, completionSchemaStructured:
-				schema.Properties.Set(
-					name,
-					completionParameterSchema(parameter, multipleTransitions),
-				)
-				schema.Required = appendUnique(schema.Required, name)
-			}
-		}
-		return nil
-	}
-}
-
-func completionTransitionSchema(transitions []CompletionTransition) *invjsonschema.Schema {
-	ids := sortedTransitionIDs(transitions)
-	values := make([]any, len(ids))
-	for index, id := range ids {
-		values[index] = id
-	}
-	return &invjsonschema.Schema{
-		Type:        "string",
-		Enum:        values,
-		Description: "Transition to take. Required when multiple outgoing transitions are available.",
-	}
-}
-
-func completionParameterSchema(
-	parameter workflow.Parameter,
-	nullable bool,
-) *invjsonschema.Schema {
-	description := strings.TrimSpace(parameter.Description)
-	if !nullable {
-		return &invjsonschema.Schema{Type: "string", Description: description}
-	}
-	if description == "" {
-		description = "Set to a string only when this parameter belongs to the selected transition; otherwise set null."
-	} else {
-		description += " Set to null when this parameter does not belong to the selected transition."
-	}
-	return completionNullableStringSchema(description)
-}
-
-func completionNullableStringSchema(description string) *invjsonschema.Schema {
-	return &invjsonschema.Schema{
-		AnyOf: []*invjsonschema.Schema{
-			{Type: "string"},
-			{Type: "null"},
-		},
-		Description: description,
-	}
-}
-
-func appendUnique(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
-
-func removeString(values []string, value string) []string {
-	filtered := values[:0]
-	for _, existing := range values {
-		if existing != value {
-			filtered = append(filtered, existing)
-		}
-	}
-	return filtered
-}
-
 func StructuredOutput(contract CompletionContract) (*llm.StructuredOutput, error) {
-	schema, err := StructuredSchema(contract)
+	schema, err := CompletionJSONSchema(contract)
 	if err != nil {
 		return nil, err
 	}
@@ -435,21 +265,81 @@ func StructuredOutput(contract CompletionContract) (*llm.StructuredOutput, error
 		Name:        structuredOutputName,
 		Description: "Complete the current workflow node by selecting a transition and returning required transition parameters.",
 		Schema:      schema,
+		Strict:      true,
 	}, nil
 }
 
-func StructuredSchema(contract CompletionContract) (jsoncontract.Structured, error) {
-	if !contract.prepared {
-		return jsoncontract.Structured{}, errors.New("workflow completion contract is not prepared")
+func CompletionJSONSchema(contract CompletionContract) (json.RawMessage, error) {
+	transitions := normalizedTransitions(contract.Transitions)
+	transitionIDs := sortedTransitionIDs(transitions)
+	properties := map[string]any{
+		"commentary": commentaryProperty(),
 	}
-	return contract.structured, nil
+	required := []string{}
+	if len(transitions) > 1 {
+		properties["transition"] = transitionProperty(transitionIDs)
+		required = append(required, "transition")
+	}
+	required = append(required, "commentary")
+	for _, parameter := range schemaParameters(transitions) {
+		name := strings.TrimSpace(parameter.Key)
+		if len(transitions) == 1 {
+			properties[name] = parameterProperty(parameter)
+			required = append(required, name)
+			continue
+		}
+		properties[name] = nullableParameterProperty(parameter)
+		required = append(required, name)
+	}
+	schema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties":           properties,
+		"required":             required,
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
-func FunctionSchema(contract CompletionContract) (jsoncontract.Function, error) {
-	if !contract.prepared {
-		return jsoncontract.Function{}, errors.New("workflow completion contract is not prepared")
+func transitionProperty(transitionIDs []string) map[string]any {
+	property := map[string]any{
+		"type":        "string",
+		"description": "Transition to take. Required when multiple outgoing transitions are available.",
 	}
-	return contract.function, nil
+	if len(transitionIDs) > 0 {
+		property["enum"] = transitionIDs
+	}
+	return property
+}
+
+func commentaryProperty() map[string]any {
+	return map[string]any{
+		"type":        []string{"string", "null"},
+		"description": "Brief explanation of what was completed and why this transition was selected.",
+	}
+}
+
+func parameterProperty(parameter workflow.Parameter) map[string]any {
+	return map[string]any{
+		"type":        "string",
+		"description": strings.TrimSpace(parameter.Description),
+	}
+}
+
+func nullableParameterProperty(parameter workflow.Parameter) map[string]any {
+	description := strings.TrimSpace(parameter.Description)
+	if description == "" {
+		description = "Set to a string only when this parameter belongs to the selected transition; otherwise set null."
+	} else {
+		description += " Set to null when this parameter does not belong to the selected transition."
+	}
+	return map[string]any{
+		"type":        []string{"string", "null"},
+		"description": description,
+	}
 }
 
 type ParsedCompletion struct {
@@ -484,59 +374,85 @@ func (e ValidationError) Error() string {
 }
 
 func DecodeCompletion(raw json.RawMessage, contract CompletionContract) (ParsedCompletion, error) {
-	if !contract.prepared {
-		return ParsedCompletion{}, errors.New("workflow completion contract is not prepared")
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ParsedCompletion{}, ValidationError{Issues: []ValidationIssue{{
+			Code:    "invalid_json",
+			Message: "completion must be a JSON object",
+		}}}
 	}
-	payload, err := contract.accepted.ValidateValue(raw)
-	if err != nil {
-		return ParsedCompletion{}, err
+	if payload == nil {
+		return ParsedCompletion{}, ValidationError{Issues: []ValidationIssue{{
+			Code:    "invalid_json",
+			Message: "completion must be a JSON object",
+		}}}
 	}
-	transitions := contract.Transitions
+	transitions := normalizedTransitions(contract.Transitions)
+	knownParameters := parameterSet(schemaParameters(transitions))
 	parsed := ParsedCompletion{OutputValues: map[string]string{}}
 	issues := []ValidationIssue{}
+	seen := map[string]bool{}
+	invalidFields := map[string]bool{}
 	nullParameters := map[string]bool{}
-	transitionValue, transitionProvided := payload.Field("transition")
-	if transitionProvided {
-		parsed.TransitionID, _ = transitionValue.String()
-		parsed.TransitionID = strings.TrimSpace(parsed.TransitionID)
-	}
-	commentaryValue, commentaryProvided := payload.Field("commentary")
-	if commentaryProvided && !commentaryValue.IsNull() {
-		parsed.Commentary, _ = commentaryValue.String()
-	}
-	for _, parameter := range schemaParameters(transitions) {
-		key := strings.TrimSpace(parameter.Key)
-		value, present := payload.Field(key)
-		if !present {
+	for _, key := range sortedMapKeys(payload) {
+		value := payload[key]
+		field := strings.TrimSpace(key)
+		if field == "" {
+			issues = append(issues, ValidationIssue{Code: "invalid_field", Message: "field name is required"})
 			continue
 		}
-		if value.IsNull() {
-			nullParameters[key] = true
-			continue
+		seen[field] = true
+		switch field {
+		case "transition":
+			text, ok, issue := decodeStringValue(value, field)
+			if !ok {
+				issues = append(issues, issue)
+				invalidFields[field] = true
+				continue
+			}
+			parsed.TransitionID = strings.TrimSpace(text)
+		case "commentary":
+			text, ok, issue := decodeOptionalStringValue(value, field)
+			if !ok {
+				issues = append(issues, issue)
+				invalidFields[field] = true
+				continue
+			}
+			parsed.Commentary = text
+		default:
+			if field == "transition_id" {
+				issues = append(issues, ValidationIssue{Code: "unknown_field", Field: field, Message: "field is not part of the workflow completion schema"})
+				continue
+			}
+			if !knownParameters[field] {
+				issues = append(issues, ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by the advertised completion contract"})
+				continue
+			}
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				nullParameters[field] = true
+				continue
+			}
+			text, ok, issue := decodeParameterValue(value, field)
+			if !ok {
+				issues = append(issues, issue)
+				invalidFields[field] = true
+				continue
+			}
+			parsed.OutputValues[field] = text
 		}
-		if text, ok := value.String(); ok {
-			parsed.OutputValues[key] = text
-			continue
-		}
-		compact, compactErr := value.CompactJSON()
-		if compactErr != nil {
-			return ParsedCompletion{}, compactErr
-		}
-		parsed.OutputValues[key] = string(compact)
 	}
 	selected := CompletionTransition{}
 	hasSelected := false
-	selected, hasSelected, transitionIssues := selectedTransition(
-		parsed.TransitionID,
-		transitionProvided,
-		transitions,
-	)
-	issues = append(issues, transitionIssues...)
+	if !invalidFields["transition"] {
+		var transitionIssues []ValidationIssue
+		selected, hasSelected, transitionIssues = selectedTransition(parsed.TransitionID, seen["transition"], transitions)
+		issues = append(issues, transitionIssues...)
+	}
 	if hasSelected {
 		parsed.TransitionID = strings.TrimSpace(selected.ID)
 		selectedParameters := normalizedParameters(selected.Parameters)
 		selectedParameterSet := parameterSet(selectedParameters)
-		for key := range nullParameters {
+		for _, key := range sortedMapKeys(nullParameters) {
 			if selectedParameterSet[key] {
 				parsed.OutputValues[key] = "null"
 			}
@@ -548,6 +464,9 @@ func DecodeCompletion(raw json.RawMessage, contract CompletionContract) (ParsedC
 		}
 		for _, parameter := range selectedParameters {
 			key := strings.TrimSpace(parameter.Key)
+			if nullParameters[key] {
+				continue
+			}
 			if strings.TrimSpace(parsed.OutputValues[key]) == "" {
 				issues = append(issues, requiredParameterMissingIssue(parameter))
 			}
@@ -570,7 +489,41 @@ func DecodeUnstructuredCompletion(content string, contract CompletionContract) (
 	return DecodeCompletion(json.RawMessage(raw), contract)
 }
 
-func sortedMapKeys[M ~map[string]V, V any](values M) []string {
+func decodeOptionalStringValue(value json.RawMessage, field string) (string, bool, ValidationIssue) {
+	if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return "", true, ValidationIssue{}
+	}
+	return decodeStringValue(value, field)
+}
+
+func decodeStringValue(value json.RawMessage, field string) (string, bool, ValidationIssue) {
+	if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return "", false, ValidationIssue{Code: "non_string_value", Field: field, Message: "value must be a string"}
+	}
+	var text string
+	if err := json.Unmarshal(value, &text); err != nil {
+		return "", false, ValidationIssue{Code: "non_string_value", Field: field, Message: "value must be a string"}
+	}
+	return text, true, ValidationIssue{}
+}
+
+func decodeParameterValue(value json.RawMessage, field string) (string, bool, ValidationIssue) {
+	trimmed := bytes.TrimSpace(value)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return "", false, ValidationIssue{Code: "non_string_value", Field: field, Message: "value must be a string"}
+	}
+	var text string
+	if err := json.Unmarshal(value, &text); err == nil {
+		return text, true, ValidationIssue{}
+	}
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, trimmed); err != nil {
+		return "", false, ValidationIssue{Code: "invalid_json", Field: field, Message: "value must be valid JSON"}
+	}
+	return compacted.String(), true, ValidationIssue{}
+}
+
+func sortedMapKeys[M ~map[K]V, K cmp.Ordered, V any](values M) []K {
 	return slices.Sorted(maps.Keys(values))
 }
 

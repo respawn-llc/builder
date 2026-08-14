@@ -85,12 +85,14 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 	}
 }
 
-func TestClientCompactionCapabilitiesAndContextWindow(t *testing.T) {
+func TestClientCompactionCapabilitiesTokensAndContextWindow(t *testing.T) {
+	tokens := 42
 	window := 128000
 	trimmed := 3
 	caps := llm.ProviderCapabilities{ProviderID: "scripted"}
 	client := scriptedllm.NewClient(scriptedllm.Script{
 		Capabilities:        &caps,
+		InputTokenCount:     &tokens,
 		ContextWindowTokens: &window,
 		Compactions: []llm.CompactionResponse{{
 			OutputItems:       []llm.ResponseItem{{Type: llm.ResponseItemTypeCompaction, Content: textutil.Value("summary")}},
@@ -101,6 +103,14 @@ func TestClientCompactionCapabilitiesAndContextWindow(t *testing.T) {
 	caps, err := client.ProviderCapabilities(context.Background())
 	if err != nil || caps.ProviderID != "scripted" {
 		t.Fatalf("ProviderCapabilities = %+v, %v", caps, err)
+	}
+	count, err := client.CountRequestInputTokens(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"})
+	if err != nil || count != tokens {
+		t.Fatalf("CountRequestInputTokens = %d, %v", count, err)
+	}
+	supported, err := client.SupportsRequestInputTokenCount(context.Background())
+	if err != nil || !supported {
+		t.Fatalf("SupportsRequestInputTokenCount = %v, %v", supported, err)
 	}
 	resolved, err := client.ResolveModelContextWindow(context.Background(), "m")
 	if err != nil || resolved != window {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { sessionPageResponseSchema } from "./catalog";
-import { workspaceCatalogPageSchema } from "./project";
+import { sessionPageResponseSchema, workspacePageTokenSchema } from "./catalog";
+import { workspaceListSchema } from "./project";
 const session = {
   session_id: "session-1",
   category: "main",
@@ -11,7 +11,9 @@ const workspace = {
   workspace_id: "workspace-1",
   display_name: "Kent",
   root_path: "/workspace/kent",
-  is_default: true,
+  availability: "available",
+  is_primary: true,
+  updated_at_unix_ms: 1,
 } as const;
 describe("Session catalog schema", () => {
   it.each([
@@ -23,7 +25,7 @@ describe("Session catalog schema", () => {
       project_id: "project-1",
       category: "main",
       sessions: [{ ...session, ...(name === undefined ? {} : { name }) }],
-      next_offset: 50,
+      older: "older-token",
     });
 
     expect(value.sessions[0]).toEqual({
@@ -61,7 +63,7 @@ describe("Session catalog schema", () => {
         project_id: "project-1",
         category: "main",
         sessions: [],
-        older: "obsolete",
+        older: null,
       }),
     ).toThrow();
   });
@@ -104,7 +106,7 @@ describe("Session catalog schema", () => {
       ).toThrow();
     },
   );
-  it("rejects row categories that differ from the page category and pages above 50 rows", () => {
+  it("rejects row categories that differ from the page category and pages above 100 rows", () => {
     expect(() =>
       sessionPageResponseSchema.parse({
         project_id: "project-1",
@@ -116,55 +118,99 @@ describe("Session catalog schema", () => {
       sessionPageResponseSchema.parse({
         project_id: "project-1",
         category: "main",
-        sessions: Array.from({ length: 51 }, (_, index) => ({
+        sessions: Array.from({ length: 101 }, (_, index) => ({
           ...session,
           session_id: `session-${String(index)}`,
         })),
       }),
     ).toThrow();
   });
-  it.each([0, -1, 1.5])("rejects invalid next offsets %j", (nextOffset) => {
+});
+describe("Workspace list schema", () => {
+  const page = {
+    project_id: "project-1",
+    workspaces: [workspace],
+    default_workspace_id: "workspace-1",
+  };
+  it("preserves an empty display name for a filesystem-root workspace", () => {
+    expect(
+      workspaceListSchema.parse({
+        ...page,
+        workspaces: [{ ...workspace, display_name: "", root_path: "/" }],
+        next_page_token: "",
+      }).workspaces[0],
+    ).toMatchObject({ id: "workspace-1", name: "", rootPath: "/" });
+  });
+  it.each([
+    ["project_id", ""],
+    ["project_id", " "],
+    ["project_id", " project-1"],
+    ["project_id", "project-1 "],
+    ["workspace_id", ""],
+    ["workspace_id", " "],
+    ["workspace_id", " workspace-1"],
+    ["workspace_id", "workspace-1 "],
+    ["default_workspace_id", ""],
+    ["default_workspace_id", " "],
+    ["default_workspace_id", " workspace-1"],
+    ["default_workspace_id", "workspace-1 "],
+  ])("rejects invalid required ID %s", (field, invalid) => {
+    const value = { ...page, workspaces: [workspace], [field]: invalid };
+    if (field === "workspace_id") {
+      expect(() =>
+        workspaceListSchema.parse({
+          ...page,
+          workspaces: [{ ...workspace, workspace_id: invalid }],
+        }),
+      ).toThrow();
+      return;
+    }
+    expect(() => workspaceListSchema.parse(value)).toThrow();
+  });
+  it("rejects empty required workspace roots", () => {
     expect(() =>
-      sessionPageResponseSchema.parse({
-        project_id: "project-1",
-        category: "main",
-        sessions: [],
-        next_offset: nextOffset,
+      workspaceListSchema.parse({
+        ...page,
+        workspaces: [{ ...workspace, root_path: "" }],
       }),
     ).toThrow();
   });
-  it.each([{ older: "opaque" }, { newer: "opaque", next_offset: 50 }])(
-    "rejects obsolete Session continuation fields",
-    (fields) => {
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "1"])(
+    "rejects invalid workspace recency %j",
+    (updatedAt) => {
       expect(() =>
-        sessionPageResponseSchema.parse({
-          project_id: "project-1",
-          category: "main",
-          sessions: [],
-          ...fields,
+        workspaceListSchema.parse({
+          ...page,
+          workspaces: [{ ...workspace, updated_at_unix_ms: updatedAt }],
         }),
       ).toThrow();
     },
   );
-});
-describe("Workspace catalog schema", () => {
-  const page = {
-    project_id: "project-1",
-    offset: 0,
-    workspaces: [workspace],
-    next_offset: null,
-  };
-  it("preserves numeric offsets and nullable continuation", () => {
-    expect(workspaceCatalogPageSchema.parse(page)).toMatchObject({ offset: 0, nextOffset: null });
+  it("normalizes omitted and exact-empty terminal continuations", () => {
+    expect(workspaceListSchema.parse(page).nextPageToken).toBeNull();
+    expect(workspaceListSchema.parse({ ...page, next_page_token: "" }).nextPageToken).toBeNull();
+    expect(workspaceListSchema.parse({ ...page, next_page_token: "next-token" }).nextPageToken).toBe(
+      "next-token",
+    );
   });
 
-  it("rejects obsolete catalog fields", () => {
-    expect(() =>
-      workspaceCatalogPageSchema.parse({ ...page, default_workspace_id: "workspace-1" }),
-    ).toThrow();
-    expect(() =>
-      workspaceCatalogPageSchema.parse({ ...page, next_page_token: "" }),
-    ).toThrow();
+  it.each([" ", "\tnext-token", "next-token "])("rejects malformed nonterminal continuation %j", (token) => {
+    expect(() => workspaceListSchema.parse({ ...page, next_page_token: token })).toThrow();
   });
 
+  it("rejects workspace pages above 100 rows", () => {
+    expect(() =>
+      workspaceListSchema.parse({
+        ...page,
+        workspaces: Array.from({ length: 101 }, (_, index) => ({
+          ...workspace,
+          workspace_id: `workspace-${String(index)}`,
+        })),
+      }),
+    ).toThrow();
+  });
+  it("does not represent an absent initial cursor as an empty page token", () => {
+    expect(workspacePageTokenSchema.safeParse("").success).toBe(false);
+    expect(workspacePageTokenSchema.safeParse("next-token").success).toBe(true);
+  });
 });

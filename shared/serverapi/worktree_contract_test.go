@@ -3,6 +3,7 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"core/shared/clientui"
@@ -475,24 +476,11 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	valid := []interface{ Validate() error }{
 		WorktreeSelectorPreviewRequest{SessionID: "session", Selector: "feature"},
 		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
-		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
-			RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
-		}}, Selector: "feature"},
 		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}},
-		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
-			RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
-		}}},
 		WorktreeDeleteRequest{
 			WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"},
 			Selector:                 "feature",
 			BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
-		},
-		WorktreeDeleteRequest{
-			WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
-				RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
-			}},
-			Selector:            "feature",
-			BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
 		},
 	}
 	for _, request := range valid {
@@ -503,7 +491,6 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	invalid := []interface{ Validate() error }{
 		WorktreeSelectorPreviewRequest{SessionID: "session"},
 		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{SessionID: "session"}, Selector: "feature"},
-		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{}}, Selector: "feature"},
 		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID}},
 		WorktreeDeleteRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
 	}
@@ -514,24 +501,17 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	}
 }
 
-func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
+func TestWorktreeTransitionRequestsKeepFlatIdentity(t *testing.T) {
 	operationID := NewWorktreeOperationID()
-	origin := &RuntimeStepOrigin{
-		RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
-		StepID: "018fdd67-89ab-4cde-8123-456789abc002",
-	}
-	header := func(origin *RuntimeStepOrigin) WorktreeTransitionHeader {
-		return WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: origin}
+	header := func() WorktreeTransitionHeader {
+		return WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}
 	}
 	for _, testCase := range []struct {
-		name         string
 		request      any
 		decodeHeader func(*testing.T, []byte) WorktreeTransitionHeader
-		wantOrigin   bool
 	}{
 		{
-			name:    "enter external",
-			request: WorktreeEnterRequest{WorktreeTransitionHeader: header(nil), Selector: "feature"},
+			request: WorktreeEnterRequest{WorktreeTransitionHeader: header(), Selector: "feature"},
 			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
 				t.Helper()
 				var request WorktreeEnterRequest
@@ -542,21 +522,7 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 			},
 		},
 		{
-			name:    "enter model",
-			request: WorktreeEnterRequest{WorktreeTransitionHeader: header(origin), Selector: "feature"},
-			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
-				t.Helper()
-				var request WorktreeEnterRequest
-				if err := json.Unmarshal(data, &request); err != nil {
-					t.Fatalf("decode enter request: %v", err)
-				}
-				return request.WorktreeTransitionHeader
-			},
-			wantOrigin: true,
-		},
-		{
-			name:    "leave external",
-			request: WorktreeLeaveRequest{WorktreeTransitionHeader: header(nil)},
+			request: WorktreeLeaveRequest{WorktreeTransitionHeader: header()},
 			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
 				t.Helper()
 				var request WorktreeLeaveRequest
@@ -567,22 +533,8 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 			},
 		},
 		{
-			name:    "leave model",
-			request: WorktreeLeaveRequest{WorktreeTransitionHeader: header(origin)},
-			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
-				t.Helper()
-				var request WorktreeLeaveRequest
-				if err := json.Unmarshal(data, &request); err != nil {
-					t.Fatalf("decode leave request: %v", err)
-				}
-				return request.WorktreeTransitionHeader
-			},
-			wantOrigin: true,
-		},
-		{
-			name: "delete external",
 			request: WorktreeDeleteRequest{
-				WorktreeTransitionHeader: header(nil),
+				WorktreeTransitionHeader: header(),
 				Selector:                 "feature",
 				BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
 			},
@@ -594,26 +546,9 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 				}
 				return request.WorktreeTransitionHeader
 			},
-		},
-		{
-			name: "delete model",
-			request: WorktreeDeleteRequest{
-				WorktreeTransitionHeader: header(origin),
-				Selector:                 "feature",
-				BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
-			},
-			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
-				t.Helper()
-				var request WorktreeDeleteRequest
-				if err := json.Unmarshal(data, &request); err != nil {
-					t.Fatalf("decode delete request: %v", err)
-				}
-				return request.WorktreeTransitionHeader
-			},
-			wantOrigin: true,
 		},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%T", testCase.request), func(t *testing.T) {
 			data, err := json.Marshal(testCase.request)
 			if err != nil {
 				t.Fatalf("encode request: %v", err)
@@ -630,20 +565,12 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 					t.Fatalf("wire payload omitted %s: %s", name, data)
 				}
 			}
-			_, hasOrigin := fields["origin"]
-			if hasOrigin != testCase.wantOrigin {
-				t.Fatalf("wire origin present=%t, want %t: %s", hasOrigin, testCase.wantOrigin, data)
+			if _, hasOrigin := fields["origin"]; hasOrigin {
+				t.Fatalf("wire payload retained Agent Step origin: %s", data)
 			}
 			decoded := testCase.decodeHeader(t, data)
 			if decoded.OperationID != operationID || decoded.SessionID != "session" {
 				t.Fatalf("decoded header=%+v", decoded)
-			}
-			if testCase.wantOrigin {
-				if decoded.Origin == nil || *decoded.Origin != *origin {
-					t.Fatalf("decoded origin=%+v, want %+v", decoded.Origin, origin)
-				}
-			} else if decoded.Origin != nil {
-				t.Fatalf("decoded external origin=%+v", decoded.Origin)
 			}
 		})
 	}

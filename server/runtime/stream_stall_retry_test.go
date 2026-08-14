@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/tools"
 )
 
 type countingFailingStreamClient struct {
@@ -31,7 +33,7 @@ func TestGenerateWithRetryRetryPolicyByToolChoice(t *testing.T) {
 	withIdleStallRetryDelays(t, []time.Duration{0})
 
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	tests := []struct {
 		name         string
 		request      llm.Request
@@ -57,7 +59,7 @@ func TestGenerateWithRetryRetryPolicyByToolChoice(t *testing.T) {
 				ToolChoiceMode: llm.ToolChoiceModeRequired,
 				Tools: []llm.Tool{{
 					Name:   "complete_node",
-					Schema: mustTestFunctionSchema(t),
+					Schema: json.RawMessage(`{"type":"object"}`),
 				}},
 			},
 			err:          &llm.ProviderAPIError{StatusCode: 503, Code: llm.UnifiedErrorCodeUnknown},
@@ -70,7 +72,7 @@ func TestGenerateWithRetryRetryPolicyByToolChoice(t *testing.T) {
 				ToolChoiceMode: llm.ToolChoiceModeRequired,
 				Tools: []llm.Tool{{
 					Name:   "complete_node",
-					Schema: mustTestFunctionSchema(t),
+					Schema: json.RawMessage(`{"type":"object"}`),
 				}},
 			},
 			err:          fmt.Errorf("model stream stalled: %w", llm.ErrModelStreamStalled),
@@ -107,7 +109,7 @@ func (c *retryingEventsClient) GenerateStreamWithEvents(_ context.Context, _ llm
 }
 func TestRequiredRetryClearsIncompleteAssistantReasoningAndTools(t *testing.T) {
 	withGenerateRetryDelays(t, []time.Duration{0})
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	var sequence []EventKind
 	resp, err := engine.generateWithRetryClient(context.Background(), "step", &retryingEventsClient{},
 		llm.Request{Model: "gpt-5", ToolChoiceMode: llm.ToolChoiceModeRequired},
@@ -123,7 +125,7 @@ func TestRetryBudgetResetsAfterSuccessAndRetainsOverloadCause(t *testing.T) {
 	withGenerateRetryDelays(t, []time.Duration{0, 0, 0, 0, 0})
 	cause := &llm.ProviderAPIError{StatusCode: 200, Code: llm.UnifiedErrorCodeProviderOverload}
 	client := &fakeClient{errors: []error{&llm.APIStatusError{StatusCode: 503}, nil, cause, cause, cause, cause, cause, cause}}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	if _, err := engine.generateWithRetryClient(context.Background(), "first", client, llm.Request{Model: "gpt-5", ToolChoiceMode: llm.ToolChoiceModeAutomatic}, nil, nil, nil); err != nil {
 		t.Fatalf("first generation: %v", err)
 	}

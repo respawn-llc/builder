@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/tools"
 )
 
 func TestGenerateWithRetryPropagatesContextCancellation(t *testing.T) {
@@ -16,7 +17,7 @@ func TestGenerateWithRetryPropagatesContextCancellation(t *testing.T) {
 		t,
 		store,
 		cancellationAwareModelClient{started: started},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 

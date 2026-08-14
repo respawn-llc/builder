@@ -65,58 +65,6 @@ func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 	}
 }
 
-func TestCompactContextWithoutReadyRuntimePreservesJoinedErrorLoopbackAndRemote(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	store := createGatewayAuthoritativeSession(t, appCore)
-
-	request := serverapi.RuntimeCompactContextRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
-		Args:            "compact without a Ready runtime",
-	}
-	loopbackErr := appCore.RuntimeControlClient().CompactContext(context.Background(), request)
-	requireCompactRuntimeUnavailableNotAccepted(t, loopbackErr)
-	if err := appCore.RuntimeControlClient().SetSessionName(context.Background(), serverapi.RuntimeSetSessionNameRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
-		Name:            "must remain unavailable",
-	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("loopback compact created a runtime: SetSessionName error = %v", err)
-	}
-
-	remote, err := remoteclient.DialRemoteURLForSession(
-		context.Background(),
-		"ws"+server.URL[len("http"):],
-		store.Meta().SessionID,
-	)
-	if err != nil {
-		t.Fatalf("DialRemoteURLForSession: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	request.ClientRequestID = runtimeids.NewRuntimeClientRequestID().String()
-	remoteErr := remote.CompactContext(context.Background(), request)
-	requireCompactRuntimeUnavailableNotAccepted(t, remoteErr)
-	if err := appCore.RuntimeControlClient().SetSessionName(context.Background(), serverapi.RuntimeSetSessionNameRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
-		Name:            "must still remain unavailable",
-	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("remote compact created a runtime: SetSessionName error = %v", err)
-	}
-}
-
-func requireCompactRuntimeUnavailableNotAccepted(t *testing.T, err error) {
-	t.Helper()
-	if !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
-		t.Fatalf("CompactContext error = %v, want runtime command not accepted", err)
-	}
-	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("CompactContext error = %v, want runtime unavailable", err)
-	}
-}
-
 func newGatewayTestServer(t *testing.T) (*core.Core, *httptest.Server) {
 	t.Helper()
 	appCore, server, _ := newGatewayTestServerWithAuth(t, true)
@@ -314,27 +262,6 @@ func TestGatewayRunPromptValidatesTypedIntentCallerAndSelector(t *testing.T) {
 	}
 }
 
-func TestGatewaySessionExecutionEnvironmentRejectsExtraRequestField(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	response := callGatewayRaw(
-		t,
-		conn,
-		"session-execution-extra",
-		protocol.MethodSessionGetExecutionEnvironment,
-		json.RawMessage(`{"session_id":"environment-session","extra":true}`),
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeInvalidParams {
-		t.Fatalf("Session execution response = %+v, want invalid params", response)
-	}
-}
-
 func TestGatewayRunPromptRejectsMixedTypedAndLegacyLaunchFields(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()
@@ -433,7 +360,7 @@ func TestDecodeAndHandleMapsMalformedWorkflowLabelFilters(t *testing.T) {
 				protocol.Request{ID: "invalid-board-card-filter", Params: mustJSON(t, serverapi.WorkflowBoardNodeCardsListRequest{
 					ProjectID:  projectID,
 					WorkflowID: runtimeids.NewWorkflowID(),
-					NodeID:     runtimeids.NewGraphEntityID(),
+					NodeID:     "node-1",
 				})},
 				func(serverapi.WorkflowBoardNodeCardsListRequest) (struct{}, error) {
 					t.Fatal("invalid board-card filter reached handler")
@@ -718,11 +645,11 @@ func TestGatewayGoalRPCWithoutProjectAttachmentReturnsServiceErrors(t *testing.T
 		code   int
 	}{
 		{name: "show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: "missing-session"}, code: protocol.ErrCodeInternalError},
-		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{ClientRequestID: "goal-set", SessionID: "missing-session", Objective: "ship", Actor: "user"}, code: protocol.ErrCodeInternalError},
-		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-pause", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
-		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-resume", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
-		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-complete", SessionID: "missing-session", Actor: "agent"}, code: protocol.ErrCodeInternalError},
-		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{ClientRequestID: "goal-clear", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
+		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{SessionID: "missing-session", Objective: "ship", Actor: "user"}, code: protocol.ErrCodeInternalError},
+		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
+		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
+		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{SessionID: "missing-session", Actor: "agent"}, code: protocol.ErrCodeInternalError},
+		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
 	} {
 		err := callGatewayExpectError(t, conn, "goal-"+tc.name, tc.method, tc.params)
 		if err.Code != tc.code {

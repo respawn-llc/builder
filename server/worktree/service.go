@@ -10,12 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/requestmemo"
 	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
@@ -61,14 +59,7 @@ type Service struct {
 	setupTimeoutSeconds int
 	resolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
 	setupBroker         *setupEventBroker
-	workspaceMutations  *requestmemo.MutationLaneRegistry[string]
-
-	transitionCtx     context.Context
-	cancelTransitions context.CancelFunc
-	transitionMu      sync.Mutex
-	transitions       map[string]pendingWorktreeTransition
-	transitionWG      sync.WaitGroup
-	transitionsClosed bool
+	workspaceMutations  *metadata.MutationLaneRegistry[string]
 }
 
 type syncedWorktree struct {
@@ -349,7 +340,6 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 	if gitInspector == nil {
 		gitInspector = NewGitInspector(nil)
 	}
-	transitionCtx, cancelTransitions := context.WithCancel(context.Background())
 	return &Service{
 		metadata:            metadataStore,
 		git:                 gitInspector,
@@ -361,10 +351,7 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 		setupTimeoutSeconds: opts.SetupTimeoutSeconds,
 		resolveSetup:        opts.ResolveSetup,
 		setupBroker:         newSetupEventBroker(),
-		workspaceMutations:  requestmemo.NewMutationLaneRegistry[string](),
-		transitionCtx:       transitionCtx,
-		cancelTransitions:   cancelTransitions,
-		transitions:         make(map[string]pendingWorktreeTransition),
+		workspaceMutations:  metadata.NewMutationLaneRegistry[string](),
 	}
 }
 
@@ -424,16 +411,6 @@ func authorizeSessionMaintenance(ctx context.Context, release sessionruntime.Ses
 }
 
 func (s *Service) Close() error {
-	if s == nil {
-		return nil
-	}
-	s.transitionMu.Lock()
-	s.transitionsClosed = true
-	s.transitionMu.Unlock()
-	if s.cancelTransitions != nil {
-		s.cancelTransitions()
-	}
-	s.transitionWG.Wait()
 	return nil
 }
 
@@ -1539,7 +1516,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		}
 		forceRemoval = dirtyState.Kind != clientui.WorktreeDirtyStateClean
 	}
-	retargetCompensation, err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
+	err = s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
 		workspaceID:   record.WorkspaceID,
 		workspaceRoot: workspaceRoot,
 	}, record, nil)
@@ -1548,7 +1525,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	}
 	if targetFound {
 		if err := s.git.Remove(ctx, workspaceRoot, target.record.CanonicalRoot, forceRemoval); err != nil {
-			return DeleteTaskWorktreeResponse{}, errors.Join(err, retargetCompensation.rollback(ctx))
+			return DeleteTaskWorktreeResponse{}, err
 		}
 	}
 	// The worktree itself is already removed by this point, so a branch-cleanup
@@ -2100,7 +2077,7 @@ func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) 
 	}
 }
 
-func (s *Service) acquireWorkspaceMutationLease(ctx context.Context, workspaceID string) (*requestmemo.MutationLaneLease[string], error) {
+func (s *Service) acquireWorkspaceMutationLease(ctx context.Context, workspaceID string) (*metadata.MutationLaneLease[string], error) {
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	if s == nil {
 		return nil, errors.New("worktree service is required")

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -94,29 +93,13 @@ func TestFreshResourceRepairIsCauseIndependentAndDoesNotReplayTools(t *testing.T
 					t.Fatalf("append committed prefix: %v", err)
 				}
 			}
-			if test.withMarker {
-				if err := store.SetPendingModelRecovery(session.PendingModelRecovery{
-					RecoveryID:             "recovery-" + callID,
-					StepID:                 stepID,
-					Reason:                 "provider_visible_output_persisted",
-					CreatedAt:              time.Unix(0, 0).UTC(),
-					OutstandingToolCallIDs: []string{callID},
-				}); err != nil {
-					t.Fatalf("set pending recovery: %v", err)
-				}
-			}
-
 			probe := &recoveryReplayProbe{}
 			reopened := mustOpenTestSession(t, store.Dir())
-			registry := tools.NewRegistry()
-			if test.tool != toolspec.ToolCompleteNode {
-				registry = newTestToolRegistry(t, tools.HandlerRegistration{ID: test.tool, Handler: probe})
-			}
 			engine := mustNewTestEngine(
 				t,
 				reopened,
 				&fakeClient{},
-				registry,
+				tools.NewRegistry(tools.HandlerRegistration{ID: test.tool, Handler: probe}),
 				Config{Model: "gpt-5"},
 			)
 			if calls := probe.calls.Load(); calls != 0 {
@@ -154,7 +137,7 @@ func TestFreshResourceRepairIgnoresStalePendingStartWhileLiveRepairDefers(t *tes
 	newDanglingEngine := func(t *testing.T, callID string) (*Engine, *session.Store) {
 		t.Helper()
 		store := mustCreateTestSession(t)
-		engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 		steerDanglingToolCall(t, engine, "step", llm.ToolCall{
 			ID: callID, Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`),
 		})
@@ -211,7 +194,7 @@ func TestFreshResourceRepairCommitsAllCompletionsWithAggregateWarning(t *testing
 		t.TempDir(),
 		session.WithPersistenceObserver(gate),
 	)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	const recoveryStepID = "recovery-step"
 	steerDanglingToolCall(t, engine, "first-step", llm.ToolCall{
 		ID: "first", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`),
@@ -233,7 +216,7 @@ func TestFreshResourceRepairCommitsAllCompletionsWithAggregateWarning(t *testing
 	}
 
 	reopened := mustOpenTestSession(t, store.Dir())
-	restored := mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	assertFreshResourceRepairOnEngine(t, restored, reopened, "first")
 	assertFreshResourceRepairOnEngine(t, restored, reopened, "second")
 	for callID, expectedStepID := range map[string]string{
@@ -290,9 +273,6 @@ func assertFreshResourceRepairOnEngine(
 	if !warningFound {
 		t.Fatal("fresh repair snapshot omitted typed warning")
 	}
-	if store.Meta().PendingModelRecovery != nil {
-		t.Fatalf("fresh repair retained pending recovery: %+v", store.Meta().PendingModelRecovery)
-	}
 }
 
 func assertFreshResourceRepairExactlyOnce(t *testing.T, store *session.Store, callID string) {
@@ -338,7 +318,7 @@ func assertFreshResourceRepairExactlyOnceWith(
 ) {
 	t.Helper()
 	firstStore := mustOpenTestSession(t, store.Dir())
-	first := mustNewTestEngine(t, firstStore, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	first := mustNewTestEngine(t, firstStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	assertFreshResourceRepairOnEngine(t, first, firstStore, callID)
 	if verify != nil {
 		verify(first, firstStore)
@@ -355,7 +335,7 @@ func assertFreshResourceRepairExactlyOnceWith(
 	}
 
 	secondStore := mustOpenTestSession(t, store.Dir())
-	second := mustNewTestEngine(t, secondStore, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	second := mustNewTestEngine(t, secondStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	assertFreshResourceRepairOnEngine(t, second, secondStore, callID)
 	if verify != nil {
 		verify(second, secondStore)

@@ -19,7 +19,6 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
-	"core/shared/textutil"
 )
 
 var sessionViewTestPersistence = sessiontest.NewPersistence()
@@ -65,9 +64,7 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 	settings.Model = "gpt-5"
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:              settings,
-		QuestionsEnabled:      textutil.Value(true),
-		AutoCompactionEnabled: textutil.Value(true),
+		Settings: settings,
 		FilesystemContext: func() tools.FilesystemContext {
 			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {

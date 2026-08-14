@@ -104,58 +104,6 @@ func TestRemoteSessionExecutionEnvironmentRoundTripsAuthApplicability(t *testing
 	}
 }
 
-func TestRemoteSessionExecutionEnvironmentRejectsExtraResponseField(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		for {
-			if err := websocket.JSON.Receive(ws, &req); err != nil {
-				if errors.Is(err, io.EOF) {
-					return
-				}
-				t.Fatalf("receive execution environment request: %v", err)
-			}
-			switch req.Method {
-			case protocol.MethodAttachProject:
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/workspace"))); err != nil {
-					t.Fatalf("send attach response: %v", err)
-				}
-			case protocol.MethodSessionGetExecutionEnvironment:
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, map[string]any{
-					"environment": map[string]any{
-						"session_id": "environment-session",
-						"workspace":  map[string]any{"kind": "unavailable", "reason": "not_configured"},
-						"branch":     map[string]any{"kind": "unavailable", "reason": "not_git_repository"},
-						"auth":       map[string]any{"kind": "unavailable", "reason": "not_applicable"},
-						"model":      map[string]any{"kind": "unavailable", "reason": "not_configured"},
-						"extra":      true,
-					},
-				})); err != nil {
-					t.Fatalf("send execution environment response: %v", err)
-				}
-			default:
-				t.Fatalf("unexpected method %q", req.Method)
-			}
-		}
-	})
-
-	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
-	if err != nil {
-		t.Fatalf("DialRemoteURLForProject: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	sessionID, err := runtimeids.ParseSessionID("environment-session")
-	if err != nil {
-		t.Fatalf("ParseSessionID: %v", err)
-	}
-	if _, err := remote.GetSessionExecutionEnvironment(
-		context.Background(),
-		serverapi.SessionExecutionEnvironmentRequest{SessionID: sessionID},
-	); err == nil {
-		t.Fatal("GetSessionExecutionEnvironment accepted an extra response field")
-	}
-}
-
 func sessionExecutionEnvironmentTransportResponse(
 	sessionID runtimeids.SessionID,
 	provider string,

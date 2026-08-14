@@ -4,13 +4,14 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/tools"
 	"core/shared/runtimeids"
 )
 
 func TestAgentSteerLiveEventsProjectTheCommittedMessage(t *testing.T) {
 	t.Run("direct submission", func(t *testing.T) {
 		var events []Event
-		eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{responses: []llm.Response{finalTextResponse("done")}}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{responses: []llm.Response{finalTextResponse("done")}}, tools.NewRegistry(), Config{
 			Model: "gpt-5",
 			OnEvent: func(event Event) {
 				events = append(events, event)
@@ -28,7 +29,7 @@ func TestAgentSteerLiveEventsProjectTheCommittedMessage(t *testing.T) {
 
 	t.Run("queued flush", func(t *testing.T) {
 		var events []Event
-		eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 			Model: "gpt-5",
 			OnEvent: func(event Event) {
 				events = append(events, event)

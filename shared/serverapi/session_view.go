@@ -20,20 +20,6 @@ type SessionMainViewResponse struct {
 	MainView clientui.RuntimeMainView
 }
 
-func (r SessionMainViewResponse) Validate() error {
-	goal := r.MainView.Status.Goal
-	if goal == nil {
-		return nil
-	}
-	if goal.Availability == nil {
-		return errors.New("runtime Goal availability is required")
-	}
-	if err := goal.Availability.Validate(); err != nil || goal.Goal == nil {
-		return err
-	}
-	return goal.Goal.Validate()
-}
-
 type SessionTranscriptPageRequest struct {
 	SessionID   string `json:"session_id"`
 	Cursor      *int64 `json:"cursor,omitempty"`

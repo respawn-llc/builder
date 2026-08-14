@@ -24,7 +24,6 @@ import (
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -185,6 +184,7 @@ func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
 		!capabilities.RuntimeControl ||
 		!capabilities.RuntimeLiveControl ||
 		!capabilities.PromptControl ||
+		!capabilities.ProcessOutput ||
 		!capabilities.AttentionNotifications ||
 		!capabilities.OnboardingFinalize ||
 		!capabilities.PromptCommands {
@@ -283,17 +283,6 @@ func TestStartServeServerRecoversAdmittedCurrentNodeOnRestart(t *testing.T) {
 		len(currentNodes[0].Scheduling.Interruption.Detail.Fields) != 0 {
 		t.Fatalf("current nodes after startup recovery = %+v, want interrupted admitted current node %v", currentNodes, currentNode)
 	}
-	time.Sleep(100 * time.Millisecond)
-	stable, err := restarted.WorkflowClient().GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{TaskID: string(taskID)})
-	if err != nil {
-		t.Fatalf("GetWorkflowTask after recovery stability window: %v", err)
-	}
-	if !stable.Task.Actions.CanResume || stable.Task.Actions.CanInterrupt {
-		t.Fatalf("task actions after recovery stability window = %+v, want resumable and not interruptible", stable.Task.Actions)
-	}
-	if count, err := store.CountTaskSessions(context.Background(), taskID); err != nil || count != 0 {
-		t.Fatalf("retained Sessions after restart recovery = %d, %v; want no automatic Agent start", count, err)
-	}
 }
 
 func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (workflow.TaskID, workflow.CurrentNodeReference) {
@@ -324,9 +313,9 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 	if startID == "" || terminalID == "" {
 		t.Fatalf("default workflow nodes = %+v", definition.Definition.Nodes)
 	}
-	agentID := runtimeids.NewGraphEntityID()
-	startGroupID := runtimeids.NewGraphEntityID()
-	doneGroupID := runtimeids.NewGraphEntityID()
+	agentID := "node-agent-" + created.Workflow.ID.String()
+	startGroupID := "group-start-" + created.Workflow.ID.String()
+	doneGroupID := "group-done-" + created.Workflow.ID.String()
 	graph := serverapi.WorkflowGraphDraftFromDefinition(definition.Definition)
 	graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
 		ID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder",
@@ -336,8 +325,8 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: doneGroupID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 	)
 	graph.Edges = append(graph.Edges,
-		serverapi.WorkflowGraphDraftEdge{ID: runtimeids.NewGraphEntityID(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work."},
-		serverapi.WorkflowGraphDraftEdge{ID: runtimeids.NewGraphEntityID(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work."},
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
 	)
 	saved, err := client.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID: created.Workflow.ID, ExpectedVersion: definition.Definition.Workflow.Version, Graph: graph,
@@ -366,7 +355,7 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 		t.Fatalf("StartTask created current nodes = %+v, want one", started.Mutation.Created)
 	}
 	currentNode := started.Mutation.Created[0].Reference
-	if err := store.AdmitCurrentNode(ctx, currentNode); err != nil {
+	if _, err := store.AdmitCurrentNode(ctx, currentNode); err != nil {
 		t.Fatalf("AdmitCurrentNode: %v", err)
 	}
 	return workflow.TaskID(task.Task.ID), currentNode

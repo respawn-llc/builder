@@ -11,12 +11,11 @@ import (
 
 func TestNewWorkflowGraphSaveRequestPreservesProductGraph(t *testing.T) {
 	workflowID := testsetup.WorkflowID(t, "workflow-rich")
-	groupID := testGraphEntityID("group-parallel")
-	groupIDPointer := &groupID
-	agentID := testNodeID("node-agent")
-	scriptID := testNodeID("node-script")
-	joinID := testNodeID("node-join")
-	providerEdgeID := testEdgeID("edge-provider")
+	groupID := "group-parallel"
+	agentID := workflow.NodeID("node-agent")
+	scriptID := workflow.NodeID("node-script")
+	joinID := workflow.NodeID("node-join")
+	providerEdgeID := workflow.EdgeID("edge-provider")
 	def := workflow.Definition{
 		ID: workflowID,
 		NodeGroups: []workflow.NodeGroup{
@@ -31,25 +30,25 @@ func TestNewWorkflowGraphSaveRequestPreservesProductGraph(t *testing.T) {
 					joinID,
 				},
 			},
-			{WorkflowID: workflowID, ID: testGraphEntityID("group-followup"), Key: "followup", DisplayName: "Follow-up"},
+			{WorkflowID: workflowID, ID: "group-followup", Key: "followup", DisplayName: "Follow-up"},
 		},
 		Nodes: []workflow.Node{
-			workflow.StartNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: testNodeID("node-start"), Key: "start", DisplayName: "Start"}},
+			workflow.StartNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-start", Key: "start", DisplayName: "Start"}},
 			workflow.AgentNode{
-				NodeIdentity:   workflow.NodeIdentity{WorkflowID: workflowID, ID: agentID, Key: "agent", DisplayName: "Agent", GroupID: groupIDPointer},
+				NodeIdentity:   workflow.NodeIdentity{WorkflowID: workflowID, ID: agentID, Key: "agent", DisplayName: "Agent", GroupID: groupID},
 				SubagentRole:   "coder",
 				CompletionMode: "tool",
 			},
 			workflow.ScriptNode{
-				NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: scriptID, Key: "script", DisplayName: "Script", GroupID: groupIDPointer},
+				NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: scriptID, Key: "script", DisplayName: "Script", GroupID: groupID},
 				ScriptPath:   workflow.MustPresentScriptPath("scripts/run"),
 			},
 			workflow.JoinNode{
-				NodeIdentity:       workflow.NodeIdentity{WorkflowID: workflowID, ID: joinID, Key: "join", DisplayName: "Join", GroupID: groupIDPointer},
+				NodeIdentity:       workflow.NodeIdentity{WorkflowID: workflowID, ID: joinID, Key: "join", DisplayName: "Join", GroupID: groupID},
 				JoinInputProviders: []workflow.JoinInputProvider{{InputName: "summary", ProviderEdgeID: providerEdgeID}},
 			},
-			workflow.ScriptNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: testNodeID("node-script-absent"), Key: "script_absent", DisplayName: "Script absent"}},
-			workflow.TerminalNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: testNodeID("node-done"), Key: "done", DisplayName: "Done"}},
+			workflow.ScriptNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-script-absent", Key: "script_absent", DisplayName: "Script absent"}},
+			workflow.TerminalNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-done", Key: "done", DisplayName: "Done"}},
 		},
 		TransitionGroups: []workflow.TransitionGroup{{
 			WorkflowID:   workflowID,
@@ -63,7 +62,7 @@ func TestNewWorkflowGraphSaveRequestPreservesProductGraph(t *testing.T) {
 			WorkflowID:        workflowID,
 			ID:                providerEdgeID,
 			Key:               "review",
-			TransitionGroupID: testTransitionGroupID("transition-review"),
+			TransitionGroupID: "transition-review",
 			TargetNodeID:      scriptID,
 			AssigneeSelection: workflow.AssigneeSelectionConfigured,
 			ThinkingSelection: workflow.ThinkingSelectionConfigured,
@@ -85,18 +84,18 @@ func TestNewWorkflowGraphSaveRequestPreservesProductGraph(t *testing.T) {
 	}
 	if len(req.NodeGroups) != 2 ||
 		req.NodeGroups[0].ID != groupID || req.NodeGroups[0].Key != "parallel" || req.NodeGroups[0].DisplayName != "Parallel" || req.NodeGroups[0].SortOrder != 0 ||
-		req.NodeGroups[1].ID != testGraphEntityID("group-followup") || req.NodeGroups[1].Key != "followup" || req.NodeGroups[1].DisplayName != "Follow-up" || req.NodeGroups[1].SortOrder != 100 {
+		req.NodeGroups[1].ID != "group-followup" || req.NodeGroups[1].Key != "followup" || req.NodeGroups[1].DisplayName != "Follow-up" || req.NodeGroups[1].SortOrder != 100 {
 		t.Fatalf("node groups = %+v, want canonical order with normalized sort values", req.NodeGroups)
 	}
 	agent := workflowGraphSaveNodeRecord(t, req.Nodes, agentID)
-	if agent.GroupID == nil || *agent.GroupID != groupID || agent.GroupKey != "parallel" || agent.SubagentRole != "coder" || agent.CompletionMode != "tool" {
+	if agent.GroupID != groupID || agent.GroupKey != "parallel" || agent.SubagentRole != "coder" || agent.CompletionMode != "tool" {
 		t.Fatalf("agent record = %+v, want identity and execution fields preserved", agent)
 	}
 	script := workflowGraphSaveNodeRecord(t, req.Nodes, scriptID)
 	if script.ScriptPath != "scripts/run" || script.GroupKey != "parallel" {
 		t.Fatalf("script record = %+v, want path and group key preserved", script)
 	}
-	absentScript := workflowGraphSaveNodeRecord(t, req.Nodes, testNodeID("node-script-absent"))
+	absentScript := workflowGraphSaveNodeRecord(t, req.Nodes, "node-script-absent")
 	if absentScript.ScriptPath != "" {
 		t.Fatalf("absent script path = %q, want absent storage value", absentScript.ScriptPath)
 	}
@@ -110,7 +109,7 @@ func TestNewWorkflowGraphSaveRequestPreservesProductGraph(t *testing.T) {
 	if len(req.Edges) != 1 || !reflect.DeepEqual(req.Edges[0], EdgeRecord{
 		ID:                 providerEdgeID,
 		WorkflowID:         workflowID,
-		TransitionGroupID:  testTransitionGroupID("transition-review"),
+		TransitionGroupID:  "transition-review",
 		Key:                "review",
 		TargetNodeID:       scriptID,
 		AssigneeSelection:  workflow.AssigneeSelectionConfigured,
@@ -166,9 +165,9 @@ func TestWorkflowGraphSaveFixtureUsesOneAtomicSaveAndConverterNoop(t *testing.T)
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
 	before := created.Version
-	agentID := testNodeID("node-agent")
-	startGroup := testTransitionGroupID("group-start")
-	doneGroup := testTransitionGroupID("group-done")
+	agentID := workflow.NodeID("node-agent")
+	startGroup := workflow.TransitionGroupID("group-start")
+	doneGroup := workflow.TransitionGroupID("group-done")
 
 	result := saveWorkflowGraphFixture(t, ctx, store, created.ID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
@@ -179,8 +178,8 @@ func TestWorkflowGraphSaveFixtureUsesOneAtomicSaveAndConverterNoop(t *testing.T)
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-start"), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured},
-			EdgeRecord{ID: testEdgeID("edge-done"), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured},
+			EdgeRecord{ID: "edge-start", WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured},
+			EdgeRecord{ID: "edge-done", WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured},
 		)
 	})
 	if !result.Changed || result.Version != before+1 {

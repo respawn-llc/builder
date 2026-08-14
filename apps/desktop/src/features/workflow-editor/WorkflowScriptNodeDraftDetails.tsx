@@ -12,7 +12,6 @@ import { useWorkflowScriptPathValidationQuery } from "./workflowEditorQueries";
 import type { WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 import { FieldSummary } from "./WorkflowInspectorSharedSections";
 import { derivedNodeWiring, type Translate } from "./workflowInspectorWiring";
-import { workflowValidationErrorKey } from "./workflowValidationErrorKey";
 
 export function ScriptNodeDraftDetails({
   controller,
@@ -139,8 +138,8 @@ function ScriptPathDiagnostics({ errors }: Readonly<{ errors: WorkflowValidation
   return (
     <DetailSection title={t("workflowEditor.scriptPathDiagnostics")}>
       <ul className="m-0 grid list-disc gap-[var(--space-1)] pl-[1.1rem] text-sm leading-snug">
-        {errors.map((error, index) => (
-          <li className="pl-[2px] marker:text-[var(--color-warning)]" key={workflowValidationErrorKey(error, index)}>
+        {errors.map((error) => (
+          <li className="pl-[2px] marker:text-[var(--color-warning)]" key={`${error.code}:${error.nodeID}`}>
             {error.message}
           </li>
         ))}

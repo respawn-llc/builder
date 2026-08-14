@@ -14,12 +14,10 @@ import (
 	"time"
 
 	"core/shared/config"
-	"core/shared/jsoncontract"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
-	"core/shared/serverjsoncontract"
 )
 
 var errRemoteClosed = errors.New("remote client is closed")
@@ -137,15 +135,6 @@ func hasExplicitTCPServerTarget(cfg config.App) bool {
 }
 
 func dialRemoteWithTransport(ctx context.Context, plan remoteDialPlan, transport rpcwire.ClientTransport, attachIntent *remoteAttachmentIntent) (*Remote, error) {
-	preparer := jsoncontract.NewPreparer(false)
-	updateStatusResponseContract, err := serverjsoncontract.PrepareUpdateStatusResponse(preparer)
-	if err != nil {
-		return nil, err
-	}
-	sessionExecutionResponseContract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentResponse(preparer)
-	if err != nil {
-		return nil, err
-	}
 	conn, err := plan.dial(ctx, transport)
 	if err != nil {
 		return nil, err
@@ -163,14 +152,12 @@ func dialRemoteWithTransport(ctx context.Context, plan remoteDialPlan, transport
 	}
 	control := newRemoteControlConn(conn)
 	return &Remote{
-		plan:                             plan,
-		transport:                        transport,
-		control:                          control,
-		identity:                         identity,
-		attachIntent:                     attachIntent,
-		attachment:                       attachment,
-		updateStatusResponseContract:     updateStatusResponseContract,
-		sessionExecutionResponseContract: sessionExecutionResponseContract,
+		plan:         plan,
+		transport:    transport,
+		control:      control,
+		identity:     identity,
+		attachIntent: attachIntent,
+		attachment:   attachment,
 	}, nil
 }
 
@@ -593,10 +580,8 @@ func protocolError(resp *protocol.ResponseError) error {
 	}
 	switch resp.Code {
 	case protocol.ErrCodeWorktreeSelector,
-		protocol.ErrCodeWorktreeTransitionPending,
 		protocol.ErrCodeWorktreeSetupRetained,
-		protocol.ErrCodeWorktreeDeletePrecondition,
-		protocol.ErrCodeWorktreeImmediateTransition:
+		protocol.ErrCodeWorktreeDeletePrecondition:
 		if len(resp.Data) > 0 {
 			return serverapi.DecodeWorktreeRPCError(resp.Data, message)
 		}

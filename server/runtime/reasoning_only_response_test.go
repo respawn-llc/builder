@@ -16,7 +16,7 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
-	completionTool := &externalCompletionTool{controller: controller}
+	completionTool := &externalCompletionTool{}
 	client := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{
@@ -43,12 +43,14 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 			Input: json.RawMessage(`{"cmd":"kent task complete"}`),
 		}),
 	}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: completionTool,
-	}), Config{
-		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
-	})
+	}), Config{})
+	workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand)
+	publishTestWorkflowExecution(t, eng, workflowConfig)
+	publishTestWorkflowAgentAssociation(t, eng, workflowConfig)
+	completionTool.complete = bindExternalAgentCompletion(t, eng, controller, workflowConfig.ScopeID)
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
 		t.Fatalf("submit workflow turn: %v", err)
@@ -80,7 +82,7 @@ func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
-	completionTool := &externalCompletionTool{controller: controller}
+	completionTool := &externalCompletionTool{}
 	client := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{
@@ -102,12 +104,14 @@ func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
 			Input: json.RawMessage(`{"cmd":"kent task complete"}`),
 		}),
 	}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: completionTool,
-	}), Config{
-		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
-	})
+	}), Config{})
+	workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand)
+	publishTestWorkflowExecution(t, eng, workflowConfig)
+	publishTestWorkflowAgentAssociation(t, eng, workflowConfig)
+	completionTool.complete = bindExternalAgentCompletion(t, eng, controller, workflowConfig.ScopeID)
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
 		t.Fatalf("submit workflow turn: %v", err)

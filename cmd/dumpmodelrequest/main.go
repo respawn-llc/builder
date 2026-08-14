@@ -1,7 +1,6 @@
-// Command dumpmodelrequest captures a production-request-assembly-equivalent
-// model-request payload for a Kent session without executing a model turn or
-// performing any network I/O. It does not reproduce provider token accounting
-// or compaction/context decisions.
+// Command dumpmodelrequest captures a semantically equivalent model-request
+// payload for a Kent session without executing a model turn or performing any
+// network I/O.
 //
 // Given a session ID (and an optional persistence root), it resolves the session
 // via the SQLite metadata index, reconstructs the production request-assembly path
@@ -10,7 +9,7 @@
 // provider-agnostic llm.Request to a file.
 //
 // Payload parameters come from the production HTTPTransport.buildPayload path.
-// The diagnostic JSON is request-shape equivalent but may differ byte-for-byte
+// The diagnostic JSON is semantically equivalent but may differ byte-for-byte
 // from the openai-go SDK HTTP body because JSON escaping can differ. No proxy,
 // mock, or live OpenAI request is involved.
 //
@@ -45,7 +44,6 @@ import (
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/shared/config"
-	"core/shared/textutil"
 )
 
 func main() {
@@ -103,11 +101,9 @@ type capturedRequest struct {
 	Request     llm.Request     `json:"request"`
 }
 
-// captureSessionRequest reproduces the production request-assembly path for a
-// session and returns the prepared provider-agnostic request plus an equivalent
-// OpenAI payload JSON. The result is request-shape equivalent only: token
-// accounting and compaction/context decisions are not reproduced. No model turn
-// runs and no HTTP is performed.
+// captureSessionRequest reproduces the production request-prep path for a session
+// and returns the prepared provider-agnostic request plus semantically equivalent
+// OpenAI payload JSON. No model turn runs and no HTTP is performed.
 func captureSessionRequest(
 	ctx context.Context,
 	persistenceRoot,
@@ -214,8 +210,6 @@ func captureSessionRequest(
 		auth.NewManager(authStore, nil, nil),
 		nil,
 		runtimewire.RuntimeWiringOptions{
-			QuestionsEnabled:                    textutil.Value(resolved.QuestionsEnabled),
-			AutoCompactionEnabled:               textutil.Value(resolved.AutoCompactionEnabled),
 			FilesystemContext:                   filesystemContext,
 			Context:                             ctx,
 			Client:                              inspectionCapabilityClient{capabilities: caps},

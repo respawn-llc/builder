@@ -55,8 +55,8 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 - `Create a new session` appears only in `Sessions`; `n` starts a new ordinary session from either tab.
 - An empty `Subagents` tab remains selected and shows `No subagent sessions yet`; tab navigation and `n` remain available.
 - When both tabs are empty, startup skips the picker and goes directly to new-session setup.
-- Each tab requests 50 Sessions per page in recency order with infinite scroll and keeps at most two bounded pages resident. Traversal loads older pages and reloads evicted newer pages when navigating back; neither client nor server holds or requests the full session set.
-- Initial load and fresh retry replace the affected tab body. Loading an older or newer offset page keeps resident rows, selection, and viewport visible, shows a loading affordance at the requested edge, and blocks only crossing that pending edge.
+- Each tab is served as its own recency-ordered 50-session window with infinite scroll and keeps at most two bounded pages resident. Traversal loads older pages and reloads evicted newer pages when navigating back; neither client nor server holds or requests the full session set.
+- Initial load and fresh retry replace the affected tab body. Older/newer continuation keeps resident rows, selection, and viewport visible, shows a loading affordance at the requested edge, and blocks only crossing that pending edge.
 - Each row shows session title and relative age.
 - Keys: `Up`/`Down` and `j`/`k` move selection; `PgUp`/`PgDn` page; `Tab`/`Shift+Tab`, `Left`/`Right`, and `h`/`l` switch tabs without opening a session; `Enter` opens; `n` starts a new session. `Esc` is a no-op, `q` has no binding, and `Ctrl+C` is the sole picker exit key.
 - Opening a session seeds the next main input from the session's persisted draft verbatim (byte-for-byte, including whitespace and newlines).
@@ -66,7 +66,6 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 - An unregistered current directory offers new-Project creation first and an existing-Project picker below.
 - Creating a Project attaches the current workspace as its first workspace and main worktree.
 - Selecting an existing Project attaches the workspace to it.
-- The existing-Project Workspace picker uses the canonical Project Workspace catalog with infinite scroll. It preserves server order, shows Workspace name and path, and shows no activity timestamp.
 - Server-browsing mode can open existing Projects and workspaces but cannot create or attach them.
 - Kent supplies the Project-name suggestion from the workspace. The TUI does not inspect the filesystem to derive it.
 - An empty Project name shows an inline error.

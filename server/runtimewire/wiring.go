@@ -2,7 +2,6 @@ package runtimewire
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,8 +17,8 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/server/workflowruntime"
+	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -44,13 +43,11 @@ type RuntimeWiringOptions struct {
 	Context                             context.Context
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
-	QuestionsEnabled                    *bool
-	AutoCompactionEnabled               *bool
+	FastMode                            *runtime.FastModeState
 	Sources                             map[string]string
 	Client                              llm.Client
 	ClientFactory                       RuntimeClientFactory
 	ReviewerClientFactory               RuntimeClientFactory
-	CurrentNodeExecution                *workflowruntime.CurrentNodeExecutionConfig
 	WorkflowPrompt                      *workflowruntime.PromptContract
 	AskQuestionBatchSkipped             func(askquestion.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
@@ -60,6 +57,7 @@ type RuntimeWiringOptions struct {
 	LifecycleTaskFinished               func() error
 	LifecycleRuntimeAbort               func() error
 	DurabilityObserver                  runtime.ResultGroupDurabilityObserver
+	ApplyWorktreeTarget                 func(clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -80,12 +78,6 @@ func NewRuntimeWiringWithBackground(
 	background *shelltool.Manager,
 	opts RuntimeWiringOptions,
 ) (*RuntimeWiring, error) {
-	if opts.QuestionsEnabled == nil {
-		return nil, errors.New("effective Session Questions setting is required")
-	}
-	if opts.AutoCompactionEnabled == nil {
-		return nil, errors.New("effective Session Auto-compaction setting is required")
-	}
 	if opts.Client != nil && opts.ClientFactory != nil {
 		return nil, ErrRuntimeClientFactoryConflict
 	}
@@ -114,7 +106,6 @@ func NewRuntimeWiringWithBackground(
 		Background:               background,
 		ShellPostprocessor:       shellPostprocessor,
 		GlobalConfigDir:          opts.GlobalConfigDir,
-		Debug:                    active.Debug,
 		TriggerHandoffController: func() triggerhandofftool.TriggerHandoffController { return eng },
 		QuestionsEnabledGetter: func() bool {
 			if eng == nil {
@@ -229,6 +220,7 @@ func NewRuntimeWiringWithBackground(
 		ThinkingLevel:                   active.ThinkingLevel,
 		ModelCapabilities:               llm.LockedModelCapabilitiesForConfig(active.Model, active.ModelCapabilities),
 		FastModeEnabled:                 active.PriorityRequestMode,
+		FastModeState:                   opts.FastMode,
 		WebSearchMode:                   active.WebSearch,
 		PromptFacingSnapshotReloader:    promptReloader,
 		ProviderCapabilitiesOverride:    providerCapabilitiesOverride,
@@ -243,11 +235,10 @@ func NewRuntimeWiringWithBackground(
 		LocalCompactionCarryoverLimit:   20_000,
 		CompactionMode:                  string(active.CompactionMode),
 		CacheWarningMode:                active.CacheWarningMode,
-		AutoCompactionEnabled:           textutil.Pointer(opts.AutoCompactionEnabled),
-		QuestionsEnabled:                textutil.Pointer(opts.QuestionsEnabled),
+		AutoCompactionEnabled:           boolRef(runtime.DefaultAutoCompactionEnabled),
+		QuestionsEnabled:                boolRef(runtime.DefaultQuestionsEnabled),
 		HeadlessMode:                    opts.Headless,
 		ToolPreambles:                   active.ToolPreambles,
-		CurrentNodeExecution:            opts.CurrentNodeExecution,
 		WorkflowPrompt:                  opts.WorkflowPrompt,
 		AskQuestionBatchSkipped:         opts.AskQuestionBatchSkipped,
 		TranscriptWorkingDir:            workingDirectory,
@@ -273,6 +264,7 @@ func NewRuntimeWiringWithBackground(
 		LifecycleTaskFinished: opts.LifecycleTaskFinished,
 		LifecycleRuntimeAbort: opts.LifecycleRuntimeAbort,
 		DurabilityObserver:    opts.DurabilityObserver,
+		ApplyWorktreeTarget:   opts.ApplyWorktreeTarget,
 	})
 	if err != nil {
 		return nil, err
@@ -402,3 +394,5 @@ func providerCapabilitiesOverridePtr(override config.ProviderCapabilitiesOverrid
 	}
 	return &caps
 }
+
+func boolRef(v bool) *bool { return &v }

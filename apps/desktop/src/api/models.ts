@@ -92,34 +92,19 @@ export type ProjectPage = Readonly<{
   generatedAt: number;
 }>;
 
-export type WorkspaceCatalogRow = Readonly<{
-  id: string;
-  name: string;
-  rootPath: string;
-  isDefault: boolean;
-}>;
-
-export type WorkspaceCatalogPage = Readonly<{
+export type WorkspaceList = Readonly<{
   projectID: string;
-  offset: number;
-  workspaces: readonly WorkspaceCatalogRow[];
-  nextOffset: number | null;
+  workspaces: readonly WorkspaceSummary[];
+  defaultWorkspaceID: string;
+  nextPageToken: string | null;
 }>;
 
-export type ProjectWorkspaceResult =
-  Readonly<{ kind: "attached"; workspace: WorkspaceCatalogRow }> | Readonly<{ kind: "not_attached" }>;
-
-export type ProjectWorkspaceAttachOutcome = "attached" | "already_attached";
-
-export type ProjectWorkspaceAttachResponse = Readonly<{
-  binding: ProjectBinding;
-  outcome: ProjectWorkspaceAttachOutcome;
-}>;
-
-export const workspaceCatalogPageSize = 100;
 export type SessionCategory = "main" | "subagent";
 
-export const sessionCatalogPageSize = 50;
+export type SessionPagePosition =
+  | Readonly<{ kind: "newest" }>
+  | Readonly<{ kind: "older"; token: string }>
+  | Readonly<{ kind: "newer"; token: string }>;
 export type SessionCatalogSummary = Readonly<{
   id: string;
   category: SessionCategory;
@@ -131,13 +116,17 @@ export type SessionCatalogPage = Readonly<{
   projectID: string;
   category: SessionCategory;
   sessions: readonly SessionCatalogSummary[];
-  nextOffset: number | null;
+  older: string | null;
+  newer: string | null;
 }>;
 
 export type ProjectEdit = Readonly<{
   projectID: string;
   projectKey: string;
   displayName: string;
+  defaultWorkspaceID: string;
+  workspaces: readonly WorkspaceSummary[];
+  nextPageToken: string;
 }>;
 
 export type ProjectMutationResponse = Readonly<{
@@ -201,9 +190,9 @@ export type WorkflowValidationError = Readonly<{
   code: string;
   message: string;
   workflowID: string | null;
-  nodeID: string | null;
-  transitionGroupID: string | null;
-  edgeID: string | null;
+  nodeID: string;
+  transitionGroupID: string;
+  edgeID: string;
   details: WorkflowValidationErrorDetails;
   relatedIDs: readonly string[];
   blocksContext: boolean;
@@ -213,7 +202,7 @@ export type WorkflowValidationErrorDetails = Readonly<{
   fieldName: string;
   inputName: string;
   placeholder: string;
-  providerEdgeID: string | null;
+  providerEdgeID: string;
   role: string | null;
   requiredTool: string | null;
 }>;
@@ -270,7 +259,7 @@ export type WorkflowNode = Readonly<{
   key: string;
   kind: string;
   name: string;
-  groupID: string | null;
+  groupID: string;
   groupKey: string;
   subagentRole: string;
   completionMode?: string | undefined;
@@ -582,7 +571,7 @@ export type BoardColumn = Readonly<{
   name: string;
   assigneeRole: string;
   outputFields: readonly WorkflowOutputField[];
-  groupID: string | null;
+  groupID: string;
   sortOrder: number;
   isBacklog: boolean;
   isDone: boolean;

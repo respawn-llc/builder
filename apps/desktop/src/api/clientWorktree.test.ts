@@ -307,11 +307,6 @@ describe("Desktop Worktree client", () => {
         ? { candidates: [{ variant: "external", selector: "feature", fallback_identity: "/repo/feature" }] }
         : {}),
     });
-    const pending = {
-      type: "worktree_transition_pending",
-      session_id: "session-1",
-      pending_operation_id: ids[0],
-    };
     const retained = {
       type: "worktree_setup_retained",
       worktree: topology,
@@ -319,7 +314,6 @@ describe("Desktop Worktree client", () => {
       diagnostic: "setup failed",
       retained_previous_worktree: null,
     };
-    const immediate = (kind: string) => ({ type: "worktree_immediate_transition", kind });
     const precondition = (dirty_state: JsonValue) => ({
       type: "worktree_delete_precondition",
       dirty_state,
@@ -331,9 +325,6 @@ describe("Desktop Worktree client", () => {
       [rpcErrorCodes.worktreeSelector, selector("unavailable"), "selector"],
       [rpcErrorCodes.worktreeCreate, { owner: "base_ref", diagnostic: "invalid" }, "create"],
       [rpcErrorCodes.worktreeCreate, { owner: "form", diagnostic: "invalid" }, "create"],
-      [rpcErrorCodes.worktreeTransitionPending, pending, "transition_pending"],
-      [rpcErrorCodes.worktreeImmediateTransition, immediate("origin_inactive"), "immediate_transition"],
-      [rpcErrorCodes.worktreeImmediateTransition, immediate("apply_failed"), "immediate_transition"],
       [rpcErrorCodes.worktreeSetupRetained, retained, "setup_retained"],
       [
         rpcErrorCodes.worktreeDeletePrecondition,
@@ -351,8 +342,6 @@ describe("Desktop Worktree client", () => {
       [rpcErrorCodes.worktreeBlocked, {}],
       [rpcErrorCodes.worktreeSelector, { ...selector("ambiguous"), candidates: [] }],
       [rpcErrorCodes.worktreeCreate, { owner: "base_ref", diagnostic: "" }],
-      [rpcErrorCodes.worktreeTransitionPending, { ...pending, pending_operation_id: "invalid" }],
-      [rpcErrorCodes.worktreeImmediateTransition, immediate("invalid")],
       [
         rpcErrorCodes.worktreeSetupRetained,
         { ...retained, worktree: { variant: "external", external: { git } } },
