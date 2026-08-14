@@ -397,7 +397,6 @@ type startupGatewayDependencies struct {
 	rootLease   *core.RootLockLease
 	finalizer   apicontract.OnboardingFinalizeService
 	core        *core.Core
-	activation  error
 	buildCore   startupCoreBuilder
 	snapshot    atomic.Pointer[startupDependencySnapshot]
 }
@@ -473,13 +472,11 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	d.core = appCore
 	d.rootLease = nil
 	d.cfg = refreshed.Config
-	d.activation = nil
 	d.publishSnapshotLocked(startupReadinessState{Ready: true}, appCore)
 	return nil
 }
 
 func (d *startupGatewayDependencies) activationError(resp serverapi.OnboardingFinalizeResponse, err error) error {
-	d.activation = err
 	reason := serverapi.ServerNotReadyActivationFailed
 	diagnostic := err.Error()
 	d.publishSnapshotLocked(startupReadinessState{Reason: &reason, Diagnostic: &diagnostic}, nil)
@@ -496,16 +493,19 @@ func (d *startupGatewayDependencies) activeCore() *core.Core {
 }
 
 func (d *startupGatewayDependencies) RequireCoreActive() error {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	if d.core != nil {
+	snapshot := d.loadSnapshot()
+	if snapshot.core != nil {
 		return nil
 	}
-	if d.activation != nil {
-		diagnostic := d.activation.Error()
-		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{Diagnostic: &diagnostic}, d.activation)
+	reason := serverapi.ServerNotReadyOnboardingRequired
+	if snapshot.readiness.Reason != nil {
+		reason = *snapshot.readiness.Reason
 	}
-	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+	var details any
+	if snapshot.readiness.Diagnostic != nil {
+		details = serverapi.ServerNotReadyDetails{Diagnostic: snapshot.readiness.Diagnostic}
+	}
+	return serverapi.NewServerNotReadyError(reason, details, nil)
 }
 
 type startupReadinessState struct {
