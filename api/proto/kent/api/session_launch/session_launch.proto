@@ -1,0 +1,582 @@
+syntax = "proto3";
+
+package kent.api.session_launch;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "kent/api/project/project.proto";
+import "kent/api/runtime/runtime.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/session_launch;sessionlaunchpb";
+
+enum SessionLaunchMode {
+  SESSION_LAUNCH_MODE_UNSPECIFIED = 0;
+  SESSION_LAUNCH_MODE_INTERACTIVE = 1;
+  SESSION_LAUNCH_MODE_HEADLESS = 2;
+}
+
+message SessionCreateOrigin {
+  oneof origin {
+    option (buf.validate.oneof).required = true;
+
+    google.protobuf.Empty independent = 1;
+    string previous_session_id = 2 [
+      (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+    ];
+    string parent_agent_session_id = 3 [
+      (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+    ];
+  }
+}
+
+message SessionLaunchIntent {
+  oneof intent {
+    option (buf.validate.oneof).required = true;
+
+    SessionCreateOrigin create_new = 1 [(buf.validate.field).required = true];
+    string open_existing_session_id = 2 [
+      (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+    ];
+  }
+}
+
+message RunPromptOverrides {
+  optional string agent_role = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.run_prompt_agent_role_nonblank"
+      message: "agent_role must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string model = 2 [(buf.validate.field).string.min_len = 1];
+  optional string provider_override = 3 [
+    (buf.validate.field).string = {
+      in: ["openai", "anthropic"]
+    }
+  ];
+  optional string thinking_level = 4 [(buf.validate.field).string.min_len = 1];
+  optional string theme = 5 [
+    (buf.validate.field).string = {
+      in: ["auto", "light", "dark"]
+    }
+  ];
+  optional int32 model_timeout_seconds = 6 [(buf.validate.field).int32.gte = 1];
+  optional string tools = 7 [(buf.validate.field).string.min_len = 1];
+  optional string openai_base_url = 8 [(buf.validate.field).string.min_len = 1];
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.run_prompt_openai_base_url_provider"
+    message: "openai_base_url requires provider_override=openai or no provider override"
+    expression:
+      "!has(this.openai_base_url) || !has(this.provider_override) || this.provider_override == 'openai'"
+  };
+}
+
+enum ModelVerbosity {
+  MODEL_VERBOSITY_UNSPECIFIED = 0;
+  MODEL_VERBOSITY_LOW = 1;
+  MODEL_VERBOSITY_MEDIUM = 2;
+  MODEL_VERBOSITY_HIGH = 3;
+}
+
+enum CompactionMode {
+  COMPACTION_MODE_UNSPECIFIED = 0;
+  COMPACTION_MODE_NATIVE = 1;
+  COMPACTION_MODE_LOCAL = 2;
+  COMPACTION_MODE_NONE = 3;
+}
+
+enum BackgroundShellOutputMode {
+  BACKGROUND_SHELL_OUTPUT_MODE_UNSPECIFIED = 0;
+  BACKGROUND_SHELL_OUTPUT_MODE_DEFAULT = 1;
+  BACKGROUND_SHELL_OUTPUT_MODE_VERBOSE = 2;
+  BACKGROUND_SHELL_OUTPUT_MODE_CONCISE = 3;
+}
+
+enum ShellPostprocessingMode {
+  SHELL_POSTPROCESSING_MODE_UNSPECIFIED = 0;
+  SHELL_POSTPROCESSING_MODE_NONE = 1;
+  SHELL_POSTPROCESSING_MODE_BUILTIN = 2;
+  SHELL_POSTPROCESSING_MODE_USER = 3;
+  SHELL_POSTPROCESSING_MODE_ALL = 4;
+}
+
+enum CacheWarningMode {
+  CACHE_WARNING_MODE_UNSPECIFIED = 0;
+  CACHE_WARNING_MODE_OFF = 1;
+  CACHE_WARNING_MODE_DEFAULT = 2;
+  CACHE_WARNING_MODE_VERBOSE = 3;
+}
+
+enum WorkflowCompletionMode {
+  WORKFLOW_COMPLETION_MODE_UNSPECIFIED = 0;
+  WORKFLOW_COMPLETION_MODE_AUTO = 1;
+  WORKFLOW_COMPLETION_MODE_STRUCTURED_OUTPUT = 2;
+  WORKFLOW_COMPLETION_MODE_TOOL = 3;
+  WORKFLOW_COMPLETION_MODE_SHELL_COMMAND = 4;
+  WORKFLOW_COMPLETION_MODE_UNSTRUCTURED_OUTPUT = 5;
+}
+
+enum SleepPreventionMode {
+  SLEEP_PREVENTION_MODE_UNSPECIFIED = 0;
+  SLEEP_PREVENTION_MODE_ALWAYS = 1;
+  SLEEP_PREVENTION_MODE_ACTIVE = 2;
+  SLEEP_PREVENTION_MODE_NEVER = 3;
+}
+
+enum SystemPromptFileScope {
+  SYSTEM_PROMPT_FILE_SCOPE_UNSPECIFIED = 0;
+  SYSTEM_PROMPT_FILE_SCOPE_HOME_CONFIG = 1;
+  SYSTEM_PROMPT_FILE_SCOPE_WORKSPACE_CONFIG = 2;
+  SYSTEM_PROMPT_FILE_SCOPE_SUBAGENT = 3;
+}
+
+message SystemPromptFile {
+  string path = 1 [(buf.validate.field).string.min_len = 1];
+  SystemPromptFileScope scope = 2 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+}
+
+message ModelCapabilitiesOverride {
+  bool supports_reasoning_effort = 1;
+  bool supports_vision_inputs = 2;
+}
+
+message ProviderCapabilitiesOverride {
+  string provider_id = 1;
+  bool supports_responses_api = 2;
+  bool supports_responses_compact = 3;
+  bool supports_request_input_token_count = 4;
+  bool supports_prompt_cache_key = 5;
+  bool supports_native_web_search = 6;
+  bool supports_reasoning_encrypted = 7;
+  bool supports_server_side_context_edit = 8;
+  bool supports_provider_verbosity = 9;
+  bool is_openai_first_party = 10;
+}
+
+message TimeoutSettings {
+  int32 model_request_seconds = 1 [(buf.validate.field).int32.gt = 0];
+}
+
+message ShellSettings {
+  ShellPostprocessingMode postprocessing_mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string postprocess_hook = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.shell_postprocess_hook_nonblank"
+      message: "postprocess_hook must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message WorktreeSettings {
+  string base_dir = 1;
+  string setup_script = 2;
+  int32 setup_timeout_seconds = 3 [(buf.validate.field).int32.gte = 0];
+}
+
+message WorkflowSettings {
+  WorkflowCompletionMode completion_mode = 1 [(buf.validate.field).enum.defined_only = true];
+  int32 concurrency = 2 [(buf.validate.field).int32.gte = 0];
+  int32 max_invalid_completion_attempts = 3 [(buf.validate.field).int32.gte = 0];
+  optional int32 pre_compaction_tokens = 4 [(buf.validate.field).int32.gt = 0];
+  bool use_required_tool_calls = 5;
+  bool subagents = 6;
+}
+
+message ReviewerSettings {
+  string frequency = 1;
+  string model = 2;
+  string thinking_level = 3;
+  ModelVerbosity model_verbosity = 4 [(buf.validate.field).enum.defined_only = true];
+  string provider_override = 5;
+  string openai_base_url = 6;
+  ModelCapabilitiesOverride model_capabilities = 7 [(buf.validate.field).required = true];
+  ProviderCapabilitiesOverride provider_capabilities = 8 [(buf.validate.field).required = true];
+  int32 model_context_window = 9 [(buf.validate.field).int32.gte = 40000];
+  string auth = 10;
+  string system_prompt_file = 11;
+  int32 timeout_seconds = 12 [(buf.validate.field).int32.gt = 0];
+  bool verbose_output = 13;
+}
+
+message SubagentRole {
+  Settings settings = 1 [(buf.validate.field).required = true];
+  repeated StringFact sources = 2;
+  string description = 3 [(buf.validate.field).string.max_len = 5000];
+  bool agent_callable = 4;
+  bool agent_callable_set = 5;
+  bool workflow_subagent = 6;
+  bool workflow_subagent_set = 7;
+}
+
+message StringFact {
+  string key = 1 [(buf.validate.field).string.min_len = 1];
+  string value = 2;
+}
+
+message BooleanFact {
+  string key = 1 [(buf.validate.field).string.min_len = 1];
+  bool value = 2;
+}
+
+message NamedSubagentRole {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+  SubagentRole role = 2 [(buf.validate.field).required = true];
+}
+
+enum ToolID {
+  TOOL_ID_UNSPECIFIED = 0;
+  TOOL_ID_EXEC_COMMAND = 1;
+  TOOL_ID_WRITE_STDIN = 2;
+  TOOL_ID_VIEW_IMAGE = 3;
+  TOOL_ID_PATCH = 4;
+  TOOL_ID_EDIT = 5;
+  TOOL_ID_ASK_QUESTION = 6;
+  TOOL_ID_COMPLETE_NODE = 7;
+  TOOL_ID_TRIGGER_HANDOFF = 8;
+  TOOL_ID_WEB_SEARCH = 9;
+}
+
+message ToolEnabledFact {
+  ToolID tool_id = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  bool enabled = 2;
+}
+
+message Settings {
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.compaction_threshold_below_model_window"
+    message: "context_compaction_threshold_tokens must be less than model_context_window"
+    expression: "this.context_compaction_threshold_tokens < this.model_context_window"
+  };
+
+  string model = 1;
+  string thinking_level = 2;
+  ModelVerbosity model_verbosity = 3 [(buf.validate.field).enum.defined_only = true];
+  string system_prompt_file = 4;
+  repeated SystemPromptFile system_prompt_files = 5;
+  ModelCapabilitiesOverride model_capabilities = 6 [(buf.validate.field).required = true];
+  string theme = 7 [(buf.validate.field).string = {
+    in: ["auto", "light", "dark"]
+  }];
+  string notification_method = 8;
+  bool tool_preambles = 9;
+  bool priority_request_mode = 10;
+  bool debug = 11;
+  string server_host = 12;
+  int32 server_port = 13 [
+    (buf.validate.field).int32 = {
+      gt: 0
+      lte: 65535
+    }
+  ];
+  string web_search = 14;
+  string provider_override = 15;
+  string provider_identifier = 16;
+  string openai_base_url = 17;
+  ProviderCapabilitiesOverride provider_capabilities = 18 [(buf.validate.field).required = true];
+  bool store = 19;
+  bool allow_non_cwd_edits = 20;
+  int32 model_context_window = 21 [(buf.validate.field).int32.gte = 40000];
+  int32 context_compaction_threshold_tokens = 22 [(buf.validate.field).int32.gt = 0];
+  int32 pre_submit_compaction_lead_tokens = 23 [(buf.validate.field).int32.gt = 0];
+  int32 minimum_exec_to_bg_seconds = 24 [(buf.validate.field).int32.gt = 0];
+  CompactionMode compaction_mode = 25 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  repeated ToolEnabledFact enabled_tools = 26;
+  repeated BooleanFact skill_toggles = 27;
+  TimeoutSettings timeouts = 28 [(buf.validate.field).required = true];
+  int32 shell_output_max_chars = 29 [(buf.validate.field).int32.gt = 0];
+  BackgroundShellOutputMode bg_shells_output = 30 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  ShellSettings shell = 31 [(buf.validate.field).required = true];
+  CacheWarningMode cache_warning_mode = 32 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  WorktreeSettings worktrees = 33 [(buf.validate.field).required = true];
+  WorkflowSettings workflow = 34 [(buf.validate.field).required = true];
+  ReviewerSettings reviewer = 35 [(buf.validate.field).required = true];
+  repeated NamedSubagentRole subagents = 36;
+  int32 max_subagent_depth = 37 [(buf.validate.field).int32.gte = 0];
+  SleepPreventionMode prevent_sleep = 38 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message SourceReport {
+  string settings_path = 1;
+  bool settings_file_exists = 2;
+  bool created_default_config = 3;
+  string home_settings_path = 4;
+  bool home_settings_file_exists = 5;
+  string workspace_settings_path = 6;
+  bool workspace_settings_file_exists = 7;
+  bool workspace_settings_layer_enabled = 8;
+  repeated StringFact sources = 9;
+}
+
+message SessionPlanRequest {
+  SessionLaunchMode mode = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  SessionLaunchIntent intent = 2 [(buf.validate.field).required = true];
+  optional string caller_session_id = 3 [(buf.validate.field).string.min_len = 1];
+  RunPromptOverrides overrides = 4;
+}
+
+message SessionPlan {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  Settings active_settings = 2 [(buf.validate.field).required = true];
+  repeated ToolID enabled_tool_ids = 3 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string configured_model_name = 4 [(buf.validate.field).string.min_len = 1];
+  optional string session_name = 5 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.session_plan_name_nonblank"
+      message: "session_name must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+  repeated string prompt_history = 6 [(buf.validate.field).repeated.max_items = 100];
+  bool model_contract_locked = 7;
+  bool questions_enabled = 8;
+  bool auto_compaction_enabled = 9;
+  bool thinking_override_explicit = 10;
+  SourceReport source = 11 [(buf.validate.field).required = true];
+}
+
+message SessionPlanSuccess {
+  SessionPlan plan = 1 [(buf.validate.field).required = true];
+  repeated string warnings = 2;
+}
+
+enum SubagentLaunchDenialKind {
+  SUBAGENT_LAUNCH_DENIAL_KIND_UNSPECIFIED = 0;
+  SUBAGENT_LAUNCH_DENIAL_KIND_INVALID_TARGET = 1;
+  SUBAGENT_LAUNCH_DENIAL_KIND_TARGET_MISSING = 2;
+  SUBAGENT_LAUNCH_DENIAL_KIND_NOT_CALLABLE = 3;
+  SUBAGENT_LAUNCH_DENIAL_KIND_CALLER_MISSING = 4;
+  SUBAGENT_LAUNCH_DENIAL_KIND_PARENT_MISSING = 5;
+}
+
+message SubagentLaunchDeniedDetails {
+  SubagentLaunchDenialKind kind = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string target = 2 [(buf.validate.field).string.min_len = 1];
+  repeated string available_roles = 3 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message SessionPlanError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    SubagentLaunchDeniedDetails subagent_launch_denied = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "subagent_launch_denied"
+      }
+    ];
+    kent.api.project.WorkspaceNotRegisteredDetails workspace_not_registered = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_not_registered"
+      }
+    ];
+    SubagentLaunchMaxDepthExceededDetails max_depth_exceeded = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "max_depth_exceeded"
+      }
+    ];
+    SubagentLaunchLineageCorruptDetails lineage_corrupt = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "lineage_corrupt"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message SubagentLaunchMaxDepthExceededDetails {
+  int32 attempted_depth = 1 [(buf.validate.field).int32.gte = 1];
+  int32 max_depth = 2 [(buf.validate.field).int32.gte = 0];
+
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.subagent_depth_exceeded"
+    message: "attempted_depth must exceed max_depth"
+    expression: "this.attempted_depth > this.max_depth"
+  };
+}
+
+message SubagentLaunchLineageCorruptDetails {
+  string repeated_session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  repeated string visited_session_ids = 2 [
+    (buf.validate.field).repeated.min_items = 1,
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message SessionPlanResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    SessionPlanSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SessionPlanError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message WorkspaceChatDraftRequest {
+  oneof operation {
+    option (buf.validate.oneof).required = true;
+
+    google.protobuf.Empty read_message = 1;
+    string update_message = 2;
+    google.protobuf.Empty clear = 3;
+  }
+}
+
+message WorkspaceChatDraftSuccess {
+  string message = 1;
+  kent.api.runtime.GoalAvailability goal_availability = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message WorkspaceChatDraftError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message WorkspaceChatDraftResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    WorkspaceChatDraftSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    WorkspaceChatDraftError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message MaterializeWorkspaceChatSuccess {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message MaterializeWorkspaceChatError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message MaterializeWorkspaceChatResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    MaterializeWorkspaceChatSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    MaterializeWorkspaceChatError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service SessionLaunchService {
+  rpc Plan(SessionPlanRequest) returns (SessionPlanResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_WORKSPACE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.plan"
+    };
+  }
+
+  rpc WorkspaceChatDraft(WorkspaceChatDraftRequest) returns (WorkspaceChatDraftResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_WORKSPACE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.workspaceChatDraft"
+    };
+  }
+
+  rpc MaterializeWorkspaceChat(google.protobuf.Empty) returns (MaterializeWorkspaceChatResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_WORKSPACE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.materializeWorkspaceChat"
+    };
+  }
+}

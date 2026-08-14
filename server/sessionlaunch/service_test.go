@@ -26,6 +26,27 @@ import (
 
 type failingAuthStateReader struct{}
 
+type nonRefreshingAuthStateReader struct {
+	loaded       auth.State
+	current      auth.State
+	loadCalls    int
+	currentCalls int
+}
+
+func (r *nonRefreshingAuthStateReader) Load(context.Context) (auth.State, error) {
+	r.loadCalls++
+	return r.loaded, nil
+}
+
+func (r *nonRefreshingAuthStateReader) CurrentState(context.Context) (auth.State, error) {
+	r.currentCalls++
+	return r.current, nil
+}
+
+func (r *nonRefreshingAuthStateReader) StoredState(context.Context) (auth.State, error) {
+	return auth.EmptyState(), nil
+}
+
 var serviceTestPersistence = sessiontest.NewPersistence()
 
 func createLaunchTestSession(t *testing.T, containerDir, name, workspace string) *session.Store {
@@ -37,12 +58,136 @@ func createLaunchTestSession(t *testing.T, containerDir, name, workspace string)
 	return store
 }
 
+func (failingAuthStateReader) Load(context.Context) (auth.State, error) {
+	return auth.EmptyState(), nil
+}
+
 func (failingAuthStateReader) CurrentState(context.Context) (auth.State, error) {
 	return auth.State{}, errors.New("auth unavailable")
 }
 
 func (failingAuthStateReader) StoredState(context.Context) (auth.State, error) {
 	return auth.EmptyState(), nil
+}
+
+func TestPlanLaunchSessionResolvesEffectiveAuthAfterFinalNamedRoleSelection(t *testing.T) {
+	workspace := t.TempDir()
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.Settings.CompactionMode = config.CompactionModeNative
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"worker": {
+			Settings: func() config.Settings {
+				settings := cfg.Settings
+				settings.Model = "worker-model"
+				settings.OpenAIBaseURL = "https://compatible.example/v1"
+				settings.ThinkingLevel = "high"
+				settings.Reviewer.Model = "worker-model"
+				settings.Reviewer.ThinkingLevel = "high"
+				settings.Subagents = nil
+				return settings
+			}(),
+			Sources: map[string]string{
+				"model":           "file",
+				"openai_base_url": "file",
+				"thinking_level":  "file",
+			},
+		},
+	}
+	containerDir := t.TempDir()
+	reader := &nonRefreshingAuthStateReader{
+		loaded:  auth.State{Method: auth.Method{Type: auth.MethodAPIKey}},
+		current: auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+	}
+	service := newSessionLaunchTestService(cfg, containerDir).WithAuthStateReader(reader)
+	role := "worker"
+
+	result, err := service.PlanLaunchSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "context-policy-named-role",
+		Mode:            serverapi.SessionLaunchModeHeadless,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.ActiveSettings.CompactionMode != config.CompactionModeLocal {
+		t.Fatalf("CompactionMode = %q, want API-key compatible-provider local fallback; refreshing OAuth would select native", result.Plan.ActiveSettings.CompactionMode)
+	}
+	if reader.loadCalls != 1 || reader.currentCalls != 1 {
+		t.Fatalf("auth calls Load/CurrentState = %d/%d, want non-refreshing policy read after existing readiness read", reader.loadCalls, reader.currentCalls)
+	}
+}
+
+func TestPlanLaunchSessionLoadsEffectiveAuthWhenLockedProviderContractIsAbsent(t *testing.T) {
+	workspace := t.TempDir()
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.Settings.CompactionMode = config.CompactionModeNative
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	if err := store.MarkModelDispatchLocked(session.LockedContract{
+		Model:         cfg.Settings.Model,
+		ContextWindow: cfg.Settings.ModelContextWindow,
+	}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	reader := &nonRefreshingAuthStateReader{
+		loaded:  auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+		current: auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+	}
+	service := newSessionLaunchTestService(cfg, containerDir).WithAuthStateReader(reader)
+
+	result, err := service.PlanLaunchSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "locked-without-provider-contract",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.ActiveSettings.CompactionMode != config.CompactionModeNative {
+		t.Fatalf("CompactionMode = %q, want OAuth provider-native mode", result.Plan.ActiveSettings.CompactionMode)
+	}
+	if reader.loadCalls != 1 {
+		t.Fatalf("effective auth Load calls = %d, want 1", reader.loadCalls)
+	}
+}
+
+func TestPlanLaunchSessionSkipsEffectiveAuthForExplicitProviderCapabilities(t *testing.T) {
+	workspace := t.TempDir()
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.Settings.CompactionMode = config.CompactionModeNative
+	cfg.Settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:               "custom",
+		SupportsResponsesCompact: false,
+	}
+	reader := &nonRefreshingAuthStateReader{
+		loaded: auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+	}
+	service := newSessionLaunchTestService(cfg, t.TempDir()).WithAuthStateReader(reader)
+
+	result, err := service.PlanLaunchSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "explicit-provider-capabilities",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.ActiveSettings.CompactionMode != config.CompactionModeLocal {
+		t.Fatalf("CompactionMode = %q, want explicit-capability local fallback", result.Plan.ActiveSettings.CompactionMode)
+	}
+	if reader.loadCalls != 0 {
+		t.Fatalf("effective auth Load calls = %d, want 0", reader.loadCalls)
+	}
 }
 
 func sessionLaunchStringPtr(value string) *string {

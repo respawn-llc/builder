@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/server/chatcontext"
 	"core/shared/apicontract"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
@@ -115,6 +116,47 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		})
 	},
 	protocol.MethodCapabilityFactsGet: gatewayClientCall[apicontract.CapabilityFactsService, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, apicontract.CapabilityFactsService.GetCapabilityFacts),
+	protocol.MethodChatContextGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
+			if params.Target.IsWorkspaceChat() {
+				authReady, err := newRoutePolicyExecutor(g).serverAuthReady(ctx, state)
+				if err != nil {
+					return serverapi.ChatContextResponse{}, err
+				}
+				if !authReady {
+					return serverapi.ChatContextResponse{}, serverapi.ErrServerAuthRequired
+				}
+				projectID, err := g.activeProjectID(ctx, state)
+				if err != nil {
+					return serverapi.ChatContextResponse{}, err
+				}
+				var owner chatcontext.WorkspaceOwner
+				if strings.TrimSpace(state.attachedWorkspaceID) == "" {
+					owner, err = g.deps.WorkspaceChatContextOwnerForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
+				} else {
+					owner, err = g.deps.WorkspaceChatContextOwnerForProjectWorkspaceID(ctx, projectID, state.attachedWorkspaceID)
+				}
+				if err != nil {
+					return serverapi.ChatContextResponse{}, err
+				}
+				if owner == nil {
+					return serverapi.ChatContextResponse{}, errors.New("workspace Chat Context owner is required")
+				}
+				contextFacts, err := owner.ReadWorkspaceChatContext(ctx)
+				return serverapi.ChatContextResponse{Context: contextFacts}, err
+			}
+			sessionID, selected := params.Target.SessionID()
+			if !selected {
+				return serverapi.ChatContextResponse{}, errors.New("validated Chat Context target is required")
+			}
+			owner := g.deps.SessionChatContextOwner()
+			if owner == nil {
+				return serverapi.ChatContextResponse{}, errors.New("Session Chat Context owner is required")
+			}
+			contextFacts, err := owner.ReadSessionChatContext(ctx, sessionID)
+			return serverapi.ChatContextResponse{Context: contextFacts}, err
+		})
+	},
 	protocol.MethodPromptCommandCatalogGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		params, err := decodeParams[serverapi.PromptCommandCatalogRequest](req.Params)
 		if err != nil {
@@ -292,6 +334,38 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 				return serverapi.WorkspaceChatMaterializeResponse{}, err
 			}
 			return launchClient.MaterializeWorkspaceChat(ctx, params)
+		})
+	},
+	protocol.MethodChatSettingsRead: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
+			switch params.Target.TargetKind {
+			case serverapi.ChatSettingsReadTargetLazy:
+				activeProjectID, err := g.activeProjectID(ctx, state)
+				if err != nil {
+					return serverapi.ChatSettingsReadResponse{}, err
+				}
+				if strings.TrimSpace(*params.Target.ProjectID) != strings.TrimSpace(activeProjectID) {
+					return serverapi.ChatSettingsReadResponse{}, serverapi.ErrWorkspaceNotRegistered
+				}
+			case serverapi.ChatSettingsReadTargetSession:
+				if err := g.requireSessionInActiveProject(
+					ctx,
+					state,
+					params.Target.Session.String(),
+				); err != nil {
+					return serverapi.ChatSettingsReadResponse{}, err
+				}
+			default:
+				return serverapi.ChatSettingsReadResponse{}, errors.New("Chat settings target kind is invalid")
+			}
+			response, err := g.deps.ChatSettingsClient().ReadChatSettings(ctx, params)
+			if err != nil {
+				return serverapi.ChatSettingsReadResponse{}, err
+			}
+			if err := response.ValidateForTarget(params.Target); err != nil {
+				return serverapi.ChatSettingsReadResponse{}, err
+			}
+			return response, nil
 		})
 	},
 	protocol.MethodSessionGetMainView:                            gatewayClientCall[apicontract.SessionViewService, serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetSessionMainView),

@@ -304,6 +304,10 @@ func (c *Remote) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequ
 	return response, nil
 }
 
+func (c *Remote) GetChatContext(ctx context.Context, req serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
+	return callValidatedControlRPC[serverapi.ChatContextRequest, serverapi.ChatContextResponse](c, ctx, protocol.MethodChatContextGet, req)
+}
+
 func (c *Remote) ListProjects(ctx context.Context, req serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
 	return callUnscopedRPC[serverapi.ProjectListRequest, serverapi.ProjectListResponse](c, ctx, protocol.MethodProjectList, req)
 }
@@ -780,6 +784,26 @@ func (c *Remote) MaterializeWorkspaceChat(ctx context.Context, req serverapi.Wor
 	return resp, nil
 }
 
+func (c *Remote) ReadChatSettings(
+	ctx context.Context,
+	req serverapi.ChatSettingsReadRequest,
+) (serverapi.ChatSettingsReadResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	var response serverapi.ChatSettingsReadResponse
+	if err := c.call(ctx, protocol.MethodChatSettingsRead, req, &response); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	if err := response.ValidateForTarget(req.Target); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, invalidResponseError(
+			"Chat settings",
+			err,
+		)
+	}
+	return response, nil
+}
+
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	return callValidatedControlRPC[serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](c, ctx, protocol.MethodSessionGetMainView, req)
 }
@@ -1177,6 +1201,7 @@ func dialConfiguredRemote(ctx context.Context, cfg config.App, intent *remoteAtt
 
 var _ apicontract.ProjectViewService = (*Remote)(nil)
 var _ apicontract.AuthStatusService = (*Remote)(nil)
+var _ apicontract.ChatContextService = (*Remote)(nil)
 var _ apicontract.SessionLaunchService = (*Remote)(nil)
 var _ apicontract.SessionViewService = (*Remote)(nil)
 var _ apicontract.SessionLifecycleService = (*Remote)(nil)

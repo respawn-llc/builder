@@ -1,0 +1,1380 @@
+syntax = "proto3";
+
+package kent.api.project;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/project;projectpb";
+
+enum ProjectAvailability {
+  PROJECT_AVAILABILITY_UNSPECIFIED = 0;
+  PROJECT_AVAILABILITY_AVAILABLE = 1;
+  PROJECT_AVAILABILITY_MISSING = 2;
+  PROJECT_AVAILABILITY_INACCESSIBLE = 3;
+  PROJECT_AVAILABILITY_UNLINKED = 4;
+}
+
+enum WorkspaceBindingPlanMode {
+  WORKSPACE_BINDING_PLAN_MODE_UNSPECIFIED = 0;
+  WORKSPACE_BINDING_PLAN_MODE_INTERACTIVE = 1;
+  WORKSPACE_BINDING_PLAN_MODE_HEADLESS = 2;
+}
+
+enum WorkspaceBindingPlanKind {
+  WORKSPACE_BINDING_PLAN_KIND_UNSPECIFIED = 0;
+  WORKSPACE_BINDING_PLAN_KIND_BOUND = 1;
+  WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND = 2;
+  WORKSPACE_BINDING_PLAN_KIND_SERVER_WORKSPACE_SELECTION = 3;
+  WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_SELECTED = 4;
+  WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_AMBIGUOUS = 5;
+}
+
+message ProjectSummary {
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "project_summary.project_id.trimmed"
+      message: "project_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string project_key = 2 [
+    (buf.validate.field).string = {
+      min_len: 2
+      max_len: 8
+    },
+    (buf.validate.field).cel = {
+      id: "kent.project.summary.project_key"
+      message: "project_key must start with A-Z and contain only A-Z or 0-9"
+      expression:
+        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
+        "bytes(this).all(character, "
+        "(character >= uint(65) && character <= uint(90)) || "
+        "(character >= uint(48) && character <= uint(57)))"
+    }
+  ];
+  string display_name = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 80
+    },
+    (buf.validate.field).cel = {
+      id: "project_summary.display_name.trimmed"
+      message: "display_name must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string root_path = 4 [(buf.validate.field).string.min_len = 1];
+  ProjectAvailability availability = 5 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  int32 session_count = 6 [(buf.validate.field).int32.gte = 0];
+  google.protobuf.Timestamp updated_at = 7 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+}
+
+message ProjectWorkspaceSummary {
+  string workspace_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "project_workspace_summary.workspace_id.trimmed"
+      message: "workspace_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string display_name = 2;
+  string root_path = 3 [(buf.validate.field).string.min_len = 1];
+  ProjectAvailability availability = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  bool is_primary = 5;
+  int32 session_count = 6 [(buf.validate.field).int32.gte = 0];
+  google.protobuf.Timestamp updated_at = 7 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+}
+
+message ProjectOverview {
+  ProjectSummary project = 1 [(buf.validate.field).required = true];
+  repeated ProjectWorkspaceSummary workspaces = 2 [(buf.validate.field).repeated.max_items = 500];
+}
+
+message ProjectBinding {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_key = 2 [
+    (buf.validate.field).string = {
+      min_len: 2
+      max_len: 8
+    },
+    (buf.validate.field).cel = {
+      id: "kent.project.binding.project_key"
+      message: "project_key must start with A-Z and contain only A-Z or 0-9"
+      expression:
+        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
+        "bytes(this).all(character, "
+        "(character >= uint(65) && character <= uint(90)) || "
+        "(character >= uint(48) && character <= uint(57)))"
+    }
+  ];
+  string project_name = 3 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 4 [(buf.validate.field).string.min_len = 1];
+  string canonical_root = 5 [(buf.validate.field).string.min_len = 1];
+  string workspace_name = 6;
+  ProjectAvailability workspace_status = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message ProjectMutationBinding {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_key = 2 [
+    (buf.validate.field).string = {
+      min_len: 2
+      max_len: 8
+    },
+    (buf.validate.field).cel = {
+      id: "kent.project.mutation_binding.project_key"
+      message: "project_key must start with A-Z and contain only A-Z or 0-9"
+      expression:
+        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
+        "bytes(this).all(character, "
+        "(character >= uint(65) && character <= uint(90)) || "
+        "(character >= uint(48) && character <= uint(57)))"
+    }
+  ];
+  string project_name = 3 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 4 [(buf.validate.field).string.min_len = 1];
+  string workspace_name = 5;
+  ProjectAvailability workspace_status = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message SelectedProjectWorkspace {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message ProjectHomeSummary {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_key = 2 [
+    (buf.validate.field).string = {
+      min_len: 2
+      max_len: 8
+    },
+    (buf.validate.field).cel = {
+      id: "kent.project.home_summary.project_key"
+      message: "project_key must start with A-Z and contain only A-Z or 0-9"
+      expression:
+        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
+        "bytes(this).all(character, "
+        "(character >= uint(65) && character <= uint(90)) || "
+        "(character >= uint(48) && character <= uint(57)))"
+    }
+  ];
+  string display_name = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 80
+    },
+    (buf.validate.field).cel = {
+      id: "project_home_summary.display_name.trimmed"
+      message: "display_name must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  ProjectWorkspaceCatalogSummary primary_workspace = 4 [(buf.validate.field).required = true];
+  optional string default_workflow_id = 5 [(buf.validate.field).string.min_len = 1];
+  optional string default_workflow_name = 6 [(buf.validate.field).string.min_len = 1];
+  bool default_workflow_valid = 7;
+  google.protobuf.Timestamp updated_at = 8 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+  int32 task_count = 9 [(buf.validate.field).int32.gte = 0];
+  int32 attention_count = 10 [(buf.validate.field).int32.gte = 0];
+  int32 workflow_count = 11 [(buf.validate.field).int32.gte = 0];
+
+  option (buf.validate.message).cel = {
+    id: "project_home_summary.default_workflow"
+    message: "default workflow fields must be consistently present and valid"
+    expression:
+      "has(this.default_workflow_id) ? "
+      "has(this.default_workflow_name) && this.default_workflow_valid : "
+      "!has(this.default_workflow_name) && !this.default_workflow_valid"
+  };
+}
+
+message ProjectWorkspaceCatalogSummary {
+  string workspace_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.project.workspace_catalog_id_trimmed"
+      message: "workspace_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string display_name = 2 [
+    (buf.validate.field).cel = {
+      id: "kent.project.workspace_catalog_display_name_trimmed"
+      message: "display_name must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string root_path = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.project.workspace_catalog_root_path_trimmed"
+      message: "root_path must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  bool is_default = 4;
+
+  option (buf.validate.message).cel = {
+    id: "kent.project.workspace_catalog_display_name_nonblank"
+    message: "display_name must not be blank for a non-root workspace"
+    expression:
+      "this.display_name != '' || this.root_path == '/' || "
+      "(size(this.root_path) == 3 && this.root_path.charAt(1) == ':' && "
+      "this.root_path.charAt(2) in ['/', '\\\\'] && "
+      "((this.root_path.charAt(0) >= 'a' && this.root_path.charAt(0) <= 'z') || "
+      "(this.root_path.charAt(0) >= 'A' && this.root_path.charAt(0) <= 'Z'))) || "
+      "(this.root_path.startsWith('//') && "
+      "size(this.root_path.substring(2).split('/').filter(part, part != '')) == 2) || "
+      "(this.root_path.startsWith('\\\\\\\\') && "
+      "size(this.root_path.substring(2).split('\\\\').filter(part, part != '')) == 2)"
+  };
+}
+
+message ProjectNotFoundDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ProjectUnavailableDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string root_path = 2 [(buf.validate.field).string.min_len = 1];
+  ProjectAvailability availability = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message WorkspaceNotRegisteredDetails {
+  optional string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "workspace_not_registered.identity"
+    message: "at least one workspace lookup identity must be present"
+    expression: "has(this.project_id) || has(this.workspace_id)"
+  };
+}
+
+message WorkspaceBindingAmbiguousDetails {
+  string canonical_root = 1 [(buf.validate.field).string.min_len = 1];
+  repeated string project_ids = 2 [(buf.validate.field).repeated = {
+    min_items: 2
+    unique: true
+    items: {
+      string: {min_len: 1}
+    }
+  }];
+}
+
+message WorkspaceBindingAmbiguousMutationDetails {
+  repeated string project_ids = 1 [(buf.validate.field).repeated = {
+    min_items: 2
+    unique: true
+    items: {
+      string: {min_len: 1}
+    }
+  }];
+}
+
+message WorkspacePathIdentityDetails {}
+
+message ProjectKeyConflictDetails {
+  string project_key = 1 [
+    (buf.validate.field).string = {
+      min_len: 2
+      max_len: 8
+    },
+    (buf.validate.field).cel = {
+      id: "kent.project.key_conflict.project_key"
+      message: "project_key must start with A-Z and contain only A-Z or 0-9"
+      expression:
+        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
+        "bytes(this).all(character, "
+        "(character >= uint(65) && character <= uint(90)) || "
+        "(character >= uint(48) && character <= uint(57)))"
+    }
+  ];
+}
+
+message WorkspaceAlreadyBoundDetails {}
+
+message WorkspacePathMissingDetails {}
+
+message WorkspaceMutationDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message WorkspaceDetachConflictDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+  bool retryable = 3 [(buf.validate.field).bool.const = true];
+}
+
+message WorkspaceUnlinkBlocker {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "workspace_unlink_blocker.code"
+      message: "workspace unlink blocker code is invalid"
+      expression:
+        "this in ['default_workspace', 'non_terminal_tasks', "
+        "'executable_current_nodes', 'managed_owned_worktrees', "
+        "'missing_history_snapshot', 'active_sessions']"
+    }
+  ];
+  reserved 2;
+  reserved "message";
+  optional int32 count = 3 [(buf.validate.field).int32.gt = 0];
+
+  option (buf.validate.message).cel = {
+    id: "workspace_unlink_blocker.count"
+    message: "default_workspace has no count and every counted blocker has a positive count"
+    expression: "this.code == 'default_workspace' ? !has(this.count) : has(this.count)"
+  };
+}
+
+message ProjectDeleteBlocker {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "project_delete_blocker.code"
+      message: "project delete blocker code is invalid"
+      expression: "this in ['non_terminal_tasks', 'active_sessions']"
+    }
+  ];
+  reserved 2;
+  reserved "message";
+  int32 count = 3 [(buf.validate.field).int32.gt = 0];
+}
+
+message ProjectListSuccess {
+  repeated ProjectSummary projects = 1;
+}
+
+message ProjectListError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message ProjectListResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ProjectListSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectListError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectHomeListRequest {
+  optional int32 page_size = 1 [(buf.validate.field).int32 = {
+    gt: 0
+  }];
+  optional string page_token = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "project_home_list.page_token.trimmed"
+      message: "page_token must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+}
+
+message ProjectHomeListSuccess {
+  repeated ProjectHomeSummary projects = 1 [(buf.validate.field).repeated.max_items = 100];
+  optional string next_page_token = 2 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.Timestamp generated_at = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+}
+
+message ProjectHomeListError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message ProjectHomeListResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ProjectHomeListSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectHomeListError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ResolvePathRequest {
+  string path = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ResolvePathSuccess {
+  string canonical_root = 1 [(buf.validate.field).string.min_len = 1];
+  ProjectAvailability path_availability = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional ProjectBinding binding = 3;
+}
+
+message ResolvePathError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    WorkspaceBindingAmbiguousDetails workspace_binding_ambiguous = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_binding_ambiguous"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message ResolvePathResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ResolvePathSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ResolvePathError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message PlanWorkspaceBindingRequest {
+  string path = 1 [(buf.validate.field).string.min_len = 1];
+  WorkspaceBindingPlanMode mode = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message PlanWorkspaceBindingSuccess {
+  WorkspaceBindingPlanKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string canonical_root = 2 [(buf.validate.field).string.min_len = 1];
+  ProjectAvailability path_availability = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional ProjectBinding binding = 4;
+  repeated ProjectSummary projects = 5;
+  optional SelectedProjectWorkspace workspace = 6;
+
+  option (buf.validate.message).cel = {
+    id: "plan_workspace_binding.shape"
+    message: "workspace binding plan fields do not match its kind"
+    expression:
+      "this.kind == 1 ? has(this.binding) && size(this.projects) == 0 && !has(this.workspace) : "
+      "this.kind == 4 ? !has(this.binding) && size(this.projects) == 0 && has(this.workspace) : "
+      "!has(this.binding) && !has(this.workspace)"
+  };
+}
+
+message PlanWorkspaceBindingError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message PlanWorkspaceBindingResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    PlanWorkspaceBindingSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    PlanWorkspaceBindingError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message CreateProjectRequest {
+  string display_name = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 80
+    },
+    (buf.validate.field).cel = {
+      id: "create_project.display_name"
+      message: "display_name must be trimmed and contain no line break"
+      expression: "this == this.trim() && !this.contains('\\r') && !this.contains('\\n')"
+    }
+  ];
+  optional string project_key = 2 [
+    (buf.validate.field).string = {
+      min_len: 2
+      max_len: 8
+    },
+    (buf.validate.field).cel = {
+      id: "kent.project.create.project_key"
+      message: "project_key must start with A-Z and contain only A-Z or 0-9"
+      expression:
+        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
+        "bytes(this).all(character, "
+        "(character >= uint(65) && character <= uint(90)) || "
+        "(character >= uint(48) && character <= uint(57)))"
+    }
+  ];
+  string workspace_root = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message CreateProjectSuccess {
+  ProjectMutationBinding binding = 1 [(buf.validate.field).required = true];
+}
+
+message CreateProjectError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectKeyConflictDetails project_key_conflict = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_key_conflict"
+      }
+    ];
+    WorkspaceAlreadyBoundDetails workspace_already_bound = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_already_bound"
+      }
+    ];
+    WorkspacePathMissingDetails workspace_path_missing = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_path_missing"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message CreateProjectResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    CreateProjectSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    CreateProjectError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectWorkspaceListRequest {
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  int32 offset = 2 [(buf.validate.field).int32.gte = 0];
+  int32 limit = 3 [(buf.validate.field).int32 = {gte: 1 lte: 100}];
+}
+
+message ProjectEditGetRequest {
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+}
+
+message GetProjectEditSuccess {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_key = 2 [
+    (buf.validate.field).string = {
+      min_len: 2
+      max_len: 8
+    },
+    (buf.validate.field).cel = {
+      id: "kent.project.edit.project_key"
+      message: "project_key must start with A-Z and contain only A-Z or 0-9"
+      expression:
+        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
+        "bytes(this).all(character, "
+        "(character >= uint(65) && character <= uint(90)) || "
+        "(character >= uint(48) && character <= uint(57)))"
+    }
+  ];
+  string display_name = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetProjectEditError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message GetProjectEditResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GetProjectEditSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GetProjectEditError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message UpdateProjectRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string display_name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 80
+    },
+    (buf.validate.field).cel = {
+      id: "update_project.display_name"
+      message: "display_name must be trimmed and contain no line break"
+      expression: "this == this.trim() && !this.contains('\\r') && !this.contains('\\n')"
+    }
+  ];
+  optional string project_key = 3 [
+    (buf.validate.field).string = {
+      min_len: 2
+      max_len: 8
+    },
+    (buf.validate.field).cel = {
+      id: "kent.project.update.project_key"
+      message: "project_key must start with A-Z and contain only A-Z or 0-9"
+      expression:
+        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
+        "bytes(this).all(character, "
+        "(character >= uint(65) && character <= uint(90)) || "
+        "(character >= uint(48) && character <= uint(57)))"
+    }
+  ];
+}
+
+message UpdateProjectSuccess {
+  ProjectHomeSummary project = 1 [(buf.validate.field).required = true];
+}
+
+message UpdateProjectError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    ProjectKeyConflictDetails project_key_conflict = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_key_conflict"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message UpdateProjectResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    UpdateProjectSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    UpdateProjectError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectWorkspaceSelector {
+  oneof selector {
+    option (buf.validate.oneof).required = true;
+    string workspace_id = 1 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.project.workspace_selector_id_nonblank"
+        message: "workspace_id must not be blank"
+        expression: "this.trim() != ''"
+      }
+    ];
+    string workspace_root = 2 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.project.workspace_selector_root_nonblank"
+        message: "workspace_root must not be blank"
+        expression: "this.trim() != ''"
+      }
+    ];
+  }
+}
+
+message SetDefaultWorkspaceRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  ProjectWorkspaceSelector workspace = 2 [(buf.validate.field).required = true];
+}
+
+message SetDefaultWorkspaceSuccess {
+  ProjectHomeSummary project = 1 [(buf.validate.field).required = true];
+}
+
+message SetDefaultWorkspaceError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    WorkspaceNotRegisteredDetails workspace_not_registered = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_not_registered"
+      }
+    ];
+    WorkspacePathIdentityDetails workspace_path_identity = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_path_identity"
+      }
+    ];
+    WorkspaceMutationDetails workspace_mutation_failed = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_mutation_failed"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message SetDefaultWorkspaceResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    SetDefaultWorkspaceSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SetDefaultWorkspaceError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ListProjectWorkspacesSuccess {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  int32 offset = 2 [(buf.validate.field).int32.gte = 0];
+  repeated ProjectWorkspaceCatalogSummary workspaces = 3 [(buf.validate.field).repeated.max_items = 100];
+  optional int32 next_offset = 4 [(buf.validate.field).int32.gt = 0];
+}
+
+message ListProjectWorkspacesError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message ListProjectWorkspacesResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ListProjectWorkspacesSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ListProjectWorkspacesError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+enum ProjectWorkspaceGetResult {
+  PROJECT_WORKSPACE_GET_RESULT_UNSPECIFIED = 0;
+  PROJECT_WORKSPACE_GET_RESULT_ATTACHED = 1;
+  PROJECT_WORKSPACE_GET_RESULT_NOT_ATTACHED = 2;
+}
+
+message GetProjectWorkspaceRequest {
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  oneof selector {
+    option (buf.validate.oneof).required = true;
+    string workspace_id = 2 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.project.workspace_get_id_nonblank"
+        message: "workspace_id must not be blank"
+        expression: "this.trim() != ''"
+      }
+    ];
+    string workspace_root = 3 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.project.workspace_get_root_nonblank"
+        message: "workspace_root must not be blank"
+        expression: "this.trim() != ''"
+      }
+    ];
+  }
+}
+
+message GetProjectWorkspaceSuccess {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  ProjectWorkspaceGetResult result = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional ProjectWorkspaceCatalogSummary workspace = 3;
+
+  option (buf.validate.message).cel = {
+    id: "kent.project.workspace_get_result"
+    message: "workspace presence must match the workspace lookup result"
+    expression:
+      "(this.result == 1 && has(this.workspace)) || "
+      "(this.result == 2 && !has(this.workspace))"
+  };
+}
+
+message GetProjectWorkspaceError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message GetProjectWorkspaceResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GetProjectWorkspaceSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GetProjectWorkspaceError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message UnlinkWorkspaceRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  ProjectWorkspaceSelector workspace = 2 [(buf.validate.field).required = true];
+}
+
+message UnlinkWorkspaceSuccess {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+  repeated WorkspaceUnlinkBlocker blockers = 3 [(buf.validate.field).repeated.max_items = 6];
+  optional ProjectHomeSummary project = 4;
+}
+
+message UnlinkWorkspaceError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    WorkspaceNotRegisteredDetails workspace_not_registered = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_not_registered"
+      }
+    ];
+    WorkspacePathIdentityDetails workspace_path_identity = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_path_identity"
+      }
+    ];
+    WorkspaceDetachConflictDetails workspace_detach_conflict = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_detach_conflict"
+      }
+    ];
+    WorkspaceMutationDetails workspace_mutation_failed = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_mutation_failed"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message UnlinkWorkspaceResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    UnlinkWorkspaceSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    UnlinkWorkspaceError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message DeleteProjectRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message DeleteProjectSuccess {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  bool deleted = 2;
+  repeated ProjectDeleteBlocker blockers = 3 [(buf.validate.field).repeated.max_items = 2];
+}
+
+message DeleteProjectError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message DeleteProjectResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    DeleteProjectSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    DeleteProjectError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message AttachWorkspaceRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workspace_root = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message AttachWorkspaceSuccess {
+  ProjectMutationBinding binding = 1 [(buf.validate.field).required = true];
+  ProjectWorkspaceAttachOutcome outcome = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+enum ProjectWorkspaceAttachOutcome {
+  PROJECT_WORKSPACE_ATTACH_OUTCOME_UNSPECIFIED = 0;
+  PROJECT_WORKSPACE_ATTACH_OUTCOME_ATTACHED = 1;
+  PROJECT_WORKSPACE_ATTACH_OUTCOME_ALREADY_ATTACHED = 2;
+}
+
+message AttachWorkspaceError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    WorkspaceAlreadyBoundDetails workspace_already_bound = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_already_bound"
+      }
+    ];
+    WorkspacePathMissingDetails workspace_path_missing = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_path_missing"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message AttachWorkspaceResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    AttachWorkspaceSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    AttachWorkspaceError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message RebindWorkspaceRequest {
+  string old_workspace_root = 1 [(buf.validate.field).string.min_len = 1];
+  string new_workspace_root = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message RebindWorkspaceSuccess {
+  ProjectMutationBinding binding = 1 [(buf.validate.field).required = true];
+}
+
+message RebindWorkspaceError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    WorkspaceNotRegisteredDetails workspace_not_registered = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_not_registered"
+      }
+    ];
+    WorkspaceBindingAmbiguousMutationDetails workspace_binding_ambiguous = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_binding_ambiguous"
+      }
+    ];
+    WorkspaceAlreadyBoundDetails workspace_already_bound = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_already_bound"
+      }
+    ];
+    WorkspacePathMissingDetails workspace_path_missing = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_path_missing"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message RebindWorkspaceResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    RebindWorkspaceSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    RebindWorkspaceError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message GetOverviewRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetOverviewSuccess {
+  ProjectOverview overview = 1 [(buf.validate.field).required = true];
+}
+
+message GetOverviewError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    ProjectUnavailableDetails project_unavailable = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_unavailable"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message GetOverviewResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GetOverviewSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GetOverviewError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service ProjectCatalogService {
+  rpc List(google.protobuf.Empty) returns (ProjectListResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.list"
+    };
+  }
+
+  rpc ListHome(ProjectHomeListRequest) returns (ProjectHomeListResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.home.list"
+    };
+  }
+
+  rpc ResolvePath(ResolvePathRequest) returns (ResolvePathResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.resolvePath"
+    };
+  }
+
+  rpc PlanWorkspaceBinding(PlanWorkspaceBindingRequest) returns (PlanWorkspaceBindingResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.planWorkspaceBinding"
+    };
+  }
+
+  rpc Create(CreateProjectRequest) returns (CreateProjectResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.create"
+    };
+  }
+
+  rpc GetEdit(ProjectEditGetRequest) returns (GetProjectEditResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.edit.get"
+    };
+  }
+
+  rpc Update(UpdateProjectRequest) returns (UpdateProjectResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.update"
+    };
+  }
+
+  rpc SetDefaultWorkspace(SetDefaultWorkspaceRequest) returns (SetDefaultWorkspaceResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.defaultWorkspace.set"
+    };
+  }
+
+  rpc ListWorkspaces(ProjectWorkspaceListRequest) returns (ListProjectWorkspacesResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.workspace.list"
+    };
+  }
+
+  rpc GetWorkspace(GetProjectWorkspaceRequest) returns (GetProjectWorkspaceResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.workspace.get"
+    };
+  }
+
+  rpc UnlinkWorkspace(UnlinkWorkspaceRequest) returns (UnlinkWorkspaceResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.unlinkWorkspace"
+    };
+  }
+
+  rpc Delete(DeleteProjectRequest) returns (DeleteProjectResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.delete"
+    };
+  }
+
+  rpc AttachWorkspace(AttachWorkspaceRequest) returns (AttachWorkspaceResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.attachWorkspace"
+    };
+  }
+
+  rpc RebindWorkspace(RebindWorkspaceRequest) returns (RebindWorkspaceResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.rebindWorkspace"
+    };
+  }
+
+  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.getOverview"
+    };
+  }
+}

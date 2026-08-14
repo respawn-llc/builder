@@ -454,16 +454,18 @@ func InitializeCreationContext(child *Store, source *Store, kind SessionCreation
 		sourceMeta = source.Meta()
 	}
 	child.mutationMu.Lock()
-	defer child.mutationMu.Unlock()
 	child.mu.Lock()
-	defer child.mu.Unlock()
 	if child.persisted {
+		child.mu.Unlock()
+		child.mutationMu.Unlock()
 		return fmt.Errorf("session creation context is immutable after durability")
 	}
 	child.meta.PreviousSessionID = nil
 	child.meta.ParentAgentSessionID = nil
 	if kind == SessionCreationSourceIndependent {
 		child.meta.UpdatedAt = time.Now().UTC()
+		child.mu.Unlock()
+		child.mutationMu.Unlock()
 		return nil
 	}
 	if opts.InheritLockedContract {
@@ -482,6 +484,8 @@ func InitializeCreationContext(child *Store, source *Store, kind SessionCreation
 	}
 	sourceID, err := runtimeids.ParseSessionID(sourceMeta.SessionID)
 	if err != nil {
+		child.mu.Unlock()
+		child.mutationMu.Unlock()
 		return fmt.Errorf("invalid creation source session id: %w", err)
 	}
 	switch kind {
@@ -500,6 +504,12 @@ func InitializeCreationContext(child *Store, source *Store, kind SessionCreation
 		child.meta.Continuation = nil
 	}
 	child.meta.UpdatedAt = time.Now().UTC()
+	child.initialContextFacts = SessionContextFacts{}
+	child.mu.Unlock()
+	child.contextFactsMu.Lock()
+	child.contextFacts = SessionContextFacts{}
+	child.contextFactsMu.Unlock()
+	child.mutationMu.Unlock()
 	return nil
 }
 

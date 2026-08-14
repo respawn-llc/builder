@@ -25,7 +25,7 @@ func TestCodexTurnStateUsesInitialHTTPHeaderAndIgnoresMetadata(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	dispatch := newTestCodexDispatch(t)
-	transport := newOAuthTestTransport(server, server.Client())
+	transport := newCanonicalOAuthTestTransport(t, server)
 	if _, err := transport.GenerateStreamWithEvents(context.Background(), testCodexOpenAIRequest(dispatch), StreamCallbacks{}); err != nil {
 		t.Fatalf("GenerateStreamWithEvents: %v", err)
 	}
@@ -88,12 +88,4 @@ func testCodexOpenAIRequest(dispatch *CodexDispatchContext) OpenAIRequest {
 		SessionID:      textutil.Value("session-1"),
 		CodexDispatch:  dispatch,
 	}
-}
-
-func newOAuthTestTransport(server *httptest.Server, client *http.Client) *HTTPTransport {
-	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.BaseURL = server.URL
-	transport.BaseURLExplicit = true
-	transport.Client = client
-	return transport
 }

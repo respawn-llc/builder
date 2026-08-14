@@ -1,0 +1,210 @@
+syntax = "proto3";
+
+package kent.api.server;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "kent/api/shared/foundation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/server;serverpb";
+
+enum ReadinessSeverity {
+  READINESS_SEVERITY_UNSPECIFIED = 0;
+  READINESS_SEVERITY_ERROR = 1;
+}
+
+message SubagentRoleSummary {
+  string name = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.server.subagent_role.name.trimmed"
+      message: "name must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+}
+
+message ReadinessCause {
+  string code = 1 [(buf.validate.field).string.min_len = 1];
+  ReadinessSeverity severity = 2 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string summary = 3 [(buf.validate.field).string.min_len = 1];
+  optional string next_action = 4 [(buf.validate.field).string.min_len = 1];
+  optional string diagnostic_id = 5 [(buf.validate.field).string.min_len = 1];
+}
+
+message Readiness {
+  bool ready = 1;
+  string server_id = 2 [(buf.validate.field).string.min_len = 1];
+  string server_version = 3 [(buf.validate.field).string.min_len = 1];
+  string server_build = 4 [(buf.validate.field).string.min_len = 1];
+  string protocol_version = 5 [(buf.validate.field).string.min_len = 1];
+  bool auth_ready = 6;
+  bool auth_required = 7;
+  string endpoint = 8;
+  repeated SubagentRoleSummary subagent_roles = 9;
+  repeated ReadinessCause causes = 10;
+
+  option (buf.validate.message).cel = {
+    id: "kent.server.readiness.causes"
+    message: "ready servers must not report readiness causes and unready servers must report at least one cause"
+    expression: "this.ready ? size(this.causes) == 0 : size(this.causes) > 0"
+  };
+}
+
+message GetReadinessSuccess {
+  Readiness readiness = 1 [(buf.validate.field).required = true];
+}
+
+message GetReadinessError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message GetReadinessResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    GetReadinessSuccess success = 1 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS
+    ];
+    GetReadinessError error = 2 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR
+    ];
+  }
+}
+
+message UpdateVersions {
+  string current_version = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.server.update.current_version.trimmed"
+      message: "current_version must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string latest_version = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.server.update.latest_version.trimmed"
+      message: "latest_version must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+}
+
+message UpdateCheckFailed {
+  string cause = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.server.update_check_failure_cause_nonblank"
+      message: "cause must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message UpdateStatus {
+  oneof status {
+    option (buf.validate.oneof).required = true;
+
+    UpdateVersions current = 1;
+    UpdateVersions available = 2;
+    google.protobuf.Empty check_unavailable = 3;
+    UpdateCheckFailed check_failed = 4;
+  }
+}
+
+message GetUpdateStatusSuccess {
+  UpdateStatus status = 1 [(buf.validate.field).required = true];
+}
+
+enum ServerNotReadyReason {
+  SERVER_NOT_READY_REASON_UNSPECIFIED = 0;
+  SERVER_NOT_READY_REASON_ONBOARDING_REQUIRED = 1;
+  SERVER_NOT_READY_REASON_ACTIVATION_FAILED = 2;
+}
+
+message ServerNotReadyDetails {
+  ServerNotReadyReason reason = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  bool onboarding_completed = 2;
+  optional string settings_path = 3 [(buf.validate.field).string.min_len = 1];
+  optional string diagnostic = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetUpdateStatusError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ServerNotReadyDetails server_not_ready = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message GetUpdateStatusResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    GetUpdateStatusSuccess success = 1 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS
+    ];
+    GetUpdateStatusError error = 2 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR
+    ];
+  }
+}
+
+service ServerService {
+  rpc GetReadiness(google.protobuf.Empty) returns (GetReadinessResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "server.readiness.get"
+    };
+  }
+
+  rpc GetUpdateStatus(google.protobuf.Empty) returns (GetUpdateStatusResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_DEDICATED
+      legacy_wire_name: "server.updateStatus.get"
+    };
+  }
+}

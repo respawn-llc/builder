@@ -145,7 +145,7 @@ func TestCompactionOverflowRepairUsesCumulativeAttemptCapOldestFirst(t *testing.
 		t.Fatalf("expected third output to remain for first attempt")
 	}
 
-	second, secondStats := collapseCompactionOverflowToolPayloadsAfterSavings(first, compactionOverflowRepairTargetTokens(defaultContextWindowTokens, 2), firstStats.EstimatedSavedTokens)
+	second, secondStats := collapseCompactionOverflowToolPayloadsAfterSavings(first, compactionOverflowRepairTargetTokens(200_000, 2), firstStats.EstimatedSavedTokens)
 	if secondStats.ShellOutputsCollapsed != 1 {
 		t.Fatalf("second attempt newly collapsed %d shell outputs, want 1", secondStats.ShellOutputsCollapsed)
 	}
@@ -156,6 +156,9 @@ func TestCompactionOverflowRepairUsesCumulativeAttemptCapOldestFirst(t *testing.
 
 func TestCompactionOverflowRepairTargetsUseContextWindow(t *testing.T) {
 	t.Parallel()
+	if got := compactionOverflowRepairTargetTokens(0, 1); got != 0 {
+		t.Fatalf("invalid-window repair target = %d, want 0 without a second window authority", got)
+	}
 	if got, want := compactionOverflowRepairTargetTokens(100_000, 1), 10_000; got != want {
 		t.Fatalf("first repair target = %d, want %d", got, want)
 	}
@@ -445,7 +448,7 @@ func shellOutputRepairItem(callID string, output string) llm.ResponseItem {
 }
 
 func collapseCompactionOverflowToolPayloadsForDefaultWindowRepairAttempt(items []llm.ResponseItem, repairAttempt int) ([]llm.ResponseItem, compactionOverflowRepairStats) {
-	return collapseCompactionOverflowToolPayloadsAfterSavings(items, compactionOverflowRepairTargetTokens(defaultContextWindowTokens, repairAttempt), 0)
+	return collapseCompactionOverflowToolPayloadsAfterSavings(items, compactionOverflowRepairTargetTokens(200_000, repairAttempt), 0)
 }
 
 func mustMarshalItemsForRepairTest(t *testing.T, items []llm.ResponseItem) string {
