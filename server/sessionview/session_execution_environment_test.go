@@ -51,15 +51,11 @@ func (r sessionExecutionEnvironmentGitRunner) Run(context.Context, string, ...st
 	return append([]byte(nil), r.output...), exitCode, r.err
 }
 
-type mismatchedSessionStoreResolver struct {
+type mismatchedPersistedSessionResolver struct {
 	store *session.Store
 }
 
-func (r mismatchedSessionStoreResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	return r.store, nil
-}
-
-func (r mismatchedSessionStoreResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
+func (r mismatchedPersistedSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
 	meta := r.store.Meta()
 	return session.PersistedSessionRecord{
 		SessionDir:   r.store.Dir(),
@@ -89,7 +85,7 @@ func TestSessionExecutionEnvironmentRejectsMismatchedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	service := NewService(mismatchedSessionStoreResolver{store: store}, nil, nil)
+	service := NewService(mismatchedPersistedSessionResolver{store: store}, nil, nil)
 	if _, err := service.GetSessionExecutionEnvironment(t.Context(), serverapi.SessionExecutionEnvironmentRequest{
 		SessionID: otherID,
 	}); err == nil {

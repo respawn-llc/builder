@@ -56,7 +56,7 @@ func resolvePersistedSessionView(
 	sessionID string,
 ) (*session.PersistedSessionView, error) {
 	if sessions == nil {
-		return nil, errSessionStoreResolverRequired
+		return nil, errPersistedSessionResolverRequired
 	}
 	view, err := session.ResolvePersistedSessionView(ctx, sessions, sessionID)
 	if err != nil {
@@ -66,13 +66,12 @@ func resolvePersistedSessionView(
 }
 
 func newResolvedSessionSnapshotSource(
-	sessions SessionStoreResolver,
+	sessions PersistedSessionResolver,
 	mainViews runtimeMainViewSnapshotProvider,
 	cacheWarningMode config.CacheWarningMode,
 ) *resolvedSessionSnapshotSource {
-	persisted, _ := sessions.(PersistedSessionResolver)
 	return &resolvedSessionSnapshotSource{
-		sessions:         persisted,
+		sessions:         sessions,
 		mainViews:        mainViews,
 		cacheWarningMode: cacheWarningMode,
 	}
@@ -80,7 +79,7 @@ func newResolvedSessionSnapshotSource(
 
 func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Context, sessionID string) (sessionSnapshot, error) {
 	if s == nil {
-		return nil, errSessionStoreResolverRequired
+		return nil, errPersistedSessionResolverRequired
 	}
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
@@ -91,7 +90,7 @@ func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Conte
 		}
 	}
 	if s.sessions == nil {
-		return nil, errSessionStoreResolverRequired
+		return nil, errPersistedSessionResolverRequired
 	}
 	view, err := resolvePersistedSessionView(ctx, s.sessions, sessionID)
 	if err != nil {

@@ -22,10 +22,6 @@ import (
 	"core/shared/serverapi"
 )
 
-type SessionStoreResolver interface {
-	ResolveSessionStore(ctx context.Context, sessionID string) (*session.Store, error)
-}
-
 type PersistedSessionResolver = session.PersistedSessionResolver
 
 type ExecutionTargetResolver interface {
@@ -74,16 +70,14 @@ func (s *Service) WithExecutionEnvironmentGit(inspector *worktree.GitInspector) 
 }
 
 func NewService(
-	sessions SessionStoreResolver,
+	sessions PersistedSessionResolver,
 	mainViews runtimeMainViewSnapshotProvider,
 	targets ExecutionTargetResolver,
 ) *Service {
 	svc := &Service{
+		persisted:        sessions,
 		targets:          targets,
 		cacheWarningMode: config.CacheWarningModeDefault,
-	}
-	if persisted, ok := sessions.(PersistedSessionResolver); ok {
-		svc.persisted = persisted
 	}
 	svc.snapshots = newResolvedSessionSnapshotSource(sessions, mainViews, svc.cacheWarningMode)
 	return svc
@@ -97,7 +91,7 @@ func (s *Service) SubscribeQuestionHistory(
 		return nil, err
 	}
 	if s == nil || s.persisted == nil {
-		return nil, errSessionStoreResolverRequired
+		return nil, errPersistedSessionResolverRequired
 	}
 	record, err := s.persisted.ResolvePersistedSession(ctx, req.SessionID)
 	if err != nil {
@@ -282,7 +276,7 @@ func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, re
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
 	if s == nil {
-		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errSessionStoreResolverRequired
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errPersistedSessionResolverRequired
 	}
 	view, err := resolvePersistedSessionView(ctx, s.persisted, req.SessionID)
 	if err != nil {
@@ -303,7 +297,7 @@ func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req server
 		return serverapi.SessionExecutionEnvironmentResponse{}, err
 	}
 	if s == nil || s.persisted == nil {
-		return serverapi.SessionExecutionEnvironmentResponse{}, errSessionStoreResolverRequired
+		return serverapi.SessionExecutionEnvironmentResponse{}, errPersistedSessionResolverRequired
 	}
 	view, err := resolvePersistedSessionView(ctx, s.persisted, req.SessionID.String())
 	if err != nil {
@@ -455,7 +449,7 @@ func sessionExecutionProviderUsesKentManagedAuth(provider string) bool {
 
 func (s *Service) resolveSnapshot(ctx context.Context, sessionID string) (sessionSnapshot, error) {
 	if s == nil || s.snapshots == nil {
-		return nil, errSessionStoreResolverRequired
+		return nil, errPersistedSessionResolverRequired
 	}
 	return s.snapshots.resolveSessionSnapshot(ctx, sessionID)
 }

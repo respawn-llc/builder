@@ -15,12 +15,7 @@ import (
 )
 
 type blockedCommittedSessionResolver struct {
-	store       *session.Store
 	persistence *sessiontest.Persistence
-}
-
-func (r blockedCommittedSessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	return r.store, nil
 }
 
 func (r blockedCommittedSessionResolver) ResolvePersistedSession(
@@ -72,7 +67,7 @@ func TestPersistedSessionReadsDoNotWaitForCommittedAppendOwner(t *testing.T) {
 	settings.Model = "gpt-5"
 	settings.ProviderOverride = "openai"
 	target := availableSessionExecutionTarget(workspaceRoot)
-	resolver := blockedCommittedSessionResolver{store: store, persistence: persistence}
+	resolver := blockedCommittedSessionResolver{persistence: persistence}
 	service := NewService(resolver, nil, staticExecutionTargetResolver{target: target}).
 		WithExecutionEnvironmentConfig(config.App{Settings: settings}).
 		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{

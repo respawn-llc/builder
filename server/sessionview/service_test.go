@@ -78,12 +78,12 @@ func (r staticExecutionTargetResolver) ResolveSessionExecutionTarget(context.Con
 	return r.target, nil
 }
 
-type failingSessionStoreResolver struct {
+type failingPersistedSessionResolver struct {
 	err error
 }
 
-func (r failingSessionStoreResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	return nil, r.err
+func (r failingPersistedSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
+	return session.PersistedSessionRecord{}, r.err
 }
 
 type missingRuntimeMainViewSnapshotProvider struct {
@@ -144,7 +144,7 @@ func TestServiceGetSessionMainViewUsesPublishedRuntimeProjectionWhenAttached(t *
 func TestServiceGetSessionMainViewDoesNotRequireStoreResolutionForPublishedRuntime(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
-	response, err := NewService(failingSessionStoreResolver{err: errors.New("store unavailable")}, fixture.activity, nil).
+	response, err := NewService(failingPersistedSessionResolver{err: errors.New("persisted Session unavailable")}, fixture.activity, nil).
 		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get live main view: %v", err)
@@ -346,14 +346,14 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 	}
 }
 
-func TestServiceRequiresSessionStoreResolverForDormantReads(t *testing.T) {
+func TestServiceRequiresPersistedSessionResolverForDormantReads(t *testing.T) {
 	svc := NewService(nil, nil, nil)
 
-	if _, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: "session-1"}); err == nil || !errors.Is(err, errSessionStoreResolverRequired) {
-		t.Fatalf("expected explicit session store resolver error for main view, got %v", err)
+	if _, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: "session-1"}); err == nil || !errors.Is(err, errPersistedSessionResolverRequired) {
+		t.Fatalf("expected explicit persisted Session resolver error for main view, got %v", err)
 	}
-	if _, err := svc.SessionTranscriptTailEntries(context.Background(), "session-1"); err == nil || !errors.Is(err, errSessionStoreResolverRequired) {
-		t.Fatalf("expected explicit session store resolver error for transcript tail entries, got %v", err)
+	if _, err := svc.SessionTranscriptTailEntries(context.Background(), "session-1"); err == nil || !errors.Is(err, errPersistedSessionResolverRequired) {
+		t.Fatalf("expected explicit persisted Session resolver error for transcript tail entries, got %v", err)
 	}
 }
 

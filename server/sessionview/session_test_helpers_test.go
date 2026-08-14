@@ -28,21 +28,11 @@ type testSessionResolver struct {
 	store *session.Store
 }
 
-func newTestSessionResolver(store *session.Store) SessionStoreResolver {
+func newTestSessionResolver(store *session.Store) PersistedSessionResolver {
 	if store == nil {
 		return nil
 	}
 	return testSessionResolver{store: store}
-}
-
-func (r testSessionResolver) ResolveSessionStore(_ context.Context, sessionID string) (*session.Store, error) {
-	if r.store == nil {
-		return nil, errors.New("session store is required")
-	}
-	if strings.TrimSpace(sessionID) != strings.TrimSpace(r.store.Meta().SessionID) {
-		return nil, fmt.Errorf("session %q not available", strings.TrimSpace(sessionID))
-	}
-	return r.store, nil
 }
 
 func (r testSessionResolver) ResolvePersistedSession(_ context.Context, sessionID string) (session.PersistedSessionRecord, error) {

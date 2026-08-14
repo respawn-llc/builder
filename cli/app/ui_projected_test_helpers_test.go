@@ -31,8 +31,13 @@ type testSessionViewSessionResolver struct {
 	store *session.Store
 }
 
-func (r testSessionViewSessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	return r.store, nil
+func (r testSessionViewSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
+	meta := r.store.Meta()
+	return session.PersistedSessionRecord{
+		SessionDir:   r.store.Dir(),
+		Meta:         &meta,
+		ContextFacts: r.store.ContextFacts(),
+	}, nil
 }
 
 func waitForTestCondition(t *testing.T, timeout time.Duration, label string, condition func() bool) {
