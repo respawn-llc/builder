@@ -322,14 +322,8 @@ func metaContextSessionModeForMessages(messages []llm.Message) (metaContextSessi
 		}
 		switch classification.kind {
 		case metaContextKindActiveGoalContinuation:
-			if mode == metaContextSessionModeWorkflow {
-				return metaContextSessionModeOrdinary, errors.New("meta context contains both Goal and Workflow modes")
-			}
 			mode = metaContextSessionModeGoal
 		case metaContextKindWorkflow:
-			if mode == metaContextSessionModeGoal {
-				return metaContextSessionModeOrdinary, errors.New("meta context contains both Goal and Workflow modes")
-			}
 			mode = metaContextSessionModeWorkflow
 		}
 	}

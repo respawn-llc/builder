@@ -263,6 +263,40 @@ func TestReviewerReconstructionPlacesActiveGoalBeforeTranscriptBoundary(t *testi
 	}
 }
 
+func TestReviewerReconstructionUsesLatestMetaContextMode(t *testing.T) {
+	t.Parallel()
+	rebuilt, err := buildReviewerRequestMessagesWithBuilder(
+		[]llm.Message{
+			{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation),
+				Content:     textutil.Value("completed goal"),
+			},
+			{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+				SourcePath:  textutil.Value("current-node"),
+				Content:     textutil.Value("current workflow"),
+			},
+			{Role: llm.RoleUser, Content: textutil.Value("request")},
+		},
+		newMetaContextBuilder(t.TempDir(), "model", "", config.SkillPolicy{}, time.Unix(0, 0)),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("build reviewer request: %v", err)
+	}
+	counts := make(map[llm.MessageType]int)
+	for _, message := range rebuilt {
+		if message.MessageType != nil {
+			counts[*message.MessageType]++
+		}
+	}
+	if counts[llm.MessageTypeActiveGoalContinuation] != 0 || counts[llm.MessageTypeWorkflowMode] != 1 {
+		t.Fatalf("reviewer meta-context mode counts = %+v, want latest Workflow only", counts)
+	}
+}
+
 func TestActiveGoalContinuationProjectsAsDetailDeveloperContext(t *testing.T) {
 	t.Parallel()
 	entries := VisibleChatEntriesFromMessage(llm.Message{

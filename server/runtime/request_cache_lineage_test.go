@@ -223,6 +223,38 @@ func TestPromptCacheResponseAppliesLineageByCommitReceipt(t *testing.T) {
 	}
 }
 
+func TestHistoryReplacementPreservesReuseBaselineWhileSuppressingShapeWarning(t *testing.T) {
+	t.Parallel()
+	tracker := newRequestCacheTracker()
+	before := cacheLineageRequest("cache-key", transcript.CacheWarningScopeConversation, "before")
+	if _, err := tracker.Prepare(before); err != nil {
+		t.Fatalf("prepare pre-compaction request: %v", err)
+	}
+	tracker.RecordResponse(persistedCacheResponseObserved{
+		DigestVersion:     requestCacheDigestVersion,
+		CacheKey:          "cache-key",
+		Scope:             transcript.CacheWarningScopeConversation,
+		ChunkCount:        1,
+		TerminalHash:      "before",
+		CachedInputTokens: textutil.Value(7),
+	})
+	tracker.ResetAfterHistoryReplacement("cache-key")
+
+	after, err := tracker.Prepare(cacheLineageRequest("cache-key", transcript.CacheWarningScopeConversation, "after"))
+	if err != nil {
+		t.Fatalf("prepare post-compaction request: %v", err)
+	}
+	if after.exactWarning != nil {
+		t.Fatalf("post-compaction request emitted replacement-shape warning: %+v", after.exactWarning)
+	}
+	if !after.hasPreviousResponse || !after.previousHadReuse || after.previousCachedInputTokens != 7 {
+		t.Fatalf("post-compaction reuse baseline = %+v", after)
+	}
+	if !shouldWarnOnCacheReuseDrop(config.CacheWarningModeVerbose, after, llm.Usage{CachedInputTokens: textutil.Value(0)}) {
+		t.Fatal("post-compaction zero reuse did not retain the reuse-drop diagnostic")
+	}
+}
+
 type transportStaticAuth struct{}
 
 func (transportStaticAuth) AuthorizationHeader(context.Context) (string, error) {
