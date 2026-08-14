@@ -355,6 +355,127 @@ func TestWorkflowTaskLifecycleGeneratedValidationPreservesMutationPredicates(t *
 	assertDynamicValid(t, branch)
 }
 
+func TestWorkflowTaskLifecycleGeneratedValidationRejectsBlankTaskIdentifiers(t *testing.T) {
+	files, err := protodesc.NewFiles(buildWorkflowTaskLifecycleDescriptorSet(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixtures := []struct {
+		message   protoreflect.FullName
+		field     protoreflect.Name
+		configure func(protoreflect.Message)
+	}{
+		{"kent.api.workflow_task.DependencyCreateIntent", "related_task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "related_task_id", "task-1")
+			setEnumField(t, message, "new_task_role", 1)
+		}},
+		{"kent.api.workflow_task.UpdateRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+		}},
+		{"kent.api.workflow_task.StartRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+			setStringField(t, message, "setup_operation_id", "123e4567-e89b-42d3-a456-426614174000")
+		}},
+		{"kent.api.workflow_task.InterruptRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+		}},
+		{"kent.api.workflow_task.ResumeRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+			setStringField(t, message, "setup_operation_id", "123e4567-e89b-42d3-a456-426614174000")
+		}},
+		{"kent.api.workflow_task.MovePreviewRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+			setStringField(t, message, "target_node_id", "node-1")
+		}},
+		{"kent.api.workflow_task.MoveRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+			setStringField(t, message, "target_node_id", "node-1")
+		}},
+		{"kent.api.workflow_task.CompleteRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+			setEnumField(t, message, "actor_kind", 2)
+			message.Set(fds(t, message, "force"), protoreflect.ValueOfBool(true))
+		}},
+		{"kent.api.workflow_task.DeleteRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+		}},
+		{"kent.api.workflow_task.DependencyAddRequest", "blocker_task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "blocker_task_id", "task-1")
+			setStringField(t, message, "blocked_task_id", "task-2")
+		}},
+		{"kent.api.workflow_task.DependencyAddRequest", "blocked_task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "blocker_task_id", "task-1")
+			setStringField(t, message, "blocked_task_id", "task-2")
+		}},
+		{"kent.api.workflow_task.DependencyRemoveRequest", "blocker_task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "blocker_task_id", "task-1")
+			setStringField(t, message, "blocked_task_id", "task-2")
+		}},
+		{"kent.api.workflow_task.DependencyRemoveRequest", "blocked_task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "blocker_task_id", "task-1")
+			setStringField(t, message, "blocked_task_id", "task-2")
+		}},
+		{"kent.api.workflow_task.DependencyListRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+		}},
+		{"kent.api.workflow_task.CommentAddRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+			setStringField(t, message, "body", "comment")
+			setEnumField(t, message, "author", 1)
+		}},
+		{"kent.api.workflow_task.TaskOffsetPageRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+		}},
+		{"kent.api.workflow_task.LabelsUpdateRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+		}},
+		{"kent.api.workflow_task.ObserveRequest", "task_id", func(message protoreflect.Message) {
+			setStringField(t, message, "task_id", "task-1")
+			setStringField(t, message, "project_id", "project-1")
+			setEnumField(t, message, "mode", 1)
+		}},
+	}
+
+	for _, fixture := range fixtures {
+		t.Run(string(fixture.message)+"."+string(fixture.field), func(t *testing.T) {
+			request := dynamicMessage(t, files, fixture.message)
+			fixture.configure(request)
+			assertDynamicValid(t, request)
+			setStringField(t, request, fixture.field, " ")
+			assertDynamicInvalid(t, request)
+		})
+	}
+}
+
+func TestWorkflowTaskLifecycleGeneratedValidationEnforcesDependencyListRelationships(t *testing.T) {
+	files, err := protodesc.NewFiles(buildWorkflowTaskLifecycleDescriptorSet(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blockedBy := dynamicMessage(t, files, "kent.api.workflow_task.DependencyListDirection")
+	setEnumField(t, blockedBy, "direction", 1)
+	setInt32Field(t, blockedBy, "total_count", 0)
+	setInt32Field(t, blockedBy, "unsatisfied_count", 0)
+	assertDynamicValid(t, blockedBy)
+
+	setInt32Field(t, blockedBy, "total_count", 1)
+	assertDynamicInvalid(t, blockedBy)
+
+	missingUnsatisfiedCount := dynamicMessage(t, files, "kent.api.workflow_task.DependencyListDirection")
+	setEnumField(t, missingUnsatisfiedCount, "direction", 1)
+	setInt32Field(t, missingUnsatisfiedCount, "total_count", 0)
+	assertDynamicInvalid(t, missingUnsatisfiedCount)
+
+	blocks := dynamicMessage(t, files, "kent.api.workflow_task.DependencyListDirection")
+	setEnumField(t, blocks, "direction", 2)
+	setInt32Field(t, blocks, "total_count", 0)
+	assertDynamicValid(t, blocks)
+	setInt32Field(t, blocks, "unsatisfied_count", 0)
+	assertDynamicInvalid(t, blocks)
+}
+
 func TestWorkflowTaskLifecycleUsesExistingDomainSchemasWithoutDynamicPayloads(t *testing.T) {
 	file := descriptorFile(t, buildWorkflowTaskLifecycleDescriptorSet(t), "kent/api/workflow_task/lifecycle.proto")
 	imports := make(map[string]bool, len(file.Dependency))

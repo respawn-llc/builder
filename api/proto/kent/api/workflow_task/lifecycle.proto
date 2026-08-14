@@ -134,7 +134,7 @@ enum InitialBranchErrorReason {
 }
 
 message DependencyCreateIntent {
-  string related_task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string related_task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   DependencyRole new_task_role = 2 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
@@ -178,7 +178,7 @@ message CreateSuccess {
 }
 
 message UpdateRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional string title = 2 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
@@ -224,7 +224,7 @@ message DependencyConfirmationRequired {
 }
 
 message StartRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional string invoking_session_id = 2 [(buf.validate.field).string.min_len = 1];
   string setup_operation_id = 3 [
     (buf.validate.field).string.uuid = true,
@@ -249,14 +249,14 @@ message StartSuccess {
 }
 
 message InterruptRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional string invoking_session_id = 2 [(buf.validate.field).string.min_len = 1];
   optional string session_id = 3 [(buf.validate.field).string.min_len = 1];
   optional string reason = 4;
 }
 
 message ResumeRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional string invoking_session_id = 2 [(buf.validate.field).string.min_len = 1];
   string setup_operation_id = 3 [
     (buf.validate.field).string.uuid = true,
@@ -298,7 +298,7 @@ message ApproveSuccess {
 }
 
 message MovePreviewRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   string target_node_id = 2 [(buf.validate.field).string.min_len = 1];
 }
 
@@ -384,7 +384,7 @@ message NodeOutputValues {
 }
 
 message MoveRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional string invoking_session_id = 2 [(buf.validate.field).string.min_len = 1];
   string target_node_id = 3 [(buf.validate.field).string.min_len = 1];
   optional string transition_key = 4 [(buf.validate.field).string.min_len = 1];
@@ -423,7 +423,7 @@ message MoveSuccess {
 
 message CompleteRequest {
   optional string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  optional string task_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional string task_id = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional string transition_id = 3 [(buf.validate.field).string.min_len = 1];
   repeated NamedValue output_values = 4;
   optional string commentary = 5;
@@ -456,17 +456,17 @@ message CompleteSuccess {
 }
 
 message DeleteRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message DependencyAddRequest {
-  string blocker_task_id = 1 [(buf.validate.field).string.min_len = 1];
-  string blocked_task_id = 2 [(buf.validate.field).string.min_len = 1];
+  string blocker_task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string blocked_task_id = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message DependencyRemoveRequest {
-  string blocker_task_id = 1 [(buf.validate.field).string.min_len = 1];
-  string blocked_task_id = 2 [(buf.validate.field).string.min_len = 1];
+  string blocker_task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string blocked_task_id = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message DependencyMutationSuccess {
@@ -481,7 +481,7 @@ message DependencyMutationSuccess {
 }
 
 message DependencyListRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional DependencyDirection direction = 2 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
@@ -496,6 +496,15 @@ message DependencyListDirection {
   int32 total_count = 2 [(buf.validate.field).int32.gte = 0];
   optional int32 unsatisfied_count = 3 [(buf.validate.field).int32.gte = 0];
   repeated DependencyItem items = 4;
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.dependency_list_direction_counts"
+    message: "direction counts and satisfaction presence must match"
+    expression:
+      "this.total_count == size(this.items) && "
+      "((this.direction == 1 && has(this.unsatisfied_count) && this.unsatisfied_count <= this.total_count && this.items.all(item, has(item.satisfaction))) || "
+      "(this.direction == 2 && !has(this.unsatisfied_count) && this.items.all(item, !has(item.satisfaction))))"
+  };
 }
 
 message DependencyListSuccess {
@@ -518,7 +527,7 @@ message Comment {
 }
 
 message CommentAddRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   string body = 2 [(buf.validate.field).string.min_len = 1];
   CommentAuthorKind author = 3 [(buf.validate.field).enum = {
     defined_only: true
@@ -532,7 +541,7 @@ message CommentAddSuccess {
 }
 
 message TaskOffsetPageRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional int32 offset = 2 [(buf.validate.field).int32.gte = 0];
   optional int32 limit = 3 [(buf.validate.field).int32.gt = 0];
 }
@@ -595,7 +604,7 @@ message SessionListSuccess {
 }
 
 message LabelsUpdateRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   repeated string add_label_ids = 2 [
     (buf.validate.field).repeated = {
       max_items: 100
@@ -625,7 +634,7 @@ message LabelsUpdateSuccess {
 }
 
 message ObserveRequest {
-  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string task_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   string project_id = 2 [(buf.validate.field).string.min_len = 1];
   ObservationMode mode = 3 [(buf.validate.field).enum = {
     defined_only: true

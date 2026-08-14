@@ -15,4 +15,9 @@ extend buf.validate.StringRules {
       "size(this) == 36 && this == this.lowerAscii() && "
       "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b'])"
   }];
+  optional bool nonblank = 50003 [(buf.validate.predefined).cel = {
+    id: "kent.shared.nonblank"
+    message: "must be non-blank"
+    expression: "!rule || this.trim() != ''"
+  }];
 }
