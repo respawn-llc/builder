@@ -67,22 +67,23 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	locked := make([]*execution, 0, len(executions))
 	selection := WorkflowInterruptSelection{}
 	for _, execution := range executions {
-		switch execution.phase {
-		case executionPhaseRunning:
-			if !execution.completed {
-				ref, _ := execution.scope.Workflow()
-				selection.Interruptible = append(selection.Interruptible, WorkflowExecutionSelection{
-					Handle: executionHandle{execution: execution}, Operation: ref.Operation(),
-				})
-			}
-		case executionPhaseQueued:
+		activity, activityErr := execution.workflowActivity()
+		if activityErr != nil {
+			a.mu.Unlock()
+			panic(activityErr)
+		}
+		switch activity {
+		case workflowExecutionRunning:
+			ref, _ := execution.scope.Workflow()
+			selection.Interruptible = append(selection.Interruptible, WorkflowExecutionSelection{
+				Handle: executionHandle{execution: execution}, Operation: ref.Operation(),
+			})
+		case workflowExecutionQueued:
 			ref, _ := execution.scope.Workflow()
 			selection.Queued = append(selection.Queued, WorkflowExecutionSelection{
 				Handle: executionHandle{execution: execution}, Operation: ref.Operation(),
 			})
-		case executionPhaseFinalizing:
-		default:
-			panic(fmt.Sprintf("workflow execution scope %s has invalid phase", execution.scope.ID()))
+		case workflowExecutionNotRunning:
 		}
 		execution.prompts.mu.Lock()
 		locked = append(locked, execution)
@@ -210,18 +211,21 @@ func (a *Authority) WithWorkflowInterruptSelection(
 			Handle:    executionHandle{execution: execution},
 			Operation: ref.Operation(),
 		}
-		switch execution.phase {
-		case executionPhaseQueued:
+		activity, activityErr := execution.workflowActivity()
+		if activityErr != nil {
+			a.mu.Unlock()
+			panic(activityErr)
+		}
+		switch activity {
+		case workflowExecutionQueued:
 			if sessionID == nil {
 				selection.Queued = append(selection.Queued, selected)
 			}
-		case executionPhaseRunning:
-			if !execution.completed && len(execution.prompts.pending) == 0 {
+		case workflowExecutionRunning:
+			if len(execution.prompts.pending) == 0 {
 				selection.Interruptible = append(selection.Interruptible, selected)
 			}
-		case executionPhaseFinalizing:
-		default:
-			panic("workflow execution has an invalid interrupt phase")
+		case workflowExecutionNotRunning:
 		}
 	}
 	a.mu.Unlock()

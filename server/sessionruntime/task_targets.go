@@ -128,10 +128,14 @@ func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (W
 		if !ok || ref.CurrentNode.TaskID != taskID {
 			continue
 		}
-		switch execution.phase {
-		case executionPhaseQueued:
+		activity, activityErr := execution.workflowActivity()
+		if activityErr != nil {
+			return WorkflowTaskExecutionState{}, activityErr
+		}
+		switch activity {
+		case workflowExecutionQueued:
 			state.Queued++
-		case executionPhaseRunning:
+		case workflowExecutionRunning:
 			pending, err := execution.prompts.pendingReferences()
 			if err != nil {
 				return WorkflowTaskExecutionState{}, err
@@ -153,9 +157,7 @@ func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (W
 			} else if len(pending) == 0 {
 				state.Running++
 			}
-		case executionPhaseFinalizing:
-		default:
-			return WorkflowTaskExecutionState{}, fmt.Errorf("workflow execution scope %s has invalid phase", execution.scope.ID())
+		case workflowExecutionNotRunning:
 		}
 	}
 	return state, nil

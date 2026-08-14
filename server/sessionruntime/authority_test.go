@@ -1388,7 +1388,45 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 	}
 }
 
-func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
+func TestRunningScriptIsInterruptibleUntilProcessEnds(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-running-script")
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: workflowExecutionRefForTest(t, taskID, "node-running-script", nil),
+		Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+	})
+	if err != nil {
+		t.Fatalf("start running Script: %v", err)
+	}
+	t.Cleanup(func() { _ = handle.Stop(context.Background()) })
+
+	selectionCalled := false
+	err = authority.WithWorkflowInterruptSelection(taskID, nil, func(selection WorkflowInterruptSelection) error {
+		selectionCalled = true
+		if len(selection.Interruptible) != 1 ||
+			selection.Interruptible[0].Handle.Scope().ID() != handle.Scope().ID() {
+			t.Fatalf("running Script interrupt selection = %+v, want exact Script", selection)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("select running Script for Interrupt: %v", err)
+	}
+	if !selectionCalled {
+		t.Fatal("running Script did not authorize Interrupt")
+	}
+}
+
+func TestTerminalScriptIsNotRunningWhileCleanupCompletes(t *testing.T) {
 	truePath, err := exec.LookPath("true")
 	if err != nil {
 		t.Skipf("true executable unavailable: %v", err)
@@ -1399,11 +1437,11 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 			t.Errorf("close authority: %v", err)
 		}
 	})
-	taskID := workflow.TaskID("task-finalizing-script")
+	taskID := workflow.TaskID("task-terminal-script")
 	finalizeStarted := make(chan struct{})
 	releaseFinalize := make(chan struct{})
 	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
-		Workflow: workflowExecutionRefForTest(t, taskID, "node-finalizing-script", nil),
+		Workflow: workflowExecutionRefForTest(t, taskID, "node-terminal-script", nil),
 		Command:  ScriptCommand{Path: truePath},
 		Finalize: func(context.Context, ExecutionScope, ScriptResult, error) error {
 			close(finalizeStarted)
@@ -1429,7 +1467,7 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
 	if len(targets.Executions) != 0 {
-		t.Fatalf("finalizing script remains interruptible: %+v", targets)
+		t.Fatalf("terminal Script appears running during cleanup: %+v", targets)
 	}
 	selectionCalled := false
 	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
@@ -1437,10 +1475,10 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 		return nil
 	})
 	if !errors.Is(selectionErr, ErrExecutionNoLongerLive) {
-		t.Fatalf("finalizing script selection error = %v, want %v", selectionErr, ErrExecutionNoLongerLive)
+		t.Fatalf("terminal Script selection error = %v, want %v", selectionErr, ErrExecutionNoLongerLive)
 	}
 	if selectionCalled {
-		t.Fatal("finalizing script alone authorized task interrupt")
+		t.Fatal("terminal Script cleanup authorized Task Interrupt")
 	}
 
 	close(releaseFinalize)

@@ -35,6 +35,14 @@ const (
 	executionPhaseFinalizing
 )
 
+type workflowExecutionActivity uint8
+
+const (
+	workflowExecutionNotRunning workflowExecutionActivity = iota
+	workflowExecutionQueued
+	workflowExecutionRunning
+)
+
 type ExecutionPromptSnapshot struct {
 	Scope     ExecutionScope
 	Request   tools.AskQuestionRequest
@@ -69,6 +77,27 @@ type execution struct {
 	completed          bool
 
 	closeResource bool
+}
+
+func (e *execution) workflowActivity() (workflowExecutionActivity, error) {
+	switch e.phase {
+	case executionPhaseQueued:
+		return workflowExecutionQueued, nil
+	case executionPhaseRunning:
+		if e.completed {
+			return workflowExecutionNotRunning, nil
+		}
+		return workflowExecutionRunning, nil
+	default:
+		if e.phase < executionPhaseQueued || e.phase > executionPhaseFinalizing {
+			return workflowExecutionNotRunning, fmt.Errorf(
+				"workflow execution scope %s has invalid phase %d",
+				e.scope.ID(),
+				e.phase,
+			)
+		}
+		return workflowExecutionNotRunning, nil
+	}
 }
 
 type executionHandle struct {
