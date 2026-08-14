@@ -60,7 +60,10 @@ func TestWorkspaceChatMaterializationResponseRequiresCanonicalUUIDv4(t *testing.
 
 func TestWorkspaceChatDraftConsumeOperationIsRejected(t *testing.T) {
 	var request WorkspaceChatDraftRequest
-	if err := json.Unmarshal([]byte(`{"operation":{"kind":"consume"}}`), &request); err == nil {
-		t.Fatal("workspace Chat draft accepted the removed consume operation")
+	if err := json.Unmarshal([]byte(`{"operation":{"kind":"consume"}}`), &request); err != nil {
+		t.Fatalf("representation decode failed: %v", err)
+	}
+	if err := request.Validate(); err == nil {
+		t.Fatal("workspace Chat draft validator accepted the removed consume operation")
 	}
 }

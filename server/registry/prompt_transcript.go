@@ -1,11 +1,9 @@
 package registry
 
 import (
-	"fmt"
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/toolspec"
 )
 
@@ -22,7 +20,7 @@ func publishPendingPrompt(
 	snapshot PendingPromptSnapshot,
 	eventType pendingPromptEventType,
 ) {
-	if feed == nil || strings.TrimSpace(snapshot.Request.ID) == "" {
+	if feed == nil {
 		return
 	}
 	prompt := transcriptPendingPromptFromSnapshot(sessionID, snapshot, eventType)
@@ -30,7 +28,7 @@ func publishPendingPrompt(
 }
 
 func transcriptPendingPromptFromSnapshot(
-	sessionID string,
+	_ string,
 	snapshot PendingPromptSnapshot,
 	eventType pendingPromptEventType,
 ) clientui.TranscriptPrompt {
@@ -45,9 +43,9 @@ func transcriptPendingPromptFromSnapshot(
 	prompt := clientui.TranscriptPrompt{
 		Kind:        kind,
 		Status:      state,
-		PromptID:    clientui.PromptID(strings.TrimSpace(snapshot.Request.ID)),
-		SessionID:   mustPromptSessionID(sessionID),
-		StepID:      mustPromptStepID(snapshot.Request.StepID),
+		PromptID:    snapshot.PromptID,
+		SessionID:   snapshot.SessionID,
+		StepID:      snapshot.StepID,
 		Question:    snapshot.Request.Question,
 		CreatedAt:   snapshot.CreatedAt,
 		Suggestions: append([]string(nil), snapshot.Request.Suggestions...),
@@ -69,20 +67,4 @@ func transcriptPendingPromptFromSnapshot(
 		}
 	}
 	return prompt
-}
-
-func mustPromptSessionID(raw string) runtimeids.SessionID {
-	id, err := runtimeids.ParseSessionID(strings.TrimSpace(raw))
-	if err != nil {
-		panic(fmt.Sprintf("pending prompt has invalid session id %q: %v", raw, err))
-	}
-	return id
-}
-
-func mustPromptStepID(raw string) runtimeids.StepID {
-	id, err := runtimeids.ParseStepID(strings.TrimSpace(raw))
-	if err != nil {
-		panic(fmt.Sprintf("pending prompt has invalid step id %q: %v", raw, err))
-	}
-	return id
 }

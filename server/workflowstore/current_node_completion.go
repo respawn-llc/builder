@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"core/server/metadata/sqlitegen"
-	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/session"
 	"core/server/workflow"
 	"core/shared/invariant"
@@ -186,35 +185,17 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	connection, err := s.db.Conn(ctx)
+	transaction, err := s.metadata.BeginImmediateTransaction(ctx, "Complete Current Node")
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	defer func() { _ = connection.Close() }()
-	lifecycle := sqlitelifecyclegen.New(connection)
-	if err := lifecycle.SetBusyTimeout15Seconds(ctx); err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
-	defer func() { _ = lifecycle.SetBusyTimeout5Seconds(context.Background()) }()
-	if err := lifecycle.BeginImmediate(ctx); err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
+	defer transaction.Settle(ctx, &resultErr)
 	nowTime := s.now().UTC()
 	now := nowTime.UnixMilli()
-	committed := false
-	defer func() {
-		if !committed {
-			_ = lifecycle.Rollback(context.Background())
-		}
-	}()
 	commit := func() error {
-		if err := lifecycle.Commit(ctx); err != nil {
-			return err
-		}
-		committed = true
-		return nil
+		return transaction.Commit(ctx)
 	}
-	q := sqlitegen.New(connection)
+	q := transaction.Queries()
 	currentSource, err := s.currentNodeForReference(ctx, q, prepared.Source)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err

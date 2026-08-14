@@ -140,7 +140,7 @@ SELECT
     display_name,
     project_key
 FROM projects
-WHERE id = sqlc.arg(project_id)
+WHERE projects.id = sqlc.arg(project_id)
 LIMIT 1;
 
 -- name: GetProjectKeyState :one
@@ -685,7 +685,7 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(project_id);
 
--- name: InsertProjectWorkflowLink :exec
+-- name: InsertProjectWorkflowLink :execrows
 INSERT INTO project_workflow_links (
     id,
     project_id,
@@ -698,7 +698,8 @@ INSERT INTO project_workflow_links (
     sqlc.arg(workflow_id),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms)
-);
+)
+ON CONFLICT(project_id, workflow_id) DO NOTHING;
 
 -- name: GetProjectWorkflowLink :one
 SELECT
@@ -822,11 +823,23 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(project_id);
 
--- name: CountProjectWorkflowLinksByIDAndProject :one
-SELECT CAST(COUNT(*) AS INTEGER) AS link_count
-FROM project_workflow_links
-WHERE id = sqlc.arg(project_workflow_link_id)
-  AND project_id = sqlc.arg(project_id);
+-- name: SetProjectDefaultWorkflowLinkByWorkflow :execrows
+UPDATE projects
+SET
+    default_project_workflow_link_id = (
+        SELECT project_workflow_links.id
+        FROM project_workflow_links
+        WHERE project_workflow_links.project_id = projects.id
+          AND project_workflow_links.workflow_id = sqlc.arg(workflow_id)
+    ),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE projects.id = sqlc.arg(project_id)
+  AND EXISTS (
+      SELECT 1
+      FROM project_workflow_links
+      WHERE project_workflow_links.project_id = projects.id
+        AND project_workflow_links.workflow_id = sqlc.arg(workflow_id)
+  );
 
 -- name: DeleteProjectWorkflowLinkUnlessDefaultNeedsReplacement :execrows
 DELETE FROM project_workflow_links
@@ -1978,7 +1991,6 @@ INSERT INTO sessions (
     category,
     created_at_unix_ms,
     updated_at_unix_ms,
-    last_sequence,
     model_request_count,
     launch_visible,
     cwd_relpath,
@@ -2002,7 +2014,6 @@ INSERT INTO sessions (
     sqlc.narg(category),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms),
-    sqlc.arg(last_sequence),
     sqlc.arg(model_request_count),
     sqlc.arg(launch_visible),
     sqlc.arg(cwd_relpath),
@@ -2021,7 +2032,6 @@ ON CONFLICT(id) DO UPDATE SET
     parent_agent_session_id = excluded.parent_agent_session_id,
     category = excluded.category,
     updated_at_unix_ms = MAX(sessions.updated_at_unix_ms, excluded.updated_at_unix_ms),
-    last_sequence = excluded.last_sequence,
     model_request_count = excluded.model_request_count,
     launch_visible = CASE
         WHEN sessions.launch_visible <> 0 OR excluded.launch_visible <> 0 THEN 1
@@ -2044,27 +2054,42 @@ UPDATE sessions
 SET manual_compact_eligible = sqlc.arg(manual_compact_eligible)
 WHERE id = sqlc.arg(session_id);
 
--- name: ReconcileSessionEventLog :execrows
+-- name: ProjectSessionAppend :execrows
 UPDATE sessions
 SET
-    last_sequence = sqlc.arg(last_sequence),
+    first_prompt_preview = CASE
+        WHEN first_prompt_preview = '' AND sqlc.narg(first_prompt_preview) IS NOT NULL
+            THEN sqlc.narg(first_prompt_preview)
+        ELSE first_prompt_preview
+    END,
     updated_at_unix_ms = MAX(updated_at_unix_ms, sqlc.arg(updated_at_unix_ms)),
-    usage_state_json = CASE
-        WHEN sqlc.arg(invalidate_usage_state) <> 0 THEN 'null'
-        ELSE usage_state_json
+    launch_visible = CASE
+        WHEN launch_visible <> 0 OR sqlc.narg(first_prompt_preview) IS NOT NULL THEN 1
+        ELSE 0
     END,
     metadata_json = json_set(
-        CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+        metadata_json,
         '$.conversation_established',
-        json(CASE WHEN sqlc.arg(conversation_established) <> 0 THEN 'true' ELSE 'false' END)
+        CASE
+            WHEN json_extract(metadata_json, '$.conversation_established') = 1
+                OR sqlc.arg(conversation_established) <> 0
+                THEN json('true')
+            ELSE json('false')
+        END,
+        '$.generated_recovered_warning_issued',
+        CASE
+            WHEN json_extract(metadata_json, '$.generated_recovered_warning_issued') = 1
+                OR sqlc.arg(generated_recovered_warning_issued) <> 0
+                THEN json('true')
+            ELSE json('false')
+        END
     )
-WHERE id = sqlc.arg(session_id)
-  AND last_sequence = sqlc.arg(observed_last_sequence);
+WHERE id = sqlc.arg(id);
 
 -- name: GetProjectDisplayName :one
 SELECT display_name
 FROM projects
-WHERE id = sqlc.arg(project_id)
+WHERE projects.id = sqlc.arg(project_id)
 LIMIT 1;
 
 -- name: SetProjectDisplayName :execrows
@@ -2090,7 +2115,13 @@ UPDATE projects
 SET
     primary_workspace_id = sqlc.arg(workspace_id),
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
-WHERE id = sqlc.arg(project_id);
+WHERE projects.id = sqlc.arg(project_id)
+  AND EXISTS (
+      SELECT 1
+      FROM workspaces
+      WHERE workspaces.id = sqlc.arg(workspace_id)
+        AND workspaces.project_id = projects.id
+  );
 
 -- name: ListProjects :many
 SELECT
@@ -2324,7 +2355,6 @@ SELECT
     s.category,
     s.created_at_unix_ms,
     s.updated_at_unix_ms,
-    s.last_sequence,
     s.model_request_count,
     s.continuation_json,
     s.locked_json,
@@ -3427,22 +3457,82 @@ WHERE id = (
 )
 RETURNING id;
 
+-- name: GetTaskDependencyPairSnapshot :many
+SELECT
+    CAST('blocker' AS TEXT) AS task_role,
+    blocker.id,
+    blocker.project_id,
+    blocker.workflow_id,
+    blocker.short_id
+FROM task_records AS blocker
+WHERE blocker.id = sqlc.arg(blocker_task_id)
+UNION ALL
+SELECT
+    CAST('blocked' AS TEXT) AS task_role,
+    blocked.id,
+    blocked.project_id,
+    blocked.workflow_id,
+    blocked.short_id
+FROM task_records AS blocked
+WHERE blocked.id = sqlc.arg(blocked_task_id);
 
--- name: CountTaskDependenciesByBlocker :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocker_task_id = sqlc.arg(blocker_task_id);
+-- name: GetTaskDependencyAttachSnapshot :many
+WITH args AS (
+    SELECT
+        sqlc.arg(blocker_task_id) AS blocker_task_id,
+        sqlc.arg(blocked_task_id) AS blocked_task_id
+),
+policy AS (
+    SELECT
+        CAST(EXISTS (
+            SELECT 1
+            FROM task_dependencies
+            WHERE blocker_task_id = args.blocked_task_id
+              AND blocked_task_id = args.blocker_task_id
+        ) AS INTEGER) AS reverse_pair_present,
+        CAST((
+            SELECT COUNT(*)
+            FROM task_dependencies
+            WHERE blocker_task_id = args.blocker_task_id
+        ) AS INTEGER) AS blocker_outgoing_count,
+        CAST((
+            SELECT COUNT(*)
+            FROM task_dependencies
+            WHERE blocked_task_id = args.blocked_task_id
+        ) AS INTEGER) AS blocked_incoming_count
+    FROM args
+)
+SELECT
+    CAST('blocker' AS TEXT) AS task_role,
+    blocker.id,
+    blocker.project_id,
+    blocker.workflow_id,
+    blocker.short_id,
+    policy.reverse_pair_present,
+    policy.blocker_outgoing_count,
+    policy.blocked_incoming_count
+FROM args
+CROSS JOIN policy
+JOIN task_records AS blocker ON blocker.id = args.blocker_task_id
+UNION ALL
+SELECT
+    CAST('blocked' AS TEXT) AS task_role,
+    blocked.id,
+    blocked.project_id,
+    blocked.workflow_id,
+    blocked.short_id,
+    policy.reverse_pair_present,
+    policy.blocker_outgoing_count,
+    policy.blocked_incoming_count
+FROM args
+CROSS JOIN policy
+JOIN task_records AS blocked ON blocked.id = args.blocked_task_id;
 
 
--- name: CountTaskDependenciesByBlocked :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocked_task_id = sqlc.arg(blocked_task_id);
-
-
--- name: InsertTaskDependency :exec
+-- name: InsertTaskDependency :execrows
 INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
-VALUES (sqlc.arg(blocker_task_id), sqlc.arg(blocked_task_id));
+VALUES (sqlc.arg(blocker_task_id), sqlc.arg(blocked_task_id))
+ON CONFLICT(blocker_task_id, blocked_task_id) DO NOTHING;
 
 
 -- name: DeleteTaskDependency :execrows

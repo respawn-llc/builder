@@ -131,13 +131,9 @@ func (s Service) scan() ([]CatalogEntry, error) {
 	return result, nil
 }
 
-func (s Service) findCandidate(command string) (candidate, bool, error) {
-	name, err := runtimeinput.ParsePromptCommandName(command)
-	if err != nil {
-		return candidate{}, false, nil
-	}
+func (s Service) findCandidate(name runtimeinput.PromptCommandName) (candidate, bool, error) {
 	var found *candidate
-	err = s.walkCandidates(func(command string) bool {
+	err := s.walkCandidates(func(command string) bool {
 		return command == name.String()
 	}, func(entry candidateEntry) (candidateDecision, error) {
 		content, readErr := os.ReadFile(entry.path)

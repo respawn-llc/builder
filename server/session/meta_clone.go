@@ -20,6 +20,10 @@ func cloneMeta(in Meta) Meta {
 	out.WorktreeReminder = CloneWorktreeReminderState(in.WorktreeReminder)
 	if in.UsageState != nil {
 		usage := *in.UsageState
+		if in.UsageState.HistoryReplacementEventSequence != nil {
+			sequence := *in.UsageState.HistoryReplacementEventSequence
+			usage.HistoryReplacementEventSequence = &sequence
+		}
 		out.UsageState = &usage
 	}
 	if in.Goal != nil {

@@ -3,6 +3,7 @@ package workflowsvc
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"core/server/workflow"
 	"core/server/workflow/label"
@@ -48,14 +49,15 @@ func (s *Service) ListWorkflowProjectLabels(ctx context.Context, req serverapi.W
 }
 
 func (s *Service) RenameWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelRenameRequest) (serverapi.WorkflowProjectLabelRenameResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	name, err := req.PrepareRPC()
+	if err != nil {
 		return serverapi.WorkflowProjectLabelRenameResponse{}, err
 	}
 	id, err := label.ParseID(req.LabelID)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelRenameResponse{}, err
 	}
-	record, err := s.store.RenameProjectLabel(ctx, req.ProjectID, id, req.Name)
+	record, err := s.store.RenameProjectLabel(ctx, req.ProjectID, id, name)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelRenameResponse{}, workflowLabelError(err, workflowLabelErrorScope{
 			projectID: &req.ProjectID,
@@ -155,8 +157,8 @@ func (s *Service) UpdateWorkflowTaskLabels(ctx context.Context, req serverapi.Wo
 	}
 	ids, err := s.store.UpdateTaskLabels(ctx, workflowstore.TaskLabelUpdateRequest{
 		TaskID:         workflow.TaskID(req.TaskID),
-		AddLabelIDs:    req.AddLabelIDs,
-		RemoveLabelIDs: req.RemoveLabelIDs,
+		AddLabelIDs:    parseLabelIDs(req.AddLabelIDs),
+		RemoveLabelIDs: parseLabelIDs(req.RemoveLabelIDs),
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskLabelsUpdateResponse{}, workflowLabelError(err, workflowLabelErrorScope{
@@ -171,6 +173,18 @@ func (s *Service) UpdateWorkflowTaskLabels(ctx context.Context, req serverapi.Wo
 	}
 	s.publishProjectWorkflowEvent(ctx, scope.ProjectID, scope.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionLabelsChanged, req.TaskID)
 	return response, nil
+}
+
+func parseLabelIDs(values []string) []label.ID {
+	ids := make([]label.ID, len(values))
+	for i, value := range values {
+		id, err := label.ParseID(value)
+		if err != nil {
+			panic(fmt.Sprintf("validated request contains invalid Label ID %q: %v", value, err))
+		}
+		ids[i] = id
+	}
+	return ids
 }
 
 func workflowProjectLabel(record workflowstore.ProjectLabelRecord) serverapi.WorkflowProjectLabel {

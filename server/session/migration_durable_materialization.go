@@ -42,7 +42,7 @@ func (s *Store) materializePreparedDurableEventLogWithMutationHeld() (
 		return MaterializedEventLog{}, wrapEventLogPreparationError(committed, err)
 	}
 	switch preparation.State {
-	case eventLogCurrentReconciliationPending:
+	case eventLogCurrent:
 	default:
 		return MaterializedEventLog{}, wrapEventLogPreparationError(
 			committed,
@@ -53,9 +53,6 @@ func (s *Store) materializePreparedDurableEventLogWithMutationHeld() (
 		)
 	}
 
-	if err := s.reconcileCurrentEventLogWithStableLockHeld(); err != nil {
-		return MaterializedEventLog{}, err
-	}
 	return s.issueCurrentEventLogCapabilityWithMutationHeld()
 }
 
@@ -65,7 +62,6 @@ func (s *Store) issueCurrentEventLogCapabilityWithMutationHeld() (
 ) {
 	s.mu.Lock()
 	path := s.eventsFP
-	expectedRevision := s.meta.LastSequence
 	if s.eventLogMaterialization == nil ||
 		s.eventLogMaterialization.state != eventLogCurrent {
 		s.mu.Unlock()
@@ -85,18 +81,6 @@ func (s *Store) issueCurrentEventLogCapabilityWithMutationHeld() (
 		)
 	}
 	log.durabilityObserver = s.options.durabilityObserver
-	if log.lastSequence != expectedRevision {
-		return MaterializedEventLog{}, wrapEventLogMaterializationError(
-			EventLogMaterializationStageReconciliation,
-			true,
-			false,
-			fmt.Errorf(
-				"current event log revision %d does not match metadata revision %d",
-				log.lastSequence,
-				expectedRevision,
-			),
-		)
-	}
 	s.mu.Lock()
 	s.materializedEventLog = log
 	s.mu.Unlock()

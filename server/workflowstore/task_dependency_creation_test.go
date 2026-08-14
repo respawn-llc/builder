@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/server/workflow"
+	workflowlabel "core/server/workflow/label"
 )
 
 func TestCreateTaskWithDependencyIntentsCommitsMixedRelationshipsTogether(t *testing.T) {
@@ -96,7 +97,7 @@ func TestCreateTaskWithDependencyIntentsRollsBackOneInvalidRelationshipAmongVali
 		WorkflowID: &workflowID,
 		Title:      "Cross-project",
 		Body:       "Body",
-		LabelIDs:   []string{label.ID.String()},
+		LabelIDs:   []workflowlabel.ID{label.ID},
 		DependencyIntents: []workflow.TaskDependencyCreateIntent{
 			{RelatedTaskID: validRelated.ID, NewTaskRole: workflow.TaskDependencyRoleBlocker},
 			{RelatedTaskID: invalidRelated.ID, NewTaskRole: workflow.TaskDependencyRoleBlocked},
@@ -133,7 +134,7 @@ func TestCreateTaskWithDependencyIntentsRollsBackCardinalityFailures(t *testing.
 			WorkflowID: &workflowID,
 			Title:      "New blocker rejected",
 			Body:       "Body",
-			LabelIDs:   []string{label.ID.String()},
+			LabelIDs:   []workflowlabel.ID{label.ID},
 			DependencyIntents: []workflow.TaskDependencyCreateIntent{{
 				RelatedTaskID: related.ID,
 				NewTaskRole:   workflow.TaskDependencyRoleBlocker,
@@ -166,7 +167,7 @@ func TestCreateTaskWithDependencyIntentsRollsBackCardinalityFailures(t *testing.
 			WorkflowID: &workflowID,
 			Title:      "New blocked rejected",
 			Body:       "Body",
-			LabelIDs:   []string{label.ID.String()},
+			LabelIDs:   []workflowlabel.ID{label.ID},
 			DependencyIntents: []workflow.TaskDependencyCreateIntent{{
 				RelatedTaskID: related.ID,
 				NewTaskRole:   workflow.TaskDependencyRoleBlocked,

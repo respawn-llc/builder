@@ -462,46 +462,6 @@ func TestLocalToolRegistryTemporaryPathsBypassNativeToolApprovals(t *testing.T) 
 	}
 }
 
-func TestPromptFacingSnapshotReloaderUsesActiveWorkspaceRoot(t *testing.T) {
-	configRoot := t.TempDir()
-	originalWorkspace := t.TempDir()
-	activeWorkspace := t.TempDir()
-	for _, workspace := range []string{originalWorkspace, activeWorkspace} {
-		configDir := filepath.Join(workspace, config.ConfigDirName)
-		if err := os.MkdirAll(configDir, 0o755); err != nil {
-			t.Fatalf("mkdir workspace config: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("system_prompt_file = \"system.md\"\n"), 0o644); err != nil {
-			t.Fatalf("write workspace config: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(configDir, "system.md"), []byte(filepath.Base(workspace)), 0o644); err != nil {
-			t.Fatalf("write system prompt: %v", err)
-		}
-	}
-	store, err := session.Create(t.TempDir(), "ws", originalWorkspace, sessioncontract.SessionCategoryMain, runtimeWireTestSessionPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
-	reloader := launchPromptFacingSnapshotReloader{
-		store:         store,
-		workspaceRoot: activeWorkspace,
-		configRoot:    configRoot,
-	}
-
-	reloaded, err := reloader.ReloadPromptFacingSnapshotConfig(context.Background(), store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("reload prompt-facing config: %v", err)
-	}
-	if len(reloaded.Settings.SystemPromptFiles) == 0 {
-		t.Fatal("expected system prompt files from active workspace config")
-	}
-	got := reloaded.Settings.SystemPromptFiles[len(reloaded.Settings.SystemPromptFiles)-1].Path
-	want := filepath.Join(activeWorkspace, config.ConfigDirName, "system.md")
-	if got != want {
-		t.Fatalf("system prompt path = %q, want active workspace path %q", got, want)
-	}
-}
-
 func TestOutsideWorkspaceToolsInheritTypedApprovalBarrierFromCallContext(t *testing.T) {
 	workspace := t.TempDir()
 	outside := outsideNonTempDir(t)

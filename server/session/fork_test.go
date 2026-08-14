@@ -82,10 +82,11 @@ func collectForkRecords(t *testing.T, log MaterializedEventLog) []EventRecord {
 }
 
 type forkReplayCountingPersistence struct {
-	base     *testSessionMetadata
-	mu       sync.Mutex
-	parentID string
-	childSeq []int64
+	base              *testSessionMetadata
+	mu                sync.Mutex
+	parentID          string
+	childObservations int
+	childProjections  int
 }
 
 func newForkReplayCountingPersistence() *forkReplayCountingPersistence {
@@ -104,21 +105,10 @@ func (p *forkReplayCountingPersistence) ObservePersistedStore(
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.parentID != "" &&
-		snapshot.Meta.SessionID != p.parentID &&
-		snapshot.Meta.LastSequence > 0 {
-		if len(p.childSeq) == 0 ||
-			p.childSeq[len(p.childSeq)-1] != snapshot.Meta.LastSequence {
-			p.childSeq = append(p.childSeq, snapshot.Meta.LastSequence)
-		}
+		snapshot.Meta.SessionID != p.parentID {
+		p.childObservations++
 	}
 	return nil
-}
-
-func (p *forkReplayCountingPersistence) ObserveEventLogReconciliation(
-	ctx context.Context,
-	reconciliation PersistedEventLogReconciliation,
-) error {
-	return p.base.ObserveEventLogReconciliation(ctx, reconciliation)
 }
 
 func (p *forkReplayCountingPersistence) ResolvePersistedSession(
@@ -131,6 +121,17 @@ func (p *forkReplayCountingPersistence) ResolvePersistedSession(
 func (p *forkReplayCountingPersistence) options() []StoreOption {
 	return []StoreOption{
 		WithPersistenceObserver(p),
+		WithAppendProjector(func(ctx context.Context, projection AppendProjection) error {
+			if err := p.base.ProjectAppend(ctx, projection); err != nil {
+				return err
+			}
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.parentID != "" && projection.SessionID.String() != p.parentID {
+				p.childProjections++
+			}
+			return nil
+		}),
 		WithPersistedSessionResolver(p),
 	}
 }
@@ -139,13 +140,14 @@ func (p *forkReplayCountingPersistence) startChildCapture(parentID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.parentID = parentID
-	p.childSeq = nil
+	p.childObservations = 0
+	p.childProjections = 0
 }
 
-func (p *forkReplayCountingPersistence) childSequences() []int64 {
+func (p *forkReplayCountingPersistence) childObservationCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]int64(nil), p.childSeq...)
+	return p.childObservations + p.childProjections
 }
 
 func TestCloneSessionStreamsLargeHistoryAcrossChunks(t *testing.T) {
@@ -354,14 +356,11 @@ func TestCloneSessionFlushesAtCountAndByteBudgets(t *testing.T) {
 			if err != nil {
 				t.Fatalf("clone session: %v", err)
 			}
-			if got := persistence.childSequences(); !reflect.DeepEqual(
-				got,
-				test.wantChildSeq,
-			) {
+			if got, want := persistence.childObservationCount(), len(test.wantChildSeq)+2; got != want {
 				t.Fatalf(
-					"child replay flush revisions = %v, want %v",
+					"child replay persistence observations = %d, want %d",
 					got,
-					test.wantChildSeq,
+					want,
 				)
 			}
 			assertNoForkTemporaryArtifacts(t, parent.Dir())

@@ -147,18 +147,20 @@ func (s *Service) MaterializeWorkspaceChat(
 	ctx context.Context,
 	req serverapi.WorkspaceChatMaterializeRequest,
 ) (serverapi.WorkspaceChatMaterializeResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error) {
+		return s.MaterializeWorkspaceChatValidated(ctx, validated)
+	})
+}
+
+func (s *Service) MaterializeWorkspaceChatValidated(
+	ctx context.Context,
+	_ servicecontract.Validated[serverapi.WorkspaceChatMaterializeRequest],
+) (serverapi.WorkspaceChatMaterializeResponse, error) {
 	sessionID, err := s.materializeWorkspaceChatSession(ctx)
 	if err != nil {
 		return serverapi.WorkspaceChatMaterializeResponse{}, err
 	}
-	response := serverapi.WorkspaceChatMaterializeResponse{SessionID: sessionID}
-	if err := response.Validate(); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, err
-	}
-	return response, nil
+	return serverapi.WorkspaceChatMaterializeResponse{SessionID: sessionID}, nil
 }
 
 func (s *Service) materializeResolvedWorkspaceChat(
@@ -220,13 +222,13 @@ func (s *Service) materializeResolvedWorkspaceChat(
 }
 
 func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
-	planner := s.planner
-	if planner.ReloadConfig != nil {
-		snapshot, err := planner.ReloadConfig()
+	snapshot := s.planner.Config
+	if s.planner.GlobalConfig.AppName != "" {
+		var err error
+		snapshot, err = config.LoadWorkspaceOverlay(s.planner.GlobalConfig, s.planner.Config.WorkspaceRoot)
 		if err != nil {
 			return WorkspaceChatDraftResolverInput{}, err
 		}
-		planner.Config = snapshot
 	}
 	authState := auth.EmptyState()
 	if s.authStates != nil {
@@ -236,7 +238,7 @@ func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (Workspac
 			return WorkspaceChatDraftResolverInput{}, err
 		}
 	}
-	return WorkspaceChatDraftResolverInput{Settings: planner.Config.Settings, Source: planner.Config.Source, AuthState: authState}, nil
+	return WorkspaceChatDraftResolverInput{Settings: snapshot.Settings, Source: snapshot.Source, AuthState: authState}, nil
 }
 
 func (s *Service) workspaceChatDraftOwner() (*WorkspaceChatDraftOwner, string, error) {
@@ -291,12 +293,6 @@ func (s *Service) MaterializedChatSettings(
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
 	planner := s.planner
-	if planner.ReloadConfig != nil {
-		planner.Config, err = planner.ReloadConfig()
-		if err != nil {
-			return serverapi.ChatSettingsReadResponse{}, err
-		}
-	}
 	authState := auth.EmptyState()
 	if s.authStates != nil {
 		authState, err = s.authStates.StoredState(ctx)
@@ -370,7 +366,11 @@ func (s *Service) workflowTaskID(ctx context.Context, sessionID string) (*string
 		return nil, nil
 	}
 	validated, err := runtimeids.ParseTaskID(*taskID)
-	return &validated, err
+	if err != nil {
+		return nil, err
+	}
+	value := validated.String()
+	return &value, nil
 }
 
 func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
@@ -382,9 +382,13 @@ func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, tran
 }
 
 func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
-	if err := req.Operation.Validate(); err != nil {
-		return serverapi.WorkspaceChatDraftResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error) {
+		return s.WorkspaceChatDraftValidated(ctx, validated)
+	})
+}
+
+func (s *Service) WorkspaceChatDraftValidated(ctx context.Context, validated servicecontract.Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error) {
+	req := validated.Value()
 	switch req.Operation.Kind {
 	case serverapi.WorkspaceChatDraftReadMessage:
 		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
@@ -418,27 +422,32 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
 		return serverapi.WorkspaceChatDraftResponse{GoalAvailability: runtimeview.GoalAvailabilityFromSession(resolved.GoalAvailability)}, nil
-	default:
-		return serverapi.WorkspaceChatDraftResponse{}, fmt.Errorf("workspace Chat draft operation kind %q is invalid", req.Operation.Kind)
 	}
+	return serverapi.WorkspaceChatDraftResponse{}, fmt.Errorf("workspace Chat draft operation kind %q is invalid", req.Operation.Kind)
 }
 
 func (s *Service) PlanSession(ctx context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-	result, err := s.PlanLaunchSession(ctx, req)
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error) {
+		return s.PlanSessionValidated(ctx, validated)
+	})
+}
+
+func (s *Service) PlanSessionValidated(ctx context.Context, validated servicecontract.Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error) {
+	result, err := s.planLaunchSession(ctx, validated.Value())
 	if err != nil {
 		return serverapi.SessionPlanResponse{}, err
 	}
-	response := sessionPlanResponseFromResult(result)
-	if err := response.Plan.Validate(); err != nil {
-		return serverapi.SessionPlanResponse{}, err
-	}
-	return response, nil
+	return sessionPlanResponseFromResult(result), nil
 }
 
 func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPlanRequest) (PlanResult, error) {
 	if err := req.Validate(); err != nil {
 		return PlanResult{}, err
 	}
+	return s.planLaunchSession(ctx, req)
+}
+
+func (s *Service) planLaunchSession(ctx context.Context, req serverapi.SessionPlanRequest) (PlanResult, error) {
 	var selectedSessionID *runtimeids.SessionID
 	var parentAgentSessionID *runtimeids.SessionID
 	switch req.Intent.Kind() {
@@ -464,13 +473,12 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 	}
 	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, func(ctx context.Context) (PlanResult, error) {
 		planner := s.planner
-		if planner.ReloadConfig != nil {
-			snapshot, snapshotErr := planner.ReloadConfig()
+		if planner.GlobalConfig.AppName != "" {
+			snapshot, snapshotErr := config.LoadWorkspaceOverlay(planner.GlobalConfig, planner.Config.WorkspaceRoot)
 			if snapshotErr != nil {
 				return PlanResult{}, snapshotErr
 			}
 			planner.Config = snapshot
-			planner.ReloadConfig = nil
 		}
 		roleOverride, err := req.Overrides.AgentRoleOverride()
 		if err != nil {
@@ -479,7 +487,11 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		var caller *subagentpolicy.Caller
 		if req.Mode == serverapi.SessionLaunchModeHeadless {
 			if req.CallerSessionID != nil {
-				resolved, callerErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, *req.CallerSessionID)
+				resolved, callerErr := launch.ResolveSessionCallerWithStore(
+					planner.Config.PersistenceRoot,
+					*req.CallerSessionID,
+					planner.SessionCallers,
+				)
 				if callerErr != nil {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialCallerMissing}
 				}
@@ -492,7 +504,11 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 				}
 			}
 			if parentAgentSessionID != nil && req.CallerSessionID == nil {
-				if _, parentErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, parentAgentSessionID.String()); parentErr != nil {
+				if _, parentErr := launch.ResolveSessionCallerWithStore(
+					planner.Config.PersistenceRoot,
+					parentAgentSessionID.String(),
+					planner.SessionCallers,
+				); parentErr != nil {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialParentMissing}
 				}
 			}

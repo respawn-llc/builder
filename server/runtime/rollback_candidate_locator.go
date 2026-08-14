@@ -58,18 +58,12 @@ func rollbackCandidateLocatorFromActiveWindow(window session.EventRecordWindow) 
 		}
 		switch payload := payload.(type) {
 		case session.MessageRecord:
-			message, err := llmMessageFromSessionRecord(payload)
-			if err != nil {
-				return nil, fmt.Errorf("restore session message record for rollback candidate locator: %w", err)
-			}
+			message := llmMessageFromSessionRecord(payload)
 			if err := tracker.ObserveMessage(record.Seq(), message); err != nil {
 				return nil, err
 			}
 		case session.HistoryReplacementRecord:
-			replacement, err := historyReplacementPayloadFromSessionRecord(payload)
-			if err != nil {
-				return nil, fmt.Errorf("restore session history replacement record: %w", err)
-			}
+			replacement := historyReplacementPayloadFromSessionRecord(payload)
 			tracker.ObserveHistoryReplacement(replacement)
 		}
 	}

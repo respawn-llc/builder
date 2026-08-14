@@ -120,7 +120,6 @@ func TestCurrentMetadataOperationsLeaveEventLogUnchanged(t *testing.T) {
 				SessionID:               "session-1",
 				CreatedAt:               now,
 				UpdatedAt:               now,
-				LastSequence:            1,
 				ConversationEstablished: true,
 			},
 		},
@@ -129,7 +128,6 @@ func TestCurrentMetadataOperationsLeaveEventLogUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open current metadata-bound store: %v", err)
 	}
-	beforeRevision := storeTestMeta(store).LastSequence
 	if store.materializedEventLog != nil {
 		t.Fatal("metadata-bound store materialized its event log during open")
 	}
@@ -171,13 +169,6 @@ func TestCurrentMetadataOperationsLeaveEventLogUnchanged(t *testing.T) {
 	}
 	if store.materializedEventLog != nil {
 		t.Fatal("metadata-only goal/recovery mutations materialized the event log")
-	}
-	if got := storeTestMeta(store).LastSequence; got != beforeRevision {
-		t.Fatalf(
-			"metadata-only goal/recovery mutations changed event revision: got %d want %d",
-			got,
-			beforeRevision,
-		)
 	}
 }
 

@@ -293,8 +293,10 @@ func projectBindingHomeDir() string {
 
 func runConfiguredProjectPicker(projects []clientui.ProjectSummary, theme string, options projectPickerOptions) (projectBindingPickerResult, error) {
 	model := newProjectBindingPickerModel(projects, theme, options)
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	output := newUITerminalOutputFile(os.Stdout)
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(output))
 	finalModel, err := program.Run()
+	err = terminalOutputRunError(output.uiTerminalOutput, err)
 	if err != nil {
 		return projectBindingPickerResult{}, err
 	}
@@ -495,8 +497,10 @@ func (m *projectWorkspacePickerModel) hasPreview(index int) bool {
 
 func runProjectWorkspacePicker(workspaces []clientui.ProjectWorkspaceSummary, theme string) (projectWorkspacePickerResult, error) {
 	model := newProjectWorkspacePickerModel(workspaces, theme)
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	output := newUITerminalOutputFile(os.Stdout)
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(output))
 	finalModel, err := program.Run()
+	err = terminalOutputRunError(output.uiTerminalOutput, err)
 	if err != nil {
 		return projectWorkspacePickerResult{}, err
 	}

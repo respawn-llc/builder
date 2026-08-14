@@ -90,7 +90,6 @@ type GatewayProjectDependencies interface {
 }
 
 type GatewaySessionDependencies interface {
-	SessionBelongsToProject(context.Context, string, string) error
 	ChatSettingsClient() apicontract.ChatSettingsService
 	SessionViewClient() apicontract.SessionViewService
 	SessionLifecycleClient() apicontract.SessionLifecycleService
@@ -155,6 +154,31 @@ type gatewayRequestSchedule struct {
 	kind          gatewayRequestScheduleKind
 	progress      gatewayProgressHandler
 	progressRoute apicontract.Route
+}
+
+const gatewayOrdinaryRequestOperation = "gateway.ordinary_request"
+
+type gatewayRequestPanicDiagnostic struct {
+	Operation string
+	Method    string
+	RequestID string
+	Cause     any
+	Stack     string
+}
+
+type processFatalGatewayPanic interface {
+	ProcessFatalPanic()
+}
+
+func (p gatewayRequestPanicDiagnostic) Error() string {
+	return fmt.Sprintf(
+		"gateway request panic operation=%q method=%q request_id=%q cause=%v\nstack:\n%s",
+		p.Operation,
+		p.Method,
+		p.RequestID,
+		p.Cause,
+		p.Stack,
+	)
 }
 
 var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
@@ -449,7 +473,7 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if req.Method != protocol.MethodHandshake && !state.handshakeDone {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
-	route, ok := apicontract.RouteByMethod(req.Method)
+	_, ok := apicontract.RouteByMethod(req.Method)
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
@@ -463,36 +487,156 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
-	if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {
-		return resp
-	}
 	return handler(g, ctx, state, req)
 }
 
 func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TReq) (TResp, error)) protocol.Response {
-	params, err := decodeParams[TReq](req.Params)
-	if err != nil {
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
-	}
-	var validationErr error
-	if validator, ok := any(params).(interface{ ValidateRPC() error }); ok {
-		validationErr = validator.ValidateRPC()
-	} else if validator, ok := any(params).(interface{ Validate() error }); ok {
-		validationErr = validator.Validate()
-	}
-	if validationErr != nil {
-		var rpcErr interface {
-			RPCErrorCode() int
-			RPCErrorData() json.RawMessage
-		}
-		if errors.As(validationErr, &rpcErr) {
-			return responseForError(req.ID, validationErr)
-		}
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, validationErr.Error())
+	params, invalid, failed := decodeValidatedParams[TReq](req)
+	if failed {
+		return invalid
 	}
 	resp, err := handler(params)
 	if err != nil {
 		return responseForError(req.ID, err)
+	}
+	if validator, ok := any(resp).(interface{ Validate() error }); ok {
+		if err := validator.Validate(); err != nil {
+			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
+		}
+	}
+	return protocol.NewSuccessResponse(req.ID, resp)
+}
+
+func decodeOwnerAndHandle[TReq any, TResp any](req protocol.Request, handler func(TReq) (TResp, error)) protocol.Response {
+	params, err := decodeParams[TReq](req.Params)
+	if err != nil {
+		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+	}
+	resp, err := handler(params)
+	if err != nil {
+		if validationErr := semanticValidationError(params); validationErr != nil {
+			return responseForValidationError(req.ID, validationErr)
+		}
+		return responseForError(req.ID, err)
+	}
+	if validator, ok := any(resp).(interface{ Validate() error }); ok {
+		if err := validator.Validate(); err != nil {
+			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
+		}
+	}
+	return protocol.NewSuccessResponse(req.ID, resp)
+}
+
+func decodeValidatedParams[TReq any](req protocol.Request) (TReq, protocol.Response, bool) {
+	params, err := decodeParams[TReq](req.Params)
+	if err != nil {
+		return params, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()), true
+	}
+	validationErr := semanticValidationError(params)
+	if validationErr != nil {
+		return params, responseForValidationError(req.ID, validationErr), true
+	}
+	return params, protocol.Response{}, false
+}
+
+func semanticValidationError[T any](request T) error {
+	if validator, ok := any(request).(interface{ ValidateRPC() error }); ok {
+		return validator.ValidateRPC()
+	}
+	if validator, ok := any(request).(interface{ Validate() error }); ok {
+		return validator.Validate()
+	}
+	return nil
+}
+
+func responseForValidationError(id string, err error) protocol.Response {
+	var rpcErr interface {
+		RPCErrorCode() int
+		RPCErrorData() json.RawMessage
+	}
+	if errors.As(err, &rpcErr) {
+		return responseForError(id, err)
+	}
+	return protocol.NewErrorResponse(id, protocol.ErrCodeInvalidParams, err.Error())
+}
+
+type validatedOwnerError struct{ cause error }
+
+func (e validatedOwnerError) Error() string { return e.cause.Error() }
+func (e validatedOwnerError) Unwrap() error { return e.cause }
+
+func responseForValidationOrOwnerError(id string, err error) protocol.Response {
+	var ownerErr validatedOwnerError
+	if errors.As(err, &ownerErr) {
+		return responseForError(id, ownerErr.cause)
+	}
+	var rpcErr interface {
+		RPCErrorCode() int
+		RPCErrorData() json.RawMessage
+	}
+	if errors.As(err, &rpcErr) {
+		return responseForError(id, err)
+	}
+	return protocol.NewErrorResponse(id, protocol.ErrCodeInvalidParams, err.Error())
+}
+
+func decodeValidatedAndHandle[TReq any, TResp any](
+	req protocol.Request,
+	handler func(apicontract.Validated[TReq]) (TResp, error),
+) protocol.Response {
+	return decodePreparedValidatedAndHandleWithPolicy(
+		req,
+		func(request TReq) TReq { return request },
+		apicontract.SemanticValidationRequired,
+		handler,
+	)
+}
+
+func decodeNoSemanticValidationAndHandle[TReq any, TResp any](
+	req protocol.Request,
+	handler func(apicontract.Validated[TReq]) (TResp, error),
+) protocol.Response {
+	return decodePreparedValidatedAndHandleWithPolicy(
+		req,
+		func(request TReq) TReq { return request },
+		apicontract.NoSemanticValidation,
+		handler,
+	)
+}
+
+func decodePreparedValidatedAndHandle[TReq any, TResp any](
+	req protocol.Request,
+	prepare func(TReq) TReq,
+	handler func(apicontract.Validated[TReq]) (TResp, error),
+) protocol.Response {
+	return decodePreparedValidatedAndHandleWithPolicy(
+		req,
+		prepare,
+		apicontract.SemanticValidationRequired,
+		handler,
+	)
+}
+
+func decodePreparedValidatedAndHandleWithPolicy[TReq any, TResp any](
+	req protocol.Request,
+	prepare func(TReq) TReq,
+	policy apicontract.ValidationPolicy,
+	handler func(apicontract.Validated[TReq]) (TResp, error),
+) protocol.Response {
+	params, err := decodeParams[TReq](req.Params)
+	if err != nil {
+		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+	}
+	params = prepare(params)
+	resp, err := apicontract.WithValidated(params, policy, func(validated apicontract.Validated[TReq]) (TResp, error) {
+		resp, ownerErr := handler(validated)
+		if ownerErr != nil {
+			return resp, validatedOwnerError{cause: ownerErr}
+		}
+		return resp, nil
+	})
+	if err != nil {
+		return responseForValidationOrOwnerError(req.ID, err)
 	}
 	if validator, ok := any(resp).(interface{ Validate() error }); ok {
 		if err := validator.Validate(); err != nil {
@@ -537,6 +681,10 @@ func protocolError(err error) (int, string) {
 		return protocol.ErrCodeInternalError, "internal error"
 	}
 	message := strings.TrimSpace(err.Error())
+	var routeErr gatewayRouteError
+	if errors.As(err, &routeErr) {
+		return routeErr.code, routeErr.message
+	}
 	if errors.Is(err, context.Canceled) {
 		if message == "" || message == context.Canceled.Error() {
 			message = canceledByClientMessage

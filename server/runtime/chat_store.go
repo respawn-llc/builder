@@ -348,10 +348,7 @@ func toolCallSnapshotFromItems(items []llm.ResponseItem, callID string) (llm.Too
 }
 
 func (s *chatStore) restoreToolCompletionRecord(record session.ToolCompletionRecord, provenances ...*TranscriptCommittedRowProvenance) error {
-	completion, err := storedToolCompletionFromSessionRecord(record)
-	if err != nil {
-		return fmt.Errorf("restore session tool completion record: %w", err)
-	}
+	completion := storedToolCompletionFromSessionRecord(record)
 	s.recordToolCompletionWithProviderItems(tools.Result{
 		CallID:         completion.CallID,
 		Name:           toolspec.ID(completion.Name),

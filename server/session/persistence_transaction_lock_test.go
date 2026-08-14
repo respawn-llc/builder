@@ -9,6 +9,7 @@ import (
 
 type blockingAfterPersistenceObserver struct {
 	downstream PersistenceObserver
+	projector  AppendProjector
 	mu         sync.Mutex
 	blockNext  bool
 	blocked    chan struct{}
@@ -17,11 +18,38 @@ type blockingAfterPersistenceObserver struct {
 
 func newBlockingAfterPersistenceObserver(
 	downstream PersistenceObserver,
+	projector AppendProjector,
 ) *blockingAfterPersistenceObserver {
 	return &blockingAfterPersistenceObserver{
 		downstream: downstream,
+		projector:  projector,
 		blocked:    make(chan struct{}),
 		release:    make(chan struct{}),
+	}
+}
+
+func (o *blockingAfterPersistenceObserver) ProjectAppend(
+	ctx context.Context,
+	projection AppendProjection,
+) error {
+	if o.projector != nil {
+		if err := o.projector(ctx, projection); err != nil {
+			return err
+		}
+	}
+	o.mu.Lock()
+	block := o.blockNext
+	o.blockNext = false
+	o.mu.Unlock()
+	if !block {
+		return nil
+	}
+	close(o.blocked)
+	select {
+	case <-o.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -54,20 +82,9 @@ func (o *blockingAfterPersistenceObserver) ObservePersistedStore(
 	}
 }
 
-func (o *blockingAfterPersistenceObserver) ObserveEventLogReconciliation(
-	ctx context.Context,
-	reconciliation PersistedEventLogReconciliation,
-) error {
-	downstream, ok := o.downstream.(EventLogReconciliationObserver)
-	if !ok {
-		return errEventLogReconcilerRequired
-	}
-	return downstream.ObserveEventLogReconciliation(ctx, reconciliation)
-}
-
-func TestConcurrentOpenCannotRecoverActiveAppendTransaction(t *testing.T) {
+func TestConcurrentOpenWaitsForActiveAppendPersistenceLock(t *testing.T) {
 	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{}}
-	observer := newBlockingAfterPersistenceObserver(persistence)
+	observer := newBlockingAfterPersistenceObserver(persistence, persistence.ProjectAppend)
 	root := t.TempDir()
 	store, err := Create(
 		root,
@@ -75,6 +92,7 @@ func TestConcurrentOpenCannotRecoverActiveAppendTransaction(t *testing.T) {
 		"/tmp/work",
 		testSessionCategory,
 		WithPersistenceObserver(observer),
+		WithAppendProjector(observer.ProjectAppend),
 		WithPersistedSessionResolver(persistence),
 	)
 	if err != nil {
@@ -101,24 +119,6 @@ func TestConcurrentOpenCannotRecoverActiveAppendTransaction(t *testing.T) {
 		t.Fatal("append did not reach metadata persistence")
 	}
 
-	recovery, err := store.readAppendRecoveryRecord()
-	if err != nil {
-		close(observer.release)
-		t.Fatalf("read active append recovery: %v", err)
-	}
-	if recovery == nil || recovery.Events == nil {
-		close(observer.release)
-		t.Fatalf("active append recovery = %+v, want event transaction", recovery)
-	}
-	// The observer gate gives the test a deterministic active transaction.
-	// Restoring its prepared phase models the state a concurrent opener could
-	// observe before the writer reaches the recovery commit point.
-	recovery.Phase = appendRecoveryPrepared
-	if err := store.writeAppendRecoveryRecord(*recovery); err != nil {
-		close(observer.release)
-		t.Fatalf("stage active append recovery: %v", err)
-	}
-
 	type openOutcome struct {
 		store *Store
 		err   error
@@ -127,6 +127,7 @@ func TestConcurrentOpenCannotRecoverActiveAppendTransaction(t *testing.T) {
 	go func() {
 		opened, err := OpenByID(root, store.Meta().SessionID,
 			WithPersistenceObserver(observer),
+			WithAppendProjector(observer.ProjectAppend),
 			WithPersistedSessionResolver(persistence),
 		)
 		openDone <- openOutcome{store: opened, err: err}
@@ -152,7 +153,7 @@ func TestConcurrentOpenCannotRecoverActiveAppendTransaction(t *testing.T) {
 		}
 	}
 	if openedEarly {
-		t.Fatal("concurrent open recovered an append transaction that was still active")
+		t.Fatal("concurrent open bypassed the active event-log persistence lock")
 	}
 	if appended.err != nil {
 		t.Fatalf("first append: %v", appended.err)
@@ -162,9 +163,6 @@ func TestConcurrentOpenCannotRecoverActiveAppendTransaction(t *testing.T) {
 	}
 	if opened.err != nil {
 		t.Fatalf("concurrent open: %v", opened.err)
-	}
-	if got := opened.store.Meta().LastSequence; got != 1 {
-		t.Fatalf("concurrently opened metadata sequence = %d, want 1", got)
 	}
 	recovered, err := collectEvents(opened.store)
 	if err != nil {

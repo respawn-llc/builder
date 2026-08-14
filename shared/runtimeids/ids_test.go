@@ -24,7 +24,7 @@ func TestParseTaskIDAcceptsCanonicalAndLegacyPersistentIDs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseTaskID(%q): %v", raw, err)
 			}
-			if got != raw {
+			if got.String() != raw {
 				t.Fatalf("ParseTaskID(%q) = %q", raw, got)
 			}
 		})
@@ -38,6 +38,25 @@ func TestParseTaskIDRejectsMissingIdentifier(t *testing.T) {
 				t.Fatalf("ParseTaskID(%q) succeeded", raw)
 			}
 		})
+	}
+}
+
+func TestLabelIDOwnsCanonicalUUIDV4Grammar(t *testing.T) {
+	const raw = "9e7bab10-773a-4a16-9d4f-4e7bd2321327"
+	id, err := ParseLabelID(raw)
+	if err != nil {
+		t.Fatalf("ParseLabelID: %v", err)
+	}
+	if id.String() != raw {
+		t.Fatalf("LabelID.String() = %q, want %q", id.String(), raw)
+	}
+	if generated := NewLabelID(); generated.String() == "" {
+		t.Fatal("NewLabelID returned an empty identity")
+	}
+	for _, invalid := range []string{"", " " + raw, "9E7BAB10-773A-4A16-9D4F-4E7BD2321327", "9e7bab10-773a-1a16-9d4f-4e7bd2321327"} {
+		if _, err := ParseLabelID(invalid); err == nil {
+			t.Fatalf("ParseLabelID(%q) succeeded", invalid)
+		}
 	}
 }
 
@@ -104,6 +123,35 @@ func TestSessionIDTracksCanonicalUUIDv4WithoutRejectingLegacyIDs(t *testing.T) {
 	}
 	if legacy.IsCanonicalUUIDv4() {
 		t.Fatal("legacy session ID was marked canonical UUIDv4")
+	}
+}
+
+func TestParseRuntimeClientRequestIDOwnsUUIDV4Grammar(t *testing.T) {
+	for _, raw := range []string{
+		"8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		" 8b0364cc-5c6c-412e-a4e8-31380661d1e1 ",
+	} {
+		t.Run("accepts_"+raw, func(t *testing.T) {
+			id, err := ParseRuntimeClientRequestID(raw)
+			if err != nil {
+				t.Fatalf("ParseRuntimeClientRequestID(%q): %v", raw, err)
+			}
+			if got := id.String(); got != "8b0364cc-5c6c-412e-a4e8-31380661d1e1" {
+				t.Fatalf("ParseRuntimeClientRequestID(%q) = %q", raw, got)
+			}
+		})
+	}
+	for _, raw := range []string{
+		"",
+		"request-1",
+		"018f3f8c-5b1a-7b72-8cb9-01af2c01a7e8",
+		"00000000-0000-4000-0000-000000000000",
+	} {
+		t.Run("rejects_"+raw, func(t *testing.T) {
+			if _, err := ParseRuntimeClientRequestID(raw); err == nil {
+				t.Fatalf("ParseRuntimeClientRequestID(%q) succeeded", raw)
+			}
+		})
 	}
 }
 

@@ -2,6 +2,39 @@ package session
 
 import "errors"
 
+type EventLogCommitCertainty uint8
+
+const (
+	EventLogCommitNotCommitted EventLogCommitCertainty = iota + 1
+	EventLogCommitUnknown
+)
+
+type EventLogPersistenceError struct {
+	Certainty EventLogCommitCertainty
+	Cause     error
+}
+
+func (e *EventLogPersistenceError) Error() string {
+	if e == nil {
+		return "Session event-log persistence failed"
+	}
+	if e.Cause == nil {
+		return "Session event-log persistence failed"
+	}
+	return "Session event-log persistence failed: " + e.Cause.Error()
+}
+
+func (e *EventLogPersistenceError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func (e *EventLogPersistenceError) RuntimeAbortDisposition() (bool, error) {
+	return false, e
+}
+
 // Sentinel errors produced by the session store and its loaders. Callers and
 // tests match these with errors.Is rather than comparing rendered message text,
 // which is free to change without affecting behavior. Dynamic context (ids,
@@ -16,7 +49,6 @@ var (
 	// opened without its authoritative structured-metadata resolver.
 	errPersistedSessionResolverRequired = errors.New("persisted session resolver is required")
 	errPersistenceObserverRequired      = errors.New("persistence observer is required")
-	errEventLogReconcilerRequired       = errors.New("event log reconciliation observer is required")
 	errEphemeralStoreCannotBeDurable    = errors.New("ephemeral session store cannot be made durable")
 	errBackgroundNoticePartialIdentity  = errors.New("background notice identity requires both process and activity identities")
 

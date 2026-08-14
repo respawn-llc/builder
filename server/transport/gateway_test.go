@@ -224,36 +224,6 @@ func TestResponseForErrorMapsProjectWorkspaceTypedFailures(t *testing.T) {
 	}
 }
 
-func TestResponseForErrorSurfacesIrreconcilableRecoveryEvidence(t *testing.T) {
-	detail := &session.IrreconcilableRecoveryDetail{
-		SessionID:             "session-1",
-		Operation:             "recover_append_transaction",
-		RecoveryPath:          "/sessions/session-1/append-recovery.json",
-		EventsPath:            "/sessions/session-1/events.jsonl",
-		CurrentMetadataSHA256: "current",
-		PreMetadataSHA256:     "pre",
-		PostMetadataSHA256:    "post",
-		Phase:                 "committed",
-		Conflict:              session.IrreconcilableRecoveryConflictCommittedSuffix,
-		Suffix: &session.IrreconcilableRecoverySuffixIdentity{
-			StartOffset:   101,
-			EndOffset:     202,
-			EventCount:    2,
-			FirstSequence: 7,
-			LastSequence:  8,
-			SHA256:        "suffix",
-		},
-	}
-
-	response := responseForError("recovery-conflict", detail)
-	if response.Error == nil {
-		t.Fatal("recovery-conflict response did not include an error")
-	}
-	if response.Error.Message != detail.Error() {
-		t.Fatalf("recovery-conflict message = %q, want projected detail %q", response.Error.Message, detail.Error())
-	}
-}
-
 func TestStreamCompleteParamsMapsTerminalErrors(t *testing.T) {
 	for _, err := range []error{nil, io.EOF, context.Canceled, context.DeadlineExceeded} {
 		params := streamCompleteParams(err)
@@ -456,6 +426,22 @@ func (c *countingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context
 	return c.SessionRuntimeService.ReleaseSessionRuntime(ctx, req)
 }
 
+func (c *countingSessionRuntimeClient) ActivateSessionRuntimeValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.SessionRuntimeActivateRequest],
+	_ apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionRuntimeActivateResponse, error) {
+	return c.ActivateSessionRuntime(ctx, req.Value())
+}
+
+func (c *countingSessionRuntimeClient) ReleaseSessionRuntimeValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.SessionRuntimeReleaseRequest],
+	_ apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionRuntimeReleaseResponse, error) {
+	return c.ReleaseSessionRuntime(ctx, req.Value())
+}
+
 type gatewayRuntimeClientOverride struct {
 	*core.Core
 	runtimeClient apicontract.SessionRuntimeService
@@ -495,6 +481,9 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 		if activationRequest.OwnerID == "" || activationRequest.OwnerID == "client-spoof" {
 			t.Fatalf("gateway did not inject connection owner id: %+v", activationRequest)
 		}
+		if activationRequest.OwnerID != strings.TrimSpace(activationRequest.OwnerID) {
+			t.Fatalf("trusted activation owner was not trimmed: %q", activationRequest.OwnerID)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for activation request")
 	}
@@ -511,6 +500,9 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 	case request := <-counter.releaseRequests:
 		if request.Attachment != activation.Attachment || request.OwnerID != activationRequest.OwnerID {
 			t.Fatalf("explicit stale release request = %+v", request)
+		}
+		if request.OwnerID != strings.TrimSpace(request.OwnerID) {
+			t.Fatalf("trusted release owner was not trimmed: %q", request.OwnerID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for stale explicit release")
@@ -794,6 +786,54 @@ func TestGatewayRemoteTaskSearchRoundsTripIndexedResponse(t *testing.T) {
 	}
 }
 
+func TestGatewayRemoteWorkflowProjectSubscriptionOpensAndReceivesEvents(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	subscription, err := remote.SubscribeWorkflowProject(context.Background(), serverapi.WorkflowProjectSubscribeRequest{
+		ProjectID: appCore.ProjectID(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = subscription.Close() }()
+
+	created, err := appCore.WorkflowClient().CreateAndLinkWorkflowToProject(t.Context(), serverapi.WorkflowCreateAndLinkProjectRequest{
+		Name:          "Subscription workflow",
+		ProjectID:     appCore.ProjectID(),
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultIfProjectHasNone,
+	})
+	if err != nil {
+		t.Fatalf("CreateAndLinkWorkflowToProject: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	event, err := subscription.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if event.ProjectID == nil ||
+		*event.ProjectID != appCore.ProjectID() ||
+		event.WorkflowID == nil ||
+		*event.WorkflowID != created.Workflow.ID ||
+		event.Resource != serverapi.WorkflowProjectEventResourceWorkflowLink ||
+		event.Action != serverapi.WorkflowProjectEventActionLinked {
+		t.Fatalf("event = %+v, want linked Workflow event", event)
+	}
+}
+
 func TestGatewayRemoteWorkflowTaskSessionsRoundsTripPage(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()
@@ -988,6 +1028,13 @@ type gatewayAuthStatusService func(context.Context, serverapi.AuthStatusRequest)
 
 func (service gatewayAuthStatusService) GetAuthStatus(ctx context.Context, request serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
 	return service(ctx, request)
+}
+
+func (service gatewayAuthStatusService) GetAuthStatusValidated(
+	ctx context.Context,
+	request apicontract.Validated[serverapi.AuthStatusRequest],
+) (serverapi.AuthStatusResponse, error) {
+	return service(ctx, request.Value())
 }
 
 type gatewayAuthStatusDependencies struct {
@@ -1496,18 +1543,22 @@ func TestGatewayAuthorizesBothChatSettingsTargetArms(t *testing.T) {
 
 func assertForeignGoalAccessRejected(t *testing.T, conn *websocket.Conn, sessionID string) {
 	t.Helper()
+	typedSessionID, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		t.Fatalf("parse foreign Session ID: %v", err)
+	}
 	wantMessage := "session " + strconv.Quote(sessionID) + " not available"
 	for _, tc := range []struct {
 		name   string
 		method string
 		params any
 	}{
-		{name: "show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: sessionID}},
-		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{ClientRequestID: "foreign-goal-set", SessionID: sessionID, Objective: "ship", Actor: "user"}},
-		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-pause", SessionID: sessionID, Actor: "user"}},
-		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-resume", SessionID: sessionID, Actor: "user"}},
-		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-complete", SessionID: sessionID, Actor: "agent"}},
-		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{ClientRequestID: "foreign-goal-clear", SessionID: sessionID, Actor: "user"}},
+		{name: "show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: typedSessionID}},
+		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{ClientRequestID: "foreign-goal-set", SessionID: typedSessionID, Objective: "ship", Actor: "user"}},
+		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-pause", SessionID: typedSessionID, Actor: "user"}},
+		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-resume", SessionID: typedSessionID, Actor: "user"}},
+		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-complete", SessionID: typedSessionID, Actor: "agent"}},
+		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{ClientRequestID: "foreign-goal-clear", SessionID: typedSessionID, Actor: "user"}},
 	} {
 		err := callGatewayExpectError(t, conn, "foreign-goal-"+tc.name, tc.method, tc.params)
 		if err.Code != protocol.ErrCodeInternalError || err.Message != wantMessage {
@@ -1524,7 +1575,7 @@ func TestGatewayAllowsUnscopedSessionRetargetOutsideServerDefaultProject(t *test
 	configureGatewayTestServerPort(t)
 
 	resolvedA := resolveGatewayTestConfig(t, workspaceA)
-	bindingA := registerGatewayTestBinding(t, resolvedA.Config)
+	registerGatewayTestBinding(t, resolvedA.Config)
 	resolvedB := resolveGatewayTestConfig(t, workspaceB)
 	bindingB := registerGatewayTestBinding(t, resolvedB.Config)
 	metadataStore, err := metadata.Open(resolvedA.Config.PersistenceRoot)
@@ -1559,11 +1610,18 @@ func TestGatewayAllowsUnscopedSessionRetargetOutsideServerDefaultProject(t *test
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
-	if err := gateway.requireSessionInAttachedProject(context.Background(), &connectionState{}, foreignSession.Meta().SessionID); err != nil {
-		t.Fatalf("requireSessionInAttachedProject unscoped: %v", err)
-	}
-	if err := gateway.requireSessionInAttachedProject(context.Background(), &connectionState{attachedProject: bindingA.ProjectID}, foreignSession.Meta().SessionID); err == nil {
-		t.Fatal("expected attached project scope to reject foreign session retarget")
+	response := gateway.dispatch(context.Background(), &connectionState{handshakeDone: true}, protocol.Request{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      "unscoped-session-retarget",
+		Method:  protocol.MethodSessionRetargetWorkspace,
+		Params: mustJSON(t, serverapi.SessionRetargetWorkspaceRequest{
+			ClientRequestID: "unscoped-session-retarget",
+			SessionID:       foreignSession.Meta().SessionID,
+			WorkspaceRoot:   resolvedB.Config.WorkspaceRoot,
+		}),
+	})
+	if response.Error != nil {
+		t.Fatalf("unscoped Session retarget response error = %+v", response.Error)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync"
 
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 )
 
@@ -28,13 +29,15 @@ func newSetupEventBroker() *setupEventBroker {
 }
 
 func (b *setupEventBroker) Subscribe(req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorktreeSetupSubscribeRequest]) (serverapi.WorktreeSetupSubscription, error) {
+		return b.subscribe(validated.Value().SetupOperationID)
+	})
+}
+
+func (b *setupEventBroker) subscribe(id serverapi.WorktreeSetupOperationID) (serverapi.WorktreeSetupSubscription, error) {
 	if b == nil {
 		return nil, errors.New("worktree setup broker is required")
 	}
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
-	id := req.SetupOperationID
 	sub := &setupSubscription{broker: b, id: id, events: make(chan serverapi.WorktreeSetupEvent, 16)}
 	b.mu.Lock()
 	if b.subscribers[id] == nil {
@@ -138,9 +141,15 @@ func (s *setupSubscription) removeFromBroker() {
 	s.broker.mu.Unlock()
 }
 
-func (s *Service) SubscribeWorktreeSetup(_ context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+func (s *Service) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorktreeSetupSubscribeRequest]) (serverapi.WorktreeSetupSubscription, error) {
+		return s.SubscribeWorktreeSetupValidated(ctx, validated)
+	})
+}
+
+func (s *Service) SubscribeWorktreeSetupValidated(_ context.Context, validated apicontract.Validated[serverapi.WorktreeSetupSubscribeRequest]) (serverapi.WorktreeSetupSubscription, error) {
 	if s == nil || s.setupBroker == nil {
 		return nil, errors.New("worktree setup broker is required")
 	}
-	return s.setupBroker.Subscribe(req)
+	return s.setupBroker.subscribe(validated.Value().SetupOperationID)
 }

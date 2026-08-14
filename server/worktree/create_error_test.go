@@ -91,6 +91,28 @@ func TestCreateWorktreeRejectsBlankBaseRefBeforeGit(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeRawValidationRunsBeforeOwnerResolution(t *testing.T) {
+	env := newServiceTestEnv(t)
+	runner := &recordingGitCommandRunner{delegate: execGitCommandRunner{}}
+	env.service.git = NewGitInspector(runner)
+
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SessionID:        " \t ",
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/malformed-direct",
+	})
+	var typed *serverapi.WorktreeCreateError
+	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerForm ||
+		!errors.Is(err, serverapi.ErrSessionIDRequired) {
+		t.Fatalf("CreateWorktree error = %T %v, want form-owned Session validation error", err, err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("Git calls = %v, want none", runner.calls)
+	}
+}
+
 func TestCreateWorktreeResolvesBaseRefOnceAndUsesCommitOIDForAdd(t *testing.T) {
 	env := newServiceTestEnv(t)
 	runner := &recordingGitCommandRunner{delegate: execGitCommandRunner{}}
@@ -100,9 +122,9 @@ func TestCreateWorktreeResolvesBaseRefOnceAndUsesCommitOIDForAdd(t *testing.T) {
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
-		BaseRef:          "HEAD",
+		BaseRef:          " HEAD ",
 		CreateBranch:     true,
-		BranchName:       "feature/resolved-base-ref",
+		BranchName:       " feature/resolved-base-ref ",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree: %v", err)

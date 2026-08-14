@@ -31,9 +31,14 @@ type AcquireCurrentNodeResumeWriteLockParams struct {
 	TransitionBranchKey interface{}
 }
 
-func (q *Queries) AcquireCurrentNodeResumeWriteLock(ctx context.Context, arg AcquireCurrentNodeResumeWriteLockParams) (int64, error) {
+func (q *Queries) AcquireCurrentNodeResumeWriteLock(ctx context.Context, arg AcquireCurrentNodeResumeWriteLockParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AcquireCurrentNodeResumeWriteLock", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, acquireCurrentNodeResumeWriteLock, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
-	err = recordQueryError(ctx, err, acquireCurrentNodeResumeWriteLock, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -46,9 +51,14 @@ SET updated_at_unix_ms = updated_at_unix_ms
 WHERE id = ?1
 `
 
-func (q *Queries) AcquireManualMoveTaskWriteLock(ctx context.Context, taskID string) (int64, error) {
+func (q *Queries) AcquireManualMoveTaskWriteLock(ctx context.Context, taskID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AcquireManualMoveTaskWriteLock", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, acquireManualMoveTaskWriteLock, taskID)
-	err = recordQueryError(ctx, err, acquireManualMoveTaskWriteLock, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -61,9 +71,14 @@ SET updated_at_unix_ms = updated_at_unix_ms
 WHERE id = ?1
 `
 
-func (q *Queries) AcquireProjectDeleteWriteLock(ctx context.Context, projectID string) (int64, error) {
+func (q *Queries) AcquireProjectDeleteWriteLock(ctx context.Context, projectID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AcquireProjectDeleteWriteLock", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, acquireProjectDeleteWriteLock, projectID)
-	err = recordQueryError(ctx, err, acquireProjectDeleteWriteLock, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -81,11 +96,16 @@ WHERE id = (
 RETURNING id
 `
 
-func (q *Queries) AcquireTaskDependencyWriteLock(ctx context.Context, taskID string) (string, error) {
+func (q *Queries) AcquireTaskDependencyWriteLock(ctx context.Context, taskID string) (metadataOperationResult0 string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return "", metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AcquireTaskDependencyWriteLock", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, acquireTaskDependencyWriteLock, taskID)
 	var id string
-	err := recordQueryError(ctx, row.Scan(&id), acquireTaskDependencyWriteLock, 1)
-
+	err := row.Scan(&id)
 	return id, err
 }
 
@@ -100,11 +120,16 @@ WHERE id = (
 RETURNING id
 `
 
-func (q *Queries) AcquireTaskLabelWriteLock(ctx context.Context, taskID string) (string, error) {
+func (q *Queries) AcquireTaskLabelWriteLock(ctx context.Context, taskID string) (metadataOperationResult0 string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return "", metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AcquireTaskLabelWriteLock", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, acquireTaskLabelWriteLock, taskID)
 	var id string
-	err := recordQueryError(ctx, row.Scan(&id), acquireTaskLabelWriteLock, 1)
-
+	err := row.Scan(&id)
 	return id, err
 }
 
@@ -118,9 +143,14 @@ WHERE id IN (
 )
 `
 
-func (q *Queries) AcquireWorkflowDependencyWriteLock(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) AcquireWorkflowDependencyWriteLock(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AcquireWorkflowDependencyWriteLock", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, acquireWorkflowDependencyWriteLock, workflowID)
-	err = recordQueryError(ctx, err, acquireWorkflowDependencyWriteLock, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -133,9 +163,14 @@ SET updated_at_unix_ms = updated_at_unix_ms
 WHERE id = ?1
 `
 
-func (q *Queries) AcquireWorkflowGraphSaveWriteLock(ctx context.Context, id runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) AcquireWorkflowGraphSaveWriteLock(ctx context.Context, id runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AcquireWorkflowGraphSaveWriteLock", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, acquireWorkflowGraphSaveWriteLock, id)
-	err = recordQueryError(ctx, err, acquireWorkflowGraphSaveWriteLock, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -148,9 +183,14 @@ SET updated_at_unix_ms = updated_at_unix_ms
 WHERE id = ''
 `
 
-func (q *Queries) AcquireWorkspaceRegistrationLock(ctx context.Context) (int64, error) {
+func (q *Queries) AcquireWorkspaceRegistrationLock(ctx context.Context) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AcquireWorkspaceRegistrationLock", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, acquireWorkspaceRegistrationLock)
-	err = recordQueryError(ctx, err, acquireWorkspaceRegistrationLock, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -169,9 +209,14 @@ type AcquireWorkspaceUnlinkWriteLockParams struct {
 	WorkspaceID string
 }
 
-func (q *Queries) AcquireWorkspaceUnlinkWriteLock(ctx context.Context, arg AcquireWorkspaceUnlinkWriteLockParams) (int64, error) {
+func (q *Queries) AcquireWorkspaceUnlinkWriteLock(ctx context.Context, arg AcquireWorkspaceUnlinkWriteLockParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AcquireWorkspaceUnlinkWriteLock", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, acquireWorkspaceUnlinkWriteLock, arg.ProjectID, arg.WorkspaceID)
-	err = recordQueryError(ctx, err, acquireWorkspaceUnlinkWriteLock, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -200,9 +245,14 @@ type AdmitBranchCurrentNodeParams struct {
 	TransitionBranchKey sql.NullString
 }
 
-func (q *Queries) AdmitBranchCurrentNode(ctx context.Context, arg AdmitBranchCurrentNodeParams) (int64, error) {
+func (q *Queries) AdmitBranchCurrentNode(ctx context.Context, arg AdmitBranchCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AdmitBranchCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, admitBranchCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
-	err = recordQueryError(ctx, err, admitBranchCurrentNode, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -230,9 +280,14 @@ type AdmitSerialCurrentNodeParams struct {
 	NodeID string
 }
 
-func (q *Queries) AdmitSerialCurrentNode(ctx context.Context, arg AdmitSerialCurrentNodeParams) (int64, error) {
+func (q *Queries) AdmitSerialCurrentNode(ctx context.Context, arg AdmitSerialCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AdmitSerialCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, admitSerialCurrentNode, arg.TaskID, arg.NodeID)
-	err = recordQueryError(ctx, err, admitSerialCurrentNode, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -253,9 +308,14 @@ type AdvanceTaskUpdatedAtParams struct {
 	TaskID          string
 }
 
-func (q *Queries) AdvanceTaskUpdatedAt(ctx context.Context, arg AdvanceTaskUpdatedAtParams) (int64, error) {
+func (q *Queries) AdvanceTaskUpdatedAt(ctx context.Context, arg AdvanceTaskUpdatedAtParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AdvanceTaskUpdatedAt", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, advanceTaskUpdatedAt, arg.UpdatedAtUnixMs, arg.TaskID)
-	err = recordQueryError(ctx, err, advanceTaskUpdatedAt, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -281,11 +341,16 @@ type AllocateProjectTaskSequenceRow struct {
 	NextTaskSeq int64
 }
 
-func (q *Queries) AllocateProjectTaskSequence(ctx context.Context, arg AllocateProjectTaskSequenceParams) (AllocateProjectTaskSequenceRow, error) {
+func (q *Queries) AllocateProjectTaskSequence(ctx context.Context, arg AllocateProjectTaskSequenceParams) (metadataOperationResult0 AllocateProjectTaskSequenceRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return AllocateProjectTaskSequenceRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AllocateProjectTaskSequence", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, allocateProjectTaskSequence, arg.UpdatedAtUnixMs, arg.ProjectID)
 	var i AllocateProjectTaskSequenceRow
-	err := recordQueryError(ctx, row.Scan(&i.ProjectKey, &i.NextTaskSeq), allocateProjectTaskSequence, 2)
-
+	err := row.Scan(&i.ProjectKey, &i.NextTaskSeq)
 	return i, err
 }
 
@@ -296,11 +361,16 @@ SELECT EXISTS(
 ) AS anchored
 `
 
-func (q *Queries) AnchorTaskSearchReadSnapshot(ctx context.Context) (bool, error) {
+func (q *Queries) AnchorTaskSearchReadSnapshot(ctx context.Context) (metadataOperationResult0 bool, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return false, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AnchorTaskSearchReadSnapshot", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, anchorTaskSearchReadSnapshot)
 	var anchored bool
-	err := recordQueryError(ctx, row.Scan(&anchored), anchorTaskSearchReadSnapshot, 0)
-
+	err := row.Scan(&anchored)
 	return anchored, err
 }
 
@@ -338,7 +408,13 @@ type AppendLegacyBranchSessionWorkflowNodeHistoryParams struct {
 	AssociatedAtUnixMs  int64
 }
 
-func (q *Queries) AppendLegacyBranchSessionWorkflowNodeHistory(ctx context.Context, arg AppendLegacyBranchSessionWorkflowNodeHistoryParams) (int64, error) {
+func (q *Queries) AppendLegacyBranchSessionWorkflowNodeHistory(ctx context.Context, arg AppendLegacyBranchSessionWorkflowNodeHistoryParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AppendLegacyBranchSessionWorkflowNodeHistory", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, appendLegacyBranchSessionWorkflowNodeHistory,
 		arg.TaskID,
 		arg.SessionID,
@@ -346,8 +422,6 @@ func (q *Queries) AppendLegacyBranchSessionWorkflowNodeHistory(ctx context.Conte
 		arg.TransitionBranchKey,
 		arg.AssociatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, appendLegacyBranchSessionWorkflowNodeHistory, 5)
-
 	if err != nil {
 		return 0, err
 	}
@@ -387,15 +461,19 @@ type AppendLegacySerialSessionWorkflowNodeHistoryParams struct {
 	AssociatedAtUnixMs int64
 }
 
-func (q *Queries) AppendLegacySerialSessionWorkflowNodeHistory(ctx context.Context, arg AppendLegacySerialSessionWorkflowNodeHistoryParams) (int64, error) {
+func (q *Queries) AppendLegacySerialSessionWorkflowNodeHistory(ctx context.Context, arg AppendLegacySerialSessionWorkflowNodeHistoryParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "AppendLegacySerialSessionWorkflowNodeHistory", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, appendLegacySerialSessionWorkflowNodeHistory,
 		arg.TaskID,
 		arg.SessionID,
 		arg.NodeID,
 		arg.AssociatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, appendLegacySerialSessionWorkflowNodeHistory, 4)
-
 	if err != nil {
 		return 0, err
 	}
@@ -420,9 +498,14 @@ type BindInitialTaskManagedWorktreeParams struct {
 	TaskID            string
 }
 
-func (q *Queries) BindInitialTaskManagedWorktree(ctx context.Context, arg BindInitialTaskManagedWorktreeParams) (int64, error) {
+func (q *Queries) BindInitialTaskManagedWorktree(ctx context.Context, arg BindInitialTaskManagedWorktreeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "BindInitialTaskManagedWorktree", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, bindInitialTaskManagedWorktree, arg.ManagedWorktreeID, arg.UpdatedAtUnixMs, arg.TaskID)
-	err = recordQueryError(ctx, err, bindInitialTaskManagedWorktree, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -456,7 +539,13 @@ type BindLegacySessionToBranchCurrentNodeParams struct {
 	ExpectedCurrentSessionID sql.NullString
 }
 
-func (q *Queries) BindLegacySessionToBranchCurrentNode(ctx context.Context, arg BindLegacySessionToBranchCurrentNodeParams) (int64, error) {
+func (q *Queries) BindLegacySessionToBranchCurrentNode(ctx context.Context, arg BindLegacySessionToBranchCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "BindLegacySessionToBranchCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, bindLegacySessionToBranchCurrentNode,
 		arg.SessionID,
 		arg.TaskID,
@@ -464,8 +553,6 @@ func (q *Queries) BindLegacySessionToBranchCurrentNode(ctx context.Context, arg 
 		arg.TransitionBranchKey,
 		arg.ExpectedCurrentSessionID,
 	)
-	err = recordQueryError(ctx, err, bindLegacySessionToBranchCurrentNode, 5)
-
 	if err != nil {
 		return 0, err
 	}
@@ -498,15 +585,19 @@ type BindLegacySessionToSerialCurrentNodeParams struct {
 	ExpectedCurrentSessionID sql.NullString
 }
 
-func (q *Queries) BindLegacySessionToSerialCurrentNode(ctx context.Context, arg BindLegacySessionToSerialCurrentNodeParams) (int64, error) {
+func (q *Queries) BindLegacySessionToSerialCurrentNode(ctx context.Context, arg BindLegacySessionToSerialCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "BindLegacySessionToSerialCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, bindLegacySessionToSerialCurrentNode,
 		arg.SessionID,
 		arg.TaskID,
 		arg.NodeID,
 		arg.ExpectedCurrentSessionID,
 	)
-	err = recordQueryError(ctx, err, bindLegacySessionToSerialCurrentNode, 4)
-
 	if err != nil {
 		return 0, err
 	}
@@ -542,7 +633,13 @@ type BindSessionToBranchCurrentNodeParams struct {
 	ExpectedCurrentSessionID sql.NullString
 }
 
-func (q *Queries) BindSessionToBranchCurrentNode(ctx context.Context, arg BindSessionToBranchCurrentNodeParams) (int64, error) {
+func (q *Queries) BindSessionToBranchCurrentNode(ctx context.Context, arg BindSessionToBranchCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "BindSessionToBranchCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, bindSessionToBranchCurrentNode,
 		arg.SessionID,
 		arg.SourceSessionID,
@@ -551,8 +648,6 @@ func (q *Queries) BindSessionToBranchCurrentNode(ctx context.Context, arg BindSe
 		arg.TransitionBranchKey,
 		arg.ExpectedCurrentSessionID,
 	)
-	err = recordQueryError(ctx, err, bindSessionToBranchCurrentNode, 6)
-
 	if err != nil {
 		return 0, err
 	}
@@ -587,7 +682,13 @@ type BindSessionToSerialCurrentNodeParams struct {
 	ExpectedCurrentSessionID sql.NullString
 }
 
-func (q *Queries) BindSessionToSerialCurrentNode(ctx context.Context, arg BindSessionToSerialCurrentNodeParams) (int64, error) {
+func (q *Queries) BindSessionToSerialCurrentNode(ctx context.Context, arg BindSessionToSerialCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "BindSessionToSerialCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, bindSessionToSerialCurrentNode,
 		arg.SessionID,
 		arg.SourceSessionID,
@@ -595,8 +696,6 @@ func (q *Queries) BindSessionToSerialCurrentNode(ctx context.Context, arg BindSe
 		arg.NodeID,
 		arg.ExpectedCurrentSessionID,
 	)
-	err = recordQueryError(ctx, err, bindSessionToSerialCurrentNode, 5)
-
 	if err != nil {
 		return 0, err
 	}
@@ -624,9 +723,14 @@ type BindSessionToTaskParams struct {
 	SessionID string
 }
 
-func (q *Queries) BindSessionToTask(ctx context.Context, arg BindSessionToTaskParams) (int64, error) {
+func (q *Queries) BindSessionToTask(ctx context.Context, arg BindSessionToTaskParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "BindSessionToTask", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, bindSessionToTask, arg.TaskID, arg.SessionID)
-	err = recordQueryError(ctx, err, bindSessionToTask, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -650,9 +754,14 @@ type ClearDeletedWorkflowDefaultProjectLinksParams struct {
 	WorkflowID      runtimeids.WorkflowID
 }
 
-func (q *Queries) ClearDeletedWorkflowDefaultProjectLinks(ctx context.Context, arg ClearDeletedWorkflowDefaultProjectLinksParams) (int64, error) {
+func (q *Queries) ClearDeletedWorkflowDefaultProjectLinks(ctx context.Context, arg ClearDeletedWorkflowDefaultProjectLinksParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ClearDeletedWorkflowDefaultProjectLinks", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, clearDeletedWorkflowDefaultProjectLinks, arg.UpdatedAtUnixMs, arg.WorkflowID)
-	err = recordQueryError(ctx, err, clearDeletedWorkflowDefaultProjectLinks, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -672,9 +781,14 @@ type ClearProjectDefaultWorkflowLinksParams struct {
 	ProjectID       string
 }
 
-func (q *Queries) ClearProjectDefaultWorkflowLinks(ctx context.Context, arg ClearProjectDefaultWorkflowLinksParams) error {
+func (q *Queries) ClearProjectDefaultWorkflowLinks(ctx context.Context, arg ClearProjectDefaultWorkflowLinksParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ClearProjectDefaultWorkflowLinks", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, clearProjectDefaultWorkflowLinks, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, clearProjectDefaultWorkflowLinks, 2)
 	return err
 }
 
@@ -684,11 +798,16 @@ FROM project_workflow_links
 WHERE project_id = ?1
 `
 
-func (q *Queries) CountActiveProjectWorkflowLinks(ctx context.Context, projectID string) (int64, error) {
+func (q *Queries) CountActiveProjectWorkflowLinks(ctx context.Context, projectID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountActiveProjectWorkflowLinks", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countActiveProjectWorkflowLinks, projectID)
 	var active_link_count int64
-	err := recordQueryError(ctx, row.Scan(&active_link_count), countActiveProjectWorkflowLinks, 1)
-
+	err := row.Scan(&active_link_count)
 	return active_link_count, err
 }
 
@@ -711,11 +830,16 @@ FROM (
 )
 `
 
-func (q *Queries) CountAllTaskEdgeReferences(ctx context.Context, edgeID string) (int64, error) {
+func (q *Queries) CountAllTaskEdgeReferences(ctx context.Context, edgeID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountAllTaskEdgeReferences", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countAllTaskEdgeReferences, edgeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countAllTaskEdgeReferences, 1)
-
+	err := row.Scan(&ref_count)
 	return ref_count, err
 }
 
@@ -738,11 +862,16 @@ FROM (
 )
 `
 
-func (q *Queries) CountCurrentTaskNodeAnchorReferences(ctx context.Context, nodeID string) (int64, error) {
+func (q *Queries) CountCurrentTaskNodeAnchorReferences(ctx context.Context, nodeID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountCurrentTaskNodeAnchorReferences", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countCurrentTaskNodeAnchorReferences, nodeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countCurrentTaskNodeAnchorReferences, 1)
-
+	err := row.Scan(&ref_count)
 	return ref_count, err
 }
 
@@ -759,11 +888,16 @@ WHERE node.kind IN ('agent', 'script')
   )
 `
 
-func (q *Queries) CountExecutableCurrentNodesByWorkspace(ctx context.Context, workspaceID sql.NullString) (int64, error) {
+func (q *Queries) CountExecutableCurrentNodesByWorkspace(ctx context.Context, workspaceID sql.NullString) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountExecutableCurrentNodesByWorkspace", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countExecutableCurrentNodesByWorkspace, workspaceID)
 	var current_node_count int64
-	err := recordQueryError(ctx, row.Scan(&current_node_count), countExecutableCurrentNodesByWorkspace, 1)
-
+	err := row.Scan(&current_node_count)
 	return current_node_count, err
 }
 
@@ -775,11 +909,16 @@ WHERE workspace_id = ?1
   AND created_branch <> 0
 `
 
-func (q *Queries) CountManagedOwnedWorktreesByWorkspace(ctx context.Context, workspaceID string) (int64, error) {
+func (q *Queries) CountManagedOwnedWorktreesByWorkspace(ctx context.Context, workspaceID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountManagedOwnedWorktreesByWorkspace", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countManagedOwnedWorktreesByWorkspace, workspaceID)
 	var worktree_count int64
-	err := recordQueryError(ctx, row.Scan(&worktree_count), countManagedOwnedWorktreesByWorkspace, 1)
-
+	err := row.Scan(&worktree_count)
 	return worktree_count, err
 }
 
@@ -792,11 +931,16 @@ WHERE t.managed_worktree_id = ?1
   AND node.kind != 'terminal'
 `
 
-func (q *Queries) CountNonTerminalTasksByManagedWorktree(ctx context.Context, managedWorktreeID sql.NullString) (int64, error) {
+func (q *Queries) CountNonTerminalTasksByManagedWorktree(ctx context.Context, managedWorktreeID sql.NullString) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountNonTerminalTasksByManagedWorktree", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countNonTerminalTasksByManagedWorktree, managedWorktreeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countNonTerminalTasksByManagedWorktree, 1)
-
+	err := row.Scan(&ref_count)
 	return ref_count, err
 }
 
@@ -809,11 +953,16 @@ WHERE t.project_workflow_link_id = ?1
   AND node.kind != 'terminal'
 `
 
-func (q *Queries) CountNonTerminalTasksByProjectWorkflowLink(ctx context.Context, projectWorkflowLinkID string) (int64, error) {
+func (q *Queries) CountNonTerminalTasksByProjectWorkflowLink(ctx context.Context, projectWorkflowLinkID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountNonTerminalTasksByProjectWorkflowLink", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countNonTerminalTasksByProjectWorkflowLink, projectWorkflowLinkID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countNonTerminalTasksByProjectWorkflowLink, 1)
-
+	err := row.Scan(&task_count)
 	return task_count, err
 }
 
@@ -837,11 +986,16 @@ WHERE t.source_workspace_id = ?1
   )
 `
 
-func (q *Queries) CountNonTerminalTasksBySourceWorkspace(ctx context.Context, workspaceID sql.NullString) (int64, error) {
+func (q *Queries) CountNonTerminalTasksBySourceWorkspace(ctx context.Context, workspaceID sql.NullString) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountNonTerminalTasksBySourceWorkspace", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countNonTerminalTasksBySourceWorkspace, workspaceID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countNonTerminalTasksBySourceWorkspace, 1)
-
+	err := row.Scan(&task_count)
 	return task_count, err
 }
 
@@ -854,11 +1008,16 @@ WHERE t.workflow_id = ?1
   AND node.kind != 'terminal'
 `
 
-func (q *Queries) CountNonTerminalTasksByWorkflow(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) CountNonTerminalTasksByWorkflow(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountNonTerminalTasksByWorkflow", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countNonTerminalTasksByWorkflow, workflowID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countNonTerminalTasksByWorkflow, 1)
-
+	err := row.Scan(&task_count)
 	return task_count, err
 }
 
@@ -877,11 +1036,16 @@ type CountOtherNonTerminalTasksByManagedWorktreeParams struct {
 	TaskID            string
 }
 
-func (q *Queries) CountOtherNonTerminalTasksByManagedWorktree(ctx context.Context, arg CountOtherNonTerminalTasksByManagedWorktreeParams) (int64, error) {
+func (q *Queries) CountOtherNonTerminalTasksByManagedWorktree(ctx context.Context, arg CountOtherNonTerminalTasksByManagedWorktreeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountOtherNonTerminalTasksByManagedWorktree", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countOtherNonTerminalTasksByManagedWorktree, arg.ManagedWorktreeID, arg.TaskID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countOtherNonTerminalTasksByManagedWorktree, 2)
-
+	err := row.Scan(&ref_count)
 	return ref_count, err
 }
 
@@ -975,32 +1139,17 @@ type CountProjectTaskGroupsRow struct {
 	DoneCount    int64
 }
 
-func (q *Queries) CountProjectTaskGroups(ctx context.Context, arg CountProjectTaskGroupsParams) (CountProjectTaskGroupsRow, error) {
+func (q *Queries) CountProjectTaskGroups(ctx context.Context, arg CountProjectTaskGroupsParams) (metadataOperationResult0 CountProjectTaskGroupsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return CountProjectTaskGroupsRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountProjectTaskGroups", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countProjectTaskGroups, arg.ProjectID, arg.LiveTaskStatesJson)
 	var i CountProjectTaskGroupsRow
-	err := recordQueryError(ctx, row.Scan(&i.ActiveCount, &i.BacklogCount, &i.DoneCount), countProjectTaskGroups, 2)
-
+	err := row.Scan(&i.ActiveCount, &i.BacklogCount, &i.DoneCount)
 	return i, err
-}
-
-const countProjectWorkflowLinksByIDAndProject = `-- name: CountProjectWorkflowLinksByIDAndProject :one
-SELECT CAST(COUNT(*) AS INTEGER) AS link_count
-FROM project_workflow_links
-WHERE id = ?1
-  AND project_id = ?2
-`
-
-type CountProjectWorkflowLinksByIDAndProjectParams struct {
-	ProjectWorkflowLinkID string
-	ProjectID             string
-}
-
-func (q *Queries) CountProjectWorkflowLinksByIDAndProject(ctx context.Context, arg CountProjectWorkflowLinksByIDAndProjectParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countProjectWorkflowLinksByIDAndProject, arg.ProjectWorkflowLinkID, arg.ProjectID)
-	var link_count int64
-	err := recordQueryError(ctx, row.Scan(&link_count), countProjectWorkflowLinksByIDAndProject, 2)
-
-	return link_count, err
 }
 
 const countProjectWorkspaces = `-- name: CountProjectWorkspaces :one
@@ -1009,11 +1158,16 @@ FROM workspaces
 WHERE project_id = ?1
 `
 
-func (q *Queries) CountProjectWorkspaces(ctx context.Context, projectID string) (int64, error) {
+func (q *Queries) CountProjectWorkspaces(ctx context.Context, projectID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountProjectWorkspaces", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countProjectWorkspaces, projectID)
 	var workspace_count int64
-	err := recordQueryError(ctx, row.Scan(&workspace_count), countProjectWorkspaces, 1)
-
+	err := row.Scan(&workspace_count)
 	return workspace_count, err
 }
 
@@ -1028,11 +1182,16 @@ WHERE workspace_id = CAST(?1 AS TEXT)
   )
 `
 
-func (q *Queries) CountSessionsMissingWorkspaceSnapshot(ctx context.Context, workspaceID string) (int64, error) {
+func (q *Queries) CountSessionsMissingWorkspaceSnapshot(ctx context.Context, workspaceID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountSessionsMissingWorkspaceSnapshot", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countSessionsMissingWorkspaceSnapshot, workspaceID)
 	var session_count int64
-	err := recordQueryError(ctx, row.Scan(&session_count), countSessionsMissingWorkspaceSnapshot, 1)
-
+	err := row.Scan(&session_count)
 	return session_count, err
 }
 
@@ -1042,40 +1201,17 @@ FROM task_comments
 WHERE task_id = ?1
 `
 
-func (q *Queries) CountTaskComments(ctx context.Context, taskID string) (int64, error) {
+func (q *Queries) CountTaskComments(ctx context.Context, taskID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountTaskComments", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countTaskComments, taskID)
 	var column_1 int64
-	err := recordQueryError(ctx, row.Scan(&column_1), countTaskComments, 1)
-
+	err := row.Scan(&column_1)
 	return column_1, err
-}
-
-const countTaskDependenciesByBlocked = `-- name: CountTaskDependenciesByBlocked :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocked_task_id = ?1
-`
-
-func (q *Queries) CountTaskDependenciesByBlocked(ctx context.Context, blockedTaskID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countTaskDependenciesByBlocked, blockedTaskID)
-	var dependency_count int64
-	err := recordQueryError(ctx, row.Scan(&dependency_count), countTaskDependenciesByBlocked, 1)
-
-	return dependency_count, err
-}
-
-const countTaskDependenciesByBlocker = `-- name: CountTaskDependenciesByBlocker :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocker_task_id = ?1
-`
-
-func (q *Queries) CountTaskDependenciesByBlocker(ctx context.Context, blockerTaskID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countTaskDependenciesByBlocker, blockerTaskID)
-	var dependency_count int64
-	err := recordQueryError(ctx, row.Scan(&dependency_count), countTaskDependenciesByBlocker, 1)
-
-	return dependency_count, err
 }
 
 const countTaskEdgeReferences = `-- name: CountTaskEdgeReferences :one
@@ -1097,11 +1233,16 @@ FROM (
 )
 `
 
-func (q *Queries) CountTaskEdgeReferences(ctx context.Context, edgeID string) (int64, error) {
+func (q *Queries) CountTaskEdgeReferences(ctx context.Context, edgeID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountTaskEdgeReferences", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countTaskEdgeReferences, edgeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countTaskEdgeReferences, 1)
-
+	err := row.Scan(&ref_count)
 	return ref_count, err
 }
 
@@ -1124,11 +1265,16 @@ FROM (
 )
 `
 
-func (q *Queries) CountTaskNodeReferences(ctx context.Context, nodeID string) (int64, error) {
+func (q *Queries) CountTaskNodeReferences(ctx context.Context, nodeID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountTaskNodeReferences", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countTaskNodeReferences, nodeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countTaskNodeReferences, 1)
-
+	err := row.Scan(&ref_count)
 	return ref_count, err
 }
 
@@ -1138,11 +1284,16 @@ FROM sessions
 WHERE task_id = ?1
 `
 
-func (q *Queries) CountTaskSessions(ctx context.Context, taskID sql.NullString) (int64, error) {
+func (q *Queries) CountTaskSessions(ctx context.Context, taskID sql.NullString) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountTaskSessions", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countTaskSessions, taskID)
 	var session_count int64
-	err := recordQueryError(ctx, row.Scan(&session_count), countTaskSessions, 1)
-
+	err := row.Scan(&session_count)
 	return session_count, err
 }
 
@@ -1152,11 +1303,16 @@ FROM tasks
 WHERE project_workflow_link_id = ?1
 `
 
-func (q *Queries) CountTasksByProjectWorkflowLink(ctx context.Context, projectWorkflowLinkID string) (int64, error) {
+func (q *Queries) CountTasksByProjectWorkflowLink(ctx context.Context, projectWorkflowLinkID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountTasksByProjectWorkflowLink", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countTasksByProjectWorkflowLink, projectWorkflowLinkID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countTasksByProjectWorkflowLink, 1)
-
+	err := row.Scan(&task_count)
 	return task_count, err
 }
 
@@ -1171,11 +1327,16 @@ WHERE source_workspace_id = ?1
   )
 `
 
-func (q *Queries) CountTasksMissingSourceWorkspaceSnapshot(ctx context.Context, workspaceID sql.NullString) (int64, error) {
+func (q *Queries) CountTasksMissingSourceWorkspaceSnapshot(ctx context.Context, workspaceID sql.NullString) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountTasksMissingSourceWorkspaceSnapshot", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countTasksMissingSourceWorkspaceSnapshot, workspaceID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countTasksMissingSourceWorkspaceSnapshot, 1)
-
+	err := row.Scan(&task_count)
 	return task_count, err
 }
 
@@ -1185,11 +1346,16 @@ FROM worktrees
 WHERE workspace_id = ?1
 `
 
-func (q *Queries) CountWorktreesByWorkspace(ctx context.Context, workspaceID string) (int64, error) {
+func (q *Queries) CountWorktreesByWorkspace(ctx context.Context, workspaceID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountWorktreesByWorkspace", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, countWorktreesByWorkspace, workspaceID)
 	var worktree_count int64
-	err := recordQueryError(ctx, row.Scan(&worktree_count), countWorktreesByWorkspace, 1)
-
+	err := row.Scan(&worktree_count)
 	return worktree_count, err
 }
 
@@ -1198,9 +1364,14 @@ DELETE FROM projects
 WHERE id = ?1
 `
 
-func (q *Queries) DeleteProject(ctx context.Context, projectID string) (int64, error) {
+func (q *Queries) DeleteProject(ctx context.Context, projectID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteProject", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteProject, projectID)
-	err = recordQueryError(ctx, err, deleteProject, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1226,16 +1397,21 @@ type DeleteProjectLabelRow struct {
 	Ordinal   int64
 }
 
-func (q *Queries) DeleteProjectLabel(ctx context.Context, arg DeleteProjectLabelParams) (DeleteProjectLabelRow, error) {
+func (q *Queries) DeleteProjectLabel(ctx context.Context, arg DeleteProjectLabelParams) (metadataOperationResult0 DeleteProjectLabelRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return DeleteProjectLabelRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteProjectLabel", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, deleteProjectLabel, arg.ID, arg.ProjectID)
 	var i DeleteProjectLabelRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.Name,
 		&i.Ordinal,
-	), deleteProjectLabel, 2)
-
+	)
 	return i, err
 }
 
@@ -1248,9 +1424,14 @@ WHERE source_task_id IN (
 )
 `
 
-func (q *Queries) DeleteProjectTaskPendingApprovals(ctx context.Context, projectID string) (int64, error) {
+func (q *Queries) DeleteProjectTaskPendingApprovals(ctx context.Context, projectID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteProjectTaskPendingApprovals", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteProjectTaskPendingApprovals, projectID)
-	err = recordQueryError(ctx, err, deleteProjectTaskPendingApprovals, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1264,9 +1445,14 @@ WHERE id IN (
 )
 `
 
-func (q *Queries) DeleteProjectTasks(ctx context.Context, projectID string) error {
+func (q *Queries) DeleteProjectTasks(ctx context.Context, projectID string) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteProjectTasks", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, deleteProjectTasks, projectID)
-	err = recordQueryError(ctx, err, deleteProjectTasks, 1)
 	return err
 }
 
@@ -1275,9 +1461,14 @@ DELETE FROM project_workflow_links
 WHERE id = ?1
 `
 
-func (q *Queries) DeleteProjectWorkflowLink(ctx context.Context, id string) (int64, error) {
+func (q *Queries) DeleteProjectWorkflowLink(ctx context.Context, id string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteProjectWorkflowLink", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteProjectWorkflowLink, id)
-	err = recordQueryError(ctx, err, deleteProjectWorkflowLink, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1302,9 +1493,14 @@ WHERE project_workflow_links.id = ?1
   )
 `
 
-func (q *Queries) DeleteProjectWorkflowLinkUnlessDefaultNeedsReplacement(ctx context.Context, id string) (int64, error) {
+func (q *Queries) DeleteProjectWorkflowLinkUnlessDefaultNeedsReplacement(ctx context.Context, id string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteProjectWorkflowLinkUnlessDefaultNeedsReplacement", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteProjectWorkflowLinkUnlessDefaultNeedsReplacement, id)
-	err = recordQueryError(ctx, err, deleteProjectWorkflowLinkUnlessDefaultNeedsReplacement, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1316,9 +1512,14 @@ DELETE FROM project_workflow_links
 WHERE workflow_id = ?1
 `
 
-func (q *Queries) DeleteProjectWorkflowLinksByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) DeleteProjectWorkflowLinksByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteProjectWorkflowLinksByWorkflowID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteProjectWorkflowLinksByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteProjectWorkflowLinksByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1337,9 +1538,14 @@ type DeleteSerialTaskCurrentNodeParams struct {
 	NodeID string
 }
 
-func (q *Queries) DeleteSerialTaskCurrentNode(ctx context.Context, arg DeleteSerialTaskCurrentNodeParams) (int64, error) {
+func (q *Queries) DeleteSerialTaskCurrentNode(ctx context.Context, arg DeleteSerialTaskCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteSerialTaskCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteSerialTaskCurrentNode, arg.TaskID, arg.NodeID)
-	err = recordQueryError(ctx, err, deleteSerialTaskCurrentNode, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -1351,9 +1557,14 @@ DELETE FROM sessions
 WHERE id = ?1
 `
 
-func (q *Queries) DeleteSessionRecordByID(ctx context.Context, sessionID string) (int64, error) {
+func (q *Queries) DeleteSessionRecordByID(ctx context.Context, sessionID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteSessionRecordByID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteSessionRecordByID, sessionID)
-	err = recordQueryError(ctx, err, deleteSessionRecordByID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1365,9 +1576,14 @@ DELETE FROM tasks
 WHERE id = ?1
 `
 
-func (q *Queries) DeleteTask(ctx context.Context, id string) (int64, error) {
+func (q *Queries) DeleteTask(ctx context.Context, id string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTask", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTask, id)
-	err = recordQueryError(ctx, err, deleteTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1379,9 +1595,14 @@ DELETE FROM task_active_fanouts
 WHERE task_id = ?1
 `
 
-func (q *Queries) DeleteTaskActiveFanout(ctx context.Context, taskID string) (int64, error) {
+func (q *Queries) DeleteTaskActiveFanout(ctx context.Context, taskID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskActiveFanout", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskActiveFanout, taskID)
-	err = recordQueryError(ctx, err, deleteTaskActiveFanout, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1393,9 +1614,14 @@ DELETE FROM task_comments
 WHERE id = ?1
 `
 
-func (q *Queries) DeleteTaskComment(ctx context.Context, id string) (int64, error) {
+func (q *Queries) DeleteTaskComment(ctx context.Context, id string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskComment", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskComment, id)
-	err = recordQueryError(ctx, err, deleteTaskComment, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1407,9 +1633,14 @@ DELETE FROM task_comments
 WHERE task_id = ?1
 `
 
-func (q *Queries) DeleteTaskCommentsByTask(ctx context.Context, taskID string) (int64, error) {
+func (q *Queries) DeleteTaskCommentsByTask(ctx context.Context, taskID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskCommentsByTask", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskCommentsByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskCommentsByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1432,9 +1663,14 @@ type DeleteTaskCurrentNodeParams struct {
 	TransitionBranchKey interface{}
 }
 
-func (q *Queries) DeleteTaskCurrentNode(ctx context.Context, arg DeleteTaskCurrentNodeParams) (int64, error) {
+func (q *Queries) DeleteTaskCurrentNode(ctx context.Context, arg DeleteTaskCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
-	err = recordQueryError(ctx, err, deleteTaskCurrentNode, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -1446,9 +1682,14 @@ DELETE FROM task_current_nodes
 WHERE task_id = ?1
 `
 
-func (q *Queries) DeleteTaskCurrentNodes(ctx context.Context, taskID string) (int64, error) {
+func (q *Queries) DeleteTaskCurrentNodes(ctx context.Context, taskID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskCurrentNodes", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskCurrentNodes, taskID)
-	err = recordQueryError(ctx, err, deleteTaskCurrentNodes, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1461,9 +1702,14 @@ WHERE blocker_task_id = ?1
    OR blocked_task_id = ?1
 `
 
-func (q *Queries) DeleteTaskDependenciesByTask(ctx context.Context, taskID string) (int64, error) {
+func (q *Queries) DeleteTaskDependenciesByTask(ctx context.Context, taskID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskDependenciesByTask", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskDependenciesByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskDependenciesByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1481,9 +1727,14 @@ type DeleteTaskDependencyParams struct {
 	BlockedTaskID string
 }
 
-func (q *Queries) DeleteTaskDependency(ctx context.Context, arg DeleteTaskDependencyParams) (int64, error) {
+func (q *Queries) DeleteTaskDependency(ctx context.Context, arg DeleteTaskDependencyParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskDependency", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskDependency, arg.BlockerTaskID, arg.BlockedTaskID)
-	err = recordQueryError(ctx, err, deleteTaskDependency, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -1501,9 +1752,14 @@ type DeleteTaskLabelAssignmentParams struct {
 	LabelID string
 }
 
-func (q *Queries) DeleteTaskLabelAssignment(ctx context.Context, arg DeleteTaskLabelAssignmentParams) (int64, error) {
+func (q *Queries) DeleteTaskLabelAssignment(ctx context.Context, arg DeleteTaskLabelAssignmentParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskLabelAssignment", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskLabelAssignment, arg.TaskID, arg.LabelID)
-	err = recordQueryError(ctx, err, deleteTaskLabelAssignment, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -1515,9 +1771,14 @@ DELETE FROM task_label_assignments
 WHERE task_id = ?1
 `
 
-func (q *Queries) DeleteTaskLabelAssignmentsByTask(ctx context.Context, taskID string) (int64, error) {
+func (q *Queries) DeleteTaskLabelAssignmentsByTask(ctx context.Context, taskID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskLabelAssignmentsByTask", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskLabelAssignmentsByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskLabelAssignmentsByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1529,9 +1790,14 @@ DELETE FROM task_pending_approvals
 WHERE id = ?1
 `
 
-func (q *Queries) DeleteTaskPendingApproval(ctx context.Context, id string) (int64, error) {
+func (q *Queries) DeleteTaskPendingApproval(ctx context.Context, id string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskPendingApproval", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskPendingApproval, id)
-	err = recordQueryError(ctx, err, deleteTaskPendingApproval, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1543,9 +1809,14 @@ DELETE FROM task_pending_approvals
 WHERE source_task_id = ?1
 `
 
-func (q *Queries) DeleteTaskPendingApprovalsByTask(ctx context.Context, taskID string) (int64, error) {
+func (q *Queries) DeleteTaskPendingApprovalsByTask(ctx context.Context, taskID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteTaskPendingApprovalsByTask", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteTaskPendingApprovalsByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskPendingApprovalsByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1557,9 +1828,14 @@ DELETE FROM workflows
 WHERE id = ?1
 `
 
-func (q *Queries) DeleteWorkflowByID(ctx context.Context, id runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) DeleteWorkflowByID(ctx context.Context, id runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowByID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowByID, id)
-	err = recordQueryError(ctx, err, deleteWorkflowByID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1571,9 +1847,14 @@ DELETE FROM workflow_edges
 WHERE id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 `
 
-func (q *Queries) DeleteWorkflowEdge(ctx context.Context, id string) (int64, error) {
+func (q *Queries) DeleteWorkflowEdge(ctx context.Context, id string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowEdge", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowEdge, id)
-	err = recordQueryError(ctx, err, deleteWorkflowEdge, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1585,9 +1866,14 @@ DELETE FROM workflow_nodes
 WHERE id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 `
 
-func (q *Queries) DeleteWorkflowNode(ctx context.Context, id string) (int64, error) {
+func (q *Queries) DeleteWorkflowNode(ctx context.Context, id string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowNode, id)
-	err = recordQueryError(ctx, err, deleteWorkflowNode, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1605,9 +1891,14 @@ type DeleteWorkflowNodeGroupParams struct {
 	WorkflowID runtimeids.WorkflowID
 }
 
-func (q *Queries) DeleteWorkflowNodeGroup(ctx context.Context, arg DeleteWorkflowNodeGroupParams) (int64, error) {
+func (q *Queries) DeleteWorkflowNodeGroup(ctx context.Context, arg DeleteWorkflowNodeGroupParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowNodeGroup", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowNodeGroup, arg.ID, arg.WorkflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowNodeGroup, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -1623,9 +1914,14 @@ WHERE task_id IN (
 )
 `
 
-func (q *Queries) DeleteWorkflowTaskCommentsByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) DeleteWorkflowTaskCommentsByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowTaskCommentsByWorkflowID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskCommentsByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTaskCommentsByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1641,9 +1937,14 @@ WHERE task_id IN (
 )
 `
 
-func (q *Queries) DeleteWorkflowTaskCurrentNodesByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) DeleteWorkflowTaskCurrentNodesByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowTaskCurrentNodesByWorkflowID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskCurrentNodesByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTaskCurrentNodesByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1664,9 +1965,14 @@ OR blocked_task_id IN (
 )
 `
 
-func (q *Queries) DeleteWorkflowTaskDependenciesByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) DeleteWorkflowTaskDependenciesByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowTaskDependenciesByWorkflowID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskDependenciesByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTaskDependenciesByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1682,9 +1988,14 @@ WHERE source_task_id IN (
 )
 `
 
-func (q *Queries) DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowTaskPendingApprovalsByWorkflowID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskPendingApprovalsByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTaskPendingApprovalsByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1700,9 +2011,14 @@ WHERE id IN (
 )
 `
 
-func (q *Queries) DeleteWorkflowTasksByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) DeleteWorkflowTasksByWorkflowID(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowTasksByWorkflowID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTasksByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTasksByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1714,9 +2030,14 @@ DELETE FROM workflow_transition_groups
 WHERE id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 `
 
-func (q *Queries) DeleteWorkflowTransitionGroupByID(ctx context.Context, id string) (int64, error) {
+func (q *Queries) DeleteWorkflowTransitionGroupByID(ctx context.Context, id string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkflowTransitionGroupByID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTransitionGroupByID, id)
-	err = recordQueryError(ctx, err, deleteWorkflowTransitionGroupByID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1734,9 +2055,14 @@ type DeleteWorkspaceBindingByIDParams struct {
 	WorkspaceID string
 }
 
-func (q *Queries) DeleteWorkspaceBindingByID(ctx context.Context, arg DeleteWorkspaceBindingByIDParams) (int64, error) {
+func (q *Queries) DeleteWorkspaceBindingByID(ctx context.Context, arg DeleteWorkspaceBindingByIDParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorkspaceBindingByID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorkspaceBindingByID, arg.ProjectID, arg.WorkspaceID)
-	err = recordQueryError(ctx, err, deleteWorkspaceBindingByID, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -1748,9 +2074,14 @@ DELETE FROM worktrees
 WHERE id = ?1
 `
 
-func (q *Queries) DeleteWorktreeByID(ctx context.Context, id string) (int64, error) {
+func (q *Queries) DeleteWorktreeByID(ctx context.Context, id string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DeleteWorktreeByID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, deleteWorktreeByID, id)
-	err = recordQueryError(ctx, err, deleteWorktreeByID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1791,7 +2122,13 @@ type DesignateBranchCurrentSessionWorkflowNodeAssociationParams struct {
 	AssociatedAtUnixMs  int64
 }
 
-func (q *Queries) DesignateBranchCurrentSessionWorkflowNodeAssociation(ctx context.Context, arg DesignateBranchCurrentSessionWorkflowNodeAssociationParams) error {
+func (q *Queries) DesignateBranchCurrentSessionWorkflowNodeAssociation(ctx context.Context, arg DesignateBranchCurrentSessionWorkflowNodeAssociationParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DesignateBranchCurrentSessionWorkflowNodeAssociation", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, designateBranchCurrentSessionWorkflowNodeAssociation,
 		arg.TaskID,
 		arg.SessionID,
@@ -1800,8 +2137,6 @@ func (q *Queries) DesignateBranchCurrentSessionWorkflowNodeAssociation(ctx conte
 		arg.SourceSessionID,
 		arg.AssociatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, designateBranchCurrentSessionWorkflowNodeAssociation, 6)
-
 	return err
 }
 
@@ -1838,7 +2173,13 @@ type DesignateSerialCurrentSessionWorkflowNodeAssociationParams struct {
 	AssociatedAtUnixMs int64
 }
 
-func (q *Queries) DesignateSerialCurrentSessionWorkflowNodeAssociation(ctx context.Context, arg DesignateSerialCurrentSessionWorkflowNodeAssociationParams) error {
+func (q *Queries) DesignateSerialCurrentSessionWorkflowNodeAssociation(ctx context.Context, arg DesignateSerialCurrentSessionWorkflowNodeAssociationParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "DesignateSerialCurrentSessionWorkflowNodeAssociation", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, designateSerialCurrentSessionWorkflowNodeAssociation,
 		arg.TaskID,
 		arg.SessionID,
@@ -1846,8 +2187,6 @@ func (q *Queries) DesignateSerialCurrentSessionWorkflowNodeAssociation(ctx conte
 		arg.SourceSessionID,
 		arg.AssociatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, designateSerialCurrentSessionWorkflowNodeAssociation, 5)
-
 	return err
 }
 
@@ -1870,18 +2209,23 @@ type GetActiveProjectWorkflowLinkByWorkflowParams struct {
 	WorkflowID runtimeids.WorkflowID
 }
 
-func (q *Queries) GetActiveProjectWorkflowLinkByWorkflow(ctx context.Context, arg GetActiveProjectWorkflowLinkByWorkflowParams) (ProjectWorkflowLinkRecord, error) {
+func (q *Queries) GetActiveProjectWorkflowLinkByWorkflow(ctx context.Context, arg GetActiveProjectWorkflowLinkByWorkflowParams) (metadataOperationResult0 ProjectWorkflowLinkRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return ProjectWorkflowLinkRecord{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetActiveProjectWorkflowLinkByWorkflow", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getActiveProjectWorkflowLinkByWorkflow, arg.ProjectID, arg.WorkflowID)
 	var i ProjectWorkflowLinkRecord
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.WorkflowID,
 		&i.IsDefault,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getActiveProjectWorkflowLinkByWorkflow, 2)
-
+	)
 	return i, err
 }
 
@@ -1914,17 +2258,22 @@ type GetCurrentBranchTaskSessionAssociationForNodeRow struct {
 	AssociatedAtUnixMs  int64
 }
 
-func (q *Queries) GetCurrentBranchTaskSessionAssociationForNode(ctx context.Context, arg GetCurrentBranchTaskSessionAssociationForNodeParams) (GetCurrentBranchTaskSessionAssociationForNodeRow, error) {
+func (q *Queries) GetCurrentBranchTaskSessionAssociationForNode(ctx context.Context, arg GetCurrentBranchTaskSessionAssociationForNodeParams) (metadataOperationResult0 GetCurrentBranchTaskSessionAssociationForNodeRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetCurrentBranchTaskSessionAssociationForNodeRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetCurrentBranchTaskSessionAssociationForNode", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getCurrentBranchTaskSessionAssociationForNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
 	var i GetCurrentBranchTaskSessionAssociationForNodeRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.SessionID,
 		&i.NodeID,
 		&i.TransitionBranchKey,
 		&i.SourceSessionID,
 		&i.AssociatedAtUnixMs,
-	), getCurrentBranchTaskSessionAssociationForNode, 3)
-
+	)
 	return i, err
 }
 
@@ -1954,16 +2303,21 @@ type GetCurrentSerialTaskSessionAssociationForNodeRow struct {
 	AssociatedAtUnixMs int64
 }
 
-func (q *Queries) GetCurrentSerialTaskSessionAssociationForNode(ctx context.Context, arg GetCurrentSerialTaskSessionAssociationForNodeParams) (GetCurrentSerialTaskSessionAssociationForNodeRow, error) {
+func (q *Queries) GetCurrentSerialTaskSessionAssociationForNode(ctx context.Context, arg GetCurrentSerialTaskSessionAssociationForNodeParams) (metadataOperationResult0 GetCurrentSerialTaskSessionAssociationForNodeRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetCurrentSerialTaskSessionAssociationForNodeRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetCurrentSerialTaskSessionAssociationForNode", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getCurrentSerialTaskSessionAssociationForNode, arg.TaskID, arg.NodeID)
 	var i GetCurrentSerialTaskSessionAssociationForNodeRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.SessionID,
 		&i.NodeID,
 		&i.SourceSessionID,
 		&i.AssociatedAtUnixMs,
-	), getCurrentSerialTaskSessionAssociationForNode, 2)
-
+	)
 	return i, err
 }
 
@@ -1981,18 +2335,23 @@ WHERE project_id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetDefaultProjectWorkflowLink(ctx context.Context, projectID string) (ProjectWorkflowLinkRecord, error) {
+func (q *Queries) GetDefaultProjectWorkflowLink(ctx context.Context, projectID string) (metadataOperationResult0 ProjectWorkflowLinkRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return ProjectWorkflowLinkRecord{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetDefaultProjectWorkflowLink", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getDefaultProjectWorkflowLink, projectID)
 	var i ProjectWorkflowLinkRecord
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.WorkflowID,
 		&i.IsDefault,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getDefaultProjectWorkflowLink, 1)
-
+	)
 	return i, err
 }
 
@@ -2017,26 +2376,36 @@ SELECT
     ) AS INTEGER) AS non_terminal_tasks
 `
 
-func (q *Queries) GetProjectDeleteBlockerCounts(ctx context.Context, deleteProjectID string) (int64, error) {
+func (q *Queries) GetProjectDeleteBlockerCounts(ctx context.Context, deleteProjectID string) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetProjectDeleteBlockerCounts", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getProjectDeleteBlockerCounts, deleteProjectID)
 	var non_terminal_tasks int64
-	err := recordQueryError(ctx, row.Scan(&non_terminal_tasks), getProjectDeleteBlockerCounts, 1)
-
+	err := row.Scan(&non_terminal_tasks)
 	return non_terminal_tasks, err
 }
 
 const getProjectDisplayName = `-- name: GetProjectDisplayName :one
 SELECT display_name
 FROM projects
-WHERE id = ?1
+WHERE projects.id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetProjectDisplayName(ctx context.Context, projectID string) (string, error) {
+func (q *Queries) GetProjectDisplayName(ctx context.Context, projectID string) (metadataOperationResult0 string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return "", metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetProjectDisplayName", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getProjectDisplayName, projectID)
 	var display_name string
-	err := recordQueryError(ctx, row.Scan(&display_name), getProjectDisplayName, 1)
-
+	err := row.Scan(&display_name)
 	return display_name, err
 }
 
@@ -2046,7 +2415,7 @@ SELECT
     display_name,
     project_key
 FROM projects
-WHERE id = ?1
+WHERE projects.id = ?1
 LIMIT 1
 `
 
@@ -2056,11 +2425,16 @@ type GetProjectEditMetadataRow struct {
 	ProjectKey  string
 }
 
-func (q *Queries) GetProjectEditMetadata(ctx context.Context, projectID string) (GetProjectEditMetadataRow, error) {
+func (q *Queries) GetProjectEditMetadata(ctx context.Context, projectID string) (metadataOperationResult0 GetProjectEditMetadataRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetProjectEditMetadataRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetProjectEditMetadata", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getProjectEditMetadata, projectID)
 	var i GetProjectEditMetadataRow
-	err := recordQueryError(ctx, row.Scan(&i.ID, &i.DisplayName, &i.ProjectKey), getProjectEditMetadata, 1)
-
+	err := row.Scan(&i.ID, &i.DisplayName, &i.ProjectKey)
 	return i, err
 }
 
@@ -2086,17 +2460,22 @@ type GetProjectKeyStateRow struct {
 	TaskCount   int64
 }
 
-func (q *Queries) GetProjectKeyState(ctx context.Context, projectID string) (GetProjectKeyStateRow, error) {
+func (q *Queries) GetProjectKeyState(ctx context.Context, projectID string) (metadataOperationResult0 GetProjectKeyStateRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetProjectKeyStateRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetProjectKeyState", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getProjectKeyState, projectID)
 	var i GetProjectKeyStateRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.DisplayName,
 		&i.ProjectKey,
 		&i.NextTaskSeq,
 		&i.TaskCount,
-	), getProjectKeyState, 1)
-
+	)
 	return i, err
 }
 
@@ -2107,11 +2486,16 @@ WHERE id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetProjectPrimaryWorkspaceID(ctx context.Context, projectID string) (string, error) {
+func (q *Queries) GetProjectPrimaryWorkspaceID(ctx context.Context, projectID string) (metadataOperationResult0 string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return "", metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetProjectPrimaryWorkspaceID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getProjectPrimaryWorkspaceID, projectID)
 	var primary_workspace_id string
-	err := recordQueryError(ctx, row.Scan(&primary_workspace_id), getProjectPrimaryWorkspaceID, 1)
-
+	err := row.Scan(&primary_workspace_id)
 	return primary_workspace_id, err
 }
 
@@ -2140,18 +2524,23 @@ type GetProjectSummaryRow struct {
 	LatestActivityUnixMs int64
 }
 
-func (q *Queries) GetProjectSummary(ctx context.Context, projectID string) (GetProjectSummaryRow, error) {
+func (q *Queries) GetProjectSummary(ctx context.Context, projectID string) (metadataOperationResult0 GetProjectSummaryRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetProjectSummaryRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetProjectSummary", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getProjectSummary, projectID)
 	var i GetProjectSummaryRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.DisplayName,
 		&i.ProjectKey,
 		&i.RootPath,
 		&i.SessionCount,
 		&i.LatestActivityUnixMs,
-	), getProjectSummary, 1)
-
+	)
 	return i, err
 }
 
@@ -2168,18 +2557,23 @@ WHERE id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetProjectWorkflowLink(ctx context.Context, id string) (ProjectWorkflowLinkRecord, error) {
+func (q *Queries) GetProjectWorkflowLink(ctx context.Context, id string) (metadataOperationResult0 ProjectWorkflowLinkRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return ProjectWorkflowLinkRecord{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetProjectWorkflowLink", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getProjectWorkflowLink, id)
 	var i ProjectWorkflowLinkRecord
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.WorkflowID,
 		&i.IsDefault,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getProjectWorkflowLink, 1)
-
+	)
 	return i, err
 }
 
@@ -2196,11 +2590,16 @@ type GetProjectWorkflowUnlinkStateRow struct {
 	ActiveLinkCount              int64
 }
 
-func (q *Queries) GetProjectWorkflowUnlinkState(ctx context.Context, projectID string) (GetProjectWorkflowUnlinkStateRow, error) {
+func (q *Queries) GetProjectWorkflowUnlinkState(ctx context.Context, projectID string) (metadataOperationResult0 GetProjectWorkflowUnlinkStateRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetProjectWorkflowUnlinkStateRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetProjectWorkflowUnlinkState", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getProjectWorkflowUnlinkState, projectID)
 	var i GetProjectWorkflowUnlinkStateRow
-	err := recordQueryError(ctx, row.Scan(&i.DefaultProjectWorkflowLinkID, &i.ActiveLinkCount), getProjectWorkflowUnlinkState, 1)
-
+	err := row.Scan(&i.DefaultProjectWorkflowLinkID, &i.ActiveLinkCount)
 	return i, err
 }
 
@@ -2234,10 +2633,16 @@ type GetSessionExecutionTargetByIDRow struct {
 	CwdRelpath                      string
 }
 
-func (q *Queries) GetSessionExecutionTargetByID(ctx context.Context, sessionID string) (GetSessionExecutionTargetByIDRow, error) {
+func (q *Queries) GetSessionExecutionTargetByID(ctx context.Context, sessionID string) (metadataOperationResult0 GetSessionExecutionTargetByIDRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetSessionExecutionTargetByIDRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetSessionExecutionTargetByID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getSessionExecutionTargetByID, sessionID)
 	var i GetSessionExecutionTargetByIDRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.SessionID,
 		&i.ExecutionTargetWorkspaceBinding,
 		&i.ProjectID,
@@ -2247,8 +2652,7 @@ func (q *Queries) GetSessionExecutionTargetByID(ctx context.Context, sessionID s
 		&i.WorktreeID,
 		&i.WorktreeRoot,
 		&i.CwdRelpath,
-	), getSessionExecutionTargetByID, 1)
-
+	)
 	return i, err
 }
 
@@ -2270,17 +2674,22 @@ type GetSessionPromptHistoryEntryBySourceIDParams struct {
 	SourceID  string
 }
 
-func (q *Queries) GetSessionPromptHistoryEntryBySourceID(ctx context.Context, arg GetSessionPromptHistoryEntryBySourceIDParams) (SessionPromptHistoryEntry, error) {
+func (q *Queries) GetSessionPromptHistoryEntryBySourceID(ctx context.Context, arg GetSessionPromptHistoryEntryBySourceIDParams) (metadataOperationResult0 SessionPromptHistoryEntry, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return SessionPromptHistoryEntry{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetSessionPromptHistoryEntryBySourceID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getSessionPromptHistoryEntryBySourceID, arg.SessionID, arg.SourceID)
 	var i SessionPromptHistoryEntry
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.Sequence,
 		&i.SessionID,
 		&i.SourceID,
 		&i.Text,
 		&i.CreatedAtUnixMs,
-	), getSessionPromptHistoryEntryBySourceID, 2)
-
+	)
 	return i, err
 }
 
@@ -2296,7 +2705,6 @@ SELECT
     s.category,
     s.created_at_unix_ms,
     s.updated_at_unix_ms,
-    s.last_sequence,
     s.model_request_count,
     s.continuation_json,
     s.locked_json,
@@ -2322,7 +2730,6 @@ type GetSessionRecordByIDRow struct {
 	Category                 sql.NullString
 	CreatedAtUnixMs          int64
 	UpdatedAtUnixMs          int64
-	LastSequence             int64
 	ModelRequestCount        int64
 	ContinuationJson         string
 	LockedJson               string
@@ -2333,10 +2740,16 @@ type GetSessionRecordByIDRow struct {
 	WorkspaceRoot            string
 }
 
-func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (GetSessionRecordByIDRow, error) {
+func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (metadataOperationResult0 GetSessionRecordByIDRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetSessionRecordByIDRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetSessionRecordByID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getSessionRecordByID, sessionID)
 	var i GetSessionRecordByIDRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ArtifactRelpath,
 		&i.Name,
@@ -2347,7 +2760,6 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (G
 		&i.Category,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-		&i.LastSequence,
 		&i.ModelRequestCount,
 		&i.ContinuationJson,
 		&i.LockedJson,
@@ -2356,8 +2768,7 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (G
 		&i.CompletedCompactionCount,
 		&i.ManualCompactEligible,
 		&i.WorkspaceRoot,
-	), getSessionRecordByID, 1)
-
+	)
 	return i, err
 }
 
@@ -2382,17 +2793,22 @@ type GetSessionWorkspaceRetargetStateByIDRow struct {
 	ArtifactRelpath    string
 }
 
-func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sessionID string) (GetSessionWorkspaceRetargetStateByIDRow, error) {
+func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sessionID string) (metadataOperationResult0 GetSessionWorkspaceRetargetStateByIDRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetSessionWorkspaceRetargetStateByIDRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetSessionWorkspaceRetargetStateByID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getSessionWorkspaceRetargetStateByID, sessionID)
 	var i GetSessionWorkspaceRetargetStateByIDRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.SessionID,
 		&i.ProjectID,
 		&i.ProjectDisplayName,
 		&i.ProjectKey,
 		&i.ArtifactRelpath,
-	), getSessionWorkspaceRetargetStateByID, 1)
-
+	)
 	return i, err
 }
 
@@ -2424,10 +2840,16 @@ WHERE id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetTask(ctx context.Context, id string) (TaskRecord, error) {
+func (q *Queries) GetTask(ctx context.Context, id string) (metadataOperationResult0 TaskRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return TaskRecord{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTask", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getTask, id)
 	var i TaskRecord
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.ProjectWorkflowLinkID,
@@ -2449,8 +2871,7 @@ func (q *Queries) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 		&i.MetadataJson,
-	), getTask, 1)
-
+	)
 	return i, err
 }
 
@@ -2460,11 +2881,16 @@ FROM task_active_fanouts
 WHERE task_id = ?1
 `
 
-func (q *Queries) GetTaskActiveFanout(ctx context.Context, taskID string) (string, error) {
+func (q *Queries) GetTaskActiveFanout(ctx context.Context, taskID string) (metadataOperationResult0 string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return "", metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTaskActiveFanout", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getTaskActiveFanout, taskID)
 	var task_id string
-	err := recordQueryError(ctx, row.Scan(&task_id), getTaskActiveFanout, 1)
-
+	err := row.Scan(&task_id)
 	return task_id, err
 }
 
@@ -2502,10 +2928,16 @@ type GetTaskByProjectShortIDParams struct {
 	ShortID   string
 }
 
-func (q *Queries) GetTaskByProjectShortID(ctx context.Context, arg GetTaskByProjectShortIDParams) (TaskRecord, error) {
+func (q *Queries) GetTaskByProjectShortID(ctx context.Context, arg GetTaskByProjectShortIDParams) (metadataOperationResult0 TaskRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return TaskRecord{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTaskByProjectShortID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getTaskByProjectShortID, arg.ProjectID, arg.ShortID)
 	var i TaskRecord
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.ProjectWorkflowLinkID,
@@ -2527,8 +2959,7 @@ func (q *Queries) GetTaskByProjectShortID(ctx context.Context, arg GetTaskByProj
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 		&i.MetadataJson,
-	), getTaskByProjectShortID, 2)
-
+	)
 	return i, err
 }
 
@@ -2545,12 +2976,192 @@ type GetTaskDependencyParams struct {
 	BlockedTaskID string
 }
 
-func (q *Queries) GetTaskDependency(ctx context.Context, arg GetTaskDependencyParams) (TaskDependency, error) {
+func (q *Queries) GetTaskDependency(ctx context.Context, arg GetTaskDependencyParams) (metadataOperationResult0 TaskDependency, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return TaskDependency{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTaskDependency", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getTaskDependency, arg.BlockerTaskID, arg.BlockedTaskID)
 	var i TaskDependency
-	err := recordQueryError(ctx, row.Scan(&i.BlockerTaskID, &i.BlockedTaskID), getTaskDependency, 2)
-
+	err := row.Scan(&i.BlockerTaskID, &i.BlockedTaskID)
 	return i, err
+}
+
+const getTaskDependencyAttachSnapshot = `-- name: GetTaskDependencyAttachSnapshot :many
+WITH args AS (
+    SELECT
+        ?1 AS blocker_task_id,
+        ?2 AS blocked_task_id
+),
+policy AS (
+    SELECT
+        CAST(EXISTS (
+            SELECT 1
+            FROM task_dependencies
+            WHERE blocker_task_id = args.blocked_task_id
+              AND blocked_task_id = args.blocker_task_id
+        ) AS INTEGER) AS reverse_pair_present,
+        CAST((
+            SELECT COUNT(*)
+            FROM task_dependencies
+            WHERE blocker_task_id = args.blocker_task_id
+        ) AS INTEGER) AS blocker_outgoing_count,
+        CAST((
+            SELECT COUNT(*)
+            FROM task_dependencies
+            WHERE blocked_task_id = args.blocked_task_id
+        ) AS INTEGER) AS blocked_incoming_count
+    FROM args
+)
+SELECT
+    CAST('blocker' AS TEXT) AS task_role,
+    blocker.id,
+    blocker.project_id,
+    blocker.workflow_id,
+    blocker.short_id,
+    policy.reverse_pair_present,
+    policy.blocker_outgoing_count,
+    policy.blocked_incoming_count
+FROM args
+CROSS JOIN policy
+JOIN task_records AS blocker ON blocker.id = args.blocker_task_id
+UNION ALL
+SELECT
+    CAST('blocked' AS TEXT) AS task_role,
+    blocked.id,
+    blocked.project_id,
+    blocked.workflow_id,
+    blocked.short_id,
+    policy.reverse_pair_present,
+    policy.blocker_outgoing_count,
+    policy.blocked_incoming_count
+FROM args
+CROSS JOIN policy
+JOIN task_records AS blocked ON blocked.id = args.blocked_task_id
+`
+
+type GetTaskDependencyAttachSnapshotParams struct {
+	BlockerTaskID string
+	BlockedTaskID string
+}
+
+type GetTaskDependencyAttachSnapshotRow struct {
+	TaskRole             string
+	ID                   string
+	ProjectID            string
+	WorkflowID           runtimeids.WorkflowID
+	ShortID              string
+	ReversePairPresent   int64
+	BlockerOutgoingCount int64
+	BlockedIncomingCount int64
+}
+
+func (q *Queries) GetTaskDependencyAttachSnapshot(ctx context.Context, arg GetTaskDependencyAttachSnapshotParams) (metadataOperationResult0 []GetTaskDependencyAttachSnapshotRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTaskDependencyAttachSnapshot", metadataOperationErr)
+	}()
+	rows, err := q.db.QueryContext(ctx, getTaskDependencyAttachSnapshot, arg.BlockerTaskID, arg.BlockedTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTaskDependencyAttachSnapshotRow
+	for rows.Next() {
+		var i GetTaskDependencyAttachSnapshotRow
+		if err := rows.Scan(
+			&i.TaskRole,
+			&i.ID,
+			&i.ProjectID,
+			&i.WorkflowID,
+			&i.ShortID,
+			&i.ReversePairPresent,
+			&i.BlockerOutgoingCount,
+			&i.BlockedIncomingCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getTaskDependencyPairSnapshot = `-- name: GetTaskDependencyPairSnapshot :many
+SELECT
+    CAST('blocker' AS TEXT) AS task_role,
+    blocker.id,
+    blocker.project_id,
+    blocker.workflow_id,
+    blocker.short_id
+FROM task_records AS blocker
+WHERE blocker.id = ?1
+UNION ALL
+SELECT
+    CAST('blocked' AS TEXT) AS task_role,
+    blocked.id,
+    blocked.project_id,
+    blocked.workflow_id,
+    blocked.short_id
+FROM task_records AS blocked
+WHERE blocked.id = ?2
+`
+
+type GetTaskDependencyPairSnapshotParams struct {
+	BlockerTaskID string
+	BlockedTaskID string
+}
+
+type GetTaskDependencyPairSnapshotRow struct {
+	TaskRole   string
+	ID         string
+	ProjectID  string
+	WorkflowID runtimeids.WorkflowID
+	ShortID    string
+}
+
+func (q *Queries) GetTaskDependencyPairSnapshot(ctx context.Context, arg GetTaskDependencyPairSnapshotParams) (metadataOperationResult0 []GetTaskDependencyPairSnapshotRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTaskDependencyPairSnapshot", metadataOperationErr)
+	}()
+	rows, err := q.db.QueryContext(ctx, getTaskDependencyPairSnapshot, arg.BlockerTaskID, arg.BlockedTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTaskDependencyPairSnapshotRow
+	for rows.Next() {
+		var i GetTaskDependencyPairSnapshotRow
+		if err := rows.Scan(
+			&i.TaskRole,
+			&i.ID,
+			&i.ProjectID,
+			&i.WorkflowID,
+			&i.ShortID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getTaskIdentityForComment = `-- name: GetTaskIdentityForComment :one
@@ -2567,11 +3178,16 @@ type GetTaskIdentityForCommentRow struct {
 	WorkflowID runtimeids.WorkflowID
 }
 
-func (q *Queries) GetTaskIdentityForComment(ctx context.Context, commentID string) (GetTaskIdentityForCommentRow, error) {
+func (q *Queries) GetTaskIdentityForComment(ctx context.Context, commentID string) (metadataOperationResult0 GetTaskIdentityForCommentRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetTaskIdentityForCommentRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTaskIdentityForComment", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getTaskIdentityForComment, commentID)
 	var i GetTaskIdentityForCommentRow
-	err := recordQueryError(ctx, row.Scan(&i.TaskID, &i.ProjectID, &i.WorkflowID), getTaskIdentityForComment, 1)
-
+	err := row.Scan(&i.TaskID, &i.ProjectID, &i.WorkflowID)
 	return i, err
 }
 
@@ -2602,10 +3218,16 @@ type GetTaskPendingApprovalRow struct {
 	CreatedAtUnixMs           int64
 }
 
-func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (GetTaskPendingApprovalRow, error) {
+func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (metadataOperationResult0 GetTaskPendingApprovalRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetTaskPendingApprovalRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTaskPendingApproval", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getTaskPendingApproval, id)
 	var i GetTaskPendingApprovalRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.SourceTaskID,
 		&i.SourceNodeID,
@@ -2615,8 +3237,7 @@ func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (GetTas
 		&i.TransitionSnapshotJson,
 		&i.MaterializedValuesJson,
 		&i.CreatedAtUnixMs,
-	), getTaskPendingApproval, 1)
-
+	)
 	return i, err
 }
 
@@ -2632,11 +3253,16 @@ type GetTaskProjectWorkflowIDsRow struct {
 	WorkflowID runtimeids.WorkflowID
 }
 
-func (q *Queries) GetTaskProjectWorkflowIDs(ctx context.Context, taskID string) (GetTaskProjectWorkflowIDsRow, error) {
+func (q *Queries) GetTaskProjectWorkflowIDs(ctx context.Context, taskID string) (metadataOperationResult0 GetTaskProjectWorkflowIDsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetTaskProjectWorkflowIDsRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTaskProjectWorkflowIDs", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getTaskProjectWorkflowIDs, taskID)
 	var i GetTaskProjectWorkflowIDsRow
-	err := recordQueryError(ctx, row.Scan(&i.ProjectID, &i.WorkflowID), getTaskProjectWorkflowIDs, 1)
-
+	err := row.Scan(&i.ProjectID, &i.WorkflowID)
 	return i, err
 }
 
@@ -2668,10 +3294,16 @@ type GetTaskSearchSourceByDocumentIDRow struct {
 	Comment    interface{}
 }
 
-func (q *Queries) GetTaskSearchSourceByDocumentID(ctx context.Context, documentID int64) (GetTaskSearchSourceByDocumentIDRow, error) {
+func (q *Queries) GetTaskSearchSourceByDocumentID(ctx context.Context, documentID int64) (metadataOperationResult0 GetTaskSearchSourceByDocumentIDRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetTaskSearchSourceByDocumentIDRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetTaskSearchSourceByDocumentID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getTaskSearchSourceByDocumentID, documentID)
 	var i GetTaskSearchSourceByDocumentIDRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.DocumentID,
 		&i.SourceKind,
 		&i.TaskID,
@@ -2680,8 +3312,7 @@ func (q *Queries) GetTaskSearchSourceByDocumentID(ctx context.Context, documentI
 		&i.Title,
 		&i.Body,
 		&i.Comment,
-	), getTaskSearchSourceByDocumentID, 1)
-
+	)
 	return i, err
 }
 
@@ -2700,10 +3331,16 @@ WHERE id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetWorkflow(ctx context.Context, id runtimeids.WorkflowID) (Workflow, error) {
+func (q *Queries) GetWorkflow(ctx context.Context, id runtimeids.WorkflowID) (metadataOperationResult0 Workflow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return Workflow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorkflow", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorkflow, id)
 	var i Workflow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.Name,
 		&i.Description,
@@ -2712,8 +3349,7 @@ func (q *Queries) GetWorkflow(ctx context.Context, id runtimeids.WorkflowID) (Wo
 		&i.ExecutionTargetCustomRef,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getWorkflow, 1)
-
+	)
 	return i, err
 }
 
@@ -2766,10 +3402,16 @@ type GetWorkflowDeleteImpactRow struct {
 	BlockedTaskCount               int64
 }
 
-func (q *Queries) GetWorkflowDeleteImpact(ctx context.Context, workflowID runtimeids.WorkflowID) (GetWorkflowDeleteImpactRow, error) {
+func (q *Queries) GetWorkflowDeleteImpact(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 GetWorkflowDeleteImpactRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetWorkflowDeleteImpactRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorkflowDeleteImpact", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorkflowDeleteImpact, workflowID)
 	var i GetWorkflowDeleteImpactRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.WorkflowID,
 		&i.Version,
 		&i.ProjectCount,
@@ -2779,8 +3421,7 @@ func (q *Queries) GetWorkflowDeleteImpact(ctx context.Context, workflowID runtim
 		&i.CurrentNodeCount,
 		&i.PendingApprovalCount,
 		&i.BlockedTaskCount,
-	), getWorkflowDeleteImpact, 1)
-
+	)
 	return i, err
 }
 
@@ -2832,11 +3473,16 @@ type GetWorkflowEdgeParameterEditPolicyImpactRow struct {
 	PendingApprovalCount          int64
 }
 
-func (q *Queries) GetWorkflowEdgeParameterEditPolicyImpact(ctx context.Context, arg GetWorkflowEdgeParameterEditPolicyImpactParams) (GetWorkflowEdgeParameterEditPolicyImpactRow, error) {
+func (q *Queries) GetWorkflowEdgeParameterEditPolicyImpact(ctx context.Context, arg GetWorkflowEdgeParameterEditPolicyImpactParams) (metadataOperationResult0 GetWorkflowEdgeParameterEditPolicyImpactRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetWorkflowEdgeParameterEditPolicyImpactRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorkflowEdgeParameterEditPolicyImpact", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorkflowEdgeParameterEditPolicyImpact, arg.WorkflowID, arg.EdgeID)
 	var i GetWorkflowEdgeParameterEditPolicyImpactRow
-	err := recordQueryError(ctx, row.Scan(&i.ActiveCurrentNodeCount, &i.UnresolvedParallelBranchCount, &i.PendingApprovalCount), getWorkflowEdgeParameterEditPolicyImpact, 2)
-
+	err := row.Scan(&i.ActiveCurrentNodeCount, &i.UnresolvedParallelBranchCount, &i.PendingApprovalCount)
 	return i, err
 }
 
@@ -2863,11 +3509,16 @@ type GetWorkflowGraphActiveWorkPolicyImpactRow struct {
 	PendingApprovalCount   int64
 }
 
-func (q *Queries) GetWorkflowGraphActiveWorkPolicyImpact(ctx context.Context, workflowID runtimeids.WorkflowID) (GetWorkflowGraphActiveWorkPolicyImpactRow, error) {
+func (q *Queries) GetWorkflowGraphActiveWorkPolicyImpact(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 GetWorkflowGraphActiveWorkPolicyImpactRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetWorkflowGraphActiveWorkPolicyImpactRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorkflowGraphActiveWorkPolicyImpact", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorkflowGraphActiveWorkPolicyImpact, workflowID)
 	var i GetWorkflowGraphActiveWorkPolicyImpactRow
-	err := recordQueryError(ctx, row.Scan(&i.ActiveCurrentNodeCount, &i.PendingApprovalCount), getWorkflowGraphActiveWorkPolicyImpact, 1)
-
+	err := row.Scan(&i.ActiveCurrentNodeCount, &i.PendingApprovalCount)
 	return i, err
 }
 
@@ -2906,10 +3557,16 @@ type GetWorkflowNodeRow struct {
 	SortOrder              int64
 }
 
-func (q *Queries) GetWorkflowNode(ctx context.Context, id string) (GetWorkflowNodeRow, error) {
+func (q *Queries) GetWorkflowNode(ctx context.Context, id string) (metadataOperationResult0 GetWorkflowNodeRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetWorkflowNodeRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorkflowNode", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorkflowNode, id)
 	var i GetWorkflowNodeRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.WorkflowID,
 		&i.NodeKey,
@@ -2921,8 +3578,7 @@ func (q *Queries) GetWorkflowNode(ctx context.Context, id string) (GetWorkflowNo
 		&i.JoinInputProvidersJson,
 		&i.GroupID,
 		&i.SortOrder,
-	), getWorkflowNode, 1)
-
+	)
 	return i, err
 }
 
@@ -2947,17 +3603,22 @@ type GetWorkspaceBindingByIDRow struct {
 	WorkspaceRoot      string
 }
 
-func (q *Queries) GetWorkspaceBindingByID(ctx context.Context, workspaceID string) (GetWorkspaceBindingByIDRow, error) {
+func (q *Queries) GetWorkspaceBindingByID(ctx context.Context, workspaceID string) (metadataOperationResult0 GetWorkspaceBindingByIDRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetWorkspaceBindingByIDRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorkspaceBindingByID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorkspaceBindingByID, workspaceID)
 	var i GetWorkspaceBindingByIDRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ProjectID,
 		&i.ProjectDisplayName,
 		&i.ProjectKey,
 		&i.WorkspaceID,
 		&i.WorkspaceRoot,
-	), getWorkspaceBindingByID, 1)
-
+	)
 	return i, err
 }
 
@@ -2988,17 +3649,22 @@ type GetWorkspaceBindingByProjectAndCanonicalRootRow struct {
 	WorkspaceRoot      string
 }
 
-func (q *Queries) GetWorkspaceBindingByProjectAndCanonicalRoot(ctx context.Context, arg GetWorkspaceBindingByProjectAndCanonicalRootParams) (GetWorkspaceBindingByProjectAndCanonicalRootRow, error) {
+func (q *Queries) GetWorkspaceBindingByProjectAndCanonicalRoot(ctx context.Context, arg GetWorkspaceBindingByProjectAndCanonicalRootParams) (metadataOperationResult0 GetWorkspaceBindingByProjectAndCanonicalRootRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetWorkspaceBindingByProjectAndCanonicalRootRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorkspaceBindingByProjectAndCanonicalRoot", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorkspaceBindingByProjectAndCanonicalRoot, arg.ProjectID, arg.CanonicalRootPath)
 	var i GetWorkspaceBindingByProjectAndCanonicalRootRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ProjectID,
 		&i.ProjectDisplayName,
 		&i.ProjectKey,
 		&i.WorkspaceID,
 		&i.WorkspaceRoot,
-	), getWorkspaceBindingByProjectAndCanonicalRoot, 2)
-
+	)
 	return i, err
 }
 
@@ -3016,10 +3682,16 @@ WHERE id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
+func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (metadataOperationResult0 Workspace, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return Workspace{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorkspaceByID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorkspaceByID, id)
 	var i Workspace
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.CanonicalRootPath,
@@ -3027,8 +3699,7 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 		&i.ChatDraftJson,
-	), getWorkspaceByID, 1)
-
+	)
 	return i, err
 }
 
@@ -3040,11 +3711,16 @@ WHERE id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetWorkspaceChatDraft(ctx context.Context, id string) (sql.NullString, error) {
+func (q *Queries) GetWorkspaceChatDraft(ctx context.Context, id string) (metadataOperationResult0 sql.NullString, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return sql.NullString{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorkspaceChatDraft", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorkspaceChatDraft, id)
 	var chat_draft_json sql.NullString
-	err := recordQueryError(ctx, row.Scan(&chat_draft_json), getWorkspaceChatDraft, 1)
-
+	err := row.Scan(&chat_draft_json)
 	return chat_draft_json, err
 }
 
@@ -3081,10 +3757,16 @@ type GetWorktreeByCanonicalRootRow struct {
 	UpdatedAtUnixMs       int64
 }
 
-func (q *Queries) GetWorktreeByCanonicalRoot(ctx context.Context, canonicalRootPath string) (GetWorktreeByCanonicalRootRow, error) {
+func (q *Queries) GetWorktreeByCanonicalRoot(ctx context.Context, canonicalRootPath string) (metadataOperationResult0 GetWorktreeByCanonicalRootRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetWorktreeByCanonicalRootRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorktreeByCanonicalRoot", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorktreeByCanonicalRoot, canonicalRootPath)
 	var i GetWorktreeByCanonicalRootRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
 		&i.CanonicalRootPath,
@@ -3096,8 +3778,7 @@ func (q *Queries) GetWorktreeByCanonicalRoot(ctx context.Context, canonicalRootP
 		&i.CreationBaseCommitOid,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getWorktreeByCanonicalRoot, 1)
-
+	)
 	return i, err
 }
 
@@ -3134,10 +3815,16 @@ type GetWorktreeByIDRow struct {
 	UpdatedAtUnixMs       int64
 }
 
-func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeByIDRow, error) {
+func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (metadataOperationResult0 GetWorktreeByIDRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return GetWorktreeByIDRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "GetWorktreeByID", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, getWorktreeByID, id)
 	var i GetWorktreeByIDRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
 		&i.CanonicalRootPath,
@@ -3149,8 +3836,7 @@ func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeBy
 		&i.CreationBaseCommitOid,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getWorktreeByID, 1)
-
+	)
 	return i, err
 }
 
@@ -3171,11 +3857,16 @@ type HasHistoricalBranchTaskSessionAssociationForNodeParams struct {
 	TransitionBranchKey sql.NullString
 }
 
-func (q *Queries) HasHistoricalBranchTaskSessionAssociationForNode(ctx context.Context, arg HasHistoricalBranchTaskSessionAssociationForNodeParams) (bool, error) {
+func (q *Queries) HasHistoricalBranchTaskSessionAssociationForNode(ctx context.Context, arg HasHistoricalBranchTaskSessionAssociationForNodeParams) (metadataOperationResult0 bool, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return false, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "HasHistoricalBranchTaskSessionAssociationForNode", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, hasHistoricalBranchTaskSessionAssociationForNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
 	var has_historical bool
-	err := recordQueryError(ctx, row.Scan(&has_historical), hasHistoricalBranchTaskSessionAssociationForNode, 3)
-
+	err := row.Scan(&has_historical)
 	return has_historical, err
 }
 
@@ -3195,11 +3886,16 @@ type HasHistoricalSerialTaskSessionAssociationForNodeParams struct {
 	NodeID string
 }
 
-func (q *Queries) HasHistoricalSerialTaskSessionAssociationForNode(ctx context.Context, arg HasHistoricalSerialTaskSessionAssociationForNodeParams) (bool, error) {
+func (q *Queries) HasHistoricalSerialTaskSessionAssociationForNode(ctx context.Context, arg HasHistoricalSerialTaskSessionAssociationForNodeParams) (metadataOperationResult0 bool, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return false, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "HasHistoricalSerialTaskSessionAssociationForNode", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, hasHistoricalSerialTaskSessionAssociationForNode, arg.TaskID, arg.NodeID)
 	var has_historical bool
-	err := recordQueryError(ctx, row.Scan(&has_historical), hasHistoricalSerialTaskSessionAssociationForNode, 2)
-
+	err := row.Scan(&has_historical)
 	return has_historical, err
 }
 
@@ -3222,11 +3918,16 @@ type HasTaskPendingApprovalForCurrentNodeParams struct {
 	TransitionBranchKey interface{}
 }
 
-func (q *Queries) HasTaskPendingApprovalForCurrentNode(ctx context.Context, arg HasTaskPendingApprovalForCurrentNodeParams) (bool, error) {
+func (q *Queries) HasTaskPendingApprovalForCurrentNode(ctx context.Context, arg HasTaskPendingApprovalForCurrentNodeParams) (metadataOperationResult0 bool, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return false, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "HasTaskPendingApprovalForCurrentNode", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, hasTaskPendingApprovalForCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
 	var exists bool
-	err := recordQueryError(ctx, row.Scan(&exists), hasTaskPendingApprovalForCurrentNode, 3)
-
+	err := row.Scan(&exists)
 	return exists, err
 }
 
@@ -3244,11 +3945,16 @@ type IncrementWorkflowVersionParams struct {
 	ID              runtimeids.WorkflowID
 }
 
-func (q *Queries) IncrementWorkflowVersion(ctx context.Context, arg IncrementWorkflowVersionParams) (int64, error) {
+func (q *Queries) IncrementWorkflowVersion(ctx context.Context, arg IncrementWorkflowVersionParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "IncrementWorkflowVersion", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, incrementWorkflowVersion, arg.UpdatedAtUnixMs, arg.ID)
 	var version int64
-	err := recordQueryError(ctx, row.Scan(&version), incrementWorkflowVersion, 2)
-
+	err := row.Scan(&version)
 	return version, err
 }
 
@@ -3294,7 +4000,13 @@ type InsertProjectLabelRow struct {
 	Ordinal   int64
 }
 
-func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabelParams) (InsertProjectLabelRow, error) {
+func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabelParams) (metadataOperationResult0 InsertProjectLabelRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return InsertProjectLabelRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertProjectLabel", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, insertProjectLabel,
 		arg.ID,
 		arg.ProjectID,
@@ -3305,17 +4017,16 @@ func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabel
 		arg.CatalogLimit,
 	)
 	var i InsertProjectLabelRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.Name,
 		&i.Ordinal,
-	), insertProjectLabel, 7)
-
+	)
 	return i, err
 }
 
-const insertProjectWorkflowLink = `-- name: InsertProjectWorkflowLink :exec
+const insertProjectWorkflowLink = `-- name: InsertProjectWorkflowLink :execrows
 INSERT INTO project_workflow_links (
     id,
     project_id,
@@ -3329,6 +4040,7 @@ INSERT INTO project_workflow_links (
     ?4,
     ?5
 )
+ON CONFLICT(project_id, workflow_id) DO NOTHING
 `
 
 type InsertProjectWorkflowLinkParams struct {
@@ -3339,17 +4051,24 @@ type InsertProjectWorkflowLinkParams struct {
 	UpdatedAtUnixMs int64
 }
 
-func (q *Queries) InsertProjectWorkflowLink(ctx context.Context, arg InsertProjectWorkflowLinkParams) error {
-	_, err := q.db.ExecContext(ctx, insertProjectWorkflowLink,
+func (q *Queries) InsertProjectWorkflowLink(ctx context.Context, arg InsertProjectWorkflowLinkParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertProjectWorkflowLink", metadataOperationErr)
+	}()
+	result, err := q.db.ExecContext(ctx, insertProjectWorkflowLink,
 		arg.ID,
 		arg.ProjectID,
 		arg.WorkflowID,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertProjectWorkflowLink, 5)
-
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertSessionPromptHistoryEntry = `-- name: InsertSessionPromptHistoryEntry :execrows
@@ -3374,15 +4093,19 @@ type InsertSessionPromptHistoryEntryParams struct {
 	CreatedAtUnixMs int64
 }
 
-func (q *Queries) InsertSessionPromptHistoryEntry(ctx context.Context, arg InsertSessionPromptHistoryEntryParams) (int64, error) {
+func (q *Queries) InsertSessionPromptHistoryEntry(ctx context.Context, arg InsertSessionPromptHistoryEntryParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertSessionPromptHistoryEntry", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, insertSessionPromptHistoryEntry,
 		arg.SessionID,
 		arg.SourceID,
 		arg.Text,
 		arg.CreatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertSessionPromptHistoryEntry, 4)
-
 	if err != nil {
 		return 0, err
 	}
@@ -3440,7 +4163,13 @@ type InsertTaskParams struct {
 	MetadataJson                    string
 }
 
-func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) error {
+func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertTask", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertTask,
 		arg.ID,
 		arg.ProjectWorkflowLinkID,
@@ -3457,8 +4186,6 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) error {
 		arg.UpdatedAtUnixMs,
 		arg.MetadataJson,
 	)
-	err = recordQueryError(ctx, err, insertTask, 14)
-
 	return err
 }
 
@@ -3467,9 +4194,14 @@ INSERT INTO task_active_fanouts (task_id)
 VALUES (?1)
 `
 
-func (q *Queries) InsertTaskActiveFanout(ctx context.Context, taskID string) error {
+func (q *Queries) InsertTaskActiveFanout(ctx context.Context, taskID string) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertTaskActiveFanout", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertTaskActiveFanout, taskID)
-	err = recordQueryError(ctx, err, insertTaskActiveFanout, 1)
 	return err
 }
 
@@ -3501,7 +4233,13 @@ type InsertTaskActiveFanoutBranchParams struct {
 	LegacyMaterialized          int64
 }
 
-func (q *Queries) InsertTaskActiveFanoutBranch(ctx context.Context, arg InsertTaskActiveFanoutBranchParams) error {
+func (q *Queries) InsertTaskActiveFanoutBranch(ctx context.Context, arg InsertTaskActiveFanoutBranchParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertTaskActiveFanoutBranch", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertTaskActiveFanoutBranch,
 		arg.TaskID,
 		arg.TransitionBranchKey,
@@ -3509,8 +4247,6 @@ func (q *Queries) InsertTaskActiveFanoutBranch(ctx context.Context, arg InsertTa
 		arg.ContinuationSourceSessionID,
 		arg.LegacyMaterialized,
 	)
-	err = recordQueryError(ctx, err, insertTaskActiveFanoutBranch, 5)
-
 	return err
 }
 
@@ -3544,7 +4280,13 @@ type InsertTaskCommentParams struct {
 	UpdatedAtUnixMs int64
 }
 
-func (q *Queries) InsertTaskComment(ctx context.Context, arg InsertTaskCommentParams) error {
+func (q *Queries) InsertTaskComment(ctx context.Context, arg InsertTaskCommentParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertTaskComment", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertTaskComment,
 		arg.ID,
 		arg.TaskID,
@@ -3554,8 +4296,6 @@ func (q *Queries) InsertTaskComment(ctx context.Context, arg InsertTaskCommentPa
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertTaskComment, 7)
-
 	return err
 }
 
@@ -3622,7 +4362,13 @@ type InsertTaskCurrentNodeParams struct {
 	AssigneeOrigin              sql.NullString
 }
 
-func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurrentNodeParams) error {
+func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurrentNodeParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertTaskCurrentNode", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertTaskCurrentNode,
 		arg.TaskID,
 		arg.NodeID,
@@ -3642,14 +4388,13 @@ func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurre
 		arg.EffectiveThinking,
 		arg.AssigneeOrigin,
 	)
-	err = recordQueryError(ctx, err, insertTaskCurrentNode, 17)
-
 	return err
 }
 
-const insertTaskDependency = `-- name: InsertTaskDependency :exec
+const insertTaskDependency = `-- name: InsertTaskDependency :execrows
 INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
 VALUES (?1, ?2)
+ON CONFLICT(blocker_task_id, blocked_task_id) DO NOTHING
 `
 
 type InsertTaskDependencyParams struct {
@@ -3657,10 +4402,18 @@ type InsertTaskDependencyParams struct {
 	BlockedTaskID string
 }
 
-func (q *Queries) InsertTaskDependency(ctx context.Context, arg InsertTaskDependencyParams) error {
-	_, err := q.db.ExecContext(ctx, insertTaskDependency, arg.BlockerTaskID, arg.BlockedTaskID)
-	err = recordQueryError(ctx, err, insertTaskDependency, 2)
-	return err
+func (q *Queries) InsertTaskDependency(ctx context.Context, arg InsertTaskDependencyParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertTaskDependency", metadataOperationErr)
+	}()
+	result, err := q.db.ExecContext(ctx, insertTaskDependency, arg.BlockerTaskID, arg.BlockedTaskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertTaskLabelAssignment = `-- name: InsertTaskLabelAssignment :exec
@@ -3674,9 +4427,14 @@ type InsertTaskLabelAssignmentParams struct {
 	LabelID string
 }
 
-func (q *Queries) InsertTaskLabelAssignment(ctx context.Context, arg InsertTaskLabelAssignmentParams) error {
+func (q *Queries) InsertTaskLabelAssignment(ctx context.Context, arg InsertTaskLabelAssignmentParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertTaskLabelAssignment", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertTaskLabelAssignment, arg.TaskID, arg.LabelID)
-	err = recordQueryError(ctx, err, insertTaskLabelAssignment, 2)
 	return err
 }
 
@@ -3716,7 +4474,13 @@ type InsertTaskPendingApprovalParams struct {
 	CreatedAtUnixMs           int64
 }
 
-func (q *Queries) InsertTaskPendingApproval(ctx context.Context, arg InsertTaskPendingApprovalParams) error {
+func (q *Queries) InsertTaskPendingApproval(ctx context.Context, arg InsertTaskPendingApprovalParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertTaskPendingApproval", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertTaskPendingApproval,
 		arg.ID,
 		arg.SourceTaskID,
@@ -3728,8 +4492,6 @@ func (q *Queries) InsertTaskPendingApproval(ctx context.Context, arg InsertTaskP
 		arg.MaterializedValuesJson,
 		arg.CreatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertTaskPendingApproval, 9)
-
 	return err
 }
 
@@ -3757,7 +4519,13 @@ type InsertTaskPendingApprovalBranchParams struct {
 	ContextSourceResolutionJson    string
 }
 
-func (q *Queries) InsertTaskPendingApprovalBranch(ctx context.Context, arg InsertTaskPendingApprovalBranchParams) error {
+func (q *Queries) InsertTaskPendingApprovalBranch(ctx context.Context, arg InsertTaskPendingApprovalBranchParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertTaskPendingApprovalBranch", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertTaskPendingApprovalBranch,
 		arg.ApprovalID,
 		arg.TransitionBranchKey,
@@ -3765,8 +4533,6 @@ func (q *Queries) InsertTaskPendingApprovalBranch(ctx context.Context, arg Inser
 		arg.EffectiveEdgeConfigurationJson,
 		arg.ContextSourceResolutionJson,
 	)
-	err = recordQueryError(ctx, err, insertTaskPendingApprovalBranch, 5)
-
 	return err
 }
 
@@ -3803,7 +4569,13 @@ type InsertWorkflowParams struct {
 	UpdatedAtUnixMs          int64
 }
 
-func (q *Queries) InsertWorkflow(ctx context.Context, arg InsertWorkflowParams) error {
+func (q *Queries) InsertWorkflow(ctx context.Context, arg InsertWorkflowParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertWorkflow", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertWorkflow,
 		arg.ID,
 		arg.Name,
@@ -3814,8 +4586,6 @@ func (q *Queries) InsertWorkflow(ctx context.Context, arg InsertWorkflowParams) 
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertWorkflow, 8)
-
 	return err
 }
 
@@ -3864,7 +4634,13 @@ type InsertWorkflowNodeParams struct {
 	SortOrder              int64
 }
 
-func (q *Queries) InsertWorkflowNode(ctx context.Context, arg InsertWorkflowNodeParams) error {
+func (q *Queries) InsertWorkflowNode(ctx context.Context, arg InsertWorkflowNodeParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertWorkflowNode", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, insertWorkflowNode,
 		arg.ID,
 		arg.WorkflowID,
@@ -3878,8 +4654,6 @@ func (q *Queries) InsertWorkflowNode(ctx context.Context, arg InsertWorkflowNode
 		arg.GroupID,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, insertWorkflowNode, 11)
-
 	return err
 }
 
@@ -3911,7 +4685,13 @@ type InsertWorkspaceBindingParams struct {
 	UpdatedAtUnixMs   int64
 }
 
-func (q *Queries) InsertWorkspaceBinding(ctx context.Context, arg InsertWorkspaceBindingParams) (int64, error) {
+func (q *Queries) InsertWorkspaceBinding(ctx context.Context, arg InsertWorkspaceBindingParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InsertWorkspaceBinding", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, insertWorkspaceBinding,
 		arg.ID,
 		arg.ProjectID,
@@ -3920,8 +4700,6 @@ func (q *Queries) InsertWorkspaceBinding(ctx context.Context, arg InsertWorkspac
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertWorkspaceBinding, 6)
-
 	if err != nil {
 		return 0, err
 	}
@@ -3949,7 +4727,13 @@ type InterruptBranchAdmittedCurrentNodeParams struct {
 	TransitionBranchKey    sql.NullString
 }
 
-func (q *Queries) InterruptBranchAdmittedCurrentNode(ctx context.Context, arg InterruptBranchAdmittedCurrentNodeParams) (int64, error) {
+func (q *Queries) InterruptBranchAdmittedCurrentNode(ctx context.Context, arg InterruptBranchAdmittedCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InterruptBranchAdmittedCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, interruptBranchAdmittedCurrentNode,
 		arg.InterruptionReason,
 		arg.InterruptionDetailJson,
@@ -3958,8 +4742,6 @@ func (q *Queries) InterruptBranchAdmittedCurrentNode(ctx context.Context, arg In
 		arg.NodeID,
 		arg.TransitionBranchKey,
 	)
-	err = recordQueryError(ctx, err, interruptBranchAdmittedCurrentNode, 6)
-
 	if err != nil {
 		return 0, err
 	}
@@ -3987,7 +4769,13 @@ type InterruptBranchCurrentNodeParams struct {
 	TransitionBranchKey    sql.NullString
 }
 
-func (q *Queries) InterruptBranchCurrentNode(ctx context.Context, arg InterruptBranchCurrentNodeParams) (int64, error) {
+func (q *Queries) InterruptBranchCurrentNode(ctx context.Context, arg InterruptBranchCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InterruptBranchCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, interruptBranchCurrentNode,
 		arg.InterruptionReason,
 		arg.InterruptionDetailJson,
@@ -3996,8 +4784,6 @@ func (q *Queries) InterruptBranchCurrentNode(ctx context.Context, arg InterruptB
 		arg.NodeID,
 		arg.TransitionBranchKey,
 	)
-	err = recordQueryError(ctx, err, interruptBranchCurrentNode, 6)
-
 	if err != nil {
 		return 0, err
 	}
@@ -4024,7 +4810,13 @@ type InterruptSerialAdmittedCurrentNodeParams struct {
 	NodeID                 string
 }
 
-func (q *Queries) InterruptSerialAdmittedCurrentNode(ctx context.Context, arg InterruptSerialAdmittedCurrentNodeParams) (int64, error) {
+func (q *Queries) InterruptSerialAdmittedCurrentNode(ctx context.Context, arg InterruptSerialAdmittedCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InterruptSerialAdmittedCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, interruptSerialAdmittedCurrentNode,
 		arg.InterruptionReason,
 		arg.InterruptionDetailJson,
@@ -4032,8 +4824,6 @@ func (q *Queries) InterruptSerialAdmittedCurrentNode(ctx context.Context, arg In
 		arg.TaskID,
 		arg.NodeID,
 	)
-	err = recordQueryError(ctx, err, interruptSerialAdmittedCurrentNode, 5)
-
 	if err != nil {
 		return 0, err
 	}
@@ -4060,7 +4850,13 @@ type InterruptSerialCurrentNodeParams struct {
 	NodeID                 string
 }
 
-func (q *Queries) InterruptSerialCurrentNode(ctx context.Context, arg InterruptSerialCurrentNodeParams) (int64, error) {
+func (q *Queries) InterruptSerialCurrentNode(ctx context.Context, arg InterruptSerialCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "InterruptSerialCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, interruptSerialCurrentNode,
 		arg.InterruptionReason,
 		arg.InterruptionDetailJson,
@@ -4068,8 +4864,6 @@ func (q *Queries) InterruptSerialCurrentNode(ctx context.Context, arg InterruptS
 		arg.TaskID,
 		arg.NodeID,
 	)
-	err = recordQueryError(ctx, err, interruptSerialCurrentNode, 5)
-
 	if err != nil {
 		return 0, err
 	}
@@ -4117,9 +4911,14 @@ type ListActiveWorkflowTaskSessionsRow struct {
 	CreatedAtUnixMs  int64
 }
 
-func (q *Queries) ListActiveWorkflowTaskSessions(ctx context.Context, arg ListActiveWorkflowTaskSessionsParams) ([]ListActiveWorkflowTaskSessionsRow, error) {
+func (q *Queries) ListActiveWorkflowTaskSessions(ctx context.Context, arg ListActiveWorkflowTaskSessionsParams) (metadataOperationResult0 []ListActiveWorkflowTaskSessionsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListActiveWorkflowTaskSessions", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listActiveWorkflowTaskSessions, arg.SessionIdsJson, arg.TaskID)
-	err = recordQueryError(ctx, err, listActiveWorkflowTaskSessions, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -4127,21 +4926,21 @@ func (q *Queries) ListActiveWorkflowTaskSessions(ctx context.Context, arg ListAc
 	var items []ListActiveWorkflowTaskSessionsRow
 	for rows.Next() {
 		var i ListActiveWorkflowTaskSessionsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.SessionID,
 			&i.SessionName,
 			&i.NodeName,
 			&i.ContinuationJson,
 			&i.CreatedAtUnixMs,
-		), listActiveWorkflowTaskSessions, 2); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listActiveWorkflowTaskSessions, 2); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listActiveWorkflowTaskSessions, 2); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4262,7 +5061,13 @@ type ListBoardColumnTaskCountsRow struct {
 	TaskCount int64
 }
 
-func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardColumnTaskCountsParams) ([]ListBoardColumnTaskCountsRow, error) {
+func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardColumnTaskCountsParams) (metadataOperationResult0 []ListBoardColumnTaskCountsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListBoardColumnTaskCounts", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listBoardColumnTaskCounts,
 		arg.ExcludedLabelIdsJson,
 		arg.LabelFilterKind,
@@ -4272,8 +5077,6 @@ func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardCo
 		arg.ProjectID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, listBoardColumnTaskCounts, 7)
-
 	if err != nil {
 		return nil, err
 	}
@@ -4281,15 +5084,15 @@ func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardCo
 	var items []ListBoardColumnTaskCountsRow
 	for rows.Next() {
 		var i ListBoardColumnTaskCountsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.NodeID, &i.TaskCount), listBoardColumnTaskCounts, 7); err != nil {
+		if err := rows.Scan(&i.NodeID, &i.TaskCount); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardColumnTaskCounts, 7); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardColumnTaskCounts, 7); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4550,7 +5353,13 @@ type ListBoardNodeTasksRow struct {
 	DependencyTotalCount        sql.NullInt64
 }
 
-func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasksParams) ([]ListBoardNodeTasksRow, error) {
+func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasksParams) (metadataOperationResult0 []ListBoardNodeTasksRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListBoardNodeTasks", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listBoardNodeTasks,
 		arg.ProjectID,
 		arg.WorkflowID,
@@ -4565,8 +5374,6 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		arg.OffsetRows,
 		arg.LimitRows,
 	)
-	err = recordQueryError(ctx, err, listBoardNodeTasks, 12)
-
 	if err != nil {
 		return nil, err
 	}
@@ -4574,7 +5381,7 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 	var items []ListBoardNodeTasksRow
 	for rows.Next() {
 		var i ListBoardNodeTasksRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
@@ -4597,15 +5404,15 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 			&i.MetadataJson,
 			&i.DependencySatisfiedCount,
 			&i.DependencyTotalCount,
-		), listBoardNodeTasks, 12); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasks, 12); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 12); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4661,15 +5468,19 @@ type ListIdleWorkflowTaskSessionsRow struct {
 	CreatedAtUnixMs  int64
 }
 
-func (q *Queries) ListIdleWorkflowTaskSessions(ctx context.Context, arg ListIdleWorkflowTaskSessionsParams) ([]ListIdleWorkflowTaskSessionsRow, error) {
+func (q *Queries) ListIdleWorkflowTaskSessions(ctx context.Context, arg ListIdleWorkflowTaskSessionsParams) (metadataOperationResult0 []ListIdleWorkflowTaskSessionsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListIdleWorkflowTaskSessions", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listIdleWorkflowTaskSessions,
 		arg.TaskID,
 		arg.ExcludedSessionIdsJson,
 		arg.PageOffset,
 		arg.PageLimit,
 	)
-	err = recordQueryError(ctx, err, listIdleWorkflowTaskSessions, 4)
-
 	if err != nil {
 		return nil, err
 	}
@@ -4677,21 +5488,21 @@ func (q *Queries) ListIdleWorkflowTaskSessions(ctx context.Context, arg ListIdle
 	var items []ListIdleWorkflowTaskSessionsRow
 	for rows.Next() {
 		var i ListIdleWorkflowTaskSessionsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.SessionID,
 			&i.SessionName,
 			&i.NodeName,
 			&i.ContinuationJson,
 			&i.CreatedAtUnixMs,
-		), listIdleWorkflowTaskSessions, 4); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listIdleWorkflowTaskSessions, 4); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listIdleWorkflowTaskSessions, 4); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4704,9 +5515,14 @@ WHERE wt.managed <> 0
 ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC
 `
 
-func (q *Queries) ListManagedWorktreeRoots(ctx context.Context) ([]string, error) {
+func (q *Queries) ListManagedWorktreeRoots(ctx context.Context) (metadataOperationResult0 []string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListManagedWorktreeRoots", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listManagedWorktreeRoots)
-	err = recordQueryError(ctx, err, listManagedWorktreeRoots, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -4714,15 +5530,15 @@ func (q *Queries) ListManagedWorktreeRoots(ctx context.Context) ([]string, error
 	var items []string
 	for rows.Next() {
 		var canonical_root_path string
-		if err := recordQueryError(ctx, rows.Scan(&canonical_root_path), listManagedWorktreeRoots, 0); err != nil {
+		if err := rows.Scan(&canonical_root_path); err != nil {
 			return nil, err
 		}
 		items = append(items, canonical_root_path)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listManagedWorktreeRoots, 0); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listManagedWorktreeRoots, 0); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4752,9 +5568,14 @@ type ListMetadataSchemaDefinitionsRow struct {
 	Ddl        string
 }
 
-func (q *Queries) ListMetadataSchemaDefinitions(ctx context.Context) ([]ListMetadataSchemaDefinitionsRow, error) {
+func (q *Queries) ListMetadataSchemaDefinitions(ctx context.Context) (metadataOperationResult0 []ListMetadataSchemaDefinitionsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListMetadataSchemaDefinitions", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listMetadataSchemaDefinitions)
-	err = recordQueryError(ctx, err, listMetadataSchemaDefinitions, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -4762,15 +5583,15 @@ func (q *Queries) ListMetadataSchemaDefinitions(ctx context.Context) ([]ListMeta
 	var items []ListMetadataSchemaDefinitionsRow
 	for rows.Next() {
 		var i ListMetadataSchemaDefinitionsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ObjectKind, &i.ObjectName, &i.Ddl), listMetadataSchemaDefinitions, 0); err != nil {
+		if err := rows.Scan(&i.ObjectKind, &i.ObjectName, &i.Ddl); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listMetadataSchemaDefinitions, 0); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listMetadataSchemaDefinitions, 0); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4844,9 +5665,14 @@ type ListProjectHomeSummariesRow struct {
 	WorkflowCount                   int64
 }
 
-func (q *Queries) ListProjectHomeSummaries(ctx context.Context, arg ListProjectHomeSummariesParams) ([]ListProjectHomeSummariesRow, error) {
+func (q *Queries) ListProjectHomeSummaries(ctx context.Context, arg ListProjectHomeSummariesParams) (metadataOperationResult0 []ListProjectHomeSummariesRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectHomeSummaries", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectHomeSummaries, arg.ProjectID, arg.OffsetRows, arg.LimitRows)
-	err = recordQueryError(ctx, err, listProjectHomeSummaries, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -4854,7 +5680,7 @@ func (q *Queries) ListProjectHomeSummaries(ctx context.Context, arg ListProjectH
 	var items []ListProjectHomeSummariesRow
 	for rows.Next() {
 		var i ListProjectHomeSummariesRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ProjectID,
 			&i.ProjectKey,
 			&i.DisplayName,
@@ -4868,15 +5694,15 @@ func (q *Queries) ListProjectHomeSummaries(ctx context.Context, arg ListProjectH
 			&i.TaskCount,
 			&i.AttentionCount,
 			&i.WorkflowCount,
-		), listProjectHomeSummaries, 3); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectHomeSummaries, 3); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectHomeSummaries, 3); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4897,9 +5723,14 @@ type ListProjectKeyRowsRow struct {
 	ProjectKey  string
 }
 
-func (q *Queries) ListProjectKeyRows(ctx context.Context) ([]ListProjectKeyRowsRow, error) {
+func (q *Queries) ListProjectKeyRows(ctx context.Context) (metadataOperationResult0 []ListProjectKeyRowsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectKeyRows", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectKeyRows)
-	err = recordQueryError(ctx, err, listProjectKeyRows, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -4907,15 +5738,15 @@ func (q *Queries) ListProjectKeyRows(ctx context.Context) ([]ListProjectKeyRowsR
 	var items []ListProjectKeyRowsRow
 	for rows.Next() {
 		var i ListProjectKeyRowsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.DisplayName, &i.ProjectKey), listProjectKeyRows, 0); err != nil {
+		if err := rows.Scan(&i.ID, &i.DisplayName, &i.ProjectKey); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectKeyRows, 0); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectKeyRows, 0); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4936,9 +5767,14 @@ type ListProjectLabelsRow struct {
 	Ordinal   int64
 }
 
-func (q *Queries) ListProjectLabels(ctx context.Context, projectID string) ([]ListProjectLabelsRow, error) {
+func (q *Queries) ListProjectLabels(ctx context.Context, projectID string) (metadataOperationResult0 []ListProjectLabelsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectLabels", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectLabels, projectID)
-	err = recordQueryError(ctx, err, listProjectLabels, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -4946,20 +5782,20 @@ func (q *Queries) ListProjectLabels(ctx context.Context, projectID string) ([]Li
 	var items []ListProjectLabelsRow
 	for rows.Next() {
 		var i ListProjectLabelsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.Name,
 			&i.Ordinal,
-		), listProjectLabels, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectLabels, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectLabels, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4979,7 +5815,13 @@ type ListProjectLabelsByIDsRow struct {
 	Ordinal   int64
 }
 
-func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string) ([]ListProjectLabelsByIDsRow, error) {
+func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string) (metadataOperationResult0 []ListProjectLabelsByIDsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectLabelsByIDs", metadataOperationErr)
+	}()
 	query := listProjectLabelsByIDs
 	var queryParams []interface{}
 	if len(labelIds) > 0 {
@@ -4991,7 +5833,6 @@ func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string)
 		query = strings.Replace(query, "/*SLICE:label_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -4999,20 +5840,20 @@ func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string)
 	var items []ListProjectLabelsByIDsRow
 	for rows.Next() {
 		var i ListProjectLabelsByIDsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.Name,
 			&i.Ordinal,
-		), query, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5025,9 +5866,14 @@ WHERE project_id = ?1
 ORDER BY rowid ASC
 `
 
-func (q *Queries) ListProjectSessionIDs(ctx context.Context, projectID string) ([]string, error) {
+func (q *Queries) ListProjectSessionIDs(ctx context.Context, projectID string) (metadataOperationResult0 []string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectSessionIDs", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectSessionIDs, projectID)
-	err = recordQueryError(ctx, err, listProjectSessionIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5035,15 +5881,15 @@ func (q *Queries) ListProjectSessionIDs(ctx context.Context, projectID string) (
 	var items []string
 	for rows.Next() {
 		var id string
-		if err := recordQueryError(ctx, rows.Scan(&id), listProjectSessionIDs, 1); err != nil {
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectSessionIDs, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectSessionIDs, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5055,9 +5901,14 @@ FROM task_records
 WHERE project_id = ?1
 `
 
-func (q *Queries) ListProjectTaskIDs(ctx context.Context, projectID string) ([]string, error) {
+func (q *Queries) ListProjectTaskIDs(ctx context.Context, projectID string) (metadataOperationResult0 []string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectTaskIDs", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectTaskIDs, projectID)
-	err = recordQueryError(ctx, err, listProjectTaskIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5065,15 +5916,15 @@ func (q *Queries) ListProjectTaskIDs(ctx context.Context, projectID string) ([]s
 	var items []string
 	for rows.Next() {
 		var id string
-		if err := recordQueryError(ctx, rows.Scan(&id), listProjectTaskIDs, 1); err != nil {
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectTaskIDs, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectTaskIDs, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5101,9 +5952,14 @@ type ListProjectWorkflowLinkTaskReferencesRow struct {
 	Title   string
 }
 
-func (q *Queries) ListProjectWorkflowLinkTaskReferences(ctx context.Context, arg ListProjectWorkflowLinkTaskReferencesParams) ([]ListProjectWorkflowLinkTaskReferencesRow, error) {
+func (q *Queries) ListProjectWorkflowLinkTaskReferences(ctx context.Context, arg ListProjectWorkflowLinkTaskReferencesParams) (metadataOperationResult0 []ListProjectWorkflowLinkTaskReferencesRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectWorkflowLinkTaskReferences", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectWorkflowLinkTaskReferences, arg.ProjectWorkflowLinkID, arg.Limit)
-	err = recordQueryError(ctx, err, listProjectWorkflowLinkTaskReferences, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -5111,15 +5967,15 @@ func (q *Queries) ListProjectWorkflowLinkTaskReferences(ctx context.Context, arg
 	var items []ListProjectWorkflowLinkTaskReferencesRow
 	for rows.Next() {
 		var i ListProjectWorkflowLinkTaskReferencesRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.ShortID, &i.Title), listProjectWorkflowLinkTaskReferences, 2); err != nil {
+		if err := rows.Scan(&i.ID, &i.ShortID, &i.Title); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkflowLinkTaskReferences, 2); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkflowLinkTaskReferences, 2); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5138,9 +5994,14 @@ WHERE project_id = ?1
 ORDER BY is_default DESC, created_at_unix_ms ASC, id ASC
 `
 
-func (q *Queries) ListProjectWorkflowLinks(ctx context.Context, projectID string) ([]ProjectWorkflowLinkRecord, error) {
+func (q *Queries) ListProjectWorkflowLinks(ctx context.Context, projectID string) (metadataOperationResult0 []ProjectWorkflowLinkRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectWorkflowLinks", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectWorkflowLinks, projectID)
-	err = recordQueryError(ctx, err, listProjectWorkflowLinks, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5148,22 +6009,22 @@ func (q *Queries) ListProjectWorkflowLinks(ctx context.Context, projectID string
 	var items []ProjectWorkflowLinkRecord
 	for rows.Next() {
 		var i ProjectWorkflowLinkRecord
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.WorkflowID,
 			&i.IsDefault,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		), listProjectWorkflowLinks, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkflowLinks, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkflowLinks, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5183,9 +6044,14 @@ ORDER BY created_at_unix_ms ASC, id ASC
 LIMIT 2
 `
 
-func (q *Queries) ListProjectWorkflowLinksForTaskSelection(ctx context.Context, projectID string) ([]ProjectWorkflowLinkRecord, error) {
+func (q *Queries) ListProjectWorkflowLinksForTaskSelection(ctx context.Context, projectID string) (metadataOperationResult0 []ProjectWorkflowLinkRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectWorkflowLinksForTaskSelection", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectWorkflowLinksForTaskSelection, projectID)
-	err = recordQueryError(ctx, err, listProjectWorkflowLinksForTaskSelection, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5193,22 +6059,22 @@ func (q *Queries) ListProjectWorkflowLinksForTaskSelection(ctx context.Context, 
 	var items []ProjectWorkflowLinkRecord
 	for rows.Next() {
 		var i ProjectWorkflowLinkRecord
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.WorkflowID,
 			&i.IsDefault,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		), listProjectWorkflowLinksForTaskSelection, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkflowLinksForTaskSelection, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkflowLinksForTaskSelection, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5229,9 +6095,14 @@ type ListProjectWorkflowTaskActivityRow struct {
 	LatestUpdatedAtUnixMs int64
 }
 
-func (q *Queries) ListProjectWorkflowTaskActivity(ctx context.Context, projectID string) ([]ListProjectWorkflowTaskActivityRow, error) {
+func (q *Queries) ListProjectWorkflowTaskActivity(ctx context.Context, projectID string) (metadataOperationResult0 []ListProjectWorkflowTaskActivityRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectWorkflowTaskActivity", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectWorkflowTaskActivity, projectID)
-	err = recordQueryError(ctx, err, listProjectWorkflowTaskActivity, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5239,15 +6110,15 @@ func (q *Queries) ListProjectWorkflowTaskActivity(ctx context.Context, projectID
 	var items []ListProjectWorkflowTaskActivityRow
 	for rows.Next() {
 		var i ListProjectWorkflowTaskActivityRow
-		if err := recordQueryError(ctx, rows.Scan(&i.WorkflowID, &i.LatestUpdatedAtUnixMs), listProjectWorkflowTaskActivity, 1); err != nil {
+		if err := rows.Scan(&i.WorkflowID, &i.LatestUpdatedAtUnixMs); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkflowTaskActivity, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkflowTaskActivity, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5273,9 +6144,14 @@ type ListProjectWorkspaceBoundaryRow struct {
 	RootPath string
 }
 
-func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, arg ListProjectWorkspaceBoundaryParams) ([]ListProjectWorkspaceBoundaryRow, error) {
+func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, arg ListProjectWorkspaceBoundaryParams) (metadataOperationResult0 []ListProjectWorkspaceBoundaryRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectWorkspaceBoundary", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectWorkspaceBoundary, arg.ProjectID, arg.WorkspaceCollectionLimit)
-	err = recordQueryError(ctx, err, listProjectWorkspaceBoundary, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -5283,15 +6159,15 @@ func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, arg ListProj
 	var items []ListProjectWorkspaceBoundaryRow
 	for rows.Next() {
 		var i ListProjectWorkspaceBoundaryRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.RootPath), listProjectWorkspaceBoundary, 2); err != nil {
+		if err := rows.Scan(&i.ID, &i.RootPath); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaceBoundary, 2); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaceBoundary, 2); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5338,9 +6214,14 @@ type ListProjectWorkspaceCatalogPageRow struct {
 	IsDefault     sql.NullInt64
 }
 
-func (q *Queries) ListProjectWorkspaceCatalogPage(ctx context.Context, arg ListProjectWorkspaceCatalogPageParams) ([]ListProjectWorkspaceCatalogPageRow, error) {
+func (q *Queries) ListProjectWorkspaceCatalogPage(ctx context.Context, arg ListProjectWorkspaceCatalogPageParams) (metadataOperationResult0 []ListProjectWorkspaceCatalogPageRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectWorkspaceCatalogPage", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectWorkspaceCatalogPage, arg.ProjectID, arg.OffsetRows, arg.LimitRows)
-	err = recordQueryError(ctx, err, listProjectWorkspaceCatalogPage, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -5348,20 +6229,20 @@ func (q *Queries) ListProjectWorkspaceCatalogPage(ctx context.Context, arg ListP
 	var items []ListProjectWorkspaceCatalogPageRow
 	for rows.Next() {
 		var i ListProjectWorkspaceCatalogPageRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ProjectID,
 			&i.WorkspaceID,
 			&i.CanonicalRoot,
 			&i.IsDefault,
-		), listProjectWorkspaceCatalogPage, 3); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaceCatalogPage, 3); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaceCatalogPage, 3); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5406,9 +6287,14 @@ type ListProjectWorkspacesRow struct {
 	WorkspaceOrderID     string
 }
 
-func (q *Queries) ListProjectWorkspaces(ctx context.Context, arg ListProjectWorkspacesParams) ([]ListProjectWorkspacesRow, error) {
+func (q *Queries) ListProjectWorkspaces(ctx context.Context, arg ListProjectWorkspacesParams) (metadataOperationResult0 []ListProjectWorkspacesRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectWorkspaces", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectWorkspaces, arg.ProjectID, arg.WorkspaceCollectionLimit)
-	err = recordQueryError(ctx, err, listProjectWorkspaces, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -5416,7 +6302,7 @@ func (q *Queries) ListProjectWorkspaces(ctx context.Context, arg ListProjectWork
 	var items []ListProjectWorkspacesRow
 	for rows.Next() {
 		var i ListProjectWorkspacesRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.RootPath,
 			&i.IsPrimary,
@@ -5424,15 +6310,15 @@ func (q *Queries) ListProjectWorkspaces(ctx context.Context, arg ListProjectWork
 			&i.LatestActivityUnixMs,
 			&i.AttachedAtUnixMs,
 			&i.WorkspaceOrderID,
-		), listProjectWorkspaces, 2); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaces, 2); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaces, 2); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5477,15 +6363,19 @@ type ListProjectWorkspacesPageRow struct {
 	LatestActivityUnixMs int64
 }
 
-func (q *Queries) ListProjectWorkspacesPage(ctx context.Context, arg ListProjectWorkspacesPageParams) ([]ListProjectWorkspacesPageRow, error) {
+func (q *Queries) ListProjectWorkspacesPage(ctx context.Context, arg ListProjectWorkspacesPageParams) (metadataOperationResult0 []ListProjectWorkspacesPageRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjectWorkspacesPage", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjectWorkspacesPage,
 		arg.ProjectID,
 		arg.WorkspaceCollectionLimit,
 		arg.OffsetRows,
 		arg.LimitRows,
 	)
-	err = recordQueryError(ctx, err, listProjectWorkspacesPage, 4)
-
 	if err != nil {
 		return nil, err
 	}
@@ -5493,21 +6383,21 @@ func (q *Queries) ListProjectWorkspacesPage(ctx context.Context, arg ListProject
 	var items []ListProjectWorkspacesPageRow
 	for rows.Next() {
 		var i ListProjectWorkspacesPageRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.RootPath,
 			&i.IsPrimary,
 			&i.SessionCount,
 			&i.LatestActivityUnixMs,
-		), listProjectWorkspacesPage, 4); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspacesPage, 4); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspacesPage, 4); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5537,9 +6427,14 @@ type ListProjectsRow struct {
 	LatestActivityUnixMs int64
 }
 
-func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
+func (q *Queries) ListProjects(ctx context.Context) (metadataOperationResult0 []ListProjectsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListProjects", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listProjects)
-	err = recordQueryError(ctx, err, listProjects, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -5547,22 +6442,22 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 	var items []ListProjectsRow
 	for rows.Next() {
 		var i ListProjectsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.DisplayName,
 			&i.ProjectKey,
 			&i.RootPath,
 			&i.SessionCount,
 			&i.LatestActivityUnixMs,
-		), listProjects, 0); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjects, 0); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjects, 0); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5579,7 +6474,13 @@ type ListSessionNamesByIDsRow struct {
 	Name string
 }
 
-func (q *Queries) ListSessionNamesByIDs(ctx context.Context, ids []string) ([]ListSessionNamesByIDsRow, error) {
+func (q *Queries) ListSessionNamesByIDs(ctx context.Context, ids []string) (metadataOperationResult0 []ListSessionNamesByIDsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListSessionNamesByIDs", metadataOperationErr)
+	}()
 	query := listSessionNamesByIDs
 	var queryParams []interface{}
 	if len(ids) > 0 {
@@ -5591,7 +6492,6 @@ func (q *Queries) ListSessionNamesByIDs(ctx context.Context, ids []string) ([]Li
 		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5599,15 +6499,15 @@ func (q *Queries) ListSessionNamesByIDs(ctx context.Context, ids []string) ([]Li
 	var items []ListSessionNamesByIDsRow
 	for rows.Next() {
 		var i ListSessionNamesByIDsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.Name), query, 1); err != nil {
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5644,15 +6544,19 @@ type ListSessionPageRow struct {
 	UpdatedAtUnixMs    int64
 }
 
-func (q *Queries) ListSessionPage(ctx context.Context, arg ListSessionPageParams) ([]ListSessionPageRow, error) {
+func (q *Queries) ListSessionPage(ctx context.Context, arg ListSessionPageParams) (metadataOperationResult0 []ListSessionPageRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListSessionPage", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listSessionPage,
 		arg.ProjectID,
 		arg.Category,
 		arg.PageOffset,
 		arg.PageLimit,
 	)
-	err = recordQueryError(ctx, err, listSessionPage, 4)
-
 	if err != nil {
 		return nil, err
 	}
@@ -5660,21 +6564,21 @@ func (q *Queries) ListSessionPage(ctx context.Context, arg ListSessionPageParams
 	var items []ListSessionPageRow
 	for rows.Next() {
 		var i ListSessionPageRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.FirstPromptPreview,
 			&i.Category,
 			&i.UpdatedAtUnixMs,
-		), listSessionPage, 4); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listSessionPage, 4); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listSessionPage, 4); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5699,9 +6603,14 @@ type ListSessionPromptHistoryTextParams struct {
 	MaxEntries int64
 }
 
-func (q *Queries) ListSessionPromptHistoryText(ctx context.Context, arg ListSessionPromptHistoryTextParams) ([]string, error) {
+func (q *Queries) ListSessionPromptHistoryText(ctx context.Context, arg ListSessionPromptHistoryTextParams) (metadataOperationResult0 []string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListSessionPromptHistoryText", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listSessionPromptHistoryText, arg.SessionID, arg.MaxEntries)
-	err = recordQueryError(ctx, err, listSessionPromptHistoryText, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -5709,15 +6618,15 @@ func (q *Queries) ListSessionPromptHistoryText(ctx context.Context, arg ListSess
 	var items []string
 	for rows.Next() {
 		var text string
-		if err := recordQueryError(ctx, rows.Scan(&text), listSessionPromptHistoryText, 2); err != nil {
+		if err := rows.Scan(&text); err != nil {
 			return nil, err
 		}
 		items = append(items, text)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listSessionPromptHistoryText, 2); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listSessionPromptHistoryText, 2); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5731,9 +6640,14 @@ WHERE id = ?1
 ORDER BY task_id ASC
 `
 
-func (q *Queries) ListSessionWorkflowTaskIDs(ctx context.Context, sessionID string) ([]sql.NullString, error) {
+func (q *Queries) ListSessionWorkflowTaskIDs(ctx context.Context, sessionID string) (metadataOperationResult0 []sql.NullString, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListSessionWorkflowTaskIDs", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listSessionWorkflowTaskIDs, sessionID)
-	err = recordQueryError(ctx, err, listSessionWorkflowTaskIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5741,15 +6655,15 @@ func (q *Queries) ListSessionWorkflowTaskIDs(ctx context.Context, sessionID stri
 	var items []sql.NullString
 	for rows.Next() {
 		var task_id sql.NullString
-		if err := recordQueryError(ctx, rows.Scan(&task_id), listSessionWorkflowTaskIDs, 1); err != nil {
+		if err := rows.Scan(&task_id); err != nil {
 			return nil, err
 		}
 		items = append(items, task_id)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listSessionWorkflowTaskIDs, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listSessionWorkflowTaskIDs, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5771,9 +6685,14 @@ type ListSessionsTargetingWorktreeRow struct {
 	UpdatedAtUnixMs int64
 }
 
-func (q *Queries) ListSessionsTargetingWorktree(ctx context.Context, worktreeID sql.NullString) ([]ListSessionsTargetingWorktreeRow, error) {
+func (q *Queries) ListSessionsTargetingWorktree(ctx context.Context, worktreeID sql.NullString) (metadataOperationResult0 []ListSessionsTargetingWorktreeRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListSessionsTargetingWorktree", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listSessionsTargetingWorktree, worktreeID)
-	err = recordQueryError(ctx, err, listSessionsTargetingWorktree, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5781,15 +6700,15 @@ func (q *Queries) ListSessionsTargetingWorktree(ctx context.Context, worktreeID 
 	var items []ListSessionsTargetingWorktreeRow
 	for rows.Next() {
 		var i ListSessionsTargetingWorktreeRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.Name, &i.UpdatedAtUnixMs), listSessionsTargetingWorktree, 1); err != nil {
+		if err := rows.Scan(&i.ID, &i.Name, &i.UpdatedAtUnixMs); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listSessionsTargetingWorktree, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listSessionsTargetingWorktree, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5809,9 +6728,14 @@ WHERE task_id = ?1
 ORDER BY transition_branch_key
 `
 
-func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID string) ([]TaskActiveFanoutBranch, error) {
+func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID string) (metadataOperationResult0 []TaskActiveFanoutBranch, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskActiveFanoutBranches", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskActiveFanoutBranches, taskID)
-	err = recordQueryError(ctx, err, listTaskActiveFanoutBranches, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5819,7 +6743,7 @@ func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID strin
 	var items []TaskActiveFanoutBranch
 	for rows.Next() {
 		var i TaskActiveFanoutBranch
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.TaskID,
 			&i.TransitionBranchKey,
 			&i.ArrivalState,
@@ -5827,15 +6751,15 @@ func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID strin
 			&i.ContinuationSourceKind,
 			&i.ContinuationSourceSessionID,
 			&i.LegacyMaterialized,
-		), listTaskActiveFanoutBranches, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskActiveFanoutBranches, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskActiveFanoutBranches, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5855,7 +6779,13 @@ type ListTaskAssignedLabelsByTasksRow struct {
 	LabelName string
 }
 
-func (q *Queries) ListTaskAssignedLabelsByTasks(ctx context.Context, taskIds []string) ([]ListTaskAssignedLabelsByTasksRow, error) {
+func (q *Queries) ListTaskAssignedLabelsByTasks(ctx context.Context, taskIds []string) (metadataOperationResult0 []ListTaskAssignedLabelsByTasksRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskAssignedLabelsByTasks", metadataOperationErr)
+	}()
 	query := listTaskAssignedLabelsByTasks
 	var queryParams []interface{}
 	if len(taskIds) > 0 {
@@ -5867,7 +6797,6 @@ func (q *Queries) ListTaskAssignedLabelsByTasks(ctx context.Context, taskIds []s
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5875,15 +6804,15 @@ func (q *Queries) ListTaskAssignedLabelsByTasks(ctx context.Context, taskIds []s
 	var items []ListTaskAssignedLabelsByTasksRow
 	for rows.Next() {
 		var i ListTaskAssignedLabelsByTasksRow
-		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.LabelID, &i.LabelName), query, 1); err != nil {
+		if err := rows.Scan(&i.TaskID, &i.LabelID, &i.LabelName); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5911,9 +6840,14 @@ type ListTaskCommentsParams struct {
 	LimitRows  int64
 }
 
-func (q *Queries) ListTaskComments(ctx context.Context, arg ListTaskCommentsParams) ([]TaskComment, error) {
+func (q *Queries) ListTaskComments(ctx context.Context, arg ListTaskCommentsParams) (metadataOperationResult0 []TaskComment, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskComments", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskComments, arg.TaskID, arg.OffsetRows, arg.LimitRows)
-	err = recordQueryError(ctx, err, listTaskComments, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -5921,7 +6855,7 @@ func (q *Queries) ListTaskComments(ctx context.Context, arg ListTaskCommentsPara
 	var items []TaskComment
 	for rows.Next() {
 		var i TaskComment
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.TaskID,
 			&i.Body,
@@ -5929,15 +6863,15 @@ func (q *Queries) ListTaskComments(ctx context.Context, arg ListTaskCommentsPara
 			&i.AuthorID,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		), listTaskComments, 3); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskComments, 3); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskComments, 3); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5956,7 +6890,13 @@ FROM task_comments
 WHERE id IN (/*SLICE:ids*/?)
 `
 
-func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]TaskComment, error) {
+func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) (metadataOperationResult0 []TaskComment, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskCommentsByIDs", metadataOperationErr)
+	}()
 	query := listTaskCommentsByIDs
 	var queryParams []interface{}
 	if len(ids) > 0 {
@@ -5968,7 +6908,6 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5976,7 +6915,7 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 	var items []TaskComment
 	for rows.Next() {
 		var i TaskComment
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.TaskID,
 			&i.Body,
@@ -5984,15 +6923,15 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 			&i.AuthorID,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		), query, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6050,9 +6989,14 @@ type ListTaskCurrentNodesRow struct {
 	NodeKind                    string
 }
 
-func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]ListTaskCurrentNodesRow, error) {
+func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) (metadataOperationResult0 []ListTaskCurrentNodesRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskCurrentNodes", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskCurrentNodes, taskID)
-	err = recordQueryError(ctx, err, listTaskCurrentNodes, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6060,7 +7004,7 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 	var items []ListTaskCurrentNodesRow
 	for rows.Next() {
 		var i ListTaskCurrentNodesRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.TaskID,
 			&i.NodeID,
 			&i.TransitionBranchKey,
@@ -6079,15 +7023,15 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 			&i.EffectiveThinking,
 			&i.AssigneeOrigin,
 			&i.NodeKind,
-		), listTaskCurrentNodes, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskCurrentNodes, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskCurrentNodes, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6146,7 +7090,13 @@ type ListTaskCurrentNodesByTasksRow struct {
 	NodeKind                    string
 }
 
-func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []string) ([]ListTaskCurrentNodesByTasksRow, error) {
+func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []string) (metadataOperationResult0 []ListTaskCurrentNodesByTasksRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskCurrentNodesByTasks", metadataOperationErr)
+	}()
 	query := listTaskCurrentNodesByTasks
 	var queryParams []interface{}
 	if len(taskIds) > 0 {
@@ -6158,7 +7108,6 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6166,7 +7115,7 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 	var items []ListTaskCurrentNodesByTasksRow
 	for rows.Next() {
 		var i ListTaskCurrentNodesByTasksRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.TaskID,
 			&i.NodeID,
 			&i.TransitionBranchKey,
@@ -6185,15 +7134,15 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 			&i.EffectiveThinking,
 			&i.AssigneeOrigin,
 			&i.NodeKind,
-		), query, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6221,9 +7170,14 @@ type ListTaskDependencyBlockedByProjectionRowsRow struct {
 	WorkflowID []byte
 }
 
-func (q *Queries) ListTaskDependencyBlockedByProjectionRows(ctx context.Context, taskID string) ([]ListTaskDependencyBlockedByProjectionRowsRow, error) {
+func (q *Queries) ListTaskDependencyBlockedByProjectionRows(ctx context.Context, taskID string) (metadataOperationResult0 []ListTaskDependencyBlockedByProjectionRowsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskDependencyBlockedByProjectionRows", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskDependencyBlockedByProjectionRows, taskID)
-	err = recordQueryError(ctx, err, listTaskDependencyBlockedByProjectionRows, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6231,21 +7185,21 @@ func (q *Queries) ListTaskDependencyBlockedByProjectionRows(ctx context.Context,
 	var items []ListTaskDependencyBlockedByProjectionRowsRow
 	for rows.Next() {
 		var i ListTaskDependencyBlockedByProjectionRowsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.Direction,
 			&i.TaskID,
 			&i.ShortID,
 			&i.Title,
 			&i.WorkflowID,
-		), listTaskDependencyBlockedByProjectionRows, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskDependencyBlockedByProjectionRows, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskDependencyBlockedByProjectionRows, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6264,9 +7218,14 @@ ORDER BY task_id ASC
 LIMIT 100
 `
 
-func (q *Queries) ListTaskDependencyNeighborIDs(ctx context.Context, taskID string) ([]string, error) {
+func (q *Queries) ListTaskDependencyNeighborIDs(ctx context.Context, taskID string) (metadataOperationResult0 []string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskDependencyNeighborIDs", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskDependencyNeighborIDs, taskID)
-	err = recordQueryError(ctx, err, listTaskDependencyNeighborIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6274,15 +7233,15 @@ func (q *Queries) ListTaskDependencyNeighborIDs(ctx context.Context, taskID stri
 	var items []string
 	for rows.Next() {
 		var task_id string
-		if err := recordQueryError(ctx, rows.Scan(&task_id), listTaskDependencyNeighborIDs, 1); err != nil {
+		if err := rows.Scan(&task_id); err != nil {
 			return nil, err
 		}
 		items = append(items, task_id)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskDependencyNeighborIDs, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskDependencyNeighborIDs, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6309,7 +7268,13 @@ type ListTaskDependencyProgressByTasksRow struct {
 	DependencySatisfiedCount int64
 }
 
-func (q *Queries) ListTaskDependencyProgressByTasks(ctx context.Context, taskIds []string) ([]ListTaskDependencyProgressByTasksRow, error) {
+func (q *Queries) ListTaskDependencyProgressByTasks(ctx context.Context, taskIds []string) (metadataOperationResult0 []ListTaskDependencyProgressByTasksRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskDependencyProgressByTasks", metadataOperationErr)
+	}()
 	query := listTaskDependencyProgressByTasks
 	var queryParams []interface{}
 	if len(taskIds) > 0 {
@@ -6321,7 +7286,6 @@ func (q *Queries) ListTaskDependencyProgressByTasks(ctx context.Context, taskIds
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6329,15 +7293,15 @@ func (q *Queries) ListTaskDependencyProgressByTasks(ctx context.Context, taskIds
 	var items []ListTaskDependencyProgressByTasksRow
 	for rows.Next() {
 		var i ListTaskDependencyProgressByTasksRow
-		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.DependencyTotalCount, &i.DependencySatisfiedCount), query, 1); err != nil {
+		if err := rows.Scan(&i.TaskID, &i.DependencyTotalCount, &i.DependencySatisfiedCount); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6375,9 +7339,14 @@ type ListTaskDependencyProjectionRowsRow struct {
 	WorkflowID []byte
 }
 
-func (q *Queries) ListTaskDependencyProjectionRows(ctx context.Context, taskID string) ([]ListTaskDependencyProjectionRowsRow, error) {
+func (q *Queries) ListTaskDependencyProjectionRows(ctx context.Context, taskID string) (metadataOperationResult0 []ListTaskDependencyProjectionRowsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskDependencyProjectionRows", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskDependencyProjectionRows, taskID)
-	err = recordQueryError(ctx, err, listTaskDependencyProjectionRows, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6385,21 +7354,21 @@ func (q *Queries) ListTaskDependencyProjectionRows(ctx context.Context, taskID s
 	var items []ListTaskDependencyProjectionRowsRow
 	for rows.Next() {
 		var i ListTaskDependencyProjectionRowsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.Direction,
 			&i.TaskID,
 			&i.ShortID,
 			&i.Title,
 			&i.WorkflowID,
-		), listTaskDependencyProjectionRows, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskDependencyProjectionRows, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskDependencyProjectionRows, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6417,9 +7386,14 @@ WHERE approval_id = ?1
 ORDER BY transition_branch_key
 `
 
-func (q *Queries) ListTaskPendingApprovalBranches(ctx context.Context, approvalID string) ([]TaskPendingApprovalBranch, error) {
+func (q *Queries) ListTaskPendingApprovalBranches(ctx context.Context, approvalID string) (metadataOperationResult0 []TaskPendingApprovalBranch, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskPendingApprovalBranches", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovalBranches, approvalID)
-	err = recordQueryError(ctx, err, listTaskPendingApprovalBranches, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6427,21 +7401,21 @@ func (q *Queries) ListTaskPendingApprovalBranches(ctx context.Context, approvalI
 	var items []TaskPendingApprovalBranch
 	for rows.Next() {
 		var i TaskPendingApprovalBranch
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ApprovalID,
 			&i.TransitionBranchKey,
 			&i.TargetSnapshotJson,
 			&i.EffectiveEdgeConfigurationJson,
 			&i.ContextSourceResolutionJson,
-		), listTaskPendingApprovalBranches, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskPendingApprovalBranches, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskPendingApprovalBranches, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6475,9 +7449,14 @@ type ListTaskPendingApprovalsRow struct {
 	CreatedAtUnixMs           int64
 }
 
-func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) ([]ListTaskPendingApprovalsRow, error) {
+func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) (metadataOperationResult0 []ListTaskPendingApprovalsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskPendingApprovals", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovals, taskID)
-	err = recordQueryError(ctx, err, listTaskPendingApprovals, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6485,7 +7464,7 @@ func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) (
 	var items []ListTaskPendingApprovalsRow
 	for rows.Next() {
 		var i ListTaskPendingApprovalsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.SourceTaskID,
 			&i.SourceNodeID,
@@ -6495,15 +7474,15 @@ func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) (
 			&i.TransitionSnapshotJson,
 			&i.MaterializedValuesJson,
 			&i.CreatedAtUnixMs,
-		), listTaskPendingApprovals, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskPendingApprovals, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskPendingApprovals, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6540,9 +7519,14 @@ type ListTaskPendingApprovalsByTasksRow struct {
 	CreatedAtUnixMs           int64
 }
 
-func (q *Queries) ListTaskPendingApprovalsByTasks(ctx context.Context, taskIdsJson interface{}) ([]ListTaskPendingApprovalsByTasksRow, error) {
+func (q *Queries) ListTaskPendingApprovalsByTasks(ctx context.Context, taskIdsJson interface{}) (metadataOperationResult0 []ListTaskPendingApprovalsByTasksRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskPendingApprovalsByTasks", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovalsByTasks, taskIdsJson)
-	err = recordQueryError(ctx, err, listTaskPendingApprovalsByTasks, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6550,7 +7534,7 @@ func (q *Queries) ListTaskPendingApprovalsByTasks(ctx context.Context, taskIdsJs
 	var items []ListTaskPendingApprovalsByTasksRow
 	for rows.Next() {
 		var i ListTaskPendingApprovalsByTasksRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.SourceTaskID,
 			&i.SourceNodeID,
@@ -6560,15 +7544,15 @@ func (q *Queries) ListTaskPendingApprovalsByTasks(ctx context.Context, taskIdsJs
 			&i.TransitionSnapshotJson,
 			&i.MaterializedValuesJson,
 			&i.CreatedAtUnixMs,
-		), listTaskPendingApprovalsByTasks, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskPendingApprovalsByTasks, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskPendingApprovalsByTasks, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6605,9 +7589,14 @@ WHERE id IN (
 ORDER BY id ASC
 `
 
-func (q *Queries) ListTasksByIDs(ctx context.Context, taskIdsJson interface{}) ([]TaskRecord, error) {
+func (q *Queries) ListTasksByIDs(ctx context.Context, taskIdsJson interface{}) (metadataOperationResult0 []TaskRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTasksByIDs", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTasksByIDs, taskIdsJson)
-	err = recordQueryError(ctx, err, listTasksByIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6615,7 +7604,7 @@ func (q *Queries) ListTasksByIDs(ctx context.Context, taskIdsJson interface{}) (
 	var items []TaskRecord
 	for rows.Next() {
 		var i TaskRecord
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
@@ -6637,15 +7626,15 @@ func (q *Queries) ListTasksByIDs(ctx context.Context, taskIdsJson interface{}) (
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-		), listTasksByIDs, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTasksByIDs, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTasksByIDs, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6687,9 +7676,14 @@ ORDER BY updated_at_unix_ms DESC, (
 ) DESC
 `
 
-func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) ([]TaskRecord, error) {
+func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) (metadataOperationResult0 []TaskRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTasksByProject", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTasksByProject, projectID)
-	err = recordQueryError(ctx, err, listTasksByProject, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6697,7 +7691,7 @@ func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) ([]T
 	var items []TaskRecord
 	for rows.Next() {
 		var i TaskRecord
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
@@ -6719,15 +7713,15 @@ func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) ([]T
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-		), listTasksByProject, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTasksByProject, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTasksByProject, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6773,9 +7767,14 @@ type ListTasksByShortIDRow struct {
 	MetadataJson          string
 }
 
-func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]ListTasksByShortIDRow, error) {
+func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) (metadataOperationResult0 []ListTasksByShortIDRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTasksByShortID", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTasksByShortID, shortID)
-	err = recordQueryError(ctx, err, listTasksByShortID, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6783,7 +7782,7 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 	var items []ListTasksByShortIDRow
 	for rows.Next() {
 		var i ListTasksByShortIDRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
@@ -6799,15 +7798,15 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-		), listTasksByShortID, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTasksByShortID, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTasksByShortID, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6823,9 +7822,14 @@ WHERE source_workspace_id = ?1
 ORDER BY rowid ASC
 `
 
-func (q *Queries) ListTasksMissingSourceWorkspaceDisplayName(ctx context.Context, workspaceID sql.NullString) ([]string, error) {
+func (q *Queries) ListTasksMissingSourceWorkspaceDisplayName(ctx context.Context, workspaceID sql.NullString) (metadataOperationResult0 []string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTasksMissingSourceWorkspaceDisplayName", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTasksMissingSourceWorkspaceDisplayName, workspaceID)
-	err = recordQueryError(ctx, err, listTasksMissingSourceWorkspaceDisplayName, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6833,15 +7837,15 @@ func (q *Queries) ListTasksMissingSourceWorkspaceDisplayName(ctx context.Context
 	var items []string
 	for rows.Next() {
 		var metadata_json string
-		if err := recordQueryError(ctx, rows.Scan(&metadata_json), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
+		if err := rows.Scan(&metadata_json); err != nil {
 			return nil, err
 		}
 		items = append(items, metadata_json)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6859,9 +7863,14 @@ WHERE projects.id IS NULL
 ORDER BY requested_projects.project_id ASC
 `
 
-func (q *Queries) ListUnknownTaskSearchProjectIDs(ctx context.Context, projectIdsJson interface{}) ([]string, error) {
+func (q *Queries) ListUnknownTaskSearchProjectIDs(ctx context.Context, projectIdsJson interface{}) (metadataOperationResult0 []string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListUnknownTaskSearchProjectIDs", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listUnknownTaskSearchProjectIDs, projectIdsJson)
-	err = recordQueryError(ctx, err, listUnknownTaskSearchProjectIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6869,15 +7878,15 @@ func (q *Queries) ListUnknownTaskSearchProjectIDs(ctx context.Context, projectId
 	var items []string
 	for rows.Next() {
 		var project_id string
-		if err := recordQueryError(ctx, rows.Scan(&project_id), listUnknownTaskSearchProjectIDs, 1); err != nil {
+		if err := rows.Scan(&project_id); err != nil {
 			return nil, err
 		}
 		items = append(items, project_id)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listUnknownTaskSearchProjectIDs, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listUnknownTaskSearchProjectIDs, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7025,7 +8034,13 @@ type ListWorkflowDurableAttentionCandidatesRow struct {
 	OccurredAtUnixMs       int64
 }
 
-func (q *Queries) ListWorkflowDurableAttentionCandidates(ctx context.Context, arg ListWorkflowDurableAttentionCandidatesParams) ([]ListWorkflowDurableAttentionCandidatesRow, error) {
+func (q *Queries) ListWorkflowDurableAttentionCandidates(ctx context.Context, arg ListWorkflowDurableAttentionCandidatesParams) (metadataOperationResult0 []ListWorkflowDurableAttentionCandidatesRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowDurableAttentionCandidates", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowDurableAttentionCandidates,
 		arg.PageLimit,
 		arg.SelectedTaskID,
@@ -7033,8 +8048,6 @@ func (q *Queries) ListWorkflowDurableAttentionCandidates(ctx context.Context, ar
 		arg.CursorOccurredAtUnixMs,
 		arg.CursorItemID,
 	)
-	err = recordQueryError(ctx, err, listWorkflowDurableAttentionCandidates, 5)
-
 	if err != nil {
 		return nil, err
 	}
@@ -7042,7 +8055,7 @@ func (q *Queries) ListWorkflowDurableAttentionCandidates(ctx context.Context, ar
 	var items []ListWorkflowDurableAttentionCandidatesRow
 	for rows.Next() {
 		var i ListWorkflowDurableAttentionCandidatesRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.Kind,
 			&i.ID,
 			&i.ProjectID,
@@ -7057,15 +8070,15 @@ func (q *Queries) ListWorkflowDurableAttentionCandidates(ctx context.Context, ar
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
 			&i.OccurredAtUnixMs,
-		), listWorkflowDurableAttentionCandidates, 5); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowDurableAttentionCandidates, 5); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowDurableAttentionCandidates, 5); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7115,9 +8128,14 @@ type ListWorkflowEdgesRow struct {
 	SortOrder              int64
 }
 
-func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID runtimeids.WorkflowID) ([]ListWorkflowEdgesRow, error) {
+func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 []ListWorkflowEdgesRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowEdges", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowEdges, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowEdges, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7125,7 +8143,7 @@ func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID runtimeids.W
 	var items []ListWorkflowEdgesRow
 	for rows.Next() {
 		var i ListWorkflowEdgesRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.WorkflowID,
 			&i.TransitionGroupID,
@@ -7142,15 +8160,15 @@ func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID runtimeids.W
 			&i.InputBindingsJson,
 			&i.OutputRequirementsJson,
 			&i.SortOrder,
-		), listWorkflowEdges, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowEdges, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowEdges, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7176,9 +8194,14 @@ type ListWorkflowNodeGroupsRow struct {
 	SortOrder   int64
 }
 
-func (q *Queries) ListWorkflowNodeGroups(ctx context.Context, workflowID runtimeids.WorkflowID) ([]ListWorkflowNodeGroupsRow, error) {
+func (q *Queries) ListWorkflowNodeGroups(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 []ListWorkflowNodeGroupsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowNodeGroups", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowNodeGroups, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowNodeGroups, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7186,21 +8209,21 @@ func (q *Queries) ListWorkflowNodeGroups(ctx context.Context, workflowID runtime
 	var items []ListWorkflowNodeGroupsRow
 	for rows.Next() {
 		var i ListWorkflowNodeGroupsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.WorkflowID,
 			&i.GroupKey,
 			&i.DisplayName,
 			&i.SortOrder,
-		), listWorkflowNodeGroups, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowNodeGroups, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowNodeGroups, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7241,9 +8264,14 @@ type ListWorkflowNodesRow struct {
 	SortOrder              int64
 }
 
-func (q *Queries) ListWorkflowNodes(ctx context.Context, workflowID runtimeids.WorkflowID) ([]ListWorkflowNodesRow, error) {
+func (q *Queries) ListWorkflowNodes(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 []ListWorkflowNodesRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowNodes", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowNodes, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowNodes, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7251,7 +8279,7 @@ func (q *Queries) ListWorkflowNodes(ctx context.Context, workflowID runtimeids.W
 	var items []ListWorkflowNodesRow
 	for rows.Next() {
 		var i ListWorkflowNodesRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.WorkflowID,
 			&i.NodeKey,
@@ -7263,15 +8291,15 @@ func (q *Queries) ListWorkflowNodes(ctx context.Context, workflowID runtimeids.W
 			&i.JoinInputProvidersJson,
 			&i.GroupID,
 			&i.SortOrder,
-		), listWorkflowNodes, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowNodes, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowNodes, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7290,9 +8318,14 @@ WHERE workflow_id = ?1
 ORDER BY project_id ASC, is_default DESC, created_at_unix_ms ASC
 `
 
-func (q *Queries) ListWorkflowProjectLinks(ctx context.Context, workflowID runtimeids.WorkflowID) ([]ProjectWorkflowLinkRecord, error) {
+func (q *Queries) ListWorkflowProjectLinks(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 []ProjectWorkflowLinkRecord, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowProjectLinks", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowProjectLinks, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowProjectLinks, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7300,22 +8333,22 @@ func (q *Queries) ListWorkflowProjectLinks(ctx context.Context, workflowID runti
 	var items []ProjectWorkflowLinkRecord
 	for rows.Next() {
 		var i ProjectWorkflowLinkRecord
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.WorkflowID,
 			&i.IsDefault,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		), listWorkflowProjectLinks, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowProjectLinks, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowProjectLinks, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7400,7 +8433,13 @@ type ListWorkflowRecordsPageRow struct {
 	ProjectNameOrderKey      string
 }
 
-func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowRecordsPageParams) ([]ListWorkflowRecordsPageRow, error) {
+func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowRecordsPageParams) (metadataOperationResult0 []ListWorkflowRecordsPageRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowRecordsPage", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowRecordsPage,
 		arg.ProjectID,
 		arg.WorkflowID,
@@ -7408,8 +8447,6 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 		arg.PageOffset,
 		arg.PageLimit,
 	)
-	err = recordQueryError(ctx, err, listWorkflowRecordsPage, 5)
-
 	if err != nil {
 		return nil, err
 	}
@@ -7417,7 +8454,7 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 	var items []ListWorkflowRecordsPageRow
 	for rows.Next() {
 		var i ListWorkflowRecordsPageRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.Description,
@@ -7430,15 +8467,15 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 			&i.ProjectActivityAtUnixMs,
 			&i.ProjectLinkDefault,
 			&i.ProjectNameOrderKey,
-		), listWorkflowRecordsPage, 5); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowRecordsPage, 5); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowRecordsPage, 5); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7486,9 +8523,14 @@ type ListWorkflowTaskActivityRowsRow struct {
 	SessionName      sql.NullString
 }
 
-func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWorkflowTaskActivityRowsParams) ([]ListWorkflowTaskActivityRowsRow, error) {
+func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWorkflowTaskActivityRowsParams) (metadataOperationResult0 []ListWorkflowTaskActivityRowsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowTaskActivityRows", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowTaskActivityRows, arg.PageOffset, arg.PageLimit, arg.TaskID)
-	err = recordQueryError(ctx, err, listWorkflowTaskActivityRows, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -7496,22 +8538,22 @@ func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWork
 	var items []ListWorkflowTaskActivityRowsRow
 	for rows.Next() {
 		var i ListWorkflowTaskActivityRowsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ActivityID,
 			&i.Kind,
 			&i.SourceID,
 			&i.OccurredAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.SessionName,
-		), listWorkflowTaskActivityRows, 3); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskActivityRows, 3); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskActivityRows, 3); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7523,9 +8565,14 @@ FROM task_records
 WHERE workflow_id = ?1
 `
 
-func (q *Queries) ListWorkflowTaskIDs(ctx context.Context, workflowID runtimeids.WorkflowID) ([]string, error) {
+func (q *Queries) ListWorkflowTaskIDs(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 []string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowTaskIDs", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowTaskIDs, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowTaskIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7533,15 +8580,15 @@ func (q *Queries) ListWorkflowTaskIDs(ctx context.Context, workflowID runtimeids
 	var items []string
 	for rows.Next() {
 		var id string
-		if err := recordQueryError(ctx, rows.Scan(&id), listWorkflowTaskIDs, 1); err != nil {
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskIDs, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskIDs, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8092,7 +9139,13 @@ type ListWorkflowTaskListRowsRow struct {
 	MatchingWorkflowCount       int64
 }
 
-func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflowTaskListRowsParams) ([]ListWorkflowTaskListRowsRow, error) {
+func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflowTaskListRowsParams) (metadataOperationResult0 []ListWorkflowTaskListRowsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowTaskListRows", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowTaskListRows,
 		arg.ProjectID,
 		arg.WorkflowID,
@@ -8127,8 +9180,6 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.LimitRows,
 		arg.ExcludedLabelIdsJson,
 	)
-	err = recordQueryError(ctx, err, listWorkflowTaskListRows, 32)
-
 	if err != nil {
 		return nil, err
 	}
@@ -8136,7 +9187,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 	var items []ListWorkflowTaskListRowsRow
 	for rows.Next() {
 		var i ListWorkflowTaskListRowsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
@@ -8166,15 +9217,15 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 			&i.AttentionTypesJson,
 			&i.TitleSort,
 			&i.MatchingWorkflowCount,
-		), listWorkflowTaskListRows, 32); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskListRows, 32); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskListRows, 32); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8271,9 +9322,14 @@ type ListWorkflowTaskStatusProjectionByTasksRow struct {
 	AttentionTypesJson string
 }
 
-func (q *Queries) ListWorkflowTaskStatusProjectionByTasks(ctx context.Context, arg ListWorkflowTaskStatusProjectionByTasksParams) ([]ListWorkflowTaskStatusProjectionByTasksRow, error) {
+func (q *Queries) ListWorkflowTaskStatusProjectionByTasks(ctx context.Context, arg ListWorkflowTaskStatusProjectionByTasksParams) (metadataOperationResult0 []ListWorkflowTaskStatusProjectionByTasksRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowTaskStatusProjectionByTasks", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowTaskStatusProjectionByTasks, arg.TaskIdsJson, arg.LiveTaskStatesJson)
-	err = recordQueryError(ctx, err, listWorkflowTaskStatusProjectionByTasks, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -8281,22 +9337,22 @@ func (q *Queries) ListWorkflowTaskStatusProjectionByTasks(ctx context.Context, a
 	var items []ListWorkflowTaskStatusProjectionByTasksRow
 	for rows.Next() {
 		var i ListWorkflowTaskStatusProjectionByTasksRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.TaskID,
 			&i.IsDone,
 			&i.Kind,
 			&i.PrimaryStatusRank,
 			&i.NodeIdsJson,
 			&i.AttentionTypesJson,
-		), listWorkflowTaskStatusProjectionByTasks, 2); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskStatusProjectionByTasks, 2); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskStatusProjectionByTasks, 2); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8324,7 +9380,13 @@ type ListWorkflowTaskStatusRecordsByTasksRow struct {
 	AttentionTypesJson string
 }
 
-func (q *Queries) ListWorkflowTaskStatusRecordsByTasks(ctx context.Context, taskIds []string) ([]ListWorkflowTaskStatusRecordsByTasksRow, error) {
+func (q *Queries) ListWorkflowTaskStatusRecordsByTasks(ctx context.Context, taskIds []string) (metadataOperationResult0 []ListWorkflowTaskStatusRecordsByTasksRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowTaskStatusRecordsByTasks", metadataOperationErr)
+	}()
 	query := listWorkflowTaskStatusRecordsByTasks
 	var queryParams []interface{}
 	if len(taskIds) > 0 {
@@ -8336,7 +9398,6 @@ func (q *Queries) ListWorkflowTaskStatusRecordsByTasks(ctx context.Context, task
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8344,22 +9405,22 @@ func (q *Queries) ListWorkflowTaskStatusRecordsByTasks(ctx context.Context, task
 	var items []ListWorkflowTaskStatusRecordsByTasksRow
 	for rows.Next() {
 		var i ListWorkflowTaskStatusRecordsByTasksRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.TaskID,
 			&i.IsDone,
 			&i.Kind,
 			&i.PrimaryStatusRank,
 			&i.NodeIdsJson,
 			&i.AttentionTypesJson,
-		), query, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8390,9 +9451,14 @@ type ListWorkflowTransitionGroupsRow struct {
 	SortOrder    int64
 }
 
-func (q *Queries) ListWorkflowTransitionGroups(ctx context.Context, workflowID runtimeids.WorkflowID) ([]ListWorkflowTransitionGroupsRow, error) {
+func (q *Queries) ListWorkflowTransitionGroups(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 []ListWorkflowTransitionGroupsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflowTransitionGroups", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflowTransitionGroups, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowTransitionGroups, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8400,7 +9466,7 @@ func (q *Queries) ListWorkflowTransitionGroups(ctx context.Context, workflowID r
 	var items []ListWorkflowTransitionGroupsRow
 	for rows.Next() {
 		var i ListWorkflowTransitionGroupsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.WorkflowID,
 			&i.SourceNodeID,
@@ -8408,15 +9474,15 @@ func (q *Queries) ListWorkflowTransitionGroups(ctx context.Context, workflowID r
 			&i.DisplayName,
 			&i.Description,
 			&i.SortOrder,
-		), listWorkflowTransitionGroups, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowTransitionGroups, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowTransitionGroups, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8436,9 +9502,14 @@ FROM workflows
 ORDER BY updated_at_unix_ms DESC, rowid DESC
 `
 
-func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
+func (q *Queries) ListWorkflows(ctx context.Context) (metadataOperationResult0 []Workflow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkflows", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkflows)
-	err = recordQueryError(ctx, err, listWorkflows, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -8446,7 +9517,7 @@ func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
 	var items []Workflow
 	for rows.Next() {
 		var i Workflow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.Description,
@@ -8455,15 +9526,15 @@ func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
 			&i.ExecutionTargetCustomRef,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		), listWorkflows, 0); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflows, 0); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflows, 0); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8490,9 +9561,14 @@ type ListWorkspaceBindingsByCanonicalRootRow struct {
 	WorkspaceRoot      string
 }
 
-func (q *Queries) ListWorkspaceBindingsByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]ListWorkspaceBindingsByCanonicalRootRow, error) {
+func (q *Queries) ListWorkspaceBindingsByCanonicalRoot(ctx context.Context, canonicalRootPath string) (metadataOperationResult0 []ListWorkspaceBindingsByCanonicalRootRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkspaceBindingsByCanonicalRoot", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkspaceBindingsByCanonicalRoot, canonicalRootPath)
-	err = recordQueryError(ctx, err, listWorkspaceBindingsByCanonicalRoot, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8500,21 +9576,21 @@ func (q *Queries) ListWorkspaceBindingsByCanonicalRoot(ctx context.Context, cano
 	var items []ListWorkspaceBindingsByCanonicalRootRow
 	for rows.Next() {
 		var i ListWorkspaceBindingsByCanonicalRootRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ProjectID,
 			&i.ProjectDisplayName,
 			&i.ProjectKey,
 			&i.WorkspaceID,
 			&i.WorkspaceRoot,
-		), listWorkspaceBindingsByCanonicalRoot, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkspaceBindingsByCanonicalRoot, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkspaceBindingsByCanonicalRoot, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8527,9 +9603,14 @@ WHERE workspace_id = ?1
 ORDER BY rowid ASC
 `
 
-func (q *Queries) ListWorkspaceSessionIDs(ctx context.Context, workspaceID sql.NullString) ([]string, error) {
+func (q *Queries) ListWorkspaceSessionIDs(ctx context.Context, workspaceID sql.NullString) (metadataOperationResult0 []string, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkspaceSessionIDs", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkspaceSessionIDs, workspaceID)
-	err = recordQueryError(ctx, err, listWorkspaceSessionIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8537,15 +9618,15 @@ func (q *Queries) ListWorkspaceSessionIDs(ctx context.Context, workspaceID sql.N
 	var items []string
 	for rows.Next() {
 		var id string
-		if err := recordQueryError(ctx, rows.Scan(&id), listWorkspaceSessionIDs, 1); err != nil {
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkspaceSessionIDs, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkspaceSessionIDs, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8565,9 +9646,14 @@ WHERE canonical_root_path = ?1
 ORDER BY created_at_unix_ms ASC, rowid ASC
 `
 
-func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]Workspace, error) {
+func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRootPath string) (metadataOperationResult0 []Workspace, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorkspacesByCanonicalRoot", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorkspacesByCanonicalRoot, canonicalRootPath)
-	err = recordQueryError(ctx, err, listWorkspacesByCanonicalRoot, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8575,7 +9661,7 @@ func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRo
 	var items []Workspace
 	for rows.Next() {
 		var i Workspace
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.CanonicalRootPath,
@@ -8583,15 +9669,15 @@ func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRo
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.ChatDraftJson,
-		), listWorkspacesByCanonicalRoot, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkspacesByCanonicalRoot, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkspacesByCanonicalRoot, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8630,9 +9716,14 @@ type ListWorktreesByWorkspaceIDRow struct {
 	UpdatedAtUnixMs       int64
 }
 
-func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID string) ([]ListWorktreesByWorkspaceIDRow, error) {
+func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID string) (metadataOperationResult0 []ListWorktreesByWorkspaceIDRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListWorktreesByWorkspaceID", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listWorktreesByWorkspaceID, workspaceID)
-	err = recordQueryError(ctx, err, listWorktreesByWorkspaceID, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8640,7 +9731,7 @@ func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID st
 	var items []ListWorktreesByWorkspaceIDRow
 	for rows.Next() {
 		var i ListWorktreesByWorkspaceIDRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
 			&i.CanonicalRootPath,
@@ -8652,15 +9743,15 @@ func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID st
 			&i.CreationBaseCommitOid,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		), listWorktreesByWorkspaceID, 1); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorktreesByWorkspaceID, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorktreesByWorkspaceID, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8698,7 +9789,13 @@ type LockTaskExecutionTargetParams struct {
 	ExpectedManagedWorktreeID   sql.NullString
 }
 
-func (q *Queries) LockTaskExecutionTarget(ctx context.Context, arg LockTaskExecutionTargetParams) (int64, error) {
+func (q *Queries) LockTaskExecutionTarget(ctx context.Context, arg LockTaskExecutionTargetParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "LockTaskExecutionTarget", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, lockTaskExecutionTarget,
 		arg.ManagedWorktreeID,
 		arg.ExecutionTargetMode,
@@ -8710,8 +9807,6 @@ func (q *Queries) LockTaskExecutionTarget(ctx context.Context, arg LockTaskExecu
 		arg.TaskID,
 		arg.ExpectedManagedWorktreeID,
 	)
-	err = recordQueryError(ctx, err, lockTaskExecutionTarget, 9)
-
 	if err != nil {
 		return 0, err
 	}
@@ -8729,50 +9824,72 @@ type MoveProjectLabelOrdinalsToTemporaryBandParams struct {
 	ProjectID           string
 }
 
-func (q *Queries) MoveProjectLabelOrdinalsToTemporaryBand(ctx context.Context, arg MoveProjectLabelOrdinalsToTemporaryBandParams) error {
+func (q *Queries) MoveProjectLabelOrdinalsToTemporaryBand(ctx context.Context, arg MoveProjectLabelOrdinalsToTemporaryBandParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "MoveProjectLabelOrdinalsToTemporaryBand", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, moveProjectLabelOrdinalsToTemporaryBand, arg.TemporaryBandOffset, arg.ProjectID)
-	err = recordQueryError(ctx, err, moveProjectLabelOrdinalsToTemporaryBand, 2)
 	return err
 }
 
-const reconcileSessionEventLog = `-- name: ReconcileSessionEventLog :execrows
+const projectSessionAppend = `-- name: ProjectSessionAppend :execrows
 UPDATE sessions
 SET
-    last_sequence = ?1,
+    first_prompt_preview = CASE
+        WHEN first_prompt_preview = '' AND ?1 IS NOT NULL
+            THEN ?1
+        ELSE first_prompt_preview
+    END,
     updated_at_unix_ms = MAX(updated_at_unix_ms, ?2),
-    usage_state_json = CASE
-        WHEN ?3 <> 0 THEN 'null'
-        ELSE usage_state_json
+    launch_visible = CASE
+        WHEN launch_visible <> 0 OR ?1 IS NOT NULL THEN 1
+        ELSE 0
     END,
     metadata_json = json_set(
-        CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+        metadata_json,
         '$.conversation_established',
-        json(CASE WHEN ?4 <> 0 THEN 'true' ELSE 'false' END)
+        CASE
+            WHEN json_extract(metadata_json, '$.conversation_established') = 1
+                OR ?3 <> 0
+                THEN json('true')
+            ELSE json('false')
+        END,
+        '$.generated_recovered_warning_issued',
+        CASE
+            WHEN json_extract(metadata_json, '$.generated_recovered_warning_issued') = 1
+                OR ?4 <> 0
+                THEN json('true')
+            ELSE json('false')
+        END
     )
 WHERE id = ?5
-  AND last_sequence = ?6
 `
 
-type ReconcileSessionEventLogParams struct {
-	LastSequence            int64
-	UpdatedAtUnixMs         interface{}
-	InvalidateUsageState    interface{}
-	ConversationEstablished interface{}
-	SessionID               string
-	ObservedLastSequence    int64
+type ProjectSessionAppendParams struct {
+	FirstPromptPreview              interface{}
+	UpdatedAtUnixMs                 interface{}
+	ConversationEstablished         interface{}
+	GeneratedRecoveredWarningIssued interface{}
+	ID                              string
 }
 
-func (q *Queries) ReconcileSessionEventLog(ctx context.Context, arg ReconcileSessionEventLogParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, reconcileSessionEventLog,
-		arg.LastSequence,
+func (q *Queries) ProjectSessionAppend(ctx context.Context, arg ProjectSessionAppendParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ProjectSessionAppend", metadataOperationErr)
+	}()
+	result, err := q.db.ExecContext(ctx, projectSessionAppend,
+		arg.FirstPromptPreview,
 		arg.UpdatedAtUnixMs,
-		arg.InvalidateUsageState,
 		arg.ConversationEstablished,
-		arg.SessionID,
-		arg.ObservedLastSequence,
+		arg.GeneratedRecoveredWarningIssued,
+		arg.ID,
 	)
-	err = recordQueryError(ctx, err, reconcileSessionEventLog, 6)
-
 	if err != nil {
 		return 0, err
 	}
@@ -8814,9 +9931,14 @@ type RecoverExecutableCurrentNodesRow struct {
 	TransitionBranchKey sql.NullString
 }
 
-func (q *Queries) RecoverExecutableCurrentNodes(ctx context.Context, arg RecoverExecutableCurrentNodesParams) ([]RecoverExecutableCurrentNodesRow, error) {
+func (q *Queries) RecoverExecutableCurrentNodes(ctx context.Context, arg RecoverExecutableCurrentNodesParams) (metadataOperationResult0 []RecoverExecutableCurrentNodesRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "RecoverExecutableCurrentNodes", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, recoverExecutableCurrentNodes, arg.InterruptionReason, arg.InterruptionDetailJson, arg.InterruptedAtUnixMs)
-	err = recordQueryError(ctx, err, recoverExecutableCurrentNodes, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -8824,15 +9946,15 @@ func (q *Queries) RecoverExecutableCurrentNodes(ctx context.Context, arg Recover
 	var items []RecoverExecutableCurrentNodesRow
 	for rows.Next() {
 		var i RecoverExecutableCurrentNodesRow
-		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.Column2, &i.TransitionBranchKey), recoverExecutableCurrentNodes, 3); err != nil {
+		if err := rows.Scan(&i.TaskID, &i.Column2, &i.TransitionBranchKey); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), recoverExecutableCurrentNodes, 3); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), recoverExecutableCurrentNodes, 3); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8862,7 +9984,13 @@ type RenameProjectLabelRow struct {
 	Ordinal   int64
 }
 
-func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabelParams) (RenameProjectLabelRow, error) {
+func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabelParams) (metadataOperationResult0 RenameProjectLabelRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return RenameProjectLabelRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "RenameProjectLabel", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, renameProjectLabel,
 		arg.Name,
 		arg.UpdatedAtUnixMs,
@@ -8870,13 +9998,12 @@ func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabel
 		arg.ProjectID,
 	)
 	var i RenameProjectLabelRow
-	err := recordQueryError(ctx, row.Scan(
+	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.Name,
 		&i.Ordinal,
-	), renameProjectLabel, 4)
-
+	)
 	return i, err
 }
 
@@ -8896,9 +10023,14 @@ type ReplacePendingInitialManagedBranchNameParams struct {
 	TaskID                          string
 }
 
-func (q *Queries) ReplacePendingInitialManagedBranchName(ctx context.Context, arg ReplacePendingInitialManagedBranchNameParams) (int64, error) {
+func (q *Queries) ReplacePendingInitialManagedBranchName(ctx context.Context, arg ReplacePendingInitialManagedBranchNameParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ReplacePendingInitialManagedBranchName", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, replacePendingInitialManagedBranchName, arg.PendingInitialManagedBranchName, arg.UpdatedAtUnixMs, arg.TaskID)
-	err = recordQueryError(ctx, err, replacePendingInitialManagedBranchName, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -8928,7 +10060,13 @@ type ReplaceUserInterruptionWithAssignmentFailureParams struct {
 	TransitionBranchKey    interface{}
 }
 
-func (q *Queries) ReplaceUserInterruptionWithAssignmentFailure(ctx context.Context, arg ReplaceUserInterruptionWithAssignmentFailureParams) (int64, error) {
+func (q *Queries) ReplaceUserInterruptionWithAssignmentFailure(ctx context.Context, arg ReplaceUserInterruptionWithAssignmentFailureParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ReplaceUserInterruptionWithAssignmentFailure", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, replaceUserInterruptionWithAssignmentFailure,
 		arg.InterruptionDetailJson,
 		arg.InterruptedAtUnixMs,
@@ -8936,8 +10074,6 @@ func (q *Queries) ReplaceUserInterruptionWithAssignmentFailure(ctx context.Conte
 		arg.NodeID,
 		arg.TransitionBranchKey,
 	)
-	err = recordQueryError(ctx, err, replaceUserInterruptionWithAssignmentFailure, 5)
-
 	if err != nil {
 		return 0, err
 	}
@@ -8955,9 +10091,14 @@ type ReplaceWorkspaceChatDraftParams struct {
 	ID            string
 }
 
-func (q *Queries) ReplaceWorkspaceChatDraft(ctx context.Context, arg ReplaceWorkspaceChatDraftParams) (int64, error) {
+func (q *Queries) ReplaceWorkspaceChatDraft(ctx context.Context, arg ReplaceWorkspaceChatDraftParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ReplaceWorkspaceChatDraft", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, replaceWorkspaceChatDraft, arg.ChatDraftJson, arg.ID)
-	err = recordQueryError(ctx, err, replaceWorkspaceChatDraft, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -8983,9 +10124,14 @@ type ResolveDeferredSelfTaskActiveFanoutBranchSourceParams struct {
 	TransitionBranchKey string
 }
 
-func (q *Queries) ResolveDeferredSelfTaskActiveFanoutBranchSource(ctx context.Context, arg ResolveDeferredSelfTaskActiveFanoutBranchSourceParams) (int64, error) {
+func (q *Queries) ResolveDeferredSelfTaskActiveFanoutBranchSource(ctx context.Context, arg ResolveDeferredSelfTaskActiveFanoutBranchSourceParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ResolveDeferredSelfTaskActiveFanoutBranchSource", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, resolveDeferredSelfTaskActiveFanoutBranchSource, arg.SourceSessionID, arg.TaskID, arg.TransitionBranchKey)
-	err = recordQueryError(ctx, err, resolveDeferredSelfTaskActiveFanoutBranchSource, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9017,9 +10163,14 @@ type ResumeBranchCurrentNodeParams struct {
 	TransitionBranchKey sql.NullString
 }
 
-func (q *Queries) ResumeBranchCurrentNode(ctx context.Context, arg ResumeBranchCurrentNodeParams) (int64, error) {
+func (q *Queries) ResumeBranchCurrentNode(ctx context.Context, arg ResumeBranchCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ResumeBranchCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, resumeBranchCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
-	err = recordQueryError(ctx, err, resumeBranchCurrentNode, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9050,9 +10201,14 @@ type ResumeSerialCurrentNodeParams struct {
 	NodeID string
 }
 
-func (q *Queries) ResumeSerialCurrentNode(ctx context.Context, arg ResumeSerialCurrentNodeParams) (int64, error) {
+func (q *Queries) ResumeSerialCurrentNode(ctx context.Context, arg ResumeSerialCurrentNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ResumeSerialCurrentNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, resumeSerialCurrentNode, arg.TaskID, arg.NodeID)
-	err = recordQueryError(ctx, err, resumeSerialCurrentNode, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -9094,7 +10250,13 @@ type RetargetSessionWorkspaceProjectParams struct {
 	SourceArtifactRelpath    string
 }
 
-func (q *Queries) RetargetSessionWorkspaceProject(ctx context.Context, arg RetargetSessionWorkspaceProjectParams) (int64, error) {
+func (q *Queries) RetargetSessionWorkspaceProject(ctx context.Context, arg RetargetSessionWorkspaceProjectParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "RetargetSessionWorkspaceProject", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, retargetSessionWorkspaceProject,
 		arg.TargetProjectID,
 		arg.TargetWorkspaceID,
@@ -9106,8 +10268,6 @@ func (q *Queries) RetargetSessionWorkspaceProject(ctx context.Context, arg Retar
 		arg.SourceProjectID,
 		arg.SourceArtifactRelpath,
 	)
-	err = recordQueryError(ctx, err, retargetSessionWorkspaceProject, 9)
-
 	if err != nil {
 		return 0, err
 	}
@@ -9131,15 +10291,19 @@ type RetireBranchCurrentSessionWorkflowNodeAssociationParams struct {
 	SessionID           string
 }
 
-func (q *Queries) RetireBranchCurrentSessionWorkflowNodeAssociation(ctx context.Context, arg RetireBranchCurrentSessionWorkflowNodeAssociationParams) error {
+func (q *Queries) RetireBranchCurrentSessionWorkflowNodeAssociation(ctx context.Context, arg RetireBranchCurrentSessionWorkflowNodeAssociationParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "RetireBranchCurrentSessionWorkflowNodeAssociation", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, retireBranchCurrentSessionWorkflowNodeAssociation,
 		arg.TaskID,
 		arg.NodeID,
 		arg.TransitionBranchKey,
 		arg.SessionID,
 	)
-	err = recordQueryError(ctx, err, retireBranchCurrentSessionWorkflowNodeAssociation, 4)
-
 	return err
 }
 
@@ -9159,9 +10323,14 @@ type RetireSerialCurrentSessionWorkflowNodeAssociationParams struct {
 	SessionID string
 }
 
-func (q *Queries) RetireSerialCurrentSessionWorkflowNodeAssociation(ctx context.Context, arg RetireSerialCurrentSessionWorkflowNodeAssociationParams) error {
+func (q *Queries) RetireSerialCurrentSessionWorkflowNodeAssociation(ctx context.Context, arg RetireSerialCurrentSessionWorkflowNodeAssociationParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "RetireSerialCurrentSessionWorkflowNodeAssociation", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, retireSerialCurrentSessionWorkflowNodeAssociation, arg.TaskID, arg.NodeID, arg.SessionID)
-	err = recordQueryError(ctx, err, retireSerialCurrentSessionWorkflowNodeAssociation, 3)
 	return err
 }
 
@@ -9179,9 +10348,53 @@ type SetProjectDefaultWorkflowLinkParams struct {
 	ProjectID             string
 }
 
-func (q *Queries) SetProjectDefaultWorkflowLink(ctx context.Context, arg SetProjectDefaultWorkflowLinkParams) (int64, error) {
+func (q *Queries) SetProjectDefaultWorkflowLink(ctx context.Context, arg SetProjectDefaultWorkflowLinkParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "SetProjectDefaultWorkflowLink", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, setProjectDefaultWorkflowLink, arg.ProjectWorkflowLinkID, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, setProjectDefaultWorkflowLink, 3)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setProjectDefaultWorkflowLinkByWorkflow = `-- name: SetProjectDefaultWorkflowLinkByWorkflow :execrows
+UPDATE projects
+SET
+    default_project_workflow_link_id = (
+        SELECT project_workflow_links.id
+        FROM project_workflow_links
+        WHERE project_workflow_links.project_id = projects.id
+          AND project_workflow_links.workflow_id = ?1
+    ),
+    updated_at_unix_ms = ?2
+WHERE projects.id = ?3
+  AND EXISTS (
+      SELECT 1
+      FROM project_workflow_links
+      WHERE project_workflow_links.project_id = projects.id
+        AND project_workflow_links.workflow_id = ?1
+  )
+`
+
+type SetProjectDefaultWorkflowLinkByWorkflowParams struct {
+	WorkflowID      runtimeids.WorkflowID
+	UpdatedAtUnixMs int64
+	ProjectID       string
+}
+
+func (q *Queries) SetProjectDefaultWorkflowLinkByWorkflow(ctx context.Context, arg SetProjectDefaultWorkflowLinkByWorkflowParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "SetProjectDefaultWorkflowLinkByWorkflow", metadataOperationErr)
+	}()
+	result, err := q.db.ExecContext(ctx, setProjectDefaultWorkflowLinkByWorkflow, arg.WorkflowID, arg.UpdatedAtUnixMs, arg.ProjectID)
 	if err != nil {
 		return 0, err
 	}
@@ -9202,9 +10415,14 @@ type SetProjectDisplayNameParams struct {
 	ProjectID       string
 }
 
-func (q *Queries) SetProjectDisplayName(ctx context.Context, arg SetProjectDisplayNameParams) (int64, error) {
+func (q *Queries) SetProjectDisplayName(ctx context.Context, arg SetProjectDisplayNameParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "SetProjectDisplayName", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, setProjectDisplayName, arg.DisplayName, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, setProjectDisplayName, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9225,9 +10443,14 @@ type SetProjectKeyParams struct {
 	ProjectID       string
 }
 
-func (q *Queries) SetProjectKey(ctx context.Context, arg SetProjectKeyParams) (int64, error) {
+func (q *Queries) SetProjectKey(ctx context.Context, arg SetProjectKeyParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "SetProjectKey", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, setProjectKey, arg.ProjectKey, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, setProjectKey, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9247,9 +10470,14 @@ type SetProjectLabelOrdinalParams struct {
 	ProjectID string
 }
 
-func (q *Queries) SetProjectLabelOrdinal(ctx context.Context, arg SetProjectLabelOrdinalParams) error {
+func (q *Queries) SetProjectLabelOrdinal(ctx context.Context, arg SetProjectLabelOrdinalParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "SetProjectLabelOrdinal", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, setProjectLabelOrdinal, arg.Ordinal, arg.ID, arg.ProjectID)
-	err = recordQueryError(ctx, err, setProjectLabelOrdinal, 3)
 	return err
 }
 
@@ -9258,7 +10486,13 @@ UPDATE projects
 SET
     primary_workspace_id = ?1,
     updated_at_unix_ms = ?2
-WHERE id = ?3
+WHERE projects.id = ?3
+  AND EXISTS (
+      SELECT 1
+      FROM workspaces
+      WHERE workspaces.id = ?1
+        AND workspaces.project_id = projects.id
+  )
 `
 
 type SetProjectPrimaryWorkspaceParams struct {
@@ -9267,9 +10501,14 @@ type SetProjectPrimaryWorkspaceParams struct {
 	ProjectID       string
 }
 
-func (q *Queries) SetProjectPrimaryWorkspace(ctx context.Context, arg SetProjectPrimaryWorkspaceParams) (int64, error) {
+func (q *Queries) SetProjectPrimaryWorkspace(ctx context.Context, arg SetProjectPrimaryWorkspaceParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "SetProjectPrimaryWorkspace", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, setProjectPrimaryWorkspace, arg.WorkspaceID, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, setProjectPrimaryWorkspace, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9287,9 +10526,14 @@ type TouchTaskUpdatedAtParams struct {
 	TaskID          string
 }
 
-func (q *Queries) TouchTaskUpdatedAt(ctx context.Context, arg TouchTaskUpdatedAtParams) (int64, error) {
+func (q *Queries) TouchTaskUpdatedAt(ctx context.Context, arg TouchTaskUpdatedAtParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "TouchTaskUpdatedAt", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, touchTaskUpdatedAt, arg.UpdatedAtUnixMs, arg.TaskID)
-	err = recordQueryError(ctx, err, touchTaskUpdatedAt, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -9310,7 +10554,13 @@ type TouchTasksUpdatedAtParams struct {
 	TaskIds         []string
 }
 
-func (q *Queries) TouchTasksUpdatedAt(ctx context.Context, arg TouchTasksUpdatedAtParams) (int64, error) {
+func (q *Queries) TouchTasksUpdatedAt(ctx context.Context, arg TouchTasksUpdatedAtParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "TouchTasksUpdatedAt", metadataOperationErr)
+	}()
 	query := touchTasksUpdatedAt
 	var queryParams []interface{}
 	queryParams = append(queryParams, arg.UpdatedAtUnixMs)
@@ -9323,7 +10573,6 @@ func (q *Queries) TouchTasksUpdatedAt(ctx context.Context, arg TouchTasksUpdated
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	result, err := q.db.ExecContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -9377,9 +10626,14 @@ type TouchWorkflowDependencySurvivorsParams struct {
 	WorkflowID      runtimeids.WorkflowID
 }
 
-func (q *Queries) TouchWorkflowDependencySurvivors(ctx context.Context, arg TouchWorkflowDependencySurvivorsParams) (int64, error) {
+func (q *Queries) TouchWorkflowDependencySurvivors(ctx context.Context, arg TouchWorkflowDependencySurvivorsParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "TouchWorkflowDependencySurvivors", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, touchWorkflowDependencySurvivors, arg.UpdatedAtUnixMs, arg.WorkflowID)
-	err = recordQueryError(ctx, err, touchWorkflowDependencySurvivors, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -9400,9 +10654,14 @@ type UpdateSessionContextFactsParams struct {
 	SessionID                string
 }
 
-func (q *Queries) UpdateSessionContextFacts(ctx context.Context, arg UpdateSessionContextFactsParams) (int64, error) {
+func (q *Queries) UpdateSessionContextFacts(ctx context.Context, arg UpdateSessionContextFactsParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateSessionContextFacts", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateSessionContextFacts, arg.CompletedCompactionCount, arg.ManualCompactEligible, arg.SessionID)
-	err = recordQueryError(ctx, err, updateSessionContextFacts, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9425,15 +10684,19 @@ type UpdateSessionExecutionTargetByIDParams struct {
 	SessionID   string
 }
 
-func (q *Queries) UpdateSessionExecutionTargetByID(ctx context.Context, arg UpdateSessionExecutionTargetByIDParams) (int64, error) {
+func (q *Queries) UpdateSessionExecutionTargetByID(ctx context.Context, arg UpdateSessionExecutionTargetByIDParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateSessionExecutionTargetByID", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateSessionExecutionTargetByID,
 		arg.WorkspaceID,
 		arg.WorktreeID,
 		arg.CwdRelpath,
 		arg.SessionID,
 	)
-	err = recordQueryError(ctx, err, updateSessionExecutionTargetByID, 4)
-
 	if err != nil {
 		return 0, err
 	}
@@ -9451,9 +10714,14 @@ type UpdateSessionManualCompactEligibilityParams struct {
 	SessionID             string
 }
 
-func (q *Queries) UpdateSessionManualCompactEligibility(ctx context.Context, arg UpdateSessionManualCompactEligibilityParams) (int64, error) {
+func (q *Queries) UpdateSessionManualCompactEligibility(ctx context.Context, arg UpdateSessionManualCompactEligibilityParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateSessionManualCompactEligibility", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateSessionManualCompactEligibility, arg.ManualCompactEligible, arg.SessionID)
-	err = recordQueryError(ctx, err, updateSessionManualCompactEligibility, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -9476,9 +10744,14 @@ type UpdateTaskActiveFanoutBranchArrivalParams struct {
 	TransitionBranchKey string
 }
 
-func (q *Queries) UpdateTaskActiveFanoutBranchArrival(ctx context.Context, arg UpdateTaskActiveFanoutBranchArrivalParams) (int64, error) {
+func (q *Queries) UpdateTaskActiveFanoutBranchArrival(ctx context.Context, arg UpdateTaskActiveFanoutBranchArrivalParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateTaskActiveFanoutBranchArrival", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateTaskActiveFanoutBranchArrival, arg.ArrivalValuesJson, arg.TaskID, arg.TransitionBranchKey)
-	err = recordQueryError(ctx, err, updateTaskActiveFanoutBranchArrival, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9504,7 +10777,13 @@ type UpdateTaskActiveFanoutBranchContinuationSourceParams struct {
 	TransitionBranchKey         string
 }
 
-func (q *Queries) UpdateTaskActiveFanoutBranchContinuationSource(ctx context.Context, arg UpdateTaskActiveFanoutBranchContinuationSourceParams) (int64, error) {
+func (q *Queries) UpdateTaskActiveFanoutBranchContinuationSource(ctx context.Context, arg UpdateTaskActiveFanoutBranchContinuationSourceParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateTaskActiveFanoutBranchContinuationSource", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateTaskActiveFanoutBranchContinuationSource,
 		arg.ContinuationSourceKind,
 		arg.ContinuationSourceSessionID,
@@ -9512,8 +10791,6 @@ func (q *Queries) UpdateTaskActiveFanoutBranchContinuationSource(ctx context.Con
 		arg.TaskID,
 		arg.TransitionBranchKey,
 	)
-	err = recordQueryError(ctx, err, updateTaskActiveFanoutBranchContinuationSource, 5)
-
 	if err != nil {
 		return 0, err
 	}
@@ -9534,9 +10811,14 @@ type UpdateTaskCommentBodyParams struct {
 	ID              string
 }
 
-func (q *Queries) UpdateTaskCommentBody(ctx context.Context, arg UpdateTaskCommentBodyParams) (int64, error) {
+func (q *Queries) UpdateTaskCommentBody(ctx context.Context, arg UpdateTaskCommentBodyParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateTaskCommentBody", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateTaskCommentBody, arg.Body, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateTaskCommentBody, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9563,7 +10845,13 @@ type UpdateTaskEditableFieldsParams struct {
 	ID                string
 }
 
-func (q *Queries) UpdateTaskEditableFields(ctx context.Context, arg UpdateTaskEditableFieldsParams) (int64, error) {
+func (q *Queries) UpdateTaskEditableFields(ctx context.Context, arg UpdateTaskEditableFieldsParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateTaskEditableFields", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateTaskEditableFields,
 		arg.Title,
 		arg.Body,
@@ -9572,8 +10860,6 @@ func (q *Queries) UpdateTaskEditableFields(ctx context.Context, arg UpdateTaskEd
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateTaskEditableFields, 6)
-
 	if err != nil {
 		return 0, err
 	}
@@ -9594,9 +10880,14 @@ type UpdateTaskManagedWorktreeParams struct {
 	ID                string
 }
 
-func (q *Queries) UpdateTaskManagedWorktree(ctx context.Context, arg UpdateTaskManagedWorktreeParams) (int64, error) {
+func (q *Queries) UpdateTaskManagedWorktree(ctx context.Context, arg UpdateTaskManagedWorktreeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateTaskManagedWorktree", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateTaskManagedWorktree, arg.ManagedWorktreeID, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateTaskManagedWorktree, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9620,15 +10911,19 @@ type UpdateWorkflowInfoParams struct {
 	ID              runtimeids.WorkflowID
 }
 
-func (q *Queries) UpdateWorkflowInfo(ctx context.Context, arg UpdateWorkflowInfoParams) (int64, error) {
+func (q *Queries) UpdateWorkflowInfo(ctx context.Context, arg UpdateWorkflowInfoParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateWorkflowInfo", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateWorkflowInfo,
 		arg.Name,
 		arg.Description,
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowInfo, 4)
-
 	if err != nil {
 		return 0, err
 	}
@@ -9651,15 +10946,19 @@ type UpdateWorkflowInfoWithoutVersionParams struct {
 	ID              runtimeids.WorkflowID
 }
 
-func (q *Queries) UpdateWorkflowInfoWithoutVersion(ctx context.Context, arg UpdateWorkflowInfoWithoutVersionParams) (int64, error) {
+func (q *Queries) UpdateWorkflowInfoWithoutVersion(ctx context.Context, arg UpdateWorkflowInfoWithoutVersionParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateWorkflowInfoWithoutVersion", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateWorkflowInfoWithoutVersion,
 		arg.Name,
 		arg.Description,
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowInfoWithoutVersion, 4)
-
 	if err != nil {
 		return 0, err
 	}
@@ -9687,7 +10986,13 @@ type UpdateWorkflowMetadataParams struct {
 	ID                       runtimeids.WorkflowID
 }
 
-func (q *Queries) UpdateWorkflowMetadata(ctx context.Context, arg UpdateWorkflowMetadataParams) (int64, error) {
+func (q *Queries) UpdateWorkflowMetadata(ctx context.Context, arg UpdateWorkflowMetadataParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateWorkflowMetadata", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateWorkflowMetadata,
 		arg.Name,
 		arg.Description,
@@ -9696,8 +11001,6 @@ func (q *Queries) UpdateWorkflowMetadata(ctx context.Context, arg UpdateWorkflow
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowMetadata, 6)
-
 	if err != nil {
 		return 0, err
 	}
@@ -9724,7 +11027,13 @@ type UpdateWorkflowMetadataWithoutVersionParams struct {
 	ID                       runtimeids.WorkflowID
 }
 
-func (q *Queries) UpdateWorkflowMetadataWithoutVersion(ctx context.Context, arg UpdateWorkflowMetadataWithoutVersionParams) (int64, error) {
+func (q *Queries) UpdateWorkflowMetadataWithoutVersion(ctx context.Context, arg UpdateWorkflowMetadataWithoutVersionParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateWorkflowMetadataWithoutVersion", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateWorkflowMetadataWithoutVersion,
 		arg.Name,
 		arg.Description,
@@ -9733,8 +11042,6 @@ func (q *Queries) UpdateWorkflowMetadataWithoutVersion(ctx context.Context, arg 
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowMetadataWithoutVersion, 6)
-
 	if err != nil {
 		return 0, err
 	}
@@ -9755,9 +11062,14 @@ type UpdateWorkspaceBindingCanonicalRootParams struct {
 	ID                string
 }
 
-func (q *Queries) UpdateWorkspaceBindingCanonicalRoot(ctx context.Context, arg UpdateWorkspaceBindingCanonicalRootParams) (int64, error) {
+func (q *Queries) UpdateWorkspaceBindingCanonicalRoot(ctx context.Context, arg UpdateWorkspaceBindingCanonicalRootParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateWorkspaceBindingCanonicalRoot", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateWorkspaceBindingCanonicalRoot, arg.CanonicalRootPath, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateWorkspaceBindingCanonicalRoot, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9778,9 +11090,14 @@ type UpdateWorktreeCanonicalRootParams struct {
 	ID                string
 }
 
-func (q *Queries) UpdateWorktreeCanonicalRoot(ctx context.Context, arg UpdateWorktreeCanonicalRootParams) (int64, error) {
+func (q *Queries) UpdateWorktreeCanonicalRoot(ctx context.Context, arg UpdateWorktreeCanonicalRootParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateWorktreeCanonicalRoot", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, updateWorktreeCanonicalRoot, arg.CanonicalRootPath, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateWorktreeCanonicalRoot, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -9815,7 +11132,13 @@ type UpsertProjectParams struct {
 	MetadataJson    string
 }
 
-func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) error {
+func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpsertProject", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, upsertProject,
 		arg.ID,
 		arg.DisplayName,
@@ -9823,8 +11146,6 @@ func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) er
 		arg.UpdatedAtUnixMs,
 		arg.MetadataJson,
 	)
-	err = recordQueryError(ctx, err, upsertProject, 5)
-
 	return err
 }
 
@@ -9843,7 +11164,6 @@ INSERT INTO sessions (
     category,
     created_at_unix_ms,
     updated_at_unix_ms,
-    last_sequence,
     model_request_count,
     launch_visible,
     cwd_relpath,
@@ -9875,8 +11195,7 @@ INSERT INTO sessions (
     ?19,
     ?20,
     ?21,
-    ?22,
-    ?23
+    ?22
 )
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
@@ -9886,7 +11205,6 @@ ON CONFLICT(id) DO UPDATE SET
     parent_agent_session_id = excluded.parent_agent_session_id,
     category = excluded.category,
     updated_at_unix_ms = MAX(sessions.updated_at_unix_ms, excluded.updated_at_unix_ms),
-    last_sequence = excluded.last_sequence,
     model_request_count = excluded.model_request_count,
     launch_visible = CASE
         WHEN sessions.launch_visible <> 0 OR excluded.launch_visible <> 0 THEN 1
@@ -9912,7 +11230,6 @@ type UpsertSessionParams struct {
 	Category                 sql.NullString
 	CreatedAtUnixMs          int64
 	UpdatedAtUnixMs          int64
-	LastSequence             int64
 	ModelRequestCount        int64
 	LaunchVisible            int64
 	CwdRelpath               string
@@ -9924,7 +11241,13 @@ type UpsertSessionParams struct {
 	ManualCompactEligible    sql.NullInt64
 }
 
-func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) error {
+func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpsertSession", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, upsertSession,
 		arg.ID,
 		arg.ProjectID,
@@ -9939,7 +11262,6 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.Category,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
-		arg.LastSequence,
 		arg.ModelRequestCount,
 		arg.LaunchVisible,
 		arg.CwdRelpath,
@@ -9950,8 +11272,6 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.CompletedCompactionCount,
 		arg.ManualCompactEligible,
 	)
-	err = recordQueryError(ctx, err, upsertSession, 23)
-
 	return err
 }
 
@@ -10031,7 +11351,13 @@ type UpsertWorkflowEdgeParams struct {
 	WorkflowID             runtimeids.WorkflowID
 }
 
-func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdgeParams) (int64, error) {
+func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdgeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpsertWorkflowEdge", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, upsertWorkflowEdge,
 		arg.ID,
 		arg.TransitionGroupID,
@@ -10050,8 +11376,6 @@ func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdge
 		arg.SortOrder,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowEdge, 16)
-
 	if err != nil {
 		return 0, err
 	}
@@ -10103,7 +11427,13 @@ type UpsertWorkflowNodeParams struct {
 	SortOrder              int64
 }
 
-func (q *Queries) UpsertWorkflowNode(ctx context.Context, arg UpsertWorkflowNodeParams) (int64, error) {
+func (q *Queries) UpsertWorkflowNode(ctx context.Context, arg UpsertWorkflowNodeParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpsertWorkflowNode", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, upsertWorkflowNode,
 		arg.ID,
 		arg.WorkflowID,
@@ -10117,8 +11447,6 @@ func (q *Queries) UpsertWorkflowNode(ctx context.Context, arg UpsertWorkflowNode
 		arg.GroupID,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowNode, 11)
-
 	if err != nil {
 		return 0, err
 	}
@@ -10149,7 +11477,13 @@ type UpsertWorkflowNodeGroupParams struct {
 	SortOrder   int64
 }
 
-func (q *Queries) UpsertWorkflowNodeGroup(ctx context.Context, arg UpsertWorkflowNodeGroupParams) (int64, error) {
+func (q *Queries) UpsertWorkflowNodeGroup(ctx context.Context, arg UpsertWorkflowNodeGroupParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpsertWorkflowNodeGroup", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, upsertWorkflowNodeGroup,
 		arg.ID,
 		arg.WorkflowID,
@@ -10157,8 +11491,6 @@ func (q *Queries) UpsertWorkflowNodeGroup(ctx context.Context, arg UpsertWorkflo
 		arg.DisplayName,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowNodeGroup, 5)
-
 	if err != nil {
 		return 0, err
 	}
@@ -10208,7 +11540,13 @@ type UpsertWorkflowTransitionGroupParams struct {
 	WorkflowID   runtimeids.WorkflowID
 }
 
-func (q *Queries) UpsertWorkflowTransitionGroup(ctx context.Context, arg UpsertWorkflowTransitionGroupParams) (int64, error) {
+func (q *Queries) UpsertWorkflowTransitionGroup(ctx context.Context, arg UpsertWorkflowTransitionGroupParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpsertWorkflowTransitionGroup", metadataOperationErr)
+	}()
 	result, err := q.db.ExecContext(ctx, upsertWorkflowTransitionGroup,
 		arg.ID,
 		arg.SourceNodeID,
@@ -10218,8 +11556,6 @@ func (q *Queries) UpsertWorkflowTransitionGroup(ctx context.Context, arg UpsertW
 		arg.SortOrder,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowTransitionGroup, 7)
-
 	if err != nil {
 		return 0, err
 	}
@@ -10258,7 +11594,13 @@ type UpsertWorkspaceParams struct {
 	UpdatedAtUnixMs   int64
 }
 
-func (q *Queries) UpsertWorkspace(ctx context.Context, arg UpsertWorkspaceParams) error {
+func (q *Queries) UpsertWorkspace(ctx context.Context, arg UpsertWorkspaceParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpsertWorkspace", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, upsertWorkspace,
 		arg.ID,
 		arg.ProjectID,
@@ -10267,8 +11609,6 @@ func (q *Queries) UpsertWorkspace(ctx context.Context, arg UpsertWorkspaceParams
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, upsertWorkspace, 6)
-
 	return err
 }
 
@@ -10318,7 +11658,13 @@ type UpsertWorktreeParams struct {
 	UpdatedAtUnixMs       int64
 }
 
-func (q *Queries) UpsertWorktree(ctx context.Context, arg UpsertWorktreeParams) error {
+func (q *Queries) UpsertWorktree(ctx context.Context, arg UpsertWorktreeParams) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpsertWorktree", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(ctx, upsertWorktree,
 		arg.ID,
 		arg.WorkspaceID,
@@ -10331,8 +11677,6 @@ func (q *Queries) UpsertWorktree(ctx context.Context, arg UpsertWorktreeParams) 
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, upsertWorktree, 10)
-
 	return err
 }
 
@@ -10345,9 +11689,14 @@ WHERE task_search_fts MATCH ?1
 LIMIT 1
 `
 
-func (q *Queries) ValidateTaskSearchFTS5Expression(ctx context.Context, fts5Expression sql.NullString) ([]int64, error) {
+func (q *Queries) ValidateTaskSearchFTS5Expression(ctx context.Context, fts5Expression sql.NullString) (metadataOperationResult0 []int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ValidateTaskSearchFTS5Expression", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, validateTaskSearchFTS5Expression, fts5Expression)
-	err = recordQueryError(ctx, err, validateTaskSearchFTS5Expression, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -10355,15 +11704,15 @@ func (q *Queries) ValidateTaskSearchFTS5Expression(ctx context.Context, fts5Expr
 	var items []int64
 	for rows.Next() {
 		var document_id int64
-		if err := recordQueryError(ctx, rows.Scan(&document_id), validateTaskSearchFTS5Expression, 1); err != nil {
+		if err := rows.Scan(&document_id); err != nil {
 			return nil, err
 		}
 		items = append(items, document_id)
 	}
-	if err := recordQueryError(ctx, rows.Close(), validateTaskSearchFTS5Expression, 1); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), validateTaskSearchFTS5Expression, 1); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -10380,10 +11729,15 @@ SELECT CAST(EXISTS (
 ) AS INTEGER) AS has_continue_session_edge
 `
 
-func (q *Queries) WorkflowHasContinueSessionEdge(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+func (q *Queries) WorkflowHasContinueSessionEdge(ctx context.Context, workflowID runtimeids.WorkflowID) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "WorkflowHasContinueSessionEdge", metadataOperationErr)
+	}()
 	row := q.db.QueryRowContext(ctx, workflowHasContinueSessionEdge, workflowID)
 	var has_continue_session_edge int64
-	err := recordQueryError(ctx, row.Scan(&has_continue_session_edge), workflowHasContinueSessionEdge, 1)
-
+	err := row.Scan(&has_continue_session_edge)
 	return has_continue_session_edge, err
 }

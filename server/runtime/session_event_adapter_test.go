@@ -58,12 +58,61 @@ func TestSessionMessageRecordAdapterRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adapt message to session record: %v", err)
 	}
-	restored, err := llmMessageFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("adapt session record to message: %v", err)
-	}
+	restored := llmMessageFromSessionRecord(record)
 	if !reflect.DeepEqual(restored, message) {
 		t.Fatalf("restored message = %#v, want %#v", restored, message)
+	}
+}
+
+func TestDecodedSessionRecordsReachRuntimeUnchanged(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	appendRawCurrentEventLine(t, store, []byte(`{"seq":1,"kind":"message","payload":{"role":"assistant","content":"kept exactly","tool_calls":[{"call_id":"call-1","name":"exec_command","kind":"function","presentation":{"ToolName":"exec_command"},"input":{"cmd":"pwd"}}]}}`))
+	appendRawCurrentEventLine(t, store, []byte(`{"seq":2,"kind":"tool_completed","payload":{"call_id":"call-1","name":"exec_command","output_kind":"function","is_error":false,"output":{"cwd":"/tmp"},"summary":"kept summary","presentation":{"ToolName":"exec_command"},"provider_items":[{"type":"function_call_output","call_id":"call-1","raw":{"type":"function_call_output","call_id":"call-1","output":"{\"cwd\":\"/tmp\"}"}}]}}`))
+	appendRawCurrentEventLine(t, store, []byte(`{"seq":3,"kind":"local_entry","payload":{"visibility":"detail","role":"developer","text":"kept local text","after_tool_call_id":"call-1"}}`))
+	appendRawCurrentEventLine(t, store, []byte(`{"seq":4,"kind":"history_replaced","payload":{"engine":"local","mode":"auto","compaction_number":2,"items":[{"type":"message","role":"user","content":"kept history","raw":{"type":"message","role":"user","content":"kept history"}}]}}`))
+
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(4)
+	if err != nil {
+		t.Fatalf("decode persisted records: %v", err)
+	}
+	if len(window.Records) != 4 {
+		t.Fatalf("decoded record count = %d, want 4", len(window.Records))
+	}
+
+	message := llmMessageFromSessionRecord(mustSessionEventPayload(window.Records[0]).(session.MessageRecord))
+	if message.Content == nil || *message.Content != "kept exactly" ||
+		len(message.ToolCalls) != 1 || message.ToolCalls[0].ID != "call-1" ||
+		message.ToolCalls[0].Name != "exec_command" {
+		t.Fatalf("runtime message changed decoded facts: %#v", message)
+	}
+
+	completion := storedToolCompletionFromSessionRecord(
+		mustSessionEventPayload(window.Records[1]).(session.ToolCompletionRecord),
+	)
+	if completion.CallID != "call-1" || completion.Name != "exec_command" ||
+		completion.Summary == nil || *completion.Summary != "kept summary" ||
+		len(completion.ProviderItems) != 1 {
+		t.Fatalf("runtime completion changed decoded facts: %#v", completion)
+	}
+
+	entry := storedLocalEntryFromSessionRecord(
+		mustSessionEventPayload(window.Records[2]).(session.LocalEntryRecord),
+	)
+	if entry.Visibility != transcript.EntryVisibilityDetail ||
+		entry.Text != "kept local text" ||
+		entry.AfterToolCallID == nil || *entry.AfterToolCallID != "call-1" {
+		t.Fatalf("runtime local entry changed decoded facts: %#v", entry)
+	}
+
+	replacement := historyReplacementPayloadFromSessionRecord(
+		mustSessionEventPayload(window.Records[3]).(session.HistoryReplacementRecord),
+	)
+	if replacement.Engine != "local" || replacement.Mode != string(compactionModeAuto) ||
+		replacement.CompactionNumber == nil || *replacement.CompactionNumber != 2 ||
+		len(replacement.Items) != 1 ||
+		replacement.Items[0].Content == nil || *replacement.Items[0].Content != "kept history" {
+		t.Fatalf("runtime history replacement changed decoded facts: %#v", replacement)
 	}
 }
 
@@ -85,16 +134,13 @@ func TestSessionMessageRecordAdapterPersistsToolCallWithoutSemanticContent(t *te
 	if record.Content != nil {
 		t.Fatalf("tool-call-only message content = %#v, want absent", record.Content)
 	}
-	restored, err := llmMessageFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore tool-call-only message: %v", err)
-	}
+	restored := llmMessageFromSessionRecord(record)
 	if len(restored.ToolCalls) != 1 || restored.ToolCalls[0].ID != "call-1" {
 		t.Fatalf("restored tool calls = %#v", restored.ToolCalls)
 	}
 }
 
-func TestSessionMessageRecordAdapterPreservesAbsenceAndRejectsPresentBlankFacts(t *testing.T) {
+func TestSessionMessageRecordAdapterPreservesAbsentOptionalFacts(t *testing.T) {
 	t.Parallel()
 	record, err := sessionMessageRecordFromLLM(llm.Message{
 		Role:    llm.RoleUser,
@@ -103,10 +149,7 @@ func TestSessionMessageRecordAdapterPreservesAbsenceAndRejectsPresentBlankFacts(
 	if err != nil {
 		t.Fatalf("adapt message with absent optional facts: %v", err)
 	}
-	restored, err := llmMessageFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore message with absent optional facts: %v", err)
-	}
+	restored := llmMessageFromSessionRecord(record)
 	if restored.MessageType != nil ||
 		restored.SourcePath != nil ||
 		restored.CompactContent != nil ||
@@ -117,27 +160,6 @@ func TestSessionMessageRecordAdapterPreservesAbsenceAndRejectsPresentBlankFacts(
 		t.Fatalf("restored absent facts became present: %#v", restored)
 	}
 
-	_, err = sessionMessageRecordFromLLM(llm.Message{
-		Role:       llm.RoleUser,
-		Content:    textutil.Value("hello"),
-		SourcePath: textutil.Value(" \t"),
-	})
-	if err == nil {
-		t.Fatal("adapter accepted a present blank source path")
-	}
-
-	_, err = sessionMessageRecordFromLLM(llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{
-			ID:          "call-1",
-			Name:        string(toolspec.ToolPatch),
-			Custom:      true,
-			CustomInput: textutil.Value(" \t"),
-		}},
-	})
-	if err == nil {
-		t.Fatal("adapter accepted a present blank custom tool input")
-	}
 }
 
 func TestSessionToolCompletionRecordAdapterRoundTrip(t *testing.T) {
@@ -167,10 +189,7 @@ func TestSessionToolCompletionRecordAdapterRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adapt completion to session record: %v", err)
 	}
-	restored, err := storedToolCompletionFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("adapt session record to completion: %v", err)
-	}
+	restored := storedToolCompletionFromSessionRecord(record)
 	if restored.CallID != result.CallID ||
 		restored.Name != string(result.Name) ||
 		restored.IsError != result.IsError ||
@@ -182,15 +201,6 @@ func TestSessionToolCompletionRecordAdapterRoundTrip(t *testing.T) {
 		t.Fatalf("restored completion = %#v, want result=%#v provider_items=%#v", restored, result, providerItems)
 	}
 
-	_, err = sessionToolCompletionRecordFromRuntime(tools.Result{
-		CallID:  "call-blank",
-		Name:    toolspec.ToolExecCommand,
-		Output:  json.RawMessage(`"done"`),
-		Summary: textutil.Value(" \t"),
-	}, nil)
-	if err == nil {
-		t.Fatal("tool-completion adapter accepted a present blank summary")
-	}
 }
 
 func TestSessionQuestionCompletionAdapterCarriesTypedAnswer(t *testing.T) {
@@ -259,10 +269,7 @@ func TestSessionQuestionCompletionAdapterCarriesTypedAnswer(t *testing.T) {
 			t.Fatalf("decode typed Session Question completion: %v", err)
 		}
 		record.Presentation = transcript.EncodeToolCallMeta(*questionCompletionPresentation())
-		restored, err := storedToolCompletionFromSessionRecord(record)
-		if err != nil {
-			t.Fatalf("restore typed Question completion: %v", err)
-		}
+		restored := storedToolCompletionFromSessionRecord(record)
 		roundTrippedStored, err := json.Marshal(restored)
 		if err != nil {
 			t.Fatalf("encode restored Question completion: %v", err)
@@ -353,10 +360,7 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adapt local entry: %v", err)
 	}
-	restoredLocal, err := storedLocalEntryFromSessionRecord(localRecord)
-	if err != nil {
-		t.Fatalf("restore local entry: %v", err)
-	}
+	restoredLocal := storedLocalEntryFromSessionRecord(localRecord)
 	if !reflect.DeepEqual(restoredLocal, localEntry) {
 		t.Fatalf("restored local entry = %#v, want %#v", restoredLocal, localEntry)
 	}
@@ -367,15 +371,6 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	}); err == nil {
 		t.Fatal("local-entry adapter accepted unsupported runtime visibility")
 	}
-	if _, err := sessionLocalEntryRecordFromRuntime(storedLocalEntry{
-		Visibility:    transcript.EntryVisibilityDetail,
-		Role:          "warning",
-		Text:          "invalid optional fact",
-		DiagnosticKey: textutil.Value(" \t"),
-	}); err == nil {
-		t.Fatal("local-entry adapter accepted a present blank diagnostic key")
-	}
-
 	request := persistedCacheRequestObserved{
 		DigestVersion: requestCacheDigestVersion,
 		CacheKey:      "cache-key-1",
@@ -418,13 +413,6 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	if restored := persistedCacheResponseObservedFromSessionRecord(absentResponseRecord); restored.CachedInputTokens != nil {
 		t.Fatalf("absent cached-token fact became present: %#v", restored)
 	}
-	negativeCachedInputTokens := -1
-	invalidResponse := response
-	invalidResponse.CachedInputTokens = &negativeCachedInputTokens
-	if _, err := sessionCacheResponseRecordFromRuntime(invalidResponse); err == nil {
-		t.Fatal("cache-response adapter accepted negative cached input tokens")
-	}
-
 	warning := transcript.CacheWarning{
 		Scope:           transcript.CacheWarningScopeReviewer,
 		Reason:          transcript.CacheWarningReasonReuseDropped,
@@ -438,142 +426,6 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	restoredWarning := cacheWarningFromSessionRecord(warningRecord)
 	if !reflect.DeepEqual(restoredWarning, warning) {
 		t.Fatalf("restored cache warning = %#v, want %#v", restoredWarning, warning)
-	}
-	invalidWarning := warning
-	invalidWarning.CacheKey = textutil.Value(" \t")
-	if _, err := sessionCacheWarningRecordFromRuntime(invalidWarning); err == nil {
-		t.Fatal("cache-warning adapter accepted a present blank cache key")
-	}
-	invalidWarning = warning
-	invalidWarning.Scope = ""
-	if _, err := sessionCacheWarningRecordFromRuntime(invalidWarning); err == nil {
-		t.Fatal("cache-warning adapter accepted an absent required scope")
-	}
-}
-
-func TestSessionHistoryReplacementRecordAdapterRejectsInvalidOptionalFacts(t *testing.T) {
-	t.Parallel()
-	base := historyReplacementPayload{
-		Engine: "local",
-		Mode:   string(compactionModeAuto),
-		Items: llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
-			Type:    llm.ResponseItemTypeMessage,
-			Role:    textutil.Value(llm.RoleUser),
-			Content: textutil.Value("summary"),
-		}}),
-	}
-
-	invalid := base
-	invalid.CompactionNumber = textutil.Value(0)
-	if _, err := sessionHistoryReplacementRecordFromRuntime(invalid); err == nil {
-		t.Fatal("history-replacement adapter accepted a present zero compaction number")
-	}
-
-	invalid = base
-	invalid.Items = llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
-		Type:       llm.ResponseItemTypeMessage,
-		Role:       textutil.Value(llm.RoleUser),
-		Content:    textutil.Value("summary"),
-		SourcePath: textutil.Value(" \t"),
-	}})
-	if _, err := sessionHistoryReplacementRecordFromRuntime(invalid); err == nil {
-		t.Fatal("history-replacement adapter accepted a present blank provider source path")
-	}
-}
-
-func TestMigratedToolCompletionRecordsPreserveProviderAndCacheLineage(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name   string
-		record session.ToolCompletionRecord
-		before []llm.ResponseItem
-	}{
-		{
-			name: "authoritative present Raw",
-			record: session.ToolCompletionRecord{
-				CallID: "call-present", Name: "exec_command",
-				OutputKind: session.ToolOutputKindFunction,
-				Output:     json.RawMessage(`"done"`),
-				ProviderItems: []session.ToolCompletionProviderItem{{
-					Type: session.ProviderInputItemTypeFunctionCallOutput,
-					Name: stringPointerRuntime("exec_command"), CallID: stringPointerRuntime("call-present"),
-					Raw: json.RawMessage(`{ "type" : "function_call_output", "call_id" : "call-present", "output" : "done" }`),
-				}},
-			},
-			before: []llm.ResponseItem{{
-				Type: llm.ResponseItemTypeFunctionCallOutput, Name: textutil.Value("exec_command"),
-				CallID: textutil.Value("call-present"), Output: json.RawMessage(`"done"`),
-				Raw: json.RawMessage(`{ "type" : "function_call_output", "call_id" : "call-present", "output" : "done" }`),
-			}},
-		},
-		{
-			name: "direct generated Raw",
-			record: session.ToolCompletionRecord{
-				CallID: "call-generated", Name: "exec_command",
-				OutputKind: session.ToolOutputKindFunction,
-				Output:     json.RawMessage(`{"cwd":"/tmp"}`),
-				ProviderItems: []session.ToolCompletionProviderItem{{
-					Type: session.ProviderInputItemTypeFunctionCallOutput,
-					Name: stringPointerRuntime("exec_command"), CallID: stringPointerRuntime("call-generated"),
-				}},
-			},
-			before: llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
-				Type: llm.ResponseItemTypeFunctionCallOutput, Name: textutil.Value("exec_command"),
-				CallID: textutil.Value("call-generated"), Output: json.RawMessage(`{"cwd":"/tmp"}`),
-			}}),
-		},
-		{
-			name: "absent snapshot fallback",
-			record: session.ToolCompletionRecord{
-				CallID: "call-fallback", Name: "patch",
-				OutputKind: session.ToolOutputKindCustom,
-				Output:     json.RawMessage(`"patched"`),
-				ProviderItems: []session.ToolCompletionProviderItem{{
-					Type: session.ProviderInputItemTypeCustomToolOutput,
-					Name: stringPointerRuntime("patch"), CallID: stringPointerRuntime("call-fallback"),
-				}},
-			},
-			before: llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
-				Type: llm.ResponseItemTypeCustomToolOutput, Name: textutil.Value("patch"),
-				CallID: textutil.Value("call-fallback"), Output: json.RawMessage(`"patched"`),
-			}}),
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			normalized, err := session.NewEventRecord(1, nil, test.record)
-			if err != nil {
-				t.Fatalf("canonicalize migrated completion: %v", err)
-			}
-			restored, err := storedToolCompletionFromSessionRecord(
-				mustSessionEventPayload(normalized).(session.ToolCompletionRecord),
-			)
-			if err != nil {
-				t.Fatalf("restore migrated completion: %v", err)
-			}
-			if !reflect.DeepEqual(restored.ProviderItems, test.before) {
-				t.Fatalf(
-					"provider input changed: got=%#v want=%#v",
-					restored.ProviderItems,
-					test.before,
-				)
-			}
-			beforeSummary, err := summarizePromptCacheRequest(llm.Request{Items: test.before})
-			if err != nil {
-				t.Fatalf("summarize pre-migration provider input: %v", err)
-			}
-			afterSummary, err := summarizePromptCacheRequest(llm.Request{Items: restored.ProviderItems})
-			if err != nil {
-				t.Fatalf("summarize migrated provider input: %v", err)
-			}
-			if afterSummary.terminalHash != beforeSummary.terminalHash {
-				t.Fatalf(
-					"terminal lineage hash changed: got=%s want=%s",
-					afterSummary.terminalHash,
-					beforeSummary.terminalHash,
-				)
-			}
-		})
 	}
 }
 
@@ -658,10 +510,7 @@ func TestSessionToolCompletionRecordAdaptersPreserveProviderPaths(t *testing.T) 
 			if err != nil {
 				t.Fatalf("adapt completion: %v", err)
 			}
-			restored, err := storedToolCompletionFromSessionRecord(record)
-			if err != nil {
-				t.Fatalf("restore completion: %v", err)
-			}
+			restored := storedToolCompletionFromSessionRecord(record)
 			if restored.IsError != test.result.IsError {
 				t.Fatalf("restored error fact = %t, want %t", restored.IsError, test.result.IsError)
 			}
@@ -802,10 +651,7 @@ func TestSessionHistoryReplacementRecordAdapterPreservesProviderHistoryAndProven
 	if err != nil {
 		t.Fatalf("adapt history replacement: %v", err)
 	}
-	restored, err := historyReplacementPayloadFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore history replacement: %v", err)
-	}
+	restored := historyReplacementPayloadFromSessionRecord(record)
 	if !reflect.DeepEqual(restored, payload) {
 		t.Fatalf("restored history replacement = %#v, want %#v", restored, payload)
 	}
@@ -870,10 +716,7 @@ func TestSessionHistoryReplacementRecordAdapterGeneratesOnlyDerivableOutputRaw(t
 		if err != nil {
 			t.Fatalf("adapt %q output history: %v", item.Type, err)
 		}
-		restored, err := historyReplacementPayloadFromSessionRecord(record)
-		if err != nil {
-			t.Fatalf("restore %q output history: %v", item.Type, err)
-		}
+		restored := historyReplacementPayloadFromSessionRecord(record)
 		want := llm.PrepareOpenAIInputItems([]llm.ResponseItem{item})
 		if len(restored.Items) != 1 || !bytes.Equal(restored.Items[0].Raw, want[0].Raw) {
 			t.Fatalf("restored %q Raw = %s, want %s", item.Type, restored.Items[0].Raw, want[0].Raw)
@@ -919,10 +762,7 @@ func TestSessionHistoryReplacementUsesItemOrderInsteadOfProviderParserOutputInde
 	if err != nil {
 		t.Fatalf("adapt history replacement: %v", err)
 	}
-	restored, err := historyReplacementPayloadFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore history replacement: %v", err)
-	}
+	restored := historyReplacementPayloadFromSessionRecord(record)
 	if len(restored.Items) != len(items) {
 		t.Fatalf("restored item count = %d, want %d", len(restored.Items), len(items))
 	}

@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -8,6 +9,7 @@ import (
 
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -17,6 +19,9 @@ type PendingPromptSnapshot struct {
 	CreatedAt time.Time
 	Resource  runtimeids.SessionResourceRef
 	ScopeID   runtimeids.ExecutionScopeID
+	SessionID runtimeids.SessionID
+	PromptID  clientui.PromptID
+	StepID    runtimeids.StepID
 }
 
 type pendingPromptStore struct {
@@ -33,7 +38,24 @@ func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.Session
 	if id == "" || requestID == "" {
 		return PendingPromptSnapshot{}, false
 	}
-	snapshot := PendingPromptSnapshot{Request: req, CreatedAt: createdAt, Resource: resource, ScopeID: scopeID}
+	promptID := clientui.PromptID(requestID)
+	if err := promptID.Validate(); err != nil {
+		panic(fmt.Sprintf("pending prompt store received invalid Prompt ID %q: %v", req.ID, err))
+	}
+	stepID, err := runtimeids.ParseStepID(req.StepID)
+	if err != nil {
+		panic(fmt.Sprintf("pending prompt store received invalid Step ID %q: %v", req.StepID, err))
+	}
+	req.ID = requestID
+	snapshot := PendingPromptSnapshot{
+		Request:   req,
+		CreatedAt: createdAt,
+		Resource:  resource,
+		ScopeID:   scopeID,
+		SessionID: resource.SessionID(),
+		PromptID:  promptID,
+		StepID:    stepID,
+	}
 	s.mu.Lock()
 	pending := s.pending[id]
 	if pending == nil {

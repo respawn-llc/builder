@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/filemode"
 	"core/internal/testharness/testsetup"
 	"core/internal/testharness/workflowfixture"
 	"core/server/llm"
@@ -128,7 +129,7 @@ func (s failAfterManualMoveAssignmentPreparationSteerer) PrepareManualMoveAssign
 	if err != nil {
 		return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
 	}
-	return preparation, nil, s.cause
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, preparation.Abort(s.cause)
 }
 
 func (s diagnosticManualMoveAssignmentSteerer) SteerCurrentNodeAssignment(
@@ -1409,7 +1410,6 @@ func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata
 }
 
 func TestManualMoveUncommittedFreshAssignmentCleansSessionAndLeavesOriginCurrent(t *testing.T) {
-	cause := errors.New("assignment persistence failed")
 	f := newCurrentNodeRunnerFixtureWithPersistenceGate(
 		t,
 		NewScriptedClient(llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true}),
@@ -1449,9 +1449,6 @@ func TestManualMoveUncommittedFreshAssignmentCleansSessionAndLeavesOriginCurrent
 	if target == "" {
 		t.Fatal("workflow has no Agent target")
 	}
-	f.persistenceGate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		return snapshot.Meta.LastSequence >= 2
-	}, cause)
 	prepared, err := f.store.PrepareManualMove(context.Background(), workflowstore.ManualMoveRequest{
 		TaskID:       task.ID,
 		TargetNodeID: target,
@@ -1459,9 +1456,33 @@ func TestManualMoveUncommittedFreshAssignmentCleansSessionAndLeavesOriginCurrent
 	if err != nil {
 		t.Fatalf("prepare Manual Move: %v", err)
 	}
-	moved, err := f.controller.ApplyManualMove(context.Background(), prepared, nil)
-	if !errors.Is(err, cause) {
-		t.Fatalf("Manual Move error = %v, want %v", err, cause)
+	entered, release := f.persistenceGate.BlockNext()
+	type manualMoveResult struct {
+		moved workflowstore.ManualMoveResult
+		err   error
+	}
+	result := make(chan manualMoveResult, 1)
+	go func() {
+		moved, moveErr := f.controller.ApplyManualMove(context.Background(), prepared, nil)
+		result <- manualMoveResult{moved: moved, err: moveErr}
+	}()
+	<-entered
+	sessionRoot := filepath.Join(f.cfg.PersistenceRoot, "projects", f.projectID, "sessions")
+	sessionDirs, err := os.ReadDir(sessionRoot)
+	if err != nil {
+		t.Fatalf("read prepared Session directory: %v", err)
+	}
+	if len(sessionDirs) != 1 {
+		t.Fatalf("prepared Session directories = %d, want one", len(sessionDirs))
+	}
+	if _, err := filemode.BlockEventLogAppends(filepath.Join(sessionRoot, sessionDirs[0].Name(), "events.jsonl")); err != nil {
+		t.Fatalf("block prepared Session assignment append: %v", err)
+	}
+	release()
+	applied := <-result
+	moved, err := applied.moved, applied.err
+	if err == nil {
+		t.Fatal("Manual Move succeeded despite blocked assignment persistence")
 	}
 	if moved.Outcome != "" {
 		t.Fatalf("Manual Move result = %+v, want unapplied zero result", moved)
@@ -1480,7 +1501,7 @@ func TestManualMoveUncommittedFreshAssignmentCleansSessionAndLeavesOriginCurrent
 	if len(sessionIDs) != 0 {
 		t.Fatalf("project Sessions after uncommitted assignment = %+v, want none", sessionIDs)
 	}
-	sessionDirs, err := os.ReadDir(filepath.Join(f.cfg.PersistenceRoot, "projects", f.projectID, "sessions"))
+	sessionDirs, err = os.ReadDir(sessionRoot)
 	if err != nil {
 		t.Fatalf("read project Session directory: %v", err)
 	}
@@ -1723,6 +1744,12 @@ func TestPostCommitDiagnosticPreservesApprovalAndCACBoundary(t *testing.T) {
 }
 
 func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *testing.T) {
+	targetResponseRelease := make(chan struct{})
+	var releaseTargetResponse sync.Once
+	t.Cleanup(func() {
+		releaseTargetResponse.Do(func() { close(targetResponseRelease) })
+	})
+	targetResponse := ScriptedFinalAnswer(`{"commentary":"resumed target done"}`)
 	client := NewCompactingScriptedClient(
 		llm.ProviderCapabilities{
 			ProviderID:               "test",
@@ -1762,7 +1789,17 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 				Input: json.RawMessage(`{"transition":"next_2","commentary":"second done"}`),
 			},
 		),
-		ScriptedFinalAnswer(`{"commentary":"resumed target done"}`),
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				select {
+				case <-targetResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: targetResponse.Response,
+		},
 	)
 	f := newCurrentNodeRunnerFixtureWithClient(t, client)
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNone
@@ -1804,6 +1841,8 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 	if targets[0].SessionID == nil || *targets[0].SessionID != *interrupted.SessionID {
 		t.Fatalf("resumed target Session = %v, want assigned Session %v", targets[0].SessionID, interrupted.SessionID)
 	}
+	releaseTargetResponse.Do(func() { close(targetResponseRelease) })
+	f.waitForTaskQuiescence(t, task.ID)
 	if len(requests) != 3 {
 		t.Fatalf("resumed model requests = %d, want source, source, target", len(requests))
 	}
@@ -2201,8 +2240,23 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	}
 }
 
-func TestResumeInterruptsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testing.T) {
-	f := newCurrentNodeRunnerFixture(t)
+func TestResumeAssignsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testing.T) {
+	responseRelease := make(chan struct{})
+	var releaseResponse sync.Once
+	t.Cleanup(func() {
+		releaseResponse.Do(func() { close(responseRelease) })
+	})
+	f := newCurrentNodeRunnerFixture(t, ScriptedRuntimeStep{
+		BeforeResponse: func(ctx context.Context) error {
+			select {
+			case <-responseRelease:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		},
+		Response: ScriptedFinalAnswer(`{"commentary":"done"}`).Response,
+	})
 	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
 	if err := f.store.LockTaskExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
@@ -2253,6 +2307,7 @@ func TestResumeInterruptsAgentCurrentNodeStrandedBeforeSessionPreparation(t *tes
 		}
 	}
 	f.waitForTaskQuiescence(t, task.ID)
+	releaseResponse.Do(func() { close(responseRelease) })
 }
 
 func requestAdvertisesTool(request llm.Request, id toolspec.ID) bool {
@@ -2506,35 +2561,6 @@ func TestAutomaticCommittedAssignmentDiagnosticStartsRealAgentExactlyOnce(t *tes
 	})
 	if requests := client.Requests(); len(requests) != 2 {
 		t.Fatalf("model requests = %d, want one source and one target execution", len(requests))
-	}
-}
-
-func TestInitialStartCommittedAssignmentDiagnosticInterruptsWithoutStartingRuntime(t *testing.T) {
-	diagnostic := errors.New("initial assignment observer diagnostic")
-	var diagnosticMatched atomic.Bool
-	f := newCurrentNodeRunnerFixtureWithPersistenceGate(t, NewScriptedClient(
-		llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
-	))
-	f.persistenceGate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		if snapshot.Meta.LastSequence < 2 {
-			return false
-		}
-		return !diagnosticMatched.Swap(true)
-	}, diagnostic)
-	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
-	task := f.createTask(t, workflowID)
-	f.startTask(t, task)
-
-	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 &&
-			nodes[0].Scheduling != nil &&
-			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted
-	})
-	if !diagnosticMatched.Load() {
-		t.Fatal("initial assignment observer diagnostic was not exercised")
-	}
-	if requests := f.client.Requests(); len(requests) != 0 {
-		t.Fatalf("model requests = %d, want no Runtime start", len(requests))
 	}
 }
 

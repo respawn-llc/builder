@@ -109,12 +109,19 @@ func (s *Service) SubscribeQuestionHistory(
 	ctx context.Context,
 	req serverapi.QuestionHistorySubscribeRequest,
 ) (serverapi.QuestionHistorySubscription, error) {
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.QuestionHistorySubscribeRequest]) (serverapi.QuestionHistorySubscription, error) {
+		return s.SubscribeQuestionHistoryValidated(ctx, validated)
+	})
+}
+
+func (s *Service) SubscribeQuestionHistoryValidated(
+	ctx context.Context,
+	validated servicecontract.Validated[serverapi.QuestionHistorySubscribeRequest],
+) (serverapi.QuestionHistorySubscription, error) {
 	if s == nil || s.persisted == nil {
 		return nil, errSessionStoreResolverRequired
 	}
+	req := validated.Value()
 	record, err := s.persisted.ResolvePersistedSession(ctx, req.SessionID)
 	if err != nil {
 		return nil, err
@@ -256,9 +263,16 @@ func normalizeServiceCacheWarningMode(mode config.CacheWarningMode) config.Cache
 }
 
 func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionMainViewResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionMainViewRequest]) (serverapi.SessionMainViewResponse, error) {
+		return s.getSessionMainView(ctx, validated.Value(), nil)
+	})
+}
+
+func (s *Service) GetSessionMainViewValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionMainViewRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionMainViewResponse, error) {
+	return s.getSessionMainView(ctx, req.Value(), &authorization.ExecutionTarget)
+}
+
+func (s *Service) getSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest, authorizedTarget *clientui.SessionExecutionTarget) (serverapi.SessionMainViewResponse, error) {
 	snapshot, err := s.resolveSnapshot(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.SessionMainViewResponse{}, err
@@ -267,7 +281,9 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 	if err != nil {
 		return serverapi.SessionMainViewResponse{}, err
 	}
-	if s.targets != nil && strings.TrimSpace(view.Session.SessionID) != "" {
+	if authorizedTarget != nil {
+		view.Session.ExecutionTarget = *authorizedTarget
+	} else if s.targets != nil && strings.TrimSpace(view.Session.SessionID) != "" {
 		target, err := s.targets.ResolveSessionExecutionTarget(ctx, view.Session.SessionID)
 		if err != nil {
 			return serverapi.SessionMainViewResponse{}, err
@@ -289,9 +305,16 @@ func (s *Service) SessionTranscriptTailEntries(ctx context.Context, sessionID st
 }
 
 func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionTranscriptPageResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionTranscriptPageRequest]) (serverapi.SessionTranscriptPageResponse, error) {
+		return s.getSessionTranscriptPage(ctx, validated.Value())
+	})
+}
+
+func (s *Service) GetSessionTranscriptPageValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionTranscriptPageRequest], _ servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionTranscriptPageResponse, error) {
+	return s.getSessionTranscriptPage(ctx, req.Value())
+}
+
+func (s *Service) getSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
 	pageReq := clientui.TranscriptPageRequest{Cursor: req.Cursor, NewerCursor: req.NewerCursor}
 	snapshot, err := s.resolveSnapshot(ctx, req.SessionID)
 	if err != nil {
@@ -325,9 +348,16 @@ func validateSessionTranscriptPageResponse(response serverapi.SessionTranscriptP
 }
 
 func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest]) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+		return s.getLatestCommittedAssistantFinalAnswer(ctx, validated.Value())
+	})
+}
+
+func (s *Service) GetLatestCommittedAssistantFinalAnswerValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest], _ servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	return s.getLatestCommittedAssistantFinalAnswer(ctx, req.Value())
+}
+
+func (s *Service) getLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
 	if s == nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errSessionStoreResolverRequired
 	}
@@ -346,9 +376,16 @@ func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, re
 }
 
 func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionExecutionEnvironmentResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
+		return s.getSessionExecutionEnvironment(ctx, validated.Value(), nil)
+	})
+}
+
+func (s *Service) GetSessionExecutionEnvironmentValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionExecutionEnvironmentRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionExecutionEnvironmentResponse, error) {
+	return s.getSessionExecutionEnvironment(ctx, req.Value(), &authorization.ExecutionTarget)
+}
+
+func (s *Service) getSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest, authorizedTarget *clientui.SessionExecutionTarget) (serverapi.SessionExecutionEnvironmentResponse, error) {
 	if s == nil || s.sessions == nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, errSessionStoreResolverRequired
 	}
@@ -361,7 +398,13 @@ func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req server
 		return serverapi.SessionExecutionEnvironmentResponse{}, fmt.Errorf("session execution environment identity mismatch: requested %q, resolved %q", req.SessionID.String(), meta.SessionID)
 	}
 	environment := serverapi.SessionExecutionEnvironment{SessionID: req.SessionID}
-	target, targetErr := s.resolveExecutionTarget(ctx, req.SessionID.String())
+	var target clientui.SessionExecutionTarget
+	var targetErr error
+	if authorizedTarget != nil {
+		target = *authorizedTarget
+	} else {
+		target, targetErr = s.resolveExecutionTarget(ctx, req.SessionID.String())
+	}
 	if targetErr != nil {
 		environment.Workspace = serverapi.FailedSessionExecutionWorkspace(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: targetErr.Error()})
 	} else {

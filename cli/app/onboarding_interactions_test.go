@@ -7,7 +7,27 @@ import (
 
 	"core/shared/config"
 	"core/shared/serverapi"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestOnboardingTerminalSequenceFailureStopsImmediately(t *testing.T) {
+	expected := errors.New("terminal unavailable")
+	model := newOnboardingModel(nil, *testOnboardingFlowStatePtr(t, nil))
+
+	next, cmd := model.Update(terminalSequenceWriteErrMsg{err: expected})
+
+	updated := next.(*onboardingModel)
+	if !errors.Is(updated.terminalErr, expected) {
+		t.Fatalf("terminal error = %v, want %v", updated.terminalErr, expected)
+	}
+	if cmd == nil {
+		t.Fatal("terminal sequence failure did not stop onboarding")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("terminal sequence failure did not return Bubble Tea quit")
+	}
+}
 
 func TestOnboardingWorkflowUsesTypedStepIdentityAndOrder(t *testing.T) {
 	state := testOnboardingFlowStatePtr(t, nil)

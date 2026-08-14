@@ -44,9 +44,6 @@ type WorkflowDeleteBlocker struct {
 }
 
 func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID runtimeids.WorkflowID) (WorkflowDeleteImpact, error) {
-	if workflowID.IsZero() {
-		return WorkflowDeleteImpact{}, ErrWorkflowIDRequired
-	}
 	row, err := s.queries.GetWorkflowDeleteImpact(ctx, workflowID)
 	if err != nil {
 		return WorkflowDeleteImpact{}, err
@@ -54,10 +51,7 @@ func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID runtimeids
 	return workflowDeleteImpactFromRow(row), nil
 }
 
-func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (WorkflowDeleteResult, error) {
-	if req.WorkflowID.IsZero() {
-		return WorkflowDeleteResult{}, ErrWorkflowIDRequired
-	}
+func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (_ WorkflowDeleteResult, metadataOperationErr error) {
 	impact, err := s.PreviewWorkflowDelete(ctx, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, err
@@ -66,12 +60,12 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 		return WorkflowDeleteResult{Impact: impact, Blockers: blockers}, nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "DeleteWorkflow", nil)
 	if err != nil {
 		return WorkflowDeleteResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	if _, err := q.AcquireWorkflowDependencyWriteLock(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("lock workflow dependency projects: %w", err)
 	}

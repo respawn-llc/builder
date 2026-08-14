@@ -391,7 +391,7 @@ func launchServerAsUser(spec serviceSpec, session uint32) (child *managedChild, 
 	if err != nil {
 		return nil, err
 	}
-	cmdLine, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(serviceCommand(spec)))
+	cmdLine, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(serverChildCommand(spec)))
 	if err != nil {
 		return nil, err
 	}

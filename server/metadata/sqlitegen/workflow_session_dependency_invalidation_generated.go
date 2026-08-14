@@ -18,7 +18,13 @@ type RetireDependentCurrentSessionWorkflowNodeAssociationsParams struct {
 func (q *Queries) RetireDependentCurrentSessionWorkflowNodeAssociations(
 	ctx context.Context,
 	arg RetireDependentCurrentSessionWorkflowNodeAssociationsParams,
-) error {
+) (metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "RetireDependentCurrentSessionWorkflowNodeAssociations", metadataOperationErr)
+	}()
 	_, err := q.db.ExecContext(
 		ctx,
 		retireDependentCurrentSessionWorkflowNodeAssociations,
@@ -27,5 +33,5 @@ func (q *Queries) RetireDependentCurrentSessionWorkflowNodeAssociations(
 		arg.PreservedSourceSessionID,
 		arg.TransitionBranchKey,
 	)
-	return recordQueryError(ctx, err, retireDependentCurrentSessionWorkflowNodeAssociations, 4)
+	return err
 }

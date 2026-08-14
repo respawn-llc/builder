@@ -179,14 +179,10 @@ var autoOnboarding = serverstartup.OnboardingHandler(func(_ context.Context, req
 	if err != nil {
 		return config.App{}, err
 	}
-	reloaded, err := req.ReloadConfig()
-	if err != nil {
-		return config.App{}, err
-	}
-	reloaded.Source.CreatedDefaultConfig = created
-	reloaded.Source.SettingsPath = path
-	reloaded.Source.SettingsFileExists = true
-	return reloaded, nil
+	req.Config.Source.CreatedDefaultConfig = created
+	req.Config.Source.SettingsPath = path
+	req.Config.Source.SettingsFileExists = true
+	return req.Config, nil
 })
 
 func waitForConfiguredRunPromptDaemon(t *testing.T, workspace string) {

@@ -22,8 +22,8 @@ func TestGitHubReleaseMetadataSourceReturnsValidatedRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestRelease: %v", err)
 	}
-	if metadata.Version != "1.2.3" {
-		t.Fatalf("version = %q, want 1.2.3", metadata.Version)
+	if metadata.Version.String() != "1.2.3" {
+		t.Fatalf("version = %q, want 1.2.3", metadata.Version.String())
 	}
 }
 
@@ -44,8 +44,8 @@ func TestDefaultGitHubReleaseMetadataSourceNegotiatesAndDecodesCompressedRespons
 	if err != nil {
 		t.Fatalf("LatestRelease: %v", err)
 	}
-	if metadata.Version != "1.2.3" {
-		t.Fatalf("version = %q, want 1.2.3", metadata.Version)
+	if metadata.Version.String() != "1.2.3" {
+		t.Fatalf("version = %q, want 1.2.3", metadata.Version.String())
 	}
 	if acceptEncoding != "zstd,gzip" {
 		t.Fatalf("Accept-Encoding = %q, want zstd,gzip", acceptEncoding)
@@ -89,4 +89,23 @@ func TestGitHubReleaseMetadataSourceBoundsInvalidMetadata(t *testing.T) {
 	if !errors.As(err, &metadataError) {
 		t.Fatalf("error = %v, want metadata error", err)
 	}
+}
+
+func TestGitHubReleaseMetadataSourceRejectsInvalidVersionAtSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v1.invalid.3"}`))
+	}))
+	defer server.Close()
+
+	_, err := newGitHubReleaseMetadataSource(server.Client(), server.URL).LatestRelease(context.Background())
+	var metadataError *releaseMetadataError
+	if !errors.As(err, &metadataError) {
+		t.Fatalf("error = %v, want metadata error", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }

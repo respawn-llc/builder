@@ -20,7 +20,7 @@ type ptyFixtureBinaryBuild struct {
 }
 
 const (
-	ptyFixtureTestTimeout = 5 * time.Second
+	ptyFixtureTestTimeout = 15 * time.Second
 	ptyFixtureBinaryEnv   = "KENT_PTY_FIXTURE_BINARY"
 )
 

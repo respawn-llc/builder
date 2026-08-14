@@ -2,13 +2,16 @@ package app
 
 import (
 	"core/cli/tui"
-	"os"
+	"io"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var writeTerminalSequence = func(sequence string) error {
-	_, err := os.Stdout.WriteString(sequence)
+func writeTerminalSequence(out *uiTerminalOutput, sequence string) error {
+	if out == nil {
+		return io.ErrClosedPipe
+	}
+	_, err := out.Write([]byte(sequence))
 	return err
 }
 
@@ -104,18 +107,18 @@ func (m *uiModel) altScreenCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 	return m.altScreenCmdForSurfaceTransition(surfaceForTranscriptMode(prev), surfaceForTranscriptMode(next))
 }
 
-func enableAlternateScrollCmd() tea.Cmd {
+func enableAlternateScrollCmd(output *uiTerminalOutput) tea.Cmd {
 	return func() tea.Msg {
-		if err := writeTerminalSequence("\x1b[?1007h"); err != nil {
+		if err := writeTerminalSequence(output, "\x1b[?1007h"); err != nil {
 			return terminalSequenceWriteErrMsg{err: err}
 		}
 		return nil
 	}
 }
 
-func disableAlternateScrollCmd() tea.Cmd {
+func disableAlternateScrollCmd(output *uiTerminalOutput) tea.Cmd {
 	return func() tea.Msg {
-		if err := writeTerminalSequence("\x1b[?1007l"); err != nil {
+		if err := writeTerminalSequence(output, "\x1b[?1007l"); err != nil {
 			return terminalSequenceWriteErrMsg{err: err}
 		}
 		return nil

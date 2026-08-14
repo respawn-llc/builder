@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"fmt"
-	"strings"
 
 	"core/server/session"
 	"core/shared/transcript"
@@ -46,13 +45,13 @@ func transcriptProvenanceFromRecord(record session.EventRecord) (TranscriptCommi
 	switch typed := payload.(type) {
 	case session.MessageRecord:
 		if typed.ToolCallID != nil {
-			provenance.ToolCallID = strings.TrimSpace(*typed.ToolCallID)
+			provenance.ToolCallID = *typed.ToolCallID
 		}
 	case session.ToolCompletionRecord:
-		provenance.ToolCallID = strings.TrimSpace(typed.CallID)
+		provenance.ToolCallID = typed.CallID
 	case session.LocalEntryRecord:
 		if typed.AfterToolCallID != nil {
-			provenance.ToolCallID = strings.TrimSpace(*typed.AfterToolCallID)
+			provenance.ToolCallID = *typed.AfterToolCallID
 		}
 	}
 	return provenance, nil

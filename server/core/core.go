@@ -22,9 +22,17 @@ import (
 )
 
 type Core struct {
-	bundles   *Bundles
-	closeOnce sync.Once
-	closeErr  error
+	bundles       *Bundles
+	metadataFatal *MetadataFatalAuthority
+	closeOnce     sync.Once
+	closeErr      error
+}
+
+func (s *Core) MetadataFatalAuthority() *MetadataFatalAuthority {
+	if s == nil {
+		return nil
+	}
+	return s.metadataFatal
 }
 
 type unregisteredSessionLaunchClient struct{}
@@ -71,33 +79,6 @@ func (s *Core) ProjectExists(ctx context.Context, projectID string) error {
 	}
 	_, err := s.safeBundles().Persistence.metadataStore.GetProjectOverview(ctx, strings.TrimSpace(projectID))
 	return err
-}
-
-func (s *Core) SessionBelongsToProject(ctx context.Context, sessionID string, projectID string) error {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return fmt.Errorf("session id is required")
-	}
-	trimmedProjectID := strings.TrimSpace(projectID)
-	if trimmedProjectID == "" {
-		return fmt.Errorf("project id is required")
-	}
-	if s == nil || s.safeBundles().Persistence.metadataStore == nil {
-		return errors.New("metadata store is required")
-	}
-	belongs, err := s.safeBundles().Persistence.metadataStore.SessionBelongsToProject(ctx, trimmedSessionID, trimmedProjectID)
-	if err != nil {
-		return fmt.Errorf(
-			"resolve project membership for session %q in project %q: %w",
-			trimmedSessionID,
-			trimmedProjectID,
-			err,
-		)
-	}
-	if !belongs {
-		return fmt.Errorf("session %q not available", trimmedSessionID)
-	}
-	return nil
 }
 
 func (s *Core) SessionLaunchClientForProject(ctx context.Context, projectID string) (apicontract.SessionLaunchService, error) {
@@ -253,23 +234,7 @@ func (s *Core) configForWorkspace(workspaceRoot string) (config.App, error) {
 	if s == nil {
 		return config.App{}, errors.New("core is required")
 	}
-	if strings.TrimSpace(s.safeBundles().Projects.cfg.WorkspaceRoot) != "" {
-		currentRoot, currentErr := config.CanonicalWorkspaceRoot(s.safeBundles().Projects.cfg.WorkspaceRoot)
-		requestedRoot, requestedErr := config.CanonicalWorkspaceRoot(workspaceRoot)
-		if currentErr == nil && requestedErr == nil && currentRoot == requestedRoot {
-			projectCfg := s.safeBundles().Projects.cfg
-			projectCfg.WorkspaceRoot = requestedRoot
-			return projectCfg, nil
-		}
-	}
-	return s.reloadWorkspaceConfig(workspaceRoot)
-}
-
-func (s *Core) reloadWorkspaceConfig(workspaceRoot string) (config.App, error) {
-	if s == nil {
-		return config.App{}, errors.New("core is required")
-	}
-	return s.safeBundles().Projects.freshWorkspace.Resolve(workspaceRoot)
+	return config.LoadWorkspaceOverlay(s.safeBundles().Projects.cfg, workspaceRoot)
 }
 
 func (s *Core) sessionLaunchClientForProjectContext(projectCtx projectContext) apicontract.SessionLaunchService {
@@ -312,14 +277,14 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 func (s *Core) newSessionLaunchService(projectCtx projectContext) *sessionlaunch.Service {
 	return sessionlaunch.NewService(launch.Planner{
 		Config:                   projectCtx.config,
+		GlobalConfig:             s.safeBundles().Projects.cfg,
 		ContainerDir:             projectCtx.projectSession,
 		StoreOptions:             s.safeBundles().Persistence.metadataStore.AuthoritativeSessionStoreOptions(),
 		PersistedSessions:        s.safeBundles().Persistence.metadataStore,
 		ExecutionTargets:         s.safeBundles().Persistence.metadataStore,
 		ProjectWorkspaceBoundary: s.safeBundles().Persistence.metadataStore,
-		ReloadConfig: func() (config.App, error) {
-			return s.reloadWorkspaceConfig(projectCtx.projectRoot)
-		},
+		MetadataStore:            s.safeBundles().Persistence.metadataStore,
+		SessionCallers:           s.safeBundles().Persistence.metadataStore,
 	}).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).

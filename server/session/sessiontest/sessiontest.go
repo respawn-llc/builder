@@ -75,6 +75,7 @@ func NewPersistence() *Persistence {
 func (p *Persistence) Options() []session.StoreOption {
 	return []session.StoreOption{
 		session.WithPersistenceObserver(p),
+		session.WithAppendProjector(p.ProjectAppend),
 		session.WithPersistedSessionResolver(p),
 		session.WithSessionContextFactWriter(p),
 	}
@@ -127,31 +128,26 @@ func (p *Persistence) WriteManualCompactEligibility(
 	return nil
 }
 
-func (p *Persistence) ObserveEventLogReconciliation(_ context.Context, reconciliation session.PersistedEventLogReconciliation) error {
-	record, ok := p.records.Get(reconciliation.SessionID)
+func (p *Persistence) ProjectAppend(_ context.Context, projection session.AppendProjection) error {
+	record, ok := p.records.Get(projection.SessionID.String())
 	if !ok {
 		return session.ErrSessionNotFound
 	}
-	invalidateUsageState, err := reconciliation.UsageState.InvalidatesUsageState()
-	if err != nil {
-		return err
-	}
 	meta := cloneMeta(record.Meta)
-	if meta.LastSequence != reconciliation.ObservedLastSequence {
-		return session.EventLogReconciliationConflictError{
-			SessionID:            reconciliation.SessionID,
-			ObservedLastSequence: reconciliation.ObservedLastSequence,
-			CurrentLastSequence:  meta.LastSequence,
-		}
+	if projection.FirstPromptPreview != nil && meta.FirstPromptPreview == "" {
+		meta.FirstPromptPreview = *projection.FirstPromptPreview
 	}
-	meta.LastSequence = reconciliation.LastSequence
-	meta.ConversationEstablished = reconciliation.ConversationEstablished
-	meta.UpdatedAt = reconciliation.UpdatedAt
-	if invalidateUsageState {
-		meta.UsageState = nil
+	if projection.ConversationEstablished {
+		meta.ConversationEstablished = true
+	}
+	if projection.GeneratedRecoveredWarningIssued {
+		meta.GeneratedRecoveredWarningIssued = true
+	}
+	if projection.AppendedAt.After(meta.UpdatedAt) {
+		meta.UpdatedAt = projection.AppendedAt
 	}
 	record.Meta = meta
-	p.records.Put(reconciliation.SessionID, record)
+	p.records.Put(projection.SessionID.String(), record)
 	return nil
 }
 
@@ -174,6 +170,14 @@ func cloneMeta(meta *session.Meta) *session.Meta {
 		return nil
 	}
 	cloned := *meta
+	if meta.UsageState != nil {
+		usage := *meta.UsageState
+		if meta.UsageState.HistoryReplacementEventSequence != nil {
+			sequence := *meta.UsageState.HistoryReplacementEventSequence
+			usage.HistoryReplacementEventSequence = &sequence
+		}
+		cloned.UsageState = &usage
+	}
 	return &cloned
 }
 

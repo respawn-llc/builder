@@ -20,6 +20,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/apicontract"
 	"core/shared/boundedio"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -153,17 +154,6 @@ type setupScriptPayload struct {
 	WorkspaceID         string  `json:"workspace_id"`
 	WorktreeID          string  `json:"worktree_id"`
 	CreatedBranch       bool    `json:"created_branch"`
-}
-
-func normalizeSetupSessionID(sessionID *string) (*string, error) {
-	if sessionID == nil {
-		return nil, nil
-	}
-	normalized := strings.TrimSpace(*sessionID)
-	if normalized == "" {
-		return nil, errors.New("setup session_id must be non-empty when present")
-	}
-	return &normalized, nil
 }
 
 type TaskExecutionRootPreparationRequest struct {
@@ -734,10 +724,12 @@ func (s *Service) releaseProvisionalTaskWorktree(
 }
 
 func (s *Service) unbindTaskManagedWorktree(ctx context.Context, task sqlitegen.TaskRecord) error {
-	updated, err := s.metadata.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-		ID:                task.ID,
-		ManagedWorktreeID: sql.NullString{},
-		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+	updated, err := metadata.RunOperation(ctx, s.metadata, "Unbind task managed worktree", func(q *sqlitegen.Queries) (int64, error) {
+		return q.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+			ID:                task.ID,
+			ManagedWorktreeID: sql.NullString{},
+			UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		})
 	})
 	if err != nil {
 		return err
@@ -1106,10 +1098,7 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 }
 
 func (s *Service) createAndBindManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp boundManagedTaskWorktree, err error) {
-	createSpec, err := normalizeCreateSpec(req.CreateSpec)
-	if err != nil {
-		return boundManagedTaskWorktree{}, err
-	}
+	createSpec := req.CreateSpec
 	var worktreeRoot string
 	rootKind := managedRootKindExplicit
 	if req.RequestedRoot == nil {
@@ -1205,20 +1194,20 @@ func (s *Service) createAndBindManagedTaskWorktree(ctx context.Context, req mana
 		return boundManagedTaskWorktree{}, err
 	}
 	cleanup.worktreeID = created.record.ID
-	var updated int64
-	if req.FreshBinding {
-		updated, err = s.metadata.Queries().BindInitialTaskManagedWorktree(ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
-			ManagedWorktreeID: sql.NullString{String: created.record.ID, Valid: true},
-			UpdatedAtUnixMs:   created.record.UpdatedAt.UnixMilli(),
-			TaskID:            req.Task.ID,
-		})
-	} else {
-		updated, err = s.metadata.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+	updated, err := metadata.RunOperation(ctx, s.metadata, "Bind task managed worktree", func(q *sqlitegen.Queries) (int64, error) {
+		if req.FreshBinding {
+			return q.BindInitialTaskManagedWorktree(ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
+				ManagedWorktreeID: sql.NullString{String: created.record.ID, Valid: true},
+				UpdatedAtUnixMs:   created.record.UpdatedAt.UnixMilli(),
+				TaskID:            req.Task.ID,
+			})
+		}
+		return q.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
 			ID:                req.Task.ID,
 			ManagedWorktreeID: sql.NullString{String: created.record.ID, Valid: true},
 			UpdatedAtUnixMs:   created.record.UpdatedAt.UnixMilli(),
 		})
-	}
+	})
 	if err != nil {
 		return boundManagedTaskWorktree{}, fmt.Errorf(
 			"bind managed worktree %q (workspace %q) to task %q (source workspace %q): %w",
@@ -1668,13 +1657,28 @@ func (s *Service) taskSourceWorkspace(ctx context.Context, projectID string, sou
 }
 
 func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeListResponse{}, err
-	}
-	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
-	if err != nil {
-		return serverapi.WorktreeListResponse{}, err
-	}
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeListRequest]) (serverapi.WorktreeListResponse, error) {
+			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, validated.Value().SessionID)
+			if err != nil {
+				return serverapi.WorktreeListResponse{}, err
+			}
+			return s.listWorktrees(ctx, workspaceCtx)
+		},
+	)
+}
+
+func (s *Service) ListWorktreesValidated(
+	ctx context.Context,
+	_ apicontract.Validated[serverapi.WorktreeListRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.WorktreeListResponse, error) {
+	return s.listWorktrees(ctx, sessionWorkspaceContextFromAuthorization(authorization))
+}
+
+func (s *Service) listWorktrees(ctx context.Context, workspaceCtx sessionWorkspaceContext) (serverapi.WorktreeListResponse, error) {
 	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
@@ -1687,19 +1691,31 @@ func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListR
 }
 
 func (s *Service) ListWorkspaceWorktrees(ctx context.Context, req serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeWorkspaceListResponse{}, err
-	}
-	if s == nil || s.metadata == nil {
-		return serverapi.WorktreeWorkspaceListResponse{}, errors.New("worktree service metadata store is required")
-	}
-	binding, err := s.metadata.LookupWorkspaceBindingByID(ctx, strings.TrimSpace(req.WorkspaceID))
-	if err != nil {
-		return serverapi.WorktreeWorkspaceListResponse{}, err
-	}
-	if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(req.ProjectID) {
-		return serverapi.WorktreeWorkspaceListResponse{}, serverapi.ErrWorkspaceNotRegistered
-	}
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorktreeWorkspaceListRequest]) (serverapi.WorktreeWorkspaceListResponse, error) {
+		if s == nil || s.metadata == nil {
+			return serverapi.WorktreeWorkspaceListResponse{}, errors.New("worktree service metadata store is required")
+		}
+		request := validated.Value()
+		binding, err := s.metadata.LookupWorkspaceBindingByID(ctx, request.WorkspaceID)
+		if err != nil {
+			return serverapi.WorktreeWorkspaceListResponse{}, err
+		}
+		if binding.ProjectID != request.ProjectID {
+			return serverapi.WorktreeWorkspaceListResponse{}, serverapi.ErrWorkspaceNotRegistered
+		}
+		return s.ListWorkspaceWorktreesValidated(ctx, validated, apicontract.AuthorizedProjectWorkspaceBinding{
+			ProjectID:     binding.ProjectID,
+			WorkspaceID:   binding.WorkspaceID,
+			CanonicalRoot: binding.CanonicalRoot,
+		})
+	})
+}
+
+func (s *Service) ListWorkspaceWorktreesValidated(
+	ctx context.Context,
+	_ apicontract.Validated[serverapi.WorktreeWorkspaceListRequest],
+	binding apicontract.AuthorizedProjectWorkspaceBinding,
+) (serverapi.WorktreeWorkspaceListResponse, error) {
 	topology, err := s.projectTopology(ctx, binding.WorkspaceID, binding.CanonicalRoot)
 	if err != nil {
 		return serverapi.WorktreeWorkspaceListResponse{}, err
@@ -1715,14 +1731,34 @@ func (s *Service) ListWorkspaceWorktrees(ctx context.Context, req serverapi.Work
 }
 
 func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeCreateTargetResolveResponse{}, err
-	}
-	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
-	if err != nil {
-		return serverapi.WorktreeCreateTargetResolveResponse{}, err
-	}
-	resolution, err := s.git.ResolveCreateTarget(ctx, workspaceCtx.workspaceRoot, req.Target)
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeCreateTargetResolveRequest]) (serverapi.WorktreeCreateTargetResolveResponse, error) {
+			request := validated.Value()
+			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, request.SessionID)
+			if err != nil {
+				return serverapi.WorktreeCreateTargetResolveResponse{}, err
+			}
+			return s.resolveWorktreeCreateTarget(ctx, request, workspaceCtx)
+		},
+	)
+}
+
+func (s *Service) ResolveWorktreeCreateTargetValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorktreeCreateTargetResolveRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.WorktreeCreateTargetResolveResponse, error) {
+	return s.resolveWorktreeCreateTarget(ctx, req.Value(), sessionWorkspaceContextFromAuthorization(authorization))
+}
+
+func (s *Service) resolveWorktreeCreateTarget(
+	ctx context.Context,
+	req serverapi.WorktreeCreateTargetResolveRequest,
+	workspaceCtx sessionWorkspaceContext,
+) (serverapi.WorktreeCreateTargetResolveResponse, error) {
+	resolution, err := s.git.ResolveCreateTarget(ctx, workspaceCtx.workspaceRoot, strings.TrimSpace(req.Target))
 	if err != nil {
 		return serverapi.WorktreeCreateTargetResolveResponse{}, err
 	}
@@ -1734,6 +1770,32 @@ func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi
 }
 
 func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreateRequest) (resp serverapi.WorktreeCreateResponse, err error) {
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeCreateRequest]) (serverapi.WorktreeCreateResponse, error) {
+			workspaceCtx, resolveErr := s.resolveSessionWorkspaceContext(ctx, validated.Value().SessionID)
+			if resolveErr != nil {
+				return serverapi.WorktreeCreateResponse{}, resolveErr
+			}
+			return s.createWorktree(ctx, validated.Value(), workspaceCtx)
+		},
+	)
+}
+
+func (s *Service) CreateWorktreeValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorktreeCreateRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.WorktreeCreateResponse, error) {
+	return s.createWorktree(ctx, req.Value(), sessionWorkspaceContextFromAuthorization(authorization))
+}
+
+func (s *Service) createWorktree(
+	ctx context.Context,
+	req serverapi.WorktreeCreateRequest,
+	initialWorkspaceCtx sessionWorkspaceContext,
+) (resp serverapi.WorktreeCreateResponse, err error) {
 	defer func() {
 		if err == nil {
 			return
@@ -1755,14 +1817,12 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		}
 		err = serverapi.NewWorktreeCreateError(serverapi.WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}()
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
+	createSpec := CreateSpec{
+		BaseRef:      strings.TrimSpace(req.BaseRef),
+		CreateBranch: req.CreateBranch,
+		BranchName:   strings.TrimSpace(req.BranchName),
 	}
-	createSpec, err := normalizeCreateSpec(CreateSpec{BaseRef: req.BaseRef, CreateBranch: req.CreateBranch, BranchName: req.BranchName})
-	if err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
-	}
-	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
+	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, initialWorkspaceCtx)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
@@ -1845,10 +1905,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	cleanup.worktreeID = strings.TrimSpace(created.record.ID)
-	setupSessionID, err := normalizeSetupSessionID(&workspaceCtx.sessionID)
-	if err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
-	}
+	setupSessionID := workspaceCtx.sessionID
 	branchName, named := worktreeNamedBranch(created.git)
 	if !named {
 		return serverapi.WorktreeCreateResponse{}, errors.New("created managed worktree does not have a named branch")
@@ -1859,7 +1916,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		BranchName:          branchName,
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
-			SessionID:   setupSessionID,
+			SessionID:   &setupSessionID,
 			ProjectID:   workspaceCtx.projectID,
 			WorkspaceID: workspaceCtx.workspaceID,
 			WorktreeID:  created.record.ID,
@@ -2075,20 +2132,17 @@ func (s *Service) deleteWorktreeRecordForCleanup(ctx context.Context, workspaceI
 	return errors.Join(collected...)
 }
 
-func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) (func(), sessionWorkspaceContext, error) {
+func (s *Service) beginWorkspaceMutation(ctx context.Context, initial sessionWorkspaceContext) (func(), sessionWorkspaceContext, error) {
 	if s == nil || s.metadata == nil {
 		return nil, sessionWorkspaceContext{}, errors.New("worktree service metadata store is required")
 	}
+	workspaceCtx := initial
 	for {
-		workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
-		if err != nil {
-			return nil, sessionWorkspaceContext{}, err
-		}
 		workspaceLease, err := s.acquireWorkspaceMutationLease(ctx, workspaceCtx.workspaceID)
 		if err != nil {
 			return nil, sessionWorkspaceContext{}, err
 		}
-		lockedWorkspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
+		lockedWorkspaceCtx, err := s.recheckSessionExecutionTargetAfterWorkspaceLease(ctx, workspaceCtx.sessionID)
 		if err != nil {
 			workspaceLease.Release()
 			return nil, sessionWorkspaceContext{}, err
@@ -2097,7 +2151,15 @@ func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) 
 			return workspaceLease.Release, lockedWorkspaceCtx, nil
 		}
 		workspaceLease.Release()
+		workspaceCtx = lockedWorkspaceCtx
 	}
+}
+
+func (s *Service) recheckSessionExecutionTargetAfterWorkspaceLease(
+	ctx context.Context,
+	sessionID string,
+) (sessionWorkspaceContext, error) {
+	return s.resolveSessionWorkspaceContext(ctx, sessionID)
 }
 
 func (s *Service) acquireWorkspaceMutationLease(ctx context.Context, workspaceID string) (*requestmemo.MutationLaneLease[string], error) {
@@ -2140,6 +2202,18 @@ func (s *Service) resolveSessionWorkspaceContext(ctx context.Context, sessionID 
 		workspaceRoot: strings.TrimSpace(target.WorkspaceRoot),
 		sessionID:     strings.TrimSpace(sessionID),
 	}, nil
+}
+
+func sessionWorkspaceContextFromAuthorization(
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) sessionWorkspaceContext {
+	return sessionWorkspaceContext{
+		target:        authorization.ExecutionTarget,
+		projectID:     authorization.OwningProjectID,
+		workspaceID:   strings.TrimSpace(authorization.ExecutionTarget.WorkspaceID),
+		workspaceRoot: strings.TrimSpace(authorization.ExecutionTarget.WorkspaceRoot),
+		sessionID:     authorization.SessionID.String(),
+	}
 }
 
 func (s *Service) backgroundProcessBlockers(worktreeRoot string) []string {
@@ -2221,9 +2295,6 @@ func (s *Service) taskSetupAttemptObserver(setupOperationID *serverapi.WorktreeS
 		return setupAttemptObserverFunc(func(serverapi.WorktreeSetupStarted) {}), nil
 	}
 	operationID := *setupOperationID
-	if err := operationID.Validate(); err != nil {
-		return nil, err
-	}
 	return setupAttemptObserverFunc(func(started serverapi.WorktreeSetupStarted) {
 		s.publishSetupEvent(serverapi.WorktreeSetupEvent{
 			SetupOperationID: operationID,
@@ -2392,15 +2463,11 @@ func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetup
 			WorktreeRoot: strings.TrimSpace(req.WorktreeRoot),
 		}
 	}
-	sessionID, err := normalizeSetupSessionID(req.ScriptPayload.SessionID)
-	if err != nil {
-		return nil, err
-	}
 	payload := setupScriptPayload{
 		SourceWorkspaceRoot: strings.TrimSpace(req.SourceWorkspaceRoot),
 		BranchName:          strings.TrimSpace(req.BranchName),
 		WorktreeRoot:        strings.TrimSpace(req.WorktreeRoot),
-		SessionID:           sessionID,
+		SessionID:           req.ScriptPayload.SessionID,
 		ProjectID:           strings.TrimSpace(req.ScriptPayload.ProjectID),
 		WorkspaceID:         strings.TrimSpace(req.ScriptPayload.WorkspaceID),
 		WorktreeID:          strings.TrimSpace(req.ScriptPayload.WorktreeID),
@@ -2530,9 +2597,6 @@ func setupFailureFromError(err error, retained *serverapi.WorktreeTopologyEntry)
 }
 
 func (s *Service) runSetupForWorktree(ctx context.Context, operationID serverapi.WorktreeSetupOperationID, req setupExecutionRequest) error {
-	if err := operationID.Validate(); err != nil {
-		return err
-	}
 	attempt, err := s.prepareSetupAttempt(req)
 	if err != nil {
 		s.publishSetupEvent(serverapi.WorktreeSetupEvent{

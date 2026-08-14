@@ -29,7 +29,7 @@ func TestMetadataQuerySourceRendersDeterministically(t *testing.T) {
 	}
 }
 
-func TestAnnotateSourceAddsDiagnosticsExactlyOnce(t *testing.T) {
+func TestAnnotateSourceAddsOperationOwnershipExactlyOnce(t *testing.T) {
 	source := []byte(`package sqlitegen
 
 func (q *Queries) execute(ctx context.Context, value string) error {
@@ -80,20 +80,20 @@ func (q *Queries) switchExecute(ctx context.Context, execute bool) error {
 	if err != nil {
 		t.Fatalf("annotate source: %v", err)
 	}
-	diagnosticCalls := countDiagnosticCalls(t, annotated)
-	if diagnosticCalls != 7 {
-		t.Fatalf("diagnostic call count = %d, want 7", diagnosticCalls)
+	beforeCalls, completeCalls := countOperationOwnershipCalls(t, annotated)
+	if beforeCalls != 4 || completeCalls != 4 {
+		t.Fatalf("operation ownership calls = before %d, complete %d; want 4 each", beforeCalls, completeCalls)
 	}
 	repeated, err := annotateSource(annotated)
 	if err != nil {
 		t.Fatalf("annotate source twice: %v", err)
 	}
 	if !bytes.Equal(repeated, annotated) {
-		t.Fatal("diagnostic annotation is not idempotent")
+		t.Fatal("operation ownership annotation is not idempotent")
 	}
 }
 
-func TestGeneratedSQLiteQueriesDiagnosticsAreFresh(t *testing.T) {
+func TestGeneratedSQLiteQueriesOperationOwnershipIsFresh(t *testing.T) {
 	const generatedPath = "../sqlitegen/queries.sql.go"
 	current, err := os.ReadFile(generatedPath)
 	if err != nil {
@@ -104,7 +104,26 @@ func TestGeneratedSQLiteQueriesDiagnosticsAreFresh(t *testing.T) {
 		t.Fatalf("annotate generated SQLite queries: %v", err)
 	}
 	if !bytes.Equal(annotated, current) {
-		t.Fatal("generated SQLite query diagnostics are stale; run go generate ./server/metadata/sqlitegen")
+		t.Fatal("generated SQLite query operation ownership is stale; run go generate ./server/metadata/sqlitegen")
+	}
+}
+
+func TestGeneratedSQLiteDBAdapterIsFresh(t *testing.T) {
+	const generatedPath = "../sqlitegen/db.go"
+	current, err := os.ReadFile(generatedPath)
+	if err != nil {
+		t.Fatalf("read generated SQLite DB adapter: %v", err)
+	}
+	temp := t.TempDir() + "/db.go"
+	if err := generateQueriesDB(temp); err != nil {
+		t.Fatalf("generate SQLite DB adapter: %v", err)
+	}
+	want, err := os.ReadFile(temp)
+	if err != nil {
+		t.Fatalf("read expected SQLite DB adapter: %v", err)
+	}
+	if !bytes.Equal(current, want) {
+		t.Fatal("generated SQLite DB adapter is stale; run go generate ./server/metadata/sqlitegen")
 	}
 }
 
@@ -174,23 +193,30 @@ func testMetadataQueryRenderer(t testing.TB) metadata.QuerySourceRenderer {
 	return renderer
 }
 
-func countDiagnosticCalls(t *testing.T, source []byte) int {
+func countOperationOwnershipCalls(t *testing.T, source []byte) (int, int) {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), "queries.sql.go", source, 0)
 	if err != nil {
 		t.Fatalf("parse annotated source: %v", err)
 	}
-	count := 0
+	before := 0
+	complete := 0
 	ast.Inspect(file, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		function, ok := call.Fun.(*ast.Ident)
-		if ok && function.Name == "recordQueryError" {
-			count++
+		function, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch function.Sel.Name {
+		case "beforeOperation":
+			before++
+		case "completeOperation":
+			complete++
 		}
 		return true
 	})
-	return count
+	return before, complete
 }

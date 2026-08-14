@@ -56,7 +56,7 @@ func TestResolveWorktreeSelectorUsesReadOnlyTopology(t *testing.T) {
 	env := newServiceTestEnv(t)
 	response, err := env.service.ResolveWorktreeSelector(env.ctx, serverapi.WorktreeSelectorPreviewRequest{
 		SessionID: env.session.Meta().SessionID,
-		Selector:  env.workspaceRoot,
+		Selector:  " " + env.workspaceRoot + " ",
 	})
 	if err != nil {
 		t.Fatalf("ResolveWorktreeSelector: %v", err)
@@ -86,9 +86,6 @@ func TestPreviewWorktreeDeleteResolvesCleanNonCurrentRegisteredTarget(t *testing
 	}
 	if response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
 		t.Fatalf("preview cleanliness = %+v, want clean", response.Cleanliness)
-	}
-	if err := response.Validate(); err != nil {
-		t.Fatalf("preview response validation: %v", err)
 	}
 }
 

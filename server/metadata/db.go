@@ -84,7 +84,7 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	if err := registerMetadataSQLiteCollations(); err != nil {
 		return nil, fmt.Errorf("register metadata SQLite extensions: %w", err)
 	}
-	dsn, err := metadataSQLiteDSN(trimmedDatabasePath)
+	dsn, err := metadataSQLiteDSN(trimmedDatabasePath, false)
 	if err != nil {
 		return nil, fmt.Errorf("build metadata db DSN: %w", err)
 	}
@@ -92,12 +92,37 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	if err != nil {
 		return nil, fmt.Errorf("open metadata db: %w", err)
 	}
-	if err := runMigrations(db); err != nil {
+	if err := runMigrations(db, trimmedDatabasePath); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := runStartupDatabaseOperation(
+		context.Background(),
+		"Close metadata database after startup migration",
+		trimmedDatabasePath,
+		db.Close,
+	); err != nil {
+		return nil, err
+	}
+	dsn, err = metadataSQLiteDSN(trimmedDatabasePath, true)
+	if err != nil {
+		return nil, fmt.Errorf("build activated metadata db DSN: %w", err)
+	}
+	db, err = sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open activated metadata db: %w", err)
+	}
 	db.SetMaxOpenConns(metadataSQLiteConnectionPoolSize)
 	db.SetMaxIdleConns(metadataSQLiteConnectionPoolSize)
+	if err := runStartupDatabaseOperation(
+		context.Background(),
+		"Activate existing metadata database",
+		trimmedDatabasePath,
+		db.Ping,
+	); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -116,8 +141,13 @@ func inspectExistingMetadataDatabase(databasePath string) (metadataDatabasePrefl
 	if err != nil {
 		return metadataDatabasePreflight{}, fmt.Errorf("open metadata db read-only: %w", err)
 	}
-	version, inspectErr := readMetadataVersion(db)
-	closeErr := db.Close()
+	version, inspectErr := readMetadataVersion(db, databasePath)
+	closeErr := runStartupDatabaseOperation(
+		context.Background(),
+		"Close metadata database version inspection",
+		databasePath,
+		db.Close,
+	)
 	if inspectErr != nil {
 		return metadataDatabasePreflight{}, errors.Join(inspectErr, closeErr)
 	}
@@ -127,9 +157,12 @@ func inspectExistingMetadataDatabase(databasePath string) (metadataDatabasePrefl
 	return metadataDatabasePreflight{Exists: true, Version: version}, nil
 }
 
-func readMetadataVersion(db *sql.DB) (int64, error) {
+func readMetadataVersion(db *sql.DB, databasePath string) (int64, error) {
 	ctx := context.Background()
-	definitions, err := sqlitegen.New(db).ListMetadataSchemaDefinitions(ctx)
+	definitions, err := sqlitegen.New(monitoredDBTX{
+		DBTX:    db,
+		monitor: startupOperationMonitor{databasePath: databasePath},
+	}).ListMetadataSchemaDefinitions(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("inspect metadata schema: %w", err)
 	}
@@ -151,19 +184,27 @@ func readMetadataVersion(db *sql.DB) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("create metadata migration version store: %w", err)
 	}
-	version, err := versionStore.GetLatestVersion(ctx, db)
+	var version int64
+	err = runStartupDatabaseOperation(ctx, "Read metadata migration version", databasePath, func() error {
+		var readErr error
+		version, readErr = versionStore.GetLatestVersion(ctx, db)
+		return readErr
+	})
 	if err != nil {
 		return 0, fmt.Errorf("read metadata migration version: %w", err)
 	}
 	return version, nil
 }
 
-func metadataSQLiteDSN(databasePath string) (string, error) {
+func metadataSQLiteDSN(databasePath string, existingFileOnly bool) (string, error) {
 	u, ok := config.LocalFileURL(databasePath)
 	if !ok {
 		return "", fmt.Errorf("metadata database path %q is not absolute", databasePath)
 	}
 	q := url.Values{}
+	if existingFileOnly {
+		q.Add("mode", "rw")
+	}
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "synchronous(NORMAL)")
@@ -183,7 +224,7 @@ func metadataSQLiteReadOnlyDSN(databasePath string) (string, error) {
 	return u.String(), nil
 }
 
-func runMigrations(db *sql.DB) error {
+func runMigrations(db *sql.DB, databasePath string) error {
 	if err := registerMetadataSQLiteFunctions(); err != nil {
 		return err
 	}
@@ -192,13 +233,13 @@ func runMigrations(db *sql.DB) error {
 		return err
 	}
 	ctx := context.Background()
-	if err := repairWorkflowIdentityMigrationCollision(ctx, db, provider); err != nil {
+	if err := repairWorkflowIdentityMigrationCollision(ctx, db, databasePath, provider); err != nil {
 		return err
 	}
-	if _, err := provider.Up(ctx); err != nil {
-		return fmt.Errorf("apply metadata migrations: %w", err)
-	}
-	return nil
+	return runStartupDatabaseOperation(ctx, "Apply metadata migrations", databasePath, func() error {
+		_, err := provider.Up(ctx)
+		return err
+	})
 }
 
 func registerMetadataSQLiteCollations() error {
@@ -208,8 +249,18 @@ func registerMetadataSQLiteCollations() error {
 // repairWorkflowIdentityMigrationCollision recognizes databases that recorded
 // the former version-62 Session role migration before version 62 became the
 // Workflow identity migration.
-func repairWorkflowIdentityMigrationCollision(ctx context.Context, db *sql.DB, provider *goose.Provider) error {
-	version, err := provider.GetDBVersion(ctx)
+func repairWorkflowIdentityMigrationCollision(
+	ctx context.Context,
+	db *sql.DB,
+	databasePath string,
+	provider *goose.Provider,
+) error {
+	var version int64
+	err := runStartupDatabaseOperation(ctx, "Read metadata migration collision version", databasePath, func() error {
+		var readErr error
+		version, readErr = provider.GetDBVersion(ctx)
+		return readErr
+	})
 	if err != nil {
 		return fmt.Errorf("read metadata migration version: %w", err)
 	}
@@ -217,7 +268,10 @@ func repairWorkflowIdentityMigrationCollision(ctx context.Context, db *sql.DB, p
 		version > metadatamigrations.WorkflowSessionAgentRoleMigrationVersion {
 		return nil
 	}
-	definitions, err := sqlitegen.New(db).ListMetadataSchemaDefinitions(ctx)
+	definitions, err := sqlitegen.New(monitoredDBTX{
+		DBTX:    db,
+		monitor: startupOperationMonitor{databasePath: databasePath},
+	}).ListMetadataSchemaDefinitions(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect metadata schema before migrations: %w", err)
 	}
@@ -232,8 +286,13 @@ func repairWorkflowIdentityMigrationCollision(ctx context.Context, db *sql.DB, p
 		return fmt.Errorf("create metadata migration version store: %w", err)
 	}
 	for collidedVersion := metadatamigrations.WorkflowSessionAgentRoleMigrationVersion; collidedVersion >= metadatamigrations.WorkflowIdentityMigrationVersion; collidedVersion-- {
-		if err := versionStore.Delete(ctx, db, collidedVersion); err != nil {
-			return fmt.Errorf("repair metadata migration version %d: %w", collidedVersion, err)
+		if err := runStartupDatabaseOperation(
+			ctx,
+			"Repair metadata migration version",
+			databasePath,
+			func() error { return versionStore.Delete(ctx, db, collidedVersion) },
+		); err != nil {
+			return err
 		}
 	}
 	return nil

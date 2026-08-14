@@ -55,18 +55,21 @@ type MetadataExecutionTargetStore interface {
 	Close() error
 }
 
-// MetadataExecutionTargetStoreOpener opens metadata storage for launch planning.
-type MetadataExecutionTargetStoreOpener func(persistenceRoot string) (MetadataExecutionTargetStore, error)
+type SessionCallerStore interface {
+	AuthoritativeSessionStoreOptions() []session.StoreOption
+	SessionHasWorkflowTask(context.Context, string) (bool, error)
+}
 
 type Planner struct {
 	Config                   config.App
+	GlobalConfig             config.App
 	ContainerDir             string
 	StoreOptions             []session.StoreOption
-	ReloadConfig             func() (config.App, error)
 	PersistedSessions        session.PersistedSessionResolver
 	ExecutionTargets         SessionExecutionTargetResolver
 	ProjectWorkspaceBoundary SessionProjectWorkspaceBoundaryResolver
-	MetadataStoreOpener      MetadataExecutionTargetStoreOpener
+	MetadataStore            MetadataExecutionTargetStore
+	SessionCallers           SessionCallerStore
 }
 
 type SessionRequest struct {
@@ -364,13 +367,6 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 }
 
 func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPlan, error) {
-	if p.ReloadConfig != nil {
-		cfg, err := p.ReloadConfig()
-		if err != nil {
-			return SessionPlan{}, err
-		}
-		p.Config = cfg
-	}
 	store, err := p.openStore(ctx, req)
 	if err != nil {
 		return SessionPlan{}, err
@@ -391,13 +387,6 @@ func (p Planner) PlanNewSessionWithPreparedOverrides(
 ) (SessionPlan, []string, error) {
 	if req.Intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
 		return SessionPlan{}, nil, errors.New("new-session planning requires a create-new intent")
-	}
-	if p.ReloadConfig != nil {
-		cfg, err := p.ReloadConfig()
-		if err != nil {
-			return SessionPlan{}, nil, err
-		}
-		p.Config = cfg
 	}
 	store, err := p.openStore(ctx, req)
 	if err != nil {
@@ -1439,10 +1428,18 @@ func (p Planner) openPersistedSession(ctx context.Context, sessionID runtimeids.
 }
 
 func (p Planner) openMetadataStore() (MetadataExecutionTargetStore, error) {
-	if p.MetadataStoreOpener != nil {
-		return p.MetadataStoreOpener(p.Config.PersistenceRoot)
+	if p.MetadataStore != nil {
+		return nonClosingMetadataExecutionTargetStore{MetadataExecutionTargetStore: p.MetadataStore}, nil
 	}
 	return metadata.Open(p.Config.PersistenceRoot)
+}
+
+type nonClosingMetadataExecutionTargetStore struct {
+	MetadataExecutionTargetStore
+}
+
+func (nonClosingMetadataExecutionTargetStore) Close() error {
+	return nil
 }
 
 func (p Planner) resolveParentExecutionTarget(ctx context.Context, parentSessionID string) (clientui.SessionExecutionTarget, bool, error) {

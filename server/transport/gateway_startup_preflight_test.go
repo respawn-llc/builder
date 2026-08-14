@@ -3,12 +3,46 @@ package transport
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"core/shared/apicontract"
 	"core/shared/protocol"
+	"core/shared/rpcwire"
 	"core/shared/serverapi"
 )
+
+type recordingGatewayConn struct {
+	mu     sync.Mutex
+	frames []rpcwire.Frame
+	events chan rpcwire.Event
+	closed chan struct{}
+}
+
+func (c *recordingGatewayConn) Send(_ context.Context, frame rpcwire.Frame) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.frames = append(c.frames, frame)
+	return nil
+}
+
+func (c *recordingGatewayConn) Events() <-chan rpcwire.Event {
+	if c.events == nil {
+		c.events = make(chan rpcwire.Event)
+	}
+	return c.events
+}
+
+func (c *recordingGatewayConn) Closed() <-chan struct{} {
+	if c.closed == nil {
+		c.closed = make(chan struct{})
+	}
+	return c.closed
+}
+
+func (c *recordingGatewayConn) Close() error {
+	return nil
+}
 
 func TestGatewayPreActivationOperationsHaveExactRegisteredSet(t *testing.T) {
 	preActivation := map[string]struct{}{

@@ -107,14 +107,14 @@ func (m *uiModel) altScreenCmdForSurfaceTransition(prev, next uiSurface) tea.Cmd
 	if !prevWantsAlt && nextWantsAlt && !m.altScreenActive {
 		m.altScreenActive = true
 		if next.wantsAlternateScroll() {
-			return tea.Sequence(tea.EnterAltScreen, enableAlternateScrollCmd())
+			return tea.Sequence(tea.EnterAltScreen, enableAlternateScrollCmd(m.terminalOutput))
 		}
 		return tea.EnterAltScreen
 	}
 	if prevWantsAlt && !nextWantsAlt && m.altScreenActive {
 		m.altScreenActive = false
 		if prev.wantsAlternateScroll() {
-			return tea.Sequence(disableAlternateScrollCmd(), tea.ExitAltScreen)
+			return tea.Sequence(disableAlternateScrollCmd(m.terminalOutput), tea.ExitAltScreen)
 		}
 		return tea.ExitAltScreen
 	}
@@ -125,9 +125,9 @@ func (m *uiModel) altScreenCmdForSurfaceTransition(prev, next uiSurface) tea.Cmd
 			return nil
 		}
 		if nextWantsAlternateScroll {
-			return enableAlternateScrollCmd()
+			return enableAlternateScrollCmd(m.terminalOutput)
 		}
-		return disableAlternateScrollCmd()
+		return disableAlternateScrollCmd(m.terminalOutput)
 	}
 	return nil
 }

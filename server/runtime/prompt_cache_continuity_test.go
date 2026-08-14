@@ -21,14 +21,6 @@ import (
 	"core/shared/transcript"
 )
 
-type mutablePromptFacingSnapshotReloader struct {
-	settings brand.Settings
-}
-
-func (r *mutablePromptFacingSnapshotReloader) ReloadPromptFacingSnapshotConfig(context.Context, string) (PromptFacingSnapshotConfig, error) {
-	return PromptFacingSnapshotConfig{Settings: r.settings}, nil
-}
-
 // This regression test guards prompt-cache continuity across restarts. It
 // seeds a realistic live runtime conversation, relies on production persistence,
 // replays the persisted event stream, reopens the runtime from disk, and proves
@@ -219,7 +211,7 @@ func TestSkillsPolicyChangesOnlyAtMainContextReconstruction(t *testing.T) {
 	}
 }
 
-func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
+func TestSessionStartSkillsPolicyRemainsStableAtCompaction(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
@@ -238,7 +230,6 @@ func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
 	writeTestFile(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "blocked", "SKILL.md"), skillFixtureMarkdown("blocked", "blocked skill"))
 
 	store := mustCreateNamedTestSessionAt(t, persistence, "ws", workspace)
-	reloader := &mutablePromptFacingSnapshotReloader{settings: brand.Settings{}}
 	client := &fakeCompactionClient{
 		responses: []llm.Response{finalOutputItemResponse("enabled response")},
 		compactionResponses: []llm.CompactionResponse{{
@@ -250,10 +241,9 @@ func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
-		Model:                        "gpt-5",
-		CompactionMode:               "native",
-		PromptFacingSnapshotReloader: reloader,
-		Reviewer:                     ReviewerConfig{Model: "gpt-5"},
+		Model:          "gpt-5",
+		CompactionMode: "native",
+		Reviewer:       ReviewerConfig{Model: "gpt-5"},
 	})
 	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("enabled submit: %v", err)
@@ -263,30 +253,26 @@ func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
 		t.Fatal("fresh enabled transcript omitted skills")
 	}
 
-	mainBeforeReload := eng.transcriptRuntimeState().SnapshotMessages()
-	reloader.settings = brand.Settings{SkillToggles: map[string]bool{"blocked": false}}
-	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeReload) {
-		t.Fatal("changing reloaded settings mutated the active main transcript")
-	}
+	mainBeforeCompaction := eng.transcriptRuntimeState().SnapshotMessages()
 
-	reviewerDisabled, err := eng.buildReviewerRequest(context.Background(), client)
+	reviewerBeforeCompaction, err := eng.buildReviewerRequest(context.Background(), client)
 	if err != nil {
-		t.Fatalf("build disabled reviewer request: %v", err)
+		t.Fatalf("build reviewer request: %v", err)
 	}
-	reviewerSkills, found := skillMessageContent(requestMessages(reviewerDisabled))
+	reviewerSkills, found := skillMessageContent(requestMessages(reviewerBeforeCompaction))
 	if !found || reviewerSkills != generationSkills {
-		t.Fatalf("reviewer changed generation-snapshotted skills context: %+v", requestMessages(reviewerDisabled))
+		t.Fatalf("reviewer changed generation-snapshotted skills context: %+v", requestMessages(reviewerBeforeCompaction))
 	}
-	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeReload) {
-		t.Fatal("disabled reviewer reconstruction mutated the main transcript")
+	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeCompaction) {
+		t.Fatal("reviewer reconstruction mutated the main transcript")
 	}
 
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact with live-reloaded per-skill policy: %v", err)
+		t.Fatalf("compact with captured per-skill policy: %v", err)
 	}
 	postCompactionSkills, found := skillMessageContent(eng.transcriptRuntimeState().SnapshotMessages())
-	if !found || postCompactionSkills == generationSkills {
-		t.Fatalf("post-compaction active transcript did not apply live-reloaded per-skill policy: %+v", eng.transcriptRuntimeState().SnapshotMessages())
+	if !found || postCompactionSkills != generationSkills {
+		t.Fatalf("post-compaction active transcript changed captured per-skill policy: %+v", eng.transcriptRuntimeState().SnapshotMessages())
 	}
 	reviewerAfterCompaction, err := eng.buildReviewerRequest(context.Background(), client)
 	if err != nil {

@@ -45,6 +45,16 @@ func serveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	installContainment, err := prepareServiceChildInvocation(ctx, strings.TrimSpace(*persistenceRoot))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		if errors.Is(err, context.Canceled) {
+			return 130
+		}
+		return 1
+	}
+	defer installContainment.Close()
+	ctx = installContainment.Context(ctx)
 	ctx = installServiceShutdownTrigger(ctx)
 	authHandler, onboardingHandler := newServeStartupHandlers()
 	server, err := startServeServer(ctx, serverstartup.Request{
@@ -58,13 +68,21 @@ func serveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		return 1
 	}
-	defer func() { _ = server.Close() }()
 	_, _ = fmt.Fprintln(stderr, "Server started, Ctrl+C to stop")
-	if err := server.Serve(ctx); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return 130
+	serveErr := server.Serve(ctx)
+	if serveErr != nil {
+		var critical *serverstartup.CriticalInfrastructureTermination
+		if errors.As(serveErr, &critical) {
+			fmt.Fprintln(stderr, critical)
+			return 2
 		}
-		fmt.Fprintln(stderr, err)
+	}
+	_ = server.Close()
+	if errors.Is(serveErr, context.Canceled) {
+		return 130
+	}
+	if serveErr != nil {
+		fmt.Fprintln(stderr, serveErr)
 		return 1
 	}
 	return 0

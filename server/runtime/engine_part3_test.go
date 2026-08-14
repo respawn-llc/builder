@@ -432,10 +432,7 @@ func TestMixedAcceptedCallsPersistInProviderOutputOrder(t *testing.T) {
 		if !ok {
 			continue
 		}
-		message, err := llmMessageFromSessionRecord(messageRecord)
-		if err != nil {
-			t.Fatalf("restore mixed-tool assistant message: %v", err)
-		}
+		message := llmMessageFromSessionRecord(messageRecord)
 		if message.Role != llm.RoleAssistant || len(message.ToolCalls) != len(want) {
 			if message.Role == llm.RoleTool && message.ToolCallID != nil {
 				persistedResults = append(persistedResults, *message.ToolCallID)
@@ -570,10 +567,7 @@ func TestInvalidMixedAcceptedCallPositionsFailBeforeToolEffects(t *testing.T) {
 				if !ok {
 					continue
 				}
-				message, err := llmMessageFromSessionRecord(messageRecord)
-				if err != nil {
-					t.Fatalf("restore invalid mixed message: %v", err)
-				}
+				message := llmMessageFromSessionRecord(messageRecord)
 				if len(message.ToolCalls) > 0 {
 					t.Fatalf("invalid mixed response persisted tool intent: %+v", message.ToolCalls)
 				}
@@ -646,10 +640,7 @@ func TestHostedOnlyAcceptedCallsPersistInOutputOrder(t *testing.T) {
 		if !ok {
 			continue
 		}
-		message, err := llmMessageFromSessionRecord(messageRecord)
-		if err != nil {
-			t.Fatalf("restore hosted-only message: %v", err)
-		}
+		message := llmMessageFromSessionRecord(messageRecord)
 		if message.Role != llm.RoleAssistant || len(message.ToolCalls) != len(want) {
 			if message.Role == llm.RoleTool && message.ToolCallID != nil {
 				persistedResults = append(persistedResults, *message.ToolCallID)

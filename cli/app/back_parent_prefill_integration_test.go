@@ -226,8 +226,17 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("plan target parent: %v", err)
 	}
-	if plan.ActiveSettings.Model != "target-project-model" || plan.Source.Sources["model"] != "file" {
-		t.Fatalf("target plan model/source = %q/%q, want target-project-model/file", plan.ActiveSettings.Model, plan.Source.Sources["model"])
+	if plan.ActiveSettings.Model != "source-project-model" ||
+		plan.Source.Sources["model"] != "cli" ||
+		plan.ActiveSettings.ThinkingLevel != "high" ||
+		plan.Source.Sources["thinking_level"] != "file" {
+		t.Fatalf(
+			"target plan model/thinking sources = %q/%q and %q/%q, want source-project-model/cli and high/file",
+			plan.ActiveSettings.Model,
+			plan.Source.Sources["model"],
+			plan.ActiveSettings.ThinkingLevel,
+			plan.Source.Sources["thinking_level"],
+		)
 	}
 	runtimePlan, request, err := prepareSessionUIRun(
 		context.Background(),
@@ -243,7 +252,9 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 		t.Fatalf("prepare target parent UI: %v", err)
 	}
 	defer func() { _ = runtimePlan.Close() }()
-	if request.initialInput != "target project draft" || request.active.Model != "target-project-model" {
+	if request.initialInput != "target project draft" ||
+		request.active.Model != "source-project-model" ||
+		request.active.ThinkingLevel != "high" {
 		t.Fatalf("prepared target UI input/model = %q/%q", request.initialInput, request.active.Model)
 	}
 }

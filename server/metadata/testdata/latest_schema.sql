@@ -74,7 +74,6 @@ CREATE TABLE "sessions" (
     category TEXT CHECK (category IS NULL OR category IN ('main', 'subagent')),
     created_at_unix_ms INTEGER NOT NULL,
     updated_at_unix_ms INTEGER NOT NULL,
-    last_sequence INTEGER NOT NULL DEFAULT 0,
     model_request_count INTEGER NOT NULL DEFAULT 0,
     launch_visible INTEGER NOT NULL DEFAULT 0,
     cwd_relpath TEXT NOT NULL DEFAULT '.',

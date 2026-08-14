@@ -76,7 +76,6 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 		arg.LiveTaskStatesJson,
 		arg.ShortIDCaseMode,
 	)
-	err = recordQueryError(ctx, err, listTaskSearchPageDescriptors, 12)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +83,7 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 	var items []ListTaskSearchPageDescriptorsRow
 	for rows.Next() {
 		var item ListTaskSearchPageDescriptorsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&item.TaskID,
 			&item.ProjectID,
 			&item.ProjectKey,
@@ -103,15 +102,15 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 			&item.SourceOrdinal,
 			&item.TaskWeightedRank,
 			&item.RawSnippet,
-		), listTaskSearchPageDescriptors, 12); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskSearchPageDescriptors, 12); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskSearchPageDescriptors, 12); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -121,7 +120,7 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 	if err != nil {
 		return nil, fmt.Errorf("format generated task-search page descriptor adapter: %w", err)
 	}
-	return formatted, nil
+	return annotateSource(formatted)
 }
 
 func generateTaskSearchSchemaContract(query []byte) ([]byte, error) {
@@ -138,7 +137,6 @@ const listTaskSearchSchemaContractFailures = ` + strconv.Quote(string(query)) + 
 
 func (q *Queries) ListTaskSearchSchemaContractFailures(ctx context.Context) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskSearchSchemaContractFailures)
-	err = recordQueryError(ctx, err, listTaskSearchSchemaContractFailures, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -146,15 +144,15 @@ func (q *Queries) ListTaskSearchSchemaContractFailures(ctx context.Context) ([]s
 	var failures []string
 	for rows.Next() {
 		var failure string
-		if err := recordQueryError(ctx, rows.Scan(&failure), listTaskSearchSchemaContractFailures, 0); err != nil {
+		if err := rows.Scan(&failure); err != nil {
 			return nil, err
 		}
 		failures = append(failures, failure)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskSearchSchemaContractFailures, 0); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskSearchSchemaContractFailures, 0); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return failures, nil
@@ -164,5 +162,5 @@ func (q *Queries) ListTaskSearchSchemaContractFailures(ctx context.Context) ([]s
 	if err != nil {
 		return nil, fmt.Errorf("format generated task-search schema contract adapter: %w", err)
 	}
-	return formatted, nil
+	return annotateSource(formatted)
 }

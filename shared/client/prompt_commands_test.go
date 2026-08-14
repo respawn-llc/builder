@@ -146,7 +146,10 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 	}); err != nil {
 		t.Fatalf("FinalizeOnboarding: %v", err)
 	}
-	service := promptcommands.New(serverRoot, serverWorkspace)
+	service, err := promptcommands.New(serverRoot, serverWorkspace)
+	if err != nil {
+		t.Fatalf("prompt command service: %v", err)
+	}
 	resolvedContent := make(chan string, 1)
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)

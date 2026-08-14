@@ -25,7 +25,7 @@ describe("Home global attention data", () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens the stream before the initial attention load, refreshes for events, and reconciles after recovery", async () => {
+  it("opens before the initial load, refreshes for events, and reconciles only after reopen", async () => {
     const services = createAttentionServices();
     renderHome(services, <HomeAttentionEventsHarness />);
 
@@ -81,7 +81,7 @@ describe("Home global attention data", () => {
     await expectAttentionCalls(services.transport, 1);
   });
 
-  it("reconciles after a decoder error while the Project stream remains open", async () => {
+  it("does not invent an authoritative refresh after a decoder error", async () => {
     const services = createAttentionServices();
     renderHome(services, <HomeAttentionEventsHarness />);
 
@@ -96,7 +96,8 @@ describe("Home global attention data", () => {
     act(() => {
       services.transport.emit(workflowAttentionRpcMethods.projectEvent, invalidProjectEvent);
     });
-    await expectAttentionCalls(services.transport, 2);
+    await flushQueuedWork();
+    expect(attentionPageTokens(services.transport)).toEqual([""]);
   });
 
   it("does not refetch Sidebar navigation when Home already owns populated attention data", async () => {

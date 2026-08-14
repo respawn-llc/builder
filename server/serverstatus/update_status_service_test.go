@@ -12,7 +12,7 @@ import (
 )
 
 func TestUpdateStatusServiceIsLazyAndCachesCompletedAttempt(t *testing.T) {
-	source := &countingReleaseSource{metadata: releaseMetadata{Version: "1.2.0"}}
+	source := &countingReleaseSource{metadata: releaseMetadata{Version: updateVersion{components: [3]uint64{1, 2, 0}}}}
 	service := newUpdateStatusService("1.1.0", false, source, time.Now)
 	t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
 
@@ -72,7 +72,10 @@ func TestUpdateStatusServiceBoundsReleaseAttempt(t *testing.T) {
 
 func TestUpdateStatusServiceRefreshesCompletedAttemptAtOneHour(t *testing.T) {
 	now := time.Date(2026, time.July, 18, 10, 0, 0, 0, time.UTC)
-	source := &sequenceReleaseSource{results: []releaseMetadata{{Version: "1.1.0"}, {Version: "1.2.0"}}}
+	source := &sequenceReleaseSource{results: []releaseMetadata{
+		{Version: updateVersion{components: [3]uint64{1, 1, 0}}},
+		{Version: updateVersion{components: [3]uint64{1, 2, 0}}},
+	}}
 	service := newUpdateStatusService("1.1.0", false, source, func() time.Time { return now })
 	t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
 
@@ -105,7 +108,7 @@ func TestUpdateStatusServiceRefreshesCompletedAttemptAtOneHour(t *testing.T) {
 }
 
 func TestUpdateStatusServiceCoalescesConcurrentRequests(t *testing.T) {
-	source := newControlledReleaseSource(releaseMetadata{Version: "1.2.0"}, nil)
+	source := newControlledReleaseSource(releaseMetadata{Version: updateVersion{components: [3]uint64{1, 2, 0}}}, nil)
 	service := newUpdateStatusService("1.1.0", false, source, time.Now)
 	t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
 
@@ -137,7 +140,7 @@ func TestUpdateStatusServiceCoalescesConcurrentRequests(t *testing.T) {
 }
 
 func TestUpdateStatusCallerCancellationIsLocal(t *testing.T) {
-	source := newControlledReleaseSource(releaseMetadata{Version: "1.2.0"}, nil)
+	source := newControlledReleaseSource(releaseMetadata{Version: updateVersion{components: [3]uint64{1, 2, 0}}}, nil)
 	service := newUpdateStatusService("1.1.0", false, source, time.Now)
 	t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
 
@@ -173,7 +176,7 @@ func TestUpdateStatusCallerCancellationIsLocal(t *testing.T) {
 }
 
 func TestUpdateStatusServiceCloseWakesPendingCallers(t *testing.T) {
-	source := newControlledReleaseSource(releaseMetadata{Version: "1.2.0"}, nil)
+	source := newControlledReleaseSource(releaseMetadata{Version: updateVersion{components: [3]uint64{1, 2, 0}}}, nil)
 	service := newUpdateStatusService("1.1.0", false, source, time.Now)
 
 	statusErrors := make(chan error, 1)
@@ -226,7 +229,7 @@ func TestUpdateStatusServiceClassifiesReleaseSourceFailures(t *testing.T) {
 
 func TestUpdateStatusServiceReportsDevelopmentAndInvalidVersions(t *testing.T) {
 	t.Run("development build", func(t *testing.T) {
-		service := newUpdateStatusService("dev", false, &countingReleaseSource{metadata: releaseMetadata{Version: "1.2.0"}}, time.Now)
+		service := newUpdateStatusService("dev", false, &countingReleaseSource{metadata: releaseMetadata{Version: updateVersion{components: [3]uint64{1, 2, 0}}}}, time.Now)
 		t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
 		result, err := service.Status(context.Background())
 		if err != nil {
@@ -239,7 +242,7 @@ func TestUpdateStatusServiceReportsDevelopmentAndInvalidVersions(t *testing.T) {
 	})
 
 	t.Run("overflowed configured version", func(t *testing.T) {
-		source := &countingReleaseSource{metadata: releaseMetadata{Version: "1.2.0"}}
+		source := &countingReleaseSource{metadata: releaseMetadata{Version: updateVersion{components: [3]uint64{1, 2, 0}}}}
 		service := newUpdateStatusService("18446744073709551616.0.0", false, source, time.Now)
 		t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
 		result, err := service.Status(context.Background())
@@ -254,17 +257,6 @@ func TestUpdateStatusServiceReportsDevelopmentAndInvalidVersions(t *testing.T) {
 		}
 	})
 
-	t.Run("overflowed release version", func(t *testing.T) {
-		service := newUpdateStatusService("1.1.0", false, &countingReleaseSource{metadata: releaseMetadata{Version: "1.18446744073709551616.0"}}, time.Now)
-		t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
-		result, err := service.Status(context.Background())
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if result.Kind() != serverapi.UpdateStatusCheckFailed {
-			t.Fatalf("kind = %q, want check_failed", result.Kind())
-		}
-	})
 }
 
 type countingReleaseSource struct {

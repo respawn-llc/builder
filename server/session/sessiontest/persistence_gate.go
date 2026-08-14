@@ -2,7 +2,6 @@ package sessiontest
 
 import (
 	"context"
-	"errors"
 	"sync"
 
 	"core/server/session"
@@ -11,8 +10,7 @@ import (
 // PersistenceGate delegates ordinary persistence while allowing tests to block
 // or fail one typed persistence observation.
 type PersistenceGate struct {
-	delegate   session.PersistenceObserver
-	reconciler session.EventLogReconciliationObserver
+	delegate session.PersistenceObserver
 
 	mu   sync.Mutex
 	next *persistenceGateStep
@@ -26,8 +24,7 @@ type persistenceGateStep struct {
 }
 
 func NewPersistenceGate(delegate session.PersistenceObserver) *PersistenceGate {
-	reconciler, _ := delegate.(session.EventLogReconciliationObserver)
-	return &PersistenceGate{delegate: delegate, reconciler: reconciler}
+	return &PersistenceGate{delegate: delegate}
 }
 
 func (g *PersistenceGate) FailNext(err error) {
@@ -112,11 +109,4 @@ func (g *PersistenceGate) ObservePersistedStore(ctx context.Context, snapshot se
 		}
 	}
 	return g.delegate.ObservePersistedStore(ctx, snapshot)
-}
-
-func (g *PersistenceGate) ObserveEventLogReconciliation(ctx context.Context, reconciliation session.PersistedEventLogReconciliation) error {
-	if g == nil || g.reconciler == nil {
-		return errors.New("test persistence gate delegate does not reconcile event logs")
-	}
-	return g.reconciler.ObserveEventLogReconciliation(ctx, reconciliation)
 }

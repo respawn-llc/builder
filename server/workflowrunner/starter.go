@@ -687,11 +687,11 @@ func (s *Starter) startCurrentNodeAgent(
 			var turnEngine *runtime.Engine
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
-					_, err := engine.SubmitWorkflowContinuationTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+					_, err := engine.SubmitWorkflowContinuationTurn(engineCtx)
 					if err != nil {
 						return err
 					}
-				} else if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+				} else if _, err := engine.SubmitWorkflowTurn(engineCtx); err != nil {
 					return err
 				}
 				turnEngine = engine
@@ -820,7 +820,7 @@ func (s *Starter) planCurrentNodeSession(
 			return launch.SessionPlan{}, false, err
 		}
 	}
-	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, ExecutionTargets: s.metadata, ProjectWorkspaceBoundary: s.metadata, MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) { return s.metadata, nil }}
+	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, ExecutionTargets: s.metadata, ProjectWorkspaceBoundary: s.metadata, MetadataStore: s.metadata}
 	plan, err := planner.PlanSession(ctx, launch.SessionRequest{
 		Mode:                                launch.ModeHeadless,
 		Intent:                              intent,

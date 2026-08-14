@@ -26,7 +26,8 @@ type TaskSearch struct {
 type taskSearchReadSnapshot struct {
 	queries            *sqlitegen.Queries
 	liveTaskStatesJSON *string
-	close              func() error
+	transaction        *metadata.Transaction
+	ctx                context.Context
 }
 
 func NewTaskSearch(
@@ -47,11 +48,15 @@ func NewTaskSearch(
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projection == nil {
-		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
-	}
 	if err := req.Validate(); err != nil {
 		return serverapi.TaskSearchResponse{}, err
+	}
+	return s.ReadSearch(ctx, req)
+}
+
+func (s *TaskSearch) ReadSearch(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
+	if s == nil || s.metadata == nil || s.queries == nil || s.projection == nil {
+		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := context.Cause(ctx); err != nil {
 		return serverapi.TaskSearchResponse{}, err
@@ -68,9 +73,9 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 		return serverapi.TaskSearchResponse{}, err
 	}
 	defer func() {
-		if closeErr := snapshot.Close(); closeErr != nil {
+		snapshot.Close(&err)
+		if err != nil {
 			response = serverapi.TaskSearchResponse{}
-			err = errors.Join(err, fmt.Errorf("close task search read snapshot: %w", closeErr))
 		}
 	}()
 	if req.Mode == serverapi.TaskSearchModeFTS5 {
@@ -101,53 +106,47 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 		value := offset + len(rows)
 		next = &value
 	}
-	response = serverapi.TaskSearchResponse{Mode: req.Mode, Groups: groups, NextOffset: next}
-	if err := response.Validate(); err != nil {
-		return serverapi.TaskSearchResponse{}, fmt.Errorf("validate task search response: %w", err)
-	}
-	return response, nil
+	return serverapi.TaskSearchResponse{Mode: req.Mode, Groups: groups, NextOffset: next}, nil
 }
 
 func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.TaskSearchRequest) (*taskSearchReadSnapshot, error) {
-	tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.metadata.BeginTransaction(ctx, "Task search read snapshot", &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, fmt.Errorf("begin task search read transaction: %w", err)
+		return nil, err
 	}
-	closeTransaction := func() error {
-		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) {
-			return nil
-		}
-		return rollbackErr
+	closeTransaction := func(primary error) error {
+		tx.Settle(ctx, &primary)
+		return primary
 	}
-	queries := s.queries.WithTx(tx)
+	queries := tx.Queries()
 	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
-		return nil, errors.Join(err, closeTransaction())
+		return nil, closeTransaction(err)
 	}
 	if _, err := queries.AnchorTaskSearchReadSnapshot(ctx); err != nil {
-		return nil, errors.Join(err, closeTransaction())
+		return nil, closeTransaction(err)
 	}
 	observation, err := s.projection.Observe(nil)
 	if err != nil {
-		return nil, errors.Join(err, closeTransaction())
+		return nil, closeTransaction(err)
 	}
 	liveTaskStatesJSON := observation.LiveTaskStatesJSON
 	return &taskSearchReadSnapshot{
 		queries:            queries,
 		liveTaskStatesJSON: &liveTaskStatesJSON,
-		close:              closeTransaction,
+		transaction:        tx,
+		ctx:                ctx,
 	}, nil
 }
 
-func (s *taskSearchReadSnapshot) Close() error {
-	if s == nil || s.close == nil {
-		return nil
+func (s *taskSearchReadSnapshot) Close(resultErr *error) {
+	if s == nil || s.transaction == nil || resultErr == nil {
+		return
 	}
-	close := s.close
-	s.close = nil
+	tx := s.transaction
+	s.transaction = nil
 	s.queries = nil
 	s.liveTaskStatesJSON = nil
-	return close()
+	tx.Settle(s.ctx, resultErr)
 }
 
 func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlitegen.Queries, req serverapi.TaskSearchRequest) error {

@@ -435,10 +435,7 @@ func TestCompletedResponsePersistsOnlyPlannedAcceptedCalls(t *testing.T) {
 		if !ok {
 			continue
 		}
-		message, err := llmMessageFromSessionRecord(messageRecord)
-		if err != nil {
-			t.Fatalf("restore persisted response message: %v", err)
-		}
+		message := llmMessageFromSessionRecord(messageRecord)
 		for _, call := range message.ToolCalls {
 			if call.ID == phantomCallID {
 				t.Fatalf("unplanned assistant-only call became durable: %+v", message)
@@ -718,10 +715,7 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 			}
 			toolCompletionRecordIndex = index
 		case session.MessageRecord:
-			message, restoreErr := llmMessageFromSessionRecord(payload)
-			if restoreErr != nil {
-				t.Fatalf("restore persisted message: %v", restoreErr)
-			}
+			message := llmMessageFromSessionRecord(payload)
 			if message.Role != llm.RoleAssistant ||
 				message.Phase == nil ||
 				*message.Phase != llm.MessagePhaseFinal {
@@ -830,10 +824,7 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 		case session.ToolCompletionRecord:
 			recordCompletions[payload.CallID] = index
 		case session.MessageRecord:
-			message, restoreErr := llmMessageFromSessionRecord(payload)
-			if restoreErr != nil {
-				t.Fatalf("restore message: %v", restoreErr)
-			}
+			message := llmMessageFromSessionRecord(payload)
 			if message.Role == llm.RoleAssistant && message.Phase != nil && *message.Phase == llm.MessagePhaseFinal {
 				persistedFinalIndex = index
 			}
@@ -962,10 +953,7 @@ func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutP
 				t.Fatalf("stale workflow response persisted a tool completion: %+v", payload)
 			}
 		case session.MessageRecord:
-			message, restoreErr := llmMessageFromSessionRecord(payload)
-			if restoreErr != nil {
-				t.Fatalf("restore persisted message: %v", restoreErr)
-			}
+			message := llmMessageFromSessionRecord(payload)
 			for _, call := range message.ToolCalls {
 				if call.ID == "stale-call" {
 					t.Fatalf("stale workflow response persisted a tool call: %+v", message)

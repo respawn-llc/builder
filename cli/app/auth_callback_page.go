@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -276,7 +277,8 @@ var runAuthCallbackPage = func(ctx context.Context, data authCallbackPageData, w
 	model := newAuthCallbackPageModel(data)
 	model.ctx = ctx
 	model.complete = complete
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	output := newUITerminalOutputFile(os.Stdout)
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithOutput(output))
 	waitCtx, cancelWait := context.WithCancel(ctx)
 	defer cancelWait()
 	if waitCallback != nil {
@@ -286,6 +288,7 @@ var runAuthCallbackPage = func(ctx context.Context, data authCallbackPageData, w
 		}()
 	}
 	finalModel, err := program.Run()
+	err = terminalOutputRunError(output.uiTerminalOutput, err)
 	if err != nil {
 		return authCallbackPageResult{}, err
 	}

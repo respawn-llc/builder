@@ -195,31 +195,6 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 	}
 }
 
-func TestWorkflowPostCompletionCompactionKeepsCommittedReceiptAfterFinalizationDiagnostic(t *testing.T) {
-	t.Parallel()
-	diagnostic := errors.New("workflow post-completion finalization diagnostic")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	fixture := newCommittedRemoteCompactionFixture(t, gate, nil)
-	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
-	}, diagnostic)
-
-	workflowResult := fixture.engine.CompactContextForWorkflowPostCompletion(context.Background())
-	if !workflowResult.CommitReceipt.Committed || !errors.Is(workflowResult.Diagnostic, diagnostic) {
-		t.Fatalf(
-			"workflow post-completion result = receipt:%+v diagnostic:%v",
-			workflowResult.CommitReceipt,
-			workflowResult.Diagnostic,
-		)
-	}
-	if !fixture.engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
-		t.Fatal("committed replacement lost its post-completion boundary after diagnostic")
-	}
-	if len(fixture.client.compactionCalls) != 1 {
-		t.Fatalf("compaction calls = %d, want one", len(fixture.client.compactionCalls))
-	}
-}
-
 func TestWorkflowPostCompletionCompactionPreCommitFailureDoesNotCreateBoundary(t *testing.T) {
 	t.Parallel()
 	fixture := newCommittedRemoteCompactionFixture(t, runtimeTestSessionPersistence, nil)

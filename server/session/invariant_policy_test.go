@@ -29,10 +29,6 @@ func TestSessionInvariantFailuresReturnDiagnosticsInReleaseMode(t *testing.T) {
 		t.Fatal("invalid capability read did not return an error")
 	}
 
-	store := &Store{}
-	if _, err := store.currentEventLogReconciliationObservation(nil); err == nil {
-		t.Fatal("nil reconciliation log did not return an error")
-	}
 }
 
 func TestSessionInvariantFailuresPanicInDebugMode(t *testing.T) {

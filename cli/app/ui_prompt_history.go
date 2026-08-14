@@ -240,17 +240,14 @@ func (m *uiModel) validateInitialPromptHistoryCount(count int) {
 	if count <= serverapi.SessionPromptHistoryMaxEntries {
 		return
 	}
-	if m.debugMode {
-		m.handleOngoingDeveloperError(ongoing.NewDeveloperError(
-			"load_prompt_history",
-			"session-opening prompt history exceeds contract maximum",
-			map[string]any{
-				"actual_count":  count,
-				"maximum_count": serverapi.SessionPromptHistoryMaxEntries,
-			},
-		))
-	}
-	// The user-authorized release recovery is intentionally silent.
+	m.handleOngoingDeveloperError(ongoing.NewDeveloperError(
+		"load_prompt_history",
+		"session-opening prompt history exceeds contract maximum",
+		map[string]any{
+			"actual_count":  count,
+			"maximum_count": serverapi.SessionPromptHistoryMaxEntries,
+		},
+	))
 }
 
 func (m *uiModel) recordPromptHistory(text string) tea.Cmd {
@@ -270,9 +267,9 @@ func (m *uiModel) recordPromptHistory(text string) tea.Cmd {
 	}
 }
 
-func ringBellCmd() tea.Cmd {
+func ringBellCmd(output *uiTerminalOutput) tea.Cmd {
 	return func() tea.Msg {
-		if err := writeTerminalSequence(terminalBell); err != nil {
+		if err := writeTerminalSequence(output, terminalBell); err != nil {
 			return terminalSequenceWriteErrMsg{err: err}
 		}
 		return nil

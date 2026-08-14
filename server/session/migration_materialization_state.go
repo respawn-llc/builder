@@ -23,7 +23,6 @@ type eventLogMaterializationState uint8
 
 const (
 	eventLogUnmaterialized eventLogMaterializationState = iota
-	eventLogCurrentReconciliationPending
 	eventLogCurrent
 )
 
@@ -108,9 +107,7 @@ func (e invalidEventLogMigrationWorkspaceError) Error() string {
 }
 
 // prepareEventLogMaterialization establishes the durable source state needed
-// by the authoritative legacy transformer. It deliberately does not transform
-// a nonempty legacy source or reconcile metadata; those operations belong to
-// later ordered slices.
+// by the authoritative legacy transformer.
 func (s *Store) prepareEventLogMaterialization() (eventLogPreparationResult, error) {
 	if s == nil {
 		return eventLogPreparationResult{}, errors.New("session store is required")
@@ -193,39 +190,20 @@ func (s *Store) prepareEventLogMaterializationWithStableLockHeld() (
 
 	switch classification {
 	case eventLogSourceMissing, eventLogSourceEmpty:
-		if s.eventLogCreationVersion == nil {
-			return eventLogPreparationResult{}, false, errors.New(
-				"event-log materialization invariant violated: creation version is absent",
-			)
-		}
-		if err := installHeaderOnlyCurrentEventLog(
-			eventsPath,
-			workspace,
-			*s.eventLogCreationVersion,
-			func() {
-				// Rename is the migration commit point. This transition must
-				// precede workspace cleanup and directory sync.
-				s.setEventLogMaterializationState(
-					eventLogCurrentReconciliationPending,
-					classification,
-					foundVersion,
-				)
-				committed = true
-			},
-		); err != nil {
-			var materializationErr *EventLogMaterializationError
-			if errors.As(err, &materializationErr) {
-				committed = materializationErr.Committed
-			}
-			return eventLogPreparationResult{}, committed, err
-		}
+		return eventLogPreparationResult{}, false, fmt.Errorf(
+			"published session event log is %s",
+			map[eventLogSourceClassification]string{
+				eventLogSourceMissing: "missing",
+				eventLogSourceEmpty:   "empty",
+			}[classification],
+		)
 	case eventLogSourceLegacy:
 		if err := installLegacyCurrentEventLog(
 			eventsPath,
 			workspace,
 			func() {
 				s.setEventLogMaterializationState(
-					eventLogCurrentReconciliationPending,
+					eventLogCurrent,
 					classification,
 					foundVersion,
 				)
@@ -240,7 +218,7 @@ func (s *Store) prepareEventLogMaterializationWithStableLockHeld() (
 		}
 	case eventLogSourceCurrent:
 		s.setEventLogMaterializationState(
-			eventLogCurrentReconciliationPending,
+			eventLogCurrent,
 			classification,
 			foundVersion,
 		)
@@ -424,24 +402,6 @@ func validateOwnedEventLogMigrationWorkspaceEntry(entry os.DirEntry) error {
 	return invalidEventLogMigrationWorkspaceError{
 		Reason: fmt.Sprintf("owned artifact %q has unexpected type %s", entry.Name(), entry.Type()),
 	}
-}
-
-func installHeaderOnlyCurrentEventLog(
-	eventsPath string,
-	workspace string,
-	version int,
-	onCommitted func(),
-) error {
-	header, err := encodeEventLogHeader(version)
-	if err != nil {
-		return err
-	}
-	return installCurrentEventLog(eventsPath, workspace, onCommitted, func(stage *os.File) error {
-		if _, err := writeAll(stage, append(header, '\n')); err != nil {
-			return fmt.Errorf("write staged event log header: %w", err)
-		}
-		return nil
-	})
 }
 
 func recoverStagedCurrentEventLog(eventsPath, workspace string) error {

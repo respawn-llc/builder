@@ -86,11 +86,10 @@ export function ProjectLabelsProvider({
         run(effects.consumeProjectEvent(event));
       },
       onComplete() {
-        run(effects.refreshAfterSubscriptionBoundary());
+        return;
       },
       onError(error) {
         reportBackgroundError(error);
-        run(effects.refreshAfterSubscriptionBoundary());
       },
     });
     return () => {

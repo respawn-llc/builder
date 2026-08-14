@@ -103,7 +103,11 @@ export class FakeRpcTransport implements RpcTransport {
 
   emit(method: string, params: unknown): void {
     for (const subscriber of [...this.#subscribers]) {
-      subscriber.handler.onEvent(method, params);
+      const error = subscriber.handler.onEvent(method, params);
+      if (error instanceof Error) {
+        subscriber.handler.onError(error);
+        this.#subscribers = this.#subscribers.filter((candidate) => candidate !== subscriber);
+      }
     }
   }
 

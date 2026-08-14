@@ -2,7 +2,6 @@ package workflowstore
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -66,50 +65,6 @@ func (f graphSaveFixture) current(t *testing.T) (workflow.Definition, WorkflowRe
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	return def, record
-}
-
-func TestWorkflowGraphSaveRejectsMissingNestedWorkflowIDs(t *testing.T) {
-	f := newGraphSaveFixture(t, createValidWorkflow)
-	tests := []struct {
-		name   string
-		mutate func(*WorkflowGraphSaveRequest)
-	}{
-		{
-			name: "node group",
-			mutate: func(req *WorkflowGraphSaveRequest) {
-				req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: "missing-workflow-id-group", WorkflowID: runtimeids.WorkflowID{}, Key: "missing_workflow_id", DisplayName: "Missing workflow ID"})
-			},
-		},
-		{
-			name: "node",
-			mutate: func(req *WorkflowGraphSaveRequest) {
-				req.Nodes[0].WorkflowID = runtimeids.WorkflowID{}
-			},
-		},
-		{
-			name: "transition group",
-			mutate: func(req *WorkflowGraphSaveRequest) {
-				req.TransitionGroups[0].WorkflowID = runtimeids.WorkflowID{}
-			},
-		},
-		{
-			name: "edge",
-			mutate: func(req *WorkflowGraphSaveRequest) {
-				req.Edges[0].WorkflowID = runtimeids.WorkflowID{}
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			req := f.request(f.record.Version, false, f.def)
-			test.mutate(&req)
-			_, err := f.store.PreviewWorkflowGraphSave(f.ctx, req)
-			if !errors.Is(err, ErrWorkflowIDRequired) {
-				t.Fatalf("PreviewWorkflowGraphSave error = %v, want missing nested workflow identity rejection", err)
-			}
-		})
-	}
 }
 
 func TestWorkflowGraphSaveReportsRemovedTransitionBranchImpact(t *testing.T) {
@@ -1653,7 +1608,7 @@ func TestWorkflowGraphSaveRejectsStaleVersion(t *testing.T) {
 	}
 }
 
-func TestWorkflowGraphSaveChecksVersionBeforePreparingDraftRecords(t *testing.T) {
+func TestWorkflowGraphSaveChecksVersionBeforePreparingGraph(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	if err := f.store.UpdateWorkflowInfo(f.ctx, f.workflowID, "Remote rename", "Remote description"); err != nil {
 		t.Fatalf("UpdateWorkflowInfo: %v", err)
@@ -1671,11 +1626,6 @@ func TestWorkflowGraphSaveChecksVersionBeforePreparingDraftRecords(t *testing.T)
 		t.Fatalf("stale save = %+v, want current-version blocker", saved)
 	}
 
-	currentVersion := stale
-	currentVersion.ExpectedVersion = current.Version
-	if _, err := f.store.PreviewWorkflowGraphSave(f.ctx, currentVersion); !errors.Is(err, ErrWorkflowIDRequired) {
-		t.Fatalf("current-version preview error = %v, want invalid nested Workflow identity", err)
-	}
 }
 
 func TestPreviewWorkflowGraphSaveDoesNotMutateWithoutBlockers(t *testing.T) {

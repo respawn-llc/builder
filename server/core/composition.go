@@ -87,7 +87,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("persistence bundle: generated support: %w", err)
 	}
 	runtimeSupport.Generated = generatedSupport
-	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
+	metadataFatal := NewMetadataFatalAuthority()
+	metadataStore, err := metadata.OpenWithFatalReporter(cfg.PersistenceRoot, metadataFatal)
 	if err != nil {
 		closeRootLeaseOnFailure()
 		return nil, fmt.Errorf("persistence bundle: metadata store: %w", err)
@@ -187,9 +188,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore).
 		WithChatSettingsPreparationResolver(sessionChatSettingsPreparationResolver{
-			metadataStore:   metadataStore,
-			authManager:     authSupport.AuthManager,
-			persistenceRoot: cfg.PersistenceRoot,
+			metadataStore:  metadataStore,
+			authManager:    authSupport.AuthManager,
+			configSnapshot: cfg,
 		}).
 		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
 	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
@@ -220,7 +221,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
-		WithNavigationTargetResolver(metadataStore)
+		WithNavigationTargetResolver(metadataStore).
+		WithExecutionTargetStore(metadataStore)
 	var workflowRuntimeStarter *workflowrunner.Starter
 	cleanupNewFailure := func() {
 		sleepManager.Close()
@@ -366,7 +368,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
 	}
-	core := &Core{bundles: composeBundles(bundleCompositionInput{
+	core := &Core{metadataFatal: metadataFatal, bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
 		workspaceConfigResolver: workspaceConfigResolver,
 		authSupport:             authSupport,
@@ -672,20 +674,8 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 		return nil, nil
 	}
 	items := s.prompts.ListPendingPrompts(sessionID)
-	typedSessionID, err := runtimeids.ParseSessionID(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("pending prompt session identity: %w", err)
-	}
 	out := make([]workflowview.PendingPromptSnapshot, 0, len(items))
 	for _, item := range items {
-		promptID := clientui.PromptID(item.Request.ID)
-		stepID, err := runtimeids.ParseStepID(item.Request.StepID)
-		if err != nil {
-			return nil, fmt.Errorf("session %q pending prompt %q step identity: %w", sessionID, item.Request.ID, err)
-		}
-		if err := promptID.Validate(); err != nil {
-			return nil, fmt.Errorf("session %q pending prompt identity: %w", sessionID, err)
-		}
 		recommendedOptionIndex, err := promptcontrol.DecodeLegacyRecommendedOptionIndex(
 			item.Request.RecommendedOptionIndex,
 			len(item.Request.Suggestions),
@@ -698,9 +688,9 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 			decisions = append(decisions, clientui.ApprovalDecision(option.Decision))
 		}
 		out = append(out, workflowview.PendingPromptSnapshot{
-			PromptID:               promptID,
-			SessionID:              typedSessionID,
-			StepID:                 stepID,
+			PromptID:               item.PromptID,
+			SessionID:              item.SessionID,
+			StepID:                 item.StepID,
 			CreatedAt:              item.CreatedAt,
 			Question:               item.Request.Question,
 			Suggestions:            append([]string(nil), item.Request.Suggestions...),

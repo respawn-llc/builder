@@ -37,7 +37,7 @@ type CreateTaskRequest struct {
 	Body              string
 	SourceURL         string
 	SourceWorkspaceID string
-	LabelIDs          []string
+	LabelIDs          []label.ID
 	DependencyIntents []workflow.TaskDependencyCreateIntent
 }
 
@@ -71,14 +71,11 @@ type TaskExecutionScope struct {
 }
 
 func (s *Store) TaskExecutionScope(ctx context.Context, taskID workflow.TaskID) (TaskExecutionScope, error) {
-	if strings.TrimSpace(string(taskID)) == "" {
-		return TaskExecutionScope{}, errors.New("task id is required")
-	}
 	row, err := s.queries.GetTaskProjectWorkflowIDs(ctx, string(taskID))
 	if err != nil {
 		return TaskExecutionScope{}, err
 	}
-	if strings.TrimSpace(row.ProjectID) == "" || row.WorkflowID.IsZero() {
+	if strings.TrimSpace(row.ProjectID) == "" {
 		return TaskExecutionScope{}, fmt.Errorf("task %q has incomplete execution scope", taskID)
 	}
 	return TaskExecutionScope{ProjectID: row.ProjectID, WorkflowID: row.WorkflowID}, nil
@@ -163,16 +160,10 @@ func (r ManualMoveResult) Validate() error {
 	return nil
 }
 
-func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskRecord, error) {
+func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (_ TaskRecord, metadataOperationErr error) {
 	projectID := strings.TrimSpace(req.ProjectID)
-	if projectID == "" {
-		return TaskRecord{}, errors.New("project id is required")
-	}
 	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
-		if req.WorkflowID.IsZero() {
-			return TaskRecord{}, errors.New("workflow id is required when provided")
-		}
 		value := *req.WorkflowID
 		workflowID = &value
 	}
@@ -180,41 +171,19 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		limit := label.MaxProjectLabels
 		return TaskRecord{}, TaskLabelMutationError{Reason: TaskLabelMutationTooManyAdd, Field: "label_ids", Limit: &limit}
 	}
-	roleCounts := map[workflow.TaskDependencyRole]int{}
 	dependencyIntents := append([]workflow.TaskDependencyCreateIntent(nil), req.DependencyIntents...)
-	for _, intent := range dependencyIntents {
-		if strings.TrimSpace(string(intent.RelatedTaskID)) == "" {
-			return TaskRecord{}, errors.New("dependency related task id is required")
-		}
-		switch intent.NewTaskRole {
-		case workflow.TaskDependencyRoleBlocker, workflow.TaskDependencyRoleBlocked:
-		default:
-			return TaskRecord{}, errors.New("dependency new task role is invalid")
-		}
-		roleCounts[intent.NewTaskRole]++
-		if roleCounts[intent.NewTaskRole] > workflow.MaxTaskDependencies {
-			return TaskRecord{}, fmt.Errorf("dependency intents exceed the %d per-role limit", workflow.MaxTaskDependencies)
-		}
-	}
-	labelIDs, _, err := parseUniqueLabelIDs(req.LabelIDs, "label_ids", TaskLabelMutationDuplicateAdd)
-	if err != nil {
-		return TaskRecord{}, err
-	}
 	prepared := preparedTaskCreate{
-		projectID: projectID, workflowID: workflowID, title: strings.TrimSpace(req.Title),
+		projectID: projectID, workflowID: workflowID, title: req.Title,
 		body: strings.TrimSpace(req.Body), sourceURL: strings.TrimSpace(req.SourceURL),
 		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID), taskID: prefixedID("task"),
-		labelIDs: labelIDs, dependencyIntents: dependencyIntents, nowUnixMs: s.now().UnixMilli(),
+		labelIDs: append([]label.ID(nil), req.LabelIDs...), dependencyIntents: dependencyIntents, nowUnixMs: s.now().UnixMilli(),
 	}
-	if prepared.title == "" {
-		return TaskRecord{}, errors.New("task title is required")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "CreateTask", nil)
 	if err != nil {
 		return TaskRecord{}, taskCreateStoreError(err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	task, err := createTaskWithQueries(ctx, s.queries.WithTx(tx), prepared)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	task, err := createTaskWithQueries(ctx, tx.Queries(), prepared)
 	if err != nil {
 		return TaskRecord{}, taskCreateStoreError(err)
 	}
@@ -239,9 +208,6 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	}
 	start, err := startNode(definition)
 	if err != nil {
-		return TaskRecord{}, err
-	}
-	if err := validateTaskLabelReferences(ctx, q, workflow.TaskID(prepared.taskID), prepared.projectID, prepared.labelIDs); err != nil {
 		return TaskRecord{}, err
 	}
 	allocated, err := q.AllocateProjectTaskSequence(ctx, sqlitegen.AllocateProjectTaskSequenceParams{ProjectID: prepared.projectID, UpdatedAtUnixMs: prepared.nowUnixMs})
@@ -269,12 +235,15 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	if err := insertTaskCurrentNode(ctx, q, currentNode, time.UnixMilli(prepared.nowUnixMs).UTC()); err != nil {
+	if err := insertTaskCurrentNodeWithKind(ctx, q, currentNode, start.Kind(), time.UnixMilli(prepared.nowUnixMs).UTC()); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert task start current node: %w", err)
 	}
 	for _, id := range prepared.labelIDs {
 		if err := q.InsertTaskLabelAssignment(ctx, sqlitegen.InsertTaskLabelAssignmentParams{TaskID: prepared.taskID, LabelID: id.String()}); err != nil {
-			return TaskRecord{}, fmt.Errorf("insert task label: %w", err)
+			return TaskRecord{}, fmt.Errorf(
+				"insert task label: %w",
+				translateTaskLabelAssignmentInsertError(ctx, q, workflow.TaskID(prepared.taskID), prepared.projectID, id, err),
+			)
 		}
 	}
 	for _, intent := range prepared.dependencyIntents {
@@ -290,7 +259,7 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 		if err != nil {
 			return TaskRecord{}, fmt.Errorf("attach task dependency during task creation: %w", err)
 		}
-		if decision == workflow.TaskDependencyAttachAdded {
+		if decision.Decision == workflow.TaskDependencyAttachAdded {
 			for _, taskID := range []workflow.TaskID{dependencyRequest.BlockerTaskID, dependencyRequest.BlockedTaskID} {
 				if err := touchTaskUpdatedAt(ctx, q, string(taskID), prepared.nowUnixMs); err != nil {
 					return TaskRecord{}, fmt.Errorf("touch task %q after dependency creation: %w", taskID, err)
@@ -307,26 +276,20 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	}, nil
 }
 
-func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskRecord, error) {
-	if strings.TrimSpace(string(req.TaskID)) == "" {
-		return TaskRecord{}, errors.New("task id is required")
-	}
-	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
-		return TaskRecord{}, errors.New("task title is required")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (_ TaskRecord, metadataOperationErr error) {
+	tx, err := s.metadata.BeginTransaction(ctx, "UpdateTask", nil)
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	task, err := q.GetTask(ctx, string(req.TaskID))
 	if err != nil {
 		return TaskRecord{}, err
 	}
 	title, body := task.Title, task.Body
 	if req.Title != nil {
-		title = strings.TrimSpace(*req.Title)
+		title = *req.Title
 	}
 	if req.Body != nil {
 		body = strings.TrimSpace(*req.Body)
@@ -380,16 +343,13 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	return taskRecordFromTask(row)
 }
 
-func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteTaskResult, error) {
-	if strings.TrimSpace(string(taskID)) == "" {
-		return DeleteTaskResult{}, errors.New("task id is required")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (_ DeleteTaskResult, metadataOperationErr error) {
+	tx, err := s.metadata.BeginTransaction(ctx, "DeleteTask", nil)
 	if err != nil {
 		return DeleteTaskResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	task, err := q.GetTask(ctx, string(taskID))
 	if err != nil {
 		return DeleteTaskResult{}, err
@@ -460,7 +420,7 @@ func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, taskID workflo
 	return s.startTask(ctx, taskID, candidate, true)
 }
 
-func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireTarget bool) (StartTaskResult, error) {
+func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireTarget bool) (_ StartTaskResult, metadataOperationErr error) {
 	prepared, err := s.prepareTaskStart(ctx, taskID)
 	if err != nil {
 		return StartTaskResult{}, err
@@ -508,12 +468,12 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "startTask", nil)
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	nowTime := s.now().UTC()
 	now := nowTime.UnixMilli()
 	if requireTarget {

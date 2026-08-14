@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -825,13 +826,8 @@ func TestRollbackPickerNeverEnablesAlternateScroll(t *testing.T) {
 			detailTestRollbackUserRow("rollback candidate", targetID),
 		},
 	})
-	originalWrite := writeTerminalSequence
-	var terminalSequences []string
-	writeTerminalSequence = func(sequence string) error {
-		terminalSequences = append(terminalSequences, sequence)
-		return nil
-	}
-	t.Cleanup(func() { writeTerminalSequence = originalWrite })
+	var terminalOutput bytes.Buffer
+	model.terminalOutput = newUITerminalOutput(&terminalOutput)
 
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
 	next, loadCmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -844,10 +840,8 @@ func TestRollbackPickerNeverEnablesAlternateScroll(t *testing.T) {
 	}
 	_ = collectCmdMessages(t, transitionCmd)
 
-	for _, sequence := range terminalSequences {
-		if strings.Contains(sequence, "?1007h") {
-			t.Fatalf("rollback picker enabled alternate scroll with terminal sequence %q", sequence)
-		}
+	if strings.Contains(terminalOutput.String(), "?1007h") {
+		t.Fatalf("rollback picker enabled alternate scroll with terminal output %q", terminalOutput.String())
 	}
 }
 

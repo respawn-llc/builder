@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http/httptest"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -437,27 +436,40 @@ func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
 
 func TestRemoteGetAuthStatusRoundTripsTypedFactsAndRejectsMalformedResponse(t *testing.T) {
 	tests := []struct {
-		name     string
-		response serverapi.AuthStatusResponse
-		wantErr  bool
+		name       string
+		response   serverapi.AuthStatusResponse
+		omitResult bool
+		wantErr    bool
 	}{}
 	for _, fixture := range testsetup.AuthStatusTransportCases() {
 		tests = append(tests, struct {
-			name     string
-			response serverapi.AuthStatusResponse
-			wantErr  bool
+			name       string
+			response   serverapi.AuthStatusResponse
+			omitResult bool
+			wantErr    bool
 		}{name: fixture.Name, response: fixture.Response})
 	}
 	tests = append(tests, struct {
-		name     string
-		response serverapi.AuthStatusResponse
-		wantErr  bool
+		name       string
+		response   serverapi.AuthStatusResponse
+		omitResult bool
+		wantErr    bool
 	}{
 		name: "malformed response",
 		response: serverapi.AuthStatusResponse{
 			Resolution: serverapi.AuthStatusResolution{Kind: serverapi.AuthStatusResolutionKnown},
 		},
 		wantErr: true,
+	})
+	tests = append(tests, struct {
+		name       string
+		response   serverapi.AuthStatusResponse
+		omitResult bool
+		wantErr    bool
+	}{
+		name:       "missing result",
+		omitResult: true,
+		wantErr:    true,
 	})
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -477,7 +489,11 @@ func TestRemoteGetAuthStatusRoundTripsTypedFactsAndRejectsMalformedResponse(t *t
 					t.Errorf("method = %q, want %q", request.Method, protocol.MethodAuthGetStatus)
 					return
 				}
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, test.response)); err != nil {
+				response := protocol.NewSuccessResponse(request.ID, test.response)
+				if test.omitResult {
+					response = protocol.Response{JSONRPC: protocol.JSONRPCVersion, ID: request.ID}
+				}
+				if err := websocket.JSON.Send(ws, response); err != nil {
 					t.Errorf("send auth status response: %v", err)
 				}
 			})
@@ -488,8 +504,9 @@ func TestRemoteGetAuthStatusRoundTripsTypedFactsAndRejectsMalformedResponse(t *t
 			defer func() { _ = remote.Close() }()
 			got, err := remote.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
 			if test.wantErr {
-				if err == nil {
-					t.Fatal("malformed auth status was accepted")
+				var invalidResponse *InvalidResponseError
+				if !errors.As(err, &invalidResponse) {
+					t.Fatalf("malformed auth status error = %v, want InvalidResponseError", err)
 				}
 				return
 			}
@@ -585,7 +602,7 @@ func TestRemoteLiveWatchRejectsMalformedResponse(t *testing.T) {
 
 	_, err = remote.LiveWatch(context.Background(), serverapi.RuntimeLiveWatchRequest{SessionID: "session-1"})
 	var invalidResponse *InvalidResponseError
-	if err == nil || !strings.Contains(err.Error(), "validate runtime live watch response") || !errors.As(err, &invalidResponse) {
+	if err == nil || !errors.As(err, &invalidResponse) {
 		t.Fatalf("LiveWatch error = %v, want response validation error", err)
 	}
 }
@@ -1732,7 +1749,7 @@ func TestDialRemoteURLForSessionAttachesSessionBeforeUnaryCalls(t *testing.T) {
 		if statusRequest.SessionID != attach.SessionID {
 			t.Fatalf("status session id = %q, want %q", statusRequest.SessionID, attach.SessionID)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{})); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{Worktree: serverapi.WorktreeStatusTarget{RecordedRoot: "/workspace"}})); err != nil {
 			t.Fatalf("send worktree status response: %v", err)
 		}
 	})

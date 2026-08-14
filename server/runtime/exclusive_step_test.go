@@ -9,7 +9,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -651,118 +650,6 @@ func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testin
 				t.Fatalf("agent-turn interrupted state=%t, want %t for %s", lifecycle.active.interrupted, test.wantMatch, test.kind)
 			}
 		})
-	}
-}
-
-func TestExclusiveStepLifecycleAgentTurnInterruptKeepsSuccessorBehindPersistence(t *testing.T) {
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: eng,
-		active: &exclusiveRunState{
-			sequence:   1,
-			activeKind: ActiveKindUserTurn,
-			cancel:     func() {},
-			runID:      uuid.NewString(),
-			stepID:     uuid.NewString(),
-			startedAt:  time.Now().UTC(),
-		},
-	}
-	persistEntered, releasePersist := gate.BlockNext()
-
-	type interruptResult struct {
-		snapshot *RunSnapshot
-		err      error
-	}
-	interruptDone := make(chan interruptResult, 1)
-	go func() {
-		snapshot, err := lifecycle.InterruptCurrentAgentTurn(nil)
-		interruptDone <- interruptResult{snapshot: snapshot, err: err}
-	}()
-	select {
-	case <-persistEntered:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Agent Turn interruption persistence")
-	}
-
-	terminalDone := make(chan struct{})
-	go func() {
-		lifecycle.beginTerminalPublication()
-		lifecycle.finishTerminalPublication()
-		close(terminalDone)
-	}()
-	select {
-	case <-terminalDone:
-		t.Fatal("terminal publication finished before Agent Turn interruption persisted")
-	case <-time.After(50 * time.Millisecond):
-	}
-	successorStarted := make(chan struct{})
-	successorDone := make(chan error, 1)
-	go func() {
-		successorDone <- lifecycle.RunNext(
-			context.Background(),
-			exclusiveStepOptions{ActiveKind: ActiveKindUserShell},
-			func(context.Context, string) error {
-				close(successorStarted)
-				return nil
-			},
-		)
-	}()
-	select {
-	case <-successorStarted:
-		t.Fatal("shell successor started before Agent Turn interruption persisted")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	releasePersist()
-	result := <-interruptDone
-	if result.err != nil || result.snapshot == nil || result.snapshot.ActiveKind != ActiveKindUserTurn {
-		t.Fatalf("agent-turn interrupt = (%+v, %v), want persisted user Agent Turn", result.snapshot, result.err)
-	}
-	select {
-	case <-terminalDone:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for terminal publication after interruption persistence")
-	}
-	select {
-	case <-successorStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for shell successor")
-	}
-	if err := <-successorDone; err != nil {
-		t.Fatalf("shell successor: %v", err)
-	}
-}
-
-func TestExclusiveStepLifecycleAgentTurnPersistenceFailureDoesNotCancel(t *testing.T) {
-	persistErr := errors.New("interruption persistence failed")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	canceled := false
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: eng,
-		active: &exclusiveRunState{
-			sequence:   1,
-			activeKind: ActiveKindUserTurn,
-			cancel:     func() { canceled = true },
-			runID:      uuid.NewString(),
-			stepID:     uuid.NewString(),
-			startedAt:  time.Now().UTC(),
-		},
-	}
-	gate.FailNext(persistErr)
-
-	snapshot, err := lifecycle.InterruptCurrentAgentTurn(nil)
-	if snapshot != nil || !errors.Is(err, persistErr) {
-		t.Fatalf("agent-turn interrupt = (%+v, %v), want persistence failure", snapshot, err)
-	}
-	if canceled {
-		t.Fatal("Agent Turn context was canceled before interruption persisted")
-	}
-	if lifecycle.active.interrupted {
-		t.Fatal("persistence failure left Agent Turn marked interrupted")
 	}
 }
 

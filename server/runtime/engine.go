@@ -78,7 +78,6 @@ type Config struct {
 	ModelCapabilities               session.LockedModelCapabilities
 	FastModeEnabled                 bool
 	WebSearchMode                   string
-	PromptFacingSnapshotReloader    PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride    *llm.ProviderCapabilities
 	EnabledTools                    []toolspec.ID
 	SkillPolicy                     config.SkillPolicy
@@ -368,7 +367,15 @@ func New(
 	if dangling := eng.pendingRecoveryDanglingToolCallIDs(); len(dangling) > 0 {
 		return nil, fmt.Errorf("runtime construction retained %d dangling tool call(s) after repair", len(dangling))
 	}
-	eng.restorePersistedUsageState(meta.UsageState)
+	if usage := meta.UsageState; usage != nil {
+		replacementSequence := eng.compactionRuntimeState().HistoryReplacementSequence()
+		if (replacementSequence == nil && usage.HistoryReplacementEventSequence == nil) ||
+			(replacementSequence != nil &&
+				usage.HistoryReplacementEventSequence != nil &&
+				*replacementSequence == *usage.HistoryReplacementEventSequence) {
+			eng.restorePersistedUsageState(usage)
+		}
+	}
 	if meta.PendingModelRecovery != nil {
 		recovery := cloneSessionPendingModelRecovery(meta.PendingModelRecovery)
 		if strings.TrimSpace(recovery.StepID) == "" {

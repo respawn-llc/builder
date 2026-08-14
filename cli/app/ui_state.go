@@ -40,7 +40,6 @@ type uiRuntimeFeatureState struct {
 
 	pathReferenceEvents        <-chan uiPathReferenceSearchEvent
 	runtimeConnectionEvents    chan runtimeConnectionStateChangedMsg
-	runtimeReconnectWarning    <-chan runtimeReconnectWarningMsg
 	runtimeContextUsage        clientui.RuntimeContextUsage
 	runtimeContextUsageSession string
 	runtimeActivityProjection  clientui.RuntimeActivity
@@ -123,6 +122,7 @@ type uiPresentationFeatureState struct {
 	altScreenActive             bool
 	terminalFocus               *terminalFocusState
 	terminalCursor              *uiTerminalCursorState
+	terminalOutput              *uiTerminalOutput
 	rendererOutputGate          *uiRendererOutputGateState
 	ongoingSurface              *ongoing.Surface
 	ongoingTranscript           *ongoingTranscriptController

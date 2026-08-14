@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -605,7 +607,7 @@ func TestConversationFreshnessAdvancesOnlyForVisibleUserMessages(t *testing.T) {
 	}
 }
 
-func TestMaterializeEventLogBackfillsConversationFreshnessFromTail(t *testing.T) {
+func TestMaterializeEventLogUsesPersistedConversationFreshness(t *testing.T) {
 	store := newSessionTestStore(t)
 	appendSessionTestRecord(t, store, "s1", sessionTestMessage(MessageRoleUser, "established session"))
 
@@ -624,15 +626,15 @@ func TestMaterializeEventLogBackfillsConversationFreshnessFromTail(t *testing.T)
 		t.Fatalf("open store: %v", err)
 	}
 	log := mustMaterializeSessionTestEventLog(t, opened)
-	if got := mustConversationFreshness(log); got != ConversationFreshnessEstablished {
-		t.Fatalf("backfilled freshness = %v, want established", got)
+	if got := mustConversationFreshness(log); got != ConversationFreshnessFresh {
+		t.Fatalf("persisted freshness = %v, want fresh", got)
 	}
-	if mustConversationFreshness(log) != ConversationFreshnessEstablished {
-		t.Fatalf("expected backfill to persist conversation_established flag")
+	if opened.Meta().ConversationEstablished {
+		t.Fatal("materialization rewrote the persisted conversation freshness projection")
 	}
 }
 
-func TestMaterializeEventLogRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
+func TestMaterializeEventLogDerivesLastSequenceFromTail(t *testing.T) {
 	store := newSessionTestStore(t)
 	for i := 0; i < 3; i++ {
 		appendSessionTestRecord(t, store, "s1", sessionTestMessage(MessageRoleAssistant, "reply"))
@@ -640,7 +642,6 @@ func TestMaterializeEventLogRecoversLastSequenceFromTailWhenMetaStale(t *testing
 	trueLastSeq := mustMaterializedRevision(mustMaterializeSessionTestEventLog(t, store))
 
 	meta := storeTestMeta(store)
-	meta.LastSequence = 0
 	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{
 		meta.SessionID: {
 			SessionDir: store.Dir(),
@@ -655,9 +656,6 @@ func TestMaterializeEventLogRecoversLastSequenceFromTailWhenMetaStale(t *testing
 	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
-	}
-	if got := storeTestMeta(opened).LastSequence; got != 0 {
-		t.Fatalf("metadata-only last sequence = %d, want stale authoritative value 0", got)
 	}
 	mustMaterializeSessionTestEventLog(t, opened)
 	if got := mustMaterializedRevision(mustMaterializeSessionTestEventLog(t, opened)); got != trueLastSeq {
@@ -700,19 +698,33 @@ func TestAppendTypedBatchReportsUncommittedEventLogFailure(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("built events = %+v, want the attempted event", events)
 	}
-	if meta := storeTestMeta(store); meta.LastSequence != 0 || meta.FirstPromptPreview != "" {
+	if meta := storeTestMeta(store); meta.FirstPromptPreview != "" {
 		t.Fatalf("metadata mutated after uncommitted append: %+v", meta)
+	}
+	var persistenceErr *EventLogPersistenceError
+	if !errors.As(err, &persistenceErr) ||
+		persistenceErr.Certainty != EventLogCommitNotCommitted {
+		t.Fatalf("event-log failure = %v, want typed not-committed certainty", err)
+	}
+	if _, _, nextErr := log.AppendRecord(&stepID, sessionTestMessage(MessageRoleUser, "must remain latched")); !errors.Is(nextErr, persistenceErr) {
+		t.Fatalf("later append error = %v, want latched %v", nextErr, persistenceErr)
 	}
 }
 
-func TestAppendTypedBatchReportsCommittedObserverFailure(t *testing.T) {
+func TestAppendTypedBatchKeepsCommittedSuccessWhenProjectionFails(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
+	projectionErr := errors.New("append projection unavailable")
+	var projected AppendProjection
 	store, err := Create(
 		t.TempDir(),
 		"workspace",
 		t.TempDir(),
 		testSessionCategory,
 		WithPersistenceObserver(observer),
+		WithAppendProjector(func(_ context.Context, projection AppendProjection) error {
+			projected = projection
+			return projectionErr
+		}),
 	)
 	if err != nil {
 		t.Fatalf("create observed store: %v", err)
@@ -722,13 +734,12 @@ func TestAppendTypedBatchReportsCommittedObserverFailure(t *testing.T) {
 	}
 
 	log := mustMaterializeSessionTestEventLog(t, store)
-	observer.err = os.ErrPermission
 	stepID := "s1"
 	events, receipt, err := log.AppendRecordsAtomic(&stepID, []EventRecordPayload{
-		sessionTestMessage(MessageRoleUser, "committed despite observer failure"),
+		sessionTestMessage(MessageRoleUser, "committed despite projection failure"),
 	})
-	if err == nil {
-		t.Fatal("append typed batch did not surface the observer failure")
+	if err != nil {
+		t.Fatalf("append typed batch returned projection failure: %v", err)
 	}
 	if !receipt.Committed {
 		t.Fatalf("append typed batch receipt = %+v, want committed", receipt)
@@ -736,8 +747,16 @@ func TestAppendTypedBatchReportsCommittedObserverFailure(t *testing.T) {
 	if len(events) != 1 || events[0].Seq() != 1 {
 		t.Fatalf("committed events = %+v, want one sequence-1 event", events)
 	}
-	if meta := storeTestMeta(store); meta.LastSequence != 1 || meta.FirstPromptPreview != "committed despite observer failure" {
-		t.Fatalf("metadata after committed observer failure = %+v", meta)
+	if meta := storeTestMeta(store); meta.FirstPromptPreview != "committed despite projection failure" {
+		t.Fatalf("metadata after committed projection = %+v", meta)
+	}
+	if projected.SessionID.String() != store.Meta().SessionID ||
+		projected.FirstSequence != 1 ||
+		projected.LastSequence != 1 ||
+		projected.FirstPromptPreview == nil ||
+		*projected.FirstPromptPreview != "committed despite projection failure" ||
+		!projected.ConversationEstablished {
+		t.Fatalf("append projection = %+v", projected)
 	}
 }
 

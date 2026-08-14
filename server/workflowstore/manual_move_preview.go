@@ -119,12 +119,6 @@ func (s *Store) PreviewManualMove(ctx context.Context, req ManualMoveRequest) (M
 }
 
 func (s *Store) resolveManualMove(ctx context.Context, q *sqlitegen.Queries, req ManualMoveRequest) (ManualMovePreview, error) {
-	if strings.TrimSpace(string(req.TaskID)) == "" {
-		return ManualMovePreview{}, errors.New("task id is required")
-	}
-	if strings.TrimSpace(string(req.TargetNodeID)) == "" {
-		return ManualMovePreview{}, errors.New("target node id is required")
-	}
 	task, err := q.GetTask(ctx, string(req.TaskID))
 	if err != nil {
 		return ManualMovePreview{}, err

@@ -2,12 +2,12 @@ package shell
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"sync"
 
 	"core/server/tools/shell/postprocess"
+	"core/shared/serverapi"
 )
 
 type outputSubscription struct {
@@ -19,12 +19,19 @@ type outputSubscription struct {
 }
 
 func (m *Manager) SubscribeOutput(_ context.Context, processID string, offsetBytes int64) (OutputSubscription, error) {
-	if offsetBytes < 0 {
-		return nil, errors.New("offset_bytes must be >= 0")
-	}
 	entry, err := m.entry(processID)
 	if err != nil {
 		return nil, err
+	}
+	entry.mu.Lock()
+	outputAvailable := entry.logPath != ""
+	retainedToBytes := entry.outputBytes
+	entry.mu.Unlock()
+	if !outputAvailable {
+		return nil, serverapi.ErrStreamUnavailable
+	}
+	if offsetBytes > retainedToBytes {
+		return nil, serverapi.ErrStreamGap
 	}
 	return &outputSubscription{processID: processID, entry: entry, offset: offsetBytes, closeCh: make(chan struct{})}, nil
 }

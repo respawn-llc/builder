@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/server/session"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"database/sql"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	sqlitedriver "modernc.org/sqlite"
 )
 
 func appendMetadataMessage(t *testing.T, store *session.Store, stepID string, role session.MessageRole, content string) session.EventRecord {
@@ -547,7 +550,11 @@ func TestWorkspaceUnlinkRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testi
 	if _, err := store.ListProjects(ctx); err != nil {
 		t.Fatalf("ListProjects during workspace unlink runtime preparation: %v", err)
 	}
-	if err := store.UpdateProjectMetadata(ctx, other.ProjectID, "Other project", other.ProjectKey); err != nil {
+	otherKey, err := runtimeids.ParseProjectKey(other.ProjectKey)
+	if err != nil {
+		t.Fatalf("NewProjectKey: %v", err)
+	}
+	if err := store.UpdateProjectMetadata(ctx, other.ProjectID, "Other project", &otherKey); err != nil {
 		t.Fatalf("UpdateProjectMetadata during workspace unlink runtime preparation: %v", err)
 	}
 	select {
@@ -574,8 +581,8 @@ func TestUnlinkProjectWorkspacePreservesTerminalHistoryWithoutWorktreeDependency
 	execSeed(t, store.db, "terminal source task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
 	insertTaskCurrentNode(t, store.db, "task-terminal-workspace", "node-done", nil)
-	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
-VALUES ('session-terminal-workspace', ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
+	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
+VALUES ('session-terminal-workspace', ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
 
 	blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 	if err != nil {
@@ -620,7 +627,7 @@ func TestProjectWorkspaceMutationsDoNotRequireWorkflowEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
 	}
-	if err := store.UpdateProjectMetadata(ctx, binding.ProjectID, "Events", ""); err != nil {
+	if err := store.UpdateProjectMetadata(ctx, binding.ProjectID, "Events", nil); err != nil {
 		t.Fatalf("UpdateProjectMetadata: %v", err)
 	}
 	if err := store.SetProjectDefaultWorkspace(ctx, binding.ProjectID, attached.WorkspaceID); err != nil {
@@ -636,6 +643,63 @@ func TestProjectWorkspaceMutationsDoNotRequireWorkflowEvents(t *testing.T) {
 	}
 	if tableExists(t, store.db, "workflow_events") {
 		t.Fatal("workflow_events should not exist; project mutations must not depend on persisted invalidation rows")
+	}
+}
+
+func TestSetProjectDefaultWorkspaceTranslatesSQLiteRelationFailures(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, _, binding := newMetadataTestStore(t)
+	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+
+	for name, testCase := range map[string]struct {
+		projectID   string
+		workspaceID string
+		want        error
+	}{
+		"missing workspace": {
+			projectID:   binding.ProjectID,
+			workspaceID: "workspace-missing",
+			want:        serverapi.ErrWorkspaceNotRegistered,
+		},
+		"workspace belongs to another project": {
+			projectID:   binding.ProjectID,
+			workspaceID: other.WorkspaceID,
+			want:        serverapi.ErrWorkspaceNotRegistered,
+		},
+		"missing project": {
+			projectID:   "project-missing",
+			workspaceID: binding.WorkspaceID,
+			want:        serverapi.ErrProjectNotFound,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := store.SetProjectDefaultWorkspace(ctx, testCase.projectID, testCase.workspaceID)
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("SetProjectDefaultWorkspace error = %v, want %v", err, testCase.want)
+			}
+			var sqliteErr *sqlitedriver.Error
+			if errors.As(err, &sqliteErr) {
+				t.Fatalf("SetProjectDefaultWorkspace exposed SQLite error: %v", err)
+			}
+		})
+	}
+}
+
+func TestAttachWorkspaceTranslatesMissingProjectRelation(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newMetadataTestStore(t)
+
+	_, err := store.AttachWorkspaceToProject(t.Context(), "project-missing", t.TempDir())
+	if !errors.Is(err, serverapi.ErrProjectNotFound) {
+		t.Fatalf("AttachWorkspaceToProject error = %v, want ErrProjectNotFound", err)
+	}
+	var sqliteErr *sqlitedriver.Error
+	if errors.As(err, &sqliteErr) {
+		t.Fatalf("AttachWorkspaceToProject exposed SQLite error: %v", err)
 	}
 }
 
@@ -1149,7 +1213,7 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	}
 }
 
-func TestMissingEventLogRepairOccursAtEventUse(t *testing.T) {
+func TestMissingEventLogFailsAtEventUseWithoutMutation(t *testing.T) {
 	t.Parallel()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
@@ -1159,45 +1223,22 @@ func TestMissingEventLogRepairOccursAtEventUse(t *testing.T) {
 		t.Fatalf("remove events artifact: %v", err)
 	}
 
-	repaired, err := session.OpenByID(
+	opened, err := session.OpenByID(
 		cfg.PersistenceRoot,
 		sess.Meta().SessionID,
 		store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
-		t.Fatalf("session.OpenByID repair: %v", err)
+		t.Fatalf("session.OpenByID: %v", err)
 	}
 	if _, err := os.Stat(eventsPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("metadata-only open repaired missing event log: %v", err)
 	}
-	repairedEventLog, err := repaired.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize missing event log: %v", err)
+	if _, err := opened.MaterializeEventLog(); err == nil {
+		t.Fatal("materialize missing event log unexpectedly succeeded")
 	}
-	if mustEventLogRevision(repairedEventLog) != 0 {
-		t.Fatalf("repaired event-log revision = %d, want fresh empty conversation", mustEventLogRevision(repairedEventLog))
-	}
-	if mustEventLogFreshness(repairedEventLog) != session.ConversationFreshnessFresh {
-		t.Fatalf("repaired freshness = %q, want fresh", mustEventLogFreshness(repairedEventLog))
-	}
-
-	reopened, err := session.OpenByID(
-		cfg.PersistenceRoot,
-		sess.Meta().SessionID,
-		store.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("session.OpenByID reopen: %v", err)
-	}
-	reopenedEventLog, err := reopened.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize reopened event log: %v", err)
-	}
-	if mustEventLogRevision(reopenedEventLog) != 0 {
-		t.Fatalf("reopened event-log revision = %d, want fresh empty conversation", mustEventLogRevision(reopenedEventLog))
-	}
-	if mustEventLogFreshness(reopenedEventLog) != session.ConversationFreshnessFresh {
-		t.Fatalf("reopened freshness = %q, want fresh", mustEventLogFreshness(reopenedEventLog))
+	if _, err := os.Stat(eventsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("event use mutated missing event log: %v", err)
 	}
 }
 
@@ -1297,7 +1338,7 @@ func TestInsertWorkspaceBindingRollsBackProjectOnWorkspaceFailure(t *testing.T) 
 	ctx, cancel := context.WithCancel(ctx)
 	insertWorkspaceBindingAfterProjectUpsertHook = cancel
 	t.Cleanup(func() { insertWorkspaceBindingAfterProjectUpsertHook = nil })
-	_, err = store.insertWorkspaceBinding(ctx, canonicalRoot, filepath.Base(canonicalRoot), "", filepath.Base(canonicalRoot), "project-cancelled", "workspace-cancelled", time.Now().UTC(), true)
+	_, err = store.insertWorkspaceBinding(ctx, canonicalRoot, filepath.Base(canonicalRoot), nil, filepath.Base(canonicalRoot), "project-cancelled", "workspace-cancelled", time.Now().UTC(), true)
 	if err == nil {
 		t.Fatal("expected insertWorkspaceBinding to fail after context cancellation")
 	}

@@ -185,7 +185,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if askRequiresFreeformSelectionCommentary(req, m.ask.cursor) && commentary == "" {
 				return m, sequenceCmds(
 					c.model.sendTransientStatusWithNoticeID("Write your response before submitting the freeform option", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""),
-					ringBellCmd(),
+					ringBellCmd(m.terminalOutput),
 				)
 			}
 			resp := clientui.PromptAnswer{FreeformAnswer: commentary}

@@ -62,12 +62,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	if l.boot.SessionLaunch == nil {
 		return nil, errors.New("headless session launch service is required")
 	}
-	selectedSessionID, openingExisting := req.Intent.SessionID()
-	if openingExisting && l.boot.RuntimeAuthority != nil {
-		if _, active := l.boot.RuntimeAuthority.SessionExecution(selectedSessionID); active {
-			return nil, ErrSessionRunning
-		}
-	}
+	_, openingExisting := req.Intent.SessionID()
 	launchReq := serverapi.SessionPlanRequest{
 		ClientRequestID: req.ClientRequestID,
 		Mode:            serverapi.SessionLaunchModeHeadless,

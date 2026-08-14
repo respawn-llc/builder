@@ -1408,9 +1408,10 @@ func TestPrepareTaskExecutionRootFinalSetupFailureRetainsCurrentRootAndBinding(t
 		t.Fatalf("setup attempt count = %q, want 2", got)
 	}
 	if materialized.SetupResult == nil || materialized.SetupResult.Failed == nil ||
+		materialized.SetupResult.Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
 		materialized.SetupResult.Failed.Cause.ProcessExit == nil ||
 		materialized.SetupResult.Failed.Cause.ProcessExit.ExitCode != 7 {
-		t.Fatalf("setup result = %+v, want final process exit 7", materialized.SetupResult)
+		t.Fatalf("setup result = %+v, want retry-ready final process exit 7", materialized.SetupResult)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
@@ -1438,6 +1439,53 @@ func TestPrepareTaskExecutionRootFinalSetupFailureRetainsCurrentRootAndBinding(t
 	}
 	if persisted.Branch == nil || persisted.Branch.Name() != task.ShortID {
 		t.Fatalf("failed setup persisted branch = %+v, want %q", persisted.Branch, task.ShortID)
+	}
+}
+
+func TestPrepareTaskExecutionRootRetriesCleanSetupOnceThenReportsRetryReady(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	base := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	countPath := filepath.Join(t.TempDir(), "count")
+	scriptRelpath := filepath.Join("scripts", "fails-clean-twice.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf(
+		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nexit 7\n",
+		countPath,
+		countPath,
+		countPath,
+	))
+	env.service.setupScript = scriptRelpath
+	runner := &recordingGitCommandRunner{delegate: execGitCommandRunner{}}
+	env.service.git = NewGitInspector(runner)
+
+	materialized, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
+	var retained *serverapi.WorktreeSetupRetainedError
+	if !errors.As(err, &retained) {
+		t.Fatalf("PrepareTaskExecutionRoot error = %T %v, want retained setup failure", err, err)
+	}
+	if got := waitForFileText(t, countPath); got != "2" {
+		t.Fatalf("setup attempt count = %q, want exactly 2", got)
+	}
+	adds, removes := 0, 0
+	for _, call := range runner.calls {
+		if len(call) < 2 || call[0] != "worktree" {
+			continue
+		}
+		switch call[1] {
+		case "add":
+			adds++
+		case "remove":
+			removes++
+		}
+	}
+	if adds != 2 || removes != 1 {
+		t.Fatalf("clean provisional-root recreation = %d add, %d remove; want 2 add, 1 remove", adds, removes)
+	}
+	if materialized.SetupResult == nil || materialized.SetupResult.Failed == nil ||
+		materialized.SetupResult.Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
+		materialized.SetupResult.Failed.Cause.ProcessExit == nil ||
+		materialized.SetupResult.Failed.Cause.ProcessExit.ExitCode != 7 {
+		t.Fatalf("setup result = %+v, want retry-ready final process exit 7", materialized.SetupResult)
 	}
 }
 

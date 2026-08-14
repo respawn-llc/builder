@@ -253,7 +253,7 @@ func systemdUnitPath() (string, error) {
 func renderSystemdUnit(spec serviceSpec) string {
 	return renderSystemdUnitText(
 		brand.Product+" server background service",
-		systemdCommand(serviceCommand(spec)),
+		systemdCommand(serverChildCommand(spec)),
 		systemdEscapeSpecifiers(spec.StdoutLogPath),
 		systemdEscapeSpecifiers(spec.StderrLogPath),
 	)

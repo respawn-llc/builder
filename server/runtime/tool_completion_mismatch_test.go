@@ -3,12 +3,10 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -113,35 +111,6 @@ func TestToolCompletionDeletionMismatchDoesNotApplyUncommittedFallback(t *testin
 	}
 	if len(emitted) != 0 {
 		t.Fatalf("uncommitted fallback emitted client events: %+v", emitted)
-	}
-}
-
-func TestToolCompletionDeletionMismatchAppliesCommittedFallbackAfterObserverError(t *testing.T) {
-	t.Parallel()
-	observerErr := errors.New("mismatch observer failure")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	var emitted []Event
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
-		Model:   "gpt-5",
-		OnEvent: func(event Event) { emitted = append(emitted, event) },
-	})
-	result := mismatchedDeletionCompletion(t, engine)
-	emitted = nil
-	gate.FailNext(observerErr)
-
-	receipt, err := engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
-	if !receipt.Committed || !errors.Is(err, observerErr) {
-		t.Fatalf("committed fallback outcome: receipt=%+v err=%v", receipt, err)
-	}
-	assertDeletionMismatchFallback(t, engine, store, result)
-	if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); ok {
-		t.Fatal("committed fallback retained the live tool")
-	}
-	if len(emitted) != 2 ||
-		emitted[0].Kind != EventToolCallCompleted ||
-		emitted[1].Kind != EventLocalEntryAdded {
-		t.Fatalf("committed fallback events = %+v", emitted)
 	}
 }
 
@@ -252,18 +221,12 @@ func assertDeletionMismatchFallback(t *testing.T, engine *Engine, store *session
 	for _, record := range window.Records {
 		switch payload := mustSessionEventPayload(record).(type) {
 		case session.ToolCompletionRecord:
-			value, restoreErr := storedToolCompletionFromSessionRecord(payload)
-			if restoreErr != nil {
-				t.Fatalf("restore tool completion: %v", restoreErr)
-			}
+			value := storedToolCompletionFromSessionRecord(payload)
 			if value.CallID == result.CallID {
 				completion = &value
 			}
 		case session.LocalEntryRecord:
-			value, restoreErr := storedLocalEntryFromSessionRecord(payload)
-			if restoreErr != nil {
-				t.Fatalf("restore local entry: %v", restoreErr)
-			}
+			value := storedLocalEntryFromSessionRecord(payload)
 			if value.AfterToolCallID != nil && *value.AfterToolCallID == result.CallID {
 				feedback = &value
 			}

@@ -6,15 +6,11 @@ import (
 )
 
 func TestTerminalSequenceWriteFailureUsesFatalTerminalErrorPolicy(t *testing.T) {
-	originalWrite := writeTerminalSequence
-	writeTerminalSequence = func(string) error {
-		return errors.New("terminal unavailable")
-	}
-	t.Cleanup(func() {
-		writeTerminalSequence = originalWrite
+	output := newUITerminalOutput(&terminalOutputScriptWriter{
+		results: []terminalOutputWriteResult{{err: errors.New("terminal unavailable")}},
 	})
 
-	msg := enableAlternateScrollCmd()()
+	msg := enableAlternateScrollCmd(output)()
 	if _, ok := msg.(terminalSequenceWriteErrMsg); !ok {
 		t.Fatalf("terminal write failure message = %T, want terminalSequenceWriteErrMsg", msg)
 	}

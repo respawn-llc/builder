@@ -16,36 +16,12 @@ import (
 
 const expectedEventLogVersionV2 = 2
 
-func TestEventLogVersionMatrixNewAndRecoveredEmptyLogsSelectV2(t *testing.T) {
+func TestEventLogVersionMatrixNewLogsSelectV2(t *testing.T) {
 	t.Run("independent creation", func(t *testing.T) {
 		store := newSessionTestStore(t)
 		mustMaterializeSessionTestEventLog(t, store)
 		assertEventLogVersion(t, filepath.Join(store.Dir(), eventsFile), expectedEventLogVersionV2)
 	})
-
-	for _, source := range []struct {
-		name      string
-		writeFile bool
-	}{
-		{name: "missing"},
-		{name: "zero byte", writeFile: true},
-	} {
-		t.Run("ordinary recovery "+source.name, func(t *testing.T) {
-			store := newSessionTestStore(t)
-			path := filepath.Join(store.Dir(), eventsFile)
-			if source.writeFile {
-				if err := os.WriteFile(path, nil, 0o600); err != nil {
-					t.Fatalf("write empty event log: %v", err)
-				}
-			} else if err := os.Remove(path); err != nil {
-				t.Fatalf("remove event log: %v", err)
-			}
-
-			reopened := mustOpenSessionTestStore(t, store)
-			mustMaterializeSessionTestEventLog(t, reopened)
-			assertEventLogVersion(t, path, expectedEventLogVersionV2)
-		})
-	}
 }
 
 func TestEventLogVersionMatrixReadOnlyOpenDoesNotMaterializeMissingOrEmptyLogs(t *testing.T) {
@@ -178,7 +154,6 @@ func TestEventLogVersionMatrixOpenedLogsRetainVersionAcrossReconcileReadAndAppen
 			writeVersionedEventLog(t, path, version, []EventRecord{first})
 
 			meta := storeTestMeta(store)
-			meta.LastSequence = 0
 			persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{
 				meta.SessionID: {SessionDir: store.Dir(), Meta: &meta},
 			}}

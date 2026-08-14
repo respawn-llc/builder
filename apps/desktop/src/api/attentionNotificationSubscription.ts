@@ -19,7 +19,7 @@ export function attentionNotificationRpcHandler(handler: AttentionNotificationEv
         handler.onEvent(parsed.data.event);
         return;
       }
-      handler.onError(new ContractError("attention.notification event did not match GUI contract."));
+      return new ContractError("attention.notification event did not match GUI contract.");
     },
   };
 }

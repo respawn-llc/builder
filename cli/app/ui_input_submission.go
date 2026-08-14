@@ -467,7 +467,8 @@ func (m *uiModel) shouldRestoreSubmittedTextOnSubmitError(err error) bool {
 	if m == nil || err == nil {
 		return false
 	}
-	if errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+	if errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) ||
+		errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return true
 	}
 	if !m.hasRuntimeClient() {

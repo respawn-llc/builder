@@ -60,40 +60,24 @@ func (p *testSessionMetadata) WriteManualCompactEligibility(
 	return nil
 }
 
-func (p *testSessionMetadata) ObserveEventLogReconciliation(_ context.Context, reconciliation PersistedEventLogReconciliation) error {
-	record, ok := p.sharedStore().Get(reconciliation.SessionID)
-	if !ok {
-		return ErrSessionNotFound
-	}
-	invalidateUsageState, err := reconciliation.UsageState.InvalidatesUsageState()
-	if err != nil {
-		return err
-	}
-	meta := cloneTestMeta(record.Meta)
-	if meta.LastSequence != reconciliation.ObservedLastSequence {
-		return EventLogReconciliationConflictError{
-			SessionID:            reconciliation.SessionID,
-			ObservedLastSequence: reconciliation.ObservedLastSequence,
-			CurrentLastSequence:  meta.LastSequence,
-		}
-	}
-	meta.LastSequence = reconciliation.LastSequence
-	meta.ConversationEstablished = reconciliation.ConversationEstablished
-	meta.UpdatedAt = reconciliation.UpdatedAt
-	if invalidateUsageState {
-		meta.UsageState = nil
-	}
-	record.Meta = meta
-	p.sharedStore().Put(reconciliation.SessionID, record)
-	return nil
-}
-
 func (p *testSessionMetadata) ResolvePersistedSession(_ context.Context, sessionID string) (PersistedSessionRecord, error) {
 	record, ok := p.sharedStore().Get(sessionID)
 	if !ok {
 		return PersistedSessionRecord{}, ErrSessionNotFound
 	}
 	return record, nil
+}
+
+func (p *testSessionMetadata) ProjectAppend(_ context.Context, projection AppendProjection) error {
+	record, ok := p.sharedStore().Get(projection.SessionID.String())
+	if !ok {
+		return ErrSessionNotFound
+	}
+	meta := cloneTestMeta(record.Meta)
+	applyAppendProjectionToMeta(meta, projection)
+	record.Meta = meta
+	p.sharedStore().Put(projection.SessionID.String(), record)
+	return nil
 }
 
 func (p *testSessionMetadata) sharedStore() *recordstore.Store[PersistedSessionRecord] {
@@ -114,6 +98,14 @@ func cloneTestMeta(meta *Meta) *Meta {
 		return nil
 	}
 	cloned := *meta
+	if meta.UsageState != nil {
+		usage := *meta.UsageState
+		if meta.UsageState.HistoryReplacementEventSequence != nil {
+			sequence := *meta.UsageState.HistoryReplacementEventSequence
+			usage.HistoryReplacementEventSequence = &sequence
+		}
+		cloned.UsageState = &usage
+	}
 	return &cloned
 }
 
@@ -124,6 +116,7 @@ func storeTestMeta(store *Store) Meta {
 func (p *testSessionMetadata) options() []StoreOption {
 	return []StoreOption{
 		WithPersistenceObserver(p),
+		WithAppendProjector(p.ProjectAppend),
 		WithPersistedSessionResolver(p),
 		WithSessionContextFactWriter(p),
 	}

@@ -2,46 +2,53 @@ package sqlitegen
 
 import (
 	"context"
-	"database/sql"
-	"errors"
-	"log/slog"
-	"runtime/debug"
 )
 
-type queryFailureDiagnosticsContextKey struct{}
-type expectedNoRowsDiagnosticsContextKey struct{}
-
-func WithQueryFailureDiagnostics(ctx context.Context) context.Context {
-	return context.WithValue(ctx, queryFailureDiagnosticsContextKey{}, true)
+type OperationMonitor interface {
+	BeforeOperation() error
+	CompleteOperation(context.Context, string, error) error
 }
 
-// WithExpectedNoRows marks an operation where sql.ErrNoRows is an expected
-// optional absence. Other query failures remain eligible for diagnostics.
-func WithExpectedNoRows(ctx context.Context) context.Context {
-	return context.WithValue(ctx, expectedNoRowsDiagnosticsContextKey{}, true)
+type DatabaseCause struct {
+	Cause error
 }
 
-// recordQueryError emits enough context to diagnose database failures while
-// returning the original error unchanged. Some existing callers compare
-// sql.ErrNoRows by identity, so wrapping it would alter control flow.
-func recordQueryError(ctx context.Context, cause error, query string, argumentCount int) error {
+func (e *DatabaseCause) Error() string { return e.Cause.Error() }
+func (e *DatabaseCause) Unwrap() error { return e.Cause }
+
+func (q *Queries) beforeOperation() error {
+	monitor, ok := q.db.(OperationMonitor)
+	if !ok {
+		return nil
+	}
+	return monitor.BeforeOperation()
+}
+
+func (q *Queries) completeOperation(ctx context.Context, operation string, cause error) error {
 	if cause == nil {
 		return nil
 	}
-	if errors.Is(cause, sql.ErrNoRows) &&
-		ctx != nil &&
-		ctx.Value(expectedNoRowsDiagnosticsContextKey{}) == true {
-		return cause
+	monitor, ok := q.db.(OperationMonitor)
+	if !ok {
+		return &DatabaseCause{Cause: cause}
 	}
-	if ctx == nil || ctx.Value(queryFailureDiagnosticsContextKey{}) != true {
-		return cause
+	return monitor.CompleteOperation(ctx, operation, cause)
+}
+
+func (q *Queries) IsMonitored() bool {
+	if q == nil {
+		return false
 	}
-	slog.Error(
-		"sqlite query failed",
-		"error", cause,
-		"sql", query,
-		"argument_count", argumentCount,
-		"stack", string(debug.Stack()),
-	)
-	return cause
+	_, ok := q.db.(OperationMonitor)
+	return ok
+}
+
+func (q *Queries) IsRaw() bool {
+	if q == nil {
+		return false
+	}
+	if _, monitored := q.db.(OperationMonitor); monitored {
+		return false
+	}
+	return true
 }

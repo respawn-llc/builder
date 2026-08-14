@@ -90,10 +90,7 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 		if !ok {
 			continue
 		}
-		restored, err := llmMessageFromSessionRecord(message)
-		if err != nil {
-			t.Fatalf("restore persisted assistant message: %v", err)
-		}
+		restored := llmMessageFromSessionRecord(message)
 		for index := range restored.ToolCalls {
 			if restored.ToolCalls[index].ID == "call-edit-1" {
 				call := restored.ToolCalls[index]

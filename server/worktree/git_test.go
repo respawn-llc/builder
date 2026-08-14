@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"core/shared/clientui"
-	"core/shared/serverapi"
 )
 
 type canceledGitCommandRunner struct{}
@@ -244,23 +243,6 @@ func TestGitInspectorAdd(t *testing.T) {
 				t.Fatalf("git dir=%q want=%q", got, want)
 			}
 		})
-	}
-}
-
-func TestGitInspectorAddRejectsCreateBranchWithoutBaseRef(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	worktreeRoot := filepath.Join(t.TempDir(), "linked")
-	runner := &stubGitCommandRunner{}
-	inspector := NewGitInspector(runner)
-
-	_, err := inspector.Add(context.Background(), workspaceRoot, worktreeRoot, CreateSpec{CreateBranch: true, BranchName: "feature/new"})
-
-	var validationErr *serverapi.WorktreeCreateValidationError
-	if !errors.As(err, &validationErr) || validationErr.Kind != serverapi.WorktreeCreateValidationBaseRefRequired {
-		t.Fatalf("error = %T %v, want neutral base ref validation", err, err)
-	}
-	if runner.args != nil {
-		t.Fatalf("expected no git command, got %v", runner.args)
 	}
 }
 

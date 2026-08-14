@@ -164,10 +164,7 @@ func CapturePersistedWorkflowAssignment(
 	meta := store.Meta()
 	snapshot := WorkflowAssignmentSnapshot{}
 	if activeAssignment != nil {
-		message, err := llmMessageFromSessionRecord(*activeAssignment)
-		if err != nil {
-			return WorkflowAssignmentSnapshot{}, false, err
-		}
+		message := llmMessageFromSessionRecord(*activeAssignment)
 		snapshot.message = &message
 	}
 	if meta.ChatSettings != nil && meta.ChatSettings.Thinking != nil {

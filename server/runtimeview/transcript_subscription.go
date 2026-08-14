@@ -166,8 +166,8 @@ func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) [
 	for index, start := range starts {
 		out = append(out, clientui.TranscriptToolStart{
 			StepID:       mustTranscriptStepID(start.StepID, fmt.Sprintf("in-flight tool %d", index)),
-			ToolCallID:   clientui.ToolCallID(strings.TrimSpace(start.ToolCallID)),
-			ToolName:     strings.TrimSpace(start.ToolName),
+			ToolCallID:   clientui.ToolCallID(start.ToolCallID),
+			ToolName:     start.ToolName,
 			Presentation: cloneToolCallMeta(start.Presentation),
 		})
 	}
@@ -573,7 +573,7 @@ func transcriptToolAbortMessages(evt runtime.Event) []clientui.TranscriptEvent {
 	}
 	abort := clientui.TranscriptToolAbort{
 		StepID:     mustTranscriptStepID(evt.StepID, "tool abort"),
-		ToolCallID: clientui.ToolCallID(strings.TrimSpace(evt.ToolCall.ID)),
+		ToolCallID: clientui.ToolCallID(evt.ToolCall.ID),
 		Reason:     reason,
 	}
 	if reason == clientui.ToolAbortFailed {
@@ -730,8 +730,8 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		row.Kind = clientui.TranscriptRowTool
 		row.Tool = &clientui.TranscriptToolRow{
 			StepID:        mustTranscriptStepID(fact.StepID, "committed tool row"),
-			ToolCallID:    clientui.ToolCallID(strings.TrimSpace(fact.Tool.ToolCallID)),
-			ToolName:      strings.TrimSpace(fact.Tool.ToolName),
+			ToolCallID:    clientui.ToolCallID(fact.Tool.ToolCallID),
+			ToolName:      fact.Tool.ToolName,
 			Text:          fact.Tool.Text,
 			IsError:       fact.Tool.IsError,
 			ResultSummary: optionalNonBlankString(fact.Tool.ResultSummary),

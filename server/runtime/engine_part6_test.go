@@ -172,10 +172,7 @@ func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *te
 				statusRecords++
 			}
 		case session.MessageRecord:
-			message, restoreErr := llmMessageFromSessionRecord(payload)
-			if restoreErr != nil {
-				t.Fatalf("restore reviewer record: %v", restoreErr)
-			}
+			message := llmMessageFromSessionRecord(payload)
 			if message.Role == llm.RoleAssistant && message.Phase != nil && *message.Phase == llm.MessagePhaseFinal {
 				finalRows++
 			}

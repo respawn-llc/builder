@@ -257,7 +257,7 @@ func (c uiInputController) handlePromptHistoryKey(delta int) (bool, tea.Cmd) {
 	if m.navigatePromptHistory(delta) {
 		return true, nil
 	}
-	return true, ringBellCmd()
+	return true, ringBellCmd(m.terminalOutput)
 }
 
 func (c uiInputController) handleRollbackSelectionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

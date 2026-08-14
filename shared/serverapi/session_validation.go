@@ -2,8 +2,9 @@ package serverapi
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
+
+	"core/shared/runtimeids"
 )
 
 // ErrSessionIDRequired is returned when a session id is empty or whitespace-only.
@@ -21,18 +22,18 @@ func validateRequiredSessionID(sessionID string) error {
 }
 
 func validateScopedSessionID(sessionID string) error {
+	_, err := parseScopedSessionID(sessionID)
+	return err
+}
+
+func parseScopedSessionID(sessionID string) (runtimeids.SessionID, error) {
 	trimmed := strings.TrimSpace(sessionID)
 	if err := validateRequiredSessionID(trimmed); err != nil {
-		return err
+		return runtimeids.SessionID{}, err
 	}
-	if filepath.IsAbs(trimmed) || trimmed == "." || trimmed == ".." {
-		return ErrSessionIDNotSingle
+	parsed, err := runtimeids.ParseSessionID(trimmed)
+	if err != nil {
+		return runtimeids.SessionID{}, ErrSessionIDNotSingle
 	}
-	if strings.Contains(trimmed, "/") || strings.Contains(trimmed, "\\") {
-		return ErrSessionIDNotSingle
-	}
-	if filepath.Clean(trimmed) != trimmed {
-		return ErrSessionIDNotSingle
-	}
-	return nil
+	return parsed, nil
 }

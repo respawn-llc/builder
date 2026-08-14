@@ -2,7 +2,6 @@ package runtimeattach
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"testing"
 
@@ -75,62 +74,6 @@ func TestActivateBuildsRequest(t *testing.T) {
 	}
 	if !req.ThinkingOverrideExplicit {
 		t.Fatal("explicit Thinking override was not forwarded")
-	}
-}
-
-func TestActivateReactivatesRuntimeWithFreshRequestID(t *testing.T) {
-	service := &fakeRuntimeService{}
-	lease, err := Activate(context.Background(), service, Request{
-		SessionID: "session-1",
-	})
-	if err != nil {
-		t.Fatalf("Activate: %v", err)
-	}
-	if err := lease.Reactivate(context.Background()); err != nil {
-		t.Fatalf("Reactivate: %v", err)
-	}
-	firstID := service.activateRequests[0].ClientRequestID
-	secondID := service.activateRequests[1].ClientRequestID
-	if firstID == "" || secondID == "" || firstID == secondID {
-		t.Fatalf("request ids = %q,%q, want two distinct non-empty fresh ids", firstID, secondID)
-	}
-	ownerID := service.activateRequests[0].OwnerID
-	if ownerID == "" {
-		t.Fatal("activate owner id is empty")
-	}
-	if service.activateRequests[1].OwnerID != ownerID {
-		t.Fatalf("owner id not stable across reactivation: activate=%q reactivate=%q", ownerID, service.activateRequests[1].OwnerID)
-	}
-	if err := lease.Release(); err != nil {
-		t.Fatalf("Release: %v", err)
-	}
-	if got := service.releaseRequests[0].Attachment; got.SessionID != "session-1" || got.Generation != 2 {
-		t.Fatalf("released attachment = %+v, want reactivated generation 2", got)
-	}
-}
-
-func TestFailedReactivationPreservesAttachment(t *testing.T) {
-	service := &fakeRuntimeService{
-		failActivateCall: 2,
-		activateErr:      errors.New("reactivation failed"),
-		releaseErr:       errors.New("release failed"),
-	}
-	lease, err := Activate(context.Background(), service, Request{SessionID: "session-1"})
-	if err != nil {
-		t.Fatalf("Activate: %v", err)
-	}
-	if err := lease.Reactivate(context.Background()); !errors.Is(err, service.activateErr) {
-		t.Fatalf("Reactivate error = %v, want reactivation failed", err)
-	}
-	if err := lease.Release(); !errors.Is(err, service.releaseErr) {
-		t.Fatalf("Release error = %v, want release failed", err)
-	}
-	if len(service.releaseRequests) != 1 {
-		t.Fatalf("release requests = %d, want 1", len(service.releaseRequests))
-	}
-	req := service.releaseRequests[0]
-	if req.Attachment.SessionID != "session-1" || req.Attachment.Generation != 1 || req.ClientRequestID == "" || !req.DropOwner || req.OwnerID == "" {
-		t.Fatalf("release request = %+v, want exact attachment/request/owner ids", req)
 	}
 }
 

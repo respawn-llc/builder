@@ -39,10 +39,6 @@ func (o *goalAuthorityPersistenceObserver) ObservePersistedStore(ctx context.Con
 	return o.persistence.ObservePersistedStore(ctx, snapshot)
 }
 
-func (o *goalAuthorityPersistenceObserver) ObserveEventLogReconciliation(ctx context.Context, reconciliation session.PersistedEventLogReconciliation) error {
-	return o.persistence.ObserveEventLogReconciliation(ctx, reconciliation)
-}
-
 func (o *goalAuthorityPersistenceObserver) resetSnapshots() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -94,10 +90,8 @@ func TestGoalAuthorityDormantSetPersistsMetadataBeforeOneNoticeWithoutRuntime(t 
 		t.Fatalf("dormant goal notice count = %d, want 1", count)
 	}
 	snapshots := observer.recordedSnapshots()
-	if len(snapshots) < 2 ||
-		snapshots[0].Meta.Goal == nil || snapshots[0].Meta.LastSequence != 0 ||
-		snapshots[1].Meta.Goal == nil || snapshots[1].Meta.LastSequence != 1 {
-		t.Fatalf("dormant persistence snapshots = %+v, want goal metadata before one notice append", snapshots)
+	if len(snapshots) != 1 || snapshots[0].Meta.Goal == nil {
+		t.Fatalf("dormant persistence snapshots = %+v, want one goal metadata publication", snapshots)
 	}
 	if _, ok := authority.SessionExecution(sessionID); ok {
 		t.Fatal("dormant goal set created an agent execution")

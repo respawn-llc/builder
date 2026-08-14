@@ -362,11 +362,7 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 
 func (e *Engine) compactionReinjectedMetaMessagesForMode(ctx context.Context, mode compactionMode) ([]llm.Message, error) {
 	meta := e.store.Meta()
-	skillPolicy, err := e.reconstructionSkillPolicy(ctx)
-	if err != nil {
-		return nil, err
-	}
-	builder := e.activeMetaContextBuilder(e.currentModel(), skillPolicy)
+	builder := e.activeMetaContextBuilder(e.currentModel(), e.cfg.SkillPolicy)
 	opts := baseMetaContextBuildOptions(false)
 	opts.IncludeHeadless = meta.HeadlessActive
 	opts.WorktreeReminder = session.CloneWorktreeReminderState(meta.WorktreeReminder)

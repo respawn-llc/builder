@@ -1,12 +1,14 @@
 package runtime
 
 import (
-	"core/server/llm"
-	"core/server/tools"
-	"core/shared/transcript"
+	"fmt"
 	"os"
 	goruntime "runtime"
 	"strings"
+
+	"core/server/llm"
+	"core/server/tools"
+	"core/shared/transcript"
 )
 
 func normalizeMessageForTranscript(msg llm.Message, workingDir string) llm.Message {
@@ -48,6 +50,14 @@ func prepareRawToolCallForTranscript(raw, executable llm.ToolCall, workingDir st
 func transcriptToolCallMeta(call llm.ToolCall, workingDir string) *transcript.ToolCallMeta {
 	if meta := decodeToolCallMeta(call); meta != nil {
 		return meta
+	}
+	if len(call.Presentation) > 0 {
+		panic(fmt.Sprintf(
+			"runtime tool call has invalid presentation: call_id=%q tool=%q presentation=%s",
+			call.ID,
+			call.Name,
+			call.Presentation,
+		))
 	}
 	input := call.Input
 	if call.Custom && call.CustomInput != nil &&

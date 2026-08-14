@@ -42,7 +42,14 @@ func NewActivity(metadataStore *metadata.Store, projector *TaskProjector) (*Acti
 }
 
 func (a *Activity) List(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
-	page, err := a.loadPage(ctx, req)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskActivityListResponse{}, err
+	}
+	return a.ReadActivity(ctx, req.TaskID, serverapi.OffsetWindowFromValidated(req.Offset, req.Limit))
+}
+
+func (a *Activity) ReadActivity(ctx context.Context, taskID string, window serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskActivityListResponse, error) {
+	page, err := a.loadPage(ctx, taskID, window)
 	if err != nil {
 		return serverapi.WorkflowTaskActivityListResponse{}, err
 	}
@@ -58,18 +65,11 @@ func (a *Activity) List(ctx context.Context, req serverapi.WorkflowTaskOffsetPag
 	}, nil
 }
 
-func (a *Activity) loadPage(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (activityPage, error) {
+func (a *Activity) loadPage(ctx context.Context, taskID string, window serverapi.WorkflowOffsetWindow) (activityPage, error) {
 	if a == nil {
 		return activityPage{}, errors.New("activity is required")
 	}
-	if err := req.Validate(); err != nil {
-		return activityPage{}, err
-	}
-	task, err := a.queries.GetTask(ctx, strings.TrimSpace(req.TaskID))
-	if err != nil {
-		return activityPage{}, err
-	}
-	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
+	task, err := a.queries.GetTask(ctx, taskID)
 	if err != nil {
 		return activityPage{}, err
 	}

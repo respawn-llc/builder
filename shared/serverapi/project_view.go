@@ -446,13 +446,11 @@ func (s ProjectWorkspaceSelector) Validate() error {
 }
 
 func (s ProjectWorkspaceSelector) WorkspaceIDValue() *string {
-	value, _ := normalizeWorkspaceSelectorArm(s.WorkspaceID, "workspace_id")
-	return value
+	return s.WorkspaceID
 }
 
 func (s ProjectWorkspaceSelector) WorkspaceRootValue() *string {
-	value, _ := normalizeWorkspaceSelectorArm(s.WorkspaceRoot, "workspace_root")
-	return value
+	return s.WorkspaceRoot
 }
 
 func normalizeWorkspaceSelectorArm(value *string, field string) (*string, error) {
@@ -546,8 +544,10 @@ func (r ProjectCreateRequest) Validate() error {
 	if strings.TrimSpace(r.WorkspaceRoot) == "" {
 		return errors.New("workspace_root is required")
 	}
-	if trimmedKey := strings.TrimSpace(r.ProjectKey); trimmedKey != "" && !isValidProjectKey(trimmedKey) {
-		return errInvalidProjectKeyFormat
+	if strings.TrimSpace(r.ProjectKey) != "" {
+		if _, err := runtimeids.ParseProjectKey(r.ProjectKey); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -556,8 +556,10 @@ func (r ProjectUpdateRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
-	if trimmedKey := strings.TrimSpace(r.ProjectKey); trimmedKey != "" && !isValidProjectKey(trimmedKey) {
-		return errInvalidProjectKeyFormat
+	if strings.TrimSpace(r.ProjectKey) != "" {
+		if _, err := runtimeids.ParseProjectKey(r.ProjectKey); err != nil {
+			return err
+		}
 	}
 	return validateProjectDisplayName(r.DisplayName)
 }
@@ -647,28 +649,6 @@ func (r ProjectRebindWorkspaceRequest) Validate() error {
 		return errors.New("new_workspace_root is required")
 	}
 	return nil
-}
-
-const projectKeyPattern = "^[A-Z][A-Z0-9]{1,7}$"
-
-var errInvalidProjectKeyFormat = errors.New("project_key must match " + projectKeyPattern)
-
-func isValidProjectKey(key string) bool {
-	if len(key) < 2 || len(key) > 8 {
-		return false
-	}
-	for index, r := range key {
-		if index == 0 {
-			if r < 'A' || r > 'Z' {
-				return false
-			}
-			continue
-		}
-		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
-			return false
-		}
-	}
-	return true
 }
 
 func validateProjectDisplayName(name string) error {

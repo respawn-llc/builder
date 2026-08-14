@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"core/server/auth"
-	"core/server/launch"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
@@ -53,7 +52,6 @@ type RuntimeWiringOptions struct {
 	CurrentNodeExecution                *workflowruntime.CurrentNodeExecutionConfig
 	WorkflowPrompt                      *workflowruntime.PromptContract
 	AskQuestionBatchSkipped             func(askquestion.AskQuestionBatchMetadata)
-	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
 	SkipContinuationAgentRoleValidation bool
 	StepLifecycle                       runtime.StepLifecycleSink
@@ -208,15 +206,6 @@ func NewRuntimeWiringWithBackground(
 			logger.Logf("runtime.event.drop count=%d kind=%s step_id=%s", total, evt.Kind, evt.StepID)
 		}
 	})
-	promptReloader := opts.PromptFacingSnapshotReloader
-	if promptReloader == nil {
-		promptReloader = launchPromptFacingSnapshotReloader{
-			store:                               store,
-			workspaceRoot:                       workingDirectory,
-			configRoot:                          opts.GlobalConfigDir,
-			skipContinuationAgentRoleValidation: opts.SkipContinuationAgentRoleValidation,
-		}
-	}
 	providerCapabilitiesOverride := mainProvider.ProviderCapabilitiesOverride
 	if opts.ProviderCapabilitiesOverride != nil {
 		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
@@ -230,7 +219,6 @@ func NewRuntimeWiringWithBackground(
 		ModelCapabilities:               llm.LockedModelCapabilitiesForConfig(active.Model, active.ModelCapabilities),
 		FastModeEnabled:                 active.PriorityRequestMode,
 		WebSearchMode:                   active.WebSearch,
-		PromptFacingSnapshotReloader:    promptReloader,
 		ProviderCapabilitiesOverride:    providerCapabilitiesOverride,
 		EnabledTools:                    enabledTools,
 		SkillPolicy:                     config.ResolveSkillPolicy(active),
@@ -283,30 +271,6 @@ func NewRuntimeWiringWithBackground(
 		EventBridge: eventBridge,
 		Background:  background,
 		LocalTools:  localTools,
-	}, nil
-}
-
-type launchPromptFacingSnapshotReloader struct {
-	store                               *session.Store
-	workspaceRoot                       string
-	configRoot                          string
-	skipContinuationAgentRoleValidation bool
-}
-
-func (r launchPromptFacingSnapshotReloader) ReloadPromptFacingSnapshotConfig(context.Context, string) (runtime.PromptFacingSnapshotConfig, error) {
-	app, err := config.Load(r.workspaceRoot, config.LoadOptions{ConfigRoot: r.configRoot})
-	if err != nil {
-		return runtime.PromptFacingSnapshotConfig{}, err
-	}
-	resolved, err := launch.ResolvePromptFacingSnapshotConfig(app, r.store, r.skipContinuationAgentRoleValidation)
-	if err != nil {
-		return runtime.PromptFacingSnapshotConfig{}, err
-	}
-	return runtime.PromptFacingSnapshotConfig{
-		Settings:      resolved.Settings,
-		Source:        resolved.Source,
-		ActiveToolIDs: append([]toolspec.ID(nil), resolved.ActiveToolIDs...),
-		WebSearchMode: resolved.WebSearchMode,
 	}, nil
 }
 

@@ -24,10 +24,12 @@ func (d *gatewayOnboardingOverride) OnboardingFinalizeClient() apicontract.Onboa
 }
 
 type gatewayOnboardingService struct {
-	handler func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+	handler  func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+	rawCalls int
 }
 
-func (s gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+func (s *gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	s.rawCalls++
 	if s.handler != nil {
 		return s.handler(ctx, req)
 	}
@@ -35,6 +37,13 @@ func (s gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req se
 		return serverapi.OnboardingFinalizeResponse{}, err
 	}
 	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
+}
+
+func (s *gatewayOnboardingService) FinalizeOnboardingValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.OnboardingFinalizeRequest],
+) (serverapi.OnboardingFinalizeResponse, error) {
+	return s.FinalizeOnboarding(ctx, req.Value())
 }
 
 func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
@@ -55,7 +64,7 @@ func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			appCore, _ := newGatewayTestCore(t, true, tt.authReady)
 			defer func() { _ = appCore.Close() }()
-			gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: gatewayOnboardingService{}}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+			gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: &gatewayOnboardingService{}}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 			if err != nil {
 				t.Fatalf("NewGateway: %v", err)
 			}
@@ -87,7 +96,7 @@ func TestRemoteOnboardingFinalizePreservesStructuredSentinels(t *testing.T) {
 	defer func() { _ = appCore.Close() }()
 	gateway, err := NewGateway(&gatewayOnboardingOverride{
 		Core: appCore,
-		finalize: gatewayOnboardingService{
+		finalize: &gatewayOnboardingService{
 			handler: func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
 				return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: "/tmp/config.toml"}, nil)
 			},
@@ -127,8 +136,8 @@ func TestConfiguredCoreOnboardingFinalizeReturnsConfigAlreadyExists(t *testing.T
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	blue := serverapi.OnboardingTheme("blue")
-	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{Theme: &blue})
+	dark := serverapi.OnboardingThemeDark
+	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{Theme: &dark})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
 		t.Fatalf("FinalizeOnboarding error = %v, want config_already_exists", err)
 	}

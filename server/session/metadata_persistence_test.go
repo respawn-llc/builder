@@ -24,22 +24,14 @@ func (s stubPersistedSessionResolver) ResolvePersistedSession(context.Context, s
 }
 
 type recordingPersistenceObserver struct {
-	snapshot       PersistedStoreSnapshot
-	reconciliation PersistedEventLogReconciliation
-	called         bool
-	reconciled     bool
-	err            error
+	snapshot PersistedStoreSnapshot
+	called   bool
+	err      error
 }
 
 func (r *recordingPersistenceObserver) ObservePersistedStore(_ context.Context, snapshot PersistedStoreSnapshot) error {
 	r.called = true
 	r.snapshot = snapshot
-	return r.err
-}
-
-func (r *recordingPersistenceObserver) ObserveEventLogReconciliation(_ context.Context, reconciliation PersistedEventLogReconciliation) error {
-	r.reconciled = true
-	r.reconciliation = reconciliation
 	return r.err
 }
 
@@ -138,22 +130,6 @@ func (o *deadlineRejectingPersistenceObserver) ObservePersistedStore(
 		}
 	}
 	return o.downstream.ObservePersistedStore(ctx, snapshot)
-}
-
-func (o *deadlineRejectingPersistenceObserver) ObserveEventLogReconciliation(
-	ctx context.Context,
-	reconciliation PersistedEventLogReconciliation,
-) error {
-	downstream, ok := o.downstream.(EventLogReconciliationObserver)
-	if !ok {
-		return errEventLogReconcilerRequired
-	}
-	if o.takeCheck() {
-		if deadline, ok := ctx.Deadline(); ok {
-			return fmt.Errorf("event-log reconciliation has synthetic deadline %s", deadline)
-		}
-	}
-	return downstream.ObserveEventLogReconciliation(ctx, reconciliation)
 }
 
 func TestOpenByIDUsesAuthoritativeResolver(t *testing.T) {
@@ -446,9 +422,6 @@ func TestEventLogMaterializationRequiresPersistenceObserverWithoutCreatingArtifa
 	}
 	if _, err := store.MaterializeEventLog(); err == nil {
 		t.Fatal("MaterializeEventLog succeeded without durable session metadata")
-	}
-	if storeTestMeta(store).LastSequence != 0 {
-		t.Fatalf("last sequence = %d, want unchanged", storeTestMeta(store).LastSequence)
 	}
 	if _, err := os.Stat(store.Dir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session artifact created without persistence observer: %v", err)

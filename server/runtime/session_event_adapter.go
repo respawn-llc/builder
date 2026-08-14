@@ -29,21 +29,6 @@ func (e UnsupportedSessionProviderItemError) Unwrap() error {
 	return ErrUnsupportedSessionProviderItem
 }
 
-func normalizedSessionPayload[T session.EventRecordPayload](
-	record session.EventRecord,
-) (T, error) {
-	var zero T
-	payload, err := record.Payload()
-	if err != nil {
-		return zero, err
-	}
-	typed, ok := payload.(T)
-	if !ok {
-		return zero, fmt.Errorf("session event payload is %T", payload)
-	}
-	return typed, nil
-}
-
 func sessionMessageRecordFromLLM(message llm.Message) (session.MessageRecord, error) {
 	record := session.MessageRecord{
 		Role:                 session.MessageRole(message.Role),
@@ -93,22 +78,10 @@ func sessionMessageRecordFromLLM(message llm.Message) (session.MessageRecord, er
 			})
 		}
 	}
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return session.MessageRecord{}, err
-	}
-	return normalizedSessionPayload[session.MessageRecord](normalized)
+	return record, nil
 }
 
-func llmMessageFromSessionRecord(record session.MessageRecord) (llm.Message, error) {
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return llm.Message{}, err
-	}
-	record, err = normalizedSessionPayload[session.MessageRecord](normalized)
-	if err != nil {
-		return llm.Message{}, err
-	}
+func llmMessageFromSessionRecord(record session.MessageRecord) llm.Message {
 	message := llm.Message{
 		Role:                 llm.Role(record.Role),
 		MessageType:          convertOptionalString[session.MessageType, llm.MessageType](record.MessageType),
@@ -144,7 +117,7 @@ func llmMessageFromSessionRecord(record session.MessageRecord) (llm.Message, err
 			})
 		}
 	}
-	return message, nil
+	return message
 }
 
 func sessionToolCompletionRecordFromRuntime(
@@ -183,29 +156,17 @@ func sessionToolCompletionRecordFromRuntime(
 			record.ProviderItems = append(record.ProviderItems, snapshot)
 		}
 	}
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return session.ToolCompletionRecord{}, err
-	}
-	return normalizedSessionPayload[session.ToolCompletionRecord](normalized)
+	return record, nil
 }
 
 func storedToolCompletionFromSessionRecord(
 	record session.ToolCompletionRecord,
-) (storedToolCompletion, error) {
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return storedToolCompletion{}, err
-	}
-	record, err = normalizedSessionPayload[session.ToolCompletionRecord](normalized)
-	if err != nil {
-		return storedToolCompletion{}, err
-	}
+) storedToolCompletion {
 	var presentation *transcript.ToolCallMeta
 	if len(record.Presentation) > 0 {
 		decoded, ok := transcript.DecodeToolCallMeta(record.Presentation)
 		if !ok {
-			return storedToolCompletion{}, errors.New("session tool completion presentation is invalid")
+			panic("decoded session tool completion has invalid presentation")
 		}
 		presentation = decoded
 	}
@@ -238,7 +199,7 @@ func storedToolCompletionFromSessionRecord(
 		Presentation:   presentation,
 		ProviderItems:  providerItems,
 		QuestionAnswer: questionAnswerFromSession(record.QuestionAnswer),
-	}, nil
+	}
 }
 
 func sessionToolCompletionRecordFromStored(
@@ -286,11 +247,7 @@ func sessionLocalEntryRecordFromRuntime(
 		ToolOutputRepair:      textutil.Pointer(entry.ToolOutputRepair),
 		ProviderModelMismatch: textutil.Pointer(entry.ProviderModelMismatch),
 	}
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return session.LocalEntryRecord{}, err
-	}
-	return normalizedSessionPayload[session.LocalEntryRecord](normalized)
+	return record, nil
 }
 
 func sessionEntryVisibilityFromRuntime(
@@ -327,21 +284,13 @@ func runtimeEntryVisibilityFromSession(
 	case session.EntryVisibilityHidden:
 		return transcript.EntryVisibilityHidden
 	default:
-		return transcript.EntryVisibilityAuto
+		panic(fmt.Sprintf("decoded session local entry has unsupported visibility %q", visibility))
 	}
 }
 
 func storedLocalEntryFromSessionRecord(
 	record session.LocalEntryRecord,
-) (storedLocalEntry, error) {
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return storedLocalEntry{}, err
-	}
-	record, err = normalizedSessionPayload[session.LocalEntryRecord](normalized)
-	if err != nil {
-		return storedLocalEntry{}, err
-	}
+) storedLocalEntry {
 	text, _ := textutil.OptionalExact(record.Text)
 	return storedLocalEntry{
 		Visibility:            runtimeEntryVisibilityFromSession(record.Visibility),
@@ -354,7 +303,7 @@ func storedLocalEntryFromSessionRecord(
 		AfterToolCallID:       textutil.Pointer(record.AfterToolCallID),
 		ToolOutputRepair:      textutil.Pointer(record.ToolOutputRepair),
 		ProviderModelMismatch: textutil.Pointer(record.ProviderModelMismatch),
-	}, nil
+	}
 }
 
 func sessionCacheRequestRecordFromRuntime(
@@ -367,11 +316,7 @@ func sessionCacheRequestRecordFromRuntime(
 		ChunkCount:    observation.ChunkCount,
 		TerminalHash:  observation.TerminalHash,
 	}
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return session.CacheRequestObservationRecord{}, err
-	}
-	return normalizedSessionPayload[session.CacheRequestObservationRecord](normalized)
+	return record, nil
 }
 
 func sessionCacheResponseRecordFromRuntime(
@@ -385,11 +330,7 @@ func sessionCacheResponseRecordFromRuntime(
 		TerminalHash:  observation.TerminalHash,
 	}
 	record.CachedInputTokens = textutil.Pointer(observation.CachedInputTokens)
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return session.CacheResponseObservationRecord{}, err
-	}
-	return normalizedSessionPayload[session.CacheResponseObservationRecord](normalized)
+	return record, nil
 }
 
 func sessionCacheWarningRecordFromRuntime(
@@ -401,11 +342,7 @@ func sessionCacheWarningRecordFromRuntime(
 		CacheKey: textutil.Pointer(warning.CacheKey),
 	}
 	record.LostInputTokens = textutil.Pointer(warning.LostInputTokens)
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return session.CacheWarningRecord{}, err
-	}
-	return normalizedSessionPayload[session.CacheWarningRecord](normalized)
+	return record, nil
 }
 
 func persistedCacheRequestObservedFromSessionRecord(
@@ -456,9 +393,19 @@ func sessionHistoryReplacementRecordFromRuntime(
 		LatestRollbackCandidate:           textutil.Pointer(payload.LatestRollbackCandidate),
 	}
 	record.CompactionNumber = textutil.Pointer(payload.CompactionNumber)
-	if len(payload.Items) > 0 {
-		record.Items = make([]session.ProviderHistoryItem, 0, len(payload.Items))
-		for index, item := range payload.Items {
+	preparedItems := llm.PrepareOpenAIInputItems(payload.Items)
+	if len(preparedItems) > 0 {
+		record.Items = make([]session.ProviderHistoryItem, 0, len(preparedItems))
+		for index, item := range preparedItems {
+			if len(item.Raw) == 0 &&
+				item.Type != llm.ResponseItemTypeFunctionCallOutput &&
+				item.Type != llm.ResponseItemTypeCustomToolOutput {
+				return session.HistoryReplacementRecord{}, session.ProviderHistoryItemError{
+					Index:  index,
+					Type:   session.ProviderHistoryItemType(item.Type),
+					Reason: session.ProviderHistoryItemMissingRaw,
+				}
+			}
 			historyItem, err := sessionProviderHistoryItemFromLLM(index, item)
 			if err != nil {
 				return session.HistoryReplacementRecord{}, err
@@ -466,24 +413,12 @@ func sessionHistoryReplacementRecordFromRuntime(
 			record.Items = append(record.Items, historyItem)
 		}
 	}
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return session.HistoryReplacementRecord{}, err
-	}
-	return normalizedSessionPayload[session.HistoryReplacementRecord](normalized)
+	return record, nil
 }
 
 func historyReplacementPayloadFromSessionRecord(
 	record session.HistoryReplacementRecord,
-) (historyReplacementPayload, error) {
-	normalized, err := session.NewEventRecord(1, nil, record)
-	if err != nil {
-		return historyReplacementPayload{}, err
-	}
-	record, err = normalizedSessionPayload[session.HistoryReplacementRecord](normalized)
-	if err != nil {
-		return historyReplacementPayload{}, err
-	}
+) historyReplacementPayload {
 	payload := historyReplacementPayload{
 		Engine:                            record.Engine,
 		Mode:                              string(record.Mode),
@@ -499,7 +434,7 @@ func historyReplacementPayloadFromSessionRecord(
 			payload.Items = append(payload.Items, llmResponseItemFromSessionHistory(item))
 		}
 	}
-	return payload, nil
+	return payload
 }
 
 func sessionProviderHistoryItemFromLLM(

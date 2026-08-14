@@ -11,15 +11,35 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/session"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
 )
 
 type SessionWorkspaceRetargetRequest struct {
-	SessionID     string
-	WorkspaceRoot string
-	ProjectID     *string
+	SessionID                 string
+	WorkspaceRoot             string
+	ProjectID                 *string
+	AttachedProjectConstraint apicontract.AttachedProjectConstraint
+}
+
+type AttachedProjectMismatchError struct {
+	SessionID         string
+	SourceProjectID   string
+	AttachedProjectID string
+}
+
+func (e *AttachedProjectMismatchError) Error() string {
+	if e == nil {
+		return "attached Project does not own Session"
+	}
+	return fmt.Sprintf(
+		"session %q belongs to project %q, not attached project %q",
+		e.SessionID,
+		e.SourceProjectID,
+		e.AttachedProjectID,
+	)
 }
 
 type SessionWorkspaceRetargetPlan struct {
@@ -67,6 +87,14 @@ func (s *Store) PlanSessionWorkspaceRetarget(ctx context.Context, req SessionWor
 		return SessionWorkspaceRetargetPlan{}, fmt.Errorf("get session retarget state: %w", err)
 	}
 	sourceProject := serverapi.ProjectReference{ID: state.ProjectID, Name: state.ProjectDisplayName}
+	if attachedProjectID, constrained := req.AttachedProjectConstraint.ProjectID(); constrained &&
+		sourceProject.ID != attachedProjectID {
+		return SessionWorkspaceRetargetPlan{}, &AttachedProjectMismatchError{
+			SessionID:         sessionID,
+			SourceProjectID:   sourceProject.ID,
+			AttachedProjectID: attachedProjectID,
+		}
+	}
 	targetProject := sourceProject
 	explicitProject := req.ProjectID != nil
 	if explicitProject {
@@ -130,7 +158,7 @@ func (s *Store) PlanSessionWorkspaceRetarget(ctx context.Context, req SessionWor
 	}, nil
 }
 
-func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan SessionWorkspaceRetargetPlan, updatedAt time.Time) (SessionWorkspaceRetargetResult, error) {
+func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan SessionWorkspaceRetargetPlan, updatedAt time.Time) (result SessionWorkspaceRetargetResult, resultErr error) {
 	if s == nil || s.queries == nil {
 		return SessionWorkspaceRetargetResult{}, errors.New("metadata store is required")
 	}
@@ -138,14 +166,15 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 		return SessionWorkspaceRetargetResult{}, errors.New("session retarget updated time is required")
 	}
 	updatedAt = updatedAt.UTC()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "Commit Session workspace retarget", nil)
 	if err != nil {
-		return SessionWorkspaceRetargetResult{}, fmt.Errorf("begin session retarget tx: %w", err)
+		return SessionWorkspaceRetargetResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &resultErr)
+	q := tx.Queries()
 	if _, err := q.AcquireWorkspaceRegistrationLock(ctx); err != nil {
-		return SessionWorkspaceRetargetResult{}, fmt.Errorf("lock session retarget: %w", err)
+		resultErr = fmt.Errorf("lock session retarget: %w", err)
+		return SessionWorkspaceRetargetResult{}, resultErr
 	}
 	state, err := q.GetSessionWorkspaceRetargetStateByID(ctx, plan.SessionID)
 	if err != nil {
@@ -200,7 +229,8 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 		return SessionWorkspaceRetargetResult{}, errors.New("session project or artifact changed while rebinding")
 	}
 	if err := tx.Commit(); err != nil {
-		return SessionWorkspaceRetargetResult{}, fmt.Errorf("commit session retarget tx: %w", err)
+		resultErr = err
+		return SessionWorkspaceRetargetResult{}, resultErr
 	}
 	return SessionWorkspaceRetargetResult{Binding: binding, WorkspaceBindingCreated: created, UpdatedAt: updatedAt}, nil
 }
@@ -298,13 +328,6 @@ func attachWorkspaceToProjectWithQueries(ctx context.Context, q *sqlitegen.Queri
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Binding{}, false, err
 	}
-	project, err := q.GetProjectKeyState(ctx, projectID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Binding{}, false, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, projectID)
-		}
-		return Binding{}, false, fmt.Errorf("get project: %w", err)
-	}
 	workspaceCount, err := q.CountProjectWorkspaces(ctx, projectID)
 	if err != nil {
 		return Binding{}, false, fmt.Errorf("count project workspaces: %w", err)
@@ -321,13 +344,16 @@ func attachWorkspaceToProjectWithQueries(ctx context.Context, q *sqlitegen.Queri
 		return Binding{}, false, err
 	}
 	if !inserted {
-		return Binding{}, false, fmt.Errorf("workspace %q could not be attached to project %q", canonicalRoot, projectID)
+		binding, err := lookupProjectWorkspaceBindingWithQueries(ctx, q, projectID, canonicalRoot)
+		if err != nil {
+			return Binding{}, false, fmt.Errorf("lookup existing workspace binding: %w", err)
+		}
+		return binding, false, nil
 	}
 	binding, err = lookupProjectWorkspaceBindingWithQueries(ctx, q, projectID, canonicalRoot)
 	if err != nil {
 		return Binding{}, false, fmt.Errorf("lookup attached workspace binding: %w", err)
 	}
-	binding.ProjectKey = project.ProjectKey
 	return binding, true, nil
 }
 

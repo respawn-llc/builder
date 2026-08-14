@@ -28,10 +28,20 @@ type currentEventLog struct {
 	durabilityObserver DurabilityObserver
 }
 
-type currentEventLogAppendTransaction struct {
-	prepare  func(startOffset int64, payload []byte) error
-	commit   func() error
-	rollback func(fp *os.File, startOffset int64, appendErr error) error
+type currentEventLogTailKind uint8
+
+const (
+	currentEventLogTailValidTerminated currentEventLogTailKind = iota + 1
+	currentEventLogTailValidUnterminated
+	currentEventLogTailMalformedIncomplete
+	currentEventLogTailCompleteInvalid
+)
+
+type currentEventLogTailClassification struct {
+	kind      currentEventLogTailKind
+	lineStart int64
+	record    *EventRecord
+	decodeErr error
 }
 
 type EventRecordWindow struct {
@@ -130,23 +140,17 @@ func openCurrentEventLog(
 	if lastRecord != nil {
 		lastSequence = lastRecord.Seq()
 	}
-	return &currentEventLog{
+	log := &currentEventLog{
 		path:             path,
 		version:          header.Version,
 		firstEventOffset: firstEventOffset,
 		lastSequence:     lastSequence,
 		mode:             mode,
-	}, nil
+	}
+	return log, nil
 }
 
 func (l *currentEventLog) appendRecords(records []EventRecord) (endOffset int64, resultErr error) {
-	return l.appendRecordsWithTransaction(records, nil)
-}
-
-func (l *currentEventLog) appendRecordsWithTransaction(
-	records []EventRecord,
-	transaction *currentEventLogAppendTransaction,
-) (endOffset int64, resultErr error) {
 	if l == nil {
 		return 0, fmt.Errorf("current event log is required")
 	}
@@ -186,88 +190,119 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 
 	fp, err := os.OpenFile(l.path, os.O_APPEND|os.O_RDWR, 0)
 	if err != nil {
-		return 0, fmt.Errorf("open current event log for append: %w", err)
+		return 0, eventLogPersistenceError(EventLogCommitNotCommitted, "open current event log for append", err)
 	}
+	closed := false
 	defer func() {
+		if closed {
+			return
+		}
 		if closeErr := fp.Close(); closeErr != nil {
-			resultErr = errors.Join(resultErr, fmt.Errorf("close current event log append: %w", closeErr))
+			certainty := EventLogCommitNotCommitted
+			if endOffset > 0 {
+				certainty = EventLogCommitUnknown
+			}
+			resultErr = errors.Join(resultErr, eventLogPersistenceError(certainty, "close current event log append", closeErr))
 		}
 	}()
-	header, firstEventOffset, err := readCurrentEventLogHeader(fp)
+	currentSize, needsSeparator, err := l.prepareAppend(fp)
+	if err != nil {
+		return 0, eventLogPersistenceError(EventLogCommitNotCommitted, "validate current event log before append", err)
+	}
+	payload, err := encodeCurrentEventRecordLines(records, needsSeparator, l.version)
 	if err != nil {
 		return 0, err
 	}
+	written, err := writeAll(fp, payload)
+	endOffset = currentSize + int64(written)
+	if err != nil {
+		return endOffset, eventLogPersistenceError(EventLogCommitUnknown, "write current event log append", err)
+	}
+	if err := l.syncAppend(fp); err != nil {
+		return endOffset, eventLogPersistenceError(EventLogCommitUnknown, "fsync current event log", err)
+	}
+	// Sync is the event-log commit boundary. A later close failure cannot
+	// change the committed append result.
+	_ = fp.Close()
+	closed = true
+	l.lastSequence = records[len(records)-1].Seq()
+	return endOffset, nil
+}
+
+func (l *currentEventLog) prepareAppend(fp *os.File) (currentSize int64, needsSeparator bool, err error) {
+	header, firstEventOffset, err := readCurrentEventLogHeader(fp)
+	if err != nil {
+		return 0, false, err
+	}
 	if firstEventOffset != l.firstEventOffset {
-		return 0, fmt.Errorf(
+		return 0, false, fmt.Errorf(
 			"current event log header offset changed from %d to %d",
 			l.firstEventOffset,
 			firstEventOffset,
 		)
 	}
 	if header.Version != l.version {
-		return 0, fmt.Errorf("current event log version changed from %d to %d", l.version, header.Version)
+		return 0, false, fmt.Errorf(
+			"current event log version changed from %d to %d",
+			l.version,
+			header.Version,
+		)
 	}
 	info, err := fp.Stat()
 	if err != nil {
-		return 0, fmt.Errorf("stat current event log before append: %w", err)
+		return 0, false, fmt.Errorf("stat current event log before append: %w", err)
 	}
-	currentSize, needsSeparator, err := repairCurrentEventLogTail(fp, info.Size(), l.firstEventOffset)
+	classification, err := classifyCurrentEventLogTail(fp, info.Size(), l.firstEventOffset)
 	if err != nil {
-		return 0, err
+		return 0, false, err
+	}
+	switch classification.kind {
+	case currentEventLogTailValidTerminated:
+		currentSize = info.Size()
+	case currentEventLogTailValidUnterminated:
+		currentSize = info.Size()
+		needsSeparator = true
+	case currentEventLogTailCompleteInvalid:
+		return 0, false, fmt.Errorf(
+			"decode complete current event log tail at byte %d: %w",
+			classification.lineStart,
+			classification.decodeErr,
+		)
+	case currentEventLogTailMalformedIncomplete:
+		return 0, false, fmt.Errorf(
+			"decode incomplete current event log tail at byte %d: %w",
+			classification.lineStart,
+			classification.decodeErr,
+		)
+	default:
+		return 0, false, fmt.Errorf(
+			"unknown current event log tail classification %d",
+			classification.kind,
+		)
 	}
 	lastRecord, err := readLastCurrentEventRecord(fp, currentSize, l.firstEventOffset)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	persistedSequence := int64(0)
 	if lastRecord != nil {
 		persistedSequence = lastRecord.Seq()
 	}
 	if persistedSequence != l.lastSequence {
-		return 0, fmt.Errorf(
+		return 0, false, fmt.Errorf(
 			"current event log append sequence authority changed from %d to %d",
 			l.lastSequence,
 			persistedSequence,
 		)
 	}
+	return currentSize, needsSeparator, nil
+}
 
-	payload, err := encodeCurrentEventRecordLines(records, needsSeparator, l.version)
-	if err != nil {
-		return 0, err
+func eventLogPersistenceError(certainty EventLogCommitCertainty, operation string, cause error) error {
+	return &EventLogPersistenceError{
+		Certainty: certainty,
+		Cause:     fmt.Errorf("%s: %w", operation, cause),
 	}
-	if transaction != nil && transaction.prepare != nil {
-		if err := transaction.prepare(currentSize, payload); err != nil {
-			return 0, err
-		}
-	}
-	written, err := writeAll(fp, payload)
-	endOffset = currentSize + int64(written)
-	if err != nil {
-		if transaction != nil && transaction.rollback != nil {
-			return endOffset, transaction.rollback(fp, currentSize, err)
-		}
-		return endOffset, err
-	}
-	if transaction != nil {
-		if err := l.syncAppend(fp); err != nil {
-			if transaction.rollback != nil {
-				return endOffset, transaction.rollback(fp, currentSize, fmt.Errorf("fsync current event log: %w", err))
-			}
-			return endOffset, fmt.Errorf("fsync current event log: %w", err)
-		}
-		if transaction.commit != nil {
-			if err := transaction.commit(); err != nil {
-				if transaction.rollback != nil {
-					return endOffset, transaction.rollback(fp, currentSize, err)
-				}
-				return endOffset, err
-			}
-		}
-	} else if err := l.syncAppend(fp); err != nil {
-		return endOffset, fmt.Errorf("fsync current event log: %w", err)
-	}
-	l.lastSequence = records[len(records)-1].Seq()
-	return endOffset, nil
 }
 
 func (l *currentEventLog) syncAppend(fp *os.File) (resultErr error) {
@@ -752,30 +787,79 @@ func repairCurrentEventLogTail(
 	size int64,
 	firstEventOffset int64,
 ) (repairedSize int64, needsSeparator bool, resultErr error) {
-	if size < firstEventOffset {
+	classification, err := classifyCurrentEventLogTail(fp, size, firstEventOffset)
+	if err != nil {
+		return 0, false, err
+	}
+	switch classification.kind {
+	case currentEventLogTailValidTerminated:
+		return size, false, nil
+	case currentEventLogTailValidUnterminated:
+		return size, true, nil
+	case currentEventLogTailCompleteInvalid:
 		return 0, false, fmt.Errorf(
+			"decode complete current event log tail at byte %d: %w",
+			classification.lineStart,
+			classification.decodeErr,
+		)
+	case currentEventLogTailMalformedIncomplete:
+		if err := fp.Truncate(classification.lineStart); err != nil {
+			return 0, false, fmt.Errorf("truncate torn current event log tail: %w", err)
+		}
+		if err := fp.Sync(); err != nil {
+			return classification.lineStart, false, fmt.Errorf("sync repaired current event log: %w", err)
+		}
+		return classification.lineStart, false, nil
+	default:
+		return 0, false, fmt.Errorf("unknown current event log tail classification %d", classification.kind)
+	}
+}
+
+func classifyCurrentEventLogTail(
+	fp *os.File,
+	size int64,
+	firstEventOffset int64,
+) (currentEventLogTailClassification, error) {
+	if size < firstEventOffset {
+		return currentEventLogTailClassification{}, fmt.Errorf(
 			"current event log size %d precedes first event offset %d",
 			size,
 			firstEventOffset,
 		)
 	}
 	if size == firstEventOffset {
-		return size, false, nil
+		return currentEventLogTailClassification{
+			kind:      currentEventLogTailValidTerminated,
+			lineStart: firstEventOffset,
+		}, nil
 	}
 	lastByte := [1]byte{}
 	if _, err := fp.ReadAt(lastByte[:], size-1); err != nil {
-		return 0, false, fmt.Errorf("read current event log tail: %w", err)
+		return currentEventLogTailClassification{}, fmt.Errorf("read current event log tail: %w", err)
 	}
 	if lastByte[0] == '\n' {
-		return size, false, nil
+		return currentEventLogTailClassification{
+			kind:      currentEventLogTailValidTerminated,
+			lineStart: size,
+		}, nil
 	}
-	lastNewline, err := lastNewlineOffset(fp, size)
+	budget := currentEventLogTailRepairMaxBytes
+	if size < budget {
+		budget = size
+	}
+	lastNewline, err := lastNewlineOffsetWithin(fp, size, budget)
 	if err != nil {
-		return 0, false, err
+		return currentEventLogTailClassification{}, err
+	}
+	if lastNewline < firstEventOffset-1 {
+		return currentEventLogTailClassification{}, fmt.Errorf(
+			"current event log tail line start is outside the %d-byte repair budget",
+			currentEventLogTailRepairMaxBytes,
+		)
 	}
 	tailStart := lastNewline + 1
 	if tailStart < firstEventOffset {
-		return 0, false, fmt.Errorf(
+		return currentEventLogTailClassification{}, fmt.Errorf(
 			"current event log tail starts before first event offset: tail=%d first=%d",
 			tailStart,
 			firstEventOffset,
@@ -783,29 +867,29 @@ func repairCurrentEventLogTail(
 	}
 	tail := make([]byte, size-tailStart)
 	if _, err := fp.ReadAt(tail, tailStart); err != nil {
-		return 0, false, fmt.Errorf("read current event log tail record: %w", err)
+		return currentEventLogTailClassification{}, fmt.Errorf("read current event log tail record: %w", err)
 	}
 	trimmedTail := bytes.TrimSpace(tail)
-	header, _, headerErr := readCurrentEventLogHeader(fp)
-	if headerErr != nil {
-		return 0, false, headerErr
+	record, decodeErr := decodeEventRecordV1(trimmedTail)
+	if decodeErr == nil {
+		return currentEventLogTailClassification{
+			kind:      currentEventLogTailValidUnterminated,
+			lineStart: tailStart,
+			record:    &record,
+		}, nil
 	}
-	if _, err := decodeEventRecordForVersion(header.Version, trimmedTail); err == nil {
-		return size, true, nil
-	} else if json.Valid(trimmedTail) {
-		return 0, false, fmt.Errorf(
-			"decode complete current event log tail at byte %d: %w",
-			tailStart,
-			err,
-		)
+	if json.Valid(trimmedTail) {
+		return currentEventLogTailClassification{
+			kind:      currentEventLogTailCompleteInvalid,
+			lineStart: tailStart,
+			decodeErr: decodeErr,
+		}, nil
 	}
-	if err := fp.Truncate(tailStart); err != nil {
-		return 0, false, fmt.Errorf("truncate torn current event log tail: %w", err)
-	}
-	if err := fp.Sync(); err != nil {
-		return tailStart, false, fmt.Errorf("sync repaired current event log: %w", err)
-	}
-	return tailStart, false, nil
+	return currentEventLogTailClassification{
+		kind:      currentEventLogTailMalformedIncomplete,
+		lineStart: tailStart,
+		decodeErr: decodeErr,
+	}, nil
 }
 
 func readLastCurrentEventRecord(

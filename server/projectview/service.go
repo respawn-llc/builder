@@ -17,6 +17,7 @@ import (
 	"core/server/workflowstore"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -118,10 +119,14 @@ func (s *Service) ResolveProjectPath(ctx context.Context, req serverapi.ProjectR
 	if err := req.Validate(); err != nil {
 		return serverapi.ProjectResolvePathResponse{}, err
 	}
+	return s.resolveProjectPath(ctx, req.Path)
+}
+
+func (s *Service) resolveProjectPath(ctx context.Context, path string) (serverapi.ProjectResolvePathResponse, error) {
 	if s == nil {
 		return serverapi.ProjectResolvePathResponse{}, errors.New("project service is required")
 	}
-	canonicalRoot, binding, err := s.metadata.ResolveWorkspacePath(ctx, req.Path)
+	canonicalRoot, binding, err := s.metadata.ResolveWorkspacePath(ctx, path)
 	if err != nil {
 		return serverapi.ProjectResolvePathResponse{}, err
 	}
@@ -138,7 +143,7 @@ func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.Projec
 	if err := req.Validate(); err != nil {
 		return serverapi.ProjectBindingPlanResponse{}, err
 	}
-	resolved, err := s.ResolveProjectPath(ctx, serverapi.ProjectResolvePathRequest{Path: req.Path})
+	resolved, err := s.resolveProjectPath(ctx, req.Path)
 	if err != nil {
 		if ambiguous, ok := serverapi.AsWorkspaceBindingAmbiguous(err); ok {
 			resp := serverapi.ProjectBindingPlanResponse{
@@ -213,7 +218,15 @@ func (s *Service) CreateProject(ctx context.Context, req serverapi.ProjectCreate
 	if s == nil {
 		return serverapi.ProjectCreateResponse{}, errors.New("project service is required")
 	}
-	binding, err := s.metadata.CreateProjectForWorkspaceWithKey(ctx, req.WorkspaceRoot, req.DisplayName, req.ProjectKey)
+	var projectKey *runtimeids.ProjectKey
+	if strings.TrimSpace(req.ProjectKey) != "" {
+		parsed, err := runtimeids.ParseProjectKey(req.ProjectKey)
+		if err != nil {
+			return serverapi.ProjectCreateResponse{}, err
+		}
+		projectKey = &parsed
+	}
+	binding, err := s.metadata.CreateProjectForWorkspaceWithKey(ctx, req.WorkspaceRoot, req.DisplayName, projectKey)
 	if err != nil {
 		return serverapi.ProjectCreateResponse{}, err
 	}
@@ -227,7 +240,15 @@ func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdate
 	if s == nil {
 		return serverapi.ProjectUpdateResponse{}, errors.New("project service is required")
 	}
-	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, req.ProjectKey); err != nil {
+	var projectKey *runtimeids.ProjectKey
+	if strings.TrimSpace(req.ProjectKey) != "" {
+		parsed, err := runtimeids.ParseProjectKey(req.ProjectKey)
+		if err != nil {
+			return serverapi.ProjectUpdateResponse{}, err
+		}
+		projectKey = &parsed
+	}
+	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, projectKey); err != nil {
 		return serverapi.ProjectUpdateResponse{}, err
 	}
 	project, err := s.projectHomeSummary(ctx, req.ProjectID)

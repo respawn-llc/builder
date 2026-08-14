@@ -45,7 +45,7 @@ This repository contains Kent - a coding agent focused on output quality, built 
   - Centralized compile-time tool interface declarations (name, descriptions, JSON schemas).
 - `docs/dev/specs/terminology.md` - DDD's ubiquitous language, must read during design phases to communicate with user.
 
-## Product Principles 
+## Product Principles
 These should guide default architectural choices in addition to user preferences.
 
 - General system concurrency model - maximum 100 concurrent agent runs, with only 3-10 realistically in the same filesystem dir. Which means using mutexes/locks to cover large scopes when that simplifies the architecture a lot is okay even if agents can wait for 1-10 seconds for another operation to finish.
@@ -75,6 +75,11 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
   - Confirm the authoritative product owner and source of truth from an owning spec or explicit product decision before choosing a coordination mechanism. Prefer enforcement inside that confirmed owner. Crossing ownership boundaries requires evidence that the owner cannot satisfy the approved product behavior alone.
   - A local or read-only feature must not change unrelated writer paths, lifecycle ownership, prompt handling, or global synchronization to eliminate a transient or low-severity edge case.
   - Tests, review findings, and implementation convenience do not authorize stronger product guarantees. If a spec appears to require disproportionate machinery, stop and ask for confirmation or an approved weaker contract.
+- Classify failures before handling them:
+  - Developer-caused invariant violations panic with diagnostic context in development. In production, surface them and contain them to the affected operation or owner when its authoritative state can remain valid.
+  - Recoverable operational failures are surfaced and follow only an explicitly specified recovery path.
+  - Critical unrecoverable infrastructure failures terminate the affected process in development and production after, at most, a best-effort stack trace or minimal standard-error diagnostic. Never retry or continue dependent work.
+  - Use the smallest owner that cannot continue safely: a lost Session event log stops that Session, a live metadata database failure surfaced by SQLite or the operating system stops the server, and terminal output failure stops that client process. Do not add polling or per-operation file-identity checks to detect unlink/replacement of an already-open database.
 - Tests must not bend production interfaces or expose internals. Production code must never bend its intended API shape to enable testability. Decomposition of interfaces and extraction of business logic and algorithms (e.g. Clean arch's use-cases) is encouraged to improve unit testability, but only interfaces must be tested externally. Example: any `*forTest` or `*TestOnly` method, private methods marked as public to be used in tests, or functions that only are exposed to be used in tests.
 - Never use regex-based matching, parsing, replace hacks. Never use substring-based lookup to determine information presence, determine types, parse errors. Avoid brittle and fragile text/string-based logic, and develop type-safe data structures, store structured data or metadata that can reliably be extracted instead.
 - All GUI pagination uses infinite scroll only; no page numbers, next/previous, Load More, or button pagination must be added at any point. No in-memory fake pagination that slurps must be implemented at any point, including both server and client in-memory storage or loads of content. The pagination must never hold the entire dataset in memory at any point under any circumstance.
@@ -98,6 +103,7 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 - Documents under `docs/dev/rust/` and `docs/dev/rust-tui-tests.md` are historical records and do not authorize Rust implementation.
 
 ## Coding Guidelines & Memories
+- Validate each rule once at its authoritative boundary. Separate trust boundaries, such as request ingress, persisted-data decoding, and client response decoding, validate independently; downstream code trusts the validated typed value until it crosses another boundary. Reuse state facts within one operation and read them again for later operations.
 -- Tauri/native APIs must stay behind GUI-side bridge packages; do not import Tauri APIs directly from feature components.
 - Use browser-client QA as the primary manual GUI QA path. Run `pnpm --dir apps/desktop dev:browser` for interactive QA against an existing Kent server. QAing a native Mac app is tough.
 - Production API shape is dictated by product/domain seams, runtime contracts, and operator-visible behavior. Do not add or widen production APIs, exported hooks, global overrides, interfaces, or configuration only so tests can fake, mock, or inspect internals.

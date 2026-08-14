@@ -2,6 +2,7 @@ package worktreeui
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -135,26 +136,18 @@ func TestListUsesSession(t *testing.T) {
 	}
 }
 
-func TestMutationRetriesAfterRecoverableError(t *testing.T) {
+func TestMutationReturnsRuntimeUnavailableWithoutReplay(t *testing.T) {
 	client := &testWorktreeClient{
 		errs: []error{serverapi.ErrRuntimeUnavailable, nil},
 	}
-	recoverCalls := 0
 	service := newTestService(client)
-	service.Runtime.RecoverRuntimeConnection = func(context.Context, error, bool) error {
-		recoverCalls++
-		return nil
-	}
 
 	_, err := service.Enter("feature")
-	if err != nil {
-		t.Fatalf("Enter: %v", err)
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("Enter error = %v, want runtime unavailable", err)
 	}
-	if recoverCalls != 1 {
-		t.Fatalf("recover calls = %d, want 1", recoverCalls)
-	}
-	if len(client.enterRequests) != 2 || client.enterRequests[0] != client.enterRequests[1] {
-		t.Fatalf("enter requests = %+v, want identical retry", client.enterRequests)
+	if len(client.enterRequests) != 1 {
+		t.Fatalf("enter requests = %+v, want one invocation", client.enterRequests)
 	}
 }
 
@@ -267,7 +260,6 @@ func newTestService(client *testWorktreeClient) Service {
 			Context: func() (context.Context, context.CancelFunc) {
 				return context.WithTimeout(context.Background(), time.Second)
 			},
-			RecoverRuntimeConnection: func(context.Context, error, bool) error { return nil },
 		},
 		NewOperationID: func() serverapi.WorktreeOperationID { return testWorktreeOperationID(nil) },
 	}

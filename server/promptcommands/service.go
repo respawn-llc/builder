@@ -58,35 +58,43 @@ type Service struct {
 	workspaceRoot   string
 }
 
-func New(persistenceRoot, workspaceRoot string) Service {
-	return Service{
-		persistenceRoot: strings.TrimSpace(persistenceRoot),
-		workspaceRoot:   strings.TrimSpace(workspaceRoot),
+func New(persistenceRoot, workspaceRoot string) (Service, error) {
+	trimmedPersistenceRoot := strings.TrimSpace(persistenceRoot)
+	if trimmedPersistenceRoot == "" {
+		return Service{}, &Error{Kind: ErrorKindCatalogRead, cause: errors.New("persistence root is required")}
 	}
+	trimmedWorkspaceRoot := strings.TrimSpace(workspaceRoot)
+	if trimmedWorkspaceRoot == "" {
+		return Service{}, &Error{Kind: ErrorKindCatalogRead, cause: errors.New("workspace root is required")}
+	}
+	return Service{
+		persistenceRoot: trimmedPersistenceRoot,
+		workspaceRoot:   trimmedWorkspaceRoot,
+	}, nil
 }
 
 func (s Service) Resolve(command, arguments string) (string, error) {
-	if err := s.validateRoots(ErrorKindCommandRead); err != nil {
-		return "", err
+	name, parseErr := runtimeinput.ParsePromptCommandName(command)
+	if parseErr != nil {
+		return "", commandNotFoundError(command)
 	}
-	if name, parseErr := runtimeinput.ParsePromptCommandName(command); parseErr == nil {
-		if kind, ok := runtimeinput.BuiltinPromptCommandForName(name); ok {
-			return textutil.ExpandPromptTemplate(builtinPromptContent(*kind), arguments), nil
-		}
+	if kind, ok := runtimeinput.BuiltinPromptCommandForName(name); ok {
+		return textutil.ExpandPromptTemplate(builtinPromptContent(*kind), arguments), nil
 	}
-	candidate, found, err := s.findCandidate(command)
+	candidate, found, err := s.findCandidate(name)
 	if err != nil {
 		return "", err
 	}
 	if !found {
-		parsed, parseErr := runtimeinput.ParsePromptCommandName(command)
-		name := strings.TrimSpace(command)
-		if parseErr == nil {
-			name = parsed.String()
-		}
-		return "", &Error{Kind: ErrorKindCommandNotFound, Command: &name}
+		commandName := name.String()
+		return "", &Error{Kind: ErrorKindCommandNotFound, Command: &commandName}
 	}
 	return textutil.ExpandPromptTemplate(candidate.content, arguments), nil
+}
+
+func commandNotFoundError(command string) error {
+	name := strings.TrimSpace(command)
+	return &Error{Kind: ErrorKindCommandNotFound, Command: &name}
 }
 
 type builtinPromptCommand struct {
@@ -111,14 +119,4 @@ func builtinPromptContent(kind runtimeinput.BuiltinPromptCommand) string {
 	default:
 		panic("invalid built-in prompt command")
 	}
-}
-
-func (s Service) validateRoots(kind ErrorKind) error {
-	if s.persistenceRoot == "" {
-		return &Error{Kind: kind, cause: errors.New("persistence root is required")}
-	}
-	if s.workspaceRoot == "" {
-		return &Error{Kind: kind, cause: errors.New("workspace root is required")}
-	}
-	return nil
 }

@@ -800,6 +800,15 @@ func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) 
 	if len(items) != 1 || items[0].Resource != successor || items[0].ScopeID != successorScope {
 		t.Fatalf("pending prompts after stale resolution = %+v, want exact successor", items)
 	}
+	stepID, err := runtimeids.ParseStepID(request.StepID)
+	if err != nil {
+		t.Fatalf("parse prompt step id: %v", err)
+	}
+	if items[0].SessionID != sessionID ||
+		items[0].PromptID != clientui.PromptID(request.ID) ||
+		items[0].StepID != stepID {
+		t.Fatalf("pending prompt typed identity = %+v", items[0])
+	}
 }
 
 func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T) {

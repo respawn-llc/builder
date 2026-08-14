@@ -1,6 +1,7 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -235,7 +236,7 @@ type RuntimeRecordPromptHistoryRequest struct {
 }
 
 type RuntimeGoalShowRequest struct {
-	SessionID string `json:"session_id"`
+	SessionID runtimeids.SessionID `json:"session_id"`
 }
 
 type RuntimeGoalShowResponse struct {
@@ -257,26 +258,26 @@ func (r RuntimeGoalMutationResponse) Validate() error {
 }
 
 type RuntimeGoalSetRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Objective       string `json:"objective"`
-	Actor           string `json:"actor"`
-	RunID           string `json:"run_id,omitempty"`
-	StepID          string `json:"step_id,omitempty"`
+	ClientRequestID string               `json:"client_request_id"`
+	SessionID       runtimeids.SessionID `json:"session_id"`
+	Objective       string               `json:"objective"`
+	Actor           string               `json:"actor"`
+	RunID           string               `json:"run_id,omitempty"`
+	StepID          string               `json:"step_id,omitempty"`
 }
 
 type RuntimeGoalStatusRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Actor           string `json:"actor"`
-	RunID           string `json:"run_id,omitempty"`
-	StepID          string `json:"step_id,omitempty"`
+	ClientRequestID string               `json:"client_request_id"`
+	SessionID       runtimeids.SessionID `json:"session_id"`
+	Actor           string               `json:"actor"`
+	RunID           string               `json:"run_id,omitempty"`
+	StepID          string               `json:"step_id,omitempty"`
 }
 
 type RuntimeGoalClearRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Actor           string `json:"actor"`
+	ClientRequestID string               `json:"client_request_id"`
+	SessionID       runtimeids.SessionID `json:"session_id"`
+	Actor           string               `json:"actor"`
 }
 
 func validateClientRequestID(clientRequestID string) error {
@@ -290,13 +291,6 @@ func validateUUIDV4Field(name string, value string) error {
 	return runtimeids.ValidateUUIDv4(value, name)
 }
 
-func validateRuntimeLiveControlRequest(clientRequestID string, sessionID string) error {
-	if err := validateUUIDV4Field("client_request_id", clientRequestID); err != nil {
-		return err
-	}
-	return validateUUIDV4Field("session_id", sessionID)
-}
-
 func validateGoalActor(actor string) error {
 	switch strings.TrimSpace(actor) {
 	case "user", "agent", "system":
@@ -307,10 +301,19 @@ func validateGoalActor(actor string) error {
 }
 
 func validateRuntimeControlRequest(clientRequestID string, sessionID string) error {
+	_, err := prepareRuntimeControlIdentity(clientRequestID, sessionID)
+	return err
+}
+
+func prepareRuntimeControlIdentity(clientRequestID string, sessionID string) (runtimeids.SessionID, error) {
 	if err := validateClientRequestID(clientRequestID); err != nil {
-		return err
+		return runtimeids.SessionID{}, err
 	}
-	return validateRequiredSessionID(sessionID)
+	return parseScopedSessionID(sessionID)
+}
+
+func validateTypedRuntimeControlRequest(clientRequestID string, sessionID string) error {
+	return validateRuntimeControlRequest(clientRequestID, sessionID)
 }
 
 func (r RuntimeSetSessionNameRequest) Validate() error {
@@ -343,10 +346,10 @@ func (r RuntimeAppendCommittedEntryRequest) Validate() error {
 	return nil
 }
 func (r RuntimeShouldCompactBeforeUserMessageRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
+	return validateScopedSessionID(r.SessionID)
 }
 func (r RuntimeSubmitUserTurnRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+	if err := validateTypedRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
 	return r.Input.Validate()
@@ -367,22 +370,8 @@ func (r RuntimeInterruptRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeLiveSteerRequest) Validate() error {
-	if err := validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	if r.CallerSessionID != nil {
-		callerSessionID, err := runtimeids.ParseSessionID(*r.CallerSessionID)
-		if err != nil {
-			return fmt.Errorf("caller_session_id: %w", err)
-		}
-		if !callerSessionID.IsCanonicalUUIDv4() {
-			return errors.New("caller_session_id: canonical UUIDv4 required")
-		}
-	}
-	if strings.TrimSpace(r.Text) == "" {
-		return errors.New("text is required")
-	}
-	return nil
+	_, _, _, err := prepareRuntimeLiveSteerRequest(r)
+	return err
 }
 func (r RuntimeLiveSteerResponse) Validate() error {
 	if err := validateUUIDV4Field("client_request_id", r.ClientRequestID); err != nil {
@@ -397,7 +386,8 @@ func (r RuntimeLiveSteerResponse) Validate() error {
 	return nil
 }
 func (r RuntimeLiveStopRequest) Validate() error {
-	return validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID)
+	_, _, err := prepareRuntimeLiveStopRequest(r)
+	return err
 }
 func (r RuntimeLiveStopResponse) Validate() error {
 	switch r.Status {
@@ -408,7 +398,8 @@ func (r RuntimeLiveStopResponse) Validate() error {
 	}
 }
 func (r RuntimeLiveWaitRequest) Validate() error {
-	return validateUUIDV4Field("session_id", r.SessionID)
+	_, err := prepareRuntimeLiveWaitRequest(r)
+	return err
 }
 func (r RuntimeLiveWaitResponse) Validate() error {
 	if err := validateUUIDV4Field("session_id", r.SessionID); err != nil {
@@ -459,26 +450,193 @@ func (r RuntimeRecordPromptHistoryRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeGoalShowRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
+	return validatePreparedGoalSessionID(r.SessionID)
+}
+
+func prepareRuntimeLiveSteerRequest(r RuntimeLiveSteerRequest) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, *runtimeids.SessionID, error) {
+	sessionID, clientRequestID, err := prepareRuntimeLiveIdentity(r.ClientRequestID, r.SessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, nil, err
+	}
+	var callerSessionID *runtimeids.SessionID
+	if r.CallerSessionID != nil {
+		caller, err := parseCanonicalRuntimeSessionID(*r.CallerSessionID)
+		if err != nil {
+			return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, nil, fmt.Errorf("caller_session_id: %w", err)
+		}
+		callerSessionID = &caller
+	}
+	if strings.TrimSpace(r.Text) == "" {
+		return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, nil, errors.New("text is required")
+	}
+	return sessionID, clientRequestID, callerSessionID, nil
+}
+
+func prepareRuntimeLiveStopRequest(r RuntimeLiveStopRequest) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, error) {
+	return prepareRuntimeLiveIdentity(r.ClientRequestID, r.SessionID)
+}
+
+func prepareRuntimeLiveWaitRequest(r RuntimeLiveWaitRequest) (runtimeids.SessionID, error) {
+	return parseCanonicalRuntimeSessionID(r.SessionID)
+}
+
+func prepareRuntimeLiveIdentity(clientRequestID string, rawSessionID string) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, error) {
+	clientID, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
+	if err != nil {
+		return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, err
+	}
+	sessionID, err := parseCanonicalRuntimeSessionID(rawSessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, err
+	}
+	return sessionID, clientID, nil
+}
+
+func parseCanonicalRuntimeSessionID(raw string) (runtimeids.SessionID, error) {
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(raw))
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, errors.New("session_id must be a canonical UUIDv4")
+	}
+	return sessionID, nil
 }
 func (r RuntimeGoalSetRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+	if err := validateClientRequestID(r.ClientRequestID); err != nil {
+		return err
+	}
+	if err := validatePreparedGoalSessionID(r.SessionID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(r.Objective) == "" {
 		return errors.New("objective is required")
 	}
-	return validateGoalActor(r.Actor)
+	if err := validateGoalActor(r.Actor); err != nil {
+		return err
+	}
+	return nil
 }
 func (r RuntimeGoalStatusRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+	if err := validateClientRequestID(r.ClientRequestID); err != nil {
 		return err
 	}
-	return validateGoalActor(r.Actor)
+	if err := validatePreparedGoalSessionID(r.SessionID); err != nil {
+		return err
+	}
+	if err := validateGoalActor(r.Actor); err != nil {
+		return err
+	}
+	return nil
 }
 func (r RuntimeGoalClearRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+	if err := validateClientRequestID(r.ClientRequestID); err != nil {
 		return err
 	}
-	return validateGoalActor(r.Actor)
+	if err := validatePreparedGoalSessionID(r.SessionID); err != nil {
+		return err
+	}
+	if err := validateGoalActor(r.Actor); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePreparedGoalSessionID(sessionID runtimeids.SessionID) error {
+	if sessionID.IsZero() {
+		return ErrSessionIDRequired
+	}
+	return nil
+}
+
+func decodeGoalSessionID(raw string) (runtimeids.SessionID, error) {
+	return parseScopedSessionID(raw)
+}
+
+func (r *RuntimeGoalShowRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	sessionID, err := decodeGoalSessionID(wire.SessionID)
+	if err != nil {
+		return err
+	}
+	*r = RuntimeGoalShowRequest{SessionID: sessionID}
+	return nil
+}
+
+func (r *RuntimeGoalSetRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ClientRequestID string `json:"client_request_id"`
+		SessionID       string `json:"session_id"`
+		Objective       string `json:"objective"`
+		Actor           string `json:"actor"`
+		RunID           string `json:"run_id,omitempty"`
+		StepID          string `json:"step_id,omitempty"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	sessionID, err := decodeGoalSessionID(wire.SessionID)
+	if err != nil {
+		return err
+	}
+	*r = RuntimeGoalSetRequest{
+		ClientRequestID: wire.ClientRequestID,
+		SessionID:       sessionID,
+		Objective:       wire.Objective,
+		Actor:           wire.Actor,
+		RunID:           wire.RunID,
+		StepID:          wire.StepID,
+	}
+	return nil
+}
+
+func (r *RuntimeGoalStatusRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ClientRequestID string `json:"client_request_id"`
+		SessionID       string `json:"session_id"`
+		Actor           string `json:"actor"`
+		RunID           string `json:"run_id,omitempty"`
+		StepID          string `json:"step_id,omitempty"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	sessionID, err := decodeGoalSessionID(wire.SessionID)
+	if err != nil {
+		return err
+	}
+	*r = RuntimeGoalStatusRequest{
+		ClientRequestID: wire.ClientRequestID,
+		SessionID:       sessionID,
+		Actor:           wire.Actor,
+		RunID:           wire.RunID,
+		StepID:          wire.StepID,
+	}
+	return nil
+}
+
+func (r *RuntimeGoalClearRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ClientRequestID string `json:"client_request_id"`
+		SessionID       string `json:"session_id"`
+		Actor           string `json:"actor"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	sessionID, err := decodeGoalSessionID(wire.SessionID)
+	if err != nil {
+		return err
+	}
+	*r = RuntimeGoalClearRequest{
+		ClientRequestID: wire.ClientRequestID,
+		SessionID:       sessionID,
+		Actor:           wire.Actor,
+	}
+	return nil
 }

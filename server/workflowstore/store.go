@@ -71,7 +71,7 @@ func WithDebug(debug bool) Option {
 }
 
 func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
-	if metadataStore == nil || metadataStore.DB() == nil || metadataStore.Queries() == nil {
+	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
 	priorValues, err := jsoncontract.NewPreparer(false).Internal(
@@ -99,9 +99,6 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 }
 
 func (s *Store) ListWorkflowTaskIDs(ctx context.Context, workflowID runtimeids.WorkflowID) ([]workflow.TaskID, error) {
-	if workflowID.IsZero() {
-		return nil, ErrWorkflowIDRequired
-	}
 	rows, err := s.queries.ListWorkflowTaskIDs(ctx, workflowID)
 	if err != nil {
 		return nil, err
@@ -347,54 +344,39 @@ type ListWorkflowsResult struct {
 }
 
 func (s *Store) CreateWorkflow(ctx context.Context, req CreateWorkflowRequest) (WorkflowRecord, error) {
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		return WorkflowRecord{}, ErrWorkflowNameRequired
-	}
 	now := s.now().UnixMilli()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return WorkflowRecord{}, fmt.Errorf("begin workflow create tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	record, err := insertWorkflow(ctx, q, now, CreateWorkflowRequest{Name: name, Description: req.Description})
-	if err != nil {
-		return WorkflowRecord{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return WorkflowRecord{}, fmt.Errorf("commit workflow create tx: %w", err)
-	}
-	return record, nil
+	return metadata.RunTransaction(ctx, s.metadata, "Create workflow", nil, func(q *sqlitegen.Queries) (WorkflowRecord, error) {
+		return insertWorkflow(ctx, q, now, req)
+	})
 }
 
 func (s *Store) CreateAndLinkWorkflow(ctx context.Context, req CreateAndLinkWorkflowRequest) (WorkflowRecord, ProjectWorkflowLinkRecord, error) {
 	now := s.now().UnixMilli()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return WorkflowRecord{}, ProjectWorkflowLinkRecord{}, fmt.Errorf("begin workflow create-and-link tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	record, err := insertWorkflow(ctx, q, now, CreateWorkflowRequest{Name: req.Name, Description: req.Description})
+	result, err := metadata.RunTransaction(ctx, s.metadata, "Create and link workflow", nil, func(q *sqlitegen.Queries) (struct {
+		record WorkflowRecord
+		link   ProjectWorkflowLinkRecord
+	}, error) {
+		record, err := insertWorkflow(ctx, q, now, CreateWorkflowRequest{Name: req.Name, Description: req.Description})
+		if err != nil {
+			return struct {
+				record WorkflowRecord
+				link   ProjectWorkflowLinkRecord
+			}{}, err
+		}
+		link, err := s.linkWorkflowInTx(ctx, q, now, strings.TrimSpace(req.ProjectID), record.ID, req.DefaultPolicy)
+		return struct {
+			record WorkflowRecord
+			link   ProjectWorkflowLinkRecord
+		}{record: record, link: link}, err
+	})
 	if err != nil {
 		return WorkflowRecord{}, ProjectWorkflowLinkRecord{}, err
 	}
-	link, err := s.linkWorkflowInTx(ctx, q, now, strings.TrimSpace(req.ProjectID), record.ID, req.DefaultPolicy)
-	if err != nil {
-		return WorkflowRecord{}, ProjectWorkflowLinkRecord{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return WorkflowRecord{}, ProjectWorkflowLinkRecord{}, fmt.Errorf("commit workflow create-and-link tx: %w", err)
-	}
-	return record, link, nil
+	return result.record, result.link, nil
 }
 
 func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req CreateWorkflowRequest) (WorkflowRecord, error) {
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		return WorkflowRecord{}, ErrWorkflowNameRequired
-	}
+	name := req.Name
 	description := strings.TrimSpace(req.Description)
 	workflowID := runtimeids.NewWorkflowID()
 	startID := runtimeids.NewGraphEntityID()
@@ -421,10 +403,6 @@ func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req Cr
 }
 
 func (s *Store) UpdateWorkflowInfo(ctx context.Context, workflowID runtimeids.WorkflowID, name string, description string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return ErrWorkflowNameRequired
-	}
 	updated, err := s.queries.UpdateWorkflowInfo(ctx, sqlitegen.UpdateWorkflowInfoParams{ID: workflowID, Name: name, Description: strings.TrimSpace(description), UpdatedAtUnixMs: s.now().UnixMilli()})
 	if err != nil {
 		return fmt.Errorf("update workflow info: %w", err)
@@ -439,9 +417,6 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 	projectID := req.ProjectID
 	workflowID := req.WorkflowID
 	query := sqliteLowerASCII(strings.TrimSpace(req.Query))
-	if err := validateWorkflowListScopes(projectID, workflowID); err != nil {
-		return ListWorkflowsResult{}, err
-	}
 	rows, err := s.queries.ListWorkflowRecordsPage(ctx, sqlitegen.ListWorkflowRecordsPageParams{
 		PageLimit:   int64(req.Limit + 1),
 		PageOffset:  int64(req.Offset),
@@ -484,17 +459,6 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 		responseProjectID = &value
 	}
 	return ListWorkflowsResult{Workflows: out, ProjectID: responseProjectID, NextOffset: nextOffset}, nil
-}
-
-func validateWorkflowListScopes(projectID *string, workflowID *runtimeids.WorkflowID) error {
-	if projectID != nil &&
-		(strings.TrimSpace(*projectID) == "" || strings.TrimSpace(*projectID) != *projectID) {
-		return errors.New("workflow list project scope must be non-blank and unpadded")
-	}
-	if workflowID != nil && workflowID.IsZero() {
-		return errors.New("invalid workflow list workflow scope")
-	}
-	return nil
 }
 
 func validateNodeCompletionMode(kind workflow.NodeKind, mode string) error {

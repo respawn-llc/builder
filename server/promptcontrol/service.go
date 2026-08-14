@@ -42,9 +42,21 @@ func (s *PromptControlService) AnswerPromptBatch(
 	ctx context.Context,
 	req serverapi.PromptAnswerBatchRequest,
 ) (serverapi.PromptAnswerBatchResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.PromptAnswerBatchResponse{}, err
-	}
+	return servicecontract.WithValidated(
+		req,
+		servicecontract.SemanticValidationRequired,
+		func(validated servicecontract.Validated[serverapi.PromptAnswerBatchRequest]) (serverapi.PromptAnswerBatchResponse, error) {
+			return s.AnswerPromptBatchValidated(ctx, validated, req.SessionID)
+		},
+	)
+}
+
+func (s *PromptControlService) AnswerPromptBatchValidated(
+	ctx context.Context,
+	validated servicecontract.Validated[serverapi.PromptAnswerBatchRequest],
+	sessionID runtimeids.SessionID,
+) (serverapi.PromptAnswerBatchResponse, error) {
+	req := validated.Value()
 	if s == nil || s.prompts == nil {
 		return serverapi.PromptAnswerBatchResponse{}, errors.New("prompt responder is required")
 	}
@@ -73,7 +85,7 @@ func (s *PromptControlService) AnswerPromptBatch(
 		}
 		commands = append(commands, command)
 	}
-	results, err := s.prompts.ResolvePromptBatch(ctx, req.SessionID, req.StepID, commands)
+	results, err := s.prompts.ResolvePromptBatch(ctx, sessionID, req.StepID, commands)
 	if err != nil {
 		return serverapi.PromptAnswerBatchResponse{}, err
 	}
@@ -111,12 +123,23 @@ func (s *PromptControlService) SubscribeFollowUp(
 	ctx context.Context,
 	req serverapi.PromptFollowUpWatchRequest,
 ) (serverapi.PromptFollowUpSubscription, error) {
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
+	return servicecontract.WithValidated(
+		req,
+		servicecontract.SemanticValidationRequired,
+		func(validated servicecontract.Validated[serverapi.PromptFollowUpWatchRequest]) (serverapi.PromptFollowUpSubscription, error) {
+			return s.SubscribeFollowUpValidated(ctx, validated)
+		},
+	)
+}
+
+func (s *PromptControlService) SubscribeFollowUpValidated(
+	ctx context.Context,
+	validated servicecontract.Validated[serverapi.PromptFollowUpWatchRequest],
+) (serverapi.PromptFollowUpSubscription, error) {
 	if s == nil || s.prompts == nil {
 		return nil, errors.New("prompt responder is required")
 	}
+	req := validated.Value()
 	return s.prompts.SubscribePromptFollowUp(ctx, req.SessionID, req.StepID, req.PromptID)
 }
 
@@ -141,4 +164,7 @@ func appendPromptAnswerBatchResult(
 	})
 }
 
-var _ servicecontract.PromptControlService = (*PromptControlService)(nil)
+var (
+	_ servicecontract.PromptControlService        = (*PromptControlService)(nil)
+	_ servicecontract.PromptControlTrustedService = (*PromptControlService)(nil)
+)

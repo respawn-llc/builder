@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,19 +15,16 @@ import (
 
 const uiRuntimeControlTimeout = 3 * time.Second
 const uiRuntimeHydrationReadTimeout = 10 * time.Second
-const runtimeReconnectWarningText = "Lost connection to the session runtime; reconnected."
 
 var errRuntimeTranscriptRefreshUnsupported = errors.New("runtime transcript refresh is not available in the tui-redesign emergency path")
 
 var uiRuntimeReadTimeout = 300 * time.Millisecond
 
 type sessionRuntimeClient struct {
-	reads                    apicontract.SessionViewService
-	controls                 apicontract.RuntimeControlService
-	sessionID                string
-	reactivator              *runtimeReactivator
-	connectionStateObserver  func(error)
-	reconnectWarningObserver func(string, clientui.EntryVisibility)
+	reads                   apicontract.SessionViewService
+	controls                apicontract.RuntimeControlService
+	sessionID               string
+	connectionStateObserver func(error)
 
 	mu               sync.RWMutex
 	mainView         clientui.RuntimeMainView
@@ -41,112 +37,29 @@ func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionView
 		return nil
 	}
 	return &sessionRuntimeClient{
-		sessionID:   sessionID,
-		reactivator: newRuntimeReactivator(),
-		reads:       reads,
-		controls:    controls,
-		mainView:    clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}},
+		sessionID: sessionID,
+		reads:     reads,
+		controls:  controls,
+		mainView:  clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}},
 	}
 }
 
-func (c *sessionRuntimeClient) SetRuntimeReactivator(reactivator *runtimeReactivator) {
-	if c == nil || reactivator == nil {
-		return
-	}
-	c.mu.Lock()
-	c.reactivator = reactivator
-	c.mu.Unlock()
-}
-
-func (c *sessionRuntimeClient) runtimeReactivator() *runtimeReactivator {
-	if c == nil {
-		return nil
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.reactivator
-}
-
-func (c *sessionRuntimeClient) recoverRuntimeConnectionWithWarning(ctx context.Context, trigger error, appendWarning bool) error {
-	return c.recoverRuntimeConnection(ctx, trigger, appendWarning, true)
-}
-
-func (c *sessionRuntimeClient) recoverRuntimeConnectionPreservingContext(ctx context.Context, trigger error, appendWarning bool) error {
-	return c.recoverRuntimeConnection(ctx, trigger, appendWarning, false)
-}
-
-func (c *sessionRuntimeClient) recoverRuntimeConnection(ctx context.Context, trigger error, appendWarning bool, detach bool) error {
-	reactivator := c.runtimeReactivator()
-	if reactivator == nil {
-		return errRuntimeReactivationUnavailable
-	}
-	reconnectBase := ctx
-	if detach {
-		reconnectBase = context.WithoutCancel(ctx)
-	}
-	reconnectCtx, cancel := context.WithTimeout(reconnectBase, uiRuntimeControlTimeout)
-	defer cancel()
-	if err := reactivator.Reactivate(reconnectCtx); err != nil {
-		return err
-	}
-	if appendWarning && isRecoverableRuntimeControlError(trigger) {
-		c.appendRuntimeReconnectWarning()
-	}
-	return nil
-}
-
-func (c *sessionRuntimeClient) appendRuntimeReconnectWarning() {
-	if c == nil || c.controls == nil {
-		return
-	}
-	warningCtx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
-	defer cancel()
-	if err := c.controls.AppendCommittedEntry(warningCtx, serverapi.RuntimeAppendCommittedEntryRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       c.sessionID,
-		Role:            "warning",
-		Text:            runtimeReconnectWarningText,
-		Visibility:      string(clientui.EntryVisibilityOngoing),
-	}); err != nil {
-		c.notifyRuntimeReconnectWarning(runtimeReconnectWarningText, clientui.EntryVisibilityOngoing)
-	}
-}
-
-func isRecoverableRuntimeControlError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return errors.Is(err, serverapi.ErrRuntimeUnavailable)
-}
-
-func runtimeControlCall[T any](c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
+func runtimeControlCall[T any](call func(ctx context.Context, requestID string) (T, error)) (T, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	return runtimeRequestCall(ctx, c, appendWarning, call)
+	return runtimeRequestCall(ctx, call)
 }
 
-func runtimeRequestCall[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
+func runtimeRequestCall[T any](ctx context.Context, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
 	requestID := uuid.NewString()
-	return runtimeRequestCallWithID(ctx, c, appendWarning, requestID, call)
+	return runtimeRequestCallWithID(ctx, requestID, call)
 }
 
-func runtimeControlCallNoResult(c *sessionRuntimeClient, call func(ctx context.Context, requestID string) error) error {
-	_, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (struct{}, error) {
+func runtimeControlCallNoResult(call func(ctx context.Context, requestID string) error) error {
+	_, err := runtimeControlCall(func(ctx context.Context, requestID string) (struct{}, error) {
 		return struct{}{}, call(ctx, requestID)
 	})
 	return err
-}
-
-func retryRuntimeUnavailableCall[T any](ctx context.Context, recoverRuntimeConnection func(context.Context, error, bool) error, appendRecoveryWarning bool, call func() (T, error)) (T, error) {
-	value, err := call()
-	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		return value, err
-	}
-	var zero T
-	if recoverErr := recoverRuntimeConnection(ctx, err, appendRecoveryWarning); recoverErr != nil {
-		return zero, recoverErr
-	}
-	return call()
 }
 
 func (c *sessionRuntimeClient) SetConnectionStateObserver(observer func(error)) {
@@ -156,15 +69,6 @@ func (c *sessionRuntimeClient) SetConnectionStateObserver(observer func(error)) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.connectionStateObserver = observer
-}
-
-func (c *sessionRuntimeClient) SetRuntimeReconnectWarningObserver(observer func(string, clientui.EntryVisibility)) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.reconnectWarningObserver = observer
 }
 
 func (c *sessionRuntimeClient) MainView() clientui.RuntimeMainView {
@@ -216,9 +120,7 @@ func (c *sessionRuntimeClient) fetchMainView() (clientui.RuntimeMainView, error)
 func (c *sessionRuntimeClient) fetchMainViewSync(timeout time.Duration) (clientui.RuntimeMainView, error) {
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionPreservingContext, false, func() (serverapi.SessionMainViewResponse, error) {
-		return c.reads.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: c.sessionID})
-	})
+	resp, err := c.reads.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: c.sessionID})
 	c.notifyConnectionState(err)
 	if err != nil {
 		view, _ := c.cachedMainView()
@@ -244,17 +146,4 @@ func (c *sessionRuntimeClient) notifyConnectionState(err error) {
 		return
 	}
 	observer(err)
-}
-
-func (c *sessionRuntimeClient) notifyRuntimeReconnectWarning(text string, visibility clientui.EntryVisibility) {
-	if c == nil || strings.TrimSpace(text) == "" {
-		return
-	}
-	c.mu.RLock()
-	observer := c.reconnectWarningObserver
-	c.mu.RUnlock()
-	if observer == nil {
-		return
-	}
-	observer(text, visibility)
 }

@@ -112,15 +112,6 @@ func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, as
 }
 
 func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion, bool, error) {
-	if err := snapshot.PromptID.Validate(); err != nil {
-		return pendingQuestion{}, true, fmt.Errorf("pending prompt identity: %w", err)
-	}
-	if snapshot.SessionID.IsZero() {
-		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no session identity", snapshot.PromptID)
-	}
-	if snapshot.StepID.IsZero() {
-		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no step identity", snapshot.PromptID)
-	}
 	if snapshot.Approval {
 		decisions := append([]clientui.ApprovalDecision(nil), snapshot.ApprovalDecisions...)
 		for _, decision := range decisions {

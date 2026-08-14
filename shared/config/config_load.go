@@ -8,6 +8,19 @@ import (
 	"strings"
 )
 
+type workspaceOverlaySnapshot struct {
+	globalState      settingsState
+	globalSources    map[string]string
+	environment      map[string]string
+	loadOptions      LoadOptions
+	configRoot       string
+	configRootSource string
+	homeSettingsPath string
+	homePathIdentity string
+	homeSettingsInfo os.FileInfo
+	homeExists       bool
+}
+
 func Load(workspaceRoot string, opts LoadOptions) (App, error) {
 	trimmed := strings.TrimSpace(workspaceRoot)
 	if trimmed == "" {
@@ -146,6 +159,20 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 	if err := appendSystemPromptFileFromConfig(homeFileConfig, homeSettingsPath, SystemPromptFileScopeHomeConfig, &state); err != nil {
 		return loadedConfig{}, err
 	}
+	globalState := cloneSettingsState(state)
+	globalSources := cloneSourceMapOrDefault(sources)
+	var homeSettingsInfo os.FileInfo
+	var homePathIdentity string
+	if homeSettingsExists {
+		homeSettingsInfo, err = os.Stat(homeSettingsPath)
+		if err != nil {
+			return loadedConfig{}, err
+		}
+		homePathIdentity, err = CanonicalPathIdentity(homeSettingsPath)
+		if err != nil {
+			return loadedConfig{}, err
+		}
+	}
 	if workspaceSettingsLayerEnabled {
 		if err := configRegistry.applyFile(workspaceFileConfig, workspaceSettingsPath, settingsFileLayerWorkspace, &state, sources); err != nil {
 			return loadedConfig{}, err
@@ -185,6 +212,139 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 		settingsPath = workspaceSettingsPath
 	}
 	settingsExists := homeSettingsExists || workspaceSettingsExists
+	app := App{
+		AppName:         DefaultAppName,
+		WorkspaceRoot:   absWorkspace,
+		PersistenceRoot: absPersistenceRoot,
+		Settings:        state.Settings,
+		Source: SourceReport{
+			SettingsPath:                  settingsPath,
+			SettingsFileExists:            settingsExists,
+			CreatedDefaultConfig:          false,
+			HomeSettingsPath:              homeSettingsPath,
+			HomeSettingsFileExists:        homeSettingsExists,
+			WorkspaceSettingsPath:         workspaceSettingsPath,
+			WorkspaceSettingsFileExists:   workspaceSettingsExists,
+			WorkspaceSettingsLayerEnabled: workspaceSettingsLayerEnabled,
+			Sources:                       sources,
+		},
+	}
+	app.workspaceOverlay = &workspaceOverlaySnapshot{
+		globalState:      globalState,
+		globalSources:    globalSources,
+		environment:      captureEnvironment(),
+		loadOptions:      opts,
+		configRoot:       configRoot,
+		configRootSource: configRootSource,
+		homeSettingsPath: homeSettingsPath,
+		homePathIdentity: homePathIdentity,
+		homeSettingsInfo: homeSettingsInfo,
+		homeExists:       homeSettingsExists,
+	}
+	return loadedConfig{
+		App:    app,
+		Client: state.Client,
+	}, nil
+}
+
+// LoadWorkspaceOverlay reads one Workspace configuration file over a captured
+// global startup snapshot. It never rereads the global file or process
+// environment.
+func LoadWorkspaceOverlay(global App, workspaceRoot string) (App, error) {
+	loaded, err := loadWorkspaceOverlay(global, workspaceRoot)
+	return loaded.App, err
+}
+
+func loadWorkspaceOverlay(global App, workspaceRoot string) (loadedConfig, error) {
+	if global.workspaceOverlay == nil {
+		return loadedConfig{}, errors.New("global configuration snapshot is required")
+	}
+	trimmed := strings.TrimSpace(workspaceRoot)
+	if trimmed == "" {
+		return loadedConfig{}, errors.New("workspace root is required")
+	}
+	absWorkspace, err := filepath.Abs(trimmed)
+	if err != nil {
+		return loadedConfig{}, fmt.Errorf("resolve workspace root: %w", err)
+	}
+	workspacePath, err := resolveWorkspaceSettingsFilePath(absWorkspace)
+	if err != nil {
+		return loadedConfig{}, err
+	}
+	workspaceExists, err := settingsFileExists(workspacePath)
+	if err != nil {
+		return loadedConfig{}, err
+	}
+	snapshot := global.workspaceOverlay
+	workspaceEnabled := true
+	if snapshot.homeExists && workspaceExists {
+		workspaceIdentity, identityErr := CanonicalPathIdentity(workspacePath)
+		if identityErr != nil {
+			return loadedConfig{}, identityErr
+		}
+		workspaceEnabled = workspaceIdentity != snapshot.homePathIdentity
+		if workspaceEnabled {
+			workspaceInfo, statErr := os.Stat(workspacePath)
+			if statErr != nil {
+				return loadedConfig{}, statErr
+			}
+			workspaceEnabled = !os.SameFile(snapshot.homeSettingsInfo, workspaceInfo)
+		}
+	}
+	workspaceFile := settingsFile{}
+	if workspaceEnabled && workspaceExists {
+		workspaceFile, err = readSettingsFile(workspacePath)
+		if err != nil {
+			return loadedConfig{}, err
+		}
+		if err := rejectRemovedPersistenceRootKey(workspaceFile, workspacePath); err != nil {
+			return loadedConfig{}, err
+		}
+	}
+	globalState := snapshot.globalState
+	globalSources := snapshot.globalSources
+	if global.WorkspaceRoot != "" && !global.Source.WorkspaceSettingsFileExists {
+		globalState.Settings = cloneSettings(global.Settings)
+		globalState.PersistenceRoot = global.PersistenceRoot
+		globalSources = global.Source.Sources
+	}
+	state := cloneSettingsState(globalState)
+	sources := cloneSourceMapOrDefault(globalSources)
+	if workspaceEnabled {
+		if err := configRegistry.applyFile(workspaceFile, workspacePath, settingsFileLayerWorkspace, &state, sources); err != nil {
+			return loadedConfig{}, err
+		}
+		if err := appendSystemPromptFileFromConfig(workspaceFile, workspacePath, SystemPromptFileScopeWorkspaceConfig, &state); err != nil {
+			return loadedConfig{}, err
+		}
+	}
+	if err := configRegistry.applyEnv(snapshot.lookupEnv, &state, sources); err != nil {
+		return loadedConfig{}, err
+	}
+	if err := configRegistry.applyCLI(snapshot.loadOptions, &state, sources); err != nil {
+		return loadedConfig{}, err
+	}
+	applyConfigRootPersistence(snapshot.configRoot, snapshot.configRootSource, &state, sources)
+	inheritReviewerDefaultsWithSources(&state.Settings, sources)
+	if err := configRegistry.validate(settingsState{Settings: state.Settings}, sources); err != nil {
+		return loadedConfig{}, err
+	}
+	absPersistenceRoot, err := preparePersistenceRoot(state.PersistenceRoot)
+	if err != nil {
+		return loadedConfig{}, err
+	}
+	if _, err := writeManagedRGConfigFileForSettingsPath(snapshot.homeSettingsPath); err != nil {
+		return loadedConfig{}, fmt.Errorf("write managed rg config: %w", err)
+	}
+	absWorktreeBaseDir, err := prepareWorktreeBaseDir(absPersistenceRoot, state.Settings.Worktrees.BaseDir)
+	if err != nil {
+		return loadedConfig{}, err
+	}
+	state.Settings.Worktrees.BaseDir = absWorktreeBaseDir
+	settingsPath := snapshot.homeSettingsPath
+	if workspaceEnabled && workspaceExists {
+		settingsPath = workspacePath
+	}
 	return loadedConfig{
 		App: App{
 			AppName:         DefaultAppName,
@@ -193,18 +353,34 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 			Settings:        state.Settings,
 			Source: SourceReport{
 				SettingsPath:                  settingsPath,
-				SettingsFileExists:            settingsExists,
-				CreatedDefaultConfig:          false,
-				HomeSettingsPath:              homeSettingsPath,
-				HomeSettingsFileExists:        homeSettingsExists,
-				WorkspaceSettingsPath:         workspaceSettingsPath,
-				WorkspaceSettingsFileExists:   workspaceSettingsExists,
-				WorkspaceSettingsLayerEnabled: workspaceSettingsLayerEnabled,
+				SettingsFileExists:            snapshot.homeExists || workspaceExists,
+				HomeSettingsPath:              snapshot.homeSettingsPath,
+				HomeSettingsFileExists:        snapshot.homeExists,
+				WorkspaceSettingsPath:         workspacePath,
+				WorkspaceSettingsFileExists:   workspaceExists,
+				WorkspaceSettingsLayerEnabled: workspaceEnabled,
 				Sources:                       sources,
 			},
+			workspaceOverlay: snapshot,
 		},
 		Client: state.Client,
 	}, nil
+}
+
+func captureEnvironment() map[string]string {
+	environment := make(map[string]string)
+	for _, entry := range os.Environ() {
+		key, value, found := strings.Cut(entry, "=")
+		if found {
+			environment[key] = value
+		}
+	}
+	return environment
+}
+
+func (s *workspaceOverlaySnapshot) lookupEnv(key string) (string, bool) {
+	value, ok := s.environment[key]
+	return value, ok
 }
 
 // resolveConfigRoot picks the explicit config+data root from the

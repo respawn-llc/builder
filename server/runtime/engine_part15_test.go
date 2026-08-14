@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
@@ -180,18 +179,6 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 			t.Fatalf("base meta, active-goal continuation, and compaction-preserved user message must be embedded in the replacement payload, not steered separately afterward: events=%+v", events)
 		}
 	}
-}
-
-type failOnHistoryReplacementAgentResetObservation struct {
-	failed bool
-}
-
-func (o *failOnHistoryReplacementAgentResetObservation) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
-	if !o.failed && snapshot.Meta.LastSequence >= 2 {
-		o.failed = true
-		return errors.New("persist observer failed after history replacement append")
-	}
-	return nil
 }
 
 type committedCompactionFixture struct {

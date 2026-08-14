@@ -27,13 +27,21 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
 	}
-	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
+	sessionID, err := parseCanonicalLiveSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
 	}
 	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(req.ClientRequestID)
 	if err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
+	}
+	var callerSessionID *runtimeids.SessionID
+	if req.CallerSessionID != nil {
+		caller, err := parseCanonicalLiveSessionID(*req.CallerSessionID)
+		if err != nil {
+			return serverapi.RuntimeLiveSteerResponse{}, err
+		}
+		callerSessionID = &caller
 	}
 	memoReq := liveSteerMemoRequest{
 		SessionID:       sessionID,
@@ -46,11 +54,7 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 			queueText := memoReq.Text
 			var agentSteer runtime.AgentSteer
 			if memoReq.CallerSessionID.Present {
-				callerID, parseErr := runtimeids.ParseSessionID(memoReq.CallerSessionID.Value)
-				if parseErr != nil {
-					return parseErr
-				}
-				agentSteer, err = runtime.NewAgentSteer(callerID, memoReq.Text)
+				agentSteer, err = runtime.NewAgentSteer(*callerSessionID, memoReq.Text)
 				if err != nil {
 					return err
 				}
@@ -97,7 +101,7 @@ func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopReq
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveStopResponse{}, err
 	}
-	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
+	sessionID, err := parseCanonicalLiveSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeLiveStopResponse{}, err
 	}
@@ -142,7 +146,7 @@ func (s *Service) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitReq
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveWaitResponse{}, err
 	}
-	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
+	sessionID, err := parseCanonicalLiveSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeLiveWaitResponse{}, err
 	}
@@ -195,7 +199,7 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
-	id, err := runtimeids.ParseSessionID(req.SessionID)
+	id, err := parseCanonicalLiveSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
@@ -298,6 +302,17 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 		wg.Wait()
 		return serverapi.RuntimeLiveWatchResponse{}, ctx.Err()
 	}
+}
+
+func parseCanonicalLiveSessionID(raw string) (runtimeids.SessionID, error) {
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(raw))
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, errors.New("session_id must be a canonical UUIDv4")
+	}
+	return sessionID, nil
 }
 
 type liveWatchAttentionStreamFailure struct {

@@ -257,9 +257,6 @@ func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 		CallerSessionID: decoded.CallerSessionID,
 		Overrides:       decoded.Overrides,
 	}
-	if err := request.Validate(); err != nil {
-		return err
-	}
 	*r = request
 	return nil
 }

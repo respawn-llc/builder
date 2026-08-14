@@ -911,11 +911,11 @@ func TestPlannerNewChildSessionRollsBackDurableChildWhenExecutionTargetCopyFails
 	}
 	failingStore := &failingUpdateMetadataExecutionTargetStore{base: metadataStore, updateErr: session.ErrSessionNotFound}
 	planner := Planner{
-		Config:              cfg,
-		ContainerDir:        containerDir,
-		StoreOptions:        metadataStore.AuthoritativeSessionStoreOptions(),
-		PersistedSessions:   metadataStore,
-		MetadataStoreOpener: func(string) (MetadataExecutionTargetStore, error) { return failingStore, nil },
+		Config:            cfg,
+		ContainerDir:      containerDir,
+		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions: metadataStore,
+		MetadataStore:     failingStore,
 	}
 
 	_, err = planner.PlanSession(context.Background(), SessionRequest{

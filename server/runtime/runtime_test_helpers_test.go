@@ -270,11 +270,43 @@ func mustCreateTestSession(t *testing.T, workspaceRoot ...string) *session.Store
 	return mustCreateNamedTestSessionAt(t, root, "ws", workspace)
 }
 
+func workflowAssignmentForCommitReceiptTest() WorkflowAssignment {
+	reference := workflow.CurrentNodeReference{
+		TaskID: "task-assignment-receipt",
+		NodeID: "node-assignment-receipt",
+	}
+	return WorkflowAssignment{
+		ContextMode:    workflow.ContextModeNewSession,
+		CompletionMode: workflowruntime.CompletionModeTool,
+		Prompt: workflowruntime.PromptContract{
+			Identity:       workflowruntime.CurrentNodePromptIdentity(reference),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode:      reference,
+				WorkflowID:       runtimeids.NewWorkflowID(),
+				TransitionPrompt: "Perform the assigned workflow step.",
+			},
+		},
+	}
+}
+
+func mustTranscriptHydrationSnapshot(t *testing.T, engine *Engine) TranscriptHydrationSnapshot {
+	t.Helper()
+	var snapshot TranscriptHydrationSnapshot
+	if err := engine.WithTranscriptHydrationSnapshot(func(value TranscriptHydrationSnapshot) error {
+		snapshot = value
+		return nil
+	}); err != nil {
+		t.Fatalf("read transcript hydration snapshot: %v", err)
+	}
+	return snapshot
+}
+
 var runtimeTestSessionPersistence = sessiontest.NewPersistence()
 
 type testPersistenceObserver struct {
-	observer   session.PersistenceObserver
-	reconciler *sessiontest.Persistence
+	observer    session.PersistenceObserver
+	persistence *sessiontest.Persistence
 }
 
 func (o testPersistenceObserver) ObservePersistedStore(
@@ -282,24 +314,17 @@ func (o testPersistenceObserver) ObservePersistedStore(
 	snapshot session.PersistedStoreSnapshot,
 ) error {
 	return errors.Join(
-		o.reconciler.ObservePersistedStore(ctx, snapshot),
+		o.persistence.ObservePersistedStore(ctx, snapshot),
 		o.observer.ObservePersistedStore(ctx, snapshot),
 	)
-}
-
-func (o testPersistenceObserver) ObserveEventLogReconciliation(
-	ctx context.Context,
-	reconciliation session.PersistedEventLogReconciliation,
-) error {
-	return o.reconciler.ObserveEventLogReconciliation(ctx, reconciliation)
 }
 
 func withRuntimeTestPersistenceObserver(
 	observer session.PersistenceObserver,
 ) session.StoreOption {
 	return session.WithPersistenceObserver(testPersistenceObserver{
-		observer:   observer,
-		reconciler: runtimeTestSessionPersistence,
+		observer:    observer,
+		persistence: runtimeTestSessionPersistence,
 	})
 }
 
@@ -456,10 +481,7 @@ func persistedMessageForTest(t *testing.T, event testPersistedEvent) llm.Message
 	if !ok {
 		t.Fatalf("event %q payload type = %T, want session.MessageRecord", event.Kind, mustSessionEventPayload(event.Record))
 	}
-	message, err := llmMessageFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore message record: %v", err)
-	}
+	message := llmMessageFromSessionRecord(record)
 	return message
 }
 
@@ -469,10 +491,7 @@ func persistedLocalEntryForTest(t *testing.T, event testPersistedEvent) storedLo
 	if !ok {
 		t.Fatalf("event %q payload type = %T, want session.LocalEntryRecord", event.Kind, mustSessionEventPayload(event.Record))
 	}
-	entry, err := storedLocalEntryFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore local entry record: %v", err)
-	}
+	entry := storedLocalEntryFromSessionRecord(record)
 	return entry
 }
 
@@ -482,10 +501,7 @@ func persistedToolCompletionForTest(t *testing.T, event testPersistedEvent) stor
 	if !ok {
 		t.Fatalf("event %q payload type = %T, want session.ToolCompletionRecord", event.Kind, mustSessionEventPayload(event.Record))
 	}
-	completion, err := storedToolCompletionFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore tool completion record: %v", err)
-	}
+	completion := storedToolCompletionFromSessionRecord(record)
 	return completion
 }
 
@@ -495,10 +511,7 @@ func persistedHistoryReplacementForTest(t *testing.T, event testPersistedEvent) 
 	if !ok {
 		t.Fatalf("event %q payload type = %T, want session.HistoryReplacementRecord", event.Kind, mustSessionEventPayload(event.Record))
 	}
-	replacement, err := historyReplacementPayloadFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore history replacement record: %v", err)
-	}
+	replacement := historyReplacementPayloadFromSessionRecord(record)
 	return replacement
 }
 

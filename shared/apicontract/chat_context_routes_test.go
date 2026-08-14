@@ -20,8 +20,7 @@ func TestChatContextRouteContract(t *testing.T) {
 		t.Fatalf("route = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.ChatContextRequest{}) ||
-		route.ResponseType != reflect.TypeOf(serverapi.ChatContextResponse{}) ||
-		!route.ValidatesRequest {
+		route.ResponseType != reflect.TypeOf(serverapi.ChatContextResponse{}) {
 		t.Fatalf("route contract = %+v", route)
 	}
 }

@@ -1,7 +1,10 @@
 package session
 
 import (
+	"context"
 	"time"
+
+	"core/shared/runtimeids"
 )
 
 type EventLogAppendObservation struct {
@@ -20,23 +23,34 @@ type DurabilityObserver interface {
 	ObserveEventLogSync(EventLogSyncObservation)
 }
 
+type AppendProjection struct {
+	SessionID                       runtimeids.SessionID
+	FirstSequence                   int64
+	LastSequence                    int64
+	AppendedAt                      time.Time
+	FirstPromptPreview              *string
+	ConversationEstablished         bool
+	GeneratedRecoveredWarningIssued bool
+	activeWorkflowAssignment        *MessageRecord
+	activeWorkflowAssignmentState   *ActiveWorkflowAssignmentState
+}
+
+type AppendProjector func(context.Context, AppendProjection) error
+
 type StoreOption func(*storeOptions)
 
 type storeOptions struct {
 	observer           PersistenceObserver
-	reconciler         EventLogReconciliationObserver
 	resolver           PersistedSessionResolver
 	contextFactWriter  SessionContextFactWriter
 	durabilityObserver DurabilityObserver
+	appendProjector    AppendProjector
 	now                func() time.Time
 }
 
 func WithPersistenceObserver(observer PersistenceObserver) StoreOption {
 	return func(options *storeOptions) {
 		options.observer = observer
-		if reconciler, ok := observer.(EventLogReconciliationObserver); ok {
-			options.reconciler = reconciler
-		}
 	}
 }
 
@@ -55,6 +69,12 @@ func WithSessionContextFactWriter(writer SessionContextFactWriter) StoreOption {
 func WithDurabilityObserver(observer DurabilityObserver) StoreOption {
 	return func(options *storeOptions) {
 		options.durabilityObserver = observer
+	}
+}
+
+func WithAppendProjector(projector AppendProjector) StoreOption {
+	return func(options *storeOptions) {
+		options.appendProjector = projector
 	}
 }
 

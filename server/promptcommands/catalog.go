@@ -5,9 +5,6 @@ import "core/shared/runtimeinput"
 type CatalogEntry = runtimeinput.PromptCommandCatalogEntry
 
 func (s Service) Catalog() ([]CatalogEntry, error) {
-	if err := s.validateRoots(ErrorKindCatalogRead); err != nil {
-		return nil, err
-	}
 	entries, err := s.scan()
 	if err != nil {
 		return nil, err

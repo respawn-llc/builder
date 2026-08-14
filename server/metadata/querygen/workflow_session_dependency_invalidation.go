@@ -37,12 +37,12 @@ func (q *Queries) RetireDependentCurrentSessionWorkflowNodeAssociations(
 		arg.PreservedSourceSessionID,
 		arg.TransitionBranchKey,
 	)
-	return recordQueryError(ctx, err, retireDependentCurrentSessionWorkflowNodeAssociations, 4)
+	return err
 }
 `
 	formatted, err := format.Source([]byte(source))
 	if err != nil {
 		return nil, fmt.Errorf("format generated Workflow Session dependency invalidation adapter: %w", err)
 	}
-	return formatted, nil
+	return annotateSource(formatted)
 }

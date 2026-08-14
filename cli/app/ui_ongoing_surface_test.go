@@ -420,38 +420,6 @@ func TestNativeOngoingClipboardPasteErrorRepaintsStatus(t *testing.T) {
 	}
 }
 
-func TestNativeOngoingReconnectWarningRepaintsAndClearsStatus(t *testing.T) {
-	disableTransientStatusClearForTest(t)
-	var out bytes.Buffer
-	nativeSurface := ongoing.NewSurface(&out)
-	spySurface := &ongoingSurfaceSpy{}
-	m := sizedTestUIModel(newProjectedStaticUIModel(
-		WithUIOngoingSurface(nativeSurface),
-	), 40, 10)
-	m.ongoingTranscript = newNoopOngoingTranscriptController(spySurface, m.ongoingFrameInput)
-
-	next, _ := m.Update(runtimeReconnectWarningMsg{text: "connection interrupted"})
-	updated := next.(*uiModel)
-	if got, want := spySurface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("surface calls after reconnect warning = %v, want %v", got, want)
-	}
-	statusSection, ok := frameSection(updated.ongoingFrameInput(), ongoing.FrameSectionStatus)
-	if !ok {
-		t.Fatal("warning status section missing")
-	}
-	if got, want := spySurface.lastFrameSectionLines(ongoing.FrameSectionStatus), statusSection.Lines; !reflect.DeepEqual(got, want) {
-		t.Fatalf("rendered warning status = %v, want %v", got, want)
-	}
-
-	_, _ = updated.Update(clearTransientStatusMsg{token: updated.transientStatusToken})
-	if got, want := spySurface.callKinds(), []string{"render", "render"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("surface calls after warning clear = %v, want %v", got, want)
-	}
-	if updated.transientStatus != "" {
-		t.Fatalf("transient status after clear = %q, want empty", updated.transientStatus)
-	}
-}
-
 func TestNativeOngoingViewClearsLegacyAppCursorPlacement(t *testing.T) {
 	cursor := newUITerminalCursorState()
 	cursor.Set(uiTerminalCursorPlacement{Visible: true, CursorRow: 1, CursorCol: 1, AnchorRow: 2})

@@ -57,6 +57,12 @@ var runLiveWaitApp = app.RunLiveWait
 func main() {
 	imagefileio.ExitIfWorker(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 	redirectServiceLogs()
+	if exitCode, handled := runDarwinPrivateServiceMode(os.Args[1:], os.Stdout, os.Stderr); handled {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+		return
+	}
 	if exitCode := rootCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); exitCode != 0 {
 		os.Exit(exitCode)
 	}

@@ -49,11 +49,7 @@ func (c *Remote) SubscribeFollowUp(ctx context.Context, req serverapi.PromptFoll
 		return nil, err
 	}
 	return newRemoteSubscriptionWithError(conn, route, func(params protocol.PromptFollowUpEventParams) (serverapi.PromptFollowUpEvent, error) {
-		event := serverapi.PromptFollowUpEvent{Kind: serverapi.PromptFollowUpEventKind(params.Event.Kind)}
-		if err := event.Validate(); err != nil {
-			return serverapi.PromptFollowUpEvent{}, err
-		}
-		return event, nil
+		return serverapi.PromptFollowUpEvent{Kind: serverapi.PromptFollowUpEventKind(params.Event.Kind)}, nil
 	}), nil
 }
 
@@ -81,10 +77,7 @@ func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, 
 		if frame.Method == route.EventMethod {
 			if progress != nil {
 				var update serverapi.RunPromptProgress
-				if err := json.Unmarshal(frame.Params, &update); err != nil {
-					return serverapi.RunPromptResponse{}, err
-				}
-				if err := update.Validate(); err != nil {
+				if err := decodeValidatedJSON(frame.Params, &update); err != nil {
 					return serverapi.RunPromptResponse{}, err
 				}
 				progress.PublishRunPromptProgress(update)
@@ -99,10 +92,8 @@ func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, 
 			return serverapi.RunPromptResponse{}, protocolError(resp.Error)
 		}
 		var result serverapi.RunPromptResponse
-		if len(resp.Result) > 0 {
-			if err := json.Unmarshal(resp.Result, &result); err != nil {
-				return serverapi.RunPromptResponse{}, err
-			}
+		if err := decodeResponseFrame(resp, &result); err != nil {
+			return serverapi.RunPromptResponse{}, err
 		}
 		return result, nil
 	}
@@ -114,9 +105,6 @@ func (c *Remote) SubscribeSessionTranscript(ctx context.Context, req serverapi.T
 		return nil, err
 	}
 	return newRemoteSubscriptionWithError(conn, route, func(params protocol.SessionTranscriptEventParams) (clientui.TranscriptMessage, error) {
-		if err := params.Message.Validate(); err != nil {
-			return clientui.TranscriptMessage{}, err
-		}
 		return params.Message, nil
 	}), nil
 }
@@ -175,9 +163,6 @@ func workflowProjectEventFromProtocol(event protocol.WorkflowProjectEvent) (serv
 		RelatedIDs:       append([]string(nil), event.RelatedIDs...),
 		OccurredAtUnixMs: event.OccurredAtUnixMs,
 	}
-	if err := decoded.Validate(); err != nil {
-		return serverapi.WorkflowProjectEvent{}, err
-	}
 	return decoded, nil
 }
 
@@ -214,9 +199,6 @@ func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.Workt
 			return serverapi.WorktreeSetupEvent{}, err
 		}
 		if err := decodePayload(params.Event.Failed, &decoded.Failed); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
-		}
-		if err := decoded.Validate(); err != nil {
 			return serverapi.WorktreeSetupEvent{}, err
 		}
 		return decoded, nil
@@ -286,7 +268,7 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 	switch frame.Method {
 	case s.route.EventMethod:
 		var params Wire
-		if err := json.Unmarshal(frame.Params, &params); err != nil {
+		if err := decodeValidatedJSON(frame.Params, &params); err != nil {
 			var zero Event
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
 		}
@@ -294,6 +276,12 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 		if err != nil {
 			var zero Event
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
+		}
+		if validator, ok := any(event).(interface{ Validate() error }); ok {
+			if err := validator.Validate(); err != nil {
+				var zero Event
+				return zero, errors.Join(serverapi.ErrStreamFailed, err)
+			}
 		}
 		return event, nil
 	case s.route.CompleteMethod:

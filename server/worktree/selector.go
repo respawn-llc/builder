@@ -83,10 +83,6 @@ func (target scheduledWorktreeTarget) resolve(topology []serverapi.WorktreeTopol
 }
 
 func resolveTopologySelector(entries []serverapi.WorktreeTopologyEntry, selector string) (topologySelectorMatch, error) {
-	selector = strings.TrimSpace(selector)
-	if selector == "" {
-		return topologySelectorMatch{}, &serverapi.WorktreeSelectorError{Kind: serverapi.WorktreeSelectorErrorKindNotFound, Input: selector}
-	}
 	for _, matches := range [][]topologySelectorMatch{
 		matchTopologyWorktreeID(entries, selector),
 		matchTopologyBranch(entries, selector),

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -272,7 +273,7 @@ func TestEventUseRejectsSymlinkedEventsFileAfterMetadataOnlyOpen(t *testing.T) {
 	}
 }
 
-func TestEventUseRepairsMissingEventsFileAndPublishes(t *testing.T) {
+func TestEventUseRejectsMissingEventsFileWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "session-without-events")
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
@@ -284,7 +285,6 @@ func TestEventUseRepairsMissingEventsFileAndPublishes(t *testing.T) {
 		WorkspaceContainer: "workspace-x",
 		CreatedAt:          time.Now().UTC(),
 		UpdatedAt:          time.Now().UTC(),
-		LastSequence:       3,
 	}
 	observer := &recordingPersistenceObserver{}
 
@@ -302,28 +302,15 @@ func TestEventUseRepairsMissingEventsFileAndPublishes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sessionDir, eventsFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("metadata-only open created events file: %v", err)
 	}
-	if observer.reconciled {
-		t.Fatal("metadata-only open reconciled event state")
+	if _, err := opened.MaterializeEventLog(); err == nil {
+		t.Fatal("expected missing published event log error")
 	}
-	events, err := collectEvents(opened)
-	if err != nil {
-		t.Fatalf("materialize events: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(sessionDir, eventsFile)); err != nil {
-		t.Fatalf("expected event use to recreate missing file: %v", err)
-	}
-	if log := mustMaterializeSessionTestEventLog(t, opened); mustMaterializedRevision(log) != 0 {
-		t.Fatalf("expected reopened last sequence to reconcile to zero, got %d", mustMaterializedRevision(log))
-	}
-	if !observer.reconciled || observer.reconciliation.LastSequence != 0 {
-		t.Fatalf("observer reconciliation = %+v, called = %t", observer.reconciliation, observer.reconciled)
-	}
-	if len(events) != 0 {
-		t.Fatalf("expected recreated events file to be empty, got %+v", events)
+	if _, err := os.Stat(filepath.Join(sessionDir, eventsFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing event log was mutated: %v", err)
 	}
 }
 
-func TestMaterializeMissingEventsFileWithoutObserverLeavesCurrentPendingRepair(t *testing.T) {
+func TestMaterializeMissingEventsFileWithoutObserverFailsUnchanged(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "session-without-events")
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
@@ -352,16 +339,11 @@ func TestMaterializeMissingEventsFileWithoutObserverLeavesCurrentPendingRepair(t
 	if !errors.As(materializeErr, &typedErr) {
 		t.Fatalf("materialization error = %v, want typed materialization error", materializeErr)
 	}
-	if !typedErr.Committed || !typedErr.PendingRepair ||
-		typedErr.Stage != EventLogMaterializationStageReconciliation ||
-		!errors.Is(typedErr, errEventLogReconcilerRequired) {
+	if typedErr.Committed || typedErr.PendingRepair {
 		t.Fatalf("materialization error facts = %+v", typedErr)
 	}
-	if _, openErr := openCurrentEventLog(
-		filepath.Join(sessionDir, eventsFile),
-		currentEventLogReadOnly,
-	); openErr != nil {
-		t.Fatalf("committed current event log unavailable: %v", openErr)
+	if _, statErr := os.Stat(filepath.Join(sessionDir, eventsFile)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("missing event log was mutated: %v", statErr)
 	}
 }
 
@@ -393,7 +375,7 @@ func TestReadEventsIgnoresTrailingTruncatedEOFLine(t *testing.T) {
 	}
 }
 
-func TestAppendEventRepairsTruncatedTailBeforeAppend(t *testing.T) {
+func TestAppendEventRejectsTruncatedTailLive(t *testing.T) {
 	store := newSessionTestStore(t)
 	log := mustMaterializeSessionTestEventLog(t, store)
 	if _, _, err := log.AppendRecord(stringPointer("s1"), sessionTestMessage(MessageRoleUser, "u1")); err != nil {
@@ -411,28 +393,36 @@ func TestAppendEventRepairsTruncatedTailBeforeAppend(t *testing.T) {
 	if err := fp.Close(); err != nil {
 		t.Fatalf("close events file: %v", err)
 	}
-
-	e2, _, err := log.AppendRecord(stringPointer("s2"), sessionTestMessage(MessageRoleAssistant, "a2"))
+	before, err := os.ReadFile(store.eventsFP)
 	if err != nil {
-		t.Fatalf("append event 2: %v", err)
-	}
-	if e2.Seq() != 2 {
-		t.Fatalf("expected seq=2, got %d", e2.Seq())
+		t.Fatalf("read externally damaged event log: %v", err)
 	}
 
-	events, err := collectEvents(store)
+	_, receipt, appendErr := log.AppendRecord(stringPointer("s2"), sessionTestMessage(MessageRoleAssistant, "a2"))
+	if appendErr == nil || receipt.Committed {
+		t.Fatalf("live append after external tail damage: receipt=%+v error=%v", receipt, appendErr)
+	}
+	var persistenceErr *EventLogPersistenceError
+	if !errors.As(appendErr, &persistenceErr) ||
+		persistenceErr.Certainty != EventLogCommitNotCommitted {
+		t.Fatalf("live append error = %v, want not-committed persistence failure", appendErr)
+	}
+	after, err := os.ReadFile(store.eventsFP)
 	if err != nil {
-		t.Fatalf("read events: %v", err)
+		t.Fatalf("read event log after rejected append: %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("events len = %d, want 2", len(events))
+	if !bytes.Equal(after, before) {
+		t.Fatal("live append repaired or mutated the externally damaged tail")
 	}
-	if events[0].Seq() != 1 || events[1].Seq() != 2 {
-		t.Fatalf("unexpected event sequence: %+v", events)
+	if _, _, laterErr := log.AppendRecord(
+		stringPointer("s3"),
+		sessionTestMessage(MessageRoleUser, "must remain stopped"),
+	); !errors.Is(laterErr, persistenceErr) {
+		t.Fatalf("later append error = %v, want latched %v", laterErr, persistenceErr)
 	}
 }
 
-func TestEventUseReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
+func TestEventUseDerivesSequenceFromEventLog(t *testing.T) {
 	store := newSessionTestStore(t)
 	log := mustMaterializeSessionTestEventLog(t, store)
 	if _, _, err := log.AppendRecord(stringPointer("s1"), sessionTestMessage(MessageRoleUser, "u1")); err != nil {
@@ -443,7 +433,6 @@ func TestEventUseReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 	}
 
 	meta := store.metaSnapshot().meta
-	meta.LastSequence = 0
 	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{
 		meta.SessionID: {
 			SessionDir: store.Dir(),
@@ -458,9 +447,6 @@ func TestEventUseReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
-	}
-	if got := storeTestMeta(reopened).LastSequence; got != 0 {
-		t.Fatalf("metadata-only open changed last sequence to %d", got)
 	}
 	reopenedLog, err := reopened.MaterializeEventLog()
 	if err != nil {

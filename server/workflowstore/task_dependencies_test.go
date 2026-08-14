@@ -198,6 +198,38 @@ func TestRemoveTaskDependencyIsIdempotentAndTouchesOnlyRealChanges(t *testing.T)
 	}
 }
 
+func TestRemoveTaskDependencyRejectsInvalidPairsWithoutMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	blocker := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &workflowID, Title: "Blocker", Body: "Body"})
+	blocked := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &workflowID, Title: "Blocked", Body: "Body"})
+	otherBinding, err := store.metadata.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	otherWorkflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, otherBinding.ProjectID, otherWorkflowID, true)
+	otherTask := createTask(t, ctx, store, CreateTaskRequest{ProjectID: otherBinding.ProjectID, WorkflowID: &otherWorkflowID, Title: "Other", Body: "Body"})
+
+	for _, testCase := range []struct {
+		name   string
+		req    TaskDependencyRemoveRequest
+		reason workflow.TaskDependencyPolicyErrorReason
+	}{
+		{name: "missing blocker", req: TaskDependencyRemoveRequest{BlockerTaskID: "task-missing", BlockedTaskID: blocked.ID}, reason: workflow.TaskDependencyMissingTask},
+		{name: "missing blocked", req: TaskDependencyRemoveRequest{BlockerTaskID: blocker.ID, BlockedTaskID: "task-missing"}, reason: workflow.TaskDependencyMissingTask},
+		{name: "self", req: TaskDependencyRemoveRequest{BlockerTaskID: blocker.ID, BlockedTaskID: blocker.ID}, reason: workflow.TaskDependencySelf},
+		{name: "cross project", req: TaskDependencyRemoveRequest{BlockerTaskID: blocker.ID, BlockedTaskID: otherTask.ID}, reason: workflow.TaskDependencyProjectMismatch},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := store.RemoveTaskDependency(ctx, testCase.req)
+			assertTaskDependencyPolicyError(t, err, testCase.reason)
+			assertTaskDependencyCount(t, store, testCase.req.BlockerTaskID, testCase.req.BlockedTaskID, 0)
+		})
+	}
+}
+
 func TestAddTaskDependencyEnforcesBothDirectionLimits(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)

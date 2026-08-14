@@ -91,19 +91,20 @@ type serviceSpec struct {
 }
 
 type serviceStatus struct {
-	Backend      string   `json:"backend"`
-	Installed    bool     `json:"installed"`
-	Loaded       bool     `json:"loaded"`
-	Running      bool     `json:"running"`
-	PID          int      `json:"pid,omitempty"`
-	Command      []string `json:"command,omitempty"`
-	Endpoint     string   `json:"endpoint"`
-	Logs         []string `json:"logs"`
-	InstallPath  string   `json:"install_path,omitempty"`
-	Detail       string   `json:"detail,omitempty"`
-	Hints        []string `json:"hints,omitempty"`
-	HealthStatus string   `json:"health_status,omitempty"`
-	HealthPID    int      `json:"health_pid,omitempty"`
+	Backend           string   `json:"backend"`
+	Installed         bool     `json:"installed"`
+	Loaded            bool     `json:"loaded"`
+	Running           bool     `json:"running"`
+	PID               int      `json:"pid,omitempty"`
+	Command           []string `json:"command,omitempty"`
+	Endpoint          string   `json:"endpoint"`
+	Logs              []string `json:"logs"`
+	InstallPath       string   `json:"install_path,omitempty"`
+	Detail            string   `json:"detail,omitempty"`
+	Hints             []string `json:"hints,omitempty"`
+	HealthStatus      string   `json:"health_status,omitempty"`
+	HealthPID         int      `json:"health_pid,omitempty"`
+	registeredCommand []string
 }
 
 type serviceBackend interface {
@@ -188,6 +189,14 @@ func serviceServeArguments(persistenceRoot string) []string {
 	return args
 }
 
+func serviceRunArguments(persistenceRoot string) []string {
+	args := []string{"service", "run"}
+	if trimmed := strings.TrimSpace(persistenceRoot); trimmed != "" {
+		args = append(args, "--persistence-root", trimmed)
+	}
+	return args
+}
+
 func defaultServiceExecutablePath() (string, error) {
 	raw := strings.TrimSpace(os.Args[0])
 	if raw == "" {
@@ -214,11 +223,15 @@ func ensureServiceLogDir(spec serviceSpec) error {
 	return nil
 }
 
-func serviceCommand(spec serviceSpec) []string {
+func serverChildCommand(spec serviceSpec) []string {
 	cmd := make([]string, 0, 1+len(spec.Arguments))
 	cmd = append(cmd, spec.Executable)
 	cmd = append(cmd, spec.Arguments...)
 	return cmd
+}
+
+func darwinServiceHostCommand(spec serviceSpec) []string {
+	return append([]string{spec.Executable}, serviceRunArguments(spec.Config.PersistenceRoot)...)
 }
 
 func commandString(args []string) string {

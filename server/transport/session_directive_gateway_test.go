@@ -37,6 +37,10 @@ func (s *lifecycleResultGatewayService) ResolveTransition(_ context.Context, req
 	return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent), nil
 }
 
+func (s *lifecycleResultGatewayService) ResolveTransitionValidated(_ context.Context, req apicontract.Validated[serverapi.SessionResolveTransitionRequest], _ apicontract.OptionalAuthorizedSessionInActiveProject) (serverapi.SessionDirective, error) {
+	return s.ResolveTransition(context.Background(), req.Value())
+}
+
 type lifecycleResultGatewayDependencies struct {
 	*core.Core
 	lifecycle apicontract.SessionLifecycleService

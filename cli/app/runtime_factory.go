@@ -20,3 +20,12 @@ type runtimeWiring struct {
 	lifecycleHookIssues   <-chan lifecycleHookIssue
 	lifecycleHookDone     <-chan struct{}
 }
+
+func (w *runtimeWiring) bindTerminalOutput(output *uiTerminalOutput) {
+	if w == nil || output == nil {
+		return
+	}
+	if hooks, ok := w.promptAttention.(*bellHooks); ok {
+		hooks.setOutput(output)
+	}
+}

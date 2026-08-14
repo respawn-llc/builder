@@ -50,11 +50,15 @@ func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjecti
 }
 
 func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
-	if a == nil {
-		return serverapi.WorkflowAttentionListResponse{}, errors.New("attention read model is required")
-	}
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
+	}
+	return a.ReadAttention(ctx, req)
+}
+
+func (a *Attention) ReadAttention(ctx context.Context, req serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
+	if a == nil {
+		return serverapi.WorkflowAttentionListResponse{}, errors.New("attention read model is required")
 	}
 	pageSize := req.PageSize
 	if pageSize == 0 {
@@ -90,13 +94,16 @@ func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionLis
 }
 
 func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
-	if a == nil {
-		return serverapi.WorkflowTaskAttentionListResponse{}, errors.New("attention read model is required")
-	}
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
-	taskID := strings.TrimSpace(req.TaskID)
+	return a.ListTaskByID(ctx, req.TaskID)
+}
+
+func (a *Attention) ListTaskByID(ctx context.Context, taskID string) (serverapi.WorkflowTaskAttentionListResponse, error) {
+	if a == nil {
+		return serverapi.WorkflowTaskAttentionListResponse{}, errors.New("attention read model is required")
+	}
 	task, err := a.queries.GetTask(ctx, taskID)
 	if err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
@@ -318,9 +325,6 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 			}
 			promptsByID := make(map[clientui.PromptID]PendingPromptSnapshot, len(prompts))
 			for _, prompt := range prompts {
-				if err := prompt.PromptID.Validate(); err != nil {
-					return nil, fmt.Errorf("task %q session %q pending prompt identity: %w", taskID, execution.Agent.SessionID, err)
-				}
 				if _, duplicate := promptsByID[prompt.PromptID]; duplicate {
 					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, prompt.PromptID)
 				}

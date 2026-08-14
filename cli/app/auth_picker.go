@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"core/cli/app/internal/authui"
@@ -317,8 +318,10 @@ func newStartupPickerStyles(theme string) startupPickerStyles {
 }
 
 func runStartupPicker(model *startupPickerModel) (startupPickerResult, error) {
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	output := newUITerminalOutputFile(os.Stdout)
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithOutput(output))
 	finalModel, err := program.Run()
+	err = terminalOutputRunError(output.uiTerminalOutput, err)
 	if err != nil {
 		return startupPickerResult{}, err
 	}

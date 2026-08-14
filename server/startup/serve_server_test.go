@@ -25,6 +25,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type envAuthHandler struct {
@@ -62,14 +63,10 @@ var noopOnboarding = OnboardingHandler(func(_ context.Context, req OnboardingReq
 	if err != nil {
 		return config.App{}, err
 	}
-	reloaded, err := req.ReloadConfig()
-	if err != nil {
-		return config.App{}, err
-	}
-	reloaded.Source.CreatedDefaultConfig = created
-	reloaded.Source.SettingsPath = path
-	reloaded.Source.SettingsFileExists = true
-	return reloaded, nil
+	req.Config.Source.CreatedDefaultConfig = created
+	req.Config.Source.SettingsPath = path
+	req.Config.Source.SettingsFileExists = true
+	return req.Config, nil
 })
 
 func releaseServeTestPortForConfig(cfg config.App) {
@@ -174,6 +171,73 @@ func TestServeWaitsForContextCancellation(t *testing.T) {
 	cancel()
 	if err := server.Serve(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Serve error = %v, want context canceled", err)
+	}
+}
+
+func TestServeReturnsTypedTerminationForMetadataFatal(t *testing.T) {
+	workspace := newServeWorkspace(t)
+	server := startServeTestServer(
+		t,
+		Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true},
+		envAuthHandler{},
+		noopOnboarding,
+	)
+	releaseServeTestPortForConfig(server.Config())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Serve(context.Background())
+	}()
+	failure := metadata.ClassifyFailure(
+		context.Background(),
+		"Session append projection",
+		filepath.Join(server.Config().PersistenceRoot, "db", "main.sqlite3"),
+		&metadata.SQLiteCause{
+			ResultCode: metadata.SQLiteResultCode{
+				Primary:  sqlite3.SQLITE_FULL,
+				Extended: sqlite3.SQLITE_FULL,
+			},
+			Cause: errors.New("database full"),
+		},
+	)
+	if !server.MetadataFatalAuthority().ReportMetadataFatal(failure) {
+		t.Fatal("metadata fatal was not accepted")
+	}
+	select {
+	case err := <-errCh:
+		var termination *CriticalInfrastructureTermination
+		if !errors.As(err, &termination) {
+			t.Fatalf("Serve error = %v, want CriticalInfrastructureTermination", err)
+		}
+		if termination.Cause != failure {
+			t.Fatalf("termination cause = %#v, want submitted failure", termination.Cause)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not terminate after metadata fatal")
+	}
+}
+
+func TestServePrefersRetainedMetadataFatalOverCanceledContext(t *testing.T) {
+	workspace := newServeWorkspace(t)
+	server := startServeTestServer(
+		t,
+		Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true},
+		envAuthHandler{},
+		noopOnboarding,
+	)
+	failure := &metadata.ClassifiedFailure{
+		Class:     metadata.FailureCritical,
+		Operation: "metadata read",
+		Cause:     context.Canceled,
+	}
+	if !server.MetadataFatalAuthority().ReportMetadataFatal(failure) {
+		t.Fatal("metadata fatal was not accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := server.Serve(ctx)
+	var termination *CriticalInfrastructureTermination
+	if !errors.As(err, &termination) || termination.Cause != failure {
+		t.Fatalf("Serve error = %#v, want retained CriticalInfrastructureTermination", err)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"context"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/server/workflow"
 	"core/shared/config"
@@ -13,7 +12,6 @@ import (
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -186,40 +184,6 @@ func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 				t.Fatalf("cache warning event visibility = %q, want %q", events[0].CacheWarningVisibility, tt.want)
 			}
 		})
-	}
-}
-
-func TestPromptCacheResponseAppliesLineageByCommitReceipt(t *testing.T) {
-	t.Parallel()
-	observerErr := errors.New("cache response observer failed")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
-		Model:            "gpt-5",
-		CacheWarningMode: config.CacheWarningModeOff,
-	})
-	prepared := preparedCacheRequestObservation{request: persistedCacheRequestObserved{
-		DigestVersion: requestCacheDigestVersion,
-		CacheKey:      "cache-key",
-		Scope:         transcript.CacheWarningScopeConversation,
-		ChunkCount:    1,
-		TerminalHash:  "0000000000000000000000000000000000000000000000000000000000000000",
-	}}
-	gate.FailNext(observerErr)
-
-	err := eng.observePromptCacheResponse("step-1", prepared, llm.Usage{
-
-		CachedInputTokens: textutil.Value(7),
-	})
-	if !errors.Is(err, observerErr) {
-		t.Fatalf("cache response error = %v, want observer error", err)
-	}
-	tracker := eng.modelRequests().RequestCache()
-	tracker.mu.Lock()
-	lineage := tracker.lineage[prepared.request.CacheKey]
-	tracker.mu.Unlock()
-	if !lineage.hasResponse || !lineage.lastResponseHadReuse || lineage.lastCachedInputTokens != 7 {
-		t.Fatalf("committed cache response lineage = %+v", lineage)
 	}
 }
 

@@ -42,14 +42,21 @@ func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient apicontr
 	model := newOnboardingModel(finalization, state)
 	terminalCursor := newUITerminalCursorState()
 	model.terminalCursor = terminalCursor
+	output := newUITerminalOutputFile(os.Stdout)
+	model.terminalOutput = output.uiTerminalOutput
 	program := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),
 		tea.WithContext(ctx),
-		tea.WithOutput(newUITerminalCursorWriter(os.Stdout, terminalCursor)),
+		tea.WithOutput(newUITerminalCursorWriter(output, terminalCursor)),
 	)
 	finalModel, runErr := program.Run()
+	terminalErr := output.Err()
+	runErr = terminalOutputRunError(output.uiTerminalOutput, runErr)
 	outcome, submitted := finalization.waitIfSubmitted()
+	if terminalErr != nil {
+		return onboardingResult{}, runErr
+	}
 	if runErr != nil {
 		if submitted {
 			return onboardingFlowOutcome(outcome)

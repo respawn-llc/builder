@@ -18,10 +18,8 @@ var (
 )
 
 type RuntimeControl struct {
-	Context                  func() (context.Context, context.CancelFunc)
-	MutationContext          func() (context.Context, context.CancelFunc)
-	RecoverRuntimeConnection func(context.Context, error, bool) error
-	AppendRecoveryWarning    bool
+	Context         func() (context.Context, context.CancelFunc)
+	MutationContext func() (context.Context, context.CancelFunc)
 }
 
 type Service struct {
@@ -116,9 +114,7 @@ func runMutation[T any](s Service, call func(context.Context) (T, error)) (T, er
 		return zero, err
 	}
 	defer cancel()
-	return retryControlCall(ctx, s.Runtime.RecoverRuntimeConnection, s.Runtime.AppendRecoveryWarning, func() (T, error) {
-		return call(ctx)
-	})
+	return call(ctx)
 }
 
 func runCreateMutation[T any](s Service, call func(context.Context) (T, error)) (T, error) {
@@ -128,9 +124,7 @@ func runCreateMutation[T any](s Service, call func(context.Context) (T, error)) 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	return retryControlCall(ctx, s.Runtime.RecoverRuntimeConnection, s.Runtime.AppendRecoveryWarning, func() (T, error) {
-		return call(ctx)
-	})
+	return call(ctx)
 }
 
 func (s Service) resolveMutationContext(mutation bool) (context.Context, context.CancelFunc, error) {
@@ -181,26 +175,4 @@ func (s Service) operationID() serverapi.WorktreeOperationID {
 		}
 	}
 	return serverapi.NewWorktreeOperationID()
-}
-
-func retryControlCall[T any](ctx context.Context, recoverRuntimeConnection func(context.Context, error, bool) error, appendRecoveryWarning bool, call func() (T, error)) (T, error) {
-	value, err := call()
-	if !isRecoverableControlError(err) {
-		return value, err
-	}
-	if recoverRuntimeConnection == nil {
-		return value, err
-	}
-	var zero T
-	if recoverErr := recoverRuntimeConnection(ctx, err, appendRecoveryWarning); recoverErr != nil {
-		return zero, recoverErr
-	}
-	return call()
-}
-
-func isRecoverableControlError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return errors.Is(err, serverapi.ErrRuntimeUnavailable)
 }

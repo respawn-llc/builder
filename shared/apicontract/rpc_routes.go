@@ -39,7 +39,6 @@ const (
 	ScopeSessionAttachedProject     ScopePolicy = "session_attached_project"
 	ScopeAttachedSession            ScopePolicy = "attached_session"
 	ScopeGoalSession                ScopePolicy = "goal_session"
-	ScopeRuntimeLiveSessionRequired ScopePolicy = "runtime_live_session_required"
 	ScopeRuntimeLiveSessionOptional ScopePolicy = "runtime_live_session_optional"
 	ScopeProcessActiveProject       ScopePolicy = "process_active_project"
 	ScopeProcessListActiveProject   ScopePolicy = "process_list_active_project"
@@ -70,7 +69,6 @@ type Route struct {
 	CompleteMethod     string
 	CompleteType       reflect.Type
 	DedicatedRequestID string
-	ValidatesRequest   bool
 }
 
 const (
@@ -81,14 +79,13 @@ const (
 func unary[Req any, Resp any](method string, auth AuthPolicy, scope ScopePolicy, connection ConnectionStrategy) Route {
 	reqType := reflect.TypeOf((*Req)(nil)).Elem()
 	return Route{
-		Method:           method,
-		Kind:             KindUnary,
-		Auth:             auth,
-		Scope:            scope,
-		Connection:       connection,
-		RequestType:      reqType,
-		ResponseType:     reflect.TypeOf((*Resp)(nil)).Elem(),
-		ValidatesRequest: implementsValidator(reqType),
+		Method:       method,
+		Kind:         KindUnary,
+		Auth:         auth,
+		Scope:        scope,
+		Connection:   connection,
+		RequestType:  reqType,
+		ResponseType: reflect.TypeOf((*Resp)(nil)).Elem(),
 	}
 }
 
@@ -101,34 +98,32 @@ func dedicatedUnary[Req any, Resp any](method string, requestID string, scope Sc
 func subscription[Req any, Event any](method string, auth AuthPolicy, scope ScopePolicy, eventMethod string, completeMethod string) Route {
 	reqType := reflect.TypeOf((*Req)(nil)).Elem()
 	return Route{
-		Method:           method,
-		Kind:             KindSubscription,
-		Auth:             auth,
-		Scope:            scope,
-		Connection:       ConnectionSubscription,
-		RequestType:      reqType,
-		ResponseType:     reflect.TypeOf((*protocol.SubscribeResponse)(nil)).Elem(),
-		EventMethod:      eventMethod,
-		EventType:        reflect.TypeOf((*Event)(nil)).Elem(),
-		CompleteMethod:   completeMethod,
-		CompleteType:     reflect.TypeOf((*protocol.StreamCompleteParams)(nil)).Elem(),
-		ValidatesRequest: implementsValidator(reqType),
+		Method:         method,
+		Kind:           KindSubscription,
+		Auth:           auth,
+		Scope:          scope,
+		Connection:     ConnectionSubscription,
+		RequestType:    reqType,
+		ResponseType:   reflect.TypeOf((*protocol.SubscribeResponse)(nil)).Elem(),
+		EventMethod:    eventMethod,
+		EventType:      reflect.TypeOf((*Event)(nil)).Elem(),
+		CompleteMethod: completeMethod,
+		CompleteType:   reflect.TypeOf((*protocol.StreamCompleteParams)(nil)).Elem(),
 	}
 }
 
 func progress[Req any, Resp any, Event any](method string, scope ScopePolicy, eventMethod string) Route {
 	reqType := reflect.TypeOf((*Req)(nil)).Elem()
 	return Route{
-		Method:           method,
-		Kind:             KindProgress,
-		Auth:             AuthServer,
-		Scope:            scope,
-		Connection:       ConnectionProgress,
-		RequestType:      reqType,
-		ResponseType:     reflect.TypeOf((*Resp)(nil)).Elem(),
-		EventMethod:      eventMethod,
-		EventType:        reflect.TypeOf((*Event)(nil)).Elem(),
-		ValidatesRequest: implementsValidator(reqType),
+		Method:       method,
+		Kind:         KindProgress,
+		Auth:         AuthServer,
+		Scope:        scope,
+		Connection:   ConnectionProgress,
+		RequestType:  reqType,
+		ResponseType: reflect.TypeOf((*Resp)(nil)).Elem(),
+		EventMethod:  eventMethod,
+		EventType:    reflect.TypeOf((*Event)(nil)).Elem(),
 	}
 }
 
@@ -141,11 +136,6 @@ func notification[Event any](method string) Route {
 		Connection:  ConnectionNotification,
 		RequestType: reflect.TypeOf((*Event)(nil)).Elem(),
 	}
-}
-
-func implementsValidator(t reflect.Type) bool {
-	validator := reflect.TypeOf((*interface{ Validate() error })(nil)).Elem()
-	return t != nil && t.Implements(validator)
 }
 
 var routeContracts = []Route{
@@ -267,9 +257,9 @@ var routeContracts = []Route{
 	dedicatedUnary[serverapi.RuntimeSubmitUserShellCommandRequest, struct{}](protocol.MethodRuntimeSubmitUserShellCommand, "runtime-submit-user-shell-command", ScopeSessionActiveProject),
 	dedicatedUnary[serverapi.RuntimeCompactContextRequest, struct{}](protocol.MethodRuntimeCompactContext, "runtime-compact-context", ScopeSessionActiveProject),
 	dedicatedUnary[serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](protocol.MethodRuntimeInterrupt, "runtime-interrupt", ScopeSessionActiveProject),
-	unary[serverapi.RuntimeLiveSteerRequest, serverapi.RuntimeLiveSteerResponse](protocol.MethodRuntimeLiveSteer, AuthServer, ScopeRuntimeLiveSessionRequired, ConnectionControl),
+	unary[serverapi.RuntimeLiveSteerRequest, serverapi.RuntimeLiveSteerResponse](protocol.MethodRuntimeLiveSteer, AuthServer, ScopeNone, ConnectionControl),
 	dedicatedUnary[serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](protocol.MethodRuntimeLiveStop, "runtime-live-stop", ScopeRuntimeLiveSessionOptional),
-	dedicatedUnary[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](protocol.MethodRuntimeLiveWait, "runtime-live-wait", ScopeRuntimeLiveSessionRequired),
+	dedicatedUnary[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](protocol.MethodRuntimeLiveWait, "runtime-live-wait", ScopeNone),
 	dedicatedUnary[serverapi.RuntimeLiveWatchRequest, serverapi.RuntimeLiveWatchResponse](protocol.MethodRuntimeLiveWatch, "runtime-live-watch", ScopeRuntimeLiveSessionOptional),
 	unary[serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](protocol.MethodRuntimeDiscardQueuedUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.RuntimeRecordPromptHistoryRequest, struct{}](protocol.MethodRuntimeRecordPromptHistory, AuthServer, ScopeSessionActiveProject, ConnectionControl),

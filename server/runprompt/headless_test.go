@@ -486,6 +486,7 @@ func TestHeadlessSiblingWorkspacePatchUsesProjectBoundary(t *testing.T) {
 			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
+			SessionCallers:           meta,
 		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
 		RuntimeAuthority: authority,
 	})
@@ -649,6 +650,7 @@ func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsum
 			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
+			SessionCallers:           meta,
 		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
 		RuntimeAuthority:       authority,
 		PromptHistory:          meta,
@@ -808,6 +810,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 		PersistedSessions:        meta,
 		ProjectWorkspaceBoundary: meta,
+		SessionCallers:           meta,
 	}).WithRuntimeAuthority(authority)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    sessionLauncher,
@@ -1001,6 +1004,7 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
+			SessionCallers:           meta,
 		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
 		RuntimeAuthority: authority,
 		PromptHistory:    meta,

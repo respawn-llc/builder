@@ -39,15 +39,15 @@ func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjectio
 }
 
 func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
-	if l == nil {
-		return serverapi.WorkflowTaskListResponse{}, errors.New("task list is required")
-	}
 	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
-	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
-	if err != nil {
-		return serverapi.WorkflowTaskListResponse{}, err
+	return l.ReadTasks(ctx, req, serverapi.OffsetWindowFromValidated(req.Offset, req.Limit))
+}
+
+func (l *TaskList) ReadTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest, window serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskListResponse, error) {
+	if l == nil {
+		return serverapi.WorkflowTaskListResponse{}, errors.New("task list is required")
 	}
 	projectID, workflowID, err := l.resolveScope(ctx, req.ProjectID, req.WorkflowID)
 	if err != nil {

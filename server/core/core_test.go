@@ -645,7 +645,7 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 	}
 }
 
-func TestSessionChatSettingsPreparationUsesAuthoritativePersistenceRoot(t *testing.T) {
+func TestSessionChatSettingsPreparationUsesImmutableGlobalSnapshot(t *testing.T) {
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	t.Setenv(brand.PersistenceRootEnvName, t.TempDir())
@@ -684,11 +684,18 @@ func TestSessionChatSettingsPreparationUsesAuthoritativePersistenceRoot(t *testi
 	if err != nil {
 		t.Fatalf("OpenByID: %v", err)
 	}
+	if err := os.WriteFile(
+		filepath.Join(persistenceRoot, "config.toml"),
+		[]byte("[subagents.worker]\nthinking_level = \"low\"\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("edit global config after activation: %v", err)
+	}
 
 	prepared, err := (sessionChatSettingsPreparationResolver{
-		metadataStore:   appCore.MetadataStore(),
-		authManager:     appCore.AuthManager(),
-		persistenceRoot: persistenceRoot,
+		metadataStore:  appCore.MetadataStore(),
+		authManager:    appCore.AuthManager(),
+		configSnapshot: resolved.Config,
 	}).PrepareSessionChatSettings(t.Context(), store, "worker")
 	if err != nil {
 		t.Fatalf("PrepareSessionChatSettings: %v", err)
@@ -801,9 +808,9 @@ func TestSessionChatSettingsPreparationUsesPersistedPromptFacingEndpoint(t *test
 	}
 
 	prepared, err := (sessionChatSettingsPreparationResolver{
-		metadataStore:   appCore.MetadataStore(),
-		authManager:     appCore.AuthManager(),
-		persistenceRoot: persistenceRoot,
+		metadataStore:  appCore.MetadataStore(),
+		authManager:    appCore.AuthManager(),
+		configSnapshot: resolved.Config,
 	}).PrepareSessionChatSettings(t.Context(), store, brand.DefaultSubagentRole)
 	if err != nil {
 		t.Fatalf("PrepareSessionChatSettings: %v", err)
@@ -850,9 +857,9 @@ func TestSessionChatSettingsPreparationUsesLockedPromptFacingModelCapabilities(t
 	}
 
 	prepared, err := (sessionChatSettingsPreparationResolver{
-		metadataStore:   appCore.MetadataStore(),
-		authManager:     appCore.AuthManager(),
-		persistenceRoot: persistenceRoot,
+		metadataStore:  appCore.MetadataStore(),
+		authManager:    appCore.AuthManager(),
+		configSnapshot: resolved.Config,
 	}).PrepareSessionChatSettings(t.Context(), store, brand.DefaultSubagentRole)
 	if err != nil {
 		t.Fatalf("PrepareSessionChatSettings: %v", err)

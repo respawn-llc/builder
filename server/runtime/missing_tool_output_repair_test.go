@@ -57,18 +57,12 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	for _, record := range window.Records {
 		switch payload := mustSessionEventPayload(record).(type) {
 		case session.ToolCompletionRecord:
-			got, err := storedToolCompletionFromSessionRecord(payload)
-			if err != nil {
-				t.Fatalf("restore completion: %v", err)
-			}
+			got := storedToolCompletionFromSessionRecord(payload)
 			if got.CallID == "missing" {
 				completion = &got
 			}
 		case session.LocalEntryRecord:
-			got, err := storedLocalEntryFromSessionRecord(payload)
-			if err != nil {
-				t.Fatalf("restore local entry: %v", err)
-			}
+			got := storedLocalEntryFromSessionRecord(payload)
 			if got.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
 				warning = &got
 			}
@@ -341,10 +335,7 @@ func repairCompletionRecord(
 		if !ok {
 			continue
 		}
-		stored, err := storedToolCompletionFromSessionRecord(completion)
-		if err != nil {
-			t.Fatalf("restore completion: %v", err)
-		}
+		stored := storedToolCompletionFromSessionRecord(completion)
 		if stored.CallID == callID {
 			return record, stored
 		}
@@ -608,10 +599,7 @@ func typedLiveRepairWarnings(
 		if !ok {
 			continue
 		}
-		stored, err := storedLocalEntryFromSessionRecord(entry)
-		if err != nil {
-			t.Fatalf("restore live-repair warning: %v", err)
-		}
+		stored := storedLocalEntryFromSessionRecord(entry)
 		if stored.Visibility == transcript.EntryVisibilityOngoing &&
 			stored.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
 			warnings = append(warnings, stored)

@@ -12,6 +12,7 @@ import (
 type uiTerminalOutput struct {
 	mu               sync.Mutex
 	out              io.Writer
+	err              error
 	started          bool
 	readinessPending bool
 }
@@ -29,17 +30,67 @@ func (w *uiTerminalOutput) Write(payload []byte) (int, error) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.err != nil {
+		return 0, w.err
+	}
 	if w.readinessPending {
-		if _, err := w.out.Write([]byte(xansi.ShowCursor)); err != nil {
-			return 0, fmt.Errorf("announce terminal input readiness: %w", err)
+		if _, err := w.write([]byte(xansi.ShowCursor)); err != nil {
+			w.err = fmt.Errorf("announce terminal input readiness: %w", err)
+			return 0, w.err
 		}
 		w.readinessPending = false
 	}
-	n, err := w.out.Write(payload)
-	if err == nil && n == len(payload) {
-		w.started = true
+	n, err := w.write(payload)
+	if err != nil {
+		w.err = err
+		return n, err
 	}
+	w.started = true
 	return n, err
+}
+
+func (w *uiTerminalOutput) write(payload []byte) (int, error) {
+	n, err := w.out.Write(payload)
+	if err != nil {
+		return n, err
+	}
+	if n != len(payload) {
+		return n, io.ErrShortWrite
+	}
+	return n, nil
+}
+
+func (w *uiTerminalOutput) Err() error {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.err
+}
+
+func (w *uiTerminalOutput) Restore() {
+	if w == nil || w.out == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, _ = w.out.Write([]byte(
+		xansi.ResetModeAltScreenSaveCursor +
+			xansi.ShowCursor,
+	))
+}
+
+func terminalOutputRunError(output *uiTerminalOutput, runErr error) error {
+	if output == nil {
+		return runErr
+	}
+	terminalErr := output.Err()
+	if terminalErr == nil {
+		return runErr
+	}
+	output.Restore()
+	return fmt.Errorf("terminal output failed: %w", terminalErr)
 }
 
 // AnnounceInputReady queues the standard native-cursor readiness signal for

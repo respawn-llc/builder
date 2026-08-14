@@ -44,9 +44,6 @@ func (r *RunPromptRequest) UnmarshalJSON(data []byte) error {
 		Timeout:         decoded.Timeout,
 		Overrides:       decoded.Overrides,
 	}
-	if err := request.Validate(); err != nil {
-		return err
-	}
 	*r = request
 	return nil
 }

@@ -7,6 +7,58 @@ import (
 
 const activeWorkflowAssignmentMigrationMaxRecords = 4096
 
+func advanceActiveWorkflowAssignmentFromRecords(meta *Meta, records []EventRecord) error {
+	for _, record := range records {
+		payload, err := record.Payload()
+		if err != nil {
+			return err
+		}
+		switch value := payload.(type) {
+		case MessageRecord:
+			if value.MessageType == nil {
+				continue
+			}
+			switch *value.MessageType {
+			case MessageTypeWorkflowMode:
+				meta.ActiveWorkflowAssignment = cloneMessageRecord(&value)
+				meta.ActiveWorkflowAssignmentState = &ActiveWorkflowAssignmentState{}
+			case MessageTypeWorkflowModeExit:
+				meta.ActiveWorkflowAssignment = nil
+				meta.ActiveWorkflowAssignmentState = &ActiveWorkflowAssignmentState{}
+			}
+		case HistoryReplacementRecord:
+			meta.ActiveWorkflowAssignment = nil
+			meta.ActiveWorkflowAssignmentState = &ActiveWorkflowAssignmentState{}
+			for _, item := range value.Items {
+				if item.Type != ProviderHistoryItemTypeMessage ||
+					item.Role == nil ||
+					*item.Role != MessageRoleDeveloper ||
+					item.MessageType == nil {
+					continue
+				}
+				switch *item.MessageType {
+				case MessageTypeWorkflowMode:
+					message, err := normalizeMessageRecord(MessageRecord{
+						Role:            *item.Role,
+						MessageType:     item.MessageType,
+						SourcePath:      item.SourcePath,
+						WorktreeContext: item.WorktreeContext,
+						Content:         item.Content,
+						CompactContent:  item.CompactContent,
+					})
+					if err != nil {
+						return err
+					}
+					meta.ActiveWorkflowAssignment = &message
+				case MessageTypeWorkflowModeExit:
+					meta.ActiveWorkflowAssignment = nil
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // ActiveWorkflowAssignmentProjection returns the authoritative current
 // assignment. Sessions persisted before this projection existed are normalized
 // once at this boundary; subsequent reads use the persisted projection.

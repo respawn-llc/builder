@@ -49,10 +49,7 @@ func visibleChatEntriesFromMessage(msg llm.Message, completions map[string]tools
 }
 
 func synthesizedToolResultForCall(call llm.ToolCall, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) (tools.Result, bool) {
-	callID := strings.TrimSpace(call.ID)
-	if callID == "" {
-		return tools.Result{}, false
-	}
+	callID := call.ID
 	if _, ok := materializedToolCalls[callID]; ok {
 		return tools.Result{}, false
 	}
@@ -158,12 +155,12 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 }
 
 func resolvedToolResultForMessage(msg llm.Message, completions map[string]tools.Result) tools.Result {
-	callID, _ := textutil.OptionalTrimmed(msg.ToolCallID)
+	callID, _ := textutil.OptionalExact(msg.ToolCallID)
 	var output []byte
 	if msg.Content != nil {
 		output = []byte(*msg.Content)
 	}
-	name, _ := textutil.OptionalTrimmed(msg.Name)
+	name, _ := textutil.OptionalExact(msg.Name)
 	result := tools.Result{
 		CallID: callID,
 		Name:   toolspec.ID(name),
@@ -180,9 +177,6 @@ func resolvedToolResultForMessage(msg llm.Message, completions map[string]tools.
 		result.Summary = completion.Summary
 		result.CondensedText = completion.CondensedText
 		result.Presentation = completion.Presentation
-	}
-	if result.Name == "" {
-		result.Name = toolspec.ID("tool")
 	}
 	return result
 }
@@ -204,7 +198,7 @@ func toolResultChatEntry(result tools.Result) ChatEntry {
 		Role:              role,
 		Text:              tools.FormatToolResultByName(string(result.Name), result.Output, result.IsError),
 		CondensedText:     condensedText,
-		ToolCallID:        strings.TrimSpace(result.CallID),
+		ToolCallID:        result.CallID,
 		ToolResultSummary: summary,
 		ToolCall:          presentation,
 	}

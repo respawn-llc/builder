@@ -2,9 +2,7 @@ package workflowstore
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 
 	"core/server/workflow"
 )
@@ -53,9 +51,6 @@ func (s *Store) PreflightTaskResume(
 	ctx context.Context,
 	taskID workflow.TaskID,
 ) ([]CurrentNodeResumeClassification, error) {
-	if strings.TrimSpace(string(taskID)) == "" {
-		return nil, errors.New("task id is required")
-	}
 	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
 		return nil, err

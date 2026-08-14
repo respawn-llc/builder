@@ -531,7 +531,7 @@ func TestRemoteSessionAttachmentSurvivesUnaryControlReconnect(t *testing.T) {
 					reportHandlerError(handlerErrs, "connection %d method = %q, want worktree status", connIndex, req.Method)
 					return
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{Worktree: serverapi.WorktreeStatusTarget{RecordedRoot: "/workspace"}}))); err != nil {
 					reportHandlerError(handlerErrs, "send worktree status response: %w", err)
 				}
 				return

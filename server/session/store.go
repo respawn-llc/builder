@@ -66,7 +66,7 @@ type Store struct {
 	materializedEventLog    *currentEventLog
 	eventLogCreationVersion *int
 	eventLogMaterialization *eventLogMaterializationSnapshot
-	recoveryErr             error
+	eventLogFailure         *EventLogPersistenceError
 }
 
 func eventLogVersionPointer(version int) *int {
@@ -266,13 +266,12 @@ func newLazyWithIDAndStoreOptions(sessionID runtimeids.SessionID, workspaceConta
 		eventsFP:   filepath.Join(sessionDir, eventsFile),
 		options:    storeOpts,
 		meta: Meta{
-			SessionID:                     sid,
-			Category:                      sessionCategoryPointer(validatedCategory),
-			WorkspaceRoot:                 workspaceRoot,
-			WorkspaceContainer:            workspaceContainerName,
-			CreatedAt:                     now,
-			UpdatedAt:                     now,
-			ActiveWorkflowAssignmentState: &ActiveWorkflowAssignmentState{},
+			SessionID:          sid,
+			Category:           sessionCategoryPointer(validatedCategory),
+			WorkspaceRoot:      workspaceRoot,
+			WorkspaceContainer: workspaceContainerName,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		},
 		contextFacts:            independentSessionContextFacts(),
 		initialContextFacts:     independentSessionContextFacts(),
@@ -357,9 +356,6 @@ func openPersistedSession(
 		return nil, err
 	}
 	defer joinEventLogPersistenceLockRelease(&resultErr, lock, lockPath)
-	if err := s.recoverAppendTransactionWithEventLogLockHeld(); err != nil {
-		return nil, err
-	}
 	s.metadataVersion = 1
 	s.persistedMetaVersion = 1
 	if s.meta.ConversationEstablished {
@@ -635,16 +631,6 @@ func (s *Store) restoreMetadataMutationLocked(checkpoint metadataMutationCheckpo
 	s.persistedMetaVersion = checkpoint.persistedMetaVersion
 }
 
-func (s *Store) closeMutationAuthorityLocked(operation string, err error) error {
-	recoveryErr := s.recoveryError(operation, err)
-	s.recoveryErr = recoveryErr
-	return recoveryErr
-}
-
-func (s *Store) recoveryError(operation string, err error) error {
-	return storeRecoveryError(s.meta.SessionID, operation, err)
-}
-
 func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metadataMutationCheckpoint) (CommitReceipt, error) {
 	observation, err := s.persistMetaLocked()
 	if err != nil {
@@ -652,21 +638,8 @@ func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metada
 		s.mu.Unlock()
 		return CommitReceipt{}, err
 	}
-	record, recordErr := s.newAppendRecoveryRecord(checkpoint.meta, s.meta, appendRecoveryCommitted, nil)
-	if recordErr == nil {
-		recordErr = s.writeAppendRecoveryRecord(record)
-	}
-	if recordErr != nil {
-		s.restoreMetadataMutationLocked(checkpoint)
-		if cleanupErr := s.clearAppendRecoveryRecord(); cleanupErr != nil {
-			recordErr = s.closeMutationAuthorityLocked("rollback metadata recovery", errors.Join(recordErr, cleanupErr))
-		}
-		s.mu.Unlock()
-		return CommitReceipt{}, recordErr
-	}
 	s.mu.Unlock()
-	return CommitReceipt{Committed: true},
-		s.observePersistenceAndClearAppendRecovery(observation)
+	return CommitReceipt{Committed: true}, s.observePersistence(observation)
 }
 
 func (s *Store) mutateLockedContractWithCommitStatus(mutator func(*LockedContract)) (LockedContractMutationResult, error) {
@@ -1392,11 +1365,17 @@ func (s *Store) ensurePersistedLocked() error {
 	if err := os.MkdirAll(s.sessionDir, 0o755); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
 	}
-	if err := os.WriteFile(s.eventsFP, nil, 0o644); err != nil {
-		return fmt.Errorf("initialize events file: %w", err)
+	if s.eventLogCreationVersion == nil {
+		return errors.New("event-log creation version is required")
+	}
+	if _, err := createCurrentEventLogVersion(s.eventsFP, *s.eventLogCreationVersion); err != nil {
+		return fmt.Errorf("initialize current event log: %w", err)
 	}
 	if err := initializeEventLogPersistenceLock(s.sessionDir); err != nil {
 		return err
+	}
+	if err := syncSessionDirectory(s.sessionDir); err != nil {
+		return fmt.Errorf("sync session creation artifacts: %w", err)
 	}
 	s.persisted = true
 	return nil
@@ -1415,28 +1394,10 @@ func (s *Store) persistenceSnapshotLocked() *PersistedStoreSnapshot {
 }
 
 func (s *Store) requireMetadataPersistenceLocked() error {
-	if s.recoveryErr != nil {
-		return s.recoveryErr
-	}
 	if s.options.observer == nil {
 		return errPersistenceObserverRequired
 	}
-	record, err := s.readAppendRecoveryRecord()
-	if err != nil || record == nil {
-		return err
-	}
-	digest, err := digestMeta(s.meta)
-	if err != nil {
-		return err
-	}
-	if record.Phase != appendRecoveryCommitted || digest != record.Post.SHA256 {
-		return s.closeMutationAuthorityLocked("supersede unresolved recovery", errors.New("pending recovery does not describe current metadata"))
-	}
-	observation := &persistenceObservation{snapshot: s.persistenceSnapshotLocked(), version: s.metadataVersion}
-	s.mu.Unlock()
-	err = s.observePersistenceAndClearAppendRecovery(observation)
-	s.mu.Lock()
-	return err
+	return nil
 }
 
 func (s *Store) observePersistence(observation *persistenceObservation) error {
@@ -1447,39 +1408,6 @@ func (s *Store) observePersistence(observation *persistenceObservation) error {
 		return nil
 	}
 	if err := s.options.observer.ObservePersistedStore(context.Background(), *observation.snapshot); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	if observation.version > s.persistedMetaVersion {
-		s.persistedMetaVersion = observation.version
-	}
-	s.mu.Unlock()
-	return nil
-}
-
-func (s *Store) observePersistenceAndClearAppendRecovery(
-	observation *persistenceObservation,
-) error {
-	if err := s.observePersistence(observation); err != nil {
-		return err
-	}
-	if observation == nil || observation.snapshot == nil {
-		return nil
-	}
-	if err := s.clearAppendRecoveryRecord(); err != nil {
-		return storeRecoveryError(observation.snapshot.Meta.SessionID, "clear committed mutation", err)
-	}
-	return nil
-}
-
-func (s *Store) observeEventLogReconciliation(observation *eventLogReconciliationObservation) error {
-	if observation == nil {
-		return nil
-	}
-	if s == nil || s.options.reconciler == nil {
-		return errEventLogReconcilerRequired
-	}
-	if err := s.options.reconciler.ObserveEventLogReconciliation(context.Background(), observation.reconciliation); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -1522,7 +1450,7 @@ func normalizeUsageState(state *UsageState) *UsageState {
 	if normalized.TotalCachedInputTokens > normalized.TotalInputTokens {
 		normalized.TotalCachedInputTokens = normalized.TotalInputTokens
 	}
-	if normalized.InputTokens == 0 && normalized.OutputTokens == 0 && normalized.WindowTokens == 0 && normalized.CachedInputTokens == 0 && !normalized.HasCachedInputTokens && normalized.EstimatedProviderTokens == 0 && normalized.TotalInputTokens == 0 && normalized.TotalCachedInputTokens == 0 {
+	if normalized.InputTokens == 0 && normalized.OutputTokens == 0 && normalized.WindowTokens == 0 && normalized.CachedInputTokens == 0 && !normalized.HasCachedInputTokens && normalized.EstimatedProviderTokens == 0 && normalized.TotalInputTokens == 0 && normalized.TotalCachedInputTokens == 0 && normalized.HistoryReplacementEventSequence == nil {
 		return nil
 	}
 	return &normalized
@@ -1531,6 +1459,21 @@ func normalizeUsageState(state *UsageState) *UsageState {
 func usageStatesEqual(left, right *UsageState) bool {
 	left = normalizeUsageState(left)
 	right = normalizeUsageState(right)
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.InputTokens == right.InputTokens &&
+		left.OutputTokens == right.OutputTokens &&
+		left.WindowTokens == right.WindowTokens &&
+		left.CachedInputTokens == right.CachedInputTokens &&
+		left.HasCachedInputTokens == right.HasCachedInputTokens &&
+		left.EstimatedProviderTokens == right.EstimatedProviderTokens &&
+		left.TotalInputTokens == right.TotalInputTokens &&
+		left.TotalCachedInputTokens == right.TotalCachedInputTokens &&
+		optionalInt64Equal(left.HistoryReplacementEventSequence, right.HistoryReplacementEventSequence)
+}
+
+func optionalInt64Equal(left, right *int64) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}

@@ -81,9 +81,21 @@ func (g *Gateway) resolveSessionAttachmentTarget(ctx context.Context, state *con
 	return target, binding, nil
 }
 
-func (g *Gateway) resolveSessionAttachment(ctx context.Context, state *connectionState, sessionID string) (metadata.Binding, error) {
-	_, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID)
-	return binding, err
+func (g *Gateway) authorizeSessionAttachment(ctx context.Context, state *connectionState, sessionID string) (apicontract.AuthorizedSessionAttachment, error) {
+	target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID)
+	if err != nil {
+		return apicontract.AuthorizedSessionAttachment{}, err
+	}
+	parsedSessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return apicontract.AuthorizedSessionAttachment{}, fmt.Errorf("decode persisted Session identity: %w", err)
+	}
+	return apicontract.AuthorizedSessionAttachment{
+		SessionID:     parsedSessionID,
+		ProjectID:     binding.ProjectID,
+		WorkspaceID:   target.WorkspaceID,
+		CanonicalRoot: binding.CanonicalRoot,
+	}, nil
 }
 
 func (g *Gateway) promptCommandWorkspaceRootForState(ctx context.Context, state *connectionState, sessionID *runtimeids.SessionID) (string, error) {

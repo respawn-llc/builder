@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/server/auth"
@@ -11,6 +12,8 @@ import (
 	"core/server/requestmemo"
 	"core/server/session"
 	"core/server/sessionruntime"
+	servicecontract "core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -26,6 +29,7 @@ type SessionLifecycleService struct {
 	retargeter      sessionWorkspaceRetargeter
 	navigation      sessionNavigationTargetResolver
 	authManager     *auth.Manager
+	metadata        sessionExecutionTargetStore
 	drafts          *requestmemo.Memo[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse]
 	transitions     *requestmemo.Memo[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]
 }
@@ -46,6 +50,11 @@ type sessionWorkspaceRetargeter interface {
 
 type sessionNavigationTargetResolver interface {
 	ResolveSessionNavigationBinding(ctx context.Context, sessionID string) (serverapi.SessionNavigationBinding, error)
+}
+
+type sessionExecutionTargetStore interface {
+	ResolveSessionExecutionTarget(context.Context, string) (clientui.SessionExecutionTarget, error)
+	UpdateSessionExecutionTarget(context.Context, metadata.SessionExecutionTargetUpdate) error
 }
 
 func NewSessionLifecycleService(persistenceRoot string, authority *sessionruntime.Authority, authManager *auth.Manager) *SessionLifecycleService {
@@ -91,10 +100,24 @@ func (s *SessionLifecycleService) WithNavigationTargetResolver(resolver sessionN
 	return s
 }
 
-func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionInitialInputResponse{}, err
+func (s *SessionLifecycleService) WithExecutionTargetStore(store sessionExecutionTargetStore) *SessionLifecycleService {
+	if s != nil {
+		s.metadata = store
 	}
+	return s
+}
+
+func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionInitialInputRequest]) (serverapi.SessionInitialInputResponse, error) {
+		return s.getInitialInput(ctx, validated.Value())
+	})
+}
+
+func (s *SessionLifecycleService) GetInitialInputValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionInitialInputRequest], _ servicecontract.OptionalAuthorizedSessionInActiveProject) (serverapi.SessionInitialInputResponse, error) {
+	return s.getInitialInput(ctx, req.Value())
+}
+
+func (s *SessionLifecycleService) getInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
 	if strings.TrimSpace(req.SessionID) == "" {
 		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
 	}
@@ -116,9 +139,16 @@ func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serve
 }
 
 func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionPersistInputDraftResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionPersistInputDraftRequest]) (serverapi.SessionPersistInputDraftResponse, error) {
+		return s.persistInputDraft(ctx, validated.Value())
+	})
+}
+
+func (s *SessionLifecycleService) PersistInputDraftValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionPersistInputDraftRequest], _ servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionPersistInputDraftResponse, error) {
+	return s.persistInputDraft(ctx, req.Value())
+}
+
+func (s *SessionLifecycleService) persistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
 	memoReq := sessionDraftMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Input: req.Input}
 	return s.drafts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionDraftMemoRequest, func(runCtx context.Context) (serverapi.SessionPersistInputDraftResponse, error) {
 		err := s.withStore(runCtx, req.SessionID, func(_ context.Context, store *session.Store) error {
@@ -129,18 +159,31 @@ func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req ser
 }
 
 func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionRetargetWorkspaceResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionRetargetWorkspaceRequest]) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		return s.RetargetSessionWorkspaceValidated(ctx, validated, servicecontract.AbsentAttachedProjectConstraint())
+	})
+}
+
+func (s *SessionLifecycleService) RetargetSessionWorkspaceValidated(
+	ctx context.Context,
+	validated servicecontract.Validated[serverapi.SessionRetargetWorkspaceRequest],
+	constraint servicecontract.AttachedProjectConstraint,
+) (serverapi.SessionRetargetWorkspaceResponse, error) {
 	if s == nil || s.retargeter == nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, errSessionWorkspaceRetargeterRequired
 	}
+	req := validated.Value()
 	result, err := s.retargeter.RetargetWorkspace(ctx, metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     req.SessionID,
-		WorkspaceRoot: req.WorkspaceRoot,
-		ProjectID:     req.ProjectID,
+		SessionID:                 req.SessionID,
+		WorkspaceRoot:             req.WorkspaceRoot,
+		ProjectID:                 req.ProjectID,
+		AttachedProjectConstraint: constraint,
 	})
 	if err != nil {
+		var mismatch *metadata.AttachedProjectMismatchError
+		if errors.As(err, &mismatch) {
+			return serverapi.SessionRetargetWorkspaceResponse{}, fmt.Errorf("session %q not available", mismatch.SessionID)
+		}
 		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
 	binding := result.Binding
@@ -156,9 +199,16 @@ func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, 
 }
 
 func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionResolveTransitionResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionResolveTransitionRequest]) (serverapi.SessionResolveTransitionResponse, error) {
+		return s.resolveTransition(ctx, validated.Value())
+	})
+}
+
+func (s *SessionLifecycleService) ResolveTransitionValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionResolveTransitionRequest], _ servicecontract.OptionalAuthorizedSessionInActiveProject) (serverapi.SessionResolveTransitionResponse, error) {
+	return s.resolveTransition(ctx, req.Value())
+}
+
+func (s *SessionLifecycleService) resolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
 	memoReq := sessionTransitionMemoRequest{
 		SessionID:  strings.TrimSpace(req.SessionID),
 		Transition: req.Transition,
@@ -329,19 +379,17 @@ func (s *SessionLifecycleService) preserveForkExecutionTarget(ctx context.Contex
 	if strings.TrimSpace(s.persistenceRoot) == "" {
 		return nil
 	}
-	metadataStore, err := metadata.Open(s.persistenceRoot)
-	if err != nil {
-		return err
+	if s.metadata == nil {
+		return errors.New("metadata execution target store is required")
 	}
-	defer func() { _ = metadataStore.Close() }()
-	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, trimmedParentID)
+	target, err := s.metadata.ResolveSessionExecutionTarget(ctx, trimmedParentID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, session.ErrSessionNotFound) {
 			return nil
 		}
 		return err
 	}
-	return metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdateFromReadModel(trimmedChildID, target))
+	return s.metadata.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdateFromReadModel(trimmedChildID, target))
 }
 
 func (s *SessionLifecycleService) withStore(

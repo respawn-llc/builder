@@ -34,6 +34,24 @@ type ServeServer struct {
 	cfg  config.App
 }
 
+type CriticalInfrastructureTermination struct {
+	Cause *metadata.ClassifiedFailure
+}
+
+func (e *CriticalInfrastructureTermination) Error() string {
+	if e == nil || e.Cause == nil {
+		return "critical infrastructure failure"
+	}
+	return e.Cause.Error()
+}
+
+func (e *CriticalInfrastructureTermination) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 func (s *ServeServer) Config() config.App {
 	if s == nil {
 		return config.App{}
@@ -101,24 +119,24 @@ func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapR
 		return config.App{}, false, err
 	}
 	factsService := capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: authSupport.AuthManager})
-	reloadConfig := func() (config.App, error) {
-		refreshed, err := serverbootstrap.ResolveConfig(bootstrapReq)
-		if err != nil {
-			return config.App{}, err
-		}
-		return refreshed.Config, nil
-	}
 	onboardingCfg, err := onboardingHandler(ctx, OnboardingRequest{
 		Config:                cfg,
 		AuthManager:           authSupport.AuthManager,
 		CapabilityFactsClient: factsService,
-		ReloadConfig:          reloadConfig,
 	})
 	if errors.Is(err, ErrOnboardingRequired) {
 		return cfg, false, nil
 	}
 	if err != nil {
 		return config.App{}, false, err
+	}
+	if onboardingCfg.Source.CreatedDefaultConfig {
+		refreshed, refreshErr := serverbootstrap.ResolveConfig(bootstrapReq)
+		if refreshErr != nil {
+			return config.App{}, false, refreshErr
+		}
+		onboardingCfg = refreshed.Config
+		onboardingCfg.Source.CreatedDefaultConfig = true
 	}
 	return onboardingCfg, onboardingCfg.Source.SettingsFileExists, nil
 }
@@ -165,6 +183,9 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 	if ctx == nil {
 		return errContextRequired
 	}
+	if fatal := s.metadataFatalTermination(); fatal != nil {
+		return fatal
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -173,19 +194,51 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 	}
 	rpc, err := s.startRPC()
 	if err != nil {
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			return fatal
+		}
 		return err
 	}
 	defer s.close()
+	var metadataFatal <-chan struct{}
+	if s.Core != nil && s.Core.MetadataFatalAuthority() != nil {
+		metadataFatal = s.Core.MetadataFatalAuthority().Done()
+	}
 	select {
 	case <-ctx.Done():
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			return fatal
+		}
 		rpc.shutdown()
 		rpc.wait()
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			return fatal
+		}
 		return ctx.Err()
 	case serveErr := <-rpc.errCh:
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			return fatal
+		}
 		rpc.shutdown()
 		rpc.waitRemaining()
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			return fatal
+		}
 		return serveErr
+	case <-metadataFatal:
+		return s.metadataFatalTermination()
 	}
+}
+
+func (s *ServeServer) metadataFatalTermination() *CriticalInfrastructureTermination {
+	if s == nil || s.Core == nil || s.Core.MetadataFatalAuthority() == nil {
+		return nil
+	}
+	fatal := s.Core.MetadataFatalAuthority().MetadataFatal()
+	if fatal == nil {
+		return nil
+	}
+	return &CriticalInfrastructureTermination{Cause: fatal}
 }
 
 func (s *ServeServer) startRPC() (*runningRPC, error) {
@@ -663,12 +716,6 @@ func (d *startupGatewayDependencies) WorkflowClient() apicontract.WorkflowServic
 		return c.WorkflowClient()
 	}
 	return nil
-}
-func (d *startupGatewayDependencies) SessionBelongsToProject(ctx context.Context, sessionID string, projectID string) error {
-	if c := d.activeCore(); c != nil {
-		return c.SessionBelongsToProject(ctx, sessionID, projectID)
-	}
-	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }
 func (d *startupGatewayDependencies) SessionViewClient() apicontract.SessionViewService {
 	if c := d.activeCore(); c != nil {

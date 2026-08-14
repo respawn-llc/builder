@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm/openaiwire"
 	"core/shared/invariant"
+	"core/shared/transcript"
 )
 
 type ToolOutputKind string
@@ -185,6 +186,9 @@ func normalizeToolCompletionFallbackFields(record ToolCompletionRecord) (ToolCom
 	if len(record.Presentation) > 0 {
 		if err := validateJSONValue("presentation", record.Presentation); err != nil {
 			return ToolCompletionRecord{}, err
+		}
+		if _, ok := transcript.DecodeToolCallMeta(record.Presentation); !ok {
+			return ToolCompletionRecord{}, fmt.Errorf("presentation is invalid")
 		}
 		record.Presentation = append(json.RawMessage(nil), record.Presentation...)
 	}
