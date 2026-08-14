@@ -86,19 +86,11 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		columnKeysJSON = sql.NullString{String: string(encodedColumnKeys), Valid: true}
 		columnFilterSet = len(req.narrowed.columnKeys) > 0
 	}
-	statusKinds := make([]string, 0, len(req.statusKinds))
-	for _, kind := range req.statusKinds {
-		statusKinds = append(statusKinds, string(kind))
-	}
-	statusKindsJSON, err := json.Marshal(statusKinds)
+	statusKindsJSON, err := workflowTaskKindsJSON(req.statusKinds)
 	if err != nil {
 		return workflowTaskListPageResult{}, err
 	}
-	attentionKinds := make([]string, 0, len(req.attentionKinds))
-	for _, kind := range req.attentionKinds {
-		attentionKinds = append(attentionKinds, string(kind))
-	}
-	attentionKindsJSON, err := json.Marshal(attentionKinds)
+	attentionKindsJSON, err := workflowTaskKindsJSON(req.attentionKinds)
 	if err != nil {
 		return workflowTaskListPageResult{}, err
 	}
@@ -113,9 +105,9 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		ColumnFilterSet:      boolInt64(columnFilterSet),
 		ColumnKeysJson:       columnKeysJSON,
 		StatusFilterSet:      boolInt64(len(req.statusKinds) > 0),
-		StatusKindsJson:      string(statusKindsJSON),
+		StatusKindsJson:      statusKindsJSON,
 		AttentionFilterSet:   boolInt64(len(req.attentionKinds) > 0),
-		AttentionKindsJson:   string(attentionKindsJSON),
+		AttentionKindsJson:   attentionKindsJSON,
 		LabelFilterKind:      labelFilterArgs.kind,
 		LabelFilterMode:      labelFilterArgs.mode,
 		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
@@ -211,16 +203,25 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	return result, nil
 }
 
+func workflowTaskKindsJSON[T ~string](kinds []T) (string, error) {
+	encoded, err := json.Marshal(kinds)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
 func workflowTaskListMatchingWorkflowCardinality(count int) (serverapi.WorkflowTaskListMatchingWorkflowCardinality, error) {
+	if count < 0 {
+		return "", fmt.Errorf("workflow task list query returned invalid matching workflow count %d", count)
+	}
 	switch count {
 	case 0:
 		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone, nil
 	case 1:
 		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne, nil
-	case 2:
-		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple, nil
 	default:
-		return "", fmt.Errorf("workflow task list query returned invalid matching workflow count %d", count)
+		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple, nil
 	}
 }
 

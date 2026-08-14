@@ -28,6 +28,10 @@ type SessionStoreResolver interface {
 	ResolveSessionStore(ctx context.Context, sessionID string) (*session.Store, error)
 }
 
+type PersistedSessionResolver interface {
+	ResolvePersistedSession(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error)
+}
+
 type ExecutionTargetResolver interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
 }
@@ -46,6 +50,7 @@ type currentRuntimeReader interface {
 
 type Service struct {
 	sessions          SessionStoreResolver
+	persisted         PersistedSessionResolver
 	snapshots         *resolvedSessionSnapshotSource
 	targets           ExecutionTargetResolver
 	app               config.App
@@ -90,11 +95,35 @@ func NewService(
 		targets:          targets,
 		cacheWarningMode: config.CacheWarningModeDefault,
 	}
+	if persisted, ok := sessions.(PersistedSessionResolver); ok {
+		svc.persisted = persisted
+	}
 	if authority != nil {
 		svc.contextRuntimes = authority
 	}
 	svc.snapshots = newResolvedSessionSnapshotSource(sessions, activity, authority, svc.cacheWarningModeValue)
 	return svc
+}
+
+func (s *Service) SubscribeQuestionHistory(
+	ctx context.Context,
+	req serverapi.QuestionHistorySubscribeRequest,
+) (serverapi.QuestionHistorySubscription, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	if s == nil || s.persisted == nil {
+		return nil, errSessionStoreResolverRequired
+	}
+	record, err := s.persisted.ResolvePersistedSession(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	cursor, err := session.OpenQuestionHistoryCursor(record.SessionDir, req.MaxHandoffs)
+	if err != nil {
+		return nil, err
+	}
+	return &questionHistorySubscription{cursor: cursor}, nil
 }
 
 func (s *Service) WithChatContextWorkspaceResolver(resolver chatContextWorkspaceResolver) *Service {

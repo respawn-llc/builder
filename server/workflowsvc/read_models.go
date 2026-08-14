@@ -21,6 +21,7 @@ type WorkflowBoardReadModel interface {
 
 type WorkflowTaskListReadModel interface {
 	List(context.Context, serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error)
+	CountGroups(context.Context, serverapi.WorkflowProjectTaskGroupCountsRequest) (serverapi.WorkflowProjectTaskGroupCountsResponse, error)
 }
 
 type WorkflowTaskSearchReadModel interface {

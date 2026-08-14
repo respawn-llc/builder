@@ -309,6 +309,181 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(virtualizer.scrollToOffset).not.toHaveBeenCalled();
   });
 
+  it("renders virtualized grid and row semantics", () => {
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
+      { end: 80, index: 1, key: "task", lane: 0, size: 40, start: 40 },
+    ]);
+    render(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        itemRole="row"
+        items={["header", "task"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={(item) => <div role={item === "header" ? "columnheader" : "gridcell"}>{item}</div>}
+        role="grid"
+        stickyItemKeys={new Set(["header"])}
+      />,
+    );
+
+    expect(screen.getByRole("grid")).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(2);
+  });
+
+  it("loads independent visible items once for their current request generation", () => {
+    const loadActive = vi.fn();
+    const loadDone = vi.fn();
+    const view = render(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={["active-boundary", "done-boundary"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[
+          {
+            itemKey: "active-boundary",
+            requestGeneration: "active-1",
+            enabled: true,
+            fetching: false,
+            onVisible: loadActive,
+          },
+          {
+            itemKey: "done-boundary",
+            requestGeneration: "done-1",
+            enabled: true,
+            fetching: false,
+            onVisible: loadDone,
+          },
+        ]}
+      />,
+    );
+
+    expect(loadActive).toHaveBeenCalledOnce();
+    expect(loadDone).toHaveBeenCalledOnce();
+    view.rerender(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={["active-boundary", "done-boundary"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[
+          {
+            itemKey: "active-boundary",
+            requestGeneration: "active-2",
+            enabled: true,
+            fetching: false,
+            onVisible: loadActive,
+          },
+          {
+            itemKey: "done-boundary",
+            requestGeneration: "done-1",
+            enabled: true,
+            fetching: false,
+            onVisible: loadDone,
+          },
+        ]}
+      />,
+    );
+    expect(loadActive).toHaveBeenCalledTimes(2);
+    expect(loadDone).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={["active-boundary", "done-boundary"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[
+          {
+            itemKey: "active-boundary",
+            requestGeneration: "active-1",
+            enabled: true,
+            fetching: false,
+            onVisible: loadActive,
+          },
+          {
+            itemKey: "done-boundary",
+            requestGeneration: "done-1",
+            enabled: true,
+            fetching: false,
+            onVisible: loadDone,
+          },
+        ]}
+      />,
+    );
+    expect(loadActive).toHaveBeenCalledTimes(3);
+    expect(loadDone).toHaveBeenCalledOnce();
+  });
+
+  it("retires visibility-trigger state after its boundary is removed", () => {
+    const load = vi.fn();
+    const trigger = {
+      itemKey: "active-boundary",
+      requestGeneration: "active-1",
+      enabled: true,
+      fetching: false,
+      onVisible: load,
+    };
+    const view = render(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={["active-boundary"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[trigger]}
+      />,
+    );
+    expect(load).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={[]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[]}
+      />,
+    );
+    view.rerender(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={["active-boundary"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[trigger]}
+      />,
+    );
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     { key: "", offsetPx: 10 },
     { key: "negative", offsetPx: -1 },

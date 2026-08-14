@@ -324,6 +324,18 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	if !errors.As(err, &routeErr) || routeErr.code != protocol.ErrCodeInvalidRequest {
 		t.Fatalf("attached transcript mismatch error = %v, want invalid request route error", err)
 	}
+	questionHistoryRoute := routeForTest(t, protocol.MethodSessionQuestionHistorySubscribe)
+	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: &ownSessionID}, questionHistoryRoute, serverapi.QuestionHistorySubscribeRequest{
+		SessionID: fixture.ownSessionID, MaxHandoffs: 1,
+	}); err != nil {
+		t.Fatalf("attached Question-history subscription: %v", err)
+	}
+	err = executor.authorizeScope(ctx, &connectionState{attachedSession: &ownSessionID}, questionHistoryRoute, serverapi.QuestionHistorySubscribeRequest{
+		SessionID: fixture.foreignSessionID, MaxHandoffs: 1,
+	})
+	if !errors.As(err, &routeErr) || routeErr.code != protocol.ErrCodeInvalidRequest {
+		t.Fatalf("attached Question-history mismatch error = %v, want invalid request route error", err)
+	}
 
 	projectWorkspaceRoute := routeForTest(t, protocol.MethodSessionPlan)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, projectWorkspaceRoute, serverapi.SessionPlanRequest{}); err != nil {

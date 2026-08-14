@@ -119,13 +119,25 @@
 - A successful batch response contains every submitted prompt identity exactly once and no other prompt identity. Each result is typed Resolved or Skipped. Result order has no meaning.
 - A declined ordinary Question produces the same canceled/error Ask Question outcome as terminal cancellation, with no completed answer or synthetic user message. A declined Approval creates no separate decision row.
 - Resolved-prompt updates carry prompt identity only. They never expose answer or decline content.
+- Answered-Question history comes only from the Session event log. Kent does not store a database copy of Question text or answers.
+- The Question-history command may read backward through the event log across its requested number of history-replacement windows. This command is an explicit exception to the normal prohibition on full-history transcript reads.
+- Question-history reading does not block Session work and provides no consistency guarantee while the event log changes. It may return stale or duplicate Questions.
+- A read or decode failure stops Question-history reading. Human output retains Questions already emitted; streaming JSON may remain partial and invalid.
+- Question-history delivery reuses the generic subscription transport. The server emits start metadata, zero or more Questions, and final omission metadata in that order; clients consume those typed events without a separate lifecycle-validation state machine. Generic transport completion is operation success, and a transport failure remains an operational failure even after final omission metadata.
+- Question-history reading ignores provider-history items carried by history replacements. It reads self-contained Question completion events only.
+- New Sessions store structured Question answers and their answer commit time in event-log schema v2.
+- Event-log schema v2 limits event-envelope field names, top-level event-payload field names, and tool names to 4,096 UTF-8 bytes. Writing or decoding an oversized discriminator fails visibly. This limit does not apply to Question text, answers, Commentary, provider history, or other payload content.
+- Event-log schema v1 Sessions remain openable, resumable, and writable without migration. Question history uses their normalized presented Question text and verbatim flattened completion output, and does not infer selected options, Commentary, or answer time.
+- Event-log schema v1 preserves existing discriminator lengths. If bounded Question-history inspection encounters a legacy discriminator that exceeds the v2 limit, the read stops with a visible decode failure instead of silently omitting the record.
+- A forked or cloned Session inherits its source Session's event-log schema version.
+- Kent 3.0 removes the event-log v1 Question-history fallback.
 
 ## Sessions, Location, And Transcript Bounds
 
 - Sessions can stop and resume. The persistence root is configurable and defaults to `~/.kent`; their durable location model is Project, Workspace, then Worktree.
 - Moving a Session to a Workspace in another Project is accepted only while its RuntimeActivity is idle or it has no Active Session Runtime. Every other live state rejects the move immediately without waiting for current work.
 - An accepted cross-Project move retires an idle Active Session Runtime before moving the Session. Opening the Session in the destination Project creates a fresh learned-Workspace cache.
-- Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself.
+- Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself, or when the Question-history command performs its explicitly requested backward history read.
 - Transcript access for active and dormant Sessions is limited to the requested bounded page or recent tail plus live streaming output. Model context retains only the bounded active segment established by compaction, never the full transcript.
 - `server_host` and `server_port` explicitly select the daemon address; Kent binds exactly that address and fails startup if it is occupied. Local same-machine optimization is additive and cannot override either explicit setting.
 - Session activation and release identify the exact session resource generation. A stale release is a successful no-op and cannot close or detach a replacement generation.

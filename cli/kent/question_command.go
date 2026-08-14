@@ -89,6 +89,8 @@ func (c questionCommand) run(args []string, stdout io.Writer, stderr io.Writer) 
 		switch args[0] {
 		case "answer":
 			return c.answerSubcommand(args[1:], stdout, stderr)
+		case "list", "history":
+			return c.listSubcommand(args[1:], stdout, stderr)
 		case "--help", "-h":
 			questionUsage.write(newCommandFlagSet(config.Command+" question", stderr, questionUsage))
 			return 0

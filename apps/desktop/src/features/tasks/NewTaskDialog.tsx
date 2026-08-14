@@ -10,6 +10,7 @@ import {
   isProjectMissingError,
   type ApiService,
   type TaskDependencyCreateIntent,
+  type TaskMutationInput,
   type WorkspaceCatalogRow,
 } from "@/api";
 import {
@@ -57,6 +58,32 @@ const newTaskSchema = z.object({
 });
 
 type NewTaskFormValues = z.output<typeof newTaskSchema>;
+
+type NewTaskRelationship = Readonly<{
+  originTaskID: string;
+  newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
+}>;
+
+type NewTaskWorkflowScope =
+  | Readonly<{
+      workflowID: string;
+      pendingRelationship?: NewTaskRelationship | undefined;
+    }>
+  | Readonly<{
+      workflowID?: undefined;
+      pendingRelationship?: undefined;
+    }>;
+
+type NewTaskFormProps = Readonly<{
+  boardQueryWorkflowID: string | undefined;
+  className?: string;
+  onSubmitted: (taskID: string) => void;
+  onPendingChange?: ((pending: boolean) => void) | undefined;
+  onProjectMissing?: (() => void) | undefined;
+  projectID: string;
+  initialSourceWorkspaceID?: string | undefined;
+}> &
+  NewTaskWorkflowScope;
 
 export type NewTaskFallbackDialogProps = Readonly<{
   boardQueryWorkflowID: string | undefined;
@@ -121,27 +148,8 @@ export function NewTaskWindowRoute({
   );
 }
 
-export function NewTaskForm({
-  projectID,
-  initialSourceWorkspaceID,
-  pendingRelationship,
-  ...props
-}: Readonly<{
-  boardQueryWorkflowID: string | undefined;
-  className?: string;
-  onSubmitted: (taskID: string) => void;
-  onPendingChange?: ((pending: boolean) => void) | undefined;
-  onProjectMissing?: (() => void) | undefined;
-  projectID: string;
-  workflowID: string;
-  initialSourceWorkspaceID?: string | undefined;
-  pendingRelationship?:
-    | Readonly<{
-        originTaskID: string;
-        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
-      }>
-    | undefined;
-}>) {
+export function NewTaskForm(props: NewTaskFormProps) {
+  const { projectID } = props;
   const { t } = useTranslation();
   const { push } = useStatusController();
   const reportLabelError = useCallback(
@@ -158,12 +166,7 @@ export function NewTaskForm({
   );
   return (
     <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={projectID}>
-      <NewTaskFormContent
-        initialSourceWorkspaceID={initialSourceWorkspaceID}
-        pendingRelationship={pendingRelationship}
-        projectID={projectID}
-        {...props}
-      />
+      <NewTaskFormContent {...props} />
     </ProjectLabelsProvider>
   );
 }
@@ -185,14 +188,9 @@ function NewTaskFormContent({
   onPendingChange?: ((pending: boolean) => void) | undefined;
   onProjectMissing?: (() => void) | undefined;
   projectID: string;
-  workflowID: string;
+  workflowID?: string | undefined;
   initialSourceWorkspaceID?: string | undefined;
-  pendingRelationship?:
-    | Readonly<{
-        originTaskID: string;
-        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
-      }>
-    | undefined;
+  pendingRelationship?: NewTaskRelationship | undefined;
 }>) {
   const { t } = useTranslation();
   const { api } = useAppServices();
@@ -251,22 +249,30 @@ function NewTaskFormContent({
       throw new Error("New Task submission requires a source Workspace.");
     }
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
+    const fields = {
+      projectID,
+      title: values.title,
+      body: values.body,
+      sourceWorkspaceID,
+      labelIDs: effectiveSelectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID)),
+    };
+    const dependencyIntent =
+      pendingRelationship === undefined
+        ? undefined
+        : {
+            relatedTaskID: pendingRelationship.originTaskID,
+            newTaskRole: pendingRelationship.newTaskRole,
+          };
+    const input =
+      workflowID === undefined
+        ? projectScopedTaskMutation(fields, pendingRelationship)
+        : {
+            ...fields,
+            workflowID,
+            ...(dependencyIntent === undefined ? {} : { dependencyIntent }),
+          };
     try {
-      const taskID = await createTask.mutateAsync({
-        projectID,
-        workflowID,
-        title: values.title,
-        body: values.body,
-        sourceWorkspaceID,
-        labelIDs: effectiveSelectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID)),
-        dependencyIntent:
-          pendingRelationship === undefined
-            ? undefined
-            : {
-                relatedTaskID: pendingRelationship.originTaskID,
-                newTaskRole: pendingRelationship.newTaskRole,
-              },
-      });
+      const taskID = await createTask.mutateAsync(input);
       onSubmitted(taskID);
     } catch {
       // The mutation state renders the persistent failure without clearing form input.
@@ -371,6 +377,16 @@ function NewTaskFormContent({
       </Button>
     </form>
   );
+}
+
+function projectScopedTaskMutation(
+  fields: Omit<TaskMutationInput, "workflowID" | "dependencyIntent">,
+  pendingRelationship: NewTaskRelationship | undefined,
+): TaskMutationInput {
+  if (pendingRelationship !== undefined) {
+    throw new Error("Related Task creation requires an explicit Workflow.");
+  }
+  return fields;
 }
 
 function useNewTaskWorkspaceCatalog(

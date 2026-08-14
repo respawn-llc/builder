@@ -166,6 +166,117 @@ func TestWorkflowTaskListRequestRejectsZeroWorkflowID(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskListRequestRoundTripsAndValidatesStatusKinds(t *testing.T) {
+	projectID := "project-1"
+	for _, statusKinds := range [][]WorkflowTaskStatusKind{
+		{
+			WorkflowTaskStatusKindWaitingQuestion,
+			WorkflowTaskStatusKindWaitingApproval,
+			WorkflowTaskStatusKindInterrupted,
+			WorkflowTaskStatusKindRunning,
+			WorkflowTaskStatusKindQueued,
+			WorkflowTaskStatusKindActive,
+		},
+		{WorkflowTaskStatusKindBacklog},
+		{WorkflowTaskStatusKindDone},
+	} {
+		request := WorkflowTaskListRequest{
+			ProjectID:   &projectID,
+			StatusKinds: statusKinds,
+			LabelFilter: WorkflowTaskLabelFilterNone(),
+		}
+		data, err := json.Marshal(request)
+		if err != nil {
+			t.Fatalf("marshal status kinds %v: %v", statusKinds, err)
+		}
+		var decoded WorkflowTaskListRequest
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("unmarshal status kinds %v: %v", statusKinds, err)
+		}
+		if !slices.Equal(decoded.StatusKinds, statusKinds) {
+			t.Fatalf("decoded status kinds = %v, want %v", decoded.StatusKinds, statusKinds)
+		}
+		if err := decoded.Validate(); err != nil {
+			t.Fatalf("Validate status kinds %v: %v", statusKinds, err)
+		}
+	}
+
+	request := WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		StatusKinds: []WorkflowTaskStatusKind{"future"},
+		LabelFilter: WorkflowTaskLabelFilterNone(),
+	}
+	if !hasWorkflowRequestError(request.Validate(), "status_kinds[0]", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("Validate error = %v, want status kind invalid value", request.Validate())
+	}
+	group := WorkflowProjectTaskGroupActive
+	request = WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		Group:       &group,
+		LabelFilter: WorkflowTaskLabelFilterNone(),
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("Validate group: %v", err)
+	}
+	request.StatusKinds = []WorkflowTaskStatusKind{WorkflowTaskStatusKindActive}
+	if !hasWorkflowRequestError(request.Validate(), "group", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("Validate group/status conflict = %v, want invalid group", request.Validate())
+	}
+}
+
+func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t *testing.T) {
+	request := WorkflowProjectTaskGroupCountsRequest{ProjectID: "project-1"}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	_, requestJSON := marshalWorkflowJSON[map[string]json.RawMessage](t, request)
+	if len(requestJSON) != 1 {
+		t.Fatalf("group-count request JSON keys = %v, want only project_id", requestJSON)
+	}
+	var serializedProjectID string
+	if err := json.Unmarshal(requestJSON["project_id"], &serializedProjectID); err != nil {
+		t.Fatalf("decode request project_id: %v", err)
+	}
+	if serializedProjectID != request.ProjectID {
+		t.Fatalf("request project_id = %q, want %q", serializedProjectID, request.ProjectID)
+	}
+	response := WorkflowProjectTaskGroupCountsResponse{
+		ProjectID:   "project-1",
+		Definitions: WorkflowProjectTaskGroupDefinitions(),
+		Counts: WorkflowProjectTaskGroupCounts{
+			Active:  3,
+			Backlog: 2,
+			Done:    1,
+		},
+		GeneratedAtUnixMs: 7,
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("response Validate: %v", err)
+	}
+	data, responseJSON := marshalWorkflowJSON[map[string]json.RawMessage](t, response)
+	for _, forbiddenKey := range []string{"tasks", "offset", "limit"} {
+		if _, exists := responseJSON[forbiddenKey]; exists {
+			t.Fatalf("group-count response includes forbidden key %q: %s", forbiddenKey, data)
+		}
+	}
+	var serializedDefinitions []WorkflowProjectTaskGroupDefinition
+	if err := json.Unmarshal(responseJSON["definitions"], &serializedDefinitions); err != nil {
+		t.Fatalf("decode response definitions: %v", err)
+	}
+	if !reflect.DeepEqual(serializedDefinitions, response.Definitions) {
+		t.Fatalf("response definitions = %+v, want %+v", serializedDefinitions, response.Definitions)
+	}
+
+	request.ProjectID = ""
+	if !hasWorkflowRequestError(request.Validate(), "project_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("blank project Validate error = %v", request.Validate())
+	}
+	response.Counts.Active = -1
+	if !hasWorkflowRequestError(response.Validate(), "counts.active", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("negative count Validate error = %v", response.Validate())
+	}
+}
+
 func TestWorkflowDependencyFilterRequestContractsRoundTripAndValidate(t *testing.T) {
 	projectID := "project-1"
 	workflowID := runtimeids.NewWorkflowID()
@@ -309,8 +420,11 @@ func TestWorkflowLabelSuccessDTOValidation(t *testing.T) {
 		{name: "task label get response", request: WorkflowTaskLabelsGetResponse{Assignment: assignment}},
 		{name: "task label update response", request: WorkflowTaskLabelsUpdateResponse{Assignment: assignment}},
 		{name: "task detail projection", request: WorkflowTaskDetail{Summary: WorkflowTaskSummary{ID: "task-1"}, LabelIDs: []string{workflowLabelIDAlpha}, Dependencies: emptyWorkflowTaskDependenciesForTest()}},
-		{name: "task list projection", request: WorkflowTaskListItem{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}},
-		{name: "task list projection response", request: WorkflowTaskListResponse{Tasks: []WorkflowTaskListItem{{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}}}},
+		{name: "task list projection", request: WorkflowTaskListItem{
+			TaskID: "task-1", WorkflowID: runtimeids.NewWorkflowID(),
+			Status: WorkflowTaskStatus{Kind: WorkflowTaskStatusKindBacklog, NativeState: WorkflowTaskNativeStateActive},
+			Labels: []WorkflowProjectLabel{label},
+		}},
 		{name: "board card projection", request: WorkflowBoardTaskCard{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}},
 		{name: "board card projection response", request: WorkflowBoardNodeCardsListResponse{Cards: []WorkflowBoardTaskCard{{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}}}},
 	})
@@ -327,7 +441,7 @@ func TestWorkflowLabelSuccessDTOValidation(t *testing.T) {
 		{name: "assignment requires task", request: WorkflowTaskAssignedLabelIDs{LabelIDs: []string{workflowLabelIDAlpha}}, field: "task_id", code: WorkflowRequestErrorRequired},
 		{name: "assignment raw 101 IDs wins over malformed IDs", request: WorkflowTaskAssignedLabelIDs{TaskID: "task-1", LabelIDs: raw101}, field: "label_ids", code: WorkflowRequestErrorTooLong},
 		{name: "detail rejects duplicate IDs", request: WorkflowTaskDetail{Summary: WorkflowTaskSummary{ID: "task-1"}, LabelIDs: []string{workflowLabelIDAlpha, workflowLabelIDAlpha}}, field: "task.label_ids[1]", code: WorkflowRequestErrorInvalidValue},
-		{name: "list item requires task ID", request: WorkflowTaskListItem{LabelIDs: []string{workflowLabelIDAlpha}}, field: "task_id", code: WorkflowRequestErrorRequired},
+		{name: "list item requires task ID", request: WorkflowTaskListItem{Labels: []WorkflowProjectLabel{label}}, field: "task_id", code: WorkflowRequestErrorRequired},
 		{name: "board card requires task ID", request: WorkflowBoardTaskCard{LabelIDs: []string{workflowLabelIDAlpha}}, field: "task_id", code: WorkflowRequestErrorRequired},
 	})
 }
@@ -521,11 +635,10 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 	})
 }
 
-func TestWorkflowLabelProjectionDTOsContainIDsWithoutNames(t *testing.T) {
+func TestWorkflowLabelProjectionDTOsExposeNamesOnlyForTaskListRows(t *testing.T) {
 	labelIDs := []string{workflowLabelIDAlpha, workflowLabelIDBeta}
 	for _, value := range []any{
 		WorkflowTaskDetail{Summary: WorkflowTaskSummary{WorkflowID: runtimeids.NewWorkflowID()}, Workflow: WorkflowTaskWorkflowSummary{WorkflowID: runtimeids.NewWorkflowID()}, LabelIDs: labelIDs, Dependencies: emptyWorkflowTaskDependenciesForTest()},
-		WorkflowTaskListItem{WorkflowID: runtimeids.NewWorkflowID(), LabelIDs: labelIDs},
 		WorkflowBoardTaskCard{WorkflowID: runtimeids.NewWorkflowID(), LabelIDs: labelIDs},
 	} {
 		data, err := json.Marshal(value)
@@ -544,6 +657,38 @@ func TestWorkflowLabelProjectionDTOsContainIDsWithoutNames(t *testing.T) {
 				t.Fatalf("projection %T leaks label names: %s", value, data)
 			}
 		}
+	}
+
+	value := WorkflowTaskListItem{
+		TaskID:     "task-1",
+		WorkflowID: runtimeids.NewWorkflowID(),
+		Status: WorkflowTaskStatus{
+			Kind:        WorkflowTaskStatusKindBacklog,
+			NativeState: WorkflowTaskNativeStateActive,
+		},
+		Labels: []WorkflowProjectLabel{
+			{ID: workflowLabelIDAlpha, Name: "Alpha"},
+			{ID: workflowLabelIDBeta, Name: "Beta"},
+		},
+		DependencyProgress: &WorkflowTaskDependencyProgress{SatisfiedCount: 1, TotalCount: 2},
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal task-list row: %v", err)
+	}
+	var shape map[string]any
+	if err := json.Unmarshal(data, &shape); err != nil {
+		t.Fatalf("decode task-list row JSON: %v", err)
+	}
+	if _, exists := shape["label_ids"]; exists {
+		t.Fatalf("task-list row retains label_ids: %s", data)
+	}
+	labels, ok := shape["labels"].([]any)
+	if !ok || len(labels) != 2 {
+		t.Fatalf("task-list labels = %#v, want two display records", shape["labels"])
+	}
+	if err := value.Validate(); err != nil {
+		t.Fatalf("Validate task-list row: %v", err)
 	}
 }
 
