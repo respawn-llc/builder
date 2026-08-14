@@ -99,7 +99,8 @@ type Logger = ReturnType<typeof useAppServices>["logger"];
 function newTaskCreateErrorBody(error: unknown, t: Translate, logger: Logger): string {
   const dependencyError = decodeWorkflowTaskDependencyError(error);
   if (dependencyError === null) return errorMessage(error);
-  void logger.append("warn", "Task creation dependency validation failed.", { error: errorMessage(error) });
+  const reason = dependencyError.reason;
+  void logger.append("warn", "Dependency rejected.", { error: errorMessage(error), reason });
   return t("task.dependenciesRejected");
 }
 

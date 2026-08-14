@@ -373,8 +373,7 @@ export const englishResources = {
       dependenciesSearchResults: "Dependency task search results",
       dependenciesRemove: "Remove dependency",
       dependenciesRemoveFailed: "Dependency removal failed",
-      dependenciesRejected:
-        "The selected dependency relationships conflict or are unavailable. Remove or change them, then try again.",
+      dependenciesRejected: "Dependencies can’t be added. Remove or change them, then try again.",
       dependenciesLimitReached: "No more direct dependencies can be added in this direction.",
       dependenciesProgress: "{{completed}} of {{total}} dependencies satisfied",
       dependenciesProgressComplete: "{{completed}} of {{total}} dependencies satisfied. Time to cook!",

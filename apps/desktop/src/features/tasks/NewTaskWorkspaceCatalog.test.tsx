@@ -647,18 +647,17 @@ describe("New Task Workspace catalog integration", () => {
         }}
       />,
     );
-    await user.click(screen.getByTestId("dependency-add-blocked-by"));
+    const addDependency = screen.getByTestId("dependency-add-blocked-by");
+    await user.click(addDependency);
     await user.click(screen.getByTestId("dependency-candidate-task-related"));
-    expect(screen.getByText("task.dependenciesNoMatches")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "task.create" }));
+    expect(addDependency).toHaveAttribute("aria-expanded", "true");
+    fireEvent.submit(addDependency);
     await vi.waitFor(() => {
       expect(state.statusPush).toHaveBeenCalledOnce();
     });
-    expect(state.statusPush.mock.lastCall?.[0]).toMatchObject({
-      body: "task.dependenciesRejected",
-    });
-    expect(JSON.stringify(state.loggerAppend.mock.lastCall?.[2])).toContain("reciprocal_dependency");
-    expect(screen.queryByRole("textbox", { name: "task.dependenciesSearch" })).not.toBeInTheDocument();
+    expect(state.loggerAppend.mock.lastCall?.[2]).toHaveProperty("error");
+    expect(state.loggerAppend.mock.lastCall?.[2]).toHaveProperty("reason", "reciprocal_dependency");
+    expect(screen.getByTestId("dependency-add-blocked-by")).toHaveAttribute("aria-expanded", "false");
     expect(screen.getAllByTestId("dependency-row-task-related")).toHaveLength(2);
   });
 });
