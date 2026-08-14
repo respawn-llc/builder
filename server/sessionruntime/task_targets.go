@@ -42,24 +42,33 @@ type TaskExecutionSnapshot struct {
 	Executions []TaskExecution
 }
 
-// WithWorkflowTaskExecutionSnapshots runs operation while the Authority live
-// state lock is held. The callback may acquire the Workflow Execution
-// Controller lock, which establishes the Authority-before-Controller order
-// required for lifecycle observations. It must not call back into Authority.
-func (a *Authority) WithWorkflowTaskExecutionSnapshots(operation func(map[workflow.TaskID]TaskExecutionSnapshot) error) error {
+type workflowTaskExecutionReadSnapshot struct {
+	executions map[workflow.TaskID]TaskExecutionSnapshot
+}
+
+// CurrentWorkflowTaskExecutionReadSnapshot returns a stale-tolerant immutable
+// read projection. It opportunistically refreshes without waiting for live
+// runtime ownership; when runtime state is busy, the last completed projection
+// remains available to read models.
+func (a *Authority) CurrentWorkflowTaskExecutionReadSnapshot() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
 	if a == nil {
-		return errors.New("session runtime authority is required")
+		return nil, errors.New("session runtime authority is required")
 	}
-	if operation == nil {
-		return errors.New("workflow task execution snapshot operation is required")
+	if a.mu.TryLock() {
+		snapshots, complete, err := a.tryWorkflowTaskExecutionSnapshotsLocked()
+		a.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		if complete {
+			a.workflowTaskReads.Store(&workflowTaskExecutionReadSnapshot{executions: snapshots})
+		}
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
-	if err != nil {
-		return err
+	current := a.workflowTaskReads.Load()
+	if current == nil {
+		return map[workflow.TaskID]TaskExecutionSnapshot{}, nil
 	}
-	return operation(snapshots)
+	return cloneTaskExecutionSnapshots(current.executions), nil
 }
 
 func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
@@ -76,6 +85,25 @@ func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]
 	}
 	sortTaskExecutionSnapshots(snapshots)
 	return snapshots, nil
+}
+
+func (a *Authority) tryWorkflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]TaskExecutionSnapshot, bool, error) {
+	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
+	complete := true
+	var snapshotErr error
+	a.forEachWorkflowExecutionLocked(func(execution *execution) {
+		if snapshotErr != nil || !complete {
+			return
+		}
+		var appended bool
+		appended, snapshotErr = tryAppendTaskExecutionSnapshot(snapshots, execution)
+		complete = appended
+	})
+	if snapshotErr != nil || !complete {
+		return nil, complete, snapshotErr
+	}
+	sortTaskExecutionSnapshots(snapshots)
+	return snapshots, true, nil
 }
 
 type WorkflowTaskExecutionState struct {
@@ -243,6 +271,29 @@ func (a *Authority) CurrentScopedTaskExecutionSnapshots(projectID string, workfl
 }
 
 func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnapshot, execution *execution) error {
+	pendingPrompts, err := execution.prompts.pendingReferences()
+	if err != nil {
+		return err
+	}
+	return appendTaskExecutionSnapshotWithPrompts(snapshots, execution, pendingPrompts)
+}
+
+func tryAppendTaskExecutionSnapshot(
+	snapshots map[workflow.TaskID]TaskExecutionSnapshot,
+	execution *execution,
+) (bool, error) {
+	pendingPrompts, acquired, err := execution.prompts.tryPendingReferences()
+	if err != nil || !acquired {
+		return acquired, err
+	}
+	return true, appendTaskExecutionSnapshotWithPrompts(snapshots, execution, pendingPrompts)
+}
+
+func appendTaskExecutionSnapshotWithPrompts(
+	snapshots map[workflow.TaskID]TaskExecutionSnapshot,
+	execution *execution,
+	pendingPrompts []PendingPromptReference,
+) error {
 	ref, ok := execution.scope.Workflow()
 	if !ok {
 		return errors.New("workflow execution index contains a non-workflow scope")
@@ -253,10 +304,6 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 	target := TaskExecution{
 		Ref:    ref,
 		Queued: execution.phase == executionPhaseQueued,
-	}
-	pendingPrompts, err := execution.prompts.pendingReferences()
-	if err != nil {
-		return err
 	}
 	target.PendingPrompts = pendingPrompts
 	if resource, ok := execution.scope.Resource(); ok {
@@ -274,6 +321,27 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 	snapshot.Executions = append(snapshot.Executions, target)
 	snapshots[ref.CurrentNode.TaskID] = snapshot
 	return nil
+}
+
+func cloneTaskExecutionSnapshots(source map[workflow.TaskID]TaskExecutionSnapshot) map[workflow.TaskID]TaskExecutionSnapshot {
+	cloned := make(map[workflow.TaskID]TaskExecutionSnapshot, len(source))
+	for taskID, snapshot := range source {
+		executions := make([]TaskExecution, len(snapshot.Executions))
+		for index, execution := range snapshot.Executions {
+			executions[index] = execution
+			executions[index].PendingPrompts = append([]PendingPromptReference(nil), execution.PendingPrompts...)
+			if execution.Agent != nil {
+				agent := *execution.Agent
+				executions[index].Agent = &agent
+			}
+			if execution.Script != nil {
+				script := *execution.Script
+				executions[index].Script = &script
+			}
+		}
+		cloned[taskID] = TaskExecutionSnapshot{Executions: executions}
+	}
+	return cloned
 }
 
 func sortTaskExecutionSnapshots(snapshots map[workflow.TaskID]TaskExecutionSnapshot) {

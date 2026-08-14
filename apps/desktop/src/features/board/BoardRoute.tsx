@@ -48,6 +48,14 @@ export type BoardRouteProps = Readonly<{
 
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
 
+function boardDragDisabled(
+  actionsDisabled: boolean,
+  initiatingActionRunning: boolean,
+  workflowValidForTaskCreation: boolean,
+): boolean {
+  return actionsDisabled || initiatingActionRunning || !workflowValidForTaskCreation;
+}
+
 const manualMoveBlockerTranslationKeys = {
   invalid_workflow: "board.moveBlockedInvalidWorkflow",
   no_source_position: "board.moveBlockedNoSource",
@@ -240,11 +248,7 @@ function BoardContent({
     },
     [push, t],
   );
-  const {
-    actionsDisabled: initiatingActionsDisabled,
-    initiatingAction,
-    runCardAction,
-  } = useBoardInitiatingActionController({
+  const { initiatingAction, runCardAction } = useBoardInitiatingActionController({
     api,
     connected: connection.phase === "connected",
     moveErrorTitle: t("board.moveFailed"),
@@ -262,8 +266,14 @@ function BoardContent({
     runAction: runCardAction,
   });
   const actionsDisabled =
-    initiatingActionsDisabled || resumeAction.actionsDisabled || manualMove.actionsDisabled;
-  const dragDisabled = actionsDisabled || !board.selectedWorkflow.validForTaskCreation;
+    connection.phase !== "connected" ||
+    initiatingAction.pending !== null ||
+    manualMove.actionsDisabled;
+  const dragDisabled = boardDragDisabled(
+    actionsDisabled,
+    initiatingAction.running,
+    board.selectedWorkflow.validForTaskCreation,
+  );
   const {
     activeDrag,
     autoScroll: dragAutoScroll,

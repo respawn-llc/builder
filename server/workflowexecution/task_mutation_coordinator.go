@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 
+	"core/server/requestmemo"
 	"core/server/workflow"
 )
 
@@ -19,20 +19,16 @@ type activeTaskMutation struct {
 	parent      *activeTaskMutation
 }
 
-type taskMutationEntry struct {
-	token chan struct{}
-	refs  int
-}
-
 // TaskMutationCoordinator serializes lifecycle mutations for one Task while
 // allowing unrelated Tasks to proceed independently.
 type TaskMutationCoordinator struct {
-	mu      sync.Mutex
-	entries map[workflow.TaskID]*taskMutationEntry
+	lanes *requestmemo.MutationLaneRegistry[workflow.TaskID]
 }
 
 func NewTaskMutationCoordinator() *TaskMutationCoordinator {
-	return &TaskMutationCoordinator{entries: make(map[workflow.TaskID]*taskMutationEntry)}
+	return &TaskMutationCoordinator{
+		lanes: requestmemo.NewMutationLaneRegistry[workflow.TaskID](),
+	}
 }
 
 func (c *TaskMutationCoordinator) Run(
@@ -58,14 +54,14 @@ func (c *TaskMutationCoordinator) Run(
 			return operation(ctx)
 		}
 	}
-	entry := c.retain(taskID)
-	defer c.release(taskID, entry)
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	case <-entry.token:
+	if c.lanes == nil {
+		return errors.New("task mutation coordinator is uninitialized")
 	}
-	defer func() { entry.token <- struct{}{} }()
+	lease, err := c.lanes.Acquire(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	defer lease.Release()
 	return operation(context.WithValue(ctx, taskMutationContextKey{}, &activeTaskMutation{
 		coordinator: c,
 		taskID:      taskID,
@@ -102,29 +98,6 @@ func (c *TaskMutationCoordinator) RunMany(
 	}
 	return run(ctx, 0)
 }
-
-func (c *TaskMutationCoordinator) retain(taskID workflow.TaskID) *taskMutationEntry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry := c.entries[taskID]
-	if entry == nil {
-		entry = &taskMutationEntry{token: make(chan struct{}, 1)}
-		entry.token <- struct{}{}
-		c.entries[taskID] = entry
-	}
-	entry.refs++
-	return entry
-}
-
-func (c *TaskMutationCoordinator) release(taskID workflow.TaskID, entry *taskMutationEntry) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry.refs--
-	if entry.refs == 0 {
-		delete(c.entries, taskID)
-	}
-}
-
 func RunTaskMutation[T any](
 	ctx context.Context,
 	coordinator *TaskMutationCoordinator,

@@ -356,6 +356,7 @@ type currentNodeControllerStore struct {
 	mu                        sync.Mutex
 	started                   workflowstore.StartTaskResult
 	interrupted               []workflow.CurrentNode
+	currentNodes              []workflow.CurrentNode
 	pendingApproval           workflow.PendingApproval
 	approvalApplied           workflowstore.PendingApprovalApplyResult
 	manualMoved               workflowstore.ManualMoveResult
@@ -387,6 +388,7 @@ type currentNodeControllerStore struct {
 	interruptRelease          chan struct{}
 	interruptOnce             sync.Once
 	idleResolved              *workflow.CurrentNode
+	idleResolvedSequence      []workflow.CurrentNode
 }
 
 type currentNodeAttentionRecorder struct {
@@ -447,6 +449,13 @@ func (s *currentNodeControllerStore) StartTask(ctx context.Context, _ workflow.T
 }
 
 func (s *currentNodeControllerStore) InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error) {
+	return append([]workflow.CurrentNode(nil), s.interrupted...), nil
+}
+
+func (s *currentNodeControllerStore) ListCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error) {
+	if s.currentNodes != nil {
+		return append([]workflow.CurrentNode(nil), s.currentNodes...), nil
+	}
 	return append([]workflow.CurrentNode(nil), s.interrupted...), nil
 }
 
@@ -640,6 +649,11 @@ func (s *currentNodeControllerStore) RecoverExecutableCurrentNodes(context.Conte
 }
 
 func (s *currentNodeControllerStore) ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error) {
+	if len(s.idleResolvedSequence) != 0 {
+		resolved := s.idleResolvedSequence[0]
+		s.idleResolvedSequence = s.idleResolvedSequence[1:]
+		return resolved, nil
+	}
 	if s.idleResolved == nil {
 		return workflow.CurrentNode{}, sql.ErrNoRows
 	}
