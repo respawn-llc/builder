@@ -174,7 +174,10 @@ func TestRunStepLoopMaterializesPendingWorktreeReminder(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{finalOutputItemResponse("ok")}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
-	if _, err := eng.runStepLoop(context.Background(), "step-1"); err != nil {
+	if err := eng.stepLifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(ctx context.Context, stepID string) error {
+		_, err := eng.runStepLoop(ctx, stepID)
+		return err
+	}); err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
 
@@ -242,12 +245,15 @@ func TestRunStepLoopCountsPendingWorktreeReminderBeforeAutoCompaction(t *testing
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "native",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := steerTestActiveStep(eng, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 999, WindowTokens: 2_000})
 
-	if _, err := eng.runStepLoop(context.Background(), "step-1"); err != nil {
+	if err := eng.stepLifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(ctx context.Context, stepID string) error {
+		_, err := eng.runStepLoop(ctx, stepID)
+		return err
+	}); err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
 	if !sawReminderDuringPreCompactionCount {

@@ -18,7 +18,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
-	if err := eng.steer(
+	if err := steerTestActiveStep(eng,
 		"user-step",
 		steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
@@ -37,16 +37,19 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 	}
 
 	for index := 0; index < 3; index++ {
-		if _, err := newCompactionPersistence(eng).replaceHistory(
-			"compact-step",
-			"local",
-			compactionModeManual,
-			llm.ItemsFromMessages([]llm.Message{{
-				Role:        llm.RoleUser,
-				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-				Content:     textutil.Value("candidate-free summary"),
-			}}),
-		); err != nil {
+		if err := runTestActiveStep(eng, "compact-step", func() error {
+			_, err := newCompactionPersistence(eng).replaceHistory(
+				"compact-step",
+				"local",
+				compactionModeManual,
+				llm.ItemsFromMessages([]llm.Message{{
+					Role:        llm.RoleUser,
+					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+					Content:     textutil.Value("candidate-free summary"),
+				}}),
+			)
+			return err
+		}); err != nil {
 			t.Fatalf("replace history %d: %v", index, err)
 		}
 	}
@@ -96,7 +99,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 		t.Fatalf("direct locator page did not contain rollback target %q", wantTarget)
 	}
 
-	if err := reopened.steer(
+	if err := steerTestActiveStep(reopened,
 		"fork-target-step",
 		steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,

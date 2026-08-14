@@ -116,6 +116,7 @@ func TestExclusiveStepEmitRunStateControlsActiveLiveRunGroup(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
 
 	for _, test := range []struct {
 		name        string

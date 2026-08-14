@@ -166,7 +166,7 @@ func TestNormalGenerationLive400RepairWaitsForMatchingStartThenRetriesOnce(t *te
 	}
 }
 
-func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
+func TestMissingToolOutputRepairRetryPreservesQueuedSteeringBoundary(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
@@ -204,8 +204,8 @@ func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
 		}
 		return count
 	}
-	if got, want := countUserItems(client.calls[1].Items), countUserItems(client.calls[0].Items)+1; got != want {
-		t.Fatalf("retry user-message count = %d, want queued steering to add one item to %d", got, want)
+	if got, want := countUserItems(client.calls[1].Items), countUserItems(client.calls[0].Items); got != want {
+		t.Fatalf("retry user-message count = %d, want protected repair retry to retain %d", got, want)
 	}
 }
 

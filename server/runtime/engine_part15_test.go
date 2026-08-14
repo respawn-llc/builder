@@ -108,7 +108,9 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 		t.TempDir(),
 		t.TempDir(),
 	))
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 

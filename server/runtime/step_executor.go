@@ -293,6 +293,9 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			if current != nil {
 				stepID = current.StepID
 			}
+			if err := e.materializePendingWorktreeReminder(stepID); err != nil {
+				return stepLoopResult{}, err
+			}
 			if err := e.runAutomaticCompactionAtBoundary(ctx, lifecycle); err != nil {
 				return stepLoopResult{}, err
 			}

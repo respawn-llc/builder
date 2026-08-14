@@ -35,6 +35,8 @@ func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	done := make(chan error, 1)
 	go func() {
 		_, err := engine.executeToolCalls(ctx, "step", []llm.ToolCall{{
@@ -80,6 +82,8 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 		&fakeWorkflowController{},
 		config.WorkflowCompletionModeTool,
 	))
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct {
 		results []tools.Result

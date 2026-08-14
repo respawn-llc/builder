@@ -23,6 +23,8 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 		Model: "gpt-5",
 		Debug: true,
 	})
+	restoreStep := setTestActiveStep(engine, "step-delete")
+	defer restoreStep()
 	result := mismatchedDeletionCompletion(t, engine)
 
 	defer func() {
@@ -62,6 +64,8 @@ func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testin
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 	})
+	restoreStep := setTestActiveStep(engine, "step-delete")
+	defer restoreStep()
 	result := mismatchedDeletionCompletion(t, engine)
 
 	if err := engine.steer("step-delete", steerToolCompletionIntent(result)); err != nil {
@@ -84,6 +88,8 @@ func TestToolCompletionDeletionMismatchDoesNotApplyUncommittedFallback(t *testin
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { emitted = append(emitted, event) },
 	})
+	restoreStep := setTestActiveStep(engine, "step-delete")
+	defer restoreStep()
 	result := mismatchedDeletionCompletion(t, engine)
 	emitted = nil
 	blocker := mustBlockTestEventLogAppends(t, store)
@@ -126,6 +132,8 @@ func TestToolCompletionDeletionMismatchAppliesCommittedFallbackAfterObserverErro
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { emitted = append(emitted, event) },
 	})
+	restoreStep := setTestActiveStep(engine, "step-delete")
+	defer restoreStep()
 	result := mismatchedDeletionCompletion(t, engine)
 	emitted = nil
 	gate.FailNext(observerErr)
@@ -168,6 +176,8 @@ func TestExecuteToolCallsCommitsCompletionDiagnosticInResultGroup(t *testing.T) 
 		}),
 		Config{Model: "gpt-5"},
 	)
+	restoreStep := setTestActiveStep(engine, "step-delete")
+	defer restoreStep()
 	call := llm.ToolCall{
 		ID:          "deletion-call",
 		Name:        string(toolspec.ToolPatch),

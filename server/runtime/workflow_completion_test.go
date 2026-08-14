@@ -138,31 +138,13 @@ func (c *fakeTaskAwarenessSource) TaskAwareness(context.Context, workflow.TaskID
 	return c.awareness, nil
 }
 
-func TestSubmitWorkflowTurnWaitsForTerminalBackgroundNoticeContinuation(t *testing.T) {
+func TestSubmitWorkflowTurnFlushesTerminalBackgroundNotice(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
-	backgroundStarted := make(chan struct{})
-	backgroundRelease := make(chan struct{})
-	releaseBackground := sync.OnceFunc(func() { close(backgroundRelease) })
-	t.Cleanup(releaseBackground)
-	var firstRequest sync.Once
-	client := &hookClient{
-		response: commentaryResponse(
-			"complete",
-			completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
-		),
-		errors: []error{&llm.ProviderAPIError{
-			ProviderID: "test",
-			Code:       llm.UnifiedErrorCodeProviderContract,
-		}},
-		beforeReturn: func() error {
-			firstRequest.Do(func() {
-				close(backgroundStarted)
-				<-backgroundRelease
-			})
-			return nil
-		},
-	}
+	client := &hookClient{response: commentaryResponse(
+		"complete",
+		completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+	)}
 	engine := mustNewWorkflowTestEngine(
 		t,
 		store,
@@ -177,39 +159,18 @@ func TestSubmitWorkflowTurnWaitsForTerminalBackgroundNoticeContinuation(t *testi
 		State:      "completed",
 		NoticeText: "Background shell completed.",
 	}, true)
-	select {
-	case <-backgroundStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("terminal background notice continuation did not start")
+	if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("workflow turn: %v", err)
 	}
-
-	workflowDone := make(chan error, 1)
-	go func() {
-		_, err := engine.SubmitWorkflowTurn(context.Background())
-		workflowDone <- err
-	}()
-	select {
-	case err := <-workflowDone:
-		t.Fatalf("workflow turn returned before the background continuation finished: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	if len(client.calls) != 1 {
+		t.Fatalf("model calls = %d, want one workflow turn", len(client.calls))
 	}
-
-	releaseBackground()
-	select {
-	case err := <-workflowDone:
-		if err != nil {
-			t.Fatalf("workflow turn after background continuation: %v", err)
+	for _, message := range requestMessages(client.calls[0]) {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice {
+			return
 		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("workflow turn did not start after the background continuation finished")
 	}
-	waitEngineLifecycleTasks(t, engine)
-	client.mu.Lock()
-	callCount := len(client.calls)
-	client.mu.Unlock()
-	if callCount != 2 {
-		t.Fatalf("model calls = %d, want background continuation then workflow turn", callCount)
-	}
+	t.Fatalf("workflow request omitted terminal background notice: %+v", client.calls[0])
 }
 
 func TestSubmitWorkflowTurnReturnsAcceptedCompletionDiagnosticWithoutTurnFailure(t *testing.T) {
@@ -832,10 +793,14 @@ func TestWorkflowModeInitialAssignmentQueriesTaskAwarenessOnlyForNewInstructions
 	workflowCfg.TaskAwarenessSource = source
 	eng := mustNewWorkflowTestEngine(t, mustCreateTestSession(t), &fakeClient{}, workflowCfg, Config{})
 
-	if err := eng.steerWorkflowModeIfNeeded(context.Background(), "initial"); err != nil {
+	if err := runTestActiveStep(eng, "initial", func() error {
+		return eng.steerWorkflowModeIfNeeded(context.Background(), "initial")
+	}); err != nil {
 		t.Fatalf("prepare initial assignment: %v", err)
 	}
-	if err := eng.steerWorkflowModeIfNeeded(context.Background(), "follow-up"); err != nil {
+	if err := runTestActiveStep(eng, "follow-up", func() error {
+		return eng.steerWorkflowModeIfNeeded(context.Background(), "follow-up")
+	}); err != nil {
 		t.Fatalf("prepare same-assignment follow-up: %v", err)
 	}
 	if got := source.calls.Load(); got != 1 {
@@ -914,7 +879,9 @@ func TestWorkflowShellAndUnstructuredModesOmitDynamicCompletionMetadata(t *testi
 			eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, workflowCfg, Config{
 				EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
 			})
-			if err := eng.ensureMetaContextForRequest(context.Background(), "step"); err != nil {
+			if err := runTestActiveStep(eng, "step", func() error {
+				return eng.ensureMetaContextForRequest(context.Background(), "step")
+			}); err != nil {
 				t.Fatalf("ensure meta context: %v", err)
 			}
 			req, err := eng.buildRequest(context.Background(), "step", true)
@@ -1316,7 +1283,7 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	}
 }
 
-func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T) {
+func TestWorkflowTerminalCompletionRetainsQueuedSteeringAtRunRelease(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	started := make(chan struct{})
@@ -1358,11 +1325,12 @@ func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T)
 	if got := hookClientCallCount(client); got != 1 {
 		t.Fatalf("model calls = %d, want terminal completion to avoid queued turn", got)
 	}
-	if len(statuses) != 2 || statuses[0].Status != QueuedUserMessageAccepted || statuses[1].Status != QueuedUserMessageFailed {
-		t.Fatalf("queued statuses = %+v, want accepted then failed", statuses)
+	if len(statuses) != 1 || statuses[0].Status != QueuedUserMessageAccepted {
+		t.Fatalf("queued statuses = %+v, want accepted pending work", statuses)
 	}
-	if statuses[1].QueueItemID != queued.ID || statuses[1].Text != "do not submit after run release" || statuses[1].FailureReason != QueuedUserMessageFailureTerminalWorkflowCompletion {
-		t.Fatalf("failed queue status = %+v, want terminal completion failure for %q", statuses[1], queued.ID)
+	pending := eng.messageFlow.PendingUserMessages()
+	if len(pending) != 1 || pending[0].ID != queued.ID {
+		t.Fatalf("pending queue = %+v, want retained %q", pending, queued.ID)
 	}
 }
 
@@ -1487,7 +1455,6 @@ func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecove
 				engine := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{})
 				workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand)
 				publishTestWorkflowExecution(t, engine, workflowConfig)
-				publishTestWorkflowAgentAssociation(t, engine, workflowConfig)
 				shellTool.complete = bindExternalAgentCompletion(t, engine, controller, workflowConfig.ScopeID)
 				return engine
 			},

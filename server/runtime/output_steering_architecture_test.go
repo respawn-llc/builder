@@ -16,6 +16,8 @@ import (
 
 func TestResultGroupFlushConsumesWorkflowPostCompletionBoundaryOnlyAfterCommit(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	prepareSimpleResultGroupCall(t, engine, "step", "first")
 	prepareSimpleResultGroupCall(t, engine, "step", "second")
 	mode := session.CompactionModeWorkflowPostCompletion
@@ -49,6 +51,8 @@ func TestResultGroupFlushConsumesWorkflowPostCompletionBoundaryOnlyAfterCommit(t
 
 func TestMissingToolOutputRepairConsumesWorkflowPostCompletionBoundaryOnlyAfterRepair(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	mode := session.CompactionModeWorkflowPostCompletion
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set workflow post-completion boundary: %v", err)

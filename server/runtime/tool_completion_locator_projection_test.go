@@ -19,6 +19,8 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
+	restoreStep := setTestActiveStep(engine, "step-1")
+	defer restoreStep()
 	calls := []llm.ToolCall{
 		{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 		{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},

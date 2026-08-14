@@ -450,9 +450,12 @@ func (f *promptCacheContinuityFixture) assertPersistedProjectionParity(t *testin
 
 func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	t.Helper()
+	restoreStep := setTestActiveStep(engine, "seed-meta")
 	if err := engine.steerBaseMetaContextIfNeeded("seed-meta"); err != nil {
 		t.Fatalf("inject agents: %v", err)
 	}
+	restoreStep()
+	restoreStep = setTestActiveStep(engine, "turn-1")
 	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Need a prompt cache continuity test that survives a server restart.")}})); err != nil {
 		t.Fatalf("append first user message: %v", err)
 	}
@@ -498,7 +501,8 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	if err := engine.steer("turn-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("The runtime state is seeded. I only need the post-restart payload comparison now.")}})); err != nil {
 		t.Fatalf("append assistant final answer: %v", err)
 	}
-	if err := engine.steer("turn-2", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Continue after restart and compare the exact OpenAI payload bytes.")}})); err != nil {
+	restoreStep()
+	if err := steerTestActiveStep(engine, "turn-2", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Continue after restart and compare the exact OpenAI payload bytes.")}})); err != nil {
 		t.Fatalf("append second user message: %v", err)
 	}
 }

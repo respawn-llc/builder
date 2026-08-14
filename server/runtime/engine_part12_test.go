@@ -108,7 +108,9 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 	if !changed || enabled {
 		t.Fatalf("expected auto compaction toggle off, changed=%v enabled=%v", changed, enabled)
 	}
-	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-off"); err != nil {
+	if err := runTestActiveStep(eng, "step-off", func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-off")
+	}); err != nil {
 		t.Fatalf("reminder while disabled: %v", err)
 	}
 
@@ -121,10 +123,14 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 	if !changed || !enabled {
 		t.Fatalf("expected auto compaction toggle on, changed=%v enabled=%v", changed, enabled)
 	}
-	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-on"); err != nil {
+	if err := runTestActiveStep(eng, "step-on", func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-on")
+	}); err != nil {
 		t.Fatalf("reminder after re-enable: %v", err)
 	}
-	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-on-duplicate"); err != nil {
+	if err := runTestActiveStep(eng, "step-on-duplicate", func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-on-duplicate")
+	}); err != nil {
 		t.Fatalf("duplicate reminder check: %v", err)
 	}
 
@@ -140,11 +146,15 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 	}
 
 	eng.setLastUsage(llm.Usage{InputTokens: 800, WindowTokens: 2_000})
-	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-reset"); err != nil {
+	if err := runTestActiveStep(eng, "step-reset", func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-reset")
+	}); err != nil {
 		t.Fatalf("reset reminder state: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 860, WindowTokens: 2_000})
-	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-reissue"); err != nil {
+	if err := runTestActiveStep(eng, "step-reissue", func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-reissue")
+	}); err != nil {
 		t.Fatalf("reissue reminder: %v", err)
 	}
 

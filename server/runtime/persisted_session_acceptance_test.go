@@ -201,6 +201,8 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		},
 	}
 	const stepID = "crash-unclosed-step"
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	persistAcceptedToolCallIntents(t, engine, stepID, accepted)
 	collector, err := newResultGroupCollector([]resultGroupCallIdentity{
 		resultGroupIdentityFromToolCall(calls[0]),
@@ -446,6 +448,8 @@ func runPersistedEffectRecoveryCase(
 		}),
 		Config{Model: "gpt-5"},
 	)
+	restoreStep := setTestActiveStep(engine, "effect-step")
+	defer restoreStep()
 	calls := questionBarrierAcceptedCalls()
 	calls.local[0] = fixture.call
 	persistAcceptedToolCallIntents(t, engine, "effect-step", calls)

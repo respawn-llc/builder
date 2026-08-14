@@ -137,13 +137,18 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}
 
-	_, receipt, err := fixture.engine.compactNow(
-		context.Background(),
-		"workflow-post-completion",
-		compactionModeWorkflowPostCompletion,
-		compactionInstructionsInput{},
-		false,
-	)
+	var receipt session.CommitReceipt
+	err := runTestActiveStep(fixture.engine, "workflow-post-completion", func() error {
+		var compactErr error
+		_, receipt, compactErr = fixture.engine.compactNow(
+			context.Background(),
+			"workflow-post-completion",
+			compactionModeWorkflowPostCompletion,
+			compactionInstructionsInput{},
+			false,
+		)
+		return compactErr
+	})
 	if err != nil || !receipt.Committed {
 		t.Fatalf("workflow post-completion compaction: receipt=%+v error=%v", receipt, err)
 	}

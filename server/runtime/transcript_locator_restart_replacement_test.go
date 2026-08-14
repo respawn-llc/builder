@@ -23,7 +23,7 @@ func TestHistoryReplacementLocatorsSurviveReopenAsOneBoundedBatch(t *testing.T) 
 		{Role: llm.RoleUser, Content: textutil.Value("preserved")},
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("environment")},
 	})
-	if err := engine.steer("compaction", steerHistoryReplacementIntent("local", compactionModeManual, 1, "", nil, items)); err != nil {
+	if err := steerTestActiveStep(engine, "compaction", steerHistoryReplacementIntent("local", compactionModeManual, 1, "", nil, items)); err != nil {
 		t.Fatalf("persist history replacement: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestHistoryReplacementLocatorsSkipFilteredToolCallEntries(t *testing.T) {
 		},
 		{Role: llm.RoleUser, Content: textutil.Value("visible user")},
 	})
-	if err := engine.steer("compaction", steerHistoryReplacementIntent("local", compactionModeManual, 1, "", nil, items)); err != nil {
+	if err := steerTestActiveStep(engine, "compaction", steerHistoryReplacementIntent("local", compactionModeManual, 1, "", nil, items)); err != nil {
 		t.Fatalf("persist history replacement: %v", err)
 	}
 

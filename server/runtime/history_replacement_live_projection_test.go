@@ -35,7 +35,7 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 		CompactionMode: "native",
 		OnEvent:        func(event Event) { events = append(events, event) },
 	})
-	if err := engine.steer(
+	if err := steerTestActiveStep(engine,
 		"input",
 		steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 			true,
@@ -157,7 +157,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		},
 	})
 
-	if err := engine.steer(
+	if err := steerTestActiveStep(engine,
 		"compaction",
 		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", nil, items),
 	); err != nil {

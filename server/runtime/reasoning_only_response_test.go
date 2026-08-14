@@ -49,7 +49,6 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 	}), Config{})
 	workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand)
 	publishTestWorkflowExecution(t, eng, workflowConfig)
-	publishTestWorkflowAgentAssociation(t, eng, workflowConfig)
 	completionTool.complete = bindExternalAgentCompletion(t, eng, controller, workflowConfig.ScopeID)
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
@@ -110,7 +109,6 @@ func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
 	}), Config{})
 	workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand)
 	publishTestWorkflowExecution(t, eng, workflowConfig)
-	publishTestWorkflowAgentAssociation(t, eng, workflowConfig)
 	completionTool.complete = bindExternalAgentCompletion(t, eng, controller, workflowConfig.ScopeID)
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {

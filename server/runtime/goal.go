@@ -428,7 +428,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		return
 	}
 	reportErr := func(err error) {
-		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
+		_ = e.steerCurrentStepOrRuntime(steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 			Text:       "Failed to auto-complete active goal on workflow completion: " + err.Error(),
@@ -448,7 +448,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		return
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed)); err != nil {
+	if err := e.steerCurrentStepOrRuntime(steerGoalNoticeAndStatusIntent(msg, goalStatusUpdateFromState(completed))); err != nil {
 		reportErr(err)
 	}
 }

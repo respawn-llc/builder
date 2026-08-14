@@ -83,7 +83,6 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 	)
 	workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeTool)
 	publishTestWorkflowExecution(t, engine, workflowConfig)
-	publishTestWorkflowAgentAssociation(t, engine, workflowConfig)
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{
 		snapshot: &RunSnapshot{
 			RunID:  "11111111-1111-4111-8111-111111111111",
@@ -140,6 +139,8 @@ func TestCompleteNodeValidatesBeforeEffectBarrier(t *testing.T) {
 		},
 	)
 	publishTestWorkflowExecution(t, engine, testWorkflowConfig(controller, config.WorkflowCompletionModeTool))
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),

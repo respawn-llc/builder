@@ -226,11 +226,20 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		publishLifecycle,
 		nil,
 	)
-	if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
+	resumeGoalLoop := options.EmitRunState &&
+		status == RunStatusCompleted &&
+		snapshot != nil &&
+		snapshot.ActiveKind == ActiveKindUserTurn
+	if resumeGoalLoop {
 		s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
 	}
 	if publishLiveRunFinished != nil {
 		publishLiveRunFinished()
+	}
+	if resumeGoalLoop {
+		if startErr := s.engine.startPendingGoalLoop(); startErr != nil {
+			err = errors.Join(err, fmt.Errorf("resume Goal loop after user turn: %w", startErr))
+		}
 	}
 	return err
 }

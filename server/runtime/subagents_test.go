@@ -284,7 +284,9 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 			if tt.workflow {
 				publishTestWorkflowExecution(t, eng, testWorkflowConfig(nil, config.WorkflowCompletionModeTool))
 			}
-			if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
+			if err := runTestActiveStep(eng, "base", func() error {
+				return eng.steerBaseMetaContextIfNeeded("base")
+			}); err != nil {
 				t.Fatalf("steer base meta context: %v", err)
 			}
 			if got := hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()); got != tt.workerVisible {
@@ -335,7 +337,9 @@ func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits
 				EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
 				SubagentCatalogSettings: settings,
 			})
-			if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
+			if err := runTestActiveStep(eng, "base", func() error {
+				return eng.steerBaseMetaContextIfNeeded("base")
+			}); err != nil {
 				t.Fatalf("steer base meta context: %v", err)
 			}
 			if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
@@ -383,7 +387,9 @@ func TestSubagentCatalogIgnoresPersistedCallerTargetPolicyInBaseAndCompaction(t 
 		EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
 		SubagentCatalogSettings: settings,
 	})
-	if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
+	if err := runTestActiveStep(eng, "base", func() error {
+		return eng.steerBaseMetaContextIfNeeded("base")
+	}); err != nil {
 		t.Fatalf("steer base meta context: %v", err)
 	}
 	if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {

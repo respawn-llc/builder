@@ -254,8 +254,9 @@ func setTestActiveStep(engine *Engine, stepID string) func() {
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{
 		activeStepID: stepID,
 		snapshot: &RunSnapshot{
-			RunID:  "11111111-1111-4111-8111-111111111111",
-			StepID: stepID,
+			RunID:      "11111111-1111-4111-8111-111111111111",
+			StepID:     stepID,
+			ActiveKind: ActiveKindUserTurn,
 		},
 	}
 	return func() {
@@ -273,6 +274,29 @@ func runTestActiveStep(engine *Engine, stepID string, operation func() error) er
 	restore := setTestActiveStep(engine, stepID)
 	defer restore()
 	return operation()
+}
+
+func generateTestActiveStep(
+	ctx context.Context,
+	engine *Engine,
+	stepID string,
+	client llm.Client,
+	request llm.Request,
+) (llm.Response, error) {
+	restore := setTestActiveStep(engine, stepID)
+	defer restore()
+	return engine.generateWithRetryClient(ctx, stepID, client, request, nil, nil, nil)
+}
+
+func runReviewerSuggestionsTestActiveStep(
+	ctx context.Context,
+	engine *Engine,
+	stepID string,
+	client llm.Client,
+) (reviewerSuggestionsResult, error) {
+	restore := setTestActiveStep(engine, stepID)
+	defer restore()
+	return engine.runReviewerSuggestions(ctx, stepID, client)
 }
 
 func mustMaterializeTestEventLog(

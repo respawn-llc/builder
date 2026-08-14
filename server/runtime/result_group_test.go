@@ -275,6 +275,8 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	calls := []llm.ToolCall{
 		{ID: "first", Name: string(toolspec.ToolExecCommand), Input: []byte(`{"cmd":"one"}`)},
 		{ID: "second", Name: string(toolspec.ToolExecCommand), Input: []byte(`{"cmd":"two"}`)},

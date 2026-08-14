@@ -119,6 +119,8 @@ func TestQuestionBarrierCommitsReadyHostedSiblingBeforeInteraction(t *testing.T)
 		}),
 		Config{Model: "gpt-5", DurabilityObserver: flushes},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),
 		"step",
@@ -194,6 +196,8 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 		}),
 		Config{Model: "gpt-5", DurabilityObserver: flushes},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	calls := questionBarrierAcceptedCalls()
 	calls.local[0] = llm.ToolCall{
 		ID:    "patch",

@@ -37,6 +37,8 @@ func TestDeclinedQuestionProducesErrorToolCompletionWithoutSyntheticUserMessage(
 			},
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "step-1")
+	defer restoreStep()
 
 	results, err := engine.executeToolCalls(context.Background(), "step-1", []llm.ToolCall{{
 		ID:    "question-1",
@@ -96,6 +98,8 @@ func TestDeclinedQuestionAllowsPreparedSuccessorToMaterialize(t *testing.T) {
 			},
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "step-1")
+	defer restoreStep()
 
 	results, err := engine.executeToolCalls(context.Background(), "step-1", []llm.ToolCall{
 		{

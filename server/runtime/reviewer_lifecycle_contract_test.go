@@ -90,6 +90,8 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 
 func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "11111111-1111-4111-8111-111111111111")
+	defer restoreStep()
 	var events []Event
 	engine.cfg.OnEvent = func(event Event) {
 		events = append(events, event)
@@ -115,6 +117,8 @@ func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *tes
 func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	stepID := "11111111-1111-4111-8111-111111111111"
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	engine.cfg.OnEvent = func(event Event) {
 		switch event.Kind {
 		case EventReviewerStarted:
@@ -138,6 +142,8 @@ func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
 func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	stepID := "11111111-1111-4111-8111-111111111111"
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
 		t.Fatalf("publish Reviewer start: %v", err)
 	}
@@ -222,7 +228,16 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 						engine: engine, phase: engine.phaseProtocol, reviewer: pipeline,
 						messages: engine.messageFlow,
 					}
-					_, runErr := engine.runStepLoopWithOptions(context.Background(), "11111111-1111-4111-8111-111111111111", "all", &fakeClient{}, false)
+					var runErr error
+					lifecycleErr := engine.stepLifecycle.Run(
+						context.Background(),
+						exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
+						func(ctx context.Context, stepID string) error {
+							_, runErr = engine.runStepLoopWithOptions(ctx, stepID, "all", &fakeClient{}, false)
+							return runErr
+						},
+					)
+					runErr = errors.Join(runErr, lifecycleErr)
 					if blocker != nil {
 						if err := blocker.Restore(); err != nil {
 							t.Fatalf("restore append blocker: %v", err)

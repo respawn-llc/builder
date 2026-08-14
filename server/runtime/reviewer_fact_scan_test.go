@@ -267,6 +267,8 @@ func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 			t.Run("uncommitted", func(t *testing.T) {
 				store := mustCreateTestSession(t)
 				engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+				restoreStep := setTestActiveStep(engine, "11111111-1111-4111-8111-111111111111")
+				defer restoreStep()
 				mustBlockTestEventLogAppends(t, store)
 				err := engine.steer("11111111-1111-4111-8111-111111111111", testCase.intent())
 				if err == nil {
@@ -281,6 +283,8 @@ func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 				gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 				store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 				engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+				restoreStep := setTestActiveStep(engine, "22222222-2222-4222-8222-222222222222")
+				defer restoreStep()
 				gate.FailNext(observerErr)
 				err := engine.steer("22222222-2222-4222-8222-222222222222", testCase.intent())
 				if !errors.Is(err, observerErr) {

@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"core/server/llm"
-	"github.com/google/uuid"
 )
 
 // ErrInspectionExactTokenCountRequired reports that an offline inspector cannot
@@ -27,17 +26,22 @@ var ErrInspectionExactTokenCountRequired = errors.New("offline inspection requir
 // produce a tool-less payload.
 func PrepareInspectionRequest(ctx context.Context, eng *Engine, allowTools bool) (llm.Request, error) {
 	eng.ensureOrchestrationCollaborators()
-	stepID := uuid.NewString()
-	if err := eng.ensureMetaContextForRequest(ctx, stepID); err != nil {
-		return llm.Request{}, err
-	}
-	if eng.inspectionRequiresExactTokenCount(ctx) {
-		return llm.Request{}, ErrInspectionExactTokenCountRequired
-	}
-	if err := (&defaultStepExecutor{engine: eng}).prepareModelTurn(ctx, stepID); err != nil {
-		return llm.Request{}, err
-	}
-	return eng.buildRequest(ctx, stepID, allowTools)
+	var request llm.Request
+	err := eng.stepLifecycle.Run(ctx, exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
+		if err := eng.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
+			return err
+		}
+		if eng.inspectionRequiresExactTokenCount(stepCtx) {
+			return ErrInspectionExactTokenCountRequired
+		}
+		if err := (&defaultStepExecutor{engine: eng}).prepareModelTurn(stepCtx, stepID); err != nil {
+			return err
+		}
+		var err error
+		request, err = eng.buildRequest(stepCtx, stepID, allowTools)
+		return err
+	})
+	return request, err
 }
 
 func (e *Engine) inspectionRequiresExactTokenCount(ctx context.Context) bool {

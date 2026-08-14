@@ -161,11 +161,10 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		}
 	})
 
-	t.Run("terminal callback does not hold waiters or queued successor scheduling", func(t *testing.T) {
+	t.Run("terminal callback does not hold waiters", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		client := &fakeClient{responses: []llm.Response{
 			finalTextResponse("first"),
-			finalTextResponse("second"),
 		}}
 		stepLifecycle := newBlockingStepLifecycleSink()
 		callbackStarted := make(chan struct{})
@@ -195,29 +194,34 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 			_, err := eng.SubmitUserMessage(context.Background(), "first")
 			firstDone <- err
 		}()
+		waitActiveLiveRunGroup(t, eng, true)
+		waitHandle, err := eng.CaptureActiveRunResult(context.Background())
+		if err != nil {
+			t.Fatalf("capture active live-run waiter: %v", err)
+		}
 		select {
 		case <-stepLifecycle.endedStarted:
 		case <-time.After(runtimeTestSynchronizationTimeout):
 			t.Fatal("timed out waiting for step terminal publication")
 		}
-		eng.QueueUserMessage("queued successor")
+		waitDone := make(chan error, 1)
+		go func() {
+			_, err := waitHandle.Wait()
+			waitDone <- err
+		}()
 		close(stepLifecycle.releaseEnded)
 		select {
 		case <-callbackStarted:
 		case <-time.After(runtimeTestSynchronizationTimeout):
 			t.Fatal("timed out waiting for terminal callback")
 		}
-
-		deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
-		for {
-			calls := fakeClientCallCount(client)
-			if calls >= 2 || !time.Now().Before(deadline) {
-				if calls < 2 {
-					t.Fatal("queued successor scheduling waited for prior terminal callback")
-				}
-				break
+		select {
+		case err := <-waitDone:
+			if err != nil {
+				t.Fatalf("live-run waiter: %v", err)
 			}
-			time.Sleep(10 * time.Millisecond)
+		case <-time.After(runtimeTestSynchronizationTimeout):
+			t.Fatal("live-run waiter remained blocked by terminal callback")
 		}
 		close(releaseCallback)
 		if err := <-firstDone; err != nil {

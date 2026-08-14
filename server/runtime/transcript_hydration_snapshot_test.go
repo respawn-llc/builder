@@ -28,6 +28,8 @@ func hydrationSnapshot(t *testing.T, engine *Engine) TranscriptHydrationSnapshot
 func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T) {
 	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
 	const stepID = "step-current"
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	outputIndex, partIndex := int64(0), int64(0)
 	if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex},
@@ -70,6 +72,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing.T) {
 	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
 	const stepID = "step-owner"
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	engine.compactionRuntimeState().SetCount(7)
 	if err := engine.steer(stepID,
 		steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}),

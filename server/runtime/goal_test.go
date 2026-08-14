@@ -731,7 +731,7 @@ func TestGoalLoopKeepsLiveRunActiveAcrossAutoContinuingTurns(t *testing.T) {
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	client.beforeReturn = func(call int) {
 		if call == 2 {
-			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+			completeGoalFromActiveStep(engine)
 		}
 	}
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
@@ -773,7 +773,7 @@ func TestGoalLoopInterruptSuspendsUntilResumeRestarts(t *testing.T) {
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	client.beforeReturn = func(call int) {
 		if call == 2 {
-			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+			completeGoalFromActiveStep(engine)
 		}
 	}
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
@@ -826,7 +826,7 @@ func TestSuspendedGoalAutoResumesAfterSuccessfulUserTurnOnly(t *testing.T) {
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	client.beforeReturn = func(call int) {
 		if call == 2 {
-			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+			completeGoalFromActiveStep(engine)
 		}
 	}
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
@@ -893,7 +893,7 @@ func TestGoalLoopResumeDuringInterruptedTurnDoesNotLaunchDuplicateLoop(t *testin
 	})
 	client.beforeReturn = func(call int) {
 		if call == 2 {
-			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+			completeGoalFromActiveStep(engine)
 		}
 	}
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
@@ -907,11 +907,17 @@ func TestGoalLoopResumeDuringInterruptedTurnDoesNotLaunchDuplicateLoop(t *testin
 	if err := engine.Interrupt(); err != nil {
 		t.Fatalf("Interrupt: %v", err)
 	}
-	if _, err := engine.SetGoalStatus(session.GoalStatusActive, session.GoalActorUser); err != nil {
+	resumed, err := engine.ApplyGoalMutationDeferred(GoalMutation{
+		Kind:      GoalMutationStatus,
+		Status:    session.GoalStatusActive,
+		Actor:     session.GoalActorUser,
+		StartLoop: true,
+	})
+	if err != nil {
 		t.Fatalf("resume goal: %v", err)
 	}
-	if err := engine.StartGoalLoop(); err != nil {
-		t.Fatalf("StartGoalLoop after resume: %v", err)
+	if resumed.Disposition != GoalCommandQueued {
+		t.Fatalf("resume disposition = %v, want queued", resumed.Disposition)
 	}
 	client.assertNotStarted(t, 2)
 
@@ -931,7 +937,7 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	client.beforeReturn = func(call int) {
 		if call == 2 {
-			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+			completeGoalFromActiveStep(engine)
 		}
 	}
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
@@ -1004,7 +1010,7 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	client.beforeReturn = func(call int) {
 		if call == 3 {
-			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+			completeGoalFromActiveStep(engine)
 		}
 	}
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
@@ -1109,6 +1115,20 @@ func goalDeveloperMessages(t *testing.T, events []testPersistedEvent) []llm.Mess
 		}
 	}
 	return out
+}
+
+func completeGoalFromActiveStep(engine *Engine) {
+	active := engine.ActiveRun()
+	if active == nil {
+		return
+	}
+	_ = engine.steer(active.StepID, steeringIntent{items: []steeringMutation{
+		&steeringGoalMutation{mutation: GoalMutation{
+			Kind:   GoalMutationStatus,
+			Status: session.GoalStatusComplete,
+			Actor:  session.GoalActorAgent,
+		}},
+	}})
 }
 
 type scriptedGoalLoopClient struct {
