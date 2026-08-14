@@ -11,6 +11,7 @@ func cloneMeta(in Meta) Meta {
 		out.ParentAgentSessionID = &parentAgentSessionID
 	}
 	out.Continuation = cloneContinuationContext(in.Continuation)
+	out.ChatSettings = cloneChatSettingsOverrides(in.ChatSettings)
 	out.WorktreeReminder = CloneWorktreeReminderState(in.WorktreeReminder)
 	if in.UsageState != nil {
 		usage := *in.UsageState

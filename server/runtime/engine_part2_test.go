@@ -799,7 +799,10 @@ func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	cfg := Config{Model: "gpt-5"}
 	eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
 
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	if err != nil {
+		t.Fatalf("SetAutoCompactionEnabled: %v", err)
+	}
 	if !changed || enabled {
 		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
 	}
@@ -864,7 +867,7 @@ func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) 
 	}
 	settingDone := make(chan settingResult, 1)
 	go func() {
-		changed, enabled := eng.SetAutoCompactionEnabled(false)
+		changed, enabled, _ := eng.SetAutoCompactionEnabled(false)
 		settingDone <- settingResult{changed: changed, enabled: enabled}
 	}()
 	select {

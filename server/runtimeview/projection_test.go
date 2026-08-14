@@ -235,7 +235,9 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	} else if !changed {
 		t.Fatal("expected fast mode enable to report changed=true")
 	}
-	if changed, enabled := eng.SetAutoCompactionEnabled(false); !changed || enabled {
+	if changed, enabled, err := eng.SetAutoCompactionEnabled(false); err != nil {
+		t.Fatalf("disable auto-compaction: %v", err)
+	} else if !changed || enabled {
 		t.Fatalf("expected auto-compaction disabled, changed=%v enabled=%v", changed, enabled)
 	}
 

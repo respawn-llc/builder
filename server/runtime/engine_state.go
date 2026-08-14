@@ -385,16 +385,16 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 	return changed
 }
 
-func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
+func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
 	var changed, resultEnabled bool
 	_, err := e.enqueueRuntimeSteering(
 		false,
 		steerAutoCompactionIntent(enabled, &changed, &resultEnabled),
 	)
 	if err != nil {
-		return false, e.AutoCompactionEnabled()
+		return false, e.AutoCompactionEnabled(), err
 	}
-	return changed, resultEnabled
+	return changed, resultEnabled, nil
 }
 
 func (e *Engine) applyAutoCompaction(enabled bool) (bool, bool) {
