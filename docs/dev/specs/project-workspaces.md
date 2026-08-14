@@ -43,12 +43,8 @@
 - Workspace-ID requests remain supported.
 - Each API operation resolves its selector inside the selected Project and applies the requested change as one operation.
 - A resolved detach result identifies the selected Project and workspace.
-- A blocked detach returns a bounded blocker summary with stable codes and counts when present.
+- A blocked detach returns every blocker with its stable code, human-readable message, and count when present.
 - The detach success result contains exactly `project_id` and `workspace_id`.
 - The default-workspace success result contains exactly `project`, whose value is the authoritative updated Project.
-- Mutation errors use stable typed variants and details.
-- A resolved mutation-error detail contains the Project and workspace IDs.
-- A blocked-detach detail contains a bounded collection of blockers with stable codes and counts when present.
-- A concurrent-detach-conflict detail contains `retryable: true`.
-- Clients own user-visible mutation error wording.
-- Canonical workspace roots are never included in mutation success or error results.
+- Mutation error objects contain only `code`, `message`, resolved Project/workspace IDs when resolution succeeded, bounded `blockers` when detach is blocked, and `retryable: true` for a concurrent detach conflict.
+- Canonical workspace roots are never included in mutation success or error JSON results.
