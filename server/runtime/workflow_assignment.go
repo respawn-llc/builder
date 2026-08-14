@@ -157,13 +157,14 @@ func CapturePersistedWorkflowAssignment(
 	if store == nil {
 		return WorkflowAssignmentSnapshot{}, false, errors.New("session store is required")
 	}
-	if err := store.EnsureActiveWorkflowAssignmentProjection(); err != nil {
+	activeAssignment, err := store.ActiveWorkflowAssignmentProjection()
+	if err != nil {
 		return WorkflowAssignmentSnapshot{}, false, err
 	}
 	meta := store.Meta()
 	snapshot := WorkflowAssignmentSnapshot{}
-	if meta.ActiveWorkflowAssignment != nil {
-		message, err := llmMessageFromSessionRecord(*meta.ActiveWorkflowAssignment)
+	if activeAssignment != nil {
+		message, err := llmMessageFromSessionRecord(*activeAssignment)
 		if err != nil {
 			return WorkflowAssignmentSnapshot{}, false, err
 		}

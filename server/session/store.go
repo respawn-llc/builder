@@ -264,7 +264,7 @@ func newLazyWithIDAndStoreOptions(sessionID runtimeids.SessionID, workspaceConta
 			WorkspaceContainer:            workspaceContainerName,
 			CreatedAt:                     now,
 			UpdatedAt:                     now,
-			ActiveWorkflowAssignmentKnown: true,
+			ActiveWorkflowAssignmentState: &ActiveWorkflowAssignmentState{},
 		},
 		conversationFreshness: ConversationFreshnessFresh,
 		persisted:             false,
@@ -553,7 +553,7 @@ func (s *Store) PromptFacingMetadataSnapshot() PromptFacingMetadataSnapshot {
 		PromptCacheLineageGeneration:  meta.PromptCacheLineageGeneration,
 		Locked:                        cloneLockedContract(meta.Locked),
 		ActiveWorkflowAssignment:      cloneMessageRecord(meta.ActiveWorkflowAssignment),
-		ActiveWorkflowAssignmentKnown: meta.ActiveWorkflowAssignmentKnown,
+		ActiveWorkflowAssignmentState: cloneActiveWorkflowAssignmentState(meta.ActiveWorkflowAssignmentState),
 	}
 }
 
@@ -566,7 +566,7 @@ func (s *Store) RestorePromptFacingMetadata(snapshot PromptFacingMetadataSnapsho
 		s.meta.PromptCacheLineageGeneration = snapshot.PromptCacheLineageGeneration
 		s.meta.Locked = cloneLockedContract(snapshot.Locked)
 		s.meta.ActiveWorkflowAssignment = cloneMessageRecord(snapshot.ActiveWorkflowAssignment)
-		s.meta.ActiveWorkflowAssignmentKnown = snapshot.ActiveWorkflowAssignmentKnown
+		s.meta.ActiveWorkflowAssignmentState = cloneActiveWorkflowAssignmentState(snapshot.ActiveWorkflowAssignmentState)
 		s.meta.UpdatedAt = time.Now().UTC()
 		return nil
 	})
