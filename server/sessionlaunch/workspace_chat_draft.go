@@ -25,6 +25,7 @@ type WorkspaceChatDraftResolverInput struct {
 type WorkspaceChatDraftTransform func(WorkspaceChatDraftResolution) (WorkspaceChatDraft, error)
 type workspaceChatDraftLimits struct {
 	draft           WorkspaceChatDraft
+	settings        config.Settings
 	fast, questions bool
 	thinking        map[string]struct{}
 }
@@ -309,6 +310,7 @@ func resolveWorkspaceChatDraftBaselines(
 				Questions:      baseline.Questions,
 				AutoCompaction: baseline.AutoCompaction,
 			},
+			settings:  entry.ResolvedSettings,
 			fast:      preparedSettings.FastAvailable,
 			questions: preparedSettings.QuestionsAvailable,
 			thinking:  thinkingLevels,

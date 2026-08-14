@@ -21,6 +21,7 @@ type OperationalDiagnosticCode string
 const (
 	OperationalDiagnosticSleepGuardFailed           OperationalDiagnosticCode = "sleep_guard_failed"
 	OperationalDiagnosticPromptHistoryPersistFailed OperationalDiagnosticCode = "prompt_history_persist_failed"
+	OperationalDiagnosticContextFactsPersistFailed  OperationalDiagnosticCode = "context_facts_persist_failed"
 	OperationalDiagnosticInFlightClearFailed        OperationalDiagnosticCode = "in_flight_clear_failed"
 	OperationalDiagnosticProviderTurnStateInvalid   OperationalDiagnosticCode = "provider_turn_state_invalid"
 )
@@ -76,6 +77,7 @@ func (d TranscriptOperationalDiagnostic) Validate() error {
 	switch d.Code {
 	case OperationalDiagnosticSleepGuardFailed,
 		OperationalDiagnosticPromptHistoryPersistFailed,
+		OperationalDiagnosticContextFactsPersistFailed,
 		OperationalDiagnosticInFlightClearFailed:
 		if strings.TrimSpace(d.Detail) == "" {
 			return fmt.Errorf("operational diagnostic detail is required")

@@ -24,9 +24,10 @@ type PreparedChatSettings struct {
 }
 
 type PreparedChatAgentCatalogEntry struct {
-	Choice     serverapi.ChatSettingsAgentChoice
-	Settings   PreparedChatSettings
-	comparison preparedChatAgentComparison
+	Choice           serverapi.ChatSettingsAgentChoice
+	Settings         PreparedChatSettings
+	ResolvedSettings config.Settings
+	comparison       preparedChatAgentComparison
 }
 
 type PreparedChatAgentCatalog struct {
@@ -115,13 +116,10 @@ func prepareChatAgentCatalogEntry(
 		capabilities, _ = llm.ProviderCapabilitiesFromOverride(target.Settings.ProviderCapabilities)
 		fastAvailable = true
 	} else {
-		if !prepared.ProviderReadinessValidated {
+		if prepared.ProviderCapabilities == nil {
 			return fail(serverapi.ChatSettingsAgentInternalPreparation)
 		}
-		capabilities, err = llm.ProviderCapabilitiesForSettings(authState, target.Settings)
-		if err != nil {
-			return fail(classifyChatAgentPreparationError(err))
-		}
+		capabilities = *prepared.ProviderCapabilities
 		fastAvailable = llm.SupportsFastModeProvider(capabilities)
 	}
 	settings, err := PrepareChatSettingsForPreparedTarget(target, fastAvailable)
@@ -138,7 +136,8 @@ func prepareChatAgentCatalogEntry(
 			CustomCapabilities: chatAgentHasExplicitCapabilities(app.Settings, selector),
 			AgentCallable:      chatAgentCallable(app.Settings, selector),
 		},
-		Settings: settings,
+		Settings:         settings,
+		ResolvedSettings: target.Settings,
 	}
 	entry.comparison = preparedChatAgentComparison{
 		Settings:             normalizeComparableSettings(target.Settings),
@@ -184,7 +183,13 @@ func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent str
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
-	return PrepareChatSettingsForPreparedTarget(target, prepared.FastAvailable)
+	if prepared.ProviderCapabilities == nil {
+		return PreparedChatSettings{}, errors.New("Chat settings provider capabilities were not prepared")
+	}
+	return PrepareChatSettingsForPreparedTarget(
+		target,
+		llm.SupportsFastModeProvider(*prepared.ProviderCapabilities),
+	)
 }
 
 func PrepareSessionChatSettingsForAgent(app config.App, authState auth.State, agent string, promptFacing PreparedBaseTarget) (PreparedChatSettings, error) {
@@ -192,7 +197,13 @@ func PrepareSessionChatSettingsForAgent(app config.App, authState auth.State, ag
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
-	baseline, err := PrepareChatSettingsForPreparedTarget(baselineTarget, prepared.FastAvailable)
+	if prepared.ProviderCapabilities == nil {
+		return PreparedChatSettings{}, errors.New("Chat settings provider capabilities were not prepared")
+	}
+	baseline, err := PrepareChatSettingsForPreparedTarget(
+		baselineTarget,
+		llm.SupportsFastModeProvider(*prepared.ProviderCapabilities),
+	)
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}

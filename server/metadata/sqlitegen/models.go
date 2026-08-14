@@ -150,28 +150,30 @@ type ProjectWorkflowLinkRecord struct {
 }
 
 type Session struct {
-	ID                   string
-	ProjectID            string
-	WorkspaceID          sql.NullString
-	WorktreeID           sql.NullString
-	ArtifactRelpath      string
-	Name                 string
-	FirstPromptPreview   string
-	InputDraft           string
-	Category             sql.NullString
-	CreatedAtUnixMs      int64
-	UpdatedAtUnixMs      int64
-	LastSequence         int64
-	ModelRequestCount    int64
-	LaunchVisible        int64
-	CwdRelpath           string
-	ContinuationJson     string
-	LockedJson           string
-	UsageStateJson       string
-	MetadataJson         string
-	PreviousSessionID    sql.NullString
-	ParentAgentSessionID sql.NullString
-	TaskID               sql.NullString
+	ID                       string
+	ProjectID                string
+	WorkspaceID              sql.NullString
+	WorktreeID               sql.NullString
+	ArtifactRelpath          string
+	Name                     string
+	FirstPromptPreview       string
+	InputDraft               string
+	Category                 sql.NullString
+	CreatedAtUnixMs          int64
+	UpdatedAtUnixMs          int64
+	LastSequence             int64
+	ModelRequestCount        int64
+	LaunchVisible            int64
+	CwdRelpath               string
+	ContinuationJson         string
+	LockedJson               string
+	UsageStateJson           string
+	MetadataJson             string
+	PreviousSessionID        sql.NullString
+	ParentAgentSessionID     sql.NullString
+	TaskID                   sql.NullString
+	CompletedCompactionCount sql.NullInt64
+	ManualCompactEligible    sql.NullInt64
 }
 
 type SessionPromptHistoryEntry struct {

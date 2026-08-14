@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"core/server/chatcontext"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
@@ -51,19 +52,6 @@ func NormalizeThinkingLevel(level string) (string, bool) {
 
 func NormalizeReviewerFrequency(frequency string) (string, bool) {
 	return session.NormalizeReviewerFrequency(frequency)
-}
-
-func NormalizeCompactionMode(mode string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "native":
-		return "native", true
-	case "local":
-		return "local", true
-	case "none":
-		return "none", true
-	default:
-		return "", false
-	}
 }
 
 func normalizeCacheWarningMode(mode config.CacheWarningMode) (config.CacheWarningMode, bool) {
@@ -193,6 +181,7 @@ type Engine struct {
 	modelRequestsState   *modelRequestRuntimeState
 	currentNodeExecution *currentNodeExecutionState
 	compactionPlanner    *compactionPlanner
+	contextPolicy        chatcontext.Policy
 	collaboratorsOnce    sync.Once
 
 	phaseProtocol  phaseProtocolEnforcer
@@ -240,19 +229,11 @@ func New(
 	if cfg.MaxTokens < 0 {
 		cfg.MaxTokens = 0
 	}
-	if cfg.EffectiveContextWindowPercent <= 0 || cfg.EffectiveContextWindowPercent > 100 {
-		cfg.EffectiveContextWindowPercent = 95
-	}
 	if cfg.PreSubmitCompactionLeadTokens <= 0 {
 		cfg.PreSubmitCompactionLeadTokens = config.DefaultPreSubmitRunwayTokens
 	}
 	if cfg.LocalCompactionCarryoverLimit <= 0 {
 		cfg.LocalCompactionCarryoverLimit = 20_000
-	}
-	if normalized, ok := NormalizeCompactionMode(cfg.CompactionMode); ok {
-		cfg.CompactionMode = normalized
-	} else {
-		cfg.CompactionMode = "native"
 	}
 	if normalized, ok := normalizeCacheWarningMode(cfg.CacheWarningMode); ok {
 		cfg.CacheWarningMode = normalized
@@ -262,11 +243,6 @@ func New(
 	if cfg.AutoCompactionEnabled == nil {
 		enabled := true
 		cfg.AutoCompactionEnabled = &enabled
-	}
-	if cfg.ContextWindowTokens <= 0 {
-		if meta, ok := llm.LookupModelMetadata(cfg.Model); ok && meta.ContextWindowTokens > 0 {
-			cfg.ContextWindowTokens = meta.ContextWindowTokens
-		}
 	}
 	if cfg.CurrentNodeExecution != nil {
 		cloned := *cfg.CurrentNodeExecution
@@ -319,11 +295,21 @@ func New(
 		currentNodeExecution:        newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
 		compactionPlanner:           newCompactionPlanner(),
 	}
+	eng.compactionRuntimeState().SetContextFacts(store.ContextFacts())
 	providerCapabilities, err := eng.providerCapabilities(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("resolve provider capabilities during runtime construction: %w", err)
 	}
 	eng.cfg.ProviderCapabilitiesOverride = &providerCapabilities
+	policySettings := config.Settings{
+		ModelContextWindow:               eng.cfg.ContextWindowTokens,
+		ContextCompactionThresholdTokens: eng.cfg.AutoCompactTokenLimit,
+		CompactionMode:                   config.CompactionMode(eng.cfg.CompactionMode),
+	}
+	eng.contextPolicy = chatcontext.ResolvePolicy(policySettings, providerCapabilities, store.Meta().Locked)
+	eng.cfg.ContextWindowTokens = int(eng.contextPolicy.ContextWindowTokens)
+	eng.cfg.AutoCompactTokenLimit = int(eng.contextPolicy.AutomaticThresholdTokens)
+	eng.cfg.CompactionMode = eng.compactionPlannerState().mode(eng.contextPolicy)
 	eng.ensureLifecycle()
 	eng.ensureOrchestrationCollaborators()
 

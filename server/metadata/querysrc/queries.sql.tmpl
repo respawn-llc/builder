@@ -1963,7 +1963,9 @@ INSERT INTO sessions (
     continuation_json,
     locked_json,
     usage_state_json,
-    metadata_json
+    metadata_json,
+    completed_compaction_count,
+    manual_compact_eligible
 ) VALUES (
     sqlc.arg(id),
     sqlc.arg(project_id),
@@ -1985,7 +1987,9 @@ INSERT INTO sessions (
     sqlc.arg(continuation_json),
     sqlc.arg(locked_json),
     sqlc.arg(usage_state_json),
-    sqlc.arg(metadata_json)
+    sqlc.arg(metadata_json),
+    sqlc.narg(completed_compaction_count),
+    sqlc.narg(manual_compact_eligible)
 )
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
@@ -2005,6 +2009,18 @@ ON CONFLICT(id) DO UPDATE SET
     locked_json = excluded.locked_json,
     usage_state_json = excluded.usage_state_json,
     metadata_json = excluded.metadata_json;
+
+-- name: UpdateSessionContextFacts :execrows
+UPDATE sessions
+SET
+    completed_compaction_count = sqlc.arg(completed_compaction_count),
+    manual_compact_eligible = sqlc.arg(manual_compact_eligible)
+WHERE id = sqlc.arg(session_id);
+
+-- name: UpdateSessionManualCompactEligibility :execrows
+UPDATE sessions
+SET manual_compact_eligible = sqlc.arg(manual_compact_eligible)
+WHERE id = sqlc.arg(session_id);
 
 -- name: ReconcileSessionEventLog :execrows
 UPDATE sessions
@@ -2292,6 +2308,8 @@ SELECT
     s.locked_json,
     s.usage_state_json,
     s.metadata_json,
+    s.completed_compaction_count,
+    s.manual_compact_eligible,
     COALESCE(w.canonical_root_path, json_extract(s.metadata_json, '$.workspace_root'), '') AS workspace_root
 FROM sessions s
 LEFT JOIN workspaces w ON w.id = s.workspace_id
