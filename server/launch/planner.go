@@ -196,12 +196,11 @@ func optionalSessionName(name string) (*string, error) {
 // RunPrompt override. Session launch prepares it before any new session is
 // materialized; applying it later must not reload config or look up a role.
 type PreparedRunPromptOverrides struct {
-	OverrideConfig             config.App
-	AgentRole                  serverapi.RunPromptAgentRoleOverride
-	BaseTarget                 *PreparedBaseTarget
-	NamedTarget                *PreparedSubagentTarget
-	FastAvailable              bool
-	ProviderReadinessValidated bool
+	OverrideConfig       config.App
+	AgentRole            serverapi.RunPromptAgentRoleOverride
+	BaseTarget           *PreparedBaseTarget
+	NamedTarget          *PreparedSubagentTarget
+	ProviderCapabilities *llm.ProviderCapabilities
 }
 
 type PreparedBaseTarget struct {
@@ -804,8 +803,7 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 			if capabilityErr != nil {
 				return PreparedRunPromptOverrides{}, capabilityErr
 			}
-			prepared.FastAvailable = llm.SupportsFastModeProvider(capabilities)
-			prepared.ProviderReadinessValidated = true
+			prepared.ProviderCapabilities = &capabilities
 		}
 		return prepared, nil
 	}
@@ -822,14 +820,14 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	providerSettings.Subagents = nil
 	providerSettings = config.OverlaySubagentRoleProviderSettings(providerSettings, lookup.Role)
 	providerID := persistedRoleProviderID(providerSettings)
-	fastAvailable := false
+	var providerCapabilities *llm.ProviderCapabilities
 	if !preparation.SkipProviderReadinessValidation {
 		providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
 		if err != nil {
 			return PreparedRunPromptOverrides{}, err
 		}
 		providerID = strings.TrimSpace(providerCaps.ProviderID)
-		fastAvailable = llm.SupportsFastModeProvider(providerCaps)
+		providerCapabilities = &providerCaps
 	}
 	target, err := prepareNamedTarget(
 		app,
@@ -847,10 +845,7 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 		return PreparedRunPromptOverrides{}, err
 	}
 	prepared.NamedTarget = &target
-	if !preparation.SkipProviderReadinessValidation {
-		prepared.FastAvailable = fastAvailable
-		prepared.ProviderReadinessValidated = true
-	}
+	prepared.ProviderCapabilities = providerCapabilities
 	return prepared, nil
 }
 
@@ -989,8 +984,9 @@ func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, stor
 	}
 	var chatSettings session.ChatSettings
 	var fastAvailable *bool
-	if prepared.ProviderReadinessValidated {
-		fastAvailable = &prepared.FastAvailable
+	if prepared.ProviderCapabilities != nil {
+		value := llm.SupportsFastModeProvider(*prepared.ProviderCapabilities)
+		fastAvailable = &value
 	}
 	next.ActiveSettings, chatSettings, err = applySessionChatSettingsWithRunOverrides(
 		store.Meta(),

@@ -176,6 +176,7 @@ func TestWorkspaceChatContextKeepsDraftAndEffectiveAuthAuthoritiesSeparate(t *te
 	settings := draftSettings("gpt-5.6-sol", "medium")
 	settings.ModelContextWindow = 100_000
 	settings.ContextCompactionThresholdTokens = 75_000
+	settings.PreSubmitCompactionLeadTokens = 20_000
 	settings.CompactionMode = config.CompactionModeNative
 	settings.OpenAIBaseURL = "https://compatible.example/v1"
 	authReader := &workspaceChatContextAuthReader{

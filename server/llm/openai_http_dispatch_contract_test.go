@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"core/internal/testharness/httpclient"
 	"core/shared/textutil"
 	"encoding/json"
 	"errors"
@@ -68,7 +69,7 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 				t.Run(authName+"/"+methodName+"/"+invalidName, func(t *testing.T) {
 					transport, authCalls := newTransport()
 					networkCalls := atomic.Int32{}
-					transport.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					transport.Client = &http.Client{Transport: httpclient.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 						networkCalls.Add(1)
 						return nil, errors.New("unexpected network request")
 					})}
@@ -113,9 +114,9 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 		t.Fatalf("dispatch context: %v", err)
 	}
 	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.BaseURL = server.URL
+	transport.BaseURL = "https://chatgpt.com/backend-api/codex"
 	transport.BaseURLExplicit = true
-	transport.Client = server.Client()
+	transport.Client = newRewritingHTTPClient(t, server)
 
 	request := OpenAIRequest{
 		Model:          "gpt-5.6-sol",
@@ -163,6 +164,45 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 		t.Fatalf("priority stream = %#v, want true", capturedBody["stream"])
 	}
 	assertCanonicalGenerationMetadata(t, capturedBody)
+}
+
+func TestOAuthExplicitCompatibleEndpointSendsCommonIdentityWithoutCodexMetadata(t *testing.T) {
+	var capturedHeaders http.Header
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeCompletedResponseSSE(w)
+	}))
+	t.Cleanup(server.Close)
+
+	transport := NewHTTPTransport(oauthStaticAuth{})
+	transport.BaseURL = server.URL
+	transport.BaseURLExplicit = true
+	transport.Client = server.Client()
+
+	if _, err := transport.Generate(context.Background(), OpenAIRequest{
+		Model:          "gpt-5.6-sol",
+		SessionID:      textutil.Value("session-1"),
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+	}); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if got := capturedHeaders.Get("session-id"); got != "session-1" {
+		t.Fatalf("session-id = %q, want session-1", got)
+	}
+	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "" {
+		t.Fatalf("Codex routing hint = %q, want absent", got)
+	}
+	if got := capturedHeaders.Get(codexTurnStateHeader); got != "" {
+		t.Fatalf("Codex turn state = %q, want absent", got)
+	}
+	if _, exists := capturedBody["client_metadata"]; exists {
+		t.Fatalf("client_metadata = %#v, want absent", capturedBody["client_metadata"])
+	}
 }
 
 func assertCanonicalGenerationMetadata(t *testing.T, body map[string]any) {
@@ -225,7 +265,7 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 				networkCalls := atomic.Int32{}
 				transport := NewHTTPTransport(oauthStaticAuth{})
 				transport.ContextWindowTokens = 0
-				transport.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				transport.Client = &http.Client{Transport: httpclient.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 					networkCalls.Add(1)
 					return nil, errors.New("unexpected network request")
 				})}
@@ -262,7 +302,7 @@ func TestOAuthDispatchRejectsMissingContextBeforeContextWindowHTTP(t *testing.T)
 			networkCalls := atomic.Int32{}
 			transport := NewHTTPTransport(oauthStaticAuth{})
 			transport.ContextWindowTokens = 0
-			transport.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			transport.Client = &http.Client{Transport: httpclient.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 				networkCalls.Add(1)
 				return nil, errors.New("unexpected network request")
 			})}

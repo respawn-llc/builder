@@ -131,6 +131,10 @@ type SessionLaunchService interface {
 	MaterializeWorkspaceChat(ctx context.Context, req serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error)
 }
 
+type ChatSettingsService interface {
+	ReadChatSettings(ctx context.Context, req serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error)
+}
+
 type SessionLifecycleService interface {
 	GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error)
 	PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error)

@@ -148,6 +148,11 @@ func EffectiveSubagentRoleTools(base map[toolspec.ID]bool, role SubagentRole) ma
 	return effective
 }
 
+func SubagentRoleHasCapabilityOverrides(role SubagentRole) bool {
+	return hasAnyConfiguredSource(role.Sources, modelCapabilityKeys...) ||
+		hasAnyConfiguredSource(role.Sources, providerCapabilityKeys...)
+}
+
 func OverlaySubagentRoleSettings(base Settings, role SubagentRole, allowModelOverride bool) Settings {
 	return overlaySubagentRoleSettings(base, role, func(key string) bool {
 		return subagentRoleSessionSetting(key) && (allowModelOverride || key != "model")

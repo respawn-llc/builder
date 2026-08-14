@@ -65,17 +65,19 @@ type Store struct {
 }
 
 type sessionMetadataDocument struct {
-	WorkspaceRoot                   string                         `json:"workspace_root"`
-	WorkspaceContainer              string                         `json:"workspace_container"`
-	ChatSettings                    *session.ChatSettingsOverrides `json:"chat_settings,omitempty"`
-	ConversationEstablished         bool                           `json:"conversation_established"`
-	PromptCacheLineageGeneration    int                            `json:"prompt_cache_lineage_generation"`
-	HeadlessActive                  bool                           `json:"headless_active"`
-	CompactionSoonReminderIssued    bool                           `json:"compaction_soon_reminder_issued"`
-	GeneratedRecoveredWarningIssued bool                           `json:"generated_recovered_warning_issued"`
-	PendingModelRecovery            *session.PendingModelRecovery  `json:"pending_model_recovery"`
-	WorktreeReminder                *session.WorktreeReminderState `json:"worktree_reminder"`
-	Goal                            *session.GoalState             `json:"goal"`
+	WorkspaceRoot                   string                                 `json:"workspace_root"`
+	WorkspaceContainer              string                                 `json:"workspace_container"`
+	ChatSettings                    *session.ChatSettingsOverrides         `json:"chat_settings,omitempty"`
+	ConversationEstablished         bool                                   `json:"conversation_established"`
+	PromptCacheLineageGeneration    int                                    `json:"prompt_cache_lineage_generation"`
+	HeadlessActive                  bool                                   `json:"headless_active"`
+	CompactionSoonReminderIssued    bool                                   `json:"compaction_soon_reminder_issued"`
+	GeneratedRecoveredWarningIssued bool                                   `json:"generated_recovered_warning_issued"`
+	PendingModelRecovery            *session.PendingModelRecovery          `json:"pending_model_recovery"`
+	WorktreeReminder                *session.WorktreeReminderState         `json:"worktree_reminder"`
+	Goal                            *session.GoalState                     `json:"goal"`
+	ActiveWorkflowAssignment        *session.MessageRecord                 `json:"active_workflow_assignment,omitempty"`
+	ActiveWorkflowAssignmentState   *session.ActiveWorkflowAssignmentState `json:"active_workflow_assignment_state,omitempty"`
 }
 
 var (
@@ -2575,6 +2577,8 @@ func (s *Store) upsertSessionSnapshotWithQueries(
 		PendingModelRecovery:            snapshot.Meta.PendingModelRecovery,
 		WorktreeReminder:                persistedWorktreeReminder,
 		Goal:                            snapshot.Meta.Goal,
+		ActiveWorkflowAssignment:        snapshot.Meta.ActiveWorkflowAssignment,
+		ActiveWorkflowAssignmentState:   snapshot.Meta.ActiveWorkflowAssignmentState,
 	})
 	if err != nil {
 		return err
@@ -2788,6 +2792,8 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		PendingModelRecovery:            metadataPayload.PendingModelRecovery,
 		WorktreeReminder:                metadataPayload.WorktreeReminder,
 		Goal:                            metadataPayload.Goal,
+		ActiveWorkflowAssignment:        metadataPayload.ActiveWorkflowAssignment,
+		ActiveWorkflowAssignmentState:   metadataPayload.ActiveWorkflowAssignmentState,
 		UsageState:                      usageState,
 		Locked:                          locked,
 	}, nil

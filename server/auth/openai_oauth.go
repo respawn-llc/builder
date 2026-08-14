@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"core/server/httpcompression"
 )
 
 const (
@@ -81,7 +83,7 @@ func normalizeOpenAIOAuthOptions(opts OpenAIOAuthOptions) OpenAIOAuthOptions {
 		opts.ClientID = DefaultOpenAIClientID
 	}
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+		opts.HTTPClient = httpcompression.NewClient(&http.Client{Timeout: 30 * time.Second})
 	}
 	if opts.PollTimeout <= 0 {
 		opts.PollTimeout = defaultPollTimeout

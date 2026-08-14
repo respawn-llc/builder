@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"reflect"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -44,7 +42,6 @@ type Gateway struct {
 	identity                          protocol.ServerIdentity
 	onboardingFinalizeRequestContract serverjsoncontract.OnboardingFinalizeRequest
 	sessionExecutionRequestContract   serverjsoncontract.SessionExecutionEnvironmentRequest
-	debug                             bool
 }
 
 type GatewayDependencies interface {
@@ -94,6 +91,7 @@ type GatewayProjectDependencies interface {
 
 type GatewaySessionDependencies interface {
 	SessionBelongsToProject(context.Context, string, string) error
+	ChatSettingsClient() apicontract.ChatSettingsService
 	SessionViewClient() apicontract.SessionViewService
 	SessionLifecycleClient() apicontract.SessionLifecycleService
 	SessionRuntimeClient() apicontract.SessionRuntimeService
@@ -157,31 +155,6 @@ type gatewayRequestSchedule struct {
 	kind          gatewayRequestScheduleKind
 	progress      gatewayProgressHandler
 	progressRoute apicontract.Route
-}
-
-const gatewayOrdinaryRequestOperation = "gateway.ordinary_request"
-
-type gatewayRequestPanicDiagnostic struct {
-	Operation string
-	Method    string
-	RequestID string
-	Cause     any
-	Stack     string
-}
-
-type processFatalGatewayPanic interface {
-	ProcessFatalPanic()
-}
-
-func (p gatewayRequestPanicDiagnostic) Error() string {
-	return fmt.Sprintf(
-		"gateway request panic operation=%q method=%q request_id=%q cause=%v\nstack:\n%s",
-		p.Operation,
-		p.Method,
-		p.RequestID,
-		p.Cause,
-		p.Stack,
-	)
 }
 
 var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
@@ -285,7 +258,6 @@ func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Ga
 		identity:                          identity,
 		onboardingFinalizeRequestContract: onboardingFinalizeRequestContract,
 		sessionExecutionRequestContract:   sessionExecutionRequestContract,
-		debug:                             debugMode,
 	}, nil
 }
 
@@ -407,31 +379,6 @@ func (g *Gateway) serveGatewayRequest(conn rpcwire.Conn, ctx context.Context, st
 }
 
 func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request, schedule gatewayRequestSchedule, stop func()) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if _, processFatal := recovered.(processFatalGatewayPanic); processFatal {
-				panic(recovered)
-			}
-			stack := string(debug.Stack())
-			slog.Error(
-				"gateway request handler panicked",
-				"method", req.Method,
-				"request_id", req.ID,
-				"panic", recovered,
-				"stack", stack,
-			)
-			stop()
-			if g.debug {
-				panic(gatewayRequestPanicDiagnostic{
-					Operation: gatewayOrdinaryRequestOperation,
-					Method:    req.Method,
-					RequestID: req.ID,
-					Cause:     recovered,
-					Stack:     stack,
-				})
-			}
-		}
-	}()
 	if !g.serveGatewayRequest(conn, ctx, state, req, schedule) {
 		stop()
 	}

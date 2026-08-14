@@ -263,7 +263,9 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 	e := s.engine
 	executedToolCall := false
 	patchEditsApplied, mismatchWarningCommitted := false, false
+	stepNo := 0
 	for {
+		stepNo++
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
 		}
@@ -280,6 +282,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := s.prepareModelTurn(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		}
+		e.assertWorkflowInstructionsPresent(stepNo)
 
 		var reasoningSteerErr error
 		candidate, err := e.generateWithMissingToolOutputRepair(
@@ -852,6 +855,9 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string) error {
 	s.engine.setManualCompactionEligible(true)
 	s.engine.persistManualCompactEligibilityBestEffort(stepID, true)
+	if err := s.engine.flushPendingWorkflowAssignments(stepID); err != nil {
+		return err
+	}
 	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 

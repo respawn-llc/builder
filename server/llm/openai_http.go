@@ -48,6 +48,7 @@ type OpenAIAuthMode struct {
 type openAIDispatchPreparation struct {
 	authHeader   string
 	mode         OpenAIAuthMode
+	variant      ProviderVariantContract
 	providerCaps ProviderCapabilities
 	projection   *codexDispatchProjection
 }
@@ -110,6 +111,7 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
+	compressionOption := requestCompressionOption(preparation.variant)
 
 	requestClient := t.Client
 	if preparation.mode.IsOAuth {
@@ -121,6 +123,7 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(preparation.authHeader, preparation.mode, request.SessionID, preparation.projection, request.CodexDispatch)
+	reqOpts = append(reqOpts, compressionOption)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
@@ -131,7 +134,7 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 			ctx,
 			stream,
 			rawResp,
-			request.CodexDispatch,
+			codexTurnStateObserver(preparation.projection, request.CodexDispatch),
 			preparation.providerCaps.ProviderID,
 			windowTokens,
 			StreamCallbacks{},
@@ -192,6 +195,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
+	compressionOption := requestCompressionOption(preparation.variant)
 
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(preparation.mode)),
@@ -199,16 +203,14 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(preparation.authHeader, preparation.mode, request.SessionID, preparation.projection, request.CodexDispatch)
+	reqOpts = append(reqOpts, compressionOption)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
 	stream := service.NewStreaming(ctx, payload, reqOpts...)
 	defer func() { _ = stream.Close() }()
 
-	var turnStateObserver *CodexDispatchContext
-	if preparation.mode.IsOAuth {
-		turnStateObserver = request.CodexDispatch
-	}
+	turnStateObserver := codexTurnStateObserver(preparation.projection, request.CodexDispatch)
 	return consumeResponsesStream(
 		ctx,
 		stream,
@@ -366,17 +368,20 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
-	variant, err := t.providerVariantForMode(preparation.mode)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
-	}
 	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
-	switch variant.RemoteCompactionProtocol {
+	switch preparation.variant.RemoteCompactionProtocol {
 	case remoteCompactionResponsesTriggerV2:
-		return t.compactResponsesTriggerV2(ctx, request, preparation.authHeader, preparation.mode, preparation.providerCaps, windowTokens, preparation.projection)
+		return t.compactResponsesTriggerV2(ctx, request, preparation.authHeader, preparation.mode, preparation.variant, preparation.providerCaps, windowTokens, preparation.projection)
 	default:
 		return OpenAICompactionResponse{}, fmt.Errorf("provider %s does not support remote compaction", preparation.providerCaps.ProviderID)
 	}
+}
+
+func codexTurnStateObserver(projection *codexDispatchProjection, dispatch *CodexDispatchContext) *CodexDispatchContext {
+	if projection == nil {
+		return nil
+	}
+	return dispatch
 }
 
 func (t *HTTPTransport) prepareDispatch(
@@ -396,15 +401,17 @@ func (t *HTTPTransport) prepareDispatch(
 	if err != nil {
 		return openAIDispatchPreparation{}, err
 	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	variant, err := t.providerVariantForMode(mode)
 	if err != nil {
 		return openAIDispatchPreparation{}, err
 	}
-	projection, err := validateOpenAIDispatchForMode(
+	providerCaps := t.providerCapabilitiesForVariant(variant)
+	isChatGPTCodex := variant.ProviderID == "chatgpt-codex"
+	projection, err := validateOpenAIDispatch(
 		*sessionID,
 		model,
 		dispatch,
-		mode,
+		isChatGPTCodex,
 		effectiveServiceTier(fastMode, providerCaps),
 	)
 	if err != nil {
@@ -413,23 +420,26 @@ func (t *HTTPTransport) prepareDispatch(
 	return openAIDispatchPreparation{
 		authHeader:   authHeader,
 		mode:         mode,
+		variant:      variant,
 		providerCaps: providerCaps,
 		projection:   projection,
 	}, nil
 }
 
-func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request OpenAICompactionRequest, authHeader string, mode OpenAIAuthMode, providerCaps ProviderCapabilities, windowTokens int, projection *codexDispatchProjection) (OpenAICompactionResponse, error) {
+func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request OpenAICompactionRequest, authHeader string, mode OpenAIAuthMode, variant ProviderVariantContract, providerCaps ProviderCapabilities, windowTokens int, projection *codexDispatchProjection) (OpenAICompactionResponse, error) {
 	payload, err := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, providerCaps).BuildCompactV2(request)
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
 	applyCodexClientMetadata(&payload, projection)
+	compressionOption := requestCompressionOption(variant)
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(mode)),
 		option.WithHTTPClient(t.streamingHTTPClient()),
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID, projection, request.CodexDispatch)
+	reqOpts = append(reqOpts, compressionOption)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 	watchdog := newStreamIdleWatchdog(ctx, t.Client.Timeout)
@@ -438,10 +448,7 @@ func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request O
 	defer func() { _ = stream.Close() }()
 
 	accumulator := newResponseStreamAccumulator(StreamCallbacks{}, windowTokens)
-	var turnStateObserver *CodexDispatchContext
-	if mode.IsOAuth {
-		turnStateObserver = request.CodexDispatch
-	}
+	turnStateObserver := codexTurnStateObserver(projection, request.CodexDispatch)
 	headersObserved := false
 	observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
 	for stream.Next() {

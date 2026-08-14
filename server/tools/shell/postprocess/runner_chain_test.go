@@ -114,7 +114,7 @@ func TestChainCriticalProcessorErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestChainProcessorPanicIsCritical(t *testing.T) {
+func TestChainProcessorPanicPropagates(t *testing.T) {
 	envelope := NewEnvelope(Request{Output: "start"})
 	chain := Chain{IDValue: "test", Processors: []Processor{
 		testProcessor{id: "panic", fn: func(Envelope) (Decision, error) {
@@ -125,13 +125,12 @@ func TestChainProcessorPanicIsCritical(t *testing.T) {
 		}},
 	}}
 
-	_, err := chain.Process(context.Background(), envelope)
-	if err == nil {
-		t.Fatal("expected panic to propagate as critical processor error")
-	}
-	if !IsCriticalError(err) || !strings.Contains(err.Error(), "postprocess processor panic panicked: boom") {
-		t.Fatalf("err = %v, want critical panic error", err)
-	}
+	defer func() {
+		if recovered := recover(); recovered != "boom" {
+			t.Fatalf("recovered panic = %#v, want boom", recovered)
+		}
+	}()
+	_, _ = chain.Process(context.Background(), envelope)
 }
 
 func TestProxySkipsProcessorOutsideScope(t *testing.T) {

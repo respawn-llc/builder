@@ -8,6 +8,7 @@ export const architectureOwners = Object.freeze({
   I18N: "i18n",
   NATIVE_CONFIG: "native-config",
   NATIVE_PACKAGE: "native-package",
+  SERVER_API_CONTRACT: "server-api-contract",
   SHARED: "shared",
   SHELL: "shell",
   TEST_SUPPORT: "test-support",
@@ -27,6 +28,10 @@ export const architectureElements = Object.freeze([
   architectureElement(architectureOwners.API, "src/api"),
   architectureElement(architectureOwners.TEST_SUPPORT, "src/test-support"),
   architectureElement(architectureOwners.UI_KIT, "packages/ui-kit"),
+  architectureElement(
+    architectureOwners.SERVER_API_CONTRACT,
+    "packages/server-api-contract",
+  ),
   architectureElement(architectureOwners.NATIVE_PACKAGE, "packages/*", "name"),
   architectureElement(architectureOwners.I18N, "src/i18n"),
   architectureElement(architectureOwners.VENDOR, "src/vendor"),
@@ -58,6 +63,11 @@ export const architectureFiles = Object.freeze([
 ]);
 
 export const architectureDependencyNodes = Object.freeze(["import", "export", "dynamic-import", "require"]);
+
+// Protobuf-ES output is regenerated and contains no handwritten ownership decisions.
+// Its handwritten package entrypoint and policy modules remain fail-closed below.
+export const generatedServerApiContractFiles =
+  "packages/server-api-contract/src/gen/**/*.ts";
 
 export const architectureAdditionalDependencyNodes = Object.freeze(
   ["mock", "doMock", "unmock", "doUnmock", "importActual", "importMock"].map((method) =>
@@ -159,6 +169,10 @@ const ownerDependencyMatrix = [
     ...vendorDependencies,
   ),
   ownerDependencies(architectureOwners.UI_KIT, dependencyTargets.UI_KIT),
+  ownerDependencies(
+    architectureOwners.SERVER_API_CONTRACT,
+    dependencyTarget(architectureOwners.SERVER_API_CONTRACT),
+  ),
   ownerDependencies(architectureOwners.TEST_SUPPORT, ...compositionDependencies),
   ownerDependencies(architectureOwners.TOOLING, dependencyTargets.TOOLING_TYPES),
 ];
@@ -216,6 +230,7 @@ export function createArchitecturePolicy({ rootPath, parserProjects }) {
   return [
     {
       files: ["**/*.{ts,tsx}"],
+      ignores: [generatedServerApiContractFiles],
       languageOptions: {
         parser: tseslint.parser,
         parserOptions: {
@@ -248,7 +263,7 @@ export function createArchitecturePolicy({ rootPath, parserProjects }) {
     },
     {
       files: ["**/*.{ts,tsx}"],
-      ignores: ["packages/native-bridge/**"],
+      ignores: ["packages/native-bridge/**", generatedServerApiContractFiles],
       rules: {
         "no-restricted-imports": [
           "error",

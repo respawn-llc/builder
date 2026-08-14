@@ -3,7 +3,10 @@ package llm
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +97,86 @@ func TestNewProviderClient_OpenAI(t *testing.T) {
 	}
 	if transport.ProviderIdentifier != "factory-agent" {
 		t.Fatalf("provider identifier = %q, want factory-agent", transport.ProviderIdentifier)
+	}
+}
+
+func TestNewProviderClient_OpenAIClientPathCompressesCodexRequest(t *testing.T) {
+	var requestEncoding string
+	var acceptEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestEncoding = r.Header.Get("Content-Encoding")
+		acceptEncoding = r.Header.Get("Accept-Encoding")
+		_, _ = io.Copy(io.Discard, r.Body)
+		writeCompletedResponseSSE(w)
+	}))
+	defer server.Close()
+
+	client, err := NewProviderClient(ProviderClientOptions{
+		Model:      "gpt-5.6-sol",
+		Auth:       oauthStaticAuth{},
+		HTTPClient: newRewritingHTTPClient(t, server),
+	})
+	if err != nil {
+		t.Fatalf("NewProviderClient: %v", err)
+	}
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
+	if _, err := client.Generate(context.Background(), Request{
+		Model:          "gpt-5.6-sol",
+		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		SystemPrompt:   strings.Repeat("large request content ", 100),
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if requestEncoding != "zstd" {
+		t.Fatalf("Content-Encoding = %q, want zstd", requestEncoding)
+	}
+	if acceptEncoding == "zstd,gzip" {
+		t.Fatalf("injected client unexpectedly received Kent response negotiation: %q", acceptEncoding)
+	}
+}
+
+func TestNewProviderClient_AuthManagerOAuthPathCompressesCodexRequest(t *testing.T) {
+	var requestEncoding string
+	var acceptEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestEncoding = r.Header.Get("Content-Encoding")
+		acceptEncoding = r.Header.Get("Accept-Encoding")
+		_, _ = io.Copy(io.Discard, r.Body)
+		writeCompletedResponseSSE(w)
+	}))
+	defer server.Close()
+
+	manager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{
+			Type:  auth.MethodOAuth,
+			OAuth: &auth.OAuthMethod{AccessToken: "oauth-token", AccountID: "account-1"},
+		},
+	}), nil, nil)
+	client, err := NewProviderClient(ProviderClientOptions{
+		Model:      "gpt-5.6-sol",
+		Auth:       manager,
+		HTTPClient: newRewritingHTTPClient(t, server),
+	})
+	if err != nil {
+		t.Fatalf("NewProviderClient: %v", err)
+	}
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
+	if _, err := client.Generate(context.Background(), Request{
+		Model:          "gpt-5.6-sol",
+		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		SystemPrompt:   strings.Repeat("large request content ", 100),
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if requestEncoding != "zstd" {
+		t.Fatalf("Content-Encoding = %q, want zstd", requestEncoding)
+	}
+	if acceptEncoding == "zstd,gzip" {
+		t.Fatalf("injected client unexpectedly received Kent response negotiation: %q", acceptEncoding)
 	}
 }
 
@@ -195,15 +278,27 @@ func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsAnonymousCapabilit
 	}
 }
 
-func TestNewProviderClient_DefaultOpenAIBaseURLDoesNotStayExplicit(t *testing.T) {
+func TestNewProviderClient_KeepsExplicitOpenAIBaseURLExplicit(t *testing.T) {
 	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
 		Model:         "gpt-5",
 		Auth:          providerTestMissingAuth{},
 		OpenAIBaseURL: "https://api.openai.com",
 	})
 	transport := httpTransportFromOpenAIClient(t, openAIClient)
-	if transport.BaseURLExplicit {
-		t.Fatal("expected canonical default OpenAI URL to avoid explicit anonymous-mode transport")
+	if !transport.BaseURLExplicit {
+		t.Fatal("expected configured OpenAI URL to remain explicit for OAuth routing")
+	}
+}
+
+func TestNewProviderClient_LocalBaseURLUsesUncompressedTransportByDefault(t *testing.T) {
+	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
+		Model:         "vendor-custom-model",
+		Auth:          providerTestMissingAuth{},
+		OpenAIBaseURL: "http://127.0.0.1:11434/v1",
+	})
+	transport := httpTransportFromOpenAIClient(t, openAIClient)
+	if transport.Client.Transport != sharedHTTPTransport {
+		t.Fatalf("local provider transport = %T, want shared uncompressed transport", transport.Client.Transport)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"core/shared/clientui"
 	brand "core/shared/config"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -702,6 +703,68 @@ func TestSessionChatSettingsPreparationUsesAuthoritativePersistenceRoot(t *testi
 	}
 	if prepared.Baseline.Thinking != "high" {
 		t.Fatalf("worker Thinking = %q, want custom-root value high", prepared.Baseline.Thinking)
+	}
+}
+
+func TestChatSettingsMaterializedReadUsesDetachedSessionSnapshotWithoutRebinding(t *testing.T) {
+	workspace := t.TempDir()
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{
+		WorkspaceRoot: workspace,
+		LoadOptions:   brand.LoadOptions{ConfigRoot: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	binding, err := metadata.RegisterBinding(t.Context(), resolved.Config.PersistenceRoot, workspace)
+	if err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	store, err := session.Create(
+		filepath.Join(resolved.Config.PersistenceRoot, "projects", binding.ProjectID, "sessions"),
+		"detached",
+		resolved.Config.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+	if err := appCore.MetadataStore().UpdateSessionExecutionTarget(
+		t.Context(),
+		metadata.SessionExecutionTargetUpdate{SessionID: store.Meta().SessionID},
+	); err != nil {
+		t.Fatalf("detach Session execution target: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+
+	response, err := appCore.ChatSettingsClient().ReadChatSettings(
+		t.Context(),
+		serverapi.ChatSettingsReadRequest{
+			Target: serverapi.SessionChatSettingsTarget(sessionID),
+		},
+	)
+	if err != nil {
+		t.Fatalf("ReadChatSettings detached Session: %v", err)
+	}
+	if response.Session == nil || response.Session.SessionID != sessionID {
+		t.Fatalf("detached response = %+v", response)
+	}
+	executionTarget, err := appCore.MetadataStore().ResolveSessionExecutionTarget(
+		t.Context(),
+		store.Meta().SessionID,
+	)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if executionTarget.WorkspaceID != "" {
+		t.Fatalf("detached read rebound workspace %q", executionTarget.WorkspaceID)
 	}
 }
 

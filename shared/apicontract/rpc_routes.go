@@ -71,6 +71,7 @@ const (
 	DependencyOnboardingFinalize    Dependency = "onboarding_finalize"
 	DependencyProjectView           Dependency = "project_view"
 	DependencySessionLaunch         Dependency = "session_launch"
+	DependencyChatSettings          Dependency = "chat_settings"
 	DependencySessionView           Dependency = "session_view"
 	DependencySessionLifecycle      Dependency = "session_lifecycle"
 	DependencySessionRuntime        Dependency = "session_runtime"
@@ -214,6 +215,7 @@ var routeContracts = []Route{
 	unary[serverapi.ProjectRebindWorkspaceRequest, serverapi.ProjectRebindWorkspaceResponse](protocol.MethodProjectRebindWorkspace, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyProjectView),
 	unary[serverapi.ProjectGetOverviewRequest, serverapi.ProjectGetOverviewResponse](protocol.MethodProjectGetOverview, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyProjectView),
 	unary[serverapi.SessionPageRequest, serverapi.SessionPageResponse](protocol.MethodSessionPage, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyProjectView),
+	unary[serverapi.ChatSettingsReadRequest, serverapi.ChatSettingsReadResponse](protocol.MethodChatSettingsRead, AuthServer, ScopeNone, ConnectionControl, DependencyChatSettings),
 	unary[serverapi.WorkflowCreateRequest, serverapi.WorkflowCreateResponse](protocol.MethodWorkflowCreate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowCreateAndLinkProjectRequest, serverapi.WorkflowCreateAndLinkProjectResponse](protocol.MethodWorkflowCreateAndLinkProject, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowUpdateRequest, serverapi.WorkflowGetResponse](protocol.MethodWorkflowUpdate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),

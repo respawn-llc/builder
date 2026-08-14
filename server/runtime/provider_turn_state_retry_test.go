@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"core/internal/testharness/httpclient"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -67,8 +69,7 @@ func TestGenerateWithRetryReplaysExactProviderTurnState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCodexDispatchContext: %v", err)
 	}
-	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
-	transport.BaseURL, transport.BaseURLExplicit, transport.Client = server.URL, true, server.Client()
+	transport := newProviderTurnStateTransport(t, server)
 	client := nonStreamingClient{client: llm.NewOpenAIClient(transport)}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	_, err = engine.generateWithRetryClient(context.Background(), "", client, llm.Request{
@@ -100,8 +101,7 @@ func TestGenerationMissingOutputRebuildDoesNotReplayProviderTurnState(t *testing
 		writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"repaired","annotations":[]}]}]`))
 	}))
 	t.Cleanup(server.Close)
-	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
-	transport.BaseURL, transport.BaseURLExplicit, transport.Client = server.URL, true, server.Client()
+	transport := newProviderTurnStateTransport(t, server)
 	client := nonStreamingClient{client: llm.NewOpenAIClient(transport)}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	steerDanglingToolCall(t, engine, "seed", llm.ToolCall{ID: "missing", Name: "exec_command", Input: []byte(`{}`)})
@@ -129,4 +129,19 @@ func writeRuntimeCompletedResponseSSE(w http.ResponseWriter, output []byte) {
 		"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2},\"output\":%s}}\n\ndata: [DONE]\n\n",
 		output,
 	)
+}
+
+func newProviderTurnStateTransport(t *testing.T, server *httptest.Server) *llm.HTTPTransport {
+	t.Helper()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse test server URL: %v", err)
+	}
+	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
+	transport.BaseURL = "https://chatgpt.com/backend-api/codex"
+	transport.BaseURLExplicit = true
+	transport.Client = &http.Client{
+		Transport: httpclient.NewURLRewriteTransport(target, server.Client().Transport, ""),
+	}
+	return transport
 }

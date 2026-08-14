@@ -109,7 +109,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	var workflowController *workflowexecution.CurrentNodeController
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
-		Debug:           cfg.Settings.Debug,
 		AuthManager:     authSupport.AuthManager,
 		Background:      runtimeSupport.Background,
 		StoreOptions:    storeOptions,
