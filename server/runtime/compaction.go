@@ -270,7 +270,7 @@ func (e *Engine) autoCompactIfNeeded(ctx context.Context, stepID string, mode co
 }
 
 func (e *Engine) maybeReserveEagerCompaction(activeKind ActiveKind, resultKind LiveRunResultKind, assistant llm.Message) {
-	if e == nil || resultKind != LiveRunResultAssistantFinalAnswer || isBlankFinalAnswer(assistant) {
+	if e == nil || e.isWorkflowAgent() || resultKind != LiveRunResultAssistantFinalAnswer || isBlankFinalAnswer(assistant) {
 		return
 	}
 	switch activeKind {

@@ -268,6 +268,40 @@ func TestExclusiveStepLifecycleEagerCompactionExcludesIneligibleResults(t *testi
 	}
 }
 
+func TestExclusiveStepLifecycleEagerCompactionExcludesWorkflowBackgroundContinuation(t *testing.T) {
+	t.Parallel()
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{
+			remoteCompactionReplacement(100, 10, 2_000),
+		},
+	}
+	engine := mustNewWorkflowTestEngine(t, mustCreateTestSession(t), client, testWorkflowConfig(&fakeWorkflowController{}, "tool"), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 1_900,
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+	if err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground},
+		func(_ context.Context, stepID string) error {
+			engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
+			engine.recordLiveRunAssistantFinalAnswer(stepID, llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("final"),
+			})
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("run exclusive step: %v", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if got := len(client.compactionCalls); got != 0 {
+		t.Fatalf("workflow background eager compaction calls = %d, want 0", got)
+	}
+}
+
 func TestExclusiveStepLifecycleEagerCompactionExcludesNoFinalAndInterruptedSteps(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
