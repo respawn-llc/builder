@@ -268,6 +268,7 @@ type processEntry struct {
 	outputBytes          int64
 	notify               chan struct{}
 	done                 chan struct{}
+	outputFinalized      chan struct{}
 	killRequested        bool
 	terminalEvent        *terminalEventCache
 	terminalDelivered    bool
@@ -345,6 +346,11 @@ func closeDetachedResources(stdin io.Closer, log *asyncLogWriter) {
 	}
 }
 
+func (p *processEntry) finalizeOutput() {
+	close(p.outputFinalized)
+	p.signal()
+}
+
 func (p *processEntry) writeOutput(chunk []byte) error {
 	if len(chunk) == 0 {
 		return nil
@@ -383,7 +389,7 @@ func (p *processEntry) setExited(exitCode int, state string) {
 	stdin, log := p.detachResourcesLocked()
 	p.mu.Unlock()
 	closeDetachedResources(stdin, log)
-	p.signal()
+	p.finalizeOutput()
 }
 
 func (p *processEntry) isBackgrounded() bool {
@@ -394,6 +400,7 @@ func (p *processEntry) isBackgrounded() bool {
 
 func (p *processEntry) closeOnExit(exitCode int, state string) Snapshot {
 	p.mu.Lock()
+	p.running = false
 	p.finishedAt = time.Now().UTC()
 	p.lastUpdatedAt = p.finishedAt
 	p.exitCode = &exitCode
@@ -401,11 +408,10 @@ func (p *processEntry) closeOnExit(exitCode int, state string) Snapshot {
 	stdin, log := p.detachResourcesLocked()
 	p.mu.Unlock()
 	closeDetachedResources(stdin, log)
+	p.finalizeOutput()
 	p.mu.Lock()
-	p.running = false
 	snapshot := p.snapshotLocked()
 	p.mu.Unlock()
-	p.signal()
 	return snapshot
 }
 

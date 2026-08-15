@@ -182,6 +182,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		stdinOpen:            req.KeepStdinOpen,
 		notify:               make(chan struct{}, 1),
 		done:                 make(chan struct{}),
+		outputFinalized:      make(chan struct{}),
 	}
 	entry.log = newAsyncLogWriter(logFile, entry.signal)
 	if entry.command == "" {
