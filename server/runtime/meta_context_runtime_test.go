@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"core/prompts"
@@ -20,11 +22,12 @@ func TestFreshHeadlessRequestMatchesPostCompactionMetaOrder(t *testing.T) {
 		prompts.HeadlessModePrompt = previousHeadlessPrompt
 	})
 
+	store, globalConfigDir := mustCreateBaseMetaContextTestSession(t)
 	engine := mustNewExecTestEngine(
 		t,
-		mustCreateTestSession(t),
+		store,
 		&fakeClient{},
-		Config{Model: "gpt-5", HeadlessMode: true},
+		Config{Model: "gpt-5", HeadlessMode: true, GlobalConfigDir: globalConfigDir},
 	)
 	assertFreshRequestMatchesCompactionProjection(t, engine, []llm.MessageType{
 		llm.MessageTypeHeadlessMode,
@@ -36,9 +39,10 @@ func TestFreshHeadlessRequestMatchesPostCompactionMetaOrder(t *testing.T) {
 
 func TestFreshWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T) {
 	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
+	store, globalConfigDir := mustCreateBaseMetaContextTestSession(t)
 	engine := mustNewWorkflowTestEngine(
 		t,
-		mustCreateTestSession(t),
+		store,
 		&fakeClient{},
 		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:        runtimeids.NewExecutionScopeID(),
@@ -46,7 +50,7 @@ func TestFreshWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T) {
 			Controller:     &externallyCompletedWorkflowController{},
 			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
 		},
-		Config{Model: "gpt-5"},
+		Config{Model: "gpt-5", GlobalConfigDir: globalConfigDir},
 	)
 	assertFreshRequestMatchesCompactionProjection(t, engine, []llm.MessageType{
 		llm.MessageTypeSkills,
@@ -58,7 +62,7 @@ func TestFreshWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T) {
 
 func TestFreshHeadlessWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T) {
 	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
-	store := mustCreateTestSession(t)
+	store, globalConfigDir := mustCreateBaseMetaContextTestSession(t)
 	engine := mustNewWorkflowTestEngine(
 		t,
 		store,
@@ -69,7 +73,7 @@ func TestFreshHeadlessWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T
 			Controller:     &externallyCompletedWorkflowController{},
 			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
 		},
-		Config{Model: "gpt-5", HeadlessMode: true},
+		Config{Model: "gpt-5", HeadlessMode: true, GlobalConfigDir: globalConfigDir},
 	)
 	assertFreshRequestMatchesCompactionProjection(t, engine, []llm.MessageType{
 		llm.MessageTypeSkills,
@@ -80,6 +84,22 @@ func TestFreshHeadlessWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T
 	if store.Meta().HeadlessActive {
 		t.Fatal("Workflow request persisted unrelated Headless mode")
 	}
+}
+
+func mustCreateBaseMetaContextTestSession(t *testing.T) (*session.Store, string) {
+	t.Helper()
+	workspace := t.TempDir()
+	globalConfigDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(globalConfigDir, agentsFileName), []byte("global instructions"), 0o644); err != nil {
+		t.Fatalf("write global AGENTS.md: %v", err)
+	}
+	writeTestSkill(
+		t,
+		filepath.Join(globalConfigDir, "skills", "meta-context-test"),
+		"meta-context-test",
+		"meta context test skill",
+	)
+	return mustCreateTestSession(t, workspace), globalConfigDir
 }
 
 func TestFreshWorkflowMetaContextRetriesCommittedObserverFailureWithoutDuplicateContext(t *testing.T) {
