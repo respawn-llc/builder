@@ -46,14 +46,14 @@ func (s *outputSubscription) Next(ctx context.Context) (OutputChunk, error) {
 		}
 
 		notify := s.entry.notify
-		doneCh := s.entry.done
+		outputFinalized := s.entry.outputFinalized
 		select {
 		case <-ctx.Done():
 			return OutputChunk{}, ctx.Err()
 		case <-s.closeCh:
 			return OutputChunk{}, io.EOF
 		case <-notify:
-		case <-doneCh:
+		case <-outputFinalized:
 		}
 	}
 }
@@ -76,7 +76,6 @@ func (s *outputSubscription) readNextChunk() (OutputChunk, bool, error) {
 	}
 	s.entry.mu.Lock()
 	logPath := s.entry.logPath
-	running := s.entry.running
 	preserveOutput := s.entry.preserveOutput
 	s.entry.mu.Unlock()
 
@@ -107,7 +106,12 @@ func (s *outputSubscription) readNextChunk() (OutputChunk, bool, error) {
 		s.offset = nextOffset
 		return chunk, false, nil
 	}
-	return OutputChunk{}, !running, nil
+	select {
+	case <-s.entry.outputFinalized:
+		return OutputChunk{}, true, nil
+	default:
+		return OutputChunk{}, false, nil
+	}
 }
 
 var _ OutputSubscription = (*outputSubscription)(nil)
