@@ -35,15 +35,15 @@
 
 - Home opens on Inbox unless a valid previously open Project or Workflow destination can be restored. Back and forward use available navigation history; otherwise Back returns Home.
 - Home has compact navigation and content side by side when both remain usable, otherwise navigation stacks above content. It has no resizable splitter or temporary navigation drawer.
-- Home navigation provides Projects and Workflows catalog controls above the active catalog's infinite-scrolling list. Inbox has no dedicated navigation row.
-- Selecting a Project opens its workspace. Selecting the open Project again or selecting a catalog control returns Home content to aggregate Inbox. When development Session catalogs are available, the Project workspace has `Tasks`, `Sessions`, and `Subagents` tabs. `Tasks` is the default. The selected tab remains local to the mounted Project workspace and resets when that workspace remounts.
+- Home navigation provides Projects and Workflows catalog controls above the active catalog's infinite-scrolling list.
+- Selecting a Project opens its workspace. Selecting the open Project again or selecting a catalog control returns Home content to aggregate Inbox.
+- A Project workspace has `Tasks`, `Sessions`, and `Subagents` tabs. `Tasks` is the default. The selected tab remains local to the mounted Project workspace and resets when that workspace remounts.
 - Switching among a Project workspace's `Tasks`, `Sessions`, and `Subagents` tabs crossfades overlapping outgoing and incoming content and respects reduced-motion preference.
-- When development Session catalogs are unavailable, the Project workspace shows the Task list as its only selectable view. It omits the complete tab bar and reserves no tab-bar space.
 - Selecting an Inbox item leaves Inbox visible and opens Task Detail as an overlay. It does not replace Home content or navigate away from Home.
 - An Inbox item shows at most five lines of its detail message before truncation. Selecting the item still opens its complete Task Detail.
 - Home opens sidebars by shifting content only when the measured main pane can retain at least 400 pixels after reserving the sidebar's preferred width, and as an overlay otherwise. A shifted sidebar cannot be widened far enough to reduce the main pane below 400 pixels. Any sidebar closes when its available width falls below 400 pixels. An open sidebar keeps its chosen mode until it closes.
-- When development Session catalogs are available, the sticky Project workspace header shows Project name and key, the three tabs, and `Link workflow` or `New Session` as appropriate.
-- The Project workspace Workflow strip uses infinite scroll. Each Workflow chip presents its name. Selecting one opens that Project's Workflow board.
+- The sticky Project workspace header shows Project name and key, the three tabs, and `Link workflow` or `New Session` as appropriate.
+- The Project workspace Workflow strip uses infinite scroll. The visible content of each Workflow chip is its name. Selecting one opens that Project's Workflow board.
 - `Manage workflows` is available from `Link workflow` for reusable Workflows, including those not linked to the selected Project. Project Task and board destinations remain Project-scoped.
 - Board actions remain in board chrome. Workflow selection uses a click-controlled non-modal popover that closes after selection or outside activation. Desktop has no default browser-style hover effects beyond explicitly designed interaction feedback.
 - An empty Inbox says `All caught up` and does not show recent Projects or choose a Project automatically.
@@ -71,7 +71,7 @@
 ## Project Task List
 
 - The Project Task list is the unified Project-wide view of Tasks across every linked Workflow. The Home Project workspace's `Tasks` tab and the standalone Project Tasks destination use the same surface.
-- The Workflow chip strip remains above the list and includes every linked Workflow and `Link Workflow`. Each Workflow chip presents its name without Project-default or validation state. Selecting a Workflow opens its board.
+- The Workflow chip strip remains above the list and includes every linked Workflow and `Link Workflow`. Each Workflow chip presents no Project-default or validation indicator. Selecting a Workflow opens its board.
 - The Workflow chip strip owns its loading and error state independently from Task counts and rows. A Workflow-list delay or failure does not block already available Task-list content.
 - The Task list uses the Project workspace backdrop directly without its own border, island backdrop, or custom surface color. It has no repeated title, action strip, search, filter, or sort controls.
 - The fixed column order is Status, Short ID, Title, Dependencies, Labels, and Workflow. Users cannot resize, reorder, add, or remove columns.
@@ -99,7 +99,7 @@
 - Live refresh preserves the leading visible Task and its screen position when possible. If that Task becomes hidden, the list retains the nearest visible position and does not expand a group.
 - An open Task Detail remains open when its Task moves off-screen or into a collapsed group. Live reordering does not scroll to keep the selected Task visible.
 - The visual vertical scrollbar is hidden while wheel, trackpad, touch, and keyboard scrolling remain available. The Task list never scrolls horizontally.
-- Task-list scrolling is smooth when reduced motion is not requested, including programmatic position restoration and live-refresh anchoring. Reduced-motion presentation positions the list immediately.
+- Task-list scrolling is smooth, including programmatic position restoration and live-refresh anchoring. Reduced-motion presentation positions the list immediately.
 - Responsive Task columns hide Workflow first, before otherwise-fitting Label chips collapse into their `+N` counter. Labels then hide, followed by Dependencies, as available width narrows. Title receives the remaining width and truncates; it hides only when less than seven characters would remain. Status and Short ID never hide. Group headers continue to span the full list width.
 - Every Interrupted status icon offers Resume through the board's existing operation, including its pending, error, dependency-confirmation, and Execution Target continuation behavior. The server remains authoritative, and an unavailable Resume uses the ordinary failure treatment. Other status icons are informational. Activating Dependencies, ID, Title, or Workflow opens the Task's general Task Detail. The Dependencies chip does not focus the Dependencies section from this list.
 - Activating Labels opens the existing Task Label assignment chooser without opening Task Detail. Successful assignment updates the row; pending and failure behavior follows the existing assignment flow.
@@ -109,7 +109,7 @@
 - The Task table exposes accessible grid, row, grid-cell, disclosure, selection, tooltip, and loading/error labels. Its hidden column-header presentation retains accessible labels. It uses ordinary browser focus and activation behavior and adds no table-specific keyboard-navigation model.
 - Leaving and returning to the Tasks tab while the same Project workspace remains mounted restores its vertical pixel offset. It does not load special pages or reconcile the former position by Task identity. Remounting resets this state.
 - When exact counts show no Tasks, the list groups are replaced with an empty state.
-- Before the first Workflow result establishes availability, the zero-Task empty state offers `Link Workflow`. The established Workflow result then determines the final empty-state action.
+- Before the Workflow request establishes a result, the zero-Task empty state offers `Link Workflow`. The established Workflow result determines the final empty-state action.
 - With no linked Workflows, the empty state's primary action is `Link Workflow`.
 - With linked Workflows but no Tasks, the empty state says `No tasks yet`. Its primary action is `New Task` when exactly one Workflow is linked or when multiple are linked with a default; otherwise it is `Link Workflow`.
 - A successful Link Workflow action opened from the Tasks empty state returns to Tasks rather than opening the Workflow board. Cancel uses the existing close behavior. Failure keeps the linking page open with its entered state and existing error behavior.

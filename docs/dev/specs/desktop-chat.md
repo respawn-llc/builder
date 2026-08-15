@@ -4,11 +4,9 @@
 
 - Desktop Sessions and Chat are thin remote-control surfaces. The Kent server is authoritative for Sessions, project and workspace scope, runtime activity, transcript history, drafts, Pending Work, prompts, goals, processes, worktrees, and durable state.
 - Desktop provides the session-browser and chat capabilities available in the terminal product unless this specification explicitly excludes a capability.
-- Desktop Chat and Session navigation are unavailable when the Chat capability is absent. Development builds may expose read-only Home Sessions and Subagents catalogs through one Session-catalog gate. The gate controls no other Home, Task, Workflow, board, route, or control.
-- Requirements that open or control Chat apply only when the Chat capability is available.
 - Session discovery is always scoped to a selected Project; there is no unbounded all-Project session list.
 - All desktop presentations of a Session control the same server-authoritative Session. Opening the same Session in another presentation neither creates separate runtime ownership nor forks client state.
-- When Chat is available, Task Detail offers `Open Chat` in place of `Open in CLI`. It opens the referenced Session at its latest transcript position.
+- Task Detail offers `Open Chat` in place of `Open in CLI`. It opens the referenced Session at its latest transcript position.
 - Chat can appear as a full-page destination, a separate window, or an adaptive detail presentation.
 - The separate-window action is available only in Chat chrome. Session rows do not offer it in their context menu.
 - Popping out Chat moves that destination into one Session-specific native window and returns the main window to the Project's Sessions tab.
@@ -24,7 +22,7 @@
 - A response includes the next offset only when older Sessions remain. Clients derive the preceding page offset from the offset and limit they requested.
 - Each request reads the current category as a stateless live view. Session recency changes between requests may cause later results to repeat or skip Sessions, and Kent does not reconcile them.
 - Desktop requests 50 Sessions per page and retains at most ten pages independently for each category.
-- When Chat is available, selecting a Session opens full-page Chat. A read-only development catalog does not activate Session rows. Session rows have no secondary actions or context menu.
+- Selecting a Session opens full-page Chat. Session rows have no secondary actions or context menu.
 - Session rows do not expose execution-target availability or warnings.
 - Opening preserves the Session's recorded execution target and uses the ordinary Session open, launch, and runtime path. Desktop adds no automatic fallback, workspace retarget, target-repair picker, or read-only recovery mode.
 - Reopening a Session after navigation or relaunch opens its latest transcript position.
