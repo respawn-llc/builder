@@ -426,7 +426,7 @@ func TestResponsesStubRejectsConcurrentDeclaredOperation(t *testing.T) {
 		}
 		firstDone <- requestErr
 	}()
-	waitForActiveRequest(t, stub)
+	waitForRequiredOperationAdmission(t, stub, 1)
 	response, err := http.Post(stub.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":[]}`))
 	if err != nil {
 		t.Fatalf("POST concurrent request: %v", err)
@@ -446,15 +446,22 @@ func TestResponsesStubRejectsConcurrentDeclaredOperation(t *testing.T) {
 	}
 }
 
-func waitForActiveRequest(t *testing.T, stub *blackbox.ResponsesStub) {
+func waitForRequiredOperationAdmission(t *testing.T, stub *blackbox.ResponsesStub, admitted int) {
 	t.Helper()
 	deadline := time.NewTimer(time.Second)
 	defer deadline.Stop()
-	for stub.Snapshot().ActiveRequests == 0 {
+	for {
+		snapshot := stub.Snapshot()
+		if snapshot.Failure != nil {
+			t.Fatalf("model request failed before operation admission: %v", snapshot.Failure)
+		}
+		if snapshot.RequiredIndex >= admitted {
+			return
+		}
 		select {
 		case <-stub.Events():
 		case <-deadline.C:
-			t.Fatal("model request did not become active")
+			t.Fatalf("model operation admission = %d, want at least %d", snapshot.RequiredIndex, admitted)
 		}
 	}
 }

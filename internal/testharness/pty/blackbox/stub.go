@@ -246,6 +246,7 @@ func (s *ResponsesStub) Close() {
 
 func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
+		requestRoute := route
 		ctx, done, admitted := s.beginHandler(request.Context())
 		if !admitted {
 			http.Error(writer, "model stub is stopping", http.StatusServiceUnavailable)
@@ -269,27 +270,27 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 			http.Error(writer, "invalid request", http.StatusRequestEntityTooLarge)
 			return
 		}
-		if route == RouteResponses {
-			route, err = classifyResponsesOperation(body)
+		if requestRoute == RouteResponses {
+			requestRoute, err = classifyResponsesOperation(body)
 			if err != nil {
 				s.recordFailure(err)
 				http.Error(writer, "invalid request", http.StatusBadRequest)
 				return
 			}
 		}
-		if err := validateRouteBody(route, body); err != nil {
+		if err := validateRouteBody(requestRoute, body); err != nil {
 			s.recordFailure(err)
 			http.Error(writer, "invalid request", http.StatusBadRequest)
 			return
 		}
-		call := ObservedCall{Route: route, Headers: request.Header.Clone(), Body: append(json.RawMessage(nil), body...)}
+		call := ObservedCall{Route: requestRoute, Headers: request.Header.Clone(), Body: append(json.RawMessage(nil), body...)}
 		if err := s.recordObserved(call); err != nil {
 			s.recordFailure(err)
 			http.Error(writer, "model diagnostics exceed limit", http.StatusRequestEntityTooLarge)
 			return
 		}
 		if s.scripted != nil {
-			admission, err := s.serveScripted(ctx, writer, request, route, body)
+			admission, err := s.serveScripted(ctx, writer, request, requestRoute, body)
 			if err != nil {
 				if admission == scriptedllm.RequestAdmitted ||
 					(!errors.Is(err, scriptedllm.ErrConcurrentCall) && !errors.Is(err, scriptedllm.ErrScriptExhausted)) {
@@ -301,7 +302,7 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 			}
 			return
 		}
-		operation, err := s.consume(route, body, request.Header)
+		operation, err := s.consume(requestRoute, body, request.Header)
 		if err != nil {
 			s.recordFailure(err)
 			http.Error(writer, "unexpected model operation", http.StatusBadRequest)
@@ -310,7 +311,7 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 		if operation != nil {
 			defer s.completeRequired()
 		}
-		s.writeOperationResponse(ctx, writer, route, operation)
+		s.writeOperationResponse(ctx, writer, requestRoute, operation)
 	}
 }
 

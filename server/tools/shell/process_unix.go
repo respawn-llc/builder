@@ -39,7 +39,16 @@ func terminateManagedProcess(process *os.Process, descendants []managedProcessId
 	}
 	descendantErr := terminateManagedDescendants(descendants)
 	groupErr := signalManagedProcessGroup(process, syscall.SIGTERM, "terminate")
-	_ = process.Signal(os.Interrupt)
+	if groupErr != nil {
+		rootErr := process.Signal(os.Interrupt)
+		if rootErr == nil || errors.Is(rootErr, os.ErrProcessDone) || errors.Is(rootErr, syscall.ESRCH) {
+			groupErr = nil
+		} else {
+			groupErr = errors.Join(groupErr, fmt.Errorf("signal managed root process %d: %w", process.Pid, rootErr))
+		}
+	} else {
+		_ = process.Signal(os.Interrupt)
+	}
 	return errors.Join(descendantErr, groupErr)
 }
 

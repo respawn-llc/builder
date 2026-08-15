@@ -476,6 +476,11 @@ func (m *Manager) collectUntil(ctx context.Context, entry *processEntry, deadlin
 			_, _ = collected.Write(pending)
 		}
 		if !entry.isRunning() {
+			select {
+			case <-entry.outputFinalized:
+			case <-ctx.Done():
+				return collected.Bytes(), ctx.Err()
+			}
 			if pending := entry.drainPending(); len(pending) > 0 {
 				_, _ = collected.Write(pending)
 			}

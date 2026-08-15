@@ -31,11 +31,8 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	defer cancel()
 	commandTimeout := spec.Timeout
 	if commandTimeout == 0 {
-		commandTimeout = maxCommandTimeout
+		commandTimeout = defaultCommandTimeout
 	}
-	var timeoutCancel context.CancelFunc
-	ctx, timeoutCancel = context.WithTimeout(ctx, commandTimeout)
-	defer timeoutCancel()
 	if _, err := analyzer.NewDimensions(spec.Dimensions.Rows, spec.Dimensions.Cols); err != nil {
 		return analyzer.Capture{}, err
 	}
@@ -57,7 +54,6 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	cmd.Env = append(os.Environ(), spec.Env...)
 	cmd.Dir = spec.Dir
 
-	started := time.Now()
 	ptmx, err := creackpty.StartWithSize(cmd, &creackpty.Winsize{Rows: uint16(spec.Dimensions.Rows), Cols: uint16(spec.Dimensions.Cols)})
 	if err != nil {
 		return analyzer.Capture{}, errors.Join(
@@ -68,6 +64,10 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	defer func() {
 		_ = ptmx.Close()
 	}()
+	started := time.Now()
+	var timeoutCancel context.CancelFunc
+	ctx, timeoutCancel = context.WithTimeout(ctx, commandTimeout)
+	defer timeoutCancel()
 	waitDone := make(chan error, 1)
 	var processExited atomic.Bool
 	go func() {
