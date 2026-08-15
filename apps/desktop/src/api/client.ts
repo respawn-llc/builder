@@ -37,6 +37,7 @@ import type {
   WorkflowListInput,
   WorkflowProjectLinkInput,
 } from "./clientInputs";
+import { workflowPageSize } from "./clientInputs";
 import { compactJsonObject, emptyJsonObject } from "./json";
 import type { SetupOperationID } from "./setupOperationID";
 import type * as worktreeModels from "./schemas/worktree";
@@ -236,7 +237,8 @@ export class ApiClient implements ApiService {
         "workflow.list",
         compactJsonObject({
           offset: input.offset ?? 0,
-          limit: input.limit ?? 40,
+          limit: input.limit ?? workflowPageSize,
+          project_id: input.projectID,
           query: input.query ?? "",
         }),
       ),

@@ -94,9 +94,13 @@ func TestFirstMetaInjectionUsesPendingWorktreeCWD(t *testing.T) {
 	if len(messages) < 3 {
 		t.Fatalf("expected environment, agents, and user messages, got %+v", messages)
 	}
-	envMsg := messages[0]
+	worktreeMsg := messages[0]
+	if worktreeMsg.Role != llm.RoleDeveloper || worktreeMsg.MessageType == nil || *worktreeMsg.MessageType != llm.MessageTypeWorktreeMode {
+		t.Fatalf("expected active worktree reminder first, got %+v", worktreeMsg)
+	}
+	envMsg := messages[2]
 	if envMsg.Role != llm.RoleDeveloper || envMsg.MessageType == nil || *envMsg.MessageType != llm.MessageTypeEnvironment {
-		t.Fatalf("expected environment context first, got %+v", envMsg)
+		t.Fatalf("expected environment context after stable context, got %+v", envMsg)
 	}
 	if !strings.Contains(messageContent(envMsg), "\nCWD: "+worktreeSubdir+"\n") {
 		t.Fatalf("expected environment cwd to use pending worktree subdir %q, got %q", worktreeSubdir, messageContent(envMsg))

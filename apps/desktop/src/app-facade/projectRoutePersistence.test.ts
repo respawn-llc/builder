@@ -22,21 +22,38 @@ afterEach(() => {
 });
 
 it("restores an omitted workflow selector", () => {
-  localStorage.setItem(storageKey, JSON.stringify({ projectId: "project-1" }));
+  localStorage.setItem(storageKey, JSON.stringify({ kind: "workflow_board", projectId: "project-1" }));
 
-  expect(readLastProjectRoute()).toEqual({ projectId: "project-1" });
+  expect(readLastProjectRoute()).toEqual({ kind: "workflow_board", projectId: "project-1" });
 });
 
 it("rejects a persisted malformed present workflow selector", () => {
-  localStorage.setItem(storageKey, JSON.stringify({ projectId: "project-1", workflowId: "workflow-1" }));
+  localStorage.setItem(
+    storageKey,
+    JSON.stringify({ kind: "workflow_board", projectId: "project-1", workflowId: "workflow-1" }),
+  );
 
   expect(readLastProjectRoute()).toBeNull();
 });
 
 it("writes a canonical workflow selector unchanged", () => {
-  writeLastProjectRoute({ projectId: "project-1", workflowId: canonicalWorkflowID });
+  writeLastProjectRoute({
+    kind: "workflow_board",
+    projectId: "project-1",
+    workflowId: canonicalWorkflowID,
+  });
 
-  expect(readLastProjectRoute()).toEqual({ projectId: "project-1", workflowId: canonicalWorkflowID });
+  expect(readLastProjectRoute()).toEqual({
+    kind: "workflow_board",
+    projectId: "project-1",
+    workflowId: canonicalWorkflowID,
+  });
+});
+
+it("writes a Home Project destination unchanged", () => {
+  writeLastProjectRoute({ kind: "home_project", projectId: "project-1" });
+
+  expect(readLastProjectRoute()).toEqual({ kind: "home_project", projectId: "project-1" });
 });
 
 class TestStorage implements Storage {

@@ -25,7 +25,9 @@ func (c uiInputController) handleRuntimeCtrlC(closeSurface func() tea.Cmd) (tea.
 }
 
 func runtimeActivityAllowsOrdinaryInterrupt(activity clientui.RuntimeActivity) bool {
-	if activity.State != clientui.RuntimeActivityRunning || activity.ActiveStep == nil {
+	if (activity.State != clientui.RuntimeActivityRunning &&
+		activity.State != clientui.RuntimeActivityAwaitingPrompt) ||
+		activity.ActiveStep == nil {
 		return false
 	}
 	switch activity.ActiveStep.ActiveKind {

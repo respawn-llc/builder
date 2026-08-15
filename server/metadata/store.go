@@ -69,7 +69,6 @@ type sessionMetadataDocument struct {
 	WorkspaceContainer              string                                 `json:"workspace_container"`
 	ChatSettings                    *session.ChatSettingsOverrides         `json:"chat_settings,omitempty"`
 	ConversationEstablished         bool                                   `json:"conversation_established"`
-	PromptCacheLineageGeneration    int                                    `json:"prompt_cache_lineage_generation"`
 	HeadlessActive                  bool                                   `json:"headless_active"`
 	CompactionSoonReminderIssued    bool                                   `json:"compaction_soon_reminder_issued"`
 	GeneratedRecoveredWarningIssued bool                                   `json:"generated_recovered_warning_issued"`
@@ -2577,7 +2576,6 @@ func (s *Store) upsertSessionSnapshotWithQueries(
 		WorkspaceContainer:              workspaceContainer,
 		ChatSettings:                    snapshot.Meta.ChatSettings,
 		ConversationEstablished:         snapshot.Meta.ConversationEstablished,
-		PromptCacheLineageGeneration:    snapshot.Meta.PromptCacheLineageGeneration,
 		HeadlessActive:                  snapshot.Meta.HeadlessActive,
 		CompactionSoonReminderIssued:    snapshot.Meta.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: snapshot.Meta.GeneratedRecoveredWarningIssued,
@@ -2792,7 +2790,6 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		LastSequence:                    row.LastSequence,
 		ConversationEstablished:         metadataPayload.ConversationEstablished,
 		ModelRequestCount:               row.ModelRequestCount,
-		PromptCacheLineageGeneration:    metadataPayload.PromptCacheLineageGeneration,
 		HeadlessActive:                  metadataPayload.HeadlessActive,
 		CompactionSoonReminderIssued:    metadataPayload.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: metadataPayload.GeneratedRecoveredWarningIssued,

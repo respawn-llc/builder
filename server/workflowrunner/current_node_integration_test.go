@@ -868,11 +868,11 @@ func TestCurrentNodeAgentStartsFreshSessionWithLatestRoleAndCompletionContract(t
 	}
 	assignments := workflowAssignments(modelRequests[0])
 	wantBaseContextTypes := []llm.MessageType{
-		llm.MessageTypeEnvironment,
-		llm.MessageTypeSkills,
 		llm.MessageTypeSubagents,
+		llm.MessageTypeSkills,
 		llm.MessageTypeAgentsMD,
 		llm.MessageTypeAgentsMD,
+		llm.MessageTypeEnvironment,
 	}
 	if !slices.Equal(baseContextTypes, wantBaseContextTypes) {
 		t.Fatalf("fresh workflow request base context types = %v, want %v", baseContextTypes, wantBaseContextTypes)
@@ -1395,7 +1395,6 @@ func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata
 		before.Meta.FirstPromptPreview != after.Meta.FirstPromptPreview ||
 		!reflect.DeepEqual(before.Meta.Continuation, after.Meta.Continuation) ||
 		!reflect.DeepEqual(before.Meta.ChatSettings, after.Meta.ChatSettings) ||
-		before.Meta.PromptCacheLineageGeneration != after.Meta.PromptCacheLineageGeneration ||
 		!reflect.DeepEqual(before.Meta.Locked, after.Meta.Locked) {
 		t.Fatalf("retained Session prompt-facing metadata changed after rejected Manual Move:\nbefore=%+v\nafter=%+v", before.Meta, after.Meta)
 	}
@@ -1588,9 +1587,6 @@ func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) 
 	if meta.Continuation == nil || meta.Continuation.AgentRole == nil || *meta.Continuation.AgentRole != "reviewer" {
 		t.Fatalf("compacted workflow Session continuation = %+v, want persisted reviewer identity", meta.Continuation)
 	}
-	if meta.PromptCacheLineageGeneration != 1 {
-		t.Fatalf("compacted workflow Session cache lineage = %d, want 1", meta.PromptCacheLineageGeneration)
-	}
 }
 
 func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t *testing.T) {
@@ -1670,8 +1666,8 @@ func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t 
 		t.Fatalf("target request compaction summaries = %d, want one", summaries)
 	}
 	if requests[1].PromptCacheKey == "" || requests[2].PromptCacheKey == "" ||
-		requests[1].PromptCacheKey == requests[2].PromptCacheKey {
-		t.Fatalf("source/target cache keys = %q/%q, want distinct non-empty keys", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
+		requests[1].PromptCacheKey != requests[2].PromptCacheKey {
+		t.Fatalf("source/target cache keys = %q/%q, want the same non-empty Session key", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
 	}
 }
 
@@ -1866,8 +1862,8 @@ func TestWorkflowPostCompletionCompactionPreservesOrdinaryContinueReplacementKey
 		t.Fatalf("ordinary continuation post-completions = %d, want one", len(client.CompactionCalls()))
 	}
 	if requests[1].PromptCacheKey == "" || requests[2].PromptCacheKey == "" ||
-		requests[1].PromptCacheKey == requests[2].PromptCacheKey {
-		t.Fatalf("ordinary continuation cache keys = %q/%q, want replacement key after source key", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
+		requests[1].PromptCacheKey != requests[2].PromptCacheKey {
+		t.Fatalf("ordinary continuation cache keys = %q/%q, want the same non-empty Session key", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
 	}
 }
 

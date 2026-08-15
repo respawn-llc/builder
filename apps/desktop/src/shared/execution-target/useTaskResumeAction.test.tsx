@@ -2,9 +2,9 @@ import { act, renderHook } from "@testing-library/react";
 import { vi } from "vitest";
 
 import { resumeTaskInitiatingAction, type TaskInitiatingActionController } from "@/shared/execution-target";
-import { useBoardResumeAction } from "./useBoardResumeAction";
+import { useTaskResumeAction } from "./useTaskResumeAction";
 
-it("routes Board Resume through the target-continuation controller", async () => {
+it("routes Resume through the target-continuation controller", async () => {
   const run = vi.fn<TaskInitiatingActionController["run"]>().mockResolvedValue(undefined);
   const controller: TaskInitiatingActionController = {
     pending: null,
@@ -14,7 +14,7 @@ it("routes Board Resume through the target-continuation controller", async () =>
     selectMode: vi.fn(),
     setCustomRef: vi.fn(),
   };
-  const { result } = renderHook(() => useBoardResumeAction(controller));
+  const { result } = renderHook(() => useTaskResumeAction(controller));
 
   await act(async () => {
     await result.current.execute("task-1");
@@ -25,7 +25,7 @@ it("routes Board Resume through the target-continuation controller", async () =>
   expect(result.current.pendingTaskIDs).toEqual(new Set());
 });
 
-it("continues Board Resume with the original action and selected target", async () => {
+it("continues Resume with the original action and selected target", async () => {
   const run = vi.fn<TaskInitiatingActionController["run"]>().mockResolvedValue(undefined);
   const controller: TaskInitiatingActionController = {
     pending: null,
@@ -35,7 +35,7 @@ it("continues Board Resume with the original action and selected target", async 
     selectMode: vi.fn(),
     setCustomRef: vi.fn(),
   };
-  const { result } = renderHook(() => useBoardResumeAction(controller));
+  const { result } = renderHook(() => useTaskResumeAction(controller));
   const action = resumeTaskInitiatingAction("task-1");
   const selection = { mode: "custom_ref", customRef: "release/v1" } as const;
 

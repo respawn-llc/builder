@@ -35,15 +35,18 @@
 
 - Home opens on Inbox unless a valid previously open Project or Workflow destination can be restored. Back and forward use available navigation history; otherwise Back returns Home.
 - Home has compact navigation and content side by side when both remain usable, otherwise navigation stacks above content. It has no resizable splitter or temporary navigation drawer.
-- Navigation pins global Inbox above the infinite-scrolling Projects list. Inbox is not a Project and has no required attention badge.
-- Selecting Inbox shows aggregate Inbox. Selecting a Project opens its workspace with `Tasks`, `Sessions`, and `Subagents` tabs. `Tasks` is the default. The selected tab remains local to the mounted Project workspace and resets when that workspace remounts.
+- Home navigation provides Projects and Workflows catalog controls above the active catalog's infinite-scrolling list.
+- Home shows no destination title in the global window chrome.
+- Selecting a Project opens its workspace. Selecting the open Project again or selecting a catalog control returns Home content to aggregate Inbox.
+- A Project workspace has no repeated Project identity header or header action.
+- A Project workspace has `Tasks`, `Sessions`, and `Subagents` tabs. `Tasks` is the default. The selected tab remains local to the mounted Project workspace and resets when that workspace remounts.
+- Switching among a Project workspace's `Tasks`, `Sessions`, and `Subagents` tabs crossfades overlapping outgoing and incoming content and respects reduced-motion preference.
 - Selecting an Inbox item leaves Inbox visible and opens Task Detail as an overlay. It does not replace Home content or navigate away from Home.
 - An Inbox item shows at most five lines of its detail message before truncation. Selecting the item still opens its complete Task Detail.
-- Home opens sidebars by shifting content when the available layout width exceeds 1000 pixels and as an overlay otherwise. Shift-mode sidebar opening, closing, and resizing keep the sidebar and Home content movement synchronized.
-- The sticky Project workspace header shows Project name and key, the three tabs, and `Link workflow` or `New Session` as appropriate.
-- Workflow links are an infinite-scrolling list. Each shows reusable Workflow identity, Project-default state, and validation state. Selecting one opens that Project's Workflow board.
+- Home opens sidebars by shifting content only when the measured main pane can retain at least 400 pixels after reserving the sidebar's preferred width, and as an overlay otherwise. A shifted sidebar cannot be widened far enough to reduce the main pane below 400 pixels. Any sidebar closes when its available width falls below 400 pixels. An open sidebar keeps its chosen mode until it closes.
+- The Project workspace Workflow strip uses infinite scroll. The visible content of each Workflow chip is its name. Selecting one opens that Project's Workflow board.
 - `Manage workflows` is available from `Link workflow` for reusable Workflows, including those not linked to the selected Project. Project Task and board destinations remain Project-scoped.
-- Board actions and Workflow selection use a non-modal menu that may be pinned. An unpinned menu closes when it loses hover; opening and closing respects reduced motion. Desktop has no default browser-style hover effects beyond explicitly designed interaction feedback.
+- Board actions remain in board chrome. Workflow selection uses a click-controlled non-modal popover that closes after selection or outside activation. Desktop has no default browser-style hover effects beyond explicitly designed interaction feedback.
 - An empty Inbox says `All caught up` and does not show recent Projects or choose a Project automatically.
 - Project navigation rows show Project identity and editing. Project name and default-workspace path use at most two lines. Selection is communicated accessibly as well as visually.
 
@@ -69,41 +72,45 @@
 ## Project Task List
 
 - The Project Task list is the unified Project-wide view of Tasks across every linked Workflow. The Home Project workspace's `Tasks` tab and the standalone Project Tasks destination use the same surface.
-- The Workflow chip strip remains above the list and includes every linked Workflow and `Link Workflow`. Selecting a Workflow opens its board.
-- The Workflow chip strip and Task list share one initial loading and error boundary. If linked Workflows cannot load, the whole Tasks surface uses the standard retryable error state.
-- The Task list occupies one large island. It begins with its column header and has no repeated title, action strip, search, filter, or sort controls.
-- The fixed column order is Status, Dependencies, ID, Title, Workflow, and Labels. Users cannot resize, reorder, add, or remove columns.
-- Every Task is one compact, single-line row with subtle horizontal dividers, standard hover feedback, and no zebra striping.
-- Status and Dependencies use fixed-size icon columns. Title gives up width first. If the fixed columns no longer fit at a usable width, the island scrolls horizontally instead of hiding columns.
+- With one or more linked Workflows, the Workflow chip strip remains above the list and includes every linked Workflow and `Link Workflow`. With no linked Workflows, the strip is absent and the empty state provides the only `Link Workflow` action. Each Workflow chip presents no Project-default or validation indicator. Selecting a Workflow opens its board.
+- The Workflow chip strip owns its loading and error state independently from Task counts and rows. A Workflow-list delay or failure does not block already available Task-list content.
+- The Task list uses the Project workspace backdrop directly without its own border, island backdrop, or custom surface color. It has no repeated title, action strip, search, filter, or sort controls.
+- The fixed column order is Status, Short ID, Title, Dependencies, Labels, and Workflow. Users cannot resize, reorder, add, or remove columns.
+- Every Task is one compact, single-line row with no divider or zebra striping. Hover, focus, press, and selection use rounded animated row treatments.
+- Status uses a fixed-size icon column. Dependencies, ID, Workflow, and Labels reserve only the width required by the widest retained row, within bounded display limits. Their retained high-water widths do not shrink while bounded pages rotate. Title uses the remaining width and gives up width first.
 - ID shows the complete Task Short ID when it fits. When space is constrained, start ellipsis preserves its numeric suffix. Its complete value remains available in a tooltip and to assistive technology.
 - Title, Workflow name, and Labels do not wrap. Workflow name uses end ellipsis.
-- Labels use the same fitting-chip and `+N` overflow presentation as board cards.
+- Labels use the same fitting-chip and `+N` overflow presentation as board cards, with compact vertical padding that remains readable in a single-line row.
 - A Task with direct Blocker Tasks shows the board's dependency-progress chip. A Task without direct Blocker Tasks leaves the Dependencies cell empty.
 - The server supplies dependency progress and assigned Label display data in each bounded Task-list row. Desktop does not derive dependency progress or load a separate Project Label catalog to render rows.
-- The Status and Dependencies column headers use icons with accessible names. The Status tooltip groups the canonical state icons and descriptions under `Active`, `Backlog`, and `Done`; its accessible name is `Status`.
+- Each section status icon has the accessible name `Status` and opens a tooltip listing every canonical state icon and name without group subheadings or duplicate descriptions.
 - Rows are grouped in the order `Active`, `Backlog`, and `Done`. Active contains Waiting for question, Waiting for approval, Interrupted, Running, Queued, and Active. Backlog contains Backlog. Done contains Done.
-- Active and Backlog start expanded. Done starts collapsed. Disclosure state remains local while the Project workspace stays mounted and resets when it remounts.
+- Active starts expanded. Backlog and Done start collapsed. Disclosure state remains local while the Project workspace stays mounted and resets when it remounts.
 - A group with zero Tasks is hidden. Each visible group header shows the server-supplied exact count, including while collapsed.
-- The complete group-header row is one disclosure control containing its chevron, name, and exact count.
-- The column header remains sticky inside the list island. Group headers scroll normally.
-- The list is one virtualized scroll area. Each expanded group paginates independently, uses infinite scroll, and retains only a bounded nearby page window.
+- A group header's vertically centered chevron, name, count, and remaining row area form its disclosure control. Its separately interactive, vertically centered status icon opens the shared flattened status legend without toggling disclosure.
+- The Task list omits a visible global column header. Its hidden column-header presentation retains accessible labels without reserving list space. Group headers scroll normally.
+- The list is one virtualized scroll area. Workflow chips, exact group counts, and the first 25-Task page of every initially expanded group begin loading in parallel.
+- Initial loading requests only each expanded group's first page. Infinite-scroll continuation becomes eligible after operator scrolling or restoration of a retained nonzero offset, then paginates each expanded group independently and retains only a bounded nearby page window.
 - Collapsing a group unmounts its Task rows and releases its loaded pages. Expanding it starts loading its first bounded page again. Collapsed groups do not load Task rows.
 - Each group requests Updated-descending order from the server and preserves the server's deterministic order for equal Updated timestamps. Desktop does not sort rows.
-- The island frame and sticky column header render while exact counts load, with the standard loading state in the row area. Once counts arrive, all non-empty group headers appear together and expanded groups load progressively.
+- The list surface renders while exact counts load, with the standard loading state in the row area. Expanded first pages do not wait for counts or Workflow chips before requesting. Once counts arrive, all non-empty group headers appear together and already loaded rows render immediately.
 - An expanded group's first-page loading or failure boundary appears beneath that group header and retries only that group. Later page failures preserve loaded rows and use the standard retry boundary at the affected paging edge.
 - During refresh, each group header retains its last exact count and loaded rows remain visible. Counts and rows may briefly disagree while separate bounded requests converge.
 - Project updates refresh exact counts and retained bounded pages, move Tasks between groups, and restore Updated-descending order without a manual refresh action.
 - Live refresh preserves the leading visible Task and its screen position when possible. If that Task becomes hidden, the list retains the nearest visible position and does not expand a group.
 - An open Task Detail remains open when its Task moves off-screen or into a collapsed group. Live reordering does not scroll to keep the selected Task visible.
-- The visual vertical scrollbar is hidden while wheel, trackpad, touch, and keyboard scrolling remain available. A horizontal scrollbar remains visible when columns overflow.
-- Activating Status, Dependencies, ID, Title, or Workflow opens the Task's general Task Detail. The Dependencies chip does not focus the Dependencies section from this list.
+- The visual vertical scrollbar is hidden while wheel, trackpad, touch, and keyboard scrolling remain available. The Task list never scrolls horizontally.
+- Task-list scrolling is smooth, including programmatic position restoration and live-refresh anchoring. Reduced-motion presentation positions the list immediately.
+- When exactly one Workflow is linked, the Task list hides Workflow because every Task belongs to that Workflow. With multiple linked Workflows, responsive Task columns hide Workflow first, before otherwise-fitting Label chips collapse into their `+N` counter. Labels then hide, followed by Dependencies, as available width narrows. Title receives the remaining width and truncates; it hides only when less than seven characters would remain. Status and Short ID never hide. Group headers continue to span the full list width.
+- Every Interrupted status icon offers Resume through the board's existing operation, including its pending, error, dependency-confirmation, and Execution Target continuation behavior. The server remains authoritative, and an unavailable Resume uses the ordinary failure treatment. Other status icons are informational. Activating Dependencies, ID, Title, or Workflow opens the Task's general Task Detail. The Dependencies chip does not focus the Dependencies section from this list.
 - Activating Labels opens the existing Task Label assignment chooser without opening Task Detail. Successful assignment updates the row; pending and failure behavior follows the existing assignment flow.
 - An open Task Detail or Label chooser gives its Task row the selected treatment. Only the most recently opened interaction shows selection. Closing a Label chooser restores an already-open Task Detail's selection when its row is visible.
-- Task Detail uses the containing destination's sidebar mode. Home shifts content when its available layout width exceeds 1000 pixels and overlays otherwise. An open sidebar keeps the mode chosen when it opened until it closes.
+- Task Detail uses the containing destination's sidebar mode.
 - Opening Task Detail adds no route or browser-history entry. Closing it clears its selected treatment.
-- The Task table exposes accessible grid, row, column-header, grid-cell, disclosure, selection, tooltip, and loading/error labels. This release uses ordinary browser focus and activation behavior and adds no table-specific keyboard-navigation model.
-- Leaving and returning to the Tasks tab while the same Project workspace remains mounted restores vertical and horizontal pixel offsets. It does not load special pages or reconcile the former position by Task identity. Remounting resets this state.
-- When exact counts show no Tasks, the island replaces the column header and groups with an empty state.
+- The Task table exposes accessible grid, row, grid-cell, disclosure, selection, tooltip, and loading/error labels. Its hidden column-header presentation retains accessible labels. It uses ordinary browser focus and activation behavior and adds no table-specific keyboard-navigation model.
+- Leaving and returning to the Tasks tab while the same Project workspace remains mounted restores its vertical pixel offset. It does not load special pages or reconcile the former position by Task identity. Remounting resets this state.
+- When exact counts show no Tasks, the list groups are replaced with an empty state.
+- Before the Workflow request establishes a result, the zero-Task empty state offers `Link Workflow`. The established Workflow result determines the final empty-state action.
 - With no linked Workflows, the empty state's primary action is `Link Workflow`.
 - With linked Workflows but no Tasks, the empty state says `No tasks yet`. Its primary action is `New Task` when exactly one Workflow is linked or when multiple are linked with a default; otherwise it is `Link Workflow`.
 - A successful Link Workflow action opened from the Tasks empty state returns to Tasks rather than opening the Workflow board. Cancel uses the existing close behavior. Failure keeps the linking page open with its entered state and existing error behavior.
@@ -315,7 +322,9 @@
 - Creation makes a Backlog Task; it does not start automation. Title, body, and source workspace are editable only in Backlog. A managed Execution Target remains tied to its original source workspace; no-managed-worktree execution uses the Task's current source workspace.
 - Task creation and editing show server validation errors.
 - Task Detail can appear inline, in a separate window when supported, or as a standalone destination. Reopening an already separate Task Detail focuses it rather than duplicating it. Closing it after a mutation refreshes visible content.
-- On wide layouts that place Description and Metadata side by side, both islands have exactly the same height. Their shared height equals the larger intrinsic island height.
+- On wide layouts that place Description and Metadata side by side, both islands must have exactly the same height. Their shared height is the maximum of the Description intrinsic height and the Metadata intrinsic height.
+- Side-by-side Description and Metadata islands use the same surface elevation and render their complete shadows without clipping.
+- Metadata property labels use one consistent font size, line height, weight, and foreground treatment. Value typography may still communicate value semantics such as code, status, or muted secondary information.
 - Task Description uses the shared collapsible large Markdown field.
 - Long descriptions start collapsed only when they overflow, at roughly half the available height and never fewer than about five or more than about ten rendered lines, with an expand action. Expansion lasts until that Task Detail closes, keeps the description top anchored, grows downward, and occurs automatically for editing.
 - A Markdown task-list item uses one product-styled checkbox in place of its list bullet.
@@ -365,7 +374,7 @@
 - `active` uses a static primary-colored progress circle.
 - `queued` and `running` use a spinner.
 - `waiting_approval` and `interrupted` use a secondary-colored circle.
-- `waiting_question` uses a primary-colored circle.
+- `waiting_question` uses a primary-colored question-mark circle.
 - The Desktop sidebar owns a navigation stack for sidebar-local movement.
 - Opening a root sidebar destination replaces the prior sidebar stack.
 - Selecting a related Task pushes Task Detail onto the sidebar stack.

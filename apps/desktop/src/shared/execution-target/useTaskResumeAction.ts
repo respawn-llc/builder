@@ -1,15 +1,12 @@
 import { useCallback } from "react";
 
 import type { WorkflowExecutionTargetSelection } from "@/api";
-import {
-  resumeTaskInitiatingAction,
-  type TaskInitiatingAction,
-  type TaskInitiatingActionController,
-} from "@/shared/execution-target";
-import { useBoardTaskLifecycleAction } from "./useBoardTaskLifecycleAction";
+import { resumeTaskInitiatingAction, type TaskInitiatingAction } from "./executionTargetContinuation";
+import type { TaskInitiatingActionController } from "./useExecutionTargetContinuation";
+import { useTaskLifecycleAction } from "./useTaskLifecycleAction";
 
-export function useBoardResumeAction(controller: TaskInitiatingActionController) {
-  const pending = useBoardTaskLifecycleAction();
+export function useTaskResumeAction(controller: TaskInitiatingActionController) {
+  const pending = useTaskLifecycleAction();
   const run = useCallback(
     async (
       taskID: string,

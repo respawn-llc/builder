@@ -19,10 +19,10 @@ import { useConnectionSnapshot } from "@/app-facade";
 import { workflowProjectEventCanChangeTaskSearch } from "@/app-facade";
 import { workflowProjectQuestionTaskID } from "@/app-facade";
 import { useRetainedQueryData } from "@/app-facade";
+import { useTaskLifecycleAction } from "@/shared/execution-target";
 import { useProjectLabelEffects } from "@/shared/labels";
 import { workflowProjectEventAffectsDependencyBoard } from "@/shared/task-dependencies";
 import { useBoardQuery } from "./BoardQueryRuntime";
-import { useBoardTaskLifecycleAction } from "./useBoardTaskLifecycleAction";
 
 export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
@@ -263,7 +263,7 @@ export function useBoardTaskActions(projectID: string) {
     mutationFn: async (taskID: string) => api.interruptTask(taskID),
     onSettled: refresh,
   });
-  const interrupt = useBoardTaskLifecycleAction();
+  const interrupt = useTaskLifecycleAction();
   return {
     refresh,
     interrupt: {

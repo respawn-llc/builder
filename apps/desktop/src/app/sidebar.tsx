@@ -24,9 +24,11 @@ import { useSidebarShell } from "@/app-facade";
 import { useSidebarCurrentPage } from "./sidebarPageContext";
 import {
   sidebarMaxWidthRatio,
+  sidebarDismissThresholdPx,
   sidebarMinWidthPx,
   sidebarResizeBoundsForShellWidth,
   sidebarResizeStepPx,
+  sidebarShiftResizeBoundsForCurrentLayout,
   resolveSidebarWidth,
   type SidebarDestination,
   type SidebarMode,
@@ -56,6 +58,7 @@ export function SidebarHost() {
   const [headerOffsetPx, setHeaderOffsetPx] = useState(0);
   const resizeDragRef = useRef<SidebarResizeDrag | null>(null);
   const [resizing, setResizing] = useState(false);
+  const mode = activeDestination?.mode ?? "shift";
   const [resizeBounds, setResizeBounds] = useState(() =>
     sidebarResizeBoundsForShellWidth(fallbackSidebarShellWidth(), sizePreference),
   );
@@ -71,11 +74,19 @@ export function SidebarHost() {
 
   const resizeTo = useCallback(
     (widthPx: number) => {
-      const nextBounds = sidebarResizeBounds(sidebarRef.current, sizePreference);
+      if (widthPx < sidebarDismissThresholdPx) {
+        close();
+        return;
+      }
+      const nextBounds = sidebarResizeBounds(sidebarRef.current, mode, sizePreference);
+      if (nextBounds.maxWidthPx < sidebarDismissThresholdPx) {
+        close();
+        return;
+      }
       setResizeBounds(nextBounds);
       resize(resolveSidebarWidth(widthPx, nextBounds));
     },
-    [resize, sizePreference],
+    [close, mode, resize, sizePreference],
   );
 
   const startResize = useCallback(
@@ -84,7 +95,11 @@ export function SidebarHost() {
         return;
       }
       event.preventDefault();
-      const nextBounds = sidebarResizeBounds(sidebarRef.current, sizePreference);
+      const nextBounds = sidebarResizeBounds(sidebarRef.current, mode, sizePreference);
+      if (nextBounds.maxWidthPx < sidebarDismissThresholdPx) {
+        close();
+        return;
+      }
       setResizeBounds(nextBounds);
       resizeDragRef.current = {
         bounds: nextBounds,
@@ -95,7 +110,7 @@ export function SidebarHost() {
       setPointerCaptureIfAvailable(event.currentTarget, event.pointerId);
       setResizing(true);
     },
-    [sidebarWidthPx, sizePreference],
+    [close, mode, sidebarWidthPx, sizePreference],
   );
 
   const resizeFromPointer = useCallback(
@@ -105,9 +120,17 @@ export function SidebarHost() {
         return;
       }
       event.preventDefault();
-      resize(resolveSidebarWidth(drag.startWidth + drag.startX - event.clientX, drag.bounds));
+      const requestedWidthPx = drag.startWidth + drag.startX - event.clientX;
+      if (requestedWidthPx < sidebarDismissThresholdPx) {
+        resizeDragRef.current = null;
+        releasePointerCaptureIfAvailable(event.currentTarget, event.pointerId);
+        setResizing(false);
+        close();
+        return;
+      }
+      resize(resolveSidebarWidth(requestedWidthPx, drag.bounds));
     },
-    [resize],
+    [close, resize],
   );
 
   const stopResize = useCallback((event: PointerEvent<HTMLDivElement>) => {
@@ -180,7 +203,11 @@ export function SidebarHost() {
       return;
     }
     const clampToCurrentBounds = () => {
-      const nextBounds = sidebarResizeBounds(sidebarRef.current, sizePreference);
+      const nextBounds = sidebarResizeBounds(sidebarRef.current, mode, sizePreference);
+      if (nextBounds.maxWidthPx < sidebarDismissThresholdPx) {
+        close();
+        return;
+      }
       setResizeBounds(nextBounds);
       resize(resolveSidebarWidth(sidebarWidthPx, nextBounds));
     };
@@ -198,7 +225,7 @@ export function SidebarHost() {
       resizeObserver?.disconnect();
       window.removeEventListener("resize", clampToCurrentBounds);
     };
-  }, [activeDestination, resize, sidebarWidthPx, sizePreference]);
+  }, [activeDestination, close, mode, resize, sidebarWidthPx, sizePreference]);
 
   if (activeDestination === null) {
     return null;
@@ -206,7 +233,6 @@ export function SidebarHost() {
   const openPage = requireCurrentPage(currentPage);
 
   const title = sidebarTitle(activeDestination, t);
-  const mode = activeDestination.mode ?? "shift";
   const PageBoundary = openPage.Boundary;
 
   return (
@@ -366,15 +392,44 @@ type SidebarResizeDrag = Readonly<{
 
 function sidebarResizeBounds(
   sidebarElement: HTMLElement | null,
+  mode: SidebarMode,
   sizePreference: ReturnType<typeof sidebarSizePreference>,
 ): SidebarResizeBounds {
-  const shellWidth = sidebarElement
-    ?.closest('[data-testid="app-shell-content"]')
-    ?.getBoundingClientRect().width;
-  if (shellWidth === undefined || shellWidth === 0) {
+  const shellElement = sidebarElement?.closest('[data-testid="app-shell-content"]') ?? null;
+  const shellWidth = positiveElementWidth(shellElement);
+  if (shellWidth === null) {
     return sidebarResizeBoundsForShellWidth(fallbackSidebarShellWidth(), sizePreference);
   }
-  return sidebarResizeBoundsForShellWidth(shellWidth, sizePreference);
+  const shiftBounds =
+    mode === "shift"
+      ? sidebarShiftResizeBounds(shellElement, sidebarElement, shellWidth, sizePreference)
+      : null;
+  return shiftBounds ?? sidebarResizeBoundsForShellWidth(shellWidth, sizePreference);
+}
+
+function sidebarShiftResizeBounds(
+  shellElement: Element | null,
+  sidebarElement: HTMLElement | null,
+  shellWidth: number,
+  sizePreference: ReturnType<typeof sidebarSizePreference>,
+): SidebarResizeBounds | null {
+  const protectedMain = shellElement?.querySelector<HTMLElement>("[data-sidebar-protected-main]") ?? null;
+  const protectedMainWidth = positiveElementWidth(protectedMain);
+  const currentSidebarWidth = positiveElementWidth(sidebarElement);
+  if (protectedMainWidth === null || currentSidebarWidth === null) {
+    return null;
+  }
+  return sidebarShiftResizeBoundsForCurrentLayout(
+    shellWidth,
+    protectedMainWidth,
+    currentSidebarWidth,
+    sizePreference,
+  );
+}
+
+function positiveElementWidth(element: Element | null): number | null {
+  const width = element?.getBoundingClientRect().width;
+  return width !== undefined && width > 0 ? width : null;
 }
 
 function fallbackSidebarShellWidth(): number {

@@ -62,6 +62,13 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 			len(client.compactionCalls),
 		)
 	}
+	request, err := engine.buildRequest(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("build request after automatic compaction: %v", err)
+	}
+	if got, want := request.PromptCacheKey, engine.SessionID(); got != want {
+		t.Fatalf("automatic compaction prompt cache key = %q, want stable Session ID %q", got, want)
+	}
 }
 
 func remoteCompactionReplacement(

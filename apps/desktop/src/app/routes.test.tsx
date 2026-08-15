@@ -1,5 +1,25 @@
-import { expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { RouterProvider } from "@tanstack/react-router";
+import { afterEach, expect, it, vi } from "vitest";
+
 import { createAppRouter } from "./routes";
+
+vi.mock("./routeComponents", async () => {
+  const { Outlet } = await import("@tanstack/react-router");
+  return {
+    HomeShellRoute: () => null,
+    ProjectRoute: () => null,
+    ProjectTasksRoute: () => <div data-testid="standalone-project-tasks-route" />,
+    RootRoute: () => <Outlet />,
+    TaskRoute: () => null,
+    WorkflowEditorShellRoute: () => null,
+    WorkflowLibraryShellRoute: () => null,
+  };
+});
+
+afterEach(() => {
+  window.history.replaceState(null, "", "/");
+});
 
 it("rejects malformed present workflow selectors while preserving omission", () => {
   const validate = createAppRouter().routesById["/projects/$projectId"].options.validateSearch;
@@ -21,4 +41,11 @@ it("normalizes omitted Home project selection", () => {
   }
   expect(validate({})).toEqual({});
   expect(validate({ projectId: "project-1" })).toEqual({ projectId: "project-1" });
+});
+
+it("opens the standalone Project Task List route from its public URL", async () => {
+  window.history.replaceState(null, "", "/projects/project-1/tasks");
+  render(<RouterProvider router={createAppRouter()} />);
+
+  expect(await screen.findByTestId("standalone-project-tasks-route")).toBeInTheDocument();
 });
