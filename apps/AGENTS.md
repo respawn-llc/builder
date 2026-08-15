@@ -14,6 +14,7 @@ GUI workspace for Kent desktop/web client surfaces.
 
 ## Desktop TypeScript Ownership
 
+- Wide Task Detail layouts must give Description and Metadata exactly one shared height: the maximum of their two intrinsic heights. Measure both intrinsic heights before applying that shared height to either outer island. Keep the behavioral regression test that covers both the Description-taller and Metadata-taller cases.
 - `desktop/src/app/**` owns shell composition, including startup under `app/startup/**`, routes, sidebars, providers, native-window controllers, and the developer showcase.
 - `desktop/src/app-facade/**` is the feature-facing shell seam for app services, navigation, query keys, status, sidebar contracts, and native helpers. It may depend on public API/UI/native seams, but never on shell or features.
 - Each `desktop/src/features/<feature>/**` directory is an isolated feature module. Features may depend on `@/app-facade`, `@/api`, `@/ui`, `@/i18n`, and public `@/shared/<capability>` entrypoints, but never on another feature, API internals/composition, shell, or the native package.

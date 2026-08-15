@@ -104,7 +104,6 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 ## Coding Guidelines & Memories
 
 - Tauri/native APIs must stay behind GUI-side bridge packages; do not import Tauri APIs directly from feature components.
-- Wide Task Detail layouts must give Description and Metadata exactly one shared height: the maximum of their two intrinsic heights. Measure both intrinsic heights before applying that shared height to either outer island. Keep the behavioral regression test that covers both the Description-taller and Metadata-taller cases.
 - Use browser-client QA as the primary manual GUI QA path. Run `pnpm --dir apps/desktop dev:browser` for interactive QA against an existing Kent server. QAing a native Mac app is tough.
 - Production API shape is dictated by product/domain seams, runtime contracts, and operator-visible behavior. Do not add or widen production APIs, exported hooks, global overrides, interfaces, or configuration only so tests can fake, mock, or inspect internals.
 - Tests must adapt to product shape. Prefer product-boundary tests, package-local tests, or harness-level verification when a unit test would require fake-only interfaces or test-only production hooks.
