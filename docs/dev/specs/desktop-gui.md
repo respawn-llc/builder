@@ -320,7 +320,7 @@
 - Creation makes a Backlog Task; it does not start automation. Title, body, and source workspace are editable only in Backlog. A managed Execution Target remains tied to its original source workspace; no-managed-worktree execution uses the Task's current source workspace.
 - Task creation and editing show server validation errors.
 - Task Detail can appear inline, in a separate window when supported, or as a standalone destination. Reopening an already separate Task Detail focuses it rather than duplicating it. Closing it after a mutation refreshes visible content.
-- On wide layouts that place Description and Metadata side by side, both islands have exactly the same height. Their shared height equals the larger intrinsic island height.
+- On wide layouts that place Description and Metadata side by side, both islands must have exactly the same height. Their shared height is the maximum of the Description intrinsic height and the Metadata intrinsic height.
 - Side-by-side Description and Metadata islands use the same surface elevation and render their complete shadows without clipping.
 - Metadata property labels use one consistent font size, line height, weight, and foreground treatment. Value typography may still communicate value semantics such as code, status, or muted secondary information.
 - Task Description uses the shared collapsible large Markdown field.

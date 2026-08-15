@@ -1,6 +1,7 @@
 This repository contains Kent - a coding agent focused on output quality, built for professional engineers.
 
 ## Repository Layout
+
 - `cli/app`
   - Startup orchestration, auth gating, session selection, and top-level UI composition.
 - `server/runtime`
@@ -45,7 +46,8 @@ This repository contains Kent - a coding agent focused on output quality, built 
   - Centralized compile-time tool interface declarations (name, descriptions, JSON schemas).
 - `docs/dev/specs/terminology.md` - DDD's ubiquitous language, must read during design phases to communicate with user.
 
-## Product Principles 
+## Product Principles
+
 These should guide default architectural choices in addition to user preferences.
 
 - General system concurrency model - maximum 100 concurrent agent runs, with only 3-10 realistically in the same filesystem dir. Which means using mutexes/locks to cover large scopes when that simplifies the architecture a lot is okay even if agents can wait for 1-10 seconds for another operation to finish.
@@ -54,6 +56,7 @@ These should guide default architectural choices in addition to user preferences
 - GUI clients are thin remote-control surfaces over Kent server APIs/read models. The server remains authoritative for all access to data. Only server manages storage (accesses config, database, workspace or session files). Only server manages business logic. CLI interfaces talk to the existing server.
 
 ## Tooling
+
 Prefer using scripts provided in `./scripts/` over raw commands like `cargo build`, `go test`, unless you need something specific.
 
 - build.sh - Prefer to build executables. Bare `./scripts/build.sh` builds the Go server/CLI only. Pass `desktop` for frontend assets. Frozen Rust remains explicit-only via `tui`. Before handing off the task, build relevant targets **once** to verify correctness.
@@ -63,6 +66,7 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 - install.sh/install.ps1 - production, user-facing installer scripts of the product. Not for development.
 
 # Critical Rules - Authoritative Guidance Applicable Always and Everywhere.
+
 ---
 
 - `docs/dev/specs/` is authoritative for locked product and product-architecture decisions. Do not create or change a spec without prior explicit user approval, and do not alter a spec to match implementation drift.
@@ -88,7 +92,7 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 - **No UI code in server.** Server must not contain hardcoded strings (beyond LLM prompts), UI labels, UI element names, provide strings that aren't i18n-enabled. Server's API must not bend to reflect a GUI implementation (such as TUI or browser-specific APIs). Any such API is an architectural smell and must be flagged. Internal errors can contain unlocalized messages as an exclusion. Instead of this clients use strongly typed fields to create strings or UI based on Backend returns.
 - No compatibility, fallback, legacy or redundancy code or behavior must be added without explicit User approval and recorded deletion timeline. Agents must not design, create, invent, preserve, adhere to or leave any compatibility, legacy, fallback code path, shim, or documentation reference. Every feature is executed as a hard cutover to the new architecture. Agents confirm with the user every time a task requires handling or migration of older data, suggesting one-time migration effort as the default.
 
---- End of critical rules --- 
+--- End of critical rules ---
 
 ## Frozen Rust code
 
@@ -98,7 +102,9 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 - Documents under `docs/dev/rust/` and `docs/dev/rust-tui-tests.md` are historical records and do not authorize Rust implementation.
 
 ## Coding Guidelines & Memories
--- Tauri/native APIs must stay behind GUI-side bridge packages; do not import Tauri APIs directly from feature components.
+
+- Tauri/native APIs must stay behind GUI-side bridge packages; do not import Tauri APIs directly from feature components.
+- Wide Task Detail layouts must give Description and Metadata exactly one shared height: the maximum of their two intrinsic heights. Measure both intrinsic heights before applying that shared height to either outer island. Keep the behavioral regression test that covers both the Description-taller and Metadata-taller cases.
 - Use browser-client QA as the primary manual GUI QA path. Run `pnpm --dir apps/desktop dev:browser` for interactive QA against an existing Kent server. QAing a native Mac app is tough.
 - Production API shape is dictated by product/domain seams, runtime contracts, and operator-visible behavior. Do not add or widen production APIs, exported hooks, global overrides, interfaces, or configuration only so tests can fake, mock, or inspect internals.
 - Tests must adapt to product shape. Prefer product-boundary tests, package-local tests, or harness-level verification when a unit test would require fake-only interfaces or test-only production hooks.
@@ -119,8 +125,9 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 - When you make changes that make server contract incompatible with existing GUI/TUI clients', don't forget to raise the protocol version in ./shared/protocol/version.json. You may do so without explicit user approval as needed.
 
 ## Commit guidelines
+
 Format: `<type>[!]: [description]`, `!` = breaking change (requiring migration from users of Kent).
-Use one of these types for all commits: `feat`, `fix`, `feat!`/`breaking`/`api`, `docs`,  `refactor`,  `chore`.
+Use one of these types for all commits: `feat`, `fix`, `feat!`/`breaking`/`api`, `docs`, `refactor`, `chore`.
 Examples: `feat: add state recovery`, `feat!: change Saver API`
 If user asks you to fix a github issue and you commit the fix, use 'closes #xx' in description.
 
