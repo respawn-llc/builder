@@ -134,9 +134,15 @@ export function projectTaskColumnStyle(
 export function resolveProjectTaskVisibleColumns(
   widthPx: number | null,
   layout: ProjectTaskColumnLayout,
+  workflowRelevant: boolean,
 ): ProjectTaskVisibleColumns {
   if (widthPx === null) {
-    return { dependencies: true, labelsPx: layout.labelsPx, title: true, workflow: true };
+    return {
+      dependencies: true,
+      labelsPx: layout.labelsPx,
+      title: true,
+      workflow: workflowRelevant,
+    };
   }
   const characterWidthPx = 8;
   const horizontalPaddingPx = 24;
@@ -153,8 +159,10 @@ export function resolveProjectTaskVisibleColumns(
     optionalWidths.reduce((total, columnWidth) => total + columnWidth, 0) +
     gapPx * (2 + optionalWidths.length);
 
-  const optionalWidths = [layout.dependenciesPx, layout.labelsPx, layout.workflowPx];
-  const workflow = requiredWidth(optionalWidths) <= widthPx;
+  const optionalWidths = workflowRelevant
+    ? [layout.dependenciesPx, layout.labelsPx, layout.workflowPx]
+    : [layout.dependenciesPx, layout.labelsPx];
+  const workflow = workflowRelevant && requiredWidth(optionalWidths) <= widthPx;
   const labelsAvailablePx = widthPx - requiredWidth([layout.dependenciesPx, 0]);
   let labelsPx: number | null = null;
   if (workflow) {

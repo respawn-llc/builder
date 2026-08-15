@@ -36,7 +36,9 @@
 - Home opens on Inbox unless a valid previously open Project or Workflow destination can be restored. Back and forward use available navigation history; otherwise Back returns Home.
 - Home has compact navigation and content side by side when both remain usable, otherwise navigation stacks above content. It has no resizable splitter or temporary navigation drawer.
 - Home navigation provides Projects and Workflows catalog controls above the active catalog's infinite-scrolling list.
+- Home shows no destination title in the global window chrome.
 - Selecting a Project opens its workspace. Selecting the open Project again or selecting a catalog control returns Home content to aggregate Inbox.
+- A Project workspace has no repeated Project identity header or header action.
 - A Project workspace has `Tasks`, `Sessions`, and `Subagents` tabs. `Tasks` is the default. The selected tab remains local to the mounted Project workspace and resets when that workspace remounts.
 - Switching among a Project workspace's `Tasks`, `Sessions`, and `Subagents` tabs crossfades overlapping outgoing and incoming content and respects reduced-motion preference.
 - Selecting an Inbox item leaves Inbox visible and opens Task Detail as an overlay. It does not replace Home content or navigate away from Home.
@@ -70,7 +72,7 @@
 ## Project Task List
 
 - The Project Task list is the unified Project-wide view of Tasks across every linked Workflow. The Home Project workspace's `Tasks` tab and the standalone Project Tasks destination use the same surface.
-- The Workflow chip strip remains above the list and includes every linked Workflow and `Link Workflow`. Each Workflow chip presents no Project-default or validation indicator. Selecting a Workflow opens its board.
+- With one or more linked Workflows, the Workflow chip strip remains above the list and includes every linked Workflow and `Link Workflow`. With no linked Workflows, the strip is absent and the empty state provides the only `Link Workflow` action. Each Workflow chip presents no Project-default or validation indicator. Selecting a Workflow opens its board.
 - The Workflow chip strip owns its loading and error state independently from Task counts and rows. A Workflow-list delay or failure does not block already available Task-list content.
 - The Task list uses the Project workspace backdrop directly without its own border, island backdrop, or custom surface color. It has no repeated title, action strip, search, filter, or sort controls.
 - The fixed column order is Status, Short ID, Title, Dependencies, Labels, and Workflow. Users cannot resize, reorder, add, or remove columns.
@@ -99,7 +101,7 @@
 - An open Task Detail remains open when its Task moves off-screen or into a collapsed group. Live reordering does not scroll to keep the selected Task visible.
 - The visual vertical scrollbar is hidden while wheel, trackpad, touch, and keyboard scrolling remain available. The Task list never scrolls horizontally.
 - Task-list scrolling is smooth, including programmatic position restoration and live-refresh anchoring. Reduced-motion presentation positions the list immediately.
-- Responsive Task columns hide Workflow first, before otherwise-fitting Label chips collapse into their `+N` counter. Labels then hide, followed by Dependencies, as available width narrows. Title receives the remaining width and truncates; it hides only when less than seven characters would remain. Status and Short ID never hide. Group headers continue to span the full list width.
+- When exactly one Workflow is linked, the Task list hides Workflow because every Task belongs to that Workflow. With multiple linked Workflows, responsive Task columns hide Workflow first, before otherwise-fitting Label chips collapse into their `+N` counter. Labels then hide, followed by Dependencies, as available width narrows. Title receives the remaining width and truncates; it hides only when less than seven characters would remain. Status and Short ID never hide. Group headers continue to span the full list width.
 - Every Interrupted status icon offers Resume through the board's existing operation, including its pending, error, dependency-confirmation, and Execution Target continuation behavior. The server remains authoritative, and an unavailable Resume uses the ordinary failure treatment. Other status icons are informational. Activating Dependencies, ID, Title, or Workflow opens the Task's general Task Detail. The Dependencies chip does not focus the Dependencies section from this list.
 - Activating Labels opens the existing Task Label assignment chooser without opening Task Detail. Successful assignment updates the row; pending and failure behavior follows the existing assignment flow.
 - An open Task Detail or Label chooser gives its Task row the selected treatment. Only the most recently opened interaction shows selection. Closing a Label chooser restores an already-open Task Detail's selection when its row is visible.

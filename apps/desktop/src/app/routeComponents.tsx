@@ -145,9 +145,8 @@ export function ProjectTasksRoute() {
 }
 
 export function HomeShellRoute() {
-  const { t } = useTranslation();
   const search = homeRouteApi.useSearch();
-  useWindowChromeTitle(t("home.projectsPane"));
+  useWindowChromeTitle(null);
   return <HomeRoute selectedProjectID={search.projectId ?? null} />;
 }
 

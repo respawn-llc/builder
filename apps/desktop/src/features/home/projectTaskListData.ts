@@ -52,6 +52,16 @@ export type ProjectTaskListData = Readonly<{
   done: ProjectTaskGroupData;
 }>;
 
+export function projectTaskListWorkflowCardinality(
+  data: ProjectTaskListData,
+): TaskListPage["matchingWorkflowCardinality"] | undefined {
+  for (const group of projectTaskGroups) {
+    const page = data[group].pages.at(0);
+    if (page !== undefined) return page.matchingWorkflowCardinality;
+  }
+  return undefined;
+}
+
 const updatedDescending = [{ field: "updated", direction: "desc" }] as const;
 
 export function useProjectTaskListData({

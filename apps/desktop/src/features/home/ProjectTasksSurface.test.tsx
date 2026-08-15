@@ -298,6 +298,17 @@ describe("ProjectTasksSurface", () => {
     expect(screen.queryByRole("button", { name: appI18n.t("board.newTask") })).not.toBeInTheDocument();
   });
 
+  it("shows one Link Workflow action when the Project has no linked Workflows", () => {
+    fixture.counts = { active: 0, backlog: 0, done: 0 };
+    fixture.board.data = { workflows: [] };
+
+    renderSurface();
+
+    expect(screen.getAllByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") })).toHaveLength(
+      1,
+    );
+  });
+
   it("offers Project-scoped New Task for a sole linked Workflow without making Desktop select it", () => {
     fixture.counts = { active: 0, backlog: 0, done: 0 };
     fixture.board.data = {
@@ -322,6 +333,23 @@ describe("ProjectTasksSurface", () => {
     });
     if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
     expect(destination.onCreated).toBeTypeOf("function");
+  });
+
+  it("hides the redundant Workflow column when the Project has one linked Workflow", () => {
+    fixture.board.data = {
+      workflows: [
+        {
+          id: "workflow-1",
+          name: "Delivery",
+          description: "Ship work",
+          isProjectDefault: false,
+        },
+      ],
+    };
+
+    renderSurface();
+
+    expect(screen.getByTestId("project-task-list-layout")).toHaveAttribute("data-workflow-visible", "false");
   });
 
   it("keeps Tasks-origin Link Workflow on Tasks and refreshes its authoritative projections", async () => {
@@ -684,7 +712,7 @@ function groupData(
       ? [
           {
             scope: { projectID: "project-1", workflowID: null },
-            matchingWorkflowCardinality: "multiple" as const,
+            matchingWorkflowCardinality: workflowCardinality(fixture.board.data.workflows.length),
             nextOffset: null,
             generatedAt: 1,
             tasks: establishedTasks,
@@ -719,4 +747,9 @@ function task(
     dependencyProgress: null,
     ...overrides,
   };
+}
+
+function workflowCardinality(count: number): "none" | "one" | "multiple" {
+  if (count === 0) return "none";
+  return count === 1 ? "one" : "multiple";
 }

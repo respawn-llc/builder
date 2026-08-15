@@ -165,10 +165,12 @@ export function ProjectWorkflowStrip({
               <InfiniteListBoundary direction="next" state={nextBoundary} />
             </div>
           )}
-          <InteractiveChip className="shrink-0" onClick={onLinkWorkflow}>
-            <Plus aria-hidden="true" size={14} strokeWidth={1.8} />
-            {t("workflowLibrary.linkWorkflow")}
-          </InteractiveChip>
+          {workflows.length === 0 ? null : (
+            <InteractiveChip className="shrink-0" onClick={onLinkWorkflow}>
+              <Plus aria-hidden="true" size={14} strokeWidth={1.8} />
+              {t("workflowLibrary.linkWorkflow")}
+            </InteractiveChip>
+          )}
         </>
       ) : (
         <div className="min-w-64">

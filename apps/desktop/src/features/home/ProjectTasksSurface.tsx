@@ -37,6 +37,7 @@ import {
 } from "@/ui";
 import {
   projectTaskGroups,
+  projectTaskListWorkflowCardinality,
   useProjectTaskListData,
   useProjectTaskListEvents,
   type ProjectTaskGroup,
@@ -156,6 +157,7 @@ export function ProjectTasksSurface({
     retryLabel: t("app.retry"),
   });
   const workflows = projectTaskWorkflowItems(workflowsQuery.data);
+  const workflowCardinality = projectTaskListWorkflowCardinality(data);
   const newTaskAvailable = useProjectTaskNewTaskAvailable(projectID, workflowsQuery.data);
   const openLinkWorkflow = useProjectLinkWorkflowAction(projectID, sidebarMode);
   const openNewTask = () => {
@@ -270,9 +272,12 @@ export function ProjectTasksSurface({
         taskCount={presentation.taskCount}
         viewMemory={viewMemory}
         newTaskAvailable={newTaskAvailable}
+        workflowColumnRelevant={workflowCardinality !== "one"}
         workflowCount={workflows.length}
         workflowsBoundary={workflowsBoundary}
-        workflowStrip={
+        workflowStrip={projectTaskWorkflowStrip(
+          workflowsBoundary,
+          workflows.length,
           <ProjectWorkflowStrip
             hasNextPage={workflowsQuery.hasNextPage}
             hasPreviousPage={workflowsQuery.hasPreviousPage}
@@ -290,8 +295,8 @@ export function ProjectTasksSurface({
             previousBoundary={previousWorkflowsBoundary}
             projectID={projectID}
             workflows={workflows}
-          />
-        }
+          />,
+        )}
         paginationEnabled={paginationEnabled}
       />
       <TaskInitiatingActionDialogs
@@ -300,6 +305,14 @@ export function ProjectTasksSurface({
       />
     </>
   );
+}
+
+function projectTaskWorkflowStrip(
+  boundary: VirtualizedInfiniteListBoundaryState | undefined,
+  workflowCount: number,
+  strip: ReactNode,
+): ReactNode {
+  return boundary === undefined && workflowCount === 0 ? null : strip;
 }
 
 function projectTaskWorkflowInitialState(
@@ -337,6 +350,7 @@ function ProjectTasksContent({
   scrollRestorationReady,
   taskCount,
   viewMemory,
+  workflowColumnRelevant,
   workflowCount,
   workflowsBoundary,
   workflowStrip,
@@ -353,6 +367,7 @@ function ProjectTasksContent({
   scrollRestorationReady: boolean;
   taskCount: number | null;
   viewMemory: ProjectTasksViewMemory;
+  workflowColumnRelevant: boolean;
   workflowCount: number;
   workflowsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   workflowStrip: ReactNode;
@@ -362,7 +377,7 @@ function ProjectTasksContent({
   const { t } = useTranslation();
   const listEntries = entries;
   const { containerRef, widthPx } = useProjectTaskListWidth();
-  const visibleColumns = resolveProjectTaskVisibleColumns(widthPx, columnLayout);
+  const visibleColumns = resolveProjectTaskVisibleColumns(widthPx, columnLayout, workflowColumnRelevant);
   const workflowsResolved = workflowsBoundary === undefined;
   const memory = viewMemory.read();
   return (
@@ -388,6 +403,7 @@ function ProjectTasksContent({
           className="h-full min-h-0"
           data-dependencies-visible={visibleColumns.dependencies}
           data-labels-visible={visibleColumns.labelsPx !== null}
+          data-testid="project-task-list-layout"
           data-title-visible={visibleColumns.title}
           data-workflow-visible={visibleColumns.workflow}
           ref={containerRef}
