@@ -61,7 +61,9 @@ it("shows the selected Project identity above its workspace", () => {
 
   expect(screen.getByRole("heading", { name: "Kent" })).toBeInTheDocument();
   expect(screen.getByText("KNT")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") })).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") }),
+  ).not.toBeInTheDocument();
 });
 
 it("restores Task-grid pixels after visiting another Project tab", () => {
