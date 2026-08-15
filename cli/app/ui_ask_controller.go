@@ -519,7 +519,8 @@ func promptAnswerDeliveryContinuationCmd(delivery *activePromptAnswerDelivery) t
 	case promptAnswerDeliveryContinuationNone:
 		return nil
 	case promptAnswerDeliveryContinuationRuntimeCtrlC:
-		return func() tea.Msg { return promptCtrlCContinuationMsg{} }
+		key := delivery.key
+		return func() tea.Msg { return promptCtrlCContinuationMsg{key: key} }
 	default:
 		panic(fmt.Sprintf("unknown prompt answer delivery continuation %d", delivery.continuation))
 	}

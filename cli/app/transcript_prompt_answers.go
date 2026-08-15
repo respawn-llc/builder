@@ -51,7 +51,9 @@ type promptAnswerDeliveryResultMsg struct {
 	err        error
 }
 
-type promptCtrlCContinuationMsg struct{}
+type promptCtrlCContinuationMsg struct {
+	key transcriptPromptKey
+}
 
 func newTranscriptPromptAnswerer(ctx context.Context, control promptBatchAnswerer) *transcriptPromptAnswerer {
 	if ctx == nil || control == nil {

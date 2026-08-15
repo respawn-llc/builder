@@ -261,6 +261,7 @@ func TestAskCtrlCFinishesPromptCancellationBeforeRuntimeInterrupt(t *testing.T) 
 	runtimeClient := &runtimeControlFakeClient{}
 	model := newProjectedTestUIModel(runtimeClient)
 	model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
+	model.sessionID = ongoingTestSessionID().String()
 	model.setRuntimeActivityBusyForTest(true)
 	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
 		testQuestionPrompt("ask-interrupt-order", "Proceed?", "Yes", "No"),
@@ -324,6 +325,7 @@ func TestAskCtrlCCanonicalResolutionPreservesRuntimeContinuation(t *testing.T) {
 	runtimeClient := &runtimeControlFakeClient{}
 	model := newProjectedTestUIModel(runtimeClient)
 	model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
+	model.sessionID = ongoingTestSessionID().String()
 	model.setRuntimeActivityBusyForTest(true)
 	prompt := testQuestionPrompt("ask-canonical-interrupt-order", "Proceed?", "Yes", "No")
 	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(prompt)})
@@ -358,6 +360,82 @@ func TestAskCtrlCCanonicalResolutionPreservesRuntimeContinuation(t *testing.T) {
 	model = updateUIModel(t, model, interruptCommand())
 	if runtimeClient.interruptCalls != 1 {
 		t.Fatalf("runtime interrupt calls = %d, want one after canonical prompt resolution", runtimeClient.interruptCalls)
+	}
+}
+
+func TestPromptCtrlCContinuationDoesNotAffectReplacementExecution(t *testing.T) {
+	replacementRunID, err := runtimeids.ParseRunID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+	if err != nil {
+		t.Fatalf("parse replacement run id: %v", err)
+	}
+	replacementStepID, err := runtimeids.ParseStepID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+	if err != nil {
+		t.Fatalf("parse replacement step id: %v", err)
+	}
+	continuation := promptCtrlCContinuationMsg{key: transcriptPromptKey{
+		sessionID: ongoingTestSessionID(),
+		stepID:    ongoingTestStepID(),
+		promptID:  "ask-replaced",
+	}}
+	tests := []struct {
+		name      string
+		sessionID string
+		activity  clientui.RuntimeActivity
+	}{
+		{
+			name:      "session",
+			sessionID: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+			activity:  runtimeTupleTestRunningActivity(),
+		},
+		{
+			name:      "step",
+			sessionID: ongoingTestSessionID().String(),
+			activity: clientui.RuntimeActivity{
+				State: clientui.RuntimeActivityRunning,
+				ActiveStep: &clientui.RuntimeActiveStep{
+					RunID:      replacementRunID,
+					StepID:     replacementStepID,
+					ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+				},
+			},
+		},
+		{
+			name:      "starting",
+			sessionID: ongoingTestSessionID().String(),
+			activity:  clientui.RuntimeActivity{State: clientui.RuntimeActivityStarting},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtimeClient := &runtimeControlFakeClient{}
+			model := newProjectedTestUIModel(runtimeClient)
+			model.sessionID = test.sessionID
+			if err := model.applyRuntimeActivityProjection(test.activity); err != nil {
+				t.Fatalf("apply replacement runtime activity: %v", err)
+			}
+
+			next, command := model.Update(continuation)
+			model = next.(*uiModel)
+			if command != nil || runtimeClient.interruptCalls != 0 || model.exitAction == UIActionExit {
+				t.Fatal("stale prompt Ctrl+C continuation affected a replacement execution")
+			}
+		})
+	}
+}
+
+func TestPromptCtrlCContinuationUsesGlobalExitWhenOriginIsIdle(t *testing.T) {
+	model := newProjectedTestUIModel(&runtimeControlFakeClient{})
+	model.sessionID = ongoingTestSessionID().String()
+	model.setRuntimeActivityBusyForTest(false)
+
+	next, command := model.Update(promptCtrlCContinuationMsg{key: transcriptPromptKey{
+		sessionID: ongoingTestSessionID(),
+		stepID:    ongoingTestStepID(),
+		promptID:  "ask-idle",
+	}})
+	model = next.(*uiModel)
+	if command == nil || model.exitAction != UIActionExit {
+		t.Fatal("idle prompt Ctrl+C continuation did not use global exit handling")
 	}
 }
 

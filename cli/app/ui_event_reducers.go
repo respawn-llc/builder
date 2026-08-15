@@ -2,6 +2,7 @@ package app
 
 import (
 	"runtime/debug"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,12 +26,30 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
 	case promptCtrlCContinuationMsg:
+		if !m.promptCtrlCContinuationTargetsCurrentExecution(msg) {
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, nil)
+		}
 		next, cmd := m.inputController().handleRuntimeCtrlC(nil)
 		nextModel := next.(*uiModel)
 		nextModel.layout().syncViewport()
 		return handledUIFeatureUpdate(nextModel, cmd)
 	}
 	return uiFeatureUpdateResult{}
+}
+
+func (m *uiModel) promptCtrlCContinuationTargetsCurrentExecution(msg promptCtrlCContinuationMsg) bool {
+	if m == nil ||
+		msg.key.sessionID.IsZero() ||
+		msg.key.stepID.IsZero() ||
+		strings.TrimSpace(m.sessionID) != msg.key.sessionID.String() {
+		return false
+	}
+	activity := m.runtimeActivityProjection
+	if activity.ActiveStep != nil {
+		return activity.ActiveStep.StepID == msg.key.stepID
+	}
+	return !activity.ActiveForControl() && !m.hasLocalDispatchPending()
 }
 
 func (m *uiModel) reducePathReferenceMessage(msg tea.Msg) uiFeatureUpdateResult {
