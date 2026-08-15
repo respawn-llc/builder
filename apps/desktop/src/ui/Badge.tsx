@@ -13,13 +13,7 @@ export type BadgeProps = Readonly<{
   title?: string;
 }>;
 
-export function Badge({
-  children,
-  className,
-  size = "default",
-  tone = "neutral",
-  title,
-}: BadgeProps) {
+export function Badge({ children, className, size = "default", tone = "neutral", title }: BadgeProps) {
   return (
     <span
       className={cn(

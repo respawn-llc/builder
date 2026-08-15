@@ -30,17 +30,18 @@ This list is not a substitute for design review. If a proposal appears to confli
 
 ## Development Setup
 
-Current prerequisites:
+Prerequisites:
 
 - Go `1.25`
-- Node `22` and `pnpm` `10` for docs work in `docs/`
-- Current Node `25+` where available and pnpm through Corepack/packageManager policy for GUI work in `apps/`
+- Just
+- Node `22` or newer and pnpm for desktop and docs commands
+- ripgrep (`rg`)
 - Rust toolchain for Tauri native builds in `apps/desktop`
 
-If you want the repository pre-push hook locally, enable it with:
+Prepare the checkout:
 
 ```bash
-git config core.hooksPath .githooks
+just setup --apply
 ```
 
 ## Before Opening a Pull Request
@@ -48,50 +49,19 @@ git config core.hooksPath .githooks
 For code changes, run:
 
 ```bash
-./scripts/ci-check.sh all
+just check --dry-run
 ```
 
-`scripts/build.sh` builds repo targets. With no positional targets it builds `server`, `tui`, and `desktop`; pass targets to narrow the build, for example `scripts/build.sh server --output ./bin/kent` or `scripts/build.sh tui desktop`. Use `--skip-frontend` or `KENT_SKIP_FRONTEND=1` only for infrastructure contexts that intentionally do not need frontend validation.
-
-`scripts/test.sh` tests repo targets. With no positional targets it tests `server`, `tui`, and `desktop`; pass targets to narrow the run, for example `scripts/test.sh server` or `scripts/test.sh tui desktop`. It does not pass arguments through to `go test`; use `go test ...` directly for targeted Go package runs.
-
-For manual Go test runs outside the full check, use:
+Use typed variants to narrow work:
 
 ```bash
-./scripts/test.sh
+just build go
+just test server -- ./server/session -run TestResume
+just lint docs --dry-run
+just check desktop --dry-run
 ```
 
-This keeps successful runs silent while still printing the captured test log on failure.
-
-The script applies a 120s wall-clock cap by default. To reproduce CI's test
-behavior locally, disable that script-level cap while keeping Go's own package
-timeouts:
-
-```bash
-KENT_TEST_DISABLE_WALL_CLOCK_CAP=1 ./scripts/test.sh server
-```
-
-If you changed docs under `docs/`, also run:
-
-```bash
-cd docs
-pnpm install --frozen-lockfile
-pnpm test
-pnpm build
-```
-
-If you changed GUI code under `apps/`, also run frontend-specific checks:
-
-```bash
-cd apps
-pnpm install --frozen-lockfile
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-```
-
-Native Tauri builds additionally require the Rust toolchain and platform-specific WebView/build prerequisites.
+Bare `just build` builds the active Go, desktop, and docs areas. Bare `just test` runs server and desktop tests. Frozen Rust runs only through explicit `rust` variants. Native Tauri builds additionally require platform-specific WebView/build prerequisites.
 
 ## Pull Request Expectations
 

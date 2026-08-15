@@ -336,7 +336,9 @@ function DerivedEdgeSections({
   );
 }
 
-export function WorkflowDraftDetails({ controller }: Readonly<{ controller: WorkflowEditorDraftController }>) {
+export function WorkflowDraftDetails({
+  controller,
+}: Readonly<{ controller: WorkflowEditorDraftController }>) {
   const { t } = useTranslation();
   return (
     <InspectorStack>

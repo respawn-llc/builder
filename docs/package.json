@@ -5,12 +5,7 @@
   "version": "0.0.1",
   "packageManager": "pnpm@11.11.0",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build && node ./scripts/emit-deployment-files.mjs",
-    "preview": "astro preview",
-    "smoke:built": "node ./scripts/smoke-built-docs.mjs",
-    "test": "node --test ./scripts/sync-mirrored-docs.test.mjs",
-    "astro": "astro"
+    "build": "astro build && node ./scripts/emit-deployment-files.mjs"
   },
   "dependencies": {
     "@astrojs/markdown-satteri": "^0.3.5",
@@ -29,5 +24,11 @@
     "starlight-llms-txt": "0.11.0",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "prettier": "^3.9.6",
+    "prettier-plugin-astro": "^0.14.1",
+    "typescript": "^6.0.3"
   }
 }

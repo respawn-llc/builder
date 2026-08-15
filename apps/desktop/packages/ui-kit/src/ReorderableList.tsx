@@ -378,6 +378,8 @@ function ReorderableListItem<Item, ID extends UniqueIdentifier>({
 const DROP_ANIMATION_DURATION_MS = 250;
 const noopRef = (): void => undefined;
 
-function formatTransform(transform: Readonly<{ x: number; y: number; scaleX: number; scaleY: number }>): string {
+function formatTransform(
+  transform: Readonly<{ x: number; y: number; scaleX: number; scaleY: number }>,
+): string {
   return `translate3d(${transform.x.toString()}px, ${transform.y.toString()}px, 0) scale(${transform.scaleX.toString()}, ${transform.scaleY.toString()})`;
 }

@@ -24,9 +24,7 @@ it("reuses one Task Detail Resume continuation for target selection", async () =
             : {
                 outcome: "applied",
                 applied: {
-                  current_nodes: [
-                    { node_id: "node-script", transition_branch_key: null, session_id: null },
-                  ],
+                  current_nodes: [{ node_id: "node-script", transition_branch_key: null, session_id: null }],
                 },
               };
         },

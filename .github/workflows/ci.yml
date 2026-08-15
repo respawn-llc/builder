@@ -24,6 +24,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: extractions/setup-just@v3
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.95.0
         with:
@@ -35,14 +37,12 @@ jobs:
           workspaces: tui-rs
 
       - name: Run Rust lints
-        working-directory: tui-rs
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: |
+          cargo install cargo-deny --locked
+          just lint rust --dry-run
 
-      - name: Verify formatting
-        run: ./scripts/ci-check.sh format
-
-      - name: Run vet
-        run: ./scripts/ci-check.sh vet
+      - name: Run server lint
+        run: just lint server --dry-run
 
   build:
     runs-on: ubuntu-latest
@@ -58,30 +58,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.9
-        with:
-          version: 11.11.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          components: clippy,rustfmt
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2.9.1
-        with:
-          workspaces: tui-rs
+      - uses: extractions/setup-just@v3
 
       - name: Build
-        run: ./scripts/ci-check.sh build
+        run: just build go
 
   test:
     runs-on: ubuntu-latest
@@ -98,6 +78,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: extractions/setup-just@v3
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v6.0.9
         with:
@@ -110,26 +92,16 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/pnpm-lock.yaml
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          components: clippy,rustfmt
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2.9.1
-        with:
-          workspaces: tui-rs
-
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+      - name: Install GUI dependencies
+        run: just install _apps-dependencies
+
       - name: Test
-        env:
-          KENT_TEST_DISABLE_WALL_CLOCK_CAP: "1"
-        run: ./scripts/ci-check.sh test
+        run: |
+          just test server --no-wall-clock-cap
+          just test desktop
 
   windows-installer:
     runs-on: windows-latest
@@ -148,6 +120,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: extractions/setup-just@v3
+
       - name: Build mocked Windows release assets
         env:
           VERSION: 0.0.0
@@ -157,7 +131,7 @@ jobs:
           for goarch in amd64 arm64; do
             asset="kent_${VERSION}_windows_${goarch}"
             GOOS=windows GOARCH="$goarch" KENT_VERSION="$VERSION" \
-              bash scripts/build.sh server --output "staging/${asset}.exe"
+              just build _go --output "staging/${asset}.exe"
             powershell -NoProfile -Command "Compress-Archive -LiteralPath 'staging/${asset}.exe' -DestinationPath 'dist/${asset}.zip' -Force"
             checksum=$(powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/${asset}.zip').Hash.ToLowerInvariant()")
             printf '%s  %s\n' "$checksum" "${asset}.zip" >> dist/checksums.txt
@@ -166,7 +140,7 @@ jobs:
       - name: Smoke test installer
         env:
           VERSION: 0.0.0
-        run: bash scripts/release-artifacts.sh smoke-windows-installer --version "$VERSION" --goarch amd64 --dist-dir dist
+        run: just release _windows-installer-smoke --version "$VERSION" --goarch amd64 --dist-dir dist
 
       - name: Smoke test installer restores stopped service after failure
         env:
@@ -220,9 +194,6 @@ jobs:
 
   docs:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
@@ -241,20 +212,16 @@ jobs:
           cache: pnpm
           cache-dependency-path: docs/pnpm-lock.yaml
 
+      - uses: extractions/setup-just@v3
+
       - name: Install docs dependencies
-        run: pnpm install --frozen-lockfile
+        run: just install _docs-dependencies
 
-      - name: Test docs
-        run: pnpm test
-
-      - name: Build docs
-        run: pnpm build
+      - name: Check docs
+        run: just check docs --dry-run
 
   gui:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
@@ -279,23 +246,22 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/pnpm-lock.yaml
 
-      - name: Check GUI dependency policy
-        run: node scripts/check-dependency-policy.mjs
+      - uses: extractions/setup-just@v3
 
       - name: Install GUI dependencies
-        run: pnpm install --frozen-lockfile
+        run: just install _apps-dependencies
+
+      - name: Generate GUI contracts
+        run: just _gen-typescript
 
       - name: Lint GUI
-        run: pnpm lint
-
-      - name: Typecheck GUI
-        run: pnpm typecheck
+        run: just lint desktop --dry-run
 
       - name: Test GUI
-        run: pnpm test
+        run: just test desktop
 
       - name: Build GUI web assets
-        run: pnpm build
+        run: just build _desktop-web
 
   gui-native:
     runs-on: macos-latest
@@ -331,48 +297,16 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/pnpm-lock.yaml
 
+      - uses: extractions/setup-just@v3
+
       - name: Install GUI dependencies
-        run: pnpm --dir apps install --frozen-lockfile
+        run: just install _apps-dependencies
 
       - name: Build macOS desktop bundle
-        run: bash scripts/build-desktop.sh --skip-install -- --bundles dmg
+        run: just build desktop -- --bundles dmg
 
       - name: Smoke test macOS desktop bundle
-        run: |
-          shopt -s nullglob
-          dmgs=(apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg)
-          if [[ "${#dmgs[@]}" -ne 1 ]]; then
-            echo "Expected exactly one macOS DMG, found ${#dmgs[@]}." >&2
-            exit 1
-          fi
-
-          mount_dir="$RUNNER_TEMP/kent-desktop-dmg"
-          mkdir -p "$mount_dir"
-          printf 'Y\n' | hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir"
-          trap 'hdiutil detach "$mount_dir"' EXIT
-
-          app="$mount_dir/Kent.app"
-          executable="$app/Contents/MacOS/kent-desktop"
-          minimum_system_version="$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")"
-          if [[ "$minimum_system_version" != "15.0" ]]; then
-            echo "Expected LSMinimumSystemVersion 15.0, got ${minimum_system_version}." >&2
-            exit 1
-          fi
-          lipo "$executable" -verify_arch arm64
-
-          "$executable" >"$RUNNER_TEMP/kent-desktop.log" 2>&1 &
-          app_pid=$!
-          sleep 10
-          if ! kill -0 "$app_pid"; then
-            set +e
-            wait "$app_pid"
-            app_status=$?
-            set -e
-            cat "$RUNNER_TEMP/kent-desktop.log" >&2
-            exit "$app_status"
-          fi
-          kill -TERM "$app_pid"
-          wait "$app_pid" || true
+        run: just build _desktop-smoke-macos apps/desktop/src-tauri/target/release/bundle/dmg
 
       - name: Upload macOS desktop bundle
         uses: actions/upload-artifact@v7.0.1
@@ -426,17 +360,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/pnpm-lock.yaml
 
-      - name: Install GUI dependencies
-        run: pnpm --dir apps install --frozen-lockfile
+      - uses: extractions/setup-just@v3
 
-      # build-desktop.sh signs updater artifacts (createUpdaterArtifacts is on). PRs
+      - name: Install GUI dependencies
+        run: just install _apps-dependencies
+
+      # The desktop build signs updater artifacts (createUpdaterArtifacts is on). PRs
       # (incl. forks) have no secret, so mint a throwaway key and pass it by content.
       # The signer runs under pnpm --dir apps/desktop, so the key path must be
       # absolute ($RUNNER_TEMP); the signed debug artifacts are discarded.
       - name: Build desktop bundle (unsigned, debug)
-        run: |
-          pnpm --dir apps/desktop exec tauri signer generate -f -w "$RUNNER_TEMP/ci-updater.key" -p ""
-          TAURI_SIGNING_PRIVATE_KEY="$(cat "$RUNNER_TEMP/ci-updater.key")"
-          export TAURI_SIGNING_PRIVATE_KEY
-          export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
-          bash scripts/build-desktop.sh --skip-install -- --debug
+        run: just build _desktop-ci-debug "$RUNNER_TEMP/ci-updater.key"

@@ -84,14 +84,14 @@ It also receives the same payload as JSON on stdin:
 
 ```json
 {
-    "source_workspace_root": "/path/to/main/workspace",
-    "branch_name": "feature/name",
-    "worktree_root": "/path/to/new/worktree",
-    "session_id": null,
-    "project_id": "...",
-    "workspace_id": "...",
-    "worktree_id": "...",
-    "created_branch": true
+  "source_workspace_root": "/path/to/main/workspace",
+  "branch_name": "feature/name",
+  "worktree_root": "/path/to/new/worktree",
+  "session_id": null,
+  "project_id": "...",
+  "workspace_id": "...",
+  "worktree_id": "...",
+  "created_branch": true
 }
 ```
 

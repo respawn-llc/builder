@@ -5,9 +5,9 @@
   "version": "0.0.0",
   "identifier": "sh.kent",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "just dev _desktop-web",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "pnpm build:web",
+    "beforeBuildCommand": "just build _desktop-web",
     "frontendDist": "../dist"
   },
   "app": {

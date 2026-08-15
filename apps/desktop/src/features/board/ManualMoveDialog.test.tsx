@@ -88,7 +88,9 @@ describe("ManualMoveDialog", () => {
             transitionKey: "transition",
             label: "Implement",
             sourceNodeDisplayName: "Plan",
-            requiredValues: [{ nodeKey: "plan", outputName: "summary", description: null, resolvedValue: null }],
+            requiredValues: [
+              { nodeKey: "plan", outputName: "summary", description: null, resolvedValue: null },
+            ],
           },
         ],
       },
@@ -99,26 +101,30 @@ describe("ManualMoveDialog", () => {
   it("auto-selects a sole choice, preserves prefills, and supports cancellation", async () => {
     const user = userEvent.setup();
     const onCancel = vi.fn();
-    const { onSubmit } = renderDialog({
-      outcome: "transition",
-      transition: {
-        choices: [
-          {
-            transitionKey: "transition-0",
-            label: "Implement",
-            sourceNodeDisplayName: "Plan",
-            requiredValues: [
-              {
-                nodeKey: "plan",
-                outputName: "summary",
-                description: "The plan summary.",
-                resolvedValue: "Prefilled",
-              },
-            ],
-          },
-        ],
+    const { onSubmit } = renderDialog(
+      {
+        outcome: "transition",
+        transition: {
+          choices: [
+            {
+              transitionKey: "transition-0",
+              label: "Implement",
+              sourceNodeDisplayName: "Plan",
+              requiredValues: [
+                {
+                  nodeKey: "plan",
+                  outputName: "summary",
+                  description: "The plan summary.",
+                  resolvedValue: "Prefilled",
+                },
+              ],
+            },
+          ],
+        },
       },
-    }, undefined, onCancel);
+      undefined,
+      onCancel,
+    );
 
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     const confirmButton = screen.getByRole("button", { name: appI18n.t("board.manualMoveConfirm") });
@@ -132,5 +138,4 @@ describe("ManualMoveDialog", () => {
     await user.click(screen.getByRole("button", { name: appI18n.t("app.cancel") }));
     expect(onCancel).toHaveBeenCalledOnce();
   });
-
 });

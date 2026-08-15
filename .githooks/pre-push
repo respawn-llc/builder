@@ -4,4 +4,5 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 
-"$repo_root/scripts/ci-check.sh"
+cd "$repo_root"
+just check --dry-run

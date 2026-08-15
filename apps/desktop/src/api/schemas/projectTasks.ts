@@ -92,7 +92,10 @@ const projectTaskGroupDefinitionSchema: z.ZodType<ProjectTaskGroupDefinition> = 
 export const projectTaskGroupCountsSchema: z.ZodType<ProjectTaskGroupCounts> = z
   .object({
     project_id: z.string().min(1),
-    definitions: z.array(projectTaskGroupDefinitionSchema).length(3).refine((definitions) => new Set(definitions.map((definition) => definition.group)).size === 3),
+    definitions: z
+      .array(projectTaskGroupDefinitionSchema)
+      .length(3)
+      .refine((definitions) => new Set(definitions.map((definition) => definition.group)).size === 3),
     counts: z
       .object({
         active: z.number().int().nonnegative(),

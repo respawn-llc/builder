@@ -22,7 +22,10 @@ type ProjectDeleteTarget = Readonly<{
   projectID: string;
 }>;
 
-export function ProjectDeleteButton({ navigator, projectID }: Readonly<{ navigator: SidebarPageNavigator; projectID: string }>) {
+export function ProjectDeleteButton({
+  navigator,
+  projectID,
+}: Readonly<{ navigator: SidebarPageNavigator; projectID: string }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const connection = useConnectionSnapshot();

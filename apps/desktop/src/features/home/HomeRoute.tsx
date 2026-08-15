@@ -27,10 +27,7 @@ import {
   VirtualizedInfiniteList,
 } from "@/ui";
 import { cx } from "@/ui";
-import {
-  HomeSidebar,
-  type HomeSidebarCategory,
-} from "./HomeSidebar";
+import { HomeSidebar, type HomeSidebarCategory } from "./HomeSidebar";
 import { HomeProjectContent } from "./HomeProjectContent";
 import { OverlappingCrossfade } from "./OverlappingCrossfade";
 import { ProjectCreateDialog, type ProjectDraft } from "./ProjectCreateForm";

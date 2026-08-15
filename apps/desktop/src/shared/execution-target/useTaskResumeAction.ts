@@ -1,10 +1,7 @@
 import { useCallback } from "react";
 
 import type { WorkflowExecutionTargetSelection } from "@/api";
-import {
-  resumeTaskInitiatingAction,
-  type TaskInitiatingAction,
-} from "./executionTargetContinuation";
+import { resumeTaskInitiatingAction, type TaskInitiatingAction } from "./executionTargetContinuation";
 import type { TaskInitiatingActionController } from "./useExecutionTargetContinuation";
 import { useTaskLifecycleAction } from "./useTaskLifecycleAction";
 

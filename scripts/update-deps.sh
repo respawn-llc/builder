@@ -141,7 +141,6 @@ update_rust_deps() {
 	fi
 
 	local manifests=(
-		"$repo_root/tui-rs/Cargo.toml"
 		"$repo_root/apps/desktop/src-tauri/Cargo.toml"
 	)
 	local manifest

@@ -9,12 +9,22 @@ cd "$repo_root"
 usage() {
 	cat <<'USAGE'
 Usage:
-  scripts/release-artifacts.sh build --version X.Y.Z [--dist-dir dist]
+  scripts/release-artifacts.sh build [--version X.Y.Z] [--dist-dir dist]
   scripts/release-artifacts.sh verify-manifest [--dist-dir dist]
   scripts/release-artifacts.sh verify-linux-static --version X.Y.Z [--dist-dir dist]
   scripts/release-artifacts.sh smoke-test --version X.Y.Z --goos <os> --goarch <arch> --archive-ext <ext> [--binary-ext <ext>] [--dist-dir dist]
   scripts/release-artifacts.sh smoke-windows-installer --version X.Y.Z --goarch <arch> [--dist-dir dist]
+
+Build version defaults to KENT_VERSION or the repository VERSION file.
 USAGE
+}
+
+resolve_version() {
+	local value="${KENT_VERSION:-}"
+	if [ -z "$value" ] && [ -f "$repo_root/VERSION" ]; then
+		value="$(tr -d '[:space:]' <"$repo_root/VERSION")"
+	fi
+	printf '%s' "${value#v}"
 }
 
 resolve_path() {
@@ -73,8 +83,7 @@ build_archives() {
 	local staging_dir
 	staging_dir="$(mktemp -d)"
 
-	local build_os build_arch ext archive_ext out frontend_build_done
-	frontend_build_done=0
+	local build_os build_arch ext archive_ext out
 	while read -r build_os build_arch; do
 		if [ "$build_os" = "windows" ]; then
 			ext=".exe"
@@ -85,14 +94,8 @@ build_archives() {
 		fi
 
 		out="kent_${version}_${build_os}_${build_arch}"
-		if [ "$frontend_build_done" -eq 0 ]; then
-			env GOOS="$build_os" GOARCH="$build_arch" KENT_VERSION="$version" \
-				bash scripts/build.sh desktop tui server --output "$staging_dir/${out}${ext}"
-			frontend_build_done=1
-		else
-			env GOOS="$build_os" GOARCH="$build_arch" KENT_VERSION="$version" KENT_SKIP_FRONTEND=1 \
-				bash scripts/build.sh server --output "$staging_dir/${out}${ext}"
-		fi
+		env GOOS="$build_os" GOARCH="$build_arch" KENT_VERSION="$version" \
+			just build _go --output "$staging_dir/${out}${ext}"
 
 		if [ "$archive_ext" = "zip" ]; then
 			(
@@ -317,6 +320,9 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+if [ "$mode" = "build" ] && [ -z "$version" ]; then
+	version="$(resolve_version)"
+fi
 version="${version#v}"
 
 case "$mode" in

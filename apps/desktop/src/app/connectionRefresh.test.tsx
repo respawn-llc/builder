@@ -12,10 +12,7 @@ import {
   installAnimationFrameTestSupport,
   waitForMacrotask,
 } from "@/test-support/scheduling";
-import {
-  workflowAttentionCalls,
-  workflowAttentionRpcMethods,
-} from "@/test-support/workflow-attention";
+import { workflowAttentionCalls, workflowAttentionRpcMethods } from "@/test-support/workflow-attention";
 
 describe("application reconnect attention refresh", () => {
   beforeEach(() => {
@@ -97,7 +94,9 @@ describe("application reconnect attention refresh", () => {
         <ActiveWorkspaceCatalog />
       </AppProviders>,
     );
-    await waitFor(() => { expect(loadCatalog).toHaveBeenCalledTimes(1); });
+    await waitFor(() => {
+      expect(loadCatalog).toHaveBeenCalledTimes(1);
+    });
 
     await act(async () => {
       services.transport.connection.set("disconnected");
@@ -108,7 +107,9 @@ describe("application reconnect attention refresh", () => {
       await waitForMacrotask();
     });
 
-    await waitFor(() => { expect(loadCatalog).toHaveBeenCalledTimes(2); });
+    await waitFor(() => {
+      expect(loadCatalog).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

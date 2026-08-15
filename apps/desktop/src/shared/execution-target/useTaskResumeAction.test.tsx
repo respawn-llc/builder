@@ -1,10 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { vi } from "vitest";
 
-import {
-  resumeTaskInitiatingAction,
-  type TaskInitiatingActionController,
-} from "@/shared/execution-target";
+import { resumeTaskInitiatingAction, type TaskInitiatingActionController } from "@/shared/execution-target";
 import { useTaskResumeAction } from "./useTaskResumeAction";
 
 it("routes Resume through the target-continuation controller", async () => {

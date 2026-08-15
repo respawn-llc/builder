@@ -30,12 +30,9 @@ export function useHomeSidebarMode(): Readonly<{
     };
   }, []);
   const shiftRequiredWidthPx =
-    sidebarProtectedMainMinWidthPx +
-    taskDetailSidebarSizePreference.desiredWidthPx +
-    homeShiftSidebarInsetPx;
+    sidebarProtectedMainMinWidthPx + taskDetailSidebarSizePreference.desiredWidthPx + homeShiftSidebarInsetPx;
   return {
     mainPaneRef,
-    sidebarMode:
-      availableWidthPx !== null && availableWidthPx >= shiftRequiredWidthPx ? "shift" : "overlay",
+    sidebarMode: availableWidthPx !== null && availableWidthPx >= shiftRequiredWidthPx ? "shift" : "overlay",
   };
 }

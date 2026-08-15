@@ -1,5 +1,10 @@
 import type { TaskDependencies, TaskDependencyDirection } from "@/api";
-import { DependenciesArea, dependencyRelatedTaskIDs, taskDependencyPairForDirection, type TaskDependencyPair } from "@/shared/task-dependencies";
+import {
+  DependenciesArea,
+  dependencyRelatedTaskIDs,
+  taskDependencyPairForDirection,
+  type TaskDependencyPair,
+} from "@/shared/task-dependencies";
 
 type Props = Readonly<{
   dependencies: TaskDependencies;
@@ -14,7 +19,17 @@ type Props = Readonly<{
 }>;
 
 export function TaskDependenciesArea(props: Props) {
-  const { dependencies, disabled, navigationDisabled, onAdd, onAddExisting, onRemove, onSelectTask, projectID, taskID } = props;
+  const {
+    dependencies,
+    disabled,
+    navigationDisabled,
+    onAdd,
+    onAddExisting,
+    onRemove,
+    onSelectTask,
+    projectID,
+    taskID,
+  } = props;
   const excludedTaskIDs = new Set([taskID, ...dependencyRelatedTaskIDs(dependencies)]);
   return (
     <DependenciesArea

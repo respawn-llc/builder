@@ -46,12 +46,7 @@ export function useVirtualizedItemVisibilityTriggers<TItem>({
           ? previousState
           : { generation: trigger.requestGeneration, handled: false };
       triggerStatesRef.current.set(trigger.itemKey, state);
-      if (
-        trigger.enabled &&
-        !trigger.fetching &&
-        visibleItemKeys.has(trigger.itemKey) &&
-        !state.handled
-      ) {
+      if (trigger.enabled && !trigger.fetching && visibleItemKeys.has(trigger.itemKey) && !state.handled) {
         triggerStatesRef.current.set(trigger.itemKey, {
           generation: trigger.requestGeneration,
           handled: true,

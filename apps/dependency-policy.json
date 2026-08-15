@@ -1,10 +1,7 @@
 {
   "$schema": "./dependency-policy.schema.json",
   "minimumReleaseAgeMinutes": 10080,
-  "minimumReleaseAgeExclude": [
-    "@napi-rs/wasm-runtime@1.2.2",
-    "vite@8.2.0"
-  ],
+  "minimumReleaseAgeExclude": ["@napi-rs/wasm-runtime@1.2.2", "vite@8.2.0"],
   "directDependencyAllowlist": {
     "@app/apps": {
       "devDependencies": ["postcss", "prettier"]

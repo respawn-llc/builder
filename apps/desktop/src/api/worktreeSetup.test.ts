@@ -29,7 +29,10 @@ function parseSetupMutationParams(value: unknown): Readonly<{ setupOperationID: 
 describe("worktree setup API", () => {
   it("decodes every setup failure cause and rejects contradictory payloads", () => {
     const causes = [
-      [{ kind: "process_exit", process_exit: { exit_code: 7, stdout: "output", stderr: "failure" } }, "retry_ready"],
+      [
+        { kind: "process_exit", process_exit: { exit_code: 7, stdout: "output", stderr: "failure" } },
+        "retry_ready",
+      ],
       [{ kind: "timeout", timeout: { stdout: null, stderr: null } }, "retry_ready"],
       [{ kind: "target_preparation", target_preparation: {} }, "retry_ready"],
       [{ kind: "interruption_persistence", interruption_persistence: {} }, "non_retryable"],
@@ -37,35 +40,55 @@ describe("worktree setup API", () => {
       [{ kind: "controller_shutdown", controller_shutdown: {} }, "non_retryable"],
       [{ kind: "operational", operational: {} }, "non_retryable"],
     ] as const;
-    const decoded = causes.map(([cause, readiness]) =>
-      worktreeSetupEventParamsSchema.parse({ event: failedSetupEvent(cause, readiness) }).event);
-    expect(decoded.map((event) => event.phase === "failed" ? event.failed.cause.kind : null))
-      .toEqual(causes.map(([cause]) => cause.kind));
-    expect(decoded[0]).toMatchObject({ failed: { cause: {
-      kind: "process_exit", exitCode: 7, stdout: "output", stderr: "failure",
-    } } });
+    const decoded = causes.map(
+      ([cause, readiness]) =>
+        worktreeSetupEventParamsSchema.parse({ event: failedSetupEvent(cause, readiness) }).event,
+    );
+    expect(decoded.map((event) => (event.phase === "failed" ? event.failed.cause.kind : null))).toEqual(
+      causes.map(([cause]) => cause.kind),
+    );
+    expect(decoded[0]).toMatchObject({
+      failed: {
+        cause: {
+          kind: "process_exit",
+          exitCode: 7,
+          stdout: "output",
+          stderr: "failure",
+        },
+      },
+    });
     expect(decoded[1]).toMatchObject({ failed: { cause: { kind: "timeout", stdout: null, stderr: null } } });
     const retryable = failedSetupEvent(causes[0][0], "retry_ready");
     for (const event of [
       failedSetupEvent({ kind: "canceled", canceled: {} }, "retry_ready"),
       { ...retryable, failed: { ...retryable.failed, retained_worktree: null } },
-      { ...failedSetupEvent(causes[2][0], "retry_ready"),
-        failed: { ...failedSetupEvent(causes[2][0], "retry_ready").failed, script_path: "/setup.sh" } },
+      {
+        ...failedSetupEvent(causes[2][0], "retry_ready"),
+        failed: { ...failedSetupEvent(causes[2][0], "retry_ready").failed, script_path: "/setup.sh" },
+      },
       { ...retryable, failed: { ...retryable.failed, diagnostic: "" } },
-    ]) expect(() => worktreeSetupEventParamsSchema.parse({ event })).toThrow();
+    ])
+      expect(() => worktreeSetupEventParamsSchema.parse({ event })).toThrow();
   });
 
   it("decodes canonical Task setup recovery without fabricating topology", () => {
-    const recovery = parseTaskSetupRecoveryDetail(JSON.stringify({
-      setup_recovery: {
-        setup_operation_id: "55555555-5555-4555-8555-555555555555",
-        cause: "target_preparation", diagnostic: "target failed", script_path: null,
-        setup_requirement: "required", retained_worktree: null, retained_previous_worktree: null,
-        execution_target: { mode: "head" },
-      },
-    }));
+    const recovery = parseTaskSetupRecoveryDetail(
+      JSON.stringify({
+        setup_recovery: {
+          setup_operation_id: "55555555-5555-4555-8555-555555555555",
+          cause: "target_preparation",
+          diagnostic: "target failed",
+          script_path: null,
+          setup_requirement: "required",
+          retained_worktree: null,
+          retained_previous_worktree: null,
+          execution_target: { mode: "head" },
+        },
+      }),
+    );
     expect(recovery).toMatchObject({
-      cause: "target_preparation", diagnostic: "target failed",
+      cause: "target_preparation",
+      diagnostic: "target failed",
       executionTarget: { mode: "head", customRef: null },
       retainedWorktree: null,
     });
@@ -200,8 +223,11 @@ describe("worktree setup API", () => {
 
   it("forwards one terminal outcome or error and closes once", () => {
     expect(subscriptionCompleteMethod("worktree.setup.subscribe")).toBe("worktree.setup.complete");
-    for (const terminal of [completedSetupEvent, notRequiredSetupEvent,
-      failedSetupEvent({ kind: "canceled", canceled: {} }, "non_retryable")]) {
+    for (const terminal of [
+      completedSetupEvent,
+      notRequiredSetupEvent,
+      failedSetupEvent({ kind: "canceled", canceled: {} }, "non_retryable"),
+    ]) {
       const transport = new FakeRpcTransport([]);
       const observed = observe(new ApiClient(transport));
       transport.emit("worktree.setup", { event: startedSetupEvent });
@@ -215,8 +241,9 @@ describe("worktree setup API", () => {
     }
     for (const trigger of [
       (transport: FakeRpcTransport) => {
-        transport.emit("worktree.setup",
-          { event: { ...startedSetupEvent, started: { ...startedSetupEvent.started, script_path: "" } } });
+        transport.emit("worktree.setup", {
+          event: { ...startedSetupEvent, started: { ...startedSetupEvent.started, script_path: "" } },
+        });
       },
       (transport: FakeRpcTransport) => {
         transport.fail("worktree.setup.subscribe", new Error("connection"));
@@ -239,33 +266,79 @@ describe("worktree setup API", () => {
 
 const setupIDWire = "123e4567-e89b-42d3-a456-426614174000";
 const setupID = parseSetupOperationID(setupIDWire);
-const retainedWorktree = { variant: "registered", registered: {
-  git: { canonical_root: "/worktree", head_object: "abc", branch_ref: null, branch_name: null,
-    detached: true, bare: false, locked_reason: null, prunable_reason: null, is_main: false, path_available: true },
-  kent: { worktree_id: "worktree-1", canonical_root: "/worktree", display_name: "feature",
-    managed: true, created_branch: false, origin_session_id: null },
-} } as const;
-const startedSetupEvent = { setup_operation_id: setupIDWire, phase: "started",
-  started: { source_workspace_root: "/source", worktree_root: "/worktree", script_path: "/setup.sh" } } as const;
-const completedSetupEvent = { setup_operation_id: setupIDWire, phase: "completed",
-  completed: { retained_previous_worktree: null } } as const;
-const notRequiredSetupEvent = { setup_operation_id: setupIDWire, phase: "not_required",
-  not_required: { reason: "no_configured_script", retained_previous_worktree: null } } as const;
-function failedSetupEvent(cause: Readonly<{ kind: string }> & Readonly<Record<string, unknown>>,
-  retryReadiness: "retry_ready" | "non_retryable") {
+const retainedWorktree = {
+  variant: "registered",
+  registered: {
+    git: {
+      canonical_root: "/worktree",
+      head_object: "abc",
+      branch_ref: null,
+      branch_name: null,
+      detached: true,
+      bare: false,
+      locked_reason: null,
+      prunable_reason: null,
+      is_main: false,
+      path_available: true,
+    },
+    kent: {
+      worktree_id: "worktree-1",
+      canonical_root: "/worktree",
+      display_name: "feature",
+      managed: true,
+      created_branch: false,
+      origin_session_id: null,
+    },
+  },
+} as const;
+const startedSetupEvent = {
+  setup_operation_id: setupIDWire,
+  phase: "started",
+  started: { source_workspace_root: "/source", worktree_root: "/worktree", script_path: "/setup.sh" },
+} as const;
+const completedSetupEvent = {
+  setup_operation_id: setupIDWire,
+  phase: "completed",
+  completed: { retained_previous_worktree: null },
+} as const;
+const notRequiredSetupEvent = {
+  setup_operation_id: setupIDWire,
+  phase: "not_required",
+  not_required: { reason: "no_configured_script", retained_previous_worktree: null },
+} as const;
+function failedSetupEvent(
+  cause: Readonly<{ kind: string }> & Readonly<Record<string, unknown>>,
+  retryReadiness: "retry_ready" | "non_retryable",
+) {
   const scriptFailure = retryReadiness === "retry_ready" && cause.kind !== "target_preparation";
-  return { setup_operation_id: setupIDWire, phase: "failed", failed: {
-    retry_readiness: retryReadiness, cause, diagnostic: "setup failed",
-    script_path: scriptFailure ? "/setup.sh" : null, execution_target: null,
-    retained_worktree: scriptFailure ? retainedWorktree : null, retained_previous_worktree: null,
-  } } as const;
+  return {
+    setup_operation_id: setupIDWire,
+    phase: "failed",
+    failed: {
+      retry_readiness: retryReadiness,
+      cause,
+      diagnostic: "setup failed",
+      script_path: scriptFailure ? "/setup.sh" : null,
+      execution_target: null,
+      retained_worktree: scriptFailure ? retainedWorktree : null,
+      retained_previous_worktree: null,
+    },
+  } as const;
 }
 function observe(client: ApiClient) {
-  const events: WorktreeSetupEvent[] = [], completions: number[] = [], errors: Error[] = [];
+  const events: WorktreeSetupEvent[] = [],
+    completions: number[] = [],
+    errors: Error[] = [];
   client.subscribeWorktreeSetup(setupID, {
-    onEvent: (event) => { events.push(event); },
-    onComplete: (code) => { completions.push(code); },
-    onError: (error) => { errors.push(error); },
+    onEvent: (event) => {
+      events.push(event);
+    },
+    onComplete: (code) => {
+      completions.push(code);
+    },
+    onError: (error) => {
+      errors.push(error);
+    },
   });
   return { events, completions, errors };
 }
