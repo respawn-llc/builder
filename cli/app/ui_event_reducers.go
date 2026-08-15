@@ -60,6 +60,7 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		next, cmd := m.inputController().handleRuntimeCtrlC(nil)
 		nextModel := next.(*uiModel)
+		cmd = tea.Batch(cmd, nextModel.interruptedStatusNoticeCmd())
 		nextModel.layout().syncViewport()
 		return handledUIFeatureUpdate(nextModel, cmd)
 	}

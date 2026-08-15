@@ -329,13 +329,14 @@ func (c uiAskController) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.ask.activeDelivery.continuation = &continuation
 	} else if accepted && (m.ask.currentToken != currentToken || !m.ask.hasCurrent()) && m.blocksRuntimeInput() {
 		_, runtimeCtrlCCmd = m.inputController().handleRuntimeCtrlC(nil)
+		runtimeCtrlCCmd = tea.Batch(runtimeCtrlCCmd, m.interruptedStatusNoticeCmd())
 	}
 	if hasNext {
 		m.activity = uiActivityQuestion
 	} else {
 		m.activity = uiActivityInterrupted
 	}
-	return m, tea.Batch(answerCmd, runtimeCtrlCCmd, m.interruptedStatusNoticeCmd())
+	return m, tea.Batch(answerCmd, runtimeCtrlCCmd)
 }
 
 func (c uiAskController) renderPriorityPromptLines() []askPromptLine {

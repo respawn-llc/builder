@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 
@@ -276,6 +277,9 @@ func TestAskCtrlCFinishesPromptCancellationBeforeRuntimeInterrupt(t *testing.T) 
 	if runtimeClient.interruptCalls != 0 {
 		t.Fatal("Ctrl+C interrupted runtime before prompt cancellation completed")
 	}
+	if model.transientStatus != "" {
+		t.Fatal("Ctrl+C reported interruption before prompt cancellation completed")
+	}
 
 	next, repeatedCommand := model.askController().handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
 	model = next.(*uiModel)
@@ -307,6 +311,9 @@ func TestAskCtrlCFinishesPromptCancellationBeforeRuntimeInterrupt(t *testing.T) 
 	if interruptCommand == nil || runtimeClient.interruptCalls != 0 {
 		t.Fatal("global Ctrl+C did not defer runtime interruption to its command")
 	}
+	if model.transientStatus == "" || model.transientStatusKind != uiStatusNoticeError {
+		t.Fatal("successful prompt cancellation did not report interruption when routing global Ctrl+C")
+	}
 	model = updateUIModel(t, model, interruptCommand())
 	if runtimeClient.interruptCalls != 1 {
 		t.Fatalf("runtime interrupt calls = %d, want one after prompt cancellation", runtimeClient.interruptCalls)
@@ -316,6 +323,35 @@ func TestAskCtrlCFinishesPromptCancellationBeforeRuntimeInterrupt(t *testing.T) 
 	entry := request.Entries[0]
 	if entry.Declined == nil {
 		t.Fatalf("prompt cancellation entry = %+v, want declined", entry)
+	}
+}
+
+func TestAskCtrlCCancellationConnectionFailureDoesNotReportInterrupted(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	control := &scriptedAskPromptControl{results: []error{io.EOF}}
+	runtimeClient := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(runtimeClient)
+	model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
+	model.sessionID = ongoingTestSessionID().String()
+	model.setRuntimeActivityBusyForTest(true)
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
+		testQuestionPrompt("ask-interrupt-connection-failure", "Proceed?", "Yes", "No"),
+	)})
+
+	next, cancellationCommand := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(*uiModel)
+	if model.transientStatus != "" {
+		t.Fatal("Ctrl+C reported interruption before prompt cancellation completed")
+	}
+	model = updateUIModel(t, model, cancellationCommand())
+	if model.transientStatus != "" {
+		t.Fatal("failed prompt cancellation left an interruption notice")
+	}
+	if testActiveAsk(model) == nil || testPromptAnswerDeliveryActive(model) {
+		t.Fatal("failed prompt cancellation did not restore the actionable prompt")
+	}
+	if runtimeClient.interruptCalls != 0 {
+		t.Fatalf("runtime interrupt calls = %d, want zero after cancellation failure", runtimeClient.interruptCalls)
 	}
 }
 
@@ -440,6 +476,7 @@ func TestPromptCtrlCContinuationUsesGlobalExitWhenOriginIsIdle(t *testing.T) {
 }
 
 func TestPromptCtrlCContinuationWaitsForPromptActivityToClear(t *testing.T) {
+	disableTransientStatusClearForTest(t)
 	runtimeClient := &runtimeControlFakeClient{}
 	model := newProjectedTestUIModel(runtimeClient)
 	model.sessionID = ongoingTestSessionID().String()
@@ -618,6 +655,7 @@ func TestPromptCtrlCContinuationCancelsSuccessorInstalledByHydration(t *testing.
 }
 
 func TestStalePromptCtrlCContinuationDoesNotClearNewerPendingContinuation(t *testing.T) {
+	disableTransientStatusClearForTest(t)
 	runtimeClient := &runtimeControlFakeClient{}
 	model := newProjectedTestUIModel(runtimeClient)
 	model.sessionID = ongoingTestSessionID().String()
