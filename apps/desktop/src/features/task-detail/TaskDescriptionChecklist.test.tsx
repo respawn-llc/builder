@@ -290,7 +290,8 @@ describe("Task description checklist", () => {
         },
         { attention: emptyTaskAttentionResponse },
       );
-      const viewport = await screen.findByRole("textbox", { name: appI18n.t("task.description") });
+      await screen.findByRole("textbox", { name: appI18n.t("task.description") });
+      const viewport = screen.getByTestId("markdown-field-read-content-viewport");
       geometry.setGeometry(viewport, { clientHeight: 100, scrollHeight: 100 });
       act(() => {
         geometry.notify();
@@ -314,7 +315,8 @@ describe("Task description checklist", () => {
         },
         { attention: emptyTaskAttentionResponse },
       );
-      const viewport = await screen.findByRole("textbox", { name: appI18n.t("task.description") });
+      await screen.findByRole("textbox", { name: appI18n.t("task.description") });
+      const viewport = screen.getByTestId("markdown-field-read-content-viewport");
       geometry.setGeometry(viewport, { clientHeight: 100, scrollHeight: 100 });
       act(() => {
         geometry.notify();
@@ -344,7 +346,8 @@ describe("Task description checklist", () => {
         },
         { attention: emptyTaskAttentionResponse },
       );
-      const viewport = await screen.findByRole("textbox", { name: appI18n.t("task.description") });
+      await screen.findByRole("textbox", { name: appI18n.t("task.description") });
+      const viewport = screen.getByTestId("markdown-field-read-content-viewport");
       geometry.setGeometry(viewport, { clientHeight: 100, scrollHeight: 200 });
       act(() => {
         geometry.notify();
@@ -382,7 +385,8 @@ describe("Task description checklist", () => {
           selectedTab: "comments",
         },
       });
-      const viewport = await screen.findByRole("textbox", { name: appI18n.t("task.description") });
+      await screen.findByRole("textbox", { name: appI18n.t("task.description") });
+      const viewport = screen.getByTestId("markdown-field-read-content-viewport");
       geometry.setGeometry(viewport, { clientHeight: 100, scrollHeight: 300 });
       act(() => {
         geometry.notify();

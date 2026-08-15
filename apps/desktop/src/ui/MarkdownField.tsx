@@ -287,7 +287,7 @@ function MarkdownFieldReadViewport({
   });
   const affordancePhase = useOpacityExit(collapsible && !readPresentation.expanded && overflows);
 
-  const surfaceStyle: CSSProperties = collapsed
+  const collapsedContentStyle: CSSProperties = collapsed
     ? { maxHeight: heightClamp(readPresentation.collapsedHeightClamp) }
     : {};
   const taskListProps = markdownTaskListProps(disabled, taskListInteraction, onChange);
@@ -306,7 +306,7 @@ function MarkdownFieldReadViewport({
           fieldIslandInputClassName(1, surfaceRadius),
           "relative block h-full min-h-0 min-w-0 max-w-full p-[var(--space-2)]",
           !disabled && "cursor-text",
-          collapsed ? "overflow-hidden" : "overflow-clip",
+          "overflow-clip",
         )}
         onKeyDown={(event) => {
           activateFromKeyboard(event, disabled, onEdit);
@@ -315,21 +315,27 @@ function MarkdownFieldReadViewport({
           activateFromPointer(event, disabled, onEdit);
         }}
         data-slot="markdown-field-read-viewport"
-        ref={viewportRef}
         role="textbox"
-        style={surfaceStyle}
         tabIndex={disabled ? -1 : 0}
       >
-        <div className="min-w-0 max-w-full" ref={contentRef}>
-          {value.trim().length > 0 ? (
-            <StaticMarkdown disabled={disabled} {...(taskListProps ?? {})} value={value} />
-          ) : (
-            <span className="text-[var(--color-muted)]">{placeholder}</span>
-          )}
+        <div
+          className={cx("relative min-w-0 max-w-full", collapsed && "overflow-hidden")}
+          data-slot="markdown-field-read-content-viewport"
+          data-testid="markdown-field-read-content-viewport"
+          ref={viewportRef}
+          style={collapsedContentStyle}
+        >
+          <div className="min-w-0 max-w-full" ref={contentRef}>
+            {value.trim().length > 0 ? (
+              <StaticMarkdown disabled={disabled} {...(taskListProps ?? {})} value={value} />
+            ) : (
+              <span className="text-[var(--color-muted)]">{placeholder}</span>
+            )}
+          </div>
+          {renderMarkdownFieldFade(affordancePhase, expandLabel, onExpand)}
+          {renderMarkdownFieldExpandButton(affordancePhase, expandLabel, onExpand)}
         </div>
-        {renderMarkdownFieldFade(affordancePhase, expandLabel, onExpand)}
       </div>
-      {renderMarkdownFieldExpandButton(affordancePhase, expandLabel, onExpand)}
     </div>
   );
 }
