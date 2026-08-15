@@ -95,14 +95,18 @@ func (m *Manager) Close() error {
 	for _, entry := range entries {
 		entry.mu.Lock()
 		process := entry.cmd.Process
+		running := entry.running
 		entry.mu.Unlock()
-		if process != nil {
+		if process != nil && running {
 			descendants, captureErr := captureManagedDescendants(process)
 			if captureErr != nil {
 				cleanupErrors = append(
 					cleanupErrors,
 					fmt.Errorf("capture descendants for background shell %s: %w", entry.id, captureErr),
 				)
+			}
+			if !entry.isRunning() {
+				continue
 			}
 			targets = append(targets, closeTarget{
 				entry:       entry,
@@ -126,10 +130,25 @@ func (m *Manager) Close() error {
 	for index := range targets {
 		targets[index].rootExited = waitForEntryDone(targets[index].entry, time.Until(graceDeadline))
 	}
+	hasDescendants := false
+	for _, target := range targets {
+		if len(target.descendants) > 0 {
+			hasDescendants = true
+			break
+		}
+	}
 	for time.Now().Before(graceDeadline) {
+		if !hasDescendants {
+			break
+		}
+		processes, snapshotErr := managedProcessSnapshot()
+		if snapshotErr != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("probe background shell descendants: %w", snapshotErr))
+			break
+		}
 		allDescendantsExited := true
 		for _, target := range targets {
-			if !managedDescendantsExited(target.descendants) {
+			if !managedDescendantsExitedIn(target.descendants, processes) {
 				allDescendantsExited = false
 				break
 			}
@@ -139,13 +158,18 @@ func (m *Manager) Close() error {
 		}
 		time.Sleep(min(10*time.Millisecond, time.Until(graceDeadline)))
 	}
-	for _, target := range targets {
-		livingDescendants, probeErr := livingManagedDescendantPIDs(target.descendants)
+	var currentProcesses map[int]managedProcessSnapshotEntry
+	var probeErr error
+	if hasDescendants {
+		currentProcesses, probeErr = managedProcessSnapshot()
 		if probeErr != nil {
-			cleanupErrors = append(
-				cleanupErrors,
-				fmt.Errorf("probe descendants for background shell %s: %w", target.entry.id, probeErr),
-			)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("probe background shell descendants: %w", probeErr))
+		}
+	}
+	for _, target := range targets {
+		var livingDescendants []managedProcessIdentity
+		if probeErr == nil {
+			livingDescendants = livingManagedDescendantPIDsIn(target.descendants, currentProcesses)
 		}
 		if len(livingDescendants) > 0 {
 			if forceErr := forceKillManagedDescendants(livingDescendants); forceErr != nil {

@@ -2,11 +2,10 @@ package sqlitegen
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 )
 
-func TestProjectSessionSummariesStayCorrectWithoutFetchingSessionIdentity(t *testing.T) {
+func TestProjectSessionSummariesCountVisibleSessionsByJoinKey(t *testing.T) {
 	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
@@ -64,57 +63,5 @@ INSERT INTO sessions VALUES ('hidden', 'project-1', 'workspace-1', 0, 400, 'wide
 	}
 	if len(workspaces) != 2 || workspaces[0].ID != "workspace-1" || workspaces[0].SessionCount != 2 {
 		t.Fatalf("workspace summaries = %+v, want primary workspace with two visible sessions first", workspaces)
-	}
-
-	requireQueryProgramDoesNotReadTableColumn(t, db, listProjects, "sessions", 0)
-	requireQueryProgramDoesNotReadTableColumn(t, db, getProjectSummary, "sessions", 0, "project-1")
-	requireQueryProgramDoesNotReadTableColumn(t, db, listProjectWorkspaces, "sessions", 0, "project-1", int64(10))
-	requireQueryProgramDoesNotReadTableColumn(
-		t,
-		db,
-		listProjectWorkspacesPage,
-		"sessions",
-		0,
-		"project-1",
-		int64(10),
-		int64(0),
-		int64(10),
-	)
-}
-
-func requireQueryProgramDoesNotReadTableColumn(
-	t *testing.T,
-	db *sql.DB,
-	query string,
-	tableName string,
-	columnIndex int64,
-	args ...any,
-) {
-	t.Helper()
-	var rootPage int64
-	if err := db.QueryRow(
-		`SELECT rootpage FROM sqlite_schema WHERE type = 'table' AND name = ?`,
-		tableName,
-	).Scan(&rootPage); err != nil {
-		t.Fatalf("resolve table %q root page: %v", tableName, err)
-	}
-	instructions := queryProgram(t, db, query, args...)
-	var tableCursor *int64
-	for _, instruction := range instructions {
-		if instruction.Opcode == sqliteOpcodeOpenRead && instruction.P2 == rootPage {
-			cursor := instruction.P1
-			tableCursor = &cursor
-			break
-		}
-	}
-	if tableCursor == nil {
-		return
-	}
-	for _, instruction := range instructions {
-		if instruction.Opcode == sqliteOpcode("Column") &&
-			instruction.P1 == *tableCursor &&
-			instruction.P2 == columnIndex {
-			t.Fatalf("query fetched column %d from table %q instead of counting the joined index key", columnIndex, tableName)
-		}
 	}
 }

@@ -9,3 +9,30 @@ type managedProcessSnapshotEntry struct {
 	parentPID int
 	startedAt uint64
 }
+
+func managedDescendantsExitedIn(
+	descendants []managedProcessIdentity,
+	processes map[int]managedProcessSnapshotEntry,
+) bool {
+	for _, descendant := range descendants {
+		current, ok := processes[descendant.pid]
+		if ok && current.startedAt == descendant.startedAt {
+			return false
+		}
+	}
+	return true
+}
+
+func livingManagedDescendantPIDsIn(
+	descendants []managedProcessIdentity,
+	processes map[int]managedProcessSnapshotEntry,
+) []managedProcessIdentity {
+	living := make([]managedProcessIdentity, 0, len(descendants))
+	for _, descendant := range descendants {
+		current, ok := processes[descendant.pid]
+		if ok && current.startedAt == descendant.startedAt {
+			living = append(living, descendant)
+		}
+	}
+	return living
+}

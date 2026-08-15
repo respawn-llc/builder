@@ -3,7 +3,6 @@
 package shell
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,11 +25,8 @@ func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
 			continue
 		}
 		process, err := readLinuxProcess(pid)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
 		if err != nil {
-			return nil, err
+			continue
 		}
 		snapshot[pid] = process
 	}

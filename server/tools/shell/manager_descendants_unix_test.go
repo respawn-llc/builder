@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"core/server/internal/testprocess"
 )
 
 const (
@@ -20,6 +22,7 @@ const (
 	descendantChildMarker   = "KENT_SHELL_DESCENDANT_CHILD"
 	descendantPIDFileEnv    = "KENT_SHELL_DESCENDANT_PID_FILE"
 	descendantIgnoreTermEnv = "KENT_SHELL_DESCENDANT_IGNORE_TERM"
+	completedHelperMarker   = "KENT_SHELL_COMPLETED_HELPER"
 )
 
 func TestManagerKillTerminatesDescendantsInIndependentProcessGroups(t *testing.T) {
@@ -46,14 +49,19 @@ func TestManagerKillTerminatesDescendantsInIndependentProcessGroups(t *testing.T
 	}
 
 	descendantPID := waitForDescendantPID(t, pidFile)
+	exited := false
 	t.Cleanup(func() {
+		if exited {
+			return
+		}
 		_ = syscall.Kill(descendantPID, syscall.SIGKILL)
 	})
 
 	if err := manager.Kill(result.SessionID); err != nil {
 		t.Fatalf("kill managed helper: %v", err)
 	}
-	waitForProcessExit(t, descendantPID, 2*time.Second)
+	testprocess.WaitForExit(t, descendantPID, 2*time.Second)
+	exited = true
 }
 
 func TestManagerCloseForceKillsIndependentDescendantsAfterGracePeriod(t *testing.T) {
@@ -88,17 +96,64 @@ func TestManagerCloseForceKillsIndependentDescendantsAfterGracePeriod(t *testing
 	}
 
 	descendantPID := waitForDescendantPID(t, pidFile)
+	exited := false
 	t.Cleanup(func() {
+		if exited {
+			return
+		}
 		_ = syscall.Kill(descendantPID, syscall.SIGKILL)
 	})
 
 	if err := manager.Close(); err != nil {
 		t.Fatalf("close manager: %v", err)
 	}
-	waitForProcessExit(t, descendantPID, 2*time.Second)
+	testprocess.WaitForExit(t, descendantPID, 2*time.Second)
+	exited = true
+}
+
+func TestManagerKillRejectsCompletedRetainedProcess(t *testing.T) {
+	manager := newShellTestManager(t, 50*time.Millisecond)
+	t.Setenv(completedHelperMarker, "1")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	result, err := manager.Start(context.Background(), ExecRequest{
+		Command:        []string{executable, "-test.run=^TestManagedProcessDescendantHelper$"},
+		DisplayCommand: "completed managed helper",
+		Workdir:        t.TempDir(),
+		YieldTime:      50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("start completed helper: %v", err)
+	}
+	if !result.MovedToBackground || !result.Running {
+		t.Fatalf("completed helper did not move to background: %+v", result)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		snapshot, snapshotErr := manager.Snapshot(result.SessionID)
+		if snapshotErr != nil {
+			t.Fatalf("snapshot completed helper: %v", snapshotErr)
+		}
+		if !snapshot.Running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for completed helper")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := manager.Kill(result.SessionID); err == nil {
+		t.Fatal("kill accepted a completed retained process")
+	}
 }
 
 func TestManagedProcessDescendantHelper(t *testing.T) {
+	if os.Getenv(completedHelperMarker) == "1" {
+		time.Sleep(200 * time.Millisecond)
+		return
+	}
 	if os.Getenv(descendantChildMarker) == "1" {
 		if os.Getenv(descendantIgnoreTermEnv) == "1" {
 			signal.Ignore(syscall.SIGTERM, os.Interrupt)
@@ -107,8 +162,12 @@ func TestManagedProcessDescendantHelper(t *testing.T) {
 		if pidFile == "" {
 			t.Fatal("descendant PID file is required")
 		}
-		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		pendingPIDFile := pidFile + ".pending"
+		if err := os.WriteFile(pendingPIDFile, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 			t.Fatalf("write descendant PID: %v", err)
+		}
+		if err := os.Rename(pendingPIDFile, pidFile); err != nil {
+			t.Fatalf("publish descendant PID: %v", err)
 		}
 		select {}
 	}
@@ -120,7 +179,7 @@ func TestManagedProcessDescendantHelper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
 	}
-	child := exec.Command(executable, "-test.run=^TestManagedProcessDescendantHelper$")
+	child := exec.CommandContext(context.Background(), executable, "-test.run=^TestManagedProcessDescendantHelper$")
 	child.Env = append(os.Environ(), descendantChildMarker+"=1")
 	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := child.Start(); err != nil {
@@ -149,20 +208,4 @@ func waitForDescendantPID(t *testing.T, path string) int {
 	}
 	t.Fatal("timed out waiting for descendant PID")
 	return 0
-}
-
-func waitForProcessExit(t *testing.T, pid int, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		err := syscall.Kill(pid, 0)
-		if errors.Is(err, syscall.ESRCH) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("probe process %d: %v", pid, err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("process %d remained alive after %v", pid, timeout)
 }
