@@ -415,7 +415,7 @@ function ProjectTasksContent({
         >
           <VirtualizedInfiniteList
             ariaLabel={t("home.prototype.projectTasksGrid")}
-            className="project-task-list-scroll h-full min-h-0 w-full min-w-0 overflow-x-hidden overflow-y-auto pb-[var(--space-2)] [scrollbar-gutter:stable] [scrollbar-width:thin]"
+            className="project-task-list-scroll h-full min-h-0 w-full min-w-0 overflow-x-hidden overflow-y-auto pb-[var(--space-2)] hide-scrollbar"
             estimateSize={() => 44}
             getItemAnchorKey={(entry) => (entry.kind === "task" ? entry.anchorKey : entry.key)}
             getItemKey={(entry) => entry.key}
