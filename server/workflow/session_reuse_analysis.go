@@ -294,13 +294,14 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 	groupEdges := a.edgesByGroup[edge.TransitionGroupID]
 	targetBranch := a.nextBranch(state.branch, edge, target, len(groupEdges))
 	if a.staticValidation {
-		requiresMergedSource := target.Kind() != NodeKindTerminal &&
-			CanonicalContextSource(edge.ContextSource).Kind != ContextSourceSelectedNode &&
-			(edge.ContextMode != ContextModeNewSession || target.Kind() != NodeKindAgent)
-		if (isRetainedTargetContextSource(edge.ContextSource) &&
-			state.staticSource.kind != staticContinuationSourceExact) ||
-			(requiresMergedSource && state.staticSource.kind == staticContinuationSourceDivergent) {
-			a.staticInvalidEdges[edge.ID] = struct{}{}
+		if target.Kind() == NodeKindAgent {
+			requiresMergedSource := CanonicalContextSource(edge.ContextSource).Kind != ContextSourceSelectedNode &&
+				edge.ContextMode != ContextModeNewSession
+			if (isRetainedTargetContextSource(edge.ContextSource) &&
+				state.staticSource.kind != staticContinuationSourceExact) ||
+				(requiresMergedSource && state.staticSource.kind == staticContinuationSourceDivergent) {
+				a.staticInvalidEdges[edge.ID] = struct{}{}
+			}
 		}
 		return reuseTransition{target: reusePathState{
 			nodeID: edge.TargetNodeID,
