@@ -15,6 +15,15 @@ func (c uiInputController) handleRuntimeCtrlC(closeSurface func() tea.Cmd) (tea.
 	if runtimeActivityAllowsOrdinaryInterrupt(m.runtimeActivityProjection) {
 		return m, sequenceCmds(closeCmd, c.interruptBusyRuntime())
 	}
+	if m.hasPendingInterrupt() && m.interruptPreActive {
+		m.exitAction = UIActionExit
+		m.forcedLocalExit = true
+		return m, sequenceCmds(closeCmd, tea.Quit)
+	}
+	if m.runtimeActivityProjection.State == clientui.RuntimeActivityStarting || m.hasLocalDispatchPending() {
+		m.deferInterruptUntilActive()
+		return m, closeCmd
+	}
 	if m.hasPendingInterrupt() {
 		m.exitAction = UIActionExit
 		m.forcedLocalExit = true
@@ -38,6 +47,13 @@ func runtimeActivityAllowsOrdinaryInterrupt(activity clientui.RuntimeActivity) b
 	default:
 		return false
 	}
+}
+
+func (m *uiModel) dispatchDeferredInterruptIfReady() tea.Cmd {
+	if !m.bindDeferredInterruptIfReady() {
+		return nil
+	}
+	return m.runtimeControlCommand(runtimeControlInterrupt, "", false, "")
 }
 
 func (c uiInputController) closeTranscriptSurfaceForRuntimeCtrlC(close func()) func() tea.Cmd {
