@@ -460,6 +460,18 @@ describe("ProjectTasksSurface", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows the standard loading boundary until initial exact counts arrive", () => {
+    fixture.countsEstablished = false;
+    fixture.countsPending = true;
+
+    renderSurface();
+
+    expect(screen.getByRole("status", { name: appI18n.t("states.loading") })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+    ).not.toBeInTheDocument();
+  });
+
   it("opens Task Detail with the containing sidebar mode", () => {
     renderSurface(createProjectTasksViewMemory(), "overlay", [task("active-1", "KNT-1", "Task")]);
 
