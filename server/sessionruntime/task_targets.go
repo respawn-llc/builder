@@ -112,6 +112,9 @@ func (a *Authority) publishWorkflowTaskPromptReadSnapshot(
 		if snapshot.Executions[index].scopeID != scope.ID() {
 			continue
 		}
+		if snapshot.Executions[index].Script != nil {
+			return
+		}
 		snapshot.Executions[index].PendingPrompts = append(
 			[]PendingPromptReference(nil),
 			pending...,
@@ -216,9 +219,13 @@ func (a *Authority) CurrentScopedTaskExecutionSnapshots(projectID string, workfl
 }
 
 func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnapshot, execution *execution) error {
-	pendingPrompts, err := execution.prompts.pendingReferences()
-	if err != nil {
-		return err
+	var pendingPrompts []PendingPromptReference
+	if _, agentExecution := execution.scope.Resource(); agentExecution {
+		var err error
+		pendingPrompts, err = execution.prompts.pendingReferences()
+		if err != nil {
+			return err
+		}
 	}
 	return appendTaskExecutionSnapshotWithPrompts(snapshots, execution, pendingPrompts)
 }

@@ -273,7 +273,7 @@ func newTestHeadlessSessionLaunch(
 			CwdRelpath:       ".",
 			EffectiveWorkdir: cfg.WorkspaceRoot,
 		}},
-	}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority)
+	}).WithAuthStateReader(authManager)
 }
 
 type fixedProjectWorkspaceBoundaryResolver struct{ root string }
@@ -486,7 +486,7 @@ func TestHeadlessSiblingWorkspacePatchUsesProjectBoundary(t *testing.T) {
 			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
-		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		}).WithAuthStateReader(authManager),
 		RuntimeAuthority: authority,
 	})
 	sessionID := mustRunPromptSessionID(t, store.Meta().SessionID)
@@ -649,7 +649,7 @@ func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsum
 			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
-		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		}).WithAuthStateReader(authManager),
 		RuntimeAuthority:       authority,
 		PromptHistory:          meta,
 		ManagedWorktreeBaseDir: managedBase,
@@ -808,7 +808,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 		PersistedSessions:        meta,
 		ProjectWorkspaceBoundary: meta,
-	}).WithRuntimeAuthority(authority)
+	})
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    sessionLauncher,
 		RuntimeAuthority: authority,
@@ -1001,7 +1001,7 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
-		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		}).WithAuthStateReader(authManager),
 		RuntimeAuthority: authority,
 		PromptHistory:    meta,
 	})

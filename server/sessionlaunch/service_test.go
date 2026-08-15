@@ -743,7 +743,7 @@ func TestServicePlanSessionDefaultRoleClearDoesNotRequireAuthState(t *testing.T)
 	}
 }
 
-func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testing.T) {
+func TestServicePlanSessionCanProjectDefaultOverInvalidPersistedRoleWithoutPersisting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
@@ -780,12 +780,12 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	if err != nil {
 		t.Fatalf("reopen session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
-		t.Fatalf("continuation = %+v, want cleared agent role", got)
+	if got := reopened.Meta().Continuation; got == nil || got.AgentRole == nil || *got.AgentRole != "worker" {
+		t.Fatalf("continuation = %+v, want unchanged persisted Agent role", got)
 	}
 }
 
-func TestServicePlanSessionExplicitCurrentAgentRefreshesContinuationEndpoint(t *testing.T) {
+func TestServicePlanSessionExplicitCurrentAgentProjectsCurrentEndpointWithoutPersisting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
@@ -817,12 +817,12 @@ func TestServicePlanSessionExplicitCurrentAgentRefreshesContinuationEndpoint(t *
 		t.Fatalf("reopen session: %v", err)
 	}
 	continuation := reopened.Meta().Continuation
-	if continuation == nil || continuation.OpenAIBaseURL == nil || *continuation.OpenAIBaseURL != cfg.Settings.OpenAIBaseURL {
-		t.Fatalf("persisted continuation = %+v, want refreshed base URL %q", continuation, cfg.Settings.OpenAIBaseURL)
+	if continuation == nil || continuation.OpenAIBaseURL == nil || *continuation.OpenAIBaseURL != "https://old.example/v1" {
+		t.Fatalf("persisted continuation = %+v, want unchanged previous base URL", continuation)
 	}
 }
 
-func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *testing.T) {
+func TestServicePlanSessionAgentSelectionProjectsCompletePreparedBaselineWithoutPersisting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
@@ -867,30 +867,39 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 		t.Fatalf("seed previous Agent base URL: %v", err)
 	}
 
-	if _, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+	selectedPlan, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
 		ClientRequestID: "select-worker",
 		Mode:            serverapi.SessionLaunchModeInteractive,
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 		Overrides:       serverapi.RunPromptOverrides{AgentRole: &worker},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("PlanSession select worker: %v", err)
 	}
+	if strings.TrimSpace(selectedPlan.Plan.ActiveSettings.ThinkingLevel) != "high" ||
+		selectedPlan.Plan.ActiveSettings.Reviewer.Frequency != "all" ||
+		!selectedPlan.Plan.ActiveSettings.PriorityRequestMode ||
+		selectedPlan.Plan.ActiveSettings.OpenAIBaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("selected plan active settings = %+v, want prepared worker baseline", selectedPlan.Plan.ActiveSettings)
+	}
 	assertSessionLaunchChatSettings(t, store.Dir(), session.ChatSettingsState{
-		Agent: "worker",
+		Agent: config.DefaultSubagentRole,
 		Settings: &session.ChatSettingsOverrides{
-			Supervisor:     sessionLaunchStringPtr("all"),
-			Thinking:       sessionLaunchStringPtr("high"),
-			Fast:           textutil.Value(true),
-			Questions:      textutil.Value(true),
-			AutoCompaction: textutil.Value(true),
+			Supervisor:     sessionLaunchStringPtr("off"),
+			Thinking:       sessionLaunchStringPtr("low"),
+			Fast:           textutil.Value(false),
+			Questions:      textutil.Value(false),
+			AutoCompaction: textutil.Value(false),
 		},
 	})
 	selected, err := session.Open(store.Dir(), serviceTestPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("reopen selected Agent Session: %v", err)
 	}
-	if continuation := selected.Meta().Continuation; continuation == nil || continuation.OpenAIBaseURL != nil {
-		t.Fatalf("selected Agent continuation = %+v, want previous base URL cleared", continuation)
+	if continuation := selected.Meta().Continuation; continuation == nil ||
+		continuation.OpenAIBaseURL == nil ||
+		*continuation.OpenAIBaseURL != "https://previous-agent.example/v1" {
+		t.Fatalf("selected Agent continuation = %+v, want unchanged previous base URL", continuation)
 	}
 
 	second, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
@@ -901,15 +910,15 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 	if err != nil {
 		t.Fatalf("PlanSession observe worker: %v", err)
 	}
-	if strings.TrimSpace(second.Plan.ActiveSettings.ThinkingLevel) != "high" ||
-		second.Plan.ActiveSettings.Reviewer.Frequency != "all" ||
-		!second.Plan.ActiveSettings.PriorityRequestMode ||
-		second.Plan.ActiveSettings.OpenAIBaseURL != "https://api.openai.com/v1" {
-		t.Fatalf("second plan active settings = %+v, want selected worker baseline", second.Plan.ActiveSettings)
+	if strings.TrimSpace(second.Plan.ActiveSettings.ThinkingLevel) != "low" ||
+		second.Plan.ActiveSettings.Reviewer.Frequency != "off" ||
+		second.Plan.ActiveSettings.PriorityRequestMode ||
+		second.Plan.ActiveSettings.OpenAIBaseURL != "https://previous-agent.example/v1" {
+		t.Fatalf("second plan active settings = %+v, want unchanged persisted baseline", second.Plan.ActiveSettings)
 	}
 }
 
-func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t *testing.T) {
+func TestServicePlanSessionProjectsUnavailableAgentWithCompleteDefaultBaselineWithoutPersisting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
@@ -951,21 +960,25 @@ func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t 
 		t.Fatalf("PlanSession repair removed Agent: %v", err)
 	}
 	assertSessionLaunchChatSettings(t, store.Dir(), session.ChatSettingsState{
-		Agent: config.DefaultSubagentRole,
+		Agent: "removed",
 		Settings: &session.ChatSettingsOverrides{
-			Supervisor:     sessionLaunchStringPtr("edits"),
-			Thinking:       sessionLaunchStringPtr("medium"),
-			Fast:           textutil.Value(false),
-			Questions:      textutil.Value(true),
-			AutoCompaction: textutil.Value(true),
+			Supervisor:     sessionLaunchStringPtr("all"),
+			Thinking:       sessionLaunchStringPtr("high"),
+			Fast:           textutil.Value(true),
+			Questions:      textutil.Value(false),
+			AutoCompaction: textutil.Value(false),
 		},
 	})
 	reopened, err := session.Open(store.Dir(), serviceTestPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("reopen repaired Agent Session: %v", err)
 	}
-	if continuation := reopened.Meta().Continuation; continuation != nil {
-		t.Fatalf("repaired Agent continuation = %+v, want default Agent inheriting current config", continuation)
+	if continuation := reopened.Meta().Continuation; continuation == nil ||
+		continuation.AgentRole == nil ||
+		*continuation.AgentRole != removed ||
+		continuation.OpenAIBaseURL == nil ||
+		*continuation.OpenAIBaseURL != "https://removed-agent.example/v1" {
+		t.Fatalf("unavailable Agent continuation = %+v, want unchanged persisted selection", continuation)
 	}
 	if repaired.Plan.ActiveSettings.OpenAIBaseURL != "https://api.openai.com/v1" {
 		t.Fatalf("repaired Agent base URL = %q, want current config", repaired.Plan.ActiveSettings.OpenAIBaseURL)
