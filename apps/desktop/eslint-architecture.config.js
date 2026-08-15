@@ -28,10 +28,7 @@ export const architectureElements = Object.freeze([
   architectureElement(architectureOwners.API, "src/api"),
   architectureElement(architectureOwners.TEST_SUPPORT, "src/test-support"),
   architectureElement(architectureOwners.UI_KIT, "packages/ui-kit"),
-  architectureElement(
-    architectureOwners.SERVER_API_CONTRACT,
-    "packages/server-api-contract",
-  ),
+  architectureElement(architectureOwners.SERVER_API_CONTRACT, "packages/server-api-contract"),
   architectureElement(architectureOwners.NATIVE_PACKAGE, "packages/*", "name"),
   architectureElement(architectureOwners.I18N, "src/i18n"),
   architectureElement(architectureOwners.VENDOR, "src/vendor"),
@@ -66,8 +63,7 @@ export const architectureDependencyNodes = Object.freeze(["import", "export", "d
 
 // Protobuf-ES output is regenerated and contains no handwritten ownership decisions.
 // Its handwritten package entrypoint and policy modules remain fail-closed below.
-export const generatedServerApiContractFiles =
-  "packages/server-api-contract/src/gen/**/*.ts";
+export const generatedServerApiContractFiles = "packages/server-api-contract/src/gen/**/*.ts";
 
 export const architectureAdditionalDependencyNodes = Object.freeze(
   ["mock", "doMock", "unmock", "doUnmock", "importActual", "importMock"].map((method) =>
@@ -97,11 +93,7 @@ const dependencyTargets = {
   SHARED: dependencyTarget(architectureOwners.SHARED, "@/shared/*"),
   TOOLING_TYPES: dependencyTarget(architectureOwners.TOOLING, "@/types"),
   UI: dependencyTarget(architectureOwners.UI, "@/ui"),
-  UI_KIT: dependencyTarget(
-    architectureOwners.UI_KIT,
-    "@app/ui-kit",
-    architectureEntrypoints.UI_KIT,
-  ),
+  UI_KIT: dependencyTarget(architectureOwners.UI_KIT, "@app/ui-kit", architectureEntrypoints.UI_KIT),
   VENDOR_ELK_API: dependencyTarget(
     architectureOwners.VENDOR,
     "elkjs/lib/elk-api",

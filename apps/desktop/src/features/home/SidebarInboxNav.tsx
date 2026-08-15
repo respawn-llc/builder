@@ -17,7 +17,10 @@ type TaskDetailDestination = Extract<SidebarDestination, { kind: "taskDetail" }>
  * stays mounted beneath the overlay sidebar) so navigation always reflects the
  * current inbox, including after the open task is resolved and drops out.
  */
-export function SidebarInboxNav({ destination, navigator }: Readonly<{ destination: TaskDetailDestination; navigator: SidebarPageNavigator }>) {
+export function SidebarInboxNav({
+  destination,
+  navigator,
+}: Readonly<{ destination: TaskDetailDestination; navigator: SidebarPageNavigator }>) {
   const { t } = useTranslation();
   const attention = useSidebarGlobalAttentionPages();
   // Remembers the open task's last position so Next still works after it is

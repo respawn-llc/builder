@@ -30,8 +30,10 @@ desktop mode="":
     node apps/scripts/check-typescript-policy.mjs
     node --test apps/scripts/check-eslint-architecture.test.mjs
     if [ "{{mode}}" = "--dry-run" ]; then
+        pnpm --dir apps exec prettier --check .
         pnpm --dir apps/desktop exec eslint .
     elif [ -z "{{mode}}" ]; then
+        pnpm --dir apps exec prettier --write .
         pnpm --dir apps/desktop exec eslint . --fix
     else
         echo "Usage: just lint desktop [--dry-run]" >&2

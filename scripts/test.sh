@@ -73,10 +73,7 @@ done
 case "$timeout_seconds" in
 '' | *[!0-9]*) echo "--timeout must be a positive integer" >&2; exit 2 ;;
 esac
-[ "$timeout_seconds" -gt 0 ] && [ "$timeout_seconds" -le 300 ] || {
-	echo "--timeout must be a positive integer from 1 through 300" >&2
-	exit 2
-}
+[ "$timeout_seconds" -gt 0 ] || { echo "--timeout must be a positive integer" >&2; exit 2; }
 
 if [ -z "$workers" ]; then
 	workers=4

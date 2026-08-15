@@ -219,9 +219,7 @@ describe("ApiClient task search", () => {
       new FakeRpcTransport([{ method: "workflow.task.search", result: response }]),
     );
 
-    await expect(client.searchTasks({ ...literalInput, mode: "fts5" })).rejects.toBeInstanceOf(
-      ContractError,
-    );
+    await expect(client.searchTasks({ ...literalInput, mode: "fts5" })).rejects.toBeInstanceOf(ContractError);
   });
 
   it.each([

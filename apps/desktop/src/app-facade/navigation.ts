@@ -169,11 +169,7 @@ export function useAppNavigation(): AppNavigation {
   );
 }
 
-function isHomeLocation(
-  pathname: string,
-  searchStr: string,
-  projectID: string | null,
-): boolean {
+function isHomeLocation(pathname: string, searchStr: string, projectID: string | null): boolean {
   return pathname === "/" && searchValue(searchStr, "projectId") === projectID;
 }
 

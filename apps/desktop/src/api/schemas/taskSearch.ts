@@ -57,11 +57,7 @@ const commentSourceSchema = z
     commentID: value.comment_id,
   }));
 
-const literalSourceSchema = z.union([
-  shortIDSourceSchema,
-  titleOrBodySourceSchema,
-  commentSourceSchema,
-]);
+const literalSourceSchema = z.union([shortIDSourceSchema, titleOrBodySourceSchema, commentSourceSchema]);
 const fts5SourceSchema = z.union([titleOrBodySourceSchema, commentSourceSchema]);
 
 const literalHitSchema: z.ZodType<TaskSearchLiteralHit> = z

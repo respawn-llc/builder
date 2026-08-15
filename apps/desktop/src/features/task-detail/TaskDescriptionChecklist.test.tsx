@@ -296,9 +296,7 @@ describe("Task description checklist", () => {
         geometry.notify();
       });
 
-      expect(
-        screen.queryByRole("button", { name: appI18n.t("app.expand") }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: appI18n.t("app.expand") })).not.toBeInTheDocument();
     } finally {
       geometry.restore();
     }
@@ -321,18 +319,14 @@ describe("Task description checklist", () => {
       act(() => {
         geometry.notify();
       });
-      expect(
-        screen.queryByRole("button", { name: appI18n.t("app.expand") }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: appI18n.t("app.expand") })).not.toBeInTheDocument();
 
       geometry.setGeometry(viewport, { clientHeight: 100, scrollHeight: 200 });
       act(() => {
         geometry.notify();
       });
 
-      expect(
-        await screen.findByRole("button", { name: appI18n.t("app.expand") }),
-      ).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: appI18n.t("app.expand") })).toBeInTheDocument();
     } finally {
       geometry.restore();
     }
@@ -359,9 +353,7 @@ describe("Task description checklist", () => {
 
       fireEvent.click(screen.getByRole("button", { name: appI18n.t("app.expand") }));
       await waitFor(() => {
-        expect(
-          screen.queryByRole("button", { name: appI18n.t("app.expand") }),
-        ).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: appI18n.t("app.expand") })).not.toBeInTheDocument();
       });
 
       geometry.setGeometry(viewport, { clientHeight: 100, scrollHeight: 300 });
@@ -369,9 +361,7 @@ describe("Task description checklist", () => {
         geometry.notify();
       });
 
-      expect(
-        screen.queryByRole("button", { name: appI18n.t("app.expand") }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: appI18n.t("app.expand") })).not.toBeInTheDocument();
     } finally {
       geometry.restore();
     }
@@ -398,9 +388,7 @@ describe("Task description checklist", () => {
         geometry.notify();
       });
 
-      expect(
-        screen.queryByRole("button", { name: appI18n.t("app.expand") }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: appI18n.t("app.expand") })).not.toBeInTheDocument();
     } finally {
       geometry.restore();
     }
