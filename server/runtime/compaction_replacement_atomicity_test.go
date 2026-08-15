@@ -11,11 +11,14 @@ import (
 
 func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMessage(t *testing.T) {
 	t.Parallel()
-	store := mustCreateTestSession(t)
+	store, globalConfigDir := mustCreateBaseMetaContextTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+		Model:           "gpt-5",
+		GlobalConfigDir: globalConfigDir,
+	})
 	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set active goal: %v", err)
 	}
