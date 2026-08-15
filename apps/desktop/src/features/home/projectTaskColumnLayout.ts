@@ -39,16 +39,19 @@ export function useProjectTaskColumnLayout(data: ProjectTaskListData): Readonly<
 }> {
   const measured = measureProjectTaskColumns(data);
   const [layout, setLayout] = useState(initialProjectTaskColumnLayout);
-  const retainRenderedWidths = useCallback((widths: ProjectTaskRenderedColumnWidths) => {
-    setLayout((current) => {
-      const expanded = {
-        ...current,
-        labelsPx: Math.max(current.labelsPx, widths.labelsPx),
-        workflowPx: Math.max(current.workflowPx, widths.workflowPx),
-      };
-      return projectTaskColumnLayoutsEqual(current, expanded) ? current : expanded;
-    });
-  }, []);
+  const retainRenderedWidths = useCallback(
+    (widths: ProjectTaskRenderedColumnWidths) => {
+      setLayout((current) => {
+        const expanded = {
+          ...current,
+          labelsPx: Math.max(current.labelsPx, widths.labelsPx),
+          workflowPx: Math.max(current.workflowPx, widths.workflowPx),
+        };
+        return projectTaskColumnLayoutsEqual(current, expanded) ? current : expanded;
+      });
+    },
+    [setLayout],
+  );
   const expanded = expandProjectTaskColumnLayout(layout, measured);
   if (!projectTaskColumnLayoutsEqual(layout, expanded)) {
     setLayout(expanded);

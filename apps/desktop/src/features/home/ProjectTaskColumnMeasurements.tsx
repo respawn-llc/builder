@@ -3,7 +3,7 @@ import { useLayoutEffect, useMemo, useRef } from "react";
 import type { TaskListItem } from "@/api";
 import type { ProjectTaskRenderedColumnWidths } from "./projectTaskColumnLayout";
 import { projectTaskGroups, type ProjectTaskListData } from "./projectTaskListData";
-import { projectTaskLabelItems } from "./ProjectTaskLabelsCell";
+import { projectTaskLabelItems } from "./projectTaskLabelItems";
 
 type ProjectTaskMeasurementEntry = Readonly<{
   key: string;
@@ -39,10 +39,17 @@ export function ProjectTaskColumnMeasurements({
         workflowPx: maximumMeasuredWidth(workflowNames.current.values()),
       });
     };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    for (const element of labelRows.current.values()) {
+      observer?.observe(element);
+    }
+    for (const element of workflowNames.current.values()) {
+      observer?.observe(element);
+    }
     measure();
-    void document.fonts?.ready.then(measure);
     return () => {
       active = false;
+      observer?.disconnect();
     };
   }, [entries, onMeasure]);
 
