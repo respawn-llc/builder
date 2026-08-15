@@ -355,7 +355,7 @@ func newRuntimeControlCompactionFixture(t *testing.T, options ...session.StoreOp
 	trimmed := 1
 	client := &runtimeControlFakeClient{
 		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{InputTokens: 330000, WindowTokens: 372000}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{InputTokens: 327000, WindowTokens: 372000}},
 			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 1000}},
 		},
 		compactionResponses: []llm.CompactionResponse{{

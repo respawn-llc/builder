@@ -11,7 +11,6 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
-	"core/shared/textutil"
 )
 
 func TestFreshHeadlessRequestMatchesPostCompactionMetaOrder(t *testing.T) {
@@ -73,81 +72,13 @@ func TestFreshHeadlessWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T
 		Config{Model: "gpt-5", HeadlessMode: true},
 	)
 	assertFreshRequestMatchesCompactionProjection(t, engine, []llm.MessageType{
-		llm.MessageTypeHeadlessMode,
 		llm.MessageTypeSkills,
 		llm.MessageTypeAgentsMD,
 		llm.MessageTypeWorkflowMode,
 		llm.MessageTypeEnvironment,
 	})
-	if !store.Meta().HeadlessActive {
-		t.Fatal("fresh headless Workflow request did not persist Headless mode")
-	}
-}
-
-func TestWorkflowHeadlessStateRetriesPersistenceAfterCommittedContext(t *testing.T) {
-	previousHeadlessPrompt := prompts.HeadlessModePrompt
-	prompts.HeadlessModePrompt = "headless mode instructions"
-	t.Cleanup(func() {
-		prompts.HeadlessModePrompt = previousHeadlessPrompt
-	})
-
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
-	engine := mustNewWorkflowTestEngine(
-		t,
-		store,
-		&fakeClient{},
-		&workflowruntime.CurrentNodeExecutionConfig{
-			ScopeID:        runtimeids.NewExecutionScopeID(),
-			CompletionMode: workflowruntime.CompletionModeTool,
-			Controller:     &externallyCompletedWorkflowController{},
-			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
-		},
-		Config{Model: "gpt-5", HeadlessMode: true},
-	)
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityRuntimeContext,
-		steeringMessageEventDefault,
-		true,
-		[]llm.Message{{
-			Role:        llm.RoleDeveloper,
-			MessageType: textutil.Value(llm.MessageTypeHeadlessMode),
-			Content:     textutil.Value("headless mode instructions"),
-		}},
-	)); err != nil {
-		t.Fatalf("persist committed headless context: %v", err)
-	}
-	engine.baseMetaInjected = true
-
-	persistErr := errors.New("headless state persistence failed")
-	gate.FailNext(persistErr)
-	if err := engine.ensureMetaContextForRequest(context.Background(), "first-retry"); !errors.Is(err, persistErr) {
-		t.Fatalf("first headless-state reconciliation error = %v, want %v", err, persistErr)
-	}
-	reopened := mustOpenTestSession(t, store.Dir())
-	if reopened.Meta().HeadlessActive {
-		t.Fatal("headless state became durable after injected persistence failure")
-	}
-
-	if err := engine.ensureMetaContextForRequest(context.Background(), "second-retry"); err != nil {
-		t.Fatalf("retry headless-state reconciliation: %v", err)
-	}
-	if !store.Meta().HeadlessActive {
-		t.Fatal("headless state remained stale after retry")
-	}
-	reopened = mustOpenTestSession(t, store.Dir())
-	if !reopened.Meta().HeadlessActive {
-		t.Fatal("headless state remained stale on disk after retry")
-	}
-	headlessCount := 0
-	for _, message := range engine.transcriptRuntimeState().SnapshotMessages() {
-		if message.MessageType != nil && *message.MessageType == llm.MessageTypeHeadlessMode {
-			headlessCount++
-		}
-	}
-	if headlessCount != 1 {
-		t.Fatalf("headless context count after persistence retry = %d, want 1", headlessCount)
+	if store.Meta().HeadlessActive {
+		t.Fatal("Workflow request persisted unrelated Headless mode")
 	}
 }
 

@@ -46,17 +46,7 @@ func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error
 		return e.steerMetaContextBuildResult(stepID, metaResult)
 	}
 	if e.workflowPromptActive() {
-		meta := e.store.Meta()
-		headlessChanged := e.cfg.HeadlessMode != meta.HeadlessActive
-		if headlessChanged {
-			if e.cfg.HeadlessMode {
-				options.IncludeHeadless = true
-			} else {
-				options.IncludeHeadlessExit = true
-			}
-		}
 		var committedErr error
-		var headlessPersistErr error
 		applyErr := e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerTaskDelivery, workflowMetaContextDeliveryConsume, options, func(resolved metaContextBuildOptions, _ bool) error {
 			receipt, err := steer(resolved)
 			if receipt.Committed {
@@ -70,10 +60,7 @@ func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error
 			e.baseMetaInjected = true
 			return nil
 		})
-		if headlessChanged && applyErr == nil {
-			headlessPersistErr = e.store.SetHeadlessActive(e.cfg.HeadlessMode)
-		}
-		return errors.Join(applyErr, committedErr, headlessPersistErr)
+		return errors.Join(applyErr, committedErr)
 	}
 	meta := e.store.Meta()
 	if e.cfg.HeadlessMode != meta.HeadlessActive {
@@ -431,8 +418,11 @@ func (e *Engine) steerMetaContextBuildResult(stepID string, metaResult metaConte
 // so repeated `--continue` launches do not duplicate the enter prompt.
 // Interactive is the default, so no reminder is injected while both are false.
 func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
+	if e.workflowPromptActive() {
+		return nil
+	}
 	if e.cfg.HeadlessMode == e.store.Meta().HeadlessActive {
-		return e.store.SetHeadlessActive(e.cfg.HeadlessMode)
+		return nil
 	}
 	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
 	if e.cfg.HeadlessMode {
