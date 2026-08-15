@@ -357,7 +357,7 @@ func TestAssistantTranscriptRowsRespectPhaseVisibility(t *testing.T) {
 		phase      llm.MessagePhase
 		visibility transcript.EntryVisibility
 	}{
-		{llm.MessagePhaseCommentary, transcript.EntryVisibilityDetail},
+		{llm.MessagePhaseCommentary, transcript.EntryVisibilityOngoing},
 		{llm.MessagePhaseFinal, transcript.EntryVisibilityOngoing},
 	}
 

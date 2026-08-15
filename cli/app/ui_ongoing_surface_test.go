@@ -171,6 +171,41 @@ func TestOngoingTranscriptEventReachesNativeSurface(t *testing.T) {
 	}
 }
 
+func TestOngoingTranscriptHydrationRestoresAssistantCommentary(t *testing.T) {
+	var out bytes.Buffer
+	surface := ongoing.NewSurface(&out)
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIOngoingSurface(surface),
+	), 40, 10)
+	m.ongoingTranscript = newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
+
+	hydration := ongoingHydrationMessage(1)
+	payload := hydration.Payload().(clientui.TranscriptHydration)
+	payload.CommittedRows = []clientui.TranscriptCommittedRow{{
+		Visibility: transcript.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowAssistant,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
+		Assistant: &clientui.TranscriptAssistantRow{
+			StepID: ongoingTestStepID(),
+			Text:   "restored assistant commentary",
+			Phase:  transcript.AssistantPhaseCommentary,
+		},
+	}}
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(payload))
+	_, cmd := m.Update(ongoingTranscriptEvent{
+		Kind:    ongoingTranscriptEventMessage,
+		Message: hydration,
+	})
+
+	if cmd != nil {
+		_ = cmd()
+	}
+	if got := out.String(); !strings.Contains(got, "restored assistant commentary") {
+		t.Fatalf("native surface output = %q, want restored commentary", got)
+	}
+}
+
 func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing.T) {
 	var out bytes.Buffer
 	surface := ongoing.NewSurface(&out)
