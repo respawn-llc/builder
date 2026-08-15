@@ -141,25 +141,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		if m.ask.activeDelivery != nil &&
-			m.ask.activeDelivery.continuation == promptAnswerDeliveryContinuationRuntimeCtrlC {
-			return m, nil
-		}
-		c.cancelActiveDelivery()
-		currentToken := m.ask.currentToken
-		accepted, hasNext, answerCmd := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
-		runtimeCtrlCCmd := tea.Cmd(nil)
-		if m.ask.activeDelivery != nil {
-			m.ask.activeDelivery.continuation = promptAnswerDeliveryContinuationRuntimeCtrlC
-		} else if accepted && (m.ask.currentToken != currentToken || !m.ask.hasCurrent()) && m.blocksRuntimeInput() {
-			_, runtimeCtrlCCmd = m.inputController().handleRuntimeCtrlC(nil)
-		}
-		if hasNext {
-			m.activity = uiActivityQuestion
-		} else {
-			m.activity = uiActivityInterrupted
-		}
-		return m, tea.Batch(answerCmd, runtimeCtrlCCmd, m.interruptedStatusNoticeCmd())
+		return c.handleCtrlC()
 	case tea.KeyEsc:
 		c.cancelActiveDelivery()
 		_, hasNext, answerCmd := c.answer(clientui.PromptAnswer{}, errors.New("question canceled"))
@@ -329,6 +311,29 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+}
+
+func (c uiAskController) handleCtrlC() (tea.Model, tea.Cmd) {
+	m := c.model
+	if m.ask.activeDelivery != nil &&
+		m.ask.activeDelivery.continuation == promptAnswerDeliveryContinuationRuntimeCtrlC {
+		return m, nil
+	}
+	c.cancelActiveDelivery()
+	currentToken := m.ask.currentToken
+	accepted, hasNext, answerCmd := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
+	runtimeCtrlCCmd := tea.Cmd(nil)
+	if m.ask.activeDelivery != nil {
+		m.ask.activeDelivery.continuation = promptAnswerDeliveryContinuationRuntimeCtrlC
+	} else if accepted && (m.ask.currentToken != currentToken || !m.ask.hasCurrent()) && m.blocksRuntimeInput() {
+		_, runtimeCtrlCCmd = m.inputController().handleRuntimeCtrlC(nil)
+	}
+	if hasNext {
+		m.activity = uiActivityQuestion
+	} else {
+		m.activity = uiActivityInterrupted
+	}
+	return m, tea.Batch(answerCmd, runtimeCtrlCCmd, m.interruptedStatusNoticeCmd())
 }
 
 func (c uiAskController) renderPriorityPromptLines() []askPromptLine {

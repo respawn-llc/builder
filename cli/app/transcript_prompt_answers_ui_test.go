@@ -481,6 +481,88 @@ func TestPromptCtrlCContinuationWaitsForPromptActivityToClear(t *testing.T) {
 	}
 }
 
+func TestPromptCtrlCContinuationCancelsSameStepSuccessorBeforeRuntimeInterrupt(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	control := newRecordingPromptControl()
+	runtimeClient := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(runtimeClient)
+	model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
+	model.sessionID = ongoingTestSessionID().String()
+	awaitingPrompt := runtimeTupleTestRunningActivity()
+	awaitingPrompt.State = clientui.RuntimeActivityAwaitingPrompt
+	if err := model.applyRuntimeActivityProjection(awaitingPrompt); err != nil {
+		t.Fatalf("apply awaiting-prompt runtime activity: %v", err)
+	}
+	origin := testQuestionPrompt("ask-origin", "Proceed?", "Yes", "No")
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(origin)})
+
+	next, originCancellation := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(*uiModel)
+	originResult := originCancellation().(promptAnswerDeliveryResultMsg)
+	resolved := cloneTranscriptPromptForAsk(origin)
+	resolved.Status = clientui.TranscriptPromptStatusResolved
+	continuation := model.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(resolved)),
+		runtimeTupleMergeResult{},
+	)
+	if continuation == nil {
+		t.Fatal("origin resolution did not preserve global Ctrl+C continuation")
+	}
+	if stale := model.askController().applyDeliveryResult(originResult); stale != nil {
+		t.Fatal("origin delivery result scheduled a duplicate continuation")
+	}
+	model = updateUIModel(t, model, continuation())
+
+	successor := testQuestionPrompt("ask-successor", "Anything else?", "Yes", "No")
+	next, successorCommand := model.Update(askEventMsg{event: model.transcriptPromptEvent(successor)})
+	model = next.(*uiModel)
+	var successorContinuation promptCtrlCContinuationMsg
+	for _, message := range collectCmdMessages(t, successorCommand) {
+		if candidate, ok := message.(promptCtrlCContinuationMsg); ok {
+			successorContinuation = candidate
+		}
+	}
+	if successorContinuation.key.promptID == "" {
+		t.Fatal("same-Step successor did not release the pending Ctrl+C continuation")
+	}
+	next, successorCancellation := model.Update(successorContinuation)
+	model = next.(*uiModel)
+	if successorCancellation == nil {
+		t.Fatal("pending Ctrl+C continuation did not cancel the same-Step successor")
+	}
+	successorResult := successorCancellation().(promptAnswerDeliveryResultMsg)
+	next, successorResolvedContinuation := model.Update(successorResult)
+	model = next.(*uiModel)
+	if successorResolvedContinuation == nil {
+		t.Fatal("successor cancellation did not retain global Ctrl+C continuation")
+	}
+	model = updateUIModel(t, model, successorResolvedContinuation())
+	if runtimeClient.interruptCalls != 0 || model.exitAction == UIActionExit {
+		t.Fatal("successor cancellation routed global Ctrl+C while prompt activity was still stale")
+	}
+
+	running := awaitingPrompt
+	running.State = clientui.RuntimeActivityRunning
+	command := model.applyTranscriptRuntimeReadModelUpdate(runtimeTupleMergeResult{
+		decision: runtimeTupleApply,
+		project:  true,
+		view:     clientui.RuntimeMainView{Activity: running},
+	})
+	next, interruptCommand := model.Update(command())
+	model = next.(*uiModel)
+	model = updateUIModel(t, model, interruptCommand())
+	if runtimeClient.interruptCalls != 1 {
+		t.Fatalf("runtime interrupt calls = %d, want one after successor cancellation", runtimeClient.interruptCalls)
+	}
+
+	for index := 0; index < 2; index++ {
+		request := requirePromptAnswerBatchRequest(t, control)
+		if request.Entries[0].Declined == nil {
+			t.Fatalf("prompt cancellation %d = %+v, want declined", index, request)
+		}
+	}
+}
+
 func TestStalePromptCtrlCContinuationDoesNotClearNewerPendingContinuation(t *testing.T) {
 	runtimeClient := &runtimeControlFakeClient{}
 	model := newProjectedTestUIModel(runtimeClient)

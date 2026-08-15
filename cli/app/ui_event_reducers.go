@@ -14,6 +14,7 @@ type promptCtrlCContinuationDisposition uint8
 const (
 	promptCtrlCContinuationDiscard promptCtrlCContinuationDisposition = iota
 	promptCtrlCContinuationWait
+	promptCtrlCContinuationCancelPrompt
 	promptCtrlCContinuationRoute
 )
 
@@ -21,6 +22,7 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case askEventMsg:
 		cmd := m.askController().acceptEvent(msg.event)
+		cmd = tea.Batch(cmd, m.releasePendingPromptCtrlCContinuation())
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
 	case questionRenderResultMsg:
@@ -45,6 +47,12 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 			m.ask.pendingCtrlCContinuation = &key
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, nil)
+		case promptCtrlCContinuationCancelPrompt:
+			m.clearPendingPromptCtrlCContinuation(msg.key)
+			next, cmd := m.askController().handleCtrlC()
+			nextModel := next.(*uiModel)
+			nextModel.layout().syncViewport()
+			return handledUIFeatureUpdate(nextModel, cmd)
 		case promptCtrlCContinuationRoute:
 			m.clearPendingPromptCtrlCContinuation(msg.key)
 		default:
@@ -70,6 +78,9 @@ func (m *uiModel) promptCtrlCContinuationDisposition(key transcriptPromptKey) pr
 		if activity.ActiveStep.StepID != key.stepID {
 			return promptCtrlCContinuationDiscard
 		}
+		if m.activePromptContinuesCtrlC(key) {
+			return promptCtrlCContinuationCancelPrompt
+		}
 		if activity.State == clientui.RuntimeActivityAwaitingPrompt {
 			return promptCtrlCContinuationWait
 		}
@@ -79,6 +90,19 @@ func (m *uiModel) promptCtrlCContinuationDisposition(key transcriptPromptKey) pr
 		return promptCtrlCContinuationDiscard
 	}
 	return promptCtrlCContinuationRoute
+}
+
+func (m *uiModel) activePromptContinuesCtrlC(key transcriptPromptKey) bool {
+	if m == nil || !m.ask.hasCurrent() {
+		return false
+	}
+	activeKey, err := newTranscriptPromptKey(m.ask.current.prompt)
+	if err != nil {
+		return false
+	}
+	return activeKey.sessionID == key.sessionID &&
+		activeKey.stepID == key.stepID &&
+		activeKey.promptID != key.promptID
 }
 
 func (m *uiModel) clearPendingPromptCtrlCContinuation(key transcriptPromptKey) {
@@ -101,7 +125,7 @@ func (m *uiModel) releasePendingPromptCtrlCContinuation() tea.Cmd {
 		return nil
 	case promptCtrlCContinuationWait:
 		return nil
-	case promptCtrlCContinuationRoute:
+	case promptCtrlCContinuationCancelPrompt, promptCtrlCContinuationRoute:
 		m.ask.pendingCtrlCContinuation = nil
 		return func() tea.Msg { return promptCtrlCContinuationMsg{key: key} }
 	default:
