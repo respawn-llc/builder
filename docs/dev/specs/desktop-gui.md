@@ -42,7 +42,6 @@
 - Selecting an Inbox item leaves Inbox visible and opens Task Detail as an overlay. It does not replace Home content or navigate away from Home.
 - An Inbox item shows at most five lines of its detail message before truncation. Selecting the item still opens its complete Task Detail.
 - Home opens sidebars by shifting content only when the measured main pane can retain at least 400 pixels after reserving the sidebar's preferred width, and as an overlay otherwise. A shifted sidebar cannot be widened far enough to reduce the main pane below 400 pixels. Any sidebar closes when its available width falls below 400 pixels. An open sidebar keeps its chosen mode until it closes.
-- The sticky Project workspace header shows Project name and key above the three tabs.
 - The Project workspace Workflow strip uses infinite scroll. The visible content of each Workflow chip is its name. Selecting one opens that Project's Workflow board.
 - `Manage workflows` is available from `Link workflow` for reusable Workflows, including those not linked to the selected Project. Project Task and board destinations remain Project-scoped.
 - Board actions remain in board chrome. Workflow selection uses a click-controlled non-modal popover that closes after selection or outside activation. Desktop has no default browser-style hover effects beyond explicitly designed interaction feedback.

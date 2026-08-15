@@ -56,16 +56,6 @@ vi.mock("./ProjectTasksSurface", () => ({
 
 beforeAll(async () => initializeI18n());
 
-it("shows the selected Project identity above its workspace", () => {
-  render(<HomeProjectContent projectID="project-1" sessionsVisible={false} sidebarMode="shift" />);
-
-  expect(screen.getByRole("heading", { name: "Kent" })).toBeInTheDocument();
-  expect(screen.getByText("KNT")).toBeInTheDocument();
-  expect(
-    screen.queryByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") }),
-  ).not.toBeInTheDocument();
-});
-
 it("restores Task-grid pixels after visiting another Project tab", () => {
   render(<HomeProjectContent projectID="project-1" sessionsVisible sidebarMode="shift" />);
   const grid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
