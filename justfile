@@ -38,7 +38,7 @@ setup *args: _node
     git config --local core.hooksPath .githooks
 
 # Regenerate protobuf-derived Go and TypeScript sources.
-gen:
+gen: _node
     go run github.com/bufbuild/buf/cmd/buf@v1.72.0 lint
     just _gen-go
     just _gen-typescript
@@ -62,12 +62,14 @@ _area-command *args:
     command_name="$1"
     shift
     target="default"
+    target_selected=0
     mode=""
     for argument in "$@"; do
         case "$argument" in
-        server|desktop|tui|rust|docs)
-            [ "$target" = "default" ] || { echo "Select one target" >&2; exit 2; }
+        default|server|desktop|tui|rust|docs)
+            [ "$target_selected" -eq 0 ] || { echo "Select one target" >&2; exit 2; }
             target="$argument"
+            target_selected=1
             ;;
         --dry-run)
             [ -z "$mode" ] || { echo "--dry-run was provided more than once" >&2; exit 2; }
