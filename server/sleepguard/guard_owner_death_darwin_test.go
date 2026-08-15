@@ -3,7 +3,7 @@
 package sleepguard
 
 import (
-	"errors"
+	"context"
 	"os"
 	"os/exec"
 	"strconv"
@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"core/server/internal/testprocess"
 )
 
 const (
@@ -27,7 +29,7 @@ func TestCaffeinateExitsWhenOwningProcessExits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
 	}
-	helper := exec.Command(executable, "-test.run=^TestCaffeinateOwnerDeathHelper$")
+	helper := exec.CommandContext(context.Background(), executable, "-test.run=^TestCaffeinateOwnerDeathHelper$")
 	helper.Env = append(os.Environ(),
 		caffeinateOwnerHelperEnv+"=1",
 		caffeinatePIDFileEnv+"="+pidFile,
@@ -37,10 +39,15 @@ func TestCaffeinateExitsWhenOwningProcessExits(t *testing.T) {
 	}
 
 	caffeinatePID := readProcessPID(t, pidFile)
+	exited := false
 	t.Cleanup(func() {
+		if exited {
+			return
+		}
 		_ = syscall.Kill(caffeinatePID, syscall.SIGKILL)
 	})
-	waitForProcessToExit(t, caffeinatePID, 2*time.Second)
+	testprocess.WaitForExit(t, caffeinatePID, 2*time.Second)
+	exited = true
 }
 
 func TestCaffeinateOwnerDeathHelper(t *testing.T) {
@@ -83,20 +90,4 @@ func readProcessPID(t *testing.T, path string) int {
 		t.Fatalf("parse process PID: %v", err)
 	}
 	return pid
-}
-
-func waitForProcessToExit(t *testing.T, pid int, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		err := syscall.Kill(pid, 0)
-		if errors.Is(err, syscall.ESRCH) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("probe process %d: %v", pid, err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("process %d remained alive after %v", pid, timeout)
 }

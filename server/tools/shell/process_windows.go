@@ -23,6 +23,8 @@ func terminateManagedProcess(process *os.Process, _ []managedProcessIdentity) er
 	return process.Kill()
 }
 
+func terminateManagedDescendants([]managedProcessIdentity) error { return nil }
+
 func forceKillManagedDescendants([]managedProcessIdentity) error { return nil }
 
 func forceKillManagedRoot(process *os.Process) error {
@@ -34,10 +36,12 @@ func forceKillManagedRoot(process *os.Process) error {
 
 func captureManagedDescendants(*os.Process) ([]managedProcessIdentity, error) { return nil, nil }
 
-func managedDescendantsExited([]managedProcessIdentity) bool { return true }
-
-func livingManagedDescendantPIDs([]managedProcessIdentity) ([]managedProcessIdentity, error) {
+func captureCompletedManagedProcessGroup(*os.Process) ([]managedProcessIdentity, error) {
 	return nil, nil
+}
+
+func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
+	return map[int]managedProcessSnapshotEntry{}, nil
 }
 
 func processExitState(err error) (int, string) {

@@ -394,6 +394,7 @@ func (p *processEntry) isBackgrounded() bool {
 
 func (p *processEntry) closeOnExit(exitCode int, state string) Snapshot {
 	p.mu.Lock()
+	p.running = false
 	p.finishedAt = time.Now().UTC()
 	p.lastUpdatedAt = p.finishedAt
 	p.exitCode = &exitCode
@@ -402,18 +403,10 @@ func (p *processEntry) closeOnExit(exitCode int, state string) Snapshot {
 	p.mu.Unlock()
 	closeDetachedResources(stdin, log)
 	p.mu.Lock()
-	p.running = false
 	snapshot := p.snapshotLocked()
 	p.mu.Unlock()
 	p.signal()
 	return snapshot
-}
-
-func (p *processEntry) finalizeClosedExit() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.running = false
-	p.signal()
 }
 
 func (p *processEntry) snapshot() Snapshot {
@@ -471,24 +464,19 @@ func normalizeWriteYieldTime(value time.Duration, fallback time.Duration) time.D
 	return value
 }
 
-func waitForEntryDone(entry *processEntry, timeout time.Duration) bool {
-	if entry == nil {
+func waitForEntryExit(entry *processEntry, timeout time.Duration) bool {
+	if entry == nil || !entry.isRunning() {
 		return true
 	}
 	if timeout <= 0 {
-		select {
-		case <-entry.done:
-			return true
-		default:
-			return false
-		}
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-entry.done:
-		return true
-	case <-timer.C:
 		return false
 	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(min(5*time.Millisecond, time.Until(deadline)))
+		if !entry.isRunning() {
+			return true
+		}
+	}
+	return !entry.isRunning()
 }

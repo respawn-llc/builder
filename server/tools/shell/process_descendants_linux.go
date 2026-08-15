@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
@@ -17,6 +18,7 @@ func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
 		return nil, err
 	}
 	snapshot := make(map[int]managedProcessSnapshotEntry, len(entries))
+	var snapshotErrors []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -26,15 +28,16 @@ func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
 			continue
 		}
 		process, err := readLinuxProcess(pid)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
 		if err != nil {
-			return nil, err
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+				continue
+			}
+			snapshotErrors = append(snapshotErrors, fmt.Errorf("inspect process %d: %w", pid, err))
+			continue
 		}
 		snapshot[pid] = process
 	}
-	return snapshot, nil
+	return snapshot, errors.Join(snapshotErrors...)
 }
 
 func readLinuxProcess(pid int) (managedProcessSnapshotEntry, error) {
@@ -54,9 +57,17 @@ func readLinuxProcess(pid int) (managedProcessSnapshotEntry, error) {
 	if err != nil {
 		return managedProcessSnapshotEntry{}, fmt.Errorf("parse /proc/%d/stat parent PID: %w", pid, err)
 	}
+	processGroupID, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return managedProcessSnapshotEntry{}, fmt.Errorf("parse /proc/%d/stat process group ID: %w", pid, err)
+	}
 	startedAt, err := strconv.ParseUint(fields[19], 10, 64)
 	if err != nil {
 		return managedProcessSnapshotEntry{}, fmt.Errorf("parse /proc/%d/stat start time: %w", pid, err)
 	}
-	return managedProcessSnapshotEntry{parentPID: parentPID, startedAt: startedAt}, nil
+	return managedProcessSnapshotEntry{
+		parentPID:      parentPID,
+		processGroupID: processGroupID,
+		startedAt:      startedAt,
+	}, nil
 }

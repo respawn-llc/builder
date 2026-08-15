@@ -37,10 +37,14 @@ func terminateManagedProcess(process *os.Process, descendants []managedProcessId
 	if pid <= 0 {
 		return nil
 	}
-	descendantErr := signalManagedDescendantPIDs(descendants, syscall.SIGTERM)
+	descendantErr := terminateManagedDescendants(descendants)
 	groupErr := signalManagedProcessGroup(process, syscall.SIGTERM, "terminate")
 	_ = process.Signal(os.Interrupt)
 	return errors.Join(descendantErr, groupErr)
+}
+
+func terminateManagedDescendants(descendants []managedProcessIdentity) error {
+	return signalManagedDescendantPIDs(descendants, syscall.SIGTERM)
 }
 
 func forceKillManagedDescendants(descendants []managedProcessIdentity) error {
@@ -60,9 +64,16 @@ func forceKillManagedRoot(process *os.Process) error {
 
 func signalManagedProcessGroup(process *os.Process, signal syscall.Signal, action string) error {
 	pid := process.Pid
-	if err := syscall.Kill(-pid, signal); err != nil && err != syscall.ESRCH {
-		probeErr := process.Signal(syscall.Signal(0))
-		if errors.Is(probeErr, os.ErrProcessDone) || errors.Is(probeErr, syscall.ESRCH) {
+	exited, probeErr := managedProcessExited(process)
+	if probeErr != nil {
+		return fmt.Errorf("probe process group %d before %s: %w", pid, action, probeErr)
+	}
+	if exited {
+		return nil
+	}
+	if err := syscall.Kill(-pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
+		exited, probeErr = managedProcessExited(process)
+		if probeErr == nil && exited {
 			return nil
 		}
 		return fmt.Errorf("%s process group %d: %w", action, pid, err)
@@ -74,44 +85,61 @@ func captureManagedDescendants(process *os.Process) ([]managedProcessIdentity, e
 	if process == nil || process.Pid <= 0 {
 		return nil, nil
 	}
+	exited, probeErr := managedProcessExited(process)
+	if probeErr != nil {
+		return nil, fmt.Errorf("probe process %d before listing descendants: %w", process.Pid, probeErr)
+	}
+	if exited {
+		return nil, nil
+	}
+	processes, err := managedProcessSnapshot()
+	descendants := descendantProcesses(process.Pid, processes)
+	if err != nil {
+		return descendants, fmt.Errorf("list descendants of process %d: %w", process.Pid, err)
+	}
+	return descendants, nil
+}
+
+func captureCompletedManagedProcessGroup(process *os.Process) ([]managedProcessIdentity, error) {
+	if process == nil || process.Pid <= 0 {
+		return nil, nil
+	}
+	exited, probeErr := managedProcessExited(process)
+	if probeErr != nil {
+		return nil, fmt.Errorf("probe completed process group %d: %w", process.Pid, probeErr)
+	}
+	if !exited {
+		return nil, nil
+	}
 	processes, err := managedProcessSnapshot()
 	if err != nil {
-		return nil, fmt.Errorf("list descendants of process %d: %w", process.Pid, err)
+		return nil, fmt.Errorf("list completed process group %d: %w", process.Pid, err)
 	}
-	return descendantProcesses(process.Pid, processes), nil
+	if _, reused := processes[process.Pid]; reused {
+		return nil, nil
+	}
+	return managedProcessGroupMembers(process.Pid, processes), nil
+}
+
+func managedProcessExited(process *os.Process) (bool, error) {
+	err := process.Signal(syscall.Signal(0))
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+		return true, nil
+	}
+	return false, err
 }
 
 func signalManagedDescendantPIDs(descendants []managedProcessIdentity, signal syscall.Signal) error {
 	var signalErrors []error
 	for _, descendant := range descendants {
-		if err := syscall.Kill(descendant.pid, signal); err != nil && err != syscall.ESRCH {
+		if err := syscall.Kill(descendant.pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
 			signalErrors = append(signalErrors, fmt.Errorf("signal descendant process %d: %w", descendant.pid, err))
 		}
 	}
 	return errors.Join(signalErrors...)
-}
-
-func managedDescendantsExited(descendants []managedProcessIdentity) bool {
-	living, err := livingManagedDescendantPIDs(descendants)
-	if err != nil {
-		return false
-	}
-	return len(living) == 0
-}
-
-func livingManagedDescendantPIDs(descendants []managedProcessIdentity) ([]managedProcessIdentity, error) {
-	processes, err := managedProcessSnapshot()
-	if err != nil {
-		return nil, err
-	}
-	living := make([]managedProcessIdentity, 0, len(descendants))
-	for _, descendant := range descendants {
-		current, ok := processes[descendant.pid]
-		if ok && current.startedAt == descendant.startedAt {
-			living = append(living, descendant)
-		}
-	}
-	return living, nil
 }
 
 func descendantProcesses(rootPID int, processes map[int]managedProcessSnapshotEntry) []managedProcessIdentity {

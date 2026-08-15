@@ -2,6 +2,8 @@
 
 package shell
 
+import "errors"
+
 func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
-	return map[int]managedProcessSnapshotEntry{}, nil
+	return nil, errors.New("managed descendant cleanup is unsupported on this platform")
 }
