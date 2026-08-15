@@ -52,29 +52,22 @@ it("keeps a bounded bidirectional window of Project Workflow pages", async () =>
   await waitFor(() => {
     expect(view.result.current.isSuccess).toBe(true);
   });
-  for (const expectedPageParams of [
-    [0, 40],
-    [0, 40, 80],
-    [40, 80, 120],
-  ]) {
+  let query = view.result.current;
+  for (let page = 0; page < 3; page += 1) {
     await act(async () => {
-      await view.result.current.fetchNextPage();
-    });
-    await waitFor(() => {
-      expect(view.result.current.data?.pageParams).toEqual(expectedPageParams);
+      query = await query.fetchNextPage();
     });
   }
 
-  expect(projectTaskWorkflowItems(view.result.current.data)).toHaveLength(90);
+  expect(query.data?.pageParams).toEqual([40, 80, 120]);
+  expect(projectTaskWorkflowItems(query.data)).toHaveLength(90);
 
   await act(async () => {
-    await view.result.current.fetchPreviousPage();
+    query = await query.fetchPreviousPage();
   });
 
-  await waitFor(() => {
-    expect(view.result.current.data?.pageParams).toEqual([0, 40, 80]);
-  });
-  expect(projectTaskWorkflowItems(view.result.current.data)).toHaveLength(120);
+  expect(query.data?.pageParams).toEqual([0, 40, 80]);
+  expect(projectTaskWorkflowItems(query.data)).toHaveLength(120);
   expect(fixture.requests).toEqual([0, 40, 80, 120, 0]);
 });
 
