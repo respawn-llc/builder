@@ -26,7 +26,8 @@ export function TaskSearchMemoryProvider({ children }: Readonly<{ children: Reac
     [setSelections],
   );
   const selectionFor = useCallback(
-    (projectID: string | null): TaskSearchMemorySelection | null => selections.get(projectID) ?? null,
+    (projectID: string | null): TaskSearchMemorySelection | null =>
+      selections.get(projectID) ?? null,
     [selections],
   );
   const memory = useMemo<TaskSearchMemory>(

@@ -25,19 +25,9 @@ describe("prepared Task Dependencies", () => {
         { totalCount: 2, unsatisfiedCount: null, addAvailability: { remainingCapacity: 48 } },
       ],
     });
-    expect(projection.directions[0]?.items.map(({ shortID }) => shortID)).toEqual([
-      "KENT-2",
-      "KENT-3",
-      "KENT-12",
-    ]);
+    expect(projection.directions[0]?.items.map(({ shortID }) => shortID)).toEqual(["KENT-2", "KENT-3", "KENT-12"]);
     expect(projection.directions[1]?.items.map(({ shortID }) => shortID)).toEqual(["KENT-10", "KENT-4"]);
-    expect(prepared.map(({ shortID }) => shortID)).toEqual([
-      "KENT-12",
-      "KENT-3",
-      "KENT-4",
-      "KENT-2",
-      "KENT-10",
-    ]);
+    expect(prepared.map(({ shortID }) => shortID)).toEqual(["KENT-12", "KENT-3", "KENT-4", "KENT-2", "KENT-10"]);
   });
 
   it("enforces per-direction uniqueness and the 50-entry boundary", () => {
@@ -49,9 +39,7 @@ describe("prepared Task Dependencies", () => {
     const prepared = Array.from({ length: 49 }, (_, index) => entry("blocked-by", `KENT-${String(index)}`));
     const full = insertPreparedTaskDependency(prepared, entry("blocked-by", "KENT-50"));
     expect(full).toHaveLength(50);
-    expect(preparedTaskDependenciesProjection(full).directions[0]?.addAvailability).toEqual({
-      kind: "limit_reached",
-    });
+    expect(preparedTaskDependenciesProjection(full).directions[0]?.addAvailability).toEqual({ kind: "limit_reached" });
     expect(insertPreparedTaskDependency(full, entry("blocked-by", "KENT-51"))).toBe(full);
   });
 });
@@ -61,11 +49,6 @@ function entry(
   shortID: string,
   kind: TaskStatusKind = "backlog",
 ): PreparedTaskDependency {
-  const status: TaskStatus = {
-    kind,
-    nativeState: kind === "done" ? "terminal" : "active",
-    nodeIDs: [],
-    attentionTypes: [],
-  };
+  const status: TaskStatus = { kind, nativeState: kind === "done" ? "terminal" : "active", nodeIDs: [], attentionTypes: [] };
   return { direction, taskID: shortID, shortID, title: shortID, workflowID: "workflow-1", status };
 }

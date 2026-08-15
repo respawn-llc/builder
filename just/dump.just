@@ -1,9 +1,7 @@
 set working-directory := ".."
 
-# Capture a diagnostic model request for a persisted session.
 model-request *args:
-    go run ./cmd/dumpmodelrequest {{args}}
+    bash scripts/dump-model-request.sh {{args}}
 
-# Print the latest effective metadata SQLite schema.
 metadata-schema *args:
-    go run ./cmd/dumpmetadataschema {{args}}
+    bash scripts/dump-metadata-schema.sh {{args}}

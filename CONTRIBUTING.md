@@ -49,7 +49,7 @@ just setup --apply
 For code changes, run:
 
 ```bash
-just check default --dry-run
+just check --dry-run
 ```
 
 Use typed variants to narrow work:

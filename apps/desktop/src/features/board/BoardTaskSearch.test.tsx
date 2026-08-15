@@ -361,7 +361,9 @@ describe("Board Task Search", () => {
 
   it("selects the exact numeric Short ID without duplicating its preview", async () => {
     vi.useRealTimers();
-    const services = createTestServices([{ method: "workflow.task.search", result: shortIDSearchResponse }]);
+    const services = createTestServices([
+      { method: "workflow.task.search", result: shortIDSearchResponse },
+    ]);
     const onOpenTask = vi.fn();
 
     renderSearch(services, "project-short-id", onOpenTask);
@@ -399,7 +401,9 @@ describe("Board Task Search", () => {
         },
       ],
     };
-    const services = createTestServices([{ method: "workflow.task.search", result: continuationResponse }]);
+    const services = createTestServices([
+      { method: "workflow.task.search", result: continuationResponse },
+    ]);
 
     renderSearch(services, "project-continuation");
     fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
@@ -425,7 +429,9 @@ describe("Board Task Search", () => {
       expect(services.transport.dedicatedCalls).toHaveLength(1);
     });
 
-    view.rerender(renderProjectSearchTree(services, "project-second"));
+    view.rerender(
+      renderProjectSearchTree(services, "project-second"),
+    );
 
     expect(screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") })).toHaveValue("search");
     await waitFor(() => {
@@ -447,7 +453,9 @@ describe("Board Task Search", () => {
     fireEvent.keyDown(firstInput, { key: "ArrowDown" });
     expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
 
-    view.rerender(renderProjectSearchTree(services, "project-second"));
+    view.rerender(
+      renderProjectSearchTree(services, "project-second"),
+    );
     const secondInput = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
     await waitFor(() => {
       expect(screen.getAllByRole("option")).toHaveLength(2);
@@ -456,7 +464,9 @@ describe("Board Task Search", () => {
     fireEvent.keyDown(secondInput, { key: "ArrowUp" });
     expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
 
-    view.rerender(renderProjectSearchTree(services, "project-first"));
+    view.rerender(
+      renderProjectSearchTree(services, "project-first"),
+    );
     await waitFor(() => {
       expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
     });

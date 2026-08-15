@@ -35,7 +35,11 @@ export function BoardTaskCardActions({
 }>) {
   const { t } = useTranslation();
   const actionPending = pendingInterrupt || pendingResume;
-  const { canInterrupt, canResume } = optimisticTaskActions(card.actions, pendingInterrupt, pendingResume);
+  const { canInterrupt, canResume } = optimisticTaskActions(
+    card.actions,
+    pendingInterrupt,
+    pendingResume,
+  );
   if (!canInterrupt && !canResume) {
     return null;
   }

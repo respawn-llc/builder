@@ -8,7 +8,10 @@ import { SidebarRootContext, type SidebarDestination } from "@/app-facade";
 import { createTestServices, TestAppProviders, type TestAppServices } from "@/test-support/app-services";
 import type { FakeRpcTransport, FakeRoute } from "@/test-support/api";
 import { flushQueuedWork, installAnimationFrameTestSupport } from "@/test-support/scheduling";
-import { createTestSidebarController, createTestSidebarNavigator } from "@/test-support/sidebar";
+import {
+  createTestSidebarController,
+  createTestSidebarNavigator,
+} from "@/test-support/sidebar";
 import { workflowAttentionCalls, workflowAttentionRpcMethods } from "@/test-support/workflow-attention";
 import { SidebarInboxNav } from "./SidebarInboxNav";
 import { useGlobalAttentionEvents, useGlobalAttentionPages } from "./useHomeData";
@@ -117,10 +120,7 @@ describe("Home global attention data", () => {
 
   it("loads a cold cache when Sidebar is the only global attention observer", async () => {
     const services = createAttentionServices();
-    renderHome(
-      services,
-      <SidebarInboxNav destination={taskDetailDestination} navigator={sidebarNavigator} />,
-    );
+    renderHome(services, <SidebarInboxNav destination={taskDetailDestination} navigator={sidebarNavigator} />);
 
     await expectAttentionCalls(services.transport, 1);
     expect(attentionPageTokens(services.transport)).toEqual([""]);

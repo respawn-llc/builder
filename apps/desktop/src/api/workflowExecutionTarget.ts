@@ -90,7 +90,8 @@ export type TaskResumeResponse =
       selectionRequired: WorkflowExecutionTargetSelectionRequirement;
     }>;
 export type TaskMoveResponse =
-  WorkflowExecutionTargetActionResponse<TaskMoveApplied> | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;
+  | WorkflowExecutionTargetActionResponse<TaskMoveApplied>
+  | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;
 export type TaskApproveResponse = WorkflowExecutionTargetActionResponse<TaskApproveApplied>;
 
 export type TaskMovePreviewBlocker =

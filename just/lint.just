@@ -1,38 +1,87 @@
 set working-directory := ".."
-set lists
-set unstable
 
-# Fix lint findings in every active non-Rust area. Pass `--dry-run` for read-only validation.
-default *args:
-    {{ quote(just_executable()) }} lint server {{args}}
-    {{ quote(just_executable()) }} lint desktop {{args}}
-    {{ quote(just_executable()) }} lint tui {{args}}
-    {{ quote(just_executable()) }} lint docs {{args}}
+default mode="":
+    just lint server {{mode}}
+    just lint desktop {{mode}}
+    just lint docs {{mode}}
 
-# Fix or validate Go server code and generated output.
-server *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/lint.mjs server {{args}}
+server mode="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just _gen-go
+    if [ "{{mode}}" = "--dry-run" ]; then
+        files="$(gofmt -l .)"
+        [ -z "$files" ] || { echo "$files"; exit 1; }
+    elif [ -z "{{mode}}" ]; then
+        gofmt -w .
+    else
+        echo "Usage: just lint server [--dry-run]" >&2
+        exit 2
+    fi
+    go run ./cmd/architectureguard .
+    go vet ./...
 
-# Fix or validate desktop code and policies.
-desktop *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/lint.mjs desktop {{args}}
+desktop mode="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just _node
+    just _gen-typescript
+    node apps/scripts/check-dependency-policy.mjs
+    node apps/scripts/check-typescript-policy.mjs
+    node --test apps/scripts/check-eslint-architecture.test.mjs
+    if [ "{{mode}}" = "--dry-run" ]; then
+        pnpm --dir apps/desktop exec eslint .
+    elif [ -z "{{mode}}" ]; then
+        pnpm --dir apps/desktop exec eslint . --fix
+    else
+        echo "Usage: just lint desktop [--dry-run]" >&2
+        exit 2
+    fi
+    node apps/desktop/node_modules/typescript7/bin/tsc -b apps/desktop/tsconfig.json --pretty false
 
-# Fix or validate the active Go TUI.
-tui *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/lint.mjs tui {{args}}
+tui mode="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{mode}}" = "--dry-run" ]; then
+        files="$(gofmt -l cli/tui)"
+        [ -z "$files" ] || { echo "$files"; exit 1; }
+    elif [ -z "{{mode}}" ]; then
+        gofmt -w cli/tui
+    else
+        echo "Usage: just lint tui [--dry-run]" >&2
+        exit 2
+    fi
+    go vet ./cli/tui/...
 
-# Fix or validate documentation formatting and types.
-docs *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/lint.mjs docs {{args}}
-
-# Fix or validate the frozen Rust workspace. Temporary: delete when `tui-rs/` is removed.
-rust mode="" checked=assert(mode == "" || mode == "--dry-run", "lint rust accepts only --dry-run"):
-    cargo fmt --manifest-path tui-rs/Cargo.toml --all {{ if mode == "--dry-run" { "-- --check" } else { "" } }}
+# Frozen Rust is explicit-only while tui-rs/ remains frozen.
+rust mode="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{mode}}" = "--dry-run" ]; then
+        cargo fmt --manifest-path tui-rs/Cargo.toml --all -- --check
+    elif [ -z "{{mode}}" ]; then
+        cargo fmt --manifest-path tui-rs/Cargo.toml --all
+    else
+        echo "Usage: just lint rust [--dry-run]" >&2
+        exit 2
+    fi
     cargo clippy --manifest-path tui-rs/Cargo.toml --workspace --all-targets --locked -- -D warnings
     cargo run --manifest-path tui-rs/Cargo.toml --locked -p manifest-check -- check --repo-root .
-    cargo metadata --manifest-path tui-rs/Cargo.toml --locked --format-version 1
-    cargo deny --manifest-path tui-rs/Cargo.toml check
+
+docs mode="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just _node
+    if [ "{{mode}}" = "--dry-run" ]; then
+        pnpm --dir docs exec prettier --check .
+    elif [ -z "{{mode}}" ]; then
+        pnpm --dir docs exec prettier --write .
+    else
+        echo "Usage: just lint docs [--dry-run]" >&2
+        exit 2
+    fi
+    pnpm --dir docs exec astro check
+
+[private]
+_desktop-native:
+    cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --locked

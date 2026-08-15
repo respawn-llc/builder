@@ -2,7 +2,9 @@ import type { BoardColumn } from "@/api";
 import type { BoardCardDragPayload } from "./BoardDragTypes";
 
 export type BoardDropAction =
-  Readonly<{ kind: "start" }> | Readonly<{ kind: "move" }> | Readonly<{ kind: "reject" }>;
+  | Readonly<{ kind: "start" }>
+  | Readonly<{ kind: "move" }>
+  | Readonly<{ kind: "reject" }>;
 
 export function classifyDrop(
   column: BoardColumn,

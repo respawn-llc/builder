@@ -198,12 +198,10 @@ export function EditableEdgeParameters({
   }>;
 }>) {
   const { t } = useTranslation();
-  const parameters = visibleWorkflowEdgeParameters(edge, protectedParameterVisibility).map(
-    (parameter, index) => ({
-      ...parameter,
-      rowID: parameter.rowID ?? [edge.id, "parameter", "fallback", index.toString()].join(":"),
-    }),
-  );
+  const parameters = visibleWorkflowEdgeParameters(edge, protectedParameterVisibility).map((parameter, index) => ({
+    ...parameter,
+    rowID: parameter.rowID ?? [edge.id, "parameter", "fallback", index.toString()].join(":"),
+  }));
   return (
     <DetailSection title={t("workflowEditor.parameters")} titleHelp={t("workflowEditor.parametersHelp")}>
       <div className="grid gap-[var(--space-3)]">

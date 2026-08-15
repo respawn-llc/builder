@@ -159,10 +159,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-
       - uses: extractions/setup-just@v3
 
       - name: Download release artifacts
@@ -172,9 +168,7 @@ jobs:
           path: dist
 
       - name: Verify release checksums
-        env:
-          VERSION: ${{ needs.prepare_release.outputs.version }}
-        run: just release _cli-verify-manifest --version "$VERSION" --dist-dir dist
+        run: just release _cli-verify-manifest --dist-dir dist
 
   smoke_release_assets:
     needs: prepare_release
@@ -218,17 +212,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-
-      - name: Setup Go for Windows installer recovery smoke
-        if: ${{ matrix.goos == 'windows' }}
-        uses: actions/setup-go@v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
       - uses: extractions/setup-just@v3
 
       - name: Download release artifacts
@@ -245,13 +228,17 @@ jobs:
           ARCHIVE_EXT: ${{ matrix.archive_ext }}
           BINARY_EXT: ${{ matrix.binary_ext }}
         run: |
-          just release _cli-smoke \
-            --version "$VERSION" \
-            --goos "$GOOS" \
-            --goarch "$GOARCH" \
-            --archive-ext "$ARCHIVE_EXT" \
-            --binary-ext "$BINARY_EXT" \
+          args=(
+            --version "$VERSION"
+            --goos "$GOOS"
+            --goarch "$GOARCH"
+            --archive-ext "$ARCHIVE_EXT"
             --dist-dir dist
+          )
+          if [[ -n "$BINARY_EXT" ]]; then
+            args+=(--binary-ext "$BINARY_EXT")
+          fi
+          just release _cli-smoke "${args[@]}"
 
       - name: Smoke test Windows installer
         if: ${{ matrix.goos == 'windows' }}
@@ -344,7 +331,7 @@ jobs:
 
       - uses: extractions/setup-just@v3
 
-      - name: Prepare desktop dependencies
+      - name: Install desktop dependencies
         run: just install _apps-dependencies
 
       - name: Build desktop bundles
@@ -359,7 +346,7 @@ jobs:
           APPLE_CERTIFICATE: ${{ matrix.platform == 'macos' && secrets.APPLE_CERTIFICATE || '' }}
           APPLE_CERTIFICATE_PASSWORD: ${{ matrix.platform == 'macos' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-        run: just release _desktop-build --version "$KENT_VERSION" --dist-dir dist/desktop
+        run: just release _desktop-build --version "$KENT_VERSION" --dist-dir dist/desktop --skip-install
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v7.0.1
@@ -380,10 +367,6 @@ jobs:
       - uses: actions/checkout@v7.0.0
         with:
           persist-credentials: false
-
-      - uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
 
       - uses: extractions/setup-just@v3
 
@@ -440,10 +423,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-
       - uses: extractions/setup-just@v3
 
       - uses: actions/checkout@v7.0.0
@@ -458,7 +437,7 @@ jobs:
           git -C homebrew-tap config user.email "github-actions[bot]@users.noreply.github.com"
 
       # The desktop .dmg is published by publish_desktop (a dependency of this job),
-      # so its release asset URL resolves and update-brew-tap.sh regenerates the
+      # so its release asset URL resolves and the release command regenerates the
       # kent-desktop cask alongside the formula.
       - name: Update tap formula and cask
         env:

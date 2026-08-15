@@ -1,37 +1,100 @@
 set default-list
 set lists
+set positional-arguments
 set unstable
 
 mod build 'just/build.just'
-mod check 'just/check.just'
+[private]
+mod _check 'just/check.just'
 mod dev 'just/dev.just'
 mod dump 'just/dump.just'
 mod install 'just/install.just'
-mod lint 'just/lint.just'
+[private]
+mod _lint 'just/lint.just'
 mod release 'just/release.just'
-mod test 'just/test.just'
 mod update 'just/update.just'
 
-# Prepare this checkout for Kent development. Dry-run unless `--apply` is passed.
-setup *args: _node-preflight
-    node tools/devcmd/setup.mjs --just {{ quote(just_executable()) }} {{ args }}
+# Prepare this checkout for development. Pass --apply to make changes.
+setup *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ "$#" -le 1 ] || { echo "Usage: just setup [--apply]" >&2; exit 2; }
+    mode="${1:-}"
+    if [ "$mode" != "" ] && [ "$mode" != "--apply" ]; then
+        echo "Usage: just setup [--apply]" >&2
+        exit 2
+    fi
+    for tool in go node pnpm cargo git jq python3 rg; do
+        command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 2; }
+    done
+    node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 22) { console.error("Node.js 22 or newer is required"); process.exit(2) }'
+    if [ "$mode" = "" ]; then
+        echo "Would download Go modules"
+        echo "Would install frozen apps and docs dependencies"
+        echo "Would fetch desktop Rust dependencies"
+        echo "Would configure core.hooksPath=.githooks"
+        exit 0
+    fi
+    just install _dependencies
+    git config --local core.hooksPath .githooks
 
-# Regenerate committed protobuf-derived Go and TypeScript sources.
-gen: _node-preflight
-    node tools/devcmd/generate.mjs write
+# Regenerate protobuf-derived Go and TypeScript sources.
+gen:
+    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 lint
+    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.go.yaml
+    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.ts.yaml
+
+# Run active tests, or select server, desktop, tui, or explicit frozen rust.
+test *args:
+    bash scripts/test.sh {{ args }}
+
+# Apply safe lint fixes, or pass --dry-run for read-only validation.
+lint *args:
+    just _area-command _lint {{ args }}
+
+# Run lint, tests, and builds for the selected area.
+check *args:
+    just _area-command _check {{ args }}
 
 [private]
-_generate-typescript: _node-preflight
-    node tools/devcmd/generate.mjs write --typescript-only
+_area-command *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command_name="$1"
+    shift
+    target="default"
+    mode=""
+    for argument in "$@"; do
+        case "$argument" in
+        server|desktop|tui|rust|docs)
+            [ "$target" = "default" ] || { echo "Select one target" >&2; exit 2; }
+            target="$argument"
+            ;;
+        --dry-run)
+            [ -z "$mode" ] || { echo "--dry-run was provided more than once" >&2; exit 2; }
+            mode="--dry-run"
+            ;;
+        *)
+            echo "Unknown ${command_name#_} argument: $argument" >&2
+            exit 2
+            ;;
+        esac
+    done
+    if [ -n "$mode" ]; then
+        just "$command_name" "$target" "$mode"
+    else
+        just "$command_name" "$target"
+    fi
 
 [private]
-_generate-go: _node-preflight
-    node tools/devcmd/generate.mjs write --kind go
+_gen-go:
+    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.go.yaml
 
 [private]
-_check-generation *args: _node-preflight
-    node tools/devcmd/generate.mjs check {{ args }}
+_gen-typescript:
+    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.ts.yaml
 
 [private]
-_node-preflight node=assert(which("node"), "Node.js 22 or newer is required for this command, but `node` was not found in PATH."):
-    {{ node }} tools/devcmd/check-node-version.cjs
+_node:
+    @command -v node >/dev/null || { echo "Node.js 22 or newer is required" >&2; exit 2; }
+    @node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 22) { console.error("Node.js 22 or newer is required"); process.exit(2) }'

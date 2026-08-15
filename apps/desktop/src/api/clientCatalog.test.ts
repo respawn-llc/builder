@@ -53,26 +53,18 @@ describe("ApiClient catalog boundary", () => {
     ).rejects.toBeInstanceOf(ContractError);
     expect(transport.calls).toHaveLength(0);
   });
-  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "rejects invalid workspace offsets %j",
-    async (offset) => {
-      const transport = new FakeRpcTransport([]);
-      await expect(new ApiClient(transport).listWorkspaces("project-1", offset)).rejects.toBeInstanceOf(
-        ContractError,
-      );
-      expect(transport.calls).toHaveLength(0);
-    },
-  );
-  it.each(["", " ", " project-1", "project-1 "])(
-    "rejects invalid catalog Project IDs %j",
-    async (projectID) => {
-      const transport = new FakeRpcTransport([]);
-      const client = new ApiClient(transport);
-      await expect(client.listSessionPage(projectID, "main", 0)).rejects.toBeInstanceOf(ContractError);
-      await expect(client.listWorkspaces(projectID, 0)).rejects.toBeInstanceOf(ContractError);
-      expect(transport.calls).toHaveLength(0);
-    },
-  );
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid workspace offsets %j", async (offset) => {
+    const transport = new FakeRpcTransport([]);
+    await expect(new ApiClient(transport).listWorkspaces("project-1", offset)).rejects.toBeInstanceOf(ContractError);
+    expect(transport.calls).toHaveLength(0);
+  });
+  it.each(["", " ", " project-1", "project-1 "])("rejects invalid catalog Project IDs %j", async (projectID) => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    await expect(client.listSessionPage(projectID, "main", 0)).rejects.toBeInstanceOf(ContractError);
+    await expect(client.listWorkspaces(projectID, 0)).rejects.toBeInstanceOf(ContractError);
+    expect(transport.calls).toHaveLength(0);
+  });
   it.each([
     { name: "omitted", response: sessionResponse },
     { name: "null", response: { ...sessionResponse, next_offset: null } },

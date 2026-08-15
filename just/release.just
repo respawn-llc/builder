@@ -1,51 +1,40 @@
 set working-directory := ".."
 
-# Build and verify all CLI release archives.
 cli *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-cli.mjs release {{args}}
+    bash scripts/release-artifacts.sh build {{args}}
 
-# Build or assemble desktop release artifacts.
 desktop *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-desktop.mjs release {{args}}
+    just _node
+    bash scripts/desktop-release.sh build --skip-install {{args}}
 
-# Update Kent's Homebrew tap.
 brew *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-brew.mjs {{args}}
+    bash scripts/update-brew-tap.sh {{args}}
 
 [private]
 _cli-build *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-cli.mjs build {{args}}
+    bash scripts/release-artifacts.sh build {{args}}
 
 [private]
 _cli-verify-manifest *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-cli.mjs verify-manifest {{args}}
+    bash scripts/release-artifacts.sh verify-manifest {{args}}
 
 [private]
 _cli-verify-linux-static *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-cli.mjs verify-linux-static {{args}}
+    bash scripts/release-artifacts.sh verify-linux-static {{args}}
 
 [private]
 _cli-smoke *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-cli.mjs smoke {{args}}
+    bash scripts/release-artifacts.sh smoke-test {{args}}
 
 [private]
 _windows-installer-smoke *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-cli.mjs windows-installer-smoke {{args}}
+    bash scripts/release-artifacts.sh smoke-windows-installer {{args}}
 
 [private]
 _desktop-build *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-desktop.mjs build {{args}}
+    just _node
+    bash scripts/desktop-release.sh build {{args}}
 
 [private]
 _desktop-assemble *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/release-desktop.mjs assemble {{args}}
+    bash scripts/desktop-release.sh assemble {{args}}

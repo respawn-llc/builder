@@ -1,4 +1,8 @@
-import type { SidebarDestination, SidebarPageNavigator, SidebarRootController } from "@/app-facade";
+import type {
+  SidebarDestination,
+  SidebarPageNavigator,
+  SidebarRootController,
+} from "@/app-facade";
 
 export function createTestSidebarNavigator(
   overrides: Partial<SidebarPageNavigator> = {},

@@ -1,16 +1,16 @@
 set working-directory := ".."
 
-# Start the documentation development server.
-docs *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/docs.mjs dev {{args}}
-
-# Start the desktop browser development process.
 desktop *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/desktop.mjs dev {{args}}
+    just _node
+    just _gen-typescript
+    pnpm --dir apps/desktop exec vite --config tooling/vite.config.ts --host 127.0.0.1 --open / {{args}}
+
+docs *args:
+    just _node
+    pnpm --dir docs exec astro dev {{args}}
 
 [private]
-_desktop-web *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/desktop.mjs native-dev-web {{args}}
+_desktop-web:
+    just _node
+    just _gen-typescript
+    pnpm --dir apps/desktop exec vite --config tooling/vite.config.ts --host 127.0.0.1

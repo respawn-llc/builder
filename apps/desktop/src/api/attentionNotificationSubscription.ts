@@ -1,6 +1,8 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { ContractError } from "./errors";
-import { attentionNotificationEventParamsSchema } from "./schemas/attentionNotification";
+import {
+  attentionNotificationEventParamsSchema,
+} from "./schemas/attentionNotification";
 import type { RpcEventHandler } from "./transport";
 
 export function attentionNotificationRpcHandler(handler: AttentionNotificationEventHandler): RpcEventHandler {

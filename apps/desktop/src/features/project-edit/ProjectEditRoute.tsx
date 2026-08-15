@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Save } from "lucide-react";
 
@@ -303,7 +311,12 @@ type ProjectEditMutation = ReturnType<typeof useProjectWorkspaceUnlink>;
 type ProjectAttachMutation = ReturnType<typeof useProjectWorkspaceAttach>;
 type ProjectDefaultMutation = ReturnType<typeof useProjectDefaultWorkspaceSave>;
 type ProjectEditTranslator = ReturnType<typeof useTranslation>["t"];
-type PushToast = (id: string, tone: "info" | "success" | "danger", body: string, title?: string) => void;
+type PushToast = (
+  id: string,
+  tone: "info" | "success" | "danger",
+  body: string,
+  title?: string,
+) => void;
 
 function useConfirmWorkspaceUnlink(
   unlink: ProjectEditMutation,

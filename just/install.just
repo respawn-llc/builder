@@ -1,21 +1,22 @@
 set working-directory := ".."
 
-# Build and install the desktop application.
-desktop *args:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/desktop.mjs install {{args}}
+desktop:
+    just _node
+    bash scripts/build-desktop.sh --skip-install --install
 
 [private]
 _apps-dependencies:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/dependencies.mjs install apps
+    just _node
+    pnpm --dir apps install --frozen-lockfile
 
 [private]
 _docs-dependencies:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/dependencies.mjs install docs
+    just _node
+    pnpm --dir docs install --frozen-lockfile
 
 [private]
 _dependencies:
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/dependencies.mjs install all
+    go mod download
+    just install _apps-dependencies
+    just install _docs-dependencies
+    cargo fetch --manifest-path apps/desktop/src-tauri/Cargo.toml --locked

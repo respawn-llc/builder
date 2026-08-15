@@ -30,11 +30,7 @@ import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 
 export function AttentionNotificationController() {
-  return (
-    <SidebarRootOwner>
-      <OwnedAttentionNotificationController />
-    </SidebarRootOwner>
-  );
+  return <SidebarRootOwner><OwnedAttentionNotificationController /></SidebarRootOwner>;
 }
 
 function OwnedAttentionNotificationController() {
@@ -174,7 +170,12 @@ function OwnedAttentionNotificationController() {
       }
       const notificationKey = attentionNotificationIDKey(notification.id);
       const existing = surfacedRef.current.get(notificationKey);
-      if (!advancesAttentionNotificationRevision(existing?.notification.revision, notification.revision)) {
+      if (
+        !advancesAttentionNotificationRevision(
+          existing?.notification.revision,
+          notification.revision,
+        )
+      ) {
         return;
       }
       if (existing !== undefined) {

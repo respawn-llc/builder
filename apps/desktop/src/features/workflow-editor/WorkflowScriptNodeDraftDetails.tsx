@@ -140,10 +140,7 @@ function ScriptPathDiagnostics({ errors }: Readonly<{ errors: WorkflowValidation
     <DetailSection title={t("workflowEditor.scriptPathDiagnostics")}>
       <ul className="m-0 grid list-disc gap-[var(--space-1)] pl-[1.1rem] text-sm leading-snug">
         {errors.map((error, index) => (
-          <li
-            className="pl-[2px] marker:text-[var(--color-warning)]"
-            key={workflowValidationErrorKey(error, index)}
-          >
+          <li className="pl-[2px] marker:text-[var(--color-warning)]" key={workflowValidationErrorKey(error, index)}>
             {error.message}
           </li>
         ))}

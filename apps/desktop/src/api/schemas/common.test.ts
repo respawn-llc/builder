@@ -318,9 +318,7 @@ describe("validationErrorSchema", () => {
       }
     }
     for (const invalid of ["", " "]) {
-      expect(() =>
-        validationErrorSchema.parse({ ...base, details: { provider_edge_id: invalid } }),
-      ).toThrow();
+      expect(() => validationErrorSchema.parse({ ...base, details: { provider_edge_id: invalid } })).toThrow();
     }
   });
 

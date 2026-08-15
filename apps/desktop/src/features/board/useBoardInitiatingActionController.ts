@@ -13,7 +13,9 @@ type BoardInitiatingActionControllerOptions = Readonly<{
   connected: boolean;
   onActionError(id: string, title: string, error: unknown): void;
   onApplied(): void | Promise<void>;
-  onPendingMoveChange(update: (current: PendingBoardCardMove | null) => PendingBoardCardMove | null): void;
+  onPendingMoveChange(
+    update: (current: PendingBoardCardMove | null) => PendingBoardCardMove | null,
+  ): void;
   startErrorTitle: string;
   moveErrorTitle: string;
   refreshErrorTitle: string;
@@ -75,7 +77,14 @@ export function useBoardInitiatingActionController({
           clearPendingMove(pendingMove);
         });
     },
-    [clearPendingMove, moveErrorTitle, onActionError, onPendingMoveChange, run, startErrorTitle],
+    [
+      clearPendingMove,
+      moveErrorTitle,
+      onActionError,
+      onPendingMoveChange,
+      run,
+      startErrorTitle,
+    ],
   );
   return {
     actionsDisabled: !connected || running || pending !== null,

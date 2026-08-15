@@ -3,7 +3,13 @@ import { useTranslation } from "react-i18next";
 
 import type { TaskMovePreviewChoice, TaskMovePreviewResponse } from "@/api";
 import { useTextFieldSubmitShortcut } from "@/app-facade";
-import { Button, Dialog, RadioGroup, RadioGroupItem, TextArea } from "@/ui";
+import {
+  Button,
+  Dialog,
+  RadioGroup,
+  RadioGroupItem,
+  TextArea,
+} from "@/ui";
 
 type ManualMoveValues = Readonly<Record<string, Readonly<Record<string, string>>>>;
 
@@ -24,7 +30,7 @@ export function ManualMoveDialog({
   const { t } = useTranslation();
   const choices = manualMoveChoices(preview);
   const [selectedTransitionKey, setSelectedTransitionKey] = useState<string | null>(
-    choices.length === 1 ? (choices[0]?.transitionKey ?? null) : null,
+    choices.length === 1 ? choices[0]?.transitionKey ?? null : null,
   );
   const [phase, setPhase] = useState<"choices" | "details">(choices.length > 1 ? "choices" : "details");
   const selectedChoice = manualMoveSelectedChoice(choices, selectedTransitionKey);
@@ -158,10 +164,7 @@ function ManualMoveDialogContent({
   );
 }
 
-function manualMoveSubmit(
-  transitionKey: string | undefined,
-  values: ManualMoveValues,
-): ManualMoveDialogSubmit {
+function manualMoveSubmit(transitionKey: string | undefined, values: ManualMoveValues): ManualMoveDialogSubmit {
   return {
     ...(transitionKey === undefined ? {} : { transitionKey }),
     ...(Object.keys(values).length === 0 ? {} : { values }),
@@ -186,10 +189,7 @@ function manualMoveRequiredValues(choice: TaskMovePreviewChoice | null) {
   return choice?.requiredValues ?? [];
 }
 
-function manualMoveCanAdvance(
-  preview: TaskMovePreviewResponse | null,
-  choice: TaskMovePreviewChoice | null,
-): boolean {
+function manualMoveCanAdvance(preview: TaskMovePreviewResponse | null, choice: TaskMovePreviewChoice | null): boolean {
   return preview?.outcome !== "transition" || choice !== null;
 }
 
@@ -246,7 +246,9 @@ function choiceDisplayLabel(
   choice: TaskMovePreviewChoice,
   choices: readonly TaskMovePreviewChoice[],
 ): string {
-  const duplicate = choices.some((candidate) => candidate !== choice && candidate.label === choice.label);
+  const duplicate = choices.some(
+    (candidate) => candidate !== choice && candidate.label === choice.label,
+  );
   return duplicate ? `${choice.label} · ${choice.sourceNodeDisplayName}` : choice.label;
 }
 
@@ -300,12 +302,7 @@ function ManualMoveDetailsPhase({
   );
 }
 
-function setValue(
-  values: ManualMoveValues,
-  nodeKey: string,
-  outputName: string,
-  value: string,
-): ManualMoveValues {
+function setValue(values: ManualMoveValues, nodeKey: string, outputName: string, value: string): ManualMoveValues {
   return {
     ...values,
     [nodeKey]: { ...(values[nodeKey] ?? {}), [outputName]: value },

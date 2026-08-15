@@ -8,7 +8,10 @@ type CompletionInput = Readonly<{
   navigateHome?: (() => Promise<void>) | undefined;
 }>;
 type FallbackConfig = Readonly<{
-  renderFallback: (payload: Readonly<{ projectID: string }>, close: () => void) => ReactNode;
+  renderFallback: (
+    payload: Readonly<{ projectID: string }>,
+    close: () => void,
+  ) => ReactNode;
 }>;
 
 const fixture = vi.hoisted(() => ({
@@ -76,7 +79,9 @@ describe("ProjectDeleteButton scoped completion", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "projectEdit.deleteProject" }));
-    await user.click(await screen.findByRole("button", { name: "projectEdit.deleteConfirm" }));
+    await user.click(
+      await screen.findByRole("button", { name: "projectEdit.deleteConfirm" }),
+    );
     await waitFor(() => {
       expect(fixture.complete).toHaveBeenCalledOnce();
     });

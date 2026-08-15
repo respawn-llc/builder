@@ -1,6 +1,8 @@
 import { CancelledError } from "@tanstack/react-query";
 
-export async function awaitAllQueryOperations(operations: readonly Promise<unknown>[]): Promise<void> {
+export async function awaitAllQueryOperations(
+  operations: readonly Promise<unknown>[],
+): Promise<void> {
   const results = await Promise.allSettled(operations);
   const errors: unknown[] = [];
   for (const result of results) {
@@ -18,7 +20,10 @@ export async function awaitAllQueryOperations(operations: readonly Promise<unkno
   throw new AggregateError(errors, "Multiple query operations failed");
 }
 
-export function reportNonCancelledError(error: unknown, report: (error: unknown) => void): void {
+export function reportNonCancelledError(
+  error: unknown,
+  report: (error: unknown) => void,
+): void {
   if (error instanceof AggregateError) {
     for (const cause of error.errors) {
       reportNonCancelledError(cause, report);

@@ -162,6 +162,9 @@ describe("Workspace catalog schema", () => {
     expect(() =>
       workspaceCatalogPageSchema.parse({ ...page, default_workspace_id: "workspace-1" }),
     ).toThrow();
-    expect(() => workspaceCatalogPageSchema.parse({ ...page, next_page_token: "" })).toThrow();
+    expect(() =>
+      workspaceCatalogPageSchema.parse({ ...page, next_page_token: "" }),
+    ).toThrow();
   });
+
 });

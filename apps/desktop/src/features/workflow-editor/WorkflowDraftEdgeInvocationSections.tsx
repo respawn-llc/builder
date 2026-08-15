@@ -6,8 +6,14 @@ import { DetailSection } from "./WorkflowInspectorPrimitives";
 import { type DraftWorkflowEdge } from "./workflowEditorDraft";
 import { type WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 import { ApprovalToggle, FieldSummary } from "./WorkflowInspectorSharedSections";
-import { EditableEdgeParameters, PromptTemplateEditor } from "./WorkflowDraftEditableSections";
-import { edgePromptPlaceholderParameters, parameterSummaryFields } from "./workflowInspectorWiring";
+import {
+  EditableEdgeParameters,
+  PromptTemplateEditor,
+} from "./WorkflowDraftEditableSections";
+import {
+  edgePromptPlaceholderParameters,
+  parameterSummaryFields,
+} from "./workflowInspectorWiring";
 import type { Translate, derivedEdgeWiring } from "./workflowInspectorWiring";
 
 export function EdgeInvocationSections({
@@ -113,10 +119,7 @@ function EdgeAgentSelectionControls({
         ]}
         value={edge.assigneeSelection}
       />
-      <DisabledInteractionGuard
-        disabled={!thinkingAvailable && !thinkingCanReset}
-        reason={thinkingDisabledReason}
-      >
+      <DisabledInteractionGuard disabled={!thinkingAvailable && !thinkingCanReset} reason={thinkingDisabledReason}>
         <ApprovalToggle
           checked={edge.thinkingSelection === "previous_node"}
           disabled={!thinkingAvailable && !thinkingCanReset}

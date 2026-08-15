@@ -65,9 +65,7 @@ export function TranscriptDisclosure({
           aria-hidden={bodyPhase === "exiting" ? true : undefined}
           className={cx(
             "transcript-disclosure-body grid overflow-hidden",
-            bodyPhase === "visible"
-              ? "transcript-disclosure-body--visible"
-              : "transcript-disclosure-body--exiting",
+            bodyPhase === "visible" ? "transcript-disclosure-body--visible" : "transcript-disclosure-body--exiting",
           )}
           id={bodyId}
           inert={bodyPhase === "exiting" ? true : undefined}
@@ -128,20 +126,12 @@ function TranscriptDisclosureHeader({
       {typeLabel === undefined ? (
         <span aria-hidden="true" className="pointer-events-none" />
       ) : (
-        <span className="pointer-events-none relative z-0 min-w-0 truncate text-xs font-medium text-[var(--color-muted)]">
-          {typeLabel}
-        </span>
+        <span className="pointer-events-none relative z-0 min-w-0 truncate text-xs font-medium text-[var(--color-muted)]">{typeLabel}</span>
       )}
-      <span className="pointer-events-none relative z-0 min-w-0 truncate text-left text-sm text-[var(--color-on-background)]">
-        {summary}
-      </span>
+      <span className="pointer-events-none relative z-0 min-w-0 truncate text-left text-sm text-[var(--color-on-background)]">{summary}</span>
       <div className="pointer-events-none relative z-10 flex min-w-0 items-center justify-end gap-[var(--space-1)]">
-        {liveStatus === undefined ? null : (
-          <div className="pointer-events-auto flex min-w-0 items-center">{liveStatus}</div>
-        )}
-        {expanded && actions !== undefined ? (
-          <div className="pointer-events-auto flex items-center">{actions}</div>
-        ) : null}
+        {liveStatus === undefined ? null : <div className="pointer-events-auto flex min-w-0 items-center">{liveStatus}</div>}
+        {expanded && actions !== undefined ? <div className="pointer-events-auto flex items-center">{actions}</div> : null}
       </div>
       <ChevronRight
         aria-hidden="true"

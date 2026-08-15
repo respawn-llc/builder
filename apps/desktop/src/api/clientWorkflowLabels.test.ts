@@ -8,11 +8,7 @@ const urgentID = "942495c2-5958-4959-8445-94046ad74fbd";
 const smallID = "11111111-1111-4111-8111-111111111111";
 describe("ApiClient workflow labels", () => {
   it("loads each Project Task-group definition exactly once", async () => {
-    const definitions = [
-      { group: "active", status_kinds: ["running", "active"] },
-      { group: "backlog", status_kinds: ["backlog"] },
-      { group: "done", status_kinds: ["done"] },
-    ] as const;
+    const definitions = [{ group: "active", status_kinds: ["running", "active"] }, { group: "backlog", status_kinds: ["backlog"] }, { group: "done", status_kinds: ["done"] }] as const;
     const result = {
       project_id: "project-1",
       definitions,
@@ -20,9 +16,8 @@ describe("ApiClient workflow labels", () => {
       generated_at_unix_ms: 7,
     };
     const getCounts = async (response: unknown) =>
-      new ApiClient(
-        new FakeRpcTransport([{ method: "workflow.task.groupCounts", result: response }]),
-      ).getProjectTaskGroupCounts({ projectID: "project-1" });
+      new ApiClient(new FakeRpcTransport([{ method: "workflow.task.groupCounts", result: response }]))
+        .getProjectTaskGroupCounts({ projectID: "project-1" });
 
     await expect(getCounts(result)).resolves.toMatchObject({
       definitions: definitions.map(({ group, status_kinds }) => ({ group, statusKinds: status_kinds })),

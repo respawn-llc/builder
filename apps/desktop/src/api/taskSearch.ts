@@ -15,7 +15,8 @@ export type TaskSearchInput = Readonly<{
 }>;
 
 export type TaskSearchSource =
-  Readonly<{ kind: "short_id" | "title" | "body" }> | Readonly<{ kind: "comment"; commentID: string }>;
+  | Readonly<{ kind: "short_id" | "title" | "body" }>
+  | Readonly<{ kind: "comment"; commentID: string }>;
 
 export type TaskSearchLiteralMatch = Readonly<{
   before: string;

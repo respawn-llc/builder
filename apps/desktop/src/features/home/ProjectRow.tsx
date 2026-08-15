@@ -61,7 +61,11 @@ export function ProjectRow({
               selected ? "mr-[var(--space-1)] w-[14px] opacity-100" : "mr-0 w-0 opacity-0",
             )}
           >
-            <Check aria-hidden="true" size={14} strokeWidth={2} />
+            <Check
+              aria-hidden="true"
+              size={14}
+              strokeWidth={2}
+            />
           </span>
           <strong className="min-w-0 truncate">{project.name}</strong>
         </div>
@@ -80,7 +84,9 @@ export function ProjectRow({
         <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-muted)]">
           {workspacePathLabel}
         </span>
-        <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">{project.key}</span>
+        <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">
+          {project.key}
+        </span>
       </div>
     </div>
   );

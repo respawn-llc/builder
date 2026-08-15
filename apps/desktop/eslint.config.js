@@ -6,7 +6,10 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import testingLibrary from "eslint-plugin-testing-library";
 import tseslint from "typescript-eslint";
 
-import { createArchitecturePolicy, generatedServerApiContractFiles } from "./eslint-architecture.config.js";
+import {
+  createArchitecturePolicy,
+  generatedServerApiContractFiles,
+} from "./eslint-architecture.config.js";
 import { appArchitecture } from "./eslint-app-plugin.js";
 
 const parserProjects = [

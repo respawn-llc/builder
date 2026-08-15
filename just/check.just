@@ -1,39 +1,34 @@
 set working-directory := ".."
 
-# Run lint, tests, and builds for every active non-Rust area.
-default *args:
-    {{ quote(just_executable()) }} check server {{args}}
-    {{ quote(just_executable()) }} check desktop {{args}}
-    {{ quote(just_executable()) }} check tui {{args}}
-    {{ quote(just_executable()) }} check docs {{args}}
+default mode="":
+    just _lint default {{mode}}
+    just test
+    just build go
+    just build docs
+    just build desktop
 
-# Run the complete server suite.
-server *args:
-    {{ quote(just_executable()) }} lint server {{args}}
-    {{ quote(just_executable()) }} test server
-    {{ quote(just_executable()) }} build go
+server mode="":
+    just _lint server {{mode}}
+    just test server
+    just build go
 
-# Run the complete desktop suite, including a native bundle.
-desktop *args:
-    {{ quote(just_executable()) }} lint desktop {{args}}
-    {{ quote(just_executable()) }} test desktop
-    {{ quote(just_executable()) }} build desktop
+desktop mode="":
+    just _lint desktop {{mode}}
+    just test desktop
+    just build desktop
 
-# Run the complete active Go TUI suite.
-tui *args:
-    {{ quote(just_executable()) }} lint tui {{args}}
-    {{ quote(just_executable()) }} test tui
-    {{ quote(just_executable()) }} build tui
+tui mode="":
+    just _lint tui {{mode}}
+    just test tui
+    just build tui
 
-# Run the complete documentation suite.
-docs *args:
-    {{ quote(just_executable()) }} lint docs {{args}}
-    {{ quote(just_executable()) }} _node-preflight
-    node tools/devcmd/docs.mjs test
-    {{ quote(just_executable()) }} build docs
+# Frozen Rust is explicit-only while tui-rs/ remains frozen.
+rust mode="":
+    just _lint rust {{mode}}
+    just test rust
+    just build rust
 
-# Run the frozen Rust suite. Temporary: delete when `tui-rs/` is removed.
-rust *args:
-    {{ quote(just_executable()) }} lint rust {{args}}
-    {{ quote(just_executable()) }} test rust
-    {{ quote(just_executable()) }} build rust
+docs mode="":
+    just _lint docs {{mode}}
+    node --test docs/scripts/sync-mirrored-docs.test.mjs
+    just build docs

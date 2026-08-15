@@ -13,7 +13,11 @@ import {
   type SidebarNavigationOutcome,
   type SidebarWidthProfile,
 } from "@/app-facade";
-import { createSidebarStack, emptySidebarStackView, type SidebarStackView } from "./sidebarStack";
+import {
+  createSidebarStack,
+  emptySidebarStackView,
+  type SidebarStackView,
+} from "./sidebarStack";
 import { SidebarCurrentPageContext, type SidebarCurrentPage } from "./sidebarPageContext";
 
 const defaultSidebarWidthProfile: SidebarWidthProfile = { kind: "custom", sizing: null };
@@ -42,7 +46,8 @@ export function SidebarProvider({
   const [stack] = useState(() => createSidebarStack(policy, publish));
   const current = view.entries.at(-1);
   const activeWidthProfile = useMemo(
-    () => (current === undefined ? defaultSidebarWidthProfile : sidebarWidthProfile(current.destination)),
+    () =>
+      current === undefined ? defaultSidebarWidthProfile : sidebarWidthProfile(current.destination),
     [current],
   );
   const resize = useCallback(
@@ -66,7 +71,9 @@ export function SidebarProvider({
       backAvailable: availability?.back ?? true,
       canGoBack: view.entries.length > 1,
       close: (): SidebarNavigationOutcome =>
-        current === undefined || availability?.close === false ? "unavailable" : current.navigator.close(),
+        current === undefined || availability?.close === false
+          ? "unavailable"
+          : current.navigator.close(),
       closeAvailable: availability?.close ?? true,
       phase: view.phase,
       resize,
@@ -98,7 +105,9 @@ export function SidebarProvider({
   return (
     <SidebarRootContext.Provider value={rootValue}>
       <SidebarShellContext.Provider value={shellValue}>
-        <SidebarCurrentPageContext.Provider value={pageValue}>{children}</SidebarCurrentPageContext.Provider>
+        <SidebarCurrentPageContext.Provider value={pageValue}>
+          {children}
+        </SidebarCurrentPageContext.Provider>
       </SidebarShellContext.Provider>
     </SidebarRootContext.Provider>
   );
