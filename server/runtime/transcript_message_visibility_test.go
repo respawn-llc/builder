@@ -37,14 +37,14 @@ func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
 	}
 }
 
-func TestAssistantCommentaryIsDetailOnlyWhileFinalAnswersRemainOngoing(t *testing.T) {
+func TestAssistantMessagesRemainOngoingAcrossCommentaryAndFinalPhases(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name  string
 		phase llm.MessagePhase
 		want  transcript.EntryVisibility
 	}{
-		{name: "commentary", phase: llm.MessagePhaseCommentary, want: transcript.EntryVisibilityDetail},
+		{name: "commentary", phase: llm.MessagePhaseCommentary, want: transcript.EntryVisibilityOngoing},
 		{name: "final", phase: llm.MessagePhaseFinal, want: transcript.EntryVisibilityOngoing},
 		{name: "legacy final", want: transcript.EntryVisibilityOngoing},
 	}

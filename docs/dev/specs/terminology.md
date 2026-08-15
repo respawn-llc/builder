@@ -386,7 +386,7 @@ Saved recovery information for a model-visible step that was interrupted or cras
 
 ### Forced Local Detach
 
-The second-`Ctrl+C` exit path while an interrupt is pending. The TUI exits and detaches without force-closing the shared Active Session Runtime.
+The second-`Ctrl+C` exit path while an Interrupt is pending for the same Run and Step. The TUI exits and detaches without force-closing the shared Active Session Runtime. A different Running Run or Step sends its own Interrupt instead.
 
 ### Agent Step
 
