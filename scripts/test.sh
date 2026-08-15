@@ -73,7 +73,10 @@ done
 case "$timeout_seconds" in
 '' | *[!0-9]*) echo "--timeout must be a positive integer" >&2; exit 2 ;;
 esac
-[ "$timeout_seconds" -gt 0 ] || { echo "--timeout must be a positive integer" >&2; exit 2; }
+[ "$timeout_seconds" -gt 0 ] && [ "$timeout_seconds" -le 300 ] || {
+	echo "--timeout must be a positive integer from 1 through 300" >&2
+	exit 2
+}
 
 if [ -z "$workers" ]; then
 	workers=4
@@ -203,6 +206,7 @@ run_server() {
 }
 
 run_desktop() {
+	just --quiet _gen-typescript
 	run_suite desktop pnpm --dir apps/desktop exec vitest --config tooling/vite.config.ts run "${tool_args[@]}"
 }
 
@@ -243,4 +247,7 @@ for index in "${!failure_labels[@]}"; do
 done
 
 printf '\n✗ %d test runner(s) failed in %ds\n' "${#failure_labels[@]}" "$((SECONDS - started))" >&2
+if [ "$target" != "default" ] && [ "${#failure_statuses[@]}" -eq 1 ] && [ "${failure_statuses[0]}" -ne 124 ]; then
+	exit "${failure_statuses[0]}"
+fi
 exit 1

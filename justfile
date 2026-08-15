@@ -15,7 +15,7 @@ mod release 'just/release.just'
 mod update 'just/update.just'
 
 # Prepare this checkout for development. Pass --apply to make changes.
-setup *args:
+setup *args: _node
     #!/usr/bin/env bash
     set -euo pipefail
     [ "$#" -le 1 ] || { echo "Usage: just setup [--apply]" >&2; exit 2; }
@@ -24,10 +24,9 @@ setup *args:
         echo "Usage: just setup [--apply]" >&2
         exit 2
     fi
-    for tool in go node pnpm cargo git jq python3 rg; do
+    for tool in go pnpm cargo git jq python3 rg; do
         command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 2; }
     done
-    node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 22) { console.error("Node.js 22 or newer is required"); process.exit(2) }'
     if [ "$mode" = "" ]; then
         echo "Would download Go modules"
         echo "Would install frozen apps and docs dependencies"
@@ -41,12 +40,12 @@ setup *args:
 # Regenerate protobuf-derived Go and TypeScript sources.
 gen:
     go run github.com/bufbuild/buf/cmd/buf@v1.72.0 lint
-    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.go.yaml
-    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.ts.yaml
+    just _gen-go
+    just _gen-typescript
 
 # Run active tests, or select server, desktop, tui, or explicit frozen rust.
 test *args:
-    bash scripts/test.sh {{ args }}
+    @bash scripts/test.sh {{ args }}
 
 # Apply safe lint fixes, or pass --dry-run for read-only validation.
 lint *args:
