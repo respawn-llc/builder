@@ -318,6 +318,49 @@ func TestAskCtrlCFinishesPromptCancellationBeforeRuntimeInterrupt(t *testing.T) 
 	}
 }
 
+func TestAskCtrlCCanonicalResolutionPreservesRuntimeContinuation(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	control := newRecordingPromptControl()
+	runtimeClient := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(runtimeClient)
+	model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
+	model.setRuntimeActivityBusyForTest(true)
+	prompt := testQuestionPrompt("ask-canonical-interrupt-order", "Proceed?", "Yes", "No")
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(prompt)})
+
+	next, cancellationCommand := model.askController().handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(*uiModel)
+	rawResult := cancellationCommand()
+	result, ok := rawResult.(promptAnswerDeliveryResultMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("prompt cancellation result = %#v, want successful delivery result", rawResult)
+	}
+
+	resolved := cloneTranscriptPromptForAsk(prompt)
+	resolved.Status = clientui.TranscriptPromptStatusResolved
+	message := clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(resolved))
+	continuation := model.applyAdmittedTranscriptMessageState(message, runtimeTupleMergeResult{})
+	if continuation == nil {
+		t.Fatal("canonical prompt resolution dropped the pending global Ctrl+C continuation")
+	}
+	if testActiveAsk(model) != nil || testPromptAnswerDeliveryActive(model) {
+		t.Fatal("canonical prompt resolution retained prompt delivery ownership")
+	}
+	if staleCommand := model.askController().applyDeliveryResult(result); staleCommand != nil {
+		t.Fatal("stale delivery result scheduled a duplicate global Ctrl+C continuation")
+	}
+
+	next, interruptCommand := model.Update(continuation())
+	model = next.(*uiModel)
+	if interruptCommand == nil || runtimeClient.interruptCalls != 0 {
+		t.Fatal("canonical resolution did not defer runtime interruption to its command")
+	}
+	model = updateUIModel(t, model, interruptCommand())
+	if runtimeClient.interruptCalls != 1 {
+		t.Fatalf("runtime interrupt calls = %d, want one after canonical prompt resolution", runtimeClient.interruptCalls)
+	}
+}
+
 func TestAskDeliverySetupFailureKeepsQuestionActivity(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 	model, control := newProjectedPromptTestUIModel(t)

@@ -88,6 +88,7 @@ func (c uiAskController) resolvePrompt(promptID string) tea.Cmd {
 	if !m.ask.hasCurrent() || strings.TrimSpace(string(m.ask.current.prompt.PromptID)) != targetID {
 		return nil
 	}
+	continuationCmd := promptAnswerDeliveryContinuationCmd(m.ask.activeDelivery)
 	c.cancelActiveDelivery()
 	if len(m.ask.queue) > 0 {
 		next := m.ask.queue[0]
@@ -95,7 +96,7 @@ func (c uiAskController) resolvePrompt(promptID string) tea.Cmd {
 		c.setActiveAsk(next)
 		m.activity = uiActivityQuestion
 		m.setInputMode(uiInputModeAsk)
-		return m.scheduleCurrentQuestionProjection()
+		return tea.Batch(m.scheduleCurrentQuestionProjection(), continuationCmd)
 	}
 	m.ask.current = nil
 	m.ask.currentToken = nextNonZeroToken(m.ask.currentToken)
@@ -113,7 +114,7 @@ func (c uiAskController) resolvePrompt(promptID string) tea.Cmd {
 			m.activity = uiActivityIdle
 		}
 	}
-	return nil
+	return continuationCmd
 }
 
 func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -489,7 +490,7 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 	if m == nil || !m.ask.activeDelivery.matches(result.key, result.generation) {
 		return nil
 	}
-	continuation := m.ask.activeDelivery.continuation
+	continuationCmd := promptAnswerDeliveryContinuationCmd(m.ask.activeDelivery)
 	if result.err == nil {
 		c.cancelActiveDelivery()
 		hasNext := c.finishDeliveredPrompt()
@@ -500,10 +501,7 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 		} else {
 			m.activity = uiActivityIdle
 		}
-		if continuation == promptAnswerDeliveryContinuationRuntimeCtrlC {
-			return func() tea.Msg { return promptCtrlCContinuationMsg{} }
-		}
-		return nil
+		return continuationCmd
 	}
 	c.cancelActiveDelivery()
 	m.activity = uiActivityQuestion
@@ -511,6 +509,20 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 		return nil
 	}
 	return m.sendTransientStatusWithNoticeID(result.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+}
+
+func promptAnswerDeliveryContinuationCmd(delivery *activePromptAnswerDelivery) tea.Cmd {
+	if delivery == nil {
+		return nil
+	}
+	switch delivery.continuation {
+	case promptAnswerDeliveryContinuationNone:
+		return nil
+	case promptAnswerDeliveryContinuationRuntimeCtrlC:
+		return func() tea.Msg { return promptCtrlCContinuationMsg{} }
+	default:
+		panic(fmt.Sprintf("unknown prompt answer delivery continuation %d", delivery.continuation))
+	}
 }
 
 func askVisibleOptions(req clientui.TranscriptPrompt) []string {
