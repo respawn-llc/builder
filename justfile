@@ -89,11 +89,11 @@ _area-command *args:
 
 [private]
 _gen-go:
-    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.go.yaml
+    GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.go.yaml
 
 [private]
 _gen-typescript:
-    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.ts.yaml
+    GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.ts.yaml
 
 [private]
 _node:

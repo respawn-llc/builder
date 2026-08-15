@@ -56,6 +56,7 @@ These should guide default architectural choices in addition to user preferences
 ## Tooling
 Just is the sole public developer command interface. Do not add standalone developer scripts, package-manager scripts, or documented direct tool invocations that bypass it.
 
+- `docs/package.json` exposes only the Cloudflare Pages `build` callback. Contributors and repository automation use `just build docs`; delete the callback when Cloudflare Pages invokes Just or deployment moves out of the Pages Git integration.
 - Install a current Just release, then run `just setup --apply` to prepare dependencies and Git hooks. Bare `just setup` is read-only.
 - `just build`, `just test`, `just lint`, and `just check` operate on active Go, desktop, and docs areas. Use their typed variants for narrower work.
 - Frozen Rust remains explicit-only through the `rust` variants.

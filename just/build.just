@@ -15,7 +15,7 @@ rust *args:
 
 desktop *args:
     just _node
-    bash scripts/build-desktop.sh --skip-install -- {{args}}
+    bash scripts/build-desktop.sh --skip-install {{args}}
 
 docs *args:
     just _node
@@ -60,4 +60,4 @@ _desktop-smoke-macos bundle_dir:
 _desktop-ci-debug key:
     just _node
     pnpm --dir apps/desktop exec tauri signer generate -f -w {{key}} -p ""
-    TAURI_SIGNING_PRIVATE_KEY="$$(cat {{key}})" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" bash scripts/build-desktop.sh --skip-install -- --debug
+    TAURI_SIGNING_PRIVATE_KEY="$(cat {{key}})" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" bash scripts/build-desktop.sh --skip-install -- --debug

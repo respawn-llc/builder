@@ -4,6 +4,9 @@
   "type": "module",
   "version": "0.0.1",
   "packageManager": "pnpm@11.11.0",
+  "scripts": {
+    "build": "astro build && node ./scripts/emit-deployment-files.mjs"
+  },
   "dependencies": {
     "@astrojs/markdown-satteri": "^0.3.5",
     "@astrojs/sitemap": "^3.7.3",
