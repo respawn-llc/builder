@@ -207,12 +207,43 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      JUST_VERSION: 1.58.0
+      JUST_WINDOWS_ARM64_SHA256: 3a39ed629eb67678976c811a4da46f7985a2c22f4dbabe017b8b2eb5ceb5d01c
     steps:
       - uses: actions/checkout@v7.0.0
         with:
           persist-credentials: false
 
       - uses: extractions/setup-just@v3
+        if: matrix.runs_on != 'windows-11-arm'
+        with:
+          just-version: ${{ env.JUST_VERSION }}
+
+      - name: Install just on Windows ARM
+        if: matrix.runs_on == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $assetName = "just-$env:JUST_VERSION-aarch64-pc-windows-msvc.zip"
+          $archive = Join-Path $env:RUNNER_TEMP "just-windows-arm64.zip"
+          $installRoot = Join-Path $env:RUNNER_TEMP "just-windows-arm64"
+          Invoke-WebRequest `
+            -Uri "https://github.com/casey/just/releases/download/$env:JUST_VERSION/$assetName" `
+            -OutFile $archive
+
+          $actualHash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:JUST_WINDOWS_ARM64_SHA256) {
+            throw "Windows ARM64 just archive SHA-256 mismatch: expected $env:JUST_WINDOWS_ARM64_SHA256, got $actualHash"
+          }
+
+          Expand-Archive -Path $archive -DestinationPath $installRoot
+
+          $executables = @(Get-ChildItem -Path $installRoot -Filter just.exe -Recurse)
+          if ($executables.Count -ne 1) {
+            throw "Expected exactly one just.exe, found $($executables.Count)"
+          }
+          $executables[0].DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append
+          & $executables[0].FullName --version
 
       - name: Download release artifacts
         uses: actions/download-artifact@v8.0.1
@@ -316,6 +347,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: apps/desktop/src-tauri
+
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6.0.9

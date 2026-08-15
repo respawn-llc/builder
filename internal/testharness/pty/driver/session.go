@@ -20,6 +20,7 @@ import (
 )
 
 const sessionCommandCapacity = 64
+const sessionWriteStallTimeout = 15 * time.Second
 
 type SessionEventKind int
 
@@ -356,10 +357,8 @@ func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssemb
 }
 
 // writeAll is reactor-owned and does not report command completion until every
-// byte has been accepted by the nonblocking PTY. The bounded retry deadline
-// turns a saturated terminal into an explicit driver failure.
+// byte has been accepted by the nonblocking PTY.
 func (s *Session) writeAll(payload []byte) error {
-	deadline := time.Now().Add(500 * time.Millisecond)
 	for len(payload) > 0 {
 		count, err := unix.Write(s.fd, payload)
 		if count > 0 {
@@ -374,22 +373,15 @@ func (s *Session) writeAll(payload []byte) error {
 		if !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
 			return err
 		}
-		if err := s.waitWritable(deadline); err != nil {
+		if err := s.waitWritable(); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Session) waitWritable(deadline time.Time) error {
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
-		return errors.New("PTY write remained blocked")
-	}
-	timeout := int(remaining.Milliseconds())
-	if timeout == 0 {
-		timeout = 1
-	}
+func (s *Session) waitWritable() error {
+	timeout := int(sessionWriteStallTimeout.Milliseconds())
 	descriptors := []unix.PollFd{{
 		Fd:     int32(s.fd),
 		Events: unix.POLLOUT,
@@ -397,21 +389,16 @@ func (s *Session) waitWritable(deadline time.Time) error {
 	for {
 		ready, err := unix.Poll(descriptors, timeout)
 		if errors.Is(err, syscall.EINTR) {
-			remaining = time.Until(deadline)
-			if remaining <= 0 {
-				return errors.New("PTY write remained blocked")
-			}
-			timeout = int(remaining.Milliseconds())
-			if timeout == 0 {
-				timeout = 1
-			}
 			continue
 		}
 		if err != nil {
 			return fmt.Errorf("wait for PTY write capacity: %w", err)
 		}
-		if ready == 0 || descriptors[0].Revents&unix.POLLOUT == 0 {
-			return errors.New("PTY write remained blocked")
+		if ready == 0 {
+			return fmt.Errorf("PTY write made no progress for %s", sessionWriteStallTimeout)
+		}
+		if descriptors[0].Revents&unix.POLLOUT == 0 {
+			return fmt.Errorf("PTY became unavailable while waiting to write: revents=%d", descriptors[0].Revents)
 		}
 		return nil
 	}
