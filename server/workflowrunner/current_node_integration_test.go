@@ -610,11 +610,11 @@ func (f *currentNodeRunnerFixture) waitForTaskQuiescence(t *testing.T, taskID wo
 	t.Helper()
 	deadline := time.Now().Add(currentNodeRunnerWait)
 	for time.Now().Before(deadline) {
-		quiescence, err := f.controller.CurrentTaskQuiescence([]workflow.TaskID{taskID})
+		observation, err := f.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
 		if err != nil {
 			t.Fatalf("inspect Task quiescence: %v", err)
 		}
-		if quiescence[taskID] {
+		if observation.Quiescence[taskID] {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)

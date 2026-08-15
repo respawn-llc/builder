@@ -35,6 +35,14 @@ type countingAuthStatusStore struct {
 	loads int
 }
 
+func apiKeyAuthStatusState(key string, preference auth.EnvAPIKeyPreference) auth.State {
+	return auth.State{
+		Scope:               auth.ScopeGlobal,
+		Method:              auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: key}},
+		EnvAPIKeyPreference: preference,
+	}
+}
+
 func (s *countingAuthStatusStore) Load(context.Context) (auth.State, error) {
 	s.loads++
 	return s.state, nil
@@ -124,7 +132,6 @@ func TestStatusServiceDoesNotRefreshOAuthCredentials(t *testing.T) {
 			TokenType:    "Bearer",
 			Expiry:       now.Add(-time.Minute),
 			AccountID:    "acct-1",
-			Email:        "user@example.com",
 		}},
 		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
 	})
@@ -148,9 +155,7 @@ func TestStatusServiceDoesNotRefreshOAuthCredentials(t *testing.T) {
 		response.Resolution.Failure != nil ||
 		facts == nil ||
 		facts.Method != serverapi.AuthStatusMethodOAuth ||
-		facts.OAuth == nil ||
-		facts.OAuth.Email == nil ||
-		*facts.OAuth.Email != "user@example.com" {
+		facts.OAuth == nil {
 		t.Fatalf("resolution = %+v", response.Resolution)
 	}
 	if refreshCalls != 0 {
@@ -169,44 +174,17 @@ func TestStatusServiceResolvesEnvironmentAndSavedAPIKeyPreferences(t *testing.T)
 	tests := []struct {
 		name       string
 		persisted  auth.State
-		envKey     string
 		wantSuffix string
 		wantPref   serverapi.AuthStatusEnvPreference
 	}{
-		{
-			name:       "environment only",
-			persisted:  auth.EmptyState(),
-			envKey:     "env-secret-1111",
-			wantSuffix: "1111",
-			wantPref:   serverapi.AuthStatusEnvPreferenceUnspecified,
-		},
-		{
-			name: "prefer saved",
-			persisted: auth.State{
-				Scope:               auth.ScopeGlobal,
-				Method:              auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "saved-secret-2222"}},
-				EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
-			},
-			envKey:     "env-secret-1111",
-			wantSuffix: "2222",
-			wantPref:   serverapi.AuthStatusEnvPreferencePreferSaved,
-		},
-		{
-			name: "prefer environment",
-			persisted: auth.State{
-				Scope:               auth.ScopeGlobal,
-				Method:              auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "saved-secret-2222"}},
-				EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferEnv,
-			},
-			envKey:     "env-secret-1111",
-			wantSuffix: "1111",
-			wantPref:   serverapi.AuthStatusEnvPreferencePreferEnv,
-		},
+		{name: "environment only", persisted: auth.EmptyState(), wantSuffix: "1111", wantPref: serverapi.AuthStatusEnvPreferenceUnspecified},
+		{name: "prefer saved", persisted: apiKeyAuthStatusState("saved-2222", auth.EnvAPIKeyPreferencePreferSaved), wantSuffix: "2222", wantPref: serverapi.AuthStatusEnvPreferencePreferSaved},
+		{name: "prefer environment", persisted: apiKeyAuthStatusState("saved-2222", auth.EnvAPIKeyPreferencePreferEnv), wantSuffix: "1111", wantPref: serverapi.AuthStatusEnvPreferencePreferEnv},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := auth.NewEnvAPIKeyOverrideStore(auth.NewMemoryStore(test.persisted), func(key string) (string, bool) {
-				return test.envKey, key == "OPENAI_API_KEY"
+				return "env-secret-1111", key == "OPENAI_API_KEY"
 			})
 			service := NewStatusService(auth.NewManager(store, nil, time.Now), config.Settings{Model: "gpt-5"})
 			response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})

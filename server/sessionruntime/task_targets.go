@@ -36,6 +36,7 @@ type TaskExecution struct {
 	Script         *TaskScriptExecutionTarget
 	Queued         bool
 	PendingPrompts []PendingPromptReference
+	scopeID        runtimeids.ExecutionScopeID
 }
 
 type TaskExecutionSnapshot struct {
@@ -75,75 +76,50 @@ func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]
 	return snapshots, nil
 }
 
-func (a *Authority) publishWorkflowTaskExecutionReadSnapshot() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.publishWorkflowTaskExecutionReadSnapshotLocked()
-}
-
 func (a *Authority) publishWorkflowTaskExecutionReadSnapshotLocked() {
 	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
 	if err != nil {
 		panic(fmt.Sprintf("publish workflow Task execution read snapshot: %v", err))
 	}
+	a.workflowTaskReadMu.Lock()
+	defer a.workflowTaskReadMu.Unlock()
 	a.workflowTaskReads.Store(&workflowTaskExecutionReadSnapshot{executions: snapshots})
 }
 
-type WorkflowTaskExecutionState struct {
-	Running          int
-	WaitingQuestions int
-	WaitingApprovals int
-	Queued           int
-	Finalizing       int
-}
-
-func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (WorkflowTaskExecutionState, error) {
+func (a *Authority) publishWorkflowTaskPromptReadSnapshot(
+	scope ExecutionScope,
+	pending []PendingPromptReference,
+) {
 	if a == nil {
-		return WorkflowTaskExecutionState{}, errors.New("session runtime authority is required")
+		return
 	}
-	if strings.TrimSpace(string(taskID)) == "" {
-		return WorkflowTaskExecutionState{}, errors.New("workflow task id is required")
+	ref, workflowExecution := scope.Workflow()
+	if !workflowExecution {
+		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	state := WorkflowTaskExecutionState{}
-	for _, execution := range a.byScope {
-		ref, ok := execution.scope.Workflow()
-		if !ok || ref.CurrentNode.TaskID != taskID {
+	a.workflowTaskReadMu.Lock()
+	defer a.workflowTaskReadMu.Unlock()
+	current := a.workflowTaskReads.Load()
+	if current == nil {
+		return
+	}
+	snapshots := cloneTaskExecutionSnapshots(current.executions)
+	snapshot, exists := snapshots[ref.CurrentNode.TaskID]
+	if !exists {
+		return
+	}
+	for index := range snapshot.Executions {
+		if snapshot.Executions[index].scopeID != scope.ID() {
 			continue
 		}
-		switch execution.phase {
-		case executionPhaseQueued:
-			state.Queued++
-		case executionPhaseRunning:
-			pending, err := execution.prompts.pendingReferences()
-			if err != nil {
-				return WorkflowTaskExecutionState{}, err
-			}
-			questionPending := false
-			approvalPending := false
-			for _, prompt := range pending {
-				switch prompt.Kind {
-				case PendingPromptKindQuestion:
-					questionPending = true
-				case PendingPromptKindSessionApproval:
-					approvalPending = true
-				}
-			}
-			if questionPending {
-				state.WaitingQuestions++
-			} else if approvalPending {
-				state.WaitingApprovals++
-			} else if len(pending) == 0 {
-				state.Running++
-			}
-		case executionPhaseFinalizing:
-			state.Finalizing++
-		default:
-			return WorkflowTaskExecutionState{}, fmt.Errorf("workflow execution scope %s has invalid phase", execution.scope.ID())
-		}
+		snapshot.Executions[index].PendingPrompts = append(
+			[]PendingPromptReference(nil),
+			pending...,
+		)
+		snapshots[ref.CurrentNode.TaskID] = snapshot
+		a.workflowTaskReads.Store(&workflowTaskExecutionReadSnapshot{executions: snapshots})
+		return
 	}
-	return state, nil
 }
 
 func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
@@ -154,71 +130,59 @@ func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflo
 	return snapshots[taskID], nil
 }
 
-// CurrentWorkflowTaskExecutionSnapshots captures every live workflow Exact
-// Execution Scope once. Read models use this bounded process-local snapshot as
-// liveness evidence; SQLite never substitutes for it.
+// CurrentWorkflowTaskExecutionSnapshots returns the latest completed immutable
+// projection of workflow Exact Execution Scopes.
 func (a *Authority) CurrentWorkflowTaskExecutionSnapshots() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
-	if a == nil {
-		return nil, errors.New("session runtime authority is required")
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
-	if err != nil {
-		return nil, err
-	}
-	return snapshots, nil
+	return a.CurrentWorkflowTaskExecutionReadSnapshot()
 }
 
 func (a *Authority) CurrentProjectTaskExecutionSnapshots(projectID string) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
-	if a == nil {
-		return nil, errors.New("session runtime authority is required")
-	}
 	if strings.TrimSpace(projectID) == "" {
 		return nil, errors.New("workflow project id is required")
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
-	var snapshotErr error
-	for _, byTask := range a.workflowExecutions[projectID] {
-		for _, executions := range byTask {
-			for _, execution := range executions {
-				if snapshotErr == nil {
-					snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
-				}
+	snapshots, err := a.CurrentWorkflowTaskExecutionReadSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	for taskID, snapshot := range snapshots {
+		filtered := snapshot.Executions[:0]
+		for _, execution := range snapshot.Executions {
+			if execution.Ref.ProjectID == projectID {
+				filtered = append(filtered, execution)
 			}
 		}
+		if len(filtered) == 0 {
+			delete(snapshots, taskID)
+		} else {
+			snapshot.Executions = filtered
+			snapshots[taskID] = snapshot
+		}
 	}
-	if snapshotErr != nil {
-		return nil, snapshotErr
-	}
-	sortTaskExecutionSnapshots(snapshots)
 	return snapshots, nil
 }
 
 func (a *Authority) CurrentProjectWorkflowTaskExecutionSnapshots(projectID string, workflowID runtimeids.WorkflowID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
-	if a == nil {
-		return nil, errors.New("session runtime authority is required")
-	}
 	if strings.TrimSpace(projectID) == "" || workflowID.IsZero() {
 		return nil, errors.New("workflow execution scope is required")
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
-	var snapshotErr error
-	for _, executions := range a.workflowExecutions[projectID][workflowID] {
-		for _, execution := range executions {
-			if snapshotErr == nil {
-				snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
+	snapshots, err := a.CurrentProjectTaskExecutionSnapshots(projectID)
+	if err != nil {
+		return nil, err
+	}
+	for taskID, snapshot := range snapshots {
+		filtered := snapshot.Executions[:0]
+		for _, execution := range snapshot.Executions {
+			if execution.Ref.WorkflowID == workflowID {
+				filtered = append(filtered, execution)
 			}
 		}
+		if len(filtered) == 0 {
+			delete(snapshots, taskID)
+		} else {
+			snapshot.Executions = filtered
+			snapshots[taskID] = snapshot
+		}
 	}
-	if snapshotErr != nil {
-		return nil, snapshotErr
-	}
-	sortTaskExecutionSnapshots(snapshots)
 	return snapshots, nil
 }
 
@@ -239,17 +203,15 @@ func (a *Authority) CurrentScopedTaskExecutionSnapshots(projectID string, workfl
 		}
 		snapshots[taskID] = TaskExecutionSnapshot{Executions: []TaskExecution{}}
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	byTask := a.workflowExecutions[projectID][workflowID]
+	current, err := a.CurrentProjectWorkflowTaskExecutionSnapshots(projectID, workflowID)
+	if err != nil {
+		return nil, err
+	}
 	for taskID := range snapshots {
-		for _, execution := range byTask[taskID] {
-			if err := appendTaskExecutionSnapshot(snapshots, execution); err != nil {
-				return nil, err
-			}
+		if snapshot, ok := current[taskID]; ok {
+			snapshots[taskID] = snapshot
 		}
 	}
-	sortTaskExecutionSnapshots(snapshots)
 	return snapshots, nil
 }
 
@@ -274,8 +236,9 @@ func appendTaskExecutionSnapshotWithPrompts(
 		return errors.New("live workflow execution has an invalid phase")
 	}
 	target := TaskExecution{
-		Ref:    ref,
-		Queued: execution.phase == executionPhaseQueued,
+		Ref:     ref,
+		Queued:  execution.phase == executionPhaseQueued,
+		scopeID: execution.scope.ID(),
 	}
 	target.PendingPrompts = pendingPrompts
 	if resource, ok := execution.scope.Resource(); ok {

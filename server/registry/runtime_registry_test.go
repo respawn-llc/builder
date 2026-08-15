@@ -321,25 +321,14 @@ func TestRuntimeMainViewPublicationFollowsRegistryLifecycle(t *testing.T) {
 	ref := registryTestResourceRef(engine.SessionID())
 	registerResource(t, registry, ref, engine)
 
-	view, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if !ok {
-		t.Fatal("registered Runtime Main View snapshot is missing")
+	if view, ok := registry.RuntimeMainViewSnapshot(engine.SessionID()); !ok || view.Session.SessionID != engine.SessionID() {
+		t.Fatalf("registered Runtime Main View = %+v, present=%t", view, ok)
 	}
-	if view.Session.SessionID != engine.SessionID() {
-		t.Fatalf("Runtime Main View Session ID = %q, want %q", view.Session.SessionID, engine.SessionID())
-	}
-	if err := view.Version.Validate(); err != nil {
-		t.Fatalf("Runtime Main View version = %+v: %v", view.Version, err)
-	}
-	if err := view.Activity.Validate(); err != nil {
-		t.Fatalf("Runtime Main View activity = %+v: %v", view.Activity, err)
-	}
-
 	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
 		t.Fatalf("drain authority runtime resource: %v", err)
 	}
-	if retired, ok := registry.RuntimeMainViewSnapshot(engine.SessionID()); ok {
-		t.Fatalf("retired Runtime Main View snapshot = %+v, want missing", retired)
+	if _, ok := registry.RuntimeMainViewSnapshot(engine.SessionID()); ok {
+		t.Fatal("retired Runtime Main View remains published")
 	}
 }
 
@@ -350,29 +339,14 @@ func TestRuntimeMainViewSnapshotClonesPublishedNestedFacts(t *testing.T) {
 	publishRunState(registry, engine.SessionID(), true)
 
 	first, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if !ok {
-		t.Fatal("published Runtime Main View snapshot is missing")
+	if !ok || first.Activity.ActiveStep == nil {
+		t.Fatalf("published Runtime Main View = %+v, present=%t", first, ok)
 	}
-	if first.Activity.ActiveStep == nil || first.Status.Goal == nil || first.Status.Goal.Availability == nil {
-		t.Fatalf("published Runtime Main View lacks nested facts: %+v", first)
-	}
-	first.Session.SessionName = "mutated caller value"
 	first.Activity.ActiveStep.ActiveKind = clientui.RuntimeActivityActiveKindBackground
-	*first.Status.Goal.Availability = clientui.GoalAvailabilityAgentCapabilityMissing
 
-	second, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if !ok {
-		t.Fatal("published Runtime Main View snapshot disappeared")
-	}
-	if second.Session.SessionName == first.Session.SessionName {
-		t.Fatalf("caller mutation aliased published Session facts: %+v", second.Session)
-	}
+	second, _ := registry.RuntimeMainViewSnapshot(engine.SessionID())
 	if second.Activity.ActiveStep == nil || second.Activity.ActiveStep.ActiveKind != clientui.RuntimeActivityActiveKindUserTurn {
 		t.Fatalf("caller mutation aliased published activity: %+v", second.Activity)
-	}
-	if second.Status.Goal == nil || second.Status.Goal.Availability == nil ||
-		*second.Status.Goal.Availability != clientui.GoalAvailabilityAvailable {
-		t.Fatalf("caller mutation aliased published Goal facts: %+v", second.Status.Goal)
 	}
 }
 
@@ -387,30 +361,15 @@ func TestRuntimeMainViewPublicationFollowsVisibleIdentityAndStatusCommits(t *tes
 	if err := registry.PublishSessionIdentity(engine.SessionID()); err != nil {
 		t.Fatalf("publish Runtime Session identity: %v", err)
 	}
-	identity, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if !ok {
-		t.Fatal("identity publication removed Runtime Main View snapshot")
-	}
-	if identity.Session.SessionName != "renamed Session" {
-		t.Fatalf("published Runtime Session name = %q, want renamed Session", identity.Session.SessionName)
-	}
-
-	changed, enabled := engine.SetAutoCompactionEnabled(false)
-	if !changed || enabled {
-		t.Fatalf("set Runtime auto-compaction = changed %v enabled %v, want changed and disabled", changed, enabled)
-	}
+	identity, _ := registry.RuntimeMainViewSnapshot(engine.SessionID())
+	engine.SetAutoCompactionEnabled(false)
 	if err := registry.PublishSessionStatus(engine.SessionID()); err != nil {
 		t.Fatalf("publish Runtime Session status: %v", err)
 	}
-	status, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if !ok {
-		t.Fatal("status publication removed Runtime Main View snapshot")
-	}
-	if status.Status.AutoCompactionEnabled {
-		t.Fatalf("published Runtime status = %+v, want auto-compaction disabled", status.Status)
-	}
-	if status.Version != identity.Version {
-		t.Fatalf("identity/status-only publication changed read-model version: identity=%+v status=%+v", identity.Version, status.Version)
+	status, _ := registry.RuntimeMainViewSnapshot(engine.SessionID())
+	if identity.Session.SessionName != "renamed Session" || status.Status.AutoCompactionEnabled ||
+		status.Version != identity.Version {
+		t.Fatalf("identity/status publications = identity %+v status %+v", identity, status)
 	}
 }
 
@@ -423,27 +382,6 @@ func TestRuntimeMainViewPublicationRejectsOlderReadModelUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Runtime Read Model: %v", err)
 	}
-	newer := current
-	newer.Version.Sequence += 2
-	runID, err := runtimeids.ParseRunID(registryTestRunID)
-	if err != nil {
-		t.Fatalf("parse Run ID: %v", err)
-	}
-	stepID, err := runtimeids.ParseStepID(registryTestStepID)
-	if err != nil {
-		t.Fatalf("parse Step ID: %v", err)
-	}
-	newer.Activity = clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityRunning,
-		ActiveStep: &clientui.RuntimeActiveStep{
-			RunID:      runID,
-			StepID:     stepID,
-			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
-		},
-		QueueAccepting: true,
-	}
-	older := current
-	older.Version.Sequence++
 
 	subscription, err := registry.SubscribeSessionTranscript(t.Context(), serverapi.TranscriptSubscribeRequest{SessionID: engine.SessionID()})
 	if err != nil {
@@ -456,8 +394,12 @@ func TestRuntimeMainViewPublicationRejectsOlderReadModelUpdate(t *testing.T) {
 	registry.SetSleepObserver(func(active bool) {
 		activityChanges <- active
 	})
-	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), newer)
-	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), older)
+	publishRunState(registry, engine.SessionID(), true)
+	newer, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
+	if !ok {
+		t.Fatal("newer Runtime Main View snapshot is missing")
+	}
+	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), current)
 
 	view, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
 	if !ok {

@@ -573,15 +573,9 @@ func (s startupServerStatusService) GetUpdateStatus(ctx context.Context, req ser
 		return serverapi.UpdateStatusResponse{}, err
 	}
 	if state := s.readiness; !state.Ready {
-		reason := serverapi.ServerNotReadyOnboardingRequired
-		if state.Reason != nil {
-			reason = *state.Reason
-		}
-		var details any
-		if state.Diagnostic != nil {
-			details = serverapi.ServerNotReadyDetails{Diagnostic: state.Diagnostic}
-		}
-		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(reason, details, nil)
+		return serverapi.UpdateStatusResponse{
+			Result: serverapi.CheckUnavailableUpdateStatusResult(),
+		}, nil
 	}
 	if s.activeCore == nil {
 		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)

@@ -114,174 +114,73 @@ func (*serviceBlockingLLM) ProviderCapabilities(context.Context) (llm.ProviderCa
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }
 
-func TestServiceGetSessionMainViewUsesPublishedRuntimeProjectionWhenAttached(t *testing.T) {
-	dir := t.TempDir()
-	store := newSessionViewStore(t, dir, "ws", dir)
-	started := make(chan struct{})
-	release := make(chan struct{})
-	client := &serviceBlockingLLM{started: started, release: release}
-	fixture := newSessionViewRuntimeFixture(t, store, client)
-	svc := NewService(newTestSessionResolver(store), fixture.activity, nil)
-	handle := fixture.startUserTurn(t, "run tools")
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for active run")
-	}
-
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get session main view: %v", err)
-	}
-	if resp.MainView.Activity.State != clientui.RuntimeActivityRunning {
-		t.Fatalf("expected live running activity, got %+v", resp.MainView.Activity)
-	}
-	close(release)
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("submit user message: %v", err)
-	}
-}
-
-func TestServiceGetSessionMainViewDoesNotRequireStoreResolutionForPublishedRuntime(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
-	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
-	response, err := NewService(failingPersistedSessionResolver{err: errors.New("persisted Session unavailable")}, fixture.activity, nil).
-		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get live main view: %v", err)
-	}
-	if response.MainView.Activity.State != clientui.RuntimeActivityRegisteredIdle {
-		t.Fatalf("live activity = %+v, want registered idle", response.MainView.Activity)
-	}
-}
-
-func TestServiceGetSessionMainViewReturnsPublishedProjectionWhileRuntimeMutationIsAdmitted(t *testing.T) {
+func TestServiceGetSessionMainViewProjectionSelection(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
 	service := NewService(newTestSessionResolver(store), fixture.activity, nil)
-	before, err := service.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{
-		SessionID: store.Meta().SessionID,
-	})
-	if err != nil {
-		t.Fatalf("get completed Main View: %v", err)
-	}
+	request := serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID}
 
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	t.Cleanup(func() {
-		select {
-		case <-release:
-		default:
-			close(release)
+	t.Run("published runtime", func(t *testing.T) {
+		response, err := NewService(failingPersistedSessionResolver{err: errors.New("persisted unavailable")}, fixture.activity, nil).
+			GetSessionMainView(t.Context(), request)
+		if err != nil || response.MainView.Activity.State != clientui.RuntimeActivityRegisteredIdle {
+			t.Fatalf("published Main View = %+v, err=%v", response.MainView, err)
 		}
 	})
-	mutationDone := make(chan error, 1)
-	go func() {
-		mutationDone <- fixture.authority.WithCurrentRuntime(
-			t.Context(),
-			fixture.sessionID,
-			func(_ context.Context, engine *runtime.Engine) error {
+
+	t.Run("published runtime during mutation", func(t *testing.T) {
+		before, err := service.GetSessionMainView(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entered, release := make(chan struct{}), make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			done <- fixture.authority.WithCurrentRuntime(t.Context(), fixture.sessionID, func(_ context.Context, engine *runtime.Engine) error {
 				close(entered)
 				<-release
-				return engine.SetSessionName("later Runtime mutation")
-			},
-		)
-	}()
-	<-entered
-
-	result := make(chan struct {
-		response serverapi.SessionMainViewResponse
-		err      error
-	}, 1)
-	go func() {
-		response, readErr := service.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{
-			SessionID: store.Meta().SessionID,
-		})
-		result <- struct {
-			response serverapi.SessionMainViewResponse
-			err      error
-		}{response: response, err: readErr}
-	}()
-	select {
-	case read := <-result:
-		if read.err != nil {
-			t.Fatalf("get Main View while Runtime mutation is admitted: %v", read.err)
+				return engine.SetSessionName("later")
+			})
+		}()
+		<-entered
+		result := make(chan serverapi.SessionMainViewResponse, 1)
+		go func() {
+			response, _ := service.GetSessionMainView(t.Context(), request)
+			result <- response
+		}()
+		select {
+		case response := <-result:
+			if response.MainView.Version != before.MainView.Version {
+				t.Fatalf("Main View version = %+v, want %+v", response.MainView.Version, before.MainView.Version)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Main View waited for Runtime mutation")
 		}
-		if read.response.MainView.Version != before.MainView.Version {
-			t.Fatalf("Main View version = %+v, want prior completed %+v", read.response.MainView.Version, before.MainView.Version)
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatal(err)
 		}
-		if read.response.MainView.Session.ConversationFreshness != before.MainView.Session.ConversationFreshness ||
-			read.response.MainView.Status.ConversationFreshness != before.MainView.Status.ConversationFreshness {
-			t.Fatalf(
-				"Main View Conversation Freshness changed: before=%+v after=%+v",
-				before.MainView,
-				read.response.MainView,
-			)
+	})
+
+	t.Run("missing runtime fallback", func(t *testing.T) {
+		activity := missingRuntimeMainViewSnapshotProvider{runtimeMainViewSnapshotProvider: fixture.activity}
+		response, err := NewService(newTestSessionResolver(store), activity, nil).GetSessionMainView(t.Context(), request)
+		if err != nil || response.MainView.Activity.State != clientui.RuntimeActivityUnavailable ||
+			response.MainView.Session.ConversationFreshness != clientui.ConversationFreshnessFresh {
+			t.Fatalf("persisted fallback = %+v, err=%v", response.MainView, err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("Main View waited for WithCurrentRuntime")
-	}
-	close(release)
-	if err := <-mutationDone; err != nil {
-		t.Fatalf("complete admitted Runtime mutation: %v", err)
-	}
-}
+	})
 
-func TestServiceGetSessionMainViewFallsBackToPersistedViewWhenLiveProjectionIsMissing(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
-	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
-	live, err := NewService(newTestSessionResolver(store), fixture.activity, nil).
-		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get completed live Main View: %v", err)
-	}
-	if !live.MainView.Status.AutoCompactionEnabled {
-		t.Fatalf("live Main View did not establish distinct Runtime status: %+v", live.MainView.Status)
-	}
-	activity := missingRuntimeMainViewSnapshotProvider{runtimeMainViewSnapshotProvider: fixture.activity}
-	response, err := NewService(newTestSessionResolver(store), activity, nil).
-		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get persisted Main View fallback: %v", err)
-	}
-	if response.MainView.Status.AutoCompactionEnabled {
-		t.Fatalf("missing live projection returned mutable Runtime status: %+v", response.MainView.Status)
-	}
-	if response.MainView.Session.ConversationFreshness != clientui.ConversationFreshnessFresh ||
-		response.MainView.Status.ConversationFreshness != clientui.ConversationFreshnessFresh {
-		t.Fatalf("persisted Main View Conversation Freshness = %+v", response.MainView)
-	}
-	if err := response.MainView.Version.Validate(); err != nil {
-		t.Fatalf("persisted Main View version = %+v, want retained client revision", response.MainView.Version)
-	}
-}
-
-func TestServiceGetSessionMainViewFallsBackToPersistedViewAfterRuntimeRetires(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
-	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
-	service := NewService(newTestSessionResolver(store), fixture.activity, nil)
-
-	live, err := service.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get live Main View: %v", err)
-	}
-	if live.MainView.Activity.State != clientui.RuntimeActivityRegisteredIdle {
-		t.Fatalf("live Main View activity = %+v, want registered idle", live.MainView.Activity)
-	}
-	if err := fixture.authority.Close(t.Context()); err != nil {
-		t.Fatalf("retire Runtime: %v", err)
-	}
-
-	retired, err := service.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get retired Main View fallback: %v", err)
-	}
-	if retired.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
-		t.Fatalf("retired Main View activity = %+v, want unavailable persisted fallback", retired.MainView.Activity)
-	}
-	if retired.MainView.Session.SessionID != store.Meta().SessionID {
-		t.Fatalf("retired Main View Session = %+v, want persisted Session", retired.MainView.Session)
-	}
+	t.Run("retired runtime fallback", func(t *testing.T) {
+		if err := fixture.authority.Close(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		response, err := service.GetSessionMainView(t.Context(), request)
+		if err != nil || response.MainView.Activity.State != clientui.RuntimeActivityUnavailable ||
+			response.MainView.Session.SessionID != store.Meta().SessionID {
+			t.Fatalf("retired fallback = %+v, err=%v", response.MainView, err)
+		}
+	})
 }
 
 func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {

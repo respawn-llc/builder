@@ -66,7 +66,7 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 	current := c.taskExecutionReads.Load()
 	if current == nil {
 		for taskID := range selected {
-			observation.Quiescence[taskID] = true
+			observation.Quiescence[taskID] = false
 		}
 		return observation, nil
 	}
@@ -74,6 +74,10 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		return WorkflowTaskExecutionObservation{}, errors.New("current node workflow controller is closed")
 	}
 	observation.ConcurrencyQueued = cloneConcurrencyQueued(current.concurrencyQueued)
+	if taskIDs == nil {
+		observation.Quiescence = cloneTaskQuiescence(current.quiescence)
+		return observation, nil
+	}
 	for taskID := range selected {
 		quiescent, exists := current.quiescence[taskID]
 		if !exists {
@@ -82,6 +86,14 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		observation.Quiescence[taskID] = quiescent
 	}
 	return observation, nil
+}
+
+func cloneTaskQuiescence(source map[workflow.TaskID]bool) map[workflow.TaskID]bool {
+	cloned := make(map[workflow.TaskID]bool, len(source))
+	for taskID, quiescent := range source {
+		cloned[taskID] = quiescent
+	}
+	return cloned
 }
 
 func (c *CurrentNodeController) publishTaskExecutionReadSnapshotLocked() {

@@ -134,6 +134,10 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		offset = *req.Offset
 	}
 	workspaceContext := boardProjectWorkspaceContext(project)
+	observation, err := b.projection.Observe(nil)
+	if err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
 	var tasks []sqlitegen.TaskRecord
 	var dependencyProgressByTaskID map[string]*serverapi.WorkflowTaskDependencyProgress
 	var projectedByTaskID map[workflow.TaskID]TaskStatusProjectionResult
@@ -172,21 +176,11 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		if hasExtra {
 			tasks = tasks[:pageSize]
 		}
-		return nil
+		projectTaskIDs := workflowTaskIDs(taskIDs(tasks))
+		projectedByTaskID, err = b.projection.Project(ctx, observation, durable, projectTaskIDs)
+		return err
 	})
 	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	projectTaskIDs := workflowTaskIDs(taskIDs(tasks))
-	if err := b.projection.WithSnapshot(
-		ctx,
-		projectTaskIDs,
-		func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
-			var err error
-			projectedByTaskID, err = b.projection.Project(ctx, observation, durable, projectTaskIDs)
-			return err
-		},
-	); err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
 	taskIDStrings := taskIDs(tasks)

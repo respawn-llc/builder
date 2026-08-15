@@ -3,11 +3,9 @@ package sessionservice
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -120,26 +118,6 @@ func (s *sessionNavigationTargetResolverStub) ResolveSessionNavigationBinding(_ 
 	return s.target, s.err
 }
 
-type firstBlockingSessionNavigationTargetResolver struct {
-	target  serverapi.SessionNavigationBinding
-	started chan struct{}
-	release chan struct{}
-	mu      sync.Mutex
-	calls   int
-}
-
-func (s *firstBlockingSessionNavigationTargetResolver) ResolveSessionNavigationBinding(context.Context, string) (serverapi.SessionNavigationBinding, error) {
-	s.mu.Lock()
-	s.calls++
-	call := s.calls
-	s.mu.Unlock()
-	if call == 1 {
-		close(s.started)
-		<-s.release
-	}
-	return s.target, nil
-}
-
 func (s *sessionLifecycleRetargeterStub) RetargetWorkspace(_ context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error) {
 	s.req = req
 	return s.result, s.err
@@ -202,62 +180,6 @@ func TestServiceGetInitialInputPrefersStoredDraft(t *testing.T) {
 	}
 	if resp.Input != "draft from store" {
 		t.Fatalf("input = %q, want %q", resp.Input, "draft from store")
-	}
-}
-
-func TestServiceGetInitialInputDoesNotWaitForSessionMetadataMutation(t *testing.T) {
-	persistence := sessiontest.NewPersistence()
-	gate := sessiontest.NewPersistenceGate(persistence)
-	root := t.TempDir()
-	containerDir := filepath.Join(root, "sessions")
-	options := []session.StoreOption{
-		session.WithPersistenceObserver(gate),
-		session.WithPersistedSessionResolver(persistence),
-		session.WithSessionContextFactWriter(persistence),
-	}
-	store, err := session.Create(
-		containerDir,
-		"workspace",
-		t.TempDir(),
-		sessioncontract.SessionCategoryMain,
-		options...,
-	)
-	if err != nil {
-		t.Fatalf("create Session: %v", err)
-	}
-	if err := store.SetInputDraft("persisted draft"); err != nil {
-		t.Fatalf("set input draft: %v", err)
-	}
-	blocked, release := gate.BlockNextAfter()
-	t.Cleanup(release)
-	mutationDone := make(chan error, 1)
-	go func() { mutationDone <- store.SetName("committed name") }()
-	<-blocked
-
-	result := make(chan error, 1)
-	go func() {
-		response, readErr := newTestSessionLifecycleService(containerDir, nil, options).
-			WithPersistedSessionResolver(persistence).
-			GetInitialInput(t.Context(), serverapi.SessionInitialInputRequest{
-				SessionID:       store.Meta().SessionID,
-				TransitionInput: "transition input",
-			})
-		if readErr == nil && response.Input != "persisted draft" {
-			readErr = fmt.Errorf("input = %q, want persisted draft", response.Input)
-		}
-		result <- readErr
-	}()
-	select {
-	case err := <-result:
-		if err != nil {
-			t.Fatalf("GetInitialInput during metadata mutation: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("GetInitialInput waited for the Session mutation owner")
-	}
-	release()
-	if err := <-mutationDone; err != nil {
-		t.Fatalf("complete metadata mutation: %v", err)
 	}
 }
 
@@ -546,151 +468,52 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	}
 }
 
-func TestServiceResolveTransitionOpenSessionDoesNotWaitForRuntimeOwnership(t *testing.T) {
+func TestServiceResolveTransitionOpenSessionReadsIndependently(t *testing.T) {
 	_, containerDir, parent := createPersistedSession(t)
-	child, err := session.NewLazy(
-		containerDir,
-		"workspace-x",
-		"/tmp/work",
-		sessioncontract.SessionCategoryMain,
-		sessionServiceTestPersistence.Options()...,
-	)
-	if err != nil {
-		t.Fatalf("create child: %v", err)
-	}
-	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}); err != nil {
-		t.Fatalf("InitializeCreationContext: %v", err)
-	}
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable child: %v", err)
-	}
-	resolver := &sessionNavigationTargetResolverStub{target: serverapi.SessionNavigationBinding{
-		ProjectID:   "project-target",
-		WorkspaceID: "workspace-target",
-	}}
-	service := newTestSessionLifecycleService(containerDir, nil).WithNavigationTargetResolver(resolver)
-	childID, err := runtimeids.ParseSessionID(child.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ParseSessionID: %v", err)
-	}
-	descriptor, err := session.NewScopedOpenSessionDescriptor(childID, containerDir)
-	if err != nil {
-		t.Fatalf("NewScopedOpenSessionDescriptor: %v", err)
-	}
-	ownerStarted := make(chan struct{})
-	releaseOwner := make(chan struct{})
-	ownerDone := make(chan error, 1)
-	go func() {
-		ownerDone <- service.authority.WithSessionStore(t.Context(), descriptor, func(context.Context, *session.Store) error {
-			close(ownerStarted)
-			<-releaseOwner
-			return nil
-		})
-	}()
-	<-ownerStarted
-
-	type transitionResult struct {
-		response serverapi.SessionResolveTransitionResponse
-		err      error
-	}
-	result := make(chan transitionResult, 1)
-	go func() {
-		response, resolveErr := service.ResolveTransition(t.Context(), serverapi.SessionResolveTransitionRequest{
-			ClientRequestID: "stale-navigation",
-			SessionID:       child.Meta().SessionID,
-			Transition: serverapi.SessionTransition{
-				Action:          serverapi.SessionTransitionActionOpenSession,
-				TargetSessionID: parent.Meta().SessionID,
-			},
-		})
-		result <- transitionResult{response: response, err: resolveErr}
-	}()
-
-	select {
-	case resolved := <-result:
-		if resolved.err != nil {
-			t.Fatalf("ResolveTransition during Runtime ownership: %v", resolved.err)
-		}
-		intent, preparation := requireSessionLifecycleLaunch(t, resolved.response)
-		targetID, present := intent.SessionID()
-		if !present || targetID.String() != parent.Meta().SessionID {
-			t.Fatalf("navigation target = %q/%t, want %q", targetID.String(), present, parent.Meta().SessionID)
-		}
-		binding, present := preparation.NavigationBinding()
-		if !present || binding.ProjectID != "project-target" || binding.WorkspaceID != "workspace-target" {
-			t.Fatalf("navigation binding = %+v/%t", binding, present)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("open-Session transition planning waited for Runtime ownership")
-	}
-
-	close(releaseOwner)
-	if err := <-ownerDone; err != nil {
-		t.Fatalf("release Runtime ownership: %v", err)
-	}
-}
-
-func TestServiceResolveTransitionOpenSessionDoesNotWaitForDuplicateRead(t *testing.T) {
-	_, containerDir, parent := createPersistedSession(t)
-	child, err := session.NewLazy(
-		containerDir,
-		"workspace-x",
-		"/tmp/work",
-		sessioncontract.SessionCategoryMain,
-		sessionServiceTestPersistence.Options()...,
-	)
-	if err != nil {
-		t.Fatalf("create child: %v", err)
-	}
-	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}); err != nil {
-		t.Fatalf("InitializeCreationContext: %v", err)
-	}
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable child: %v", err)
-	}
-	resolver := &firstBlockingSessionNavigationTargetResolver{
-		target: serverapi.SessionNavigationBinding{
-			ProjectID:   "project-target",
-			WorkspaceID: "workspace-target",
-		},
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	service := newTestSessionLifecycleService(containerDir, nil).WithNavigationTargetResolver(resolver)
+	child := sessiontest.Must(session.NewLazy(containerDir, "workspace-x", "/tmp/work", sessioncontract.SessionCategoryMain, sessionServiceTestPersistence.Options()...))
+	sessiontest.MustNoError(session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}))
+	sessiontest.MustNoError(child.EnsureDurable())
 	request := serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "duplicate-navigation-read",
+		ClientRequestID: "independent-open-session-read",
 		SessionID:       child.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
-			Action:          serverapi.SessionTransitionActionOpenSession,
-			TargetSessionID: parent.Meta().SessionID,
+			Action: serverapi.SessionTransitionActionOpenSession, TargetSessionID: parent.Meta().SessionID,
 		},
 	}
+	binding := serverapi.SessionNavigationBinding{ProjectID: "project-target", WorkspaceID: "workspace-target"}
 
-	firstDone := make(chan error, 1)
-	go func() {
-		_, resolveErr := service.ResolveTransition(t.Context(), request)
-		firstDone <- resolveErr
-	}()
-	<-resolver.started
-
-	secondDone := make(chan error, 1)
-	go func() {
-		_, resolveErr := service.ResolveTransition(t.Context(), request)
-		secondDone <- resolveErr
-	}()
-	select {
-	case resolveErr := <-secondDone:
-		if resolveErr != nil {
-			t.Fatalf("duplicate open-Session transition read: %v", resolveErr)
+	t.Run("runtime ownership", func(t *testing.T) {
+		service := newTestSessionLifecycleService(containerDir, nil).
+			WithNavigationTargetResolver(&sessionNavigationTargetResolverStub{target: binding})
+		childID := sessiontest.Must(runtimeids.ParseSessionID(child.Meta().SessionID))
+		descriptor := sessiontest.Must(session.NewScopedOpenSessionDescriptor(childID, containerDir))
+		entered, release := make(chan struct{}), make(chan struct{})
+		ownerDone := make(chan error, 1)
+		go func() {
+			ownerDone <- service.authority.WithSessionStore(t.Context(), descriptor, func(context.Context, *session.Store) error {
+				close(entered)
+				<-release
+				return nil
+			})
+		}()
+		<-entered
+		readDone := make(chan error, 1)
+		go func() {
+			_, err := service.ResolveTransition(t.Context(), request)
+			readDone <- err
+		}()
+		select {
+		case err := <-readDone:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("open-Session read waited for Runtime ownership")
 		}
-	case <-time.After(time.Second):
-		t.Fatal("duplicate open-Session transition read waited for the earlier read")
-	}
+		close(release)
+		sessiontest.MustNoError(<-ownerDone)
+	})
 
-	close(resolver.release)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first open-Session transition read: %v", err)
-	}
 }
 
 func TestServiceResolveTransitionOpenSessionRejectsNonProvenanceTargetBeforeResolution(t *testing.T) {

@@ -25,16 +25,15 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("persisted session resolver is required")
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
-	view, err := session.ResolvePersistedSessionView(ctx, s.persisted, sessionID)
+	record, err := session.ResolvePersistedSessionRecord(ctx, s.persisted, sessionID)
 	if err != nil {
-		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("open persisted session %q: %w", sessionID, err)
+		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve persisted session %q: %w", sessionID, err)
 	}
-	meta := view.Meta()
-	availability, err := session.GoalAvailabilityFromMeta(meta)
+	availability, err := session.GoalAvailabilityFromMeta(*record.Meta)
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve Goal availability for session %q: %w", sessionID, err)
 	}
-	return serverapi.RuntimeGoalShowResponse{GoalEnvelope: clientui.GoalEnvelope{Goal: runtimeview.GoalCoreFromSessionState(meta.Goal), Availability: runtimeview.GoalAvailabilityFromSession(availability)}}, nil
+	return serverapi.RuntimeGoalShowResponse{GoalEnvelope: clientui.GoalEnvelope{Goal: runtimeview.GoalCoreFromSessionState(record.Meta.Goal), Availability: runtimeview.GoalAvailabilityFromSession(availability)}}, nil
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {

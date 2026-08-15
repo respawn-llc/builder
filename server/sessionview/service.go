@@ -132,11 +132,11 @@ func (s *Service) readDormantSessionChatContext(ctx context.Context, sessionID r
 	if s.contextWorkspaces == nil {
 		return serverapi.ChatContext{}, errors.New("fresh workspace config resolver is required")
 	}
-	view, err := resolvePersistedSessionView(ctx, s.persisted, sessionID.String())
+	record, err := session.ResolvePersistedSessionRecord(ctx, s.persisted, sessionID.String())
 	if err != nil {
 		return serverapi.ChatContext{}, err
 	}
-	snapshot := view.ContextSnapshot()
+	snapshot := session.ContextSnapshot{Meta: *record.Meta, Facts: record.ContextFacts}
 	target, err := s.targets.ResolveSessionExecutionTarget(ctx, sessionID.String())
 	if err != nil {
 		return serverapi.ChatContext{}, err
@@ -299,11 +299,11 @@ func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req server
 	if s == nil || s.persisted == nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, errPersistedSessionResolverRequired
 	}
-	view, err := resolvePersistedSessionView(ctx, s.persisted, req.SessionID.String())
+	record, err := session.ResolvePersistedSessionRecord(ctx, s.persisted, req.SessionID.String())
 	if err != nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, err
 	}
-	meta := view.Meta()
+	meta := *record.Meta
 	if strings.TrimSpace(meta.SessionID) != req.SessionID.String() {
 		return serverapi.SessionExecutionEnvironmentResponse{}, fmt.Errorf("session execution environment identity mismatch: requested %q, resolved %q", req.SessionID.String(), meta.SessionID)
 	}

@@ -397,6 +397,7 @@ func isGatewayPreActivationOperation(method string) bool {
 	switch method {
 	case protocol.MethodHandshake,
 		protocol.MethodServerReadinessGet,
+		protocol.MethodServerUpdateStatusGet,
 		protocol.MethodAuthGetBootstrapStatus,
 		protocol.MethodAuthCompleteBootstrap,
 		protocol.MethodAuthAcknowledgeNoAuth,

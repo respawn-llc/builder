@@ -163,7 +163,7 @@ func TestReadDormantSessionChatContextUsesCurrentRoleSettingsWithLockedContinuit
 	}
 }
 
-func TestReadDormantSessionChatContextRejectsMalformedEventLogWithoutMaterialization(t *testing.T) {
+func TestReadDormantSessionChatContextUsesProductionPersistenceResolverWithoutEventLogMaterialization(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
 	metadataStore, err := metadata.Open(persistenceRoot)
@@ -210,21 +210,14 @@ func TestReadDormantSessionChatContextRejectsMalformedEventLogWithoutMaterializa
 		app: config.App{Settings: settings},
 	}).WithChatContextAuthReader(&sessionChatContextAuthReader{})
 
-	before, err := os.ReadFile(filepath.Join(store.Dir(), "events.jsonl"))
+	got, err := service.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
 	if err != nil {
-		t.Fatalf("read malformed event log before Context read: %v", err)
+		t.Fatalf("ReadSessionChatContext: %v", err)
 	}
-	_, err = service.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
-	var materializationErr *session.EventLogMaterializationError
-	if !errors.As(err, &materializationErr) {
-		t.Fatalf("ReadSessionChatContext error = %v, want EventLogMaterializationError", err)
-	}
-	after, err := os.ReadFile(filepath.Join(store.Dir(), "events.jsonl"))
-	if err != nil {
-		t.Fatalf("read malformed event log after Context read: %v", err)
-	}
-	if string(after) != string(before) {
-		t.Fatal("Chat Context read materialized or repaired malformed event log")
+	if got.UsedTokens != 42_000 ||
+		got.CompletedCompactionCount != 2 ||
+		!got.ManualCompactAvailable {
+		t.Fatalf("production persisted Context = %+v", got)
 	}
 }
 

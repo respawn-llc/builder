@@ -16,7 +16,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/sessionruntime"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -201,10 +200,7 @@ func newSessionLaunchTestService(cfg config.App, containerDir string) *Service {
 		StoreOptions:             serviceTestPersistence.Options(),
 		PersistedSessions:        serviceTestPersistence,
 		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: cfg.WorkspaceRoot},
-	}).WithRuntimeAuthority(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: cfg.PersistenceRoot,
-		StoreOptions:    serviceTestPersistence.Options(),
-	}))
+	})
 }
 
 type sessionLaunchBoundaryResolver struct{ root string }
@@ -266,10 +262,7 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 		PersistedSessions:        meta,
 		ProjectWorkspaceBoundary: meta,
-	}).WithPromptHistoryReader(meta).WithRuntimeAuthority(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: cfg.PersistenceRoot,
-		StoreOptions:    meta.AuthoritativeSessionStoreOptions(),
-	}))
+	}).WithPromptHistoryReader(meta)
 
 	resp, err := service.PlanSession(ctx, serverapi.SessionPlanRequest{
 		ClientRequestID: "plan-1",

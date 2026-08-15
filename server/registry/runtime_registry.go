@@ -338,32 +338,27 @@ func (r *RuntimeRegistry) RuntimeReadModelSnapshot(ctx context.Context, sessionI
 	}, nil
 }
 
-func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(ctx context.Context) ([]runtimeactivity.ActiveSessionSnapshot, error) {
+func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(context.Context) ([]runtimeactivity.ActiveSessionSnapshot, error) {
 	if r == nil {
 		return []runtimeactivity.ActiveSessionSnapshot{}, nil
 	}
-	r.runStateMu.Lock()
-	sessionIDs := make([]string, 0, len(r.blockingActivitySessions))
-	for sessionID := range r.blockingActivitySessions {
-		sessionIDs = append(sessionIDs, sessionID)
+	catalog := r.mainViews.Load()
+	if catalog == nil {
+		return []runtimeactivity.ActiveSessionSnapshot{}, nil
 	}
-	r.runStateMu.Unlock()
-	sort.Strings(sessionIDs)
-
-	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		snapshot, err := r.RuntimeReadModelSnapshot(ctx, sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if !snapshot.Activity.ActiveForControl() {
+	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0, len(catalog.bySession))
+	for sessionID, publication := range catalog.bySession {
+		if !publication.view.Activity.ActiveForControl() {
 			continue
 		}
 		snapshots = append(snapshots, runtimeactivity.ActiveSessionSnapshot{
 			SessionID: sessionID,
-			Activity:  snapshot.Activity,
+			Activity:  cloneRuntimeActivity(publication.view.Activity),
 		})
 	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].SessionID < snapshots[j].SessionID
+	})
 	return snapshots, nil
 }
 

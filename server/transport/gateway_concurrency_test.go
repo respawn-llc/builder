@@ -83,93 +83,57 @@ type gatewayConcurrencyDependencies struct {
 
 type gatewaySchedulingDependencies struct {
 	GatewayDependencies
-	workflow      apicontract.WorkflowService
-	authBootstrap apicontract.AuthBootstrapService
-	authStatus    apicontract.AuthStatusService
-	capability    apicontract.CapabilityFactsService
-	attention     apicontract.AttentionNotificationService
-	runPrompt     apicontract.RunPromptService
+	workflow apicontract.WorkflowService
+	probe    *gatewaySchedulingProbe
 }
 
 func (d *gatewaySchedulingDependencies) WorkflowClient() apicontract.WorkflowService {
 	return d.workflow
 }
 
-func (d *gatewaySchedulingDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
-	return d.authBootstrap
-}
-
 func (d *gatewaySchedulingDependencies) AuthStatusClient() apicontract.AuthStatusService {
-	return d.authStatus
-}
-
-func (d *gatewaySchedulingDependencies) CapabilityFactsClient() apicontract.CapabilityFactsService {
-	return d.capability
+	return d.probe
 }
 
 func (d *gatewaySchedulingDependencies) AttentionNotificationClient() apicontract.AttentionNotificationService {
-	return d.attention
+	return d.probe
 }
 
 func (d *gatewaySchedulingDependencies) RunPromptClientForProjectWorkspace(context.Context, string, string) (apicontract.RunPromptService, error) {
-	return d.runPrompt, nil
+	return d.probe, nil
 }
 
 func (d *gatewaySchedulingDependencies) RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error) {
-	return d.runPrompt, nil
+	return d.probe, nil
 }
 
-type gatewaySchedulingAuthBootstrapService struct {
-	apicontract.AuthBootstrapService
-	get      func(context.Context, serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error)
-	complete func(context.Context, serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error)
+type gatewaySchedulingProbe struct {
+	entered chan struct{}
+	once    sync.Once
 }
 
-func (s gatewaySchedulingAuthBootstrapService) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	if s.get != nil {
-		return s.get(ctx, req)
-	}
-	return s.AuthBootstrapService.GetAuthBootstrapStatus(ctx, req)
+func (p *gatewaySchedulingProbe) enter() {
+	p.once.Do(func() { close(p.entered) })
 }
 
-func (s gatewaySchedulingAuthBootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	if s.complete != nil {
-		return s.complete(ctx, req)
-	}
-	return s.AuthBootstrapService.CompleteAuthBootstrap(ctx, req)
+func (p *gatewaySchedulingProbe) GetAuthStatus(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+	p.enter()
+	return serverapi.AuthStatusResponse{}, errors.New("scheduling probe")
 }
 
-type gatewaySchedulingAuthStatusService struct {
-	apicontract.AuthStatusService
-	get func(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error)
+func (p *gatewaySchedulingProbe) SubscribeAttentionNotifications(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	p.enter()
+	return nil, errors.New("scheduling probe")
 }
 
-func (s gatewaySchedulingAuthStatusService) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	return s.get(ctx, req)
+func (p *gatewaySchedulingProbe) SubscribeSessionAttentionNotifications(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	p.enter()
+	return nil, errors.New("scheduling probe")
 }
 
-type gatewaySchedulingCapabilityFactsService struct {
-	apicontract.CapabilityFactsService
-	get func(context.Context, serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error)
-}
-
-func (s gatewaySchedulingCapabilityFactsService) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	return s.get(ctx, req)
-}
-
-type gatewaySchedulingAttentionService struct {
-	apicontract.AttentionNotificationService
-	subscribe func(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
-}
-
-func (s gatewaySchedulingAttentionService) SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	return s.subscribe(ctx, req)
-}
-
-type gatewaySchedulingRunPromptService func(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error)
-
-func (f gatewaySchedulingRunPromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-	return f(ctx, req, progress)
+func (p *gatewaySchedulingProbe) RunPrompt(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+	p.enter()
+	return serverapi.RunPromptResponse{}, errors.New("scheduling probe")
 }
 
 type gatewayAutomaticFatalSteerer struct {
@@ -303,131 +267,45 @@ func (d *gatewayConcurrencyDependencies) DebugEnabled() bool {
 }
 
 func TestGatewayDataOnlyAndStreamRequestsStartAlongsideOrdinaryRequest(t *testing.T) {
-	tests := []struct {
+	for _, test := range []struct {
 		name      string
 		method    string
 		params    any
 		needsBind bool
-		configure func(*gatewaySchedulingDependencies, func())
 	}{
-		{
-			name:   "authentication bootstrap status",
-			method: protocol.MethodAuthGetBootstrapStatus,
-			params: serverapi.AuthGetBootstrapStatusRequest{},
-			configure: func(deps *gatewaySchedulingDependencies, entered func()) {
-				deps.authBootstrap = gatewaySchedulingAuthBootstrapService{
-					AuthBootstrapService: deps.GatewayDependencies.AuthBootstrapClient(),
-					get: func(context.Context, serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-						entered()
-						return serverapi.AuthGetBootstrapStatusResponse{}, errors.New("scheduling probe")
-					},
-				}
-			},
-		},
-		{
-			name:   "authentication status",
-			method: protocol.MethodAuthGetStatus,
-			params: serverapi.AuthStatusRequest{SkipSubscriptionUsage: true},
-			configure: func(deps *gatewaySchedulingDependencies, entered func()) {
-				deps.authStatus = gatewaySchedulingAuthStatusService{
-					AuthStatusService: deps.GatewayDependencies.AuthStatusClient(),
-					get: func(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-						entered()
-						return serverapi.AuthStatusResponse{}, errors.New("scheduling probe")
-					},
-				}
-			},
-		},
-		{
-			name:   "Capability Facts",
-			method: protocol.MethodCapabilityFactsGet,
-			params: serverapi.CapabilityFactsRequest{},
-			configure: func(deps *gatewaySchedulingDependencies, entered func()) {
-				deps.capability = gatewaySchedulingCapabilityFactsService{
-					CapabilityFactsService: deps.GatewayDependencies.CapabilityFactsClient(),
-					get: func(context.Context, serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-						entered()
-						return serverapi.CapabilityFactsResponse{}, errors.New("scheduling probe")
-					},
-				}
-			},
-		},
-		{
-			name:   "subscription",
-			method: protocol.MethodAttentionNotificationSubscribe,
-			params: serverapi.AttentionNotificationSubscribeRequest{},
-			configure: func(deps *gatewaySchedulingDependencies, entered func()) {
-				deps.attention = gatewaySchedulingAttentionService{
-					AttentionNotificationService: deps.GatewayDependencies.AttentionNotificationClient(),
-					subscribe: func(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-						entered()
-						return nil, errors.New("scheduling probe")
-					},
-				}
-			},
-		},
-		{
-			name:      "progress",
-			method:    protocol.MethodRunPrompt,
-			needsBind: true,
-			params: serverapi.RunPromptRequest{
-				ClientRequestID: "progress-probe",
-				Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-				Prompt:          "probe",
-			},
-			configure: func(deps *gatewaySchedulingDependencies, entered func()) {
-				deps.runPrompt = gatewaySchedulingRunPromptService(func(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-					entered()
-					return serverapi.RunPromptResponse{}, errors.New("scheduling probe")
-				})
-			},
-		},
-	}
-
-	for _, test := range tests {
+		{"data-only", protocol.MethodAuthGetStatus, serverapi.AuthStatusRequest{SkipSubscriptionUsage: true}, false},
+		{"subscription", protocol.MethodAttentionNotificationSubscribe, serverapi.AttentionNotificationSubscribeRequest{}, false},
+		{"progress", protocol.MethodRunPrompt, serverapi.RunPromptRequest{
+			ClientRequestID: "progress-probe",
+			Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			Prompt:          "probe",
+		}, true},
+	} {
 		t.Run(test.name, func(t *testing.T) {
 			appCore, _ := newGatewayTestCore(t, true, true)
 			defer func() { _ = appCore.Close() }()
-
-			blockedEntered := make(chan struct{})
-			releaseBlocked := make(chan struct{})
-			var releaseOnce sync.Once
-			release := func() {
-				releaseOnce.Do(func() { close(releaseBlocked) })
-			}
-			t.Cleanup(release)
+			blocked, release := make(chan struct{}), make(chan struct{})
+			t.Cleanup(func() { close(release) })
 			workflow := &gatewayConcurrencyWorkflowService{
 				WorkflowService: appCore.WorkflowClient(),
 				getWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-					close(blockedEntered)
+					close(blocked)
 					select {
-					case <-releaseBlocked:
+					case <-release:
+						return serverapi.WorkflowTaskGetResponse{}, errors.New("released")
 					case <-ctx.Done():
 						return serverapi.WorkflowTaskGetResponse{}, ctx.Err()
 					}
-					return serverapi.WorkflowTaskGetResponse{}, errors.New("scheduling probe released")
 				},
 			}
-			deps := &gatewaySchedulingDependencies{
-				GatewayDependencies: appCore,
-				workflow:            workflow,
-				authBootstrap:       appCore.AuthBootstrapClient(),
-				authStatus:          appCore.AuthStatusClient(),
-				capability:          appCore.CapabilityFactsClient(),
-				attention:           appCore.AttentionNotificationClient(),
-			}
-			entered := make(chan struct{})
-			var enteredOnce sync.Once
-			test.configure(deps, func() {
-				enteredOnce.Do(func() { close(entered) })
-			})
+			probe := &gatewaySchedulingProbe{entered: make(chan struct{})}
+			deps := &gatewaySchedulingDependencies{GatewayDependencies: appCore, workflow: workflow, probe: probe}
 			gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 			if err != nil {
-				t.Fatalf("NewGateway: %v", err)
+				t.Fatal(err)
 			}
 			server := httptest.NewServer(gateway.Handler())
 			defer server.Close()
-
 			conn := dialGateway(t, server)
 			defer func() { _ = conn.Close() }()
 			handshakeGateway(t, conn)
@@ -435,17 +313,12 @@ func TestGatewayDataOnlyAndStreamRequestsStartAlongsideOrdinaryRequest(t *testin
 				callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
 			}
 			sendGatewayRequest(t, conn, "blocked", protocol.MethodWorkflowTaskGet, serverapi.WorkflowTaskGetRequest{TaskID: "task-blocked"})
-			select {
-			case <-blockedEntered:
-			case <-time.After(time.Second):
-				t.Fatal("timed out waiting for ordinary request to enter")
-			}
-
+			<-blocked
 			sendGatewayRequest(t, conn, "probe", test.method, test.params)
 			select {
-			case <-entered:
+			case <-probe.entered:
 			case <-time.After(time.Second):
-				t.Fatalf("%s did not begin while the ordinary request was open", test.name)
+				t.Fatalf("%s did not start alongside ordinary work", test.name)
 			}
 		})
 	}

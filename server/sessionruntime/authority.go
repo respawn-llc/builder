@@ -57,6 +57,7 @@ type Authority struct {
 	executionFinalized ExecutionFinalized
 	promptFeed         ExecutionPromptFeed
 	options            authorityRuntimeOptions
+	workflowTaskReadMu sync.Mutex
 	workflowTaskReads  atomic.Pointer[workflowTaskExecutionReadSnapshot]
 }
 

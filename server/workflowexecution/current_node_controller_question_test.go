@@ -293,64 +293,6 @@ func TestCurrentNodeControllerManualMoveCleansUpAfterQuestionResolutionPublicati
 	}
 }
 
-func TestCurrentNodeControllerManualMoveDispositionClassifiesLifecycle(t *testing.T) {
-	t.Run("quiescent", func(t *testing.T) {
-		fixture := newCurrentNodeQuestionFixture(t)
-		disposition, err := fixture.controller.ManualMoveDisposition("task-disposition-quiescent")
-		if err != nil {
-			t.Fatalf("ManualMoveDisposition: %v", err)
-		}
-		if disposition != ManualMoveDispositionQuiescent {
-			t.Fatalf("disposition = %q, want quiescent", disposition)
-		}
-	})
-
-	t.Run("waiting question", func(t *testing.T) {
-		fixture := newCurrentNodeQuestionFixture(t)
-		reference := currentNodeReferenceForControllerTest(t, "task-disposition-question", "node-question")
-		pending := fixture.startPendingPrompt(t, reference, askquestion.AskQuestionRequest{
-			ID:       "ask-disposition-question",
-			StepID:   uuid.NewString(),
-			Question: "Wait?",
-		})
-		fixture.waitForPendingPrompt(t, reference.TaskID, "ask-disposition-question")
-		t.Cleanup(func() {
-			pending.handle.RequestStop()
-			_, _ = pending.handle.Wait(context.Background())
-		})
-		disposition, err := fixture.controller.ManualMoveDisposition(reference.TaskID)
-		if err != nil {
-			t.Fatalf("ManualMoveDisposition: %v", err)
-		}
-		if disposition != ManualMoveDispositionAutoInterruptible {
-			t.Fatalf("disposition = %q, want auto_interruptible", disposition)
-		}
-	})
-
-	t.Run("pending session approval", func(t *testing.T) {
-		fixture := newCurrentNodeQuestionFixture(t)
-		reference := currentNodeReferenceForControllerTest(t, "task-disposition-approval", "node-approval")
-		pending := fixture.startPendingPrompt(t, reference, askquestion.AskQuestionRequest{
-			ID:       "ask-disposition-approval",
-			StepID:   uuid.NewString(),
-			Question: "Approve?",
-			Approval: true,
-		})
-		fixture.waitForPendingPrompt(t, reference.TaskID, "ask-disposition-approval")
-		t.Cleanup(func() {
-			pending.handle.RequestStop()
-			_, _ = pending.handle.Wait(context.Background())
-		})
-		disposition, err := fixture.controller.ManualMoveDisposition(reference.TaskID)
-		if err != nil {
-			t.Fatalf("ManualMoveDisposition: %v", err)
-		}
-		if disposition != ManualMoveDispositionLifecycleConflict {
-			t.Fatalf("disposition = %q, want lifecycle_conflict", disposition)
-		}
-	})
-}
-
 func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question", "node-question")

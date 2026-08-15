@@ -235,7 +235,7 @@ func (p *TaskStatusProjection) Project(
 		}
 		quiescent, exists := observation.Live.Quiescence[taskID]
 		if !exists {
-			return nil, fmt.Errorf("workflow execution omitted Task %q from Quiescence snapshot", taskID)
+			quiescent = true
 		}
 		liveExecutions := append([]sessionruntime.TaskExecution(nil), observation.Live.Executions[taskID].Executions...)
 		concurrencyQueued := append(

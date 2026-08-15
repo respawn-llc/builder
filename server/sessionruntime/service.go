@@ -88,6 +88,9 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		SessionID: sessionID,
 		OwnerID:   ownerID,
 	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, error) {
+		if _, err := store.PromoteSubagentToMain(); err != nil {
+			return nil, err
+		}
 		persisted := store.Meta().ChatSettings
 		if persisted != nil && req.ThinkingOverrideExplicit {
 			cloned := *persisted

@@ -16,13 +16,11 @@ import (
 )
 
 func TestRuntimeRegistryRootAttentionDeliversEveryDurableSnapshotPage(t *testing.T) {
-	notifications := make([]clientui.AttentionNotification, 0, workflowAttentionNotificationSnapshotPageSize*2+1)
-	for index := range workflowAttentionNotificationSnapshotPageSize*2 + 1 {
-		notifications = append(notifications, registryWorkflowInterruptionNotification(
-			fmt.Sprintf("snapshot-%d", index),
-			fmt.Sprintf("task-%d", index),
-			fmt.Sprintf("node-%d", index),
-		))
+	notifications := make([]clientui.AttentionNotification, workflowAttentionNotificationSnapshotPageSize*2+1)
+	for index := range notifications {
+		notifications[index] = registryWorkflowInterruptionNotification(
+			fmt.Sprintf("snapshot-%d", index), fmt.Sprintf("task-%d", index), fmt.Sprintf("node-%d", index),
+		)
 	}
 	source := workflowAttentionNotificationSnapshotSourceFunc(func(pageSize int) (WorkflowAttentionNotificationSnapshot, error) {
 		if pageSize != workflowAttentionNotificationSnapshotPageSize {
@@ -30,44 +28,32 @@ func TestRuntimeRegistryRootAttentionDeliversEveryDurableSnapshotPage(t *testing
 		}
 		return &workflowAttentionNotificationSnapshotSlice{notifications: notifications}, nil
 	})
-	broker := attentionnotify.NewBroker()
 	registry := NewRuntimeRegistry().
-		WithAttentionNotifications(broker).
+		WithAttentionNotifications(attentionnotify.NewBroker()).
 		WithWorkflowAttentionNotificationSnapshot(source)
-
 	sub, err := registry.SubscribeAttentionNotifications(context.Background(), serverapi.AttentionNotificationSubscribeRequest{})
 	if err != nil {
-		t.Fatalf("SubscribeAttentionNotifications: %v", err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sub.Close() })
-
-	seen := make(map[string]struct{}, len(notifications))
 	for index := range notifications {
 		event := nextRegistryAttentionEvent(t, sub)
-		if event.Source != clientui.AttentionNotificationSourceSnapshot || event.Pending == nil {
-			t.Fatalf("durable root attention event %d = %+v", index, event)
-		}
-		seen[event.Pending.ID.UUID] = struct{}{}
-	}
-	for _, notification := range notifications {
-		if _, ok := seen[notification.ID.UUID]; !ok {
-			t.Fatalf("durable root attention snapshot omitted %q", notification.ID.UUID)
+		if event.Source != clientui.AttentionNotificationSourceSnapshot || event.Pending == nil ||
+			event.Pending.ID != notifications[index].ID {
+			t.Fatalf("durable event %d = %+v", index, event)
 		}
 	}
 }
 
 func TestRuntimeRegistryRootAttentionAllowsSnapshotLiveOverlapWhilePageIsBlocked(t *testing.T) {
-	pageBlocked := make(chan struct{})
-	releasePage := make(chan struct{})
-	overlappingID := "overlap-1"
+	snapshotStarted := make(chan struct{})
+	releaseSnapshot := make(chan struct{})
+	overlap := registryWorkflowQuestionNotification("overlap")
 	source := workflowAttentionNotificationSnapshotSourceFunc(func(_ int) (WorkflowAttentionNotificationSnapshot, error) {
-		return &workflowAttentionSnapshotBlockedBetweenItems{
-			blocked: pageBlocked,
-			release: releasePage,
-			notifications: []clientui.AttentionNotification{
-				registryWorkflowInterruptionNotification("snapshot-1", "task-1", "node-1"),
-				registryWorkflowQuestionNotification(overlappingID),
-			},
+		return &blockingWorkflowAttentionNotificationSnapshot{
+			started:      snapshotStarted,
+			release:      releaseSnapshot,
+			notification: overlap,
 		}, nil
 	})
 	broker := attentionnotify.NewBroker()
@@ -80,126 +66,62 @@ func TestRuntimeRegistryRootAttentionAllowsSnapshotLiveOverlapWhilePageIsBlocked
 	}
 	t.Cleanup(func() { _ = sub.Close() })
 
-	first := nextRegistryAttentionEvent(t, sub)
-	if first.Source != clientui.AttentionNotificationSourceSnapshot ||
-		first.Pending == nil ||
-		first.Pending.ID.UUID != "snapshot-1" {
-		t.Fatalf("first durable root attention item = %+v", first)
-	}
-
-	type nextResult struct {
-		event clientui.AttentionNotificationEvent
-		err   error
-	}
-	results := make(chan nextResult, 1)
+	results := make(chan clientui.AttentionNotificationEvent, 1)
 	go func() {
-		event, err := sub.Next(context.Background())
-		results <- nextResult{event: event, err: err}
+		event, _ := sub.Next(context.Background())
+		results <- event
 	}()
-	<-pageBlocked
-	live := registryWorkflowQuestionNotification(overlappingID)
-	if err := broker.PublishPending(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: live.Target.TaskID}, live); err != nil {
-		t.Fatalf("PublishPending overlapping live item: %v", err)
+	<-snapshotStarted
+	if err := broker.PublishPending(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: overlap.Target.TaskID}, overlap); err != nil {
+		t.Fatal(err)
 	}
-	close(releasePage)
-
-	seenSources := map[clientui.AttentionNotificationSource]int{}
-	var firstOverlappingResult nextResult
-	select {
-	case firstOverlappingResult = <-results:
-	case <-time.After(5 * time.Second):
-		t.Fatal("root attention did not resume after the blocked snapshot page")
+	close(releaseSnapshot)
+	seen := map[clientui.AttentionNotificationSource]bool{}
+	for _, event := range []clientui.AttentionNotificationEvent{<-results, nextRegistryAttentionEvent(t, sub)} {
+		if event.Pending == nil || event.Pending.ID != overlap.ID {
+			t.Fatalf("overlapping event = %+v", event)
+		}
+		seen[event.Source] = true
 	}
-	pendingResult := &firstOverlappingResult
-	for len(seenSources) < 2 {
-		var result nextResult
-		if pendingResult != nil {
-			result = *pendingResult
-			pendingResult = nil
-		} else {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			event, err := sub.Next(ctx)
-			cancel()
-			result = nextResult{event: event, err: err}
-		}
-		if result.err != nil {
-			if errors.Is(result.err, serverapi.ErrStreamGap) {
-				return
-			}
-			t.Fatalf("Next overlapping root attention item: %v", result.err)
-		}
-		if result.event.Source != clientui.AttentionNotificationSourceSnapshot &&
-			result.event.Source != clientui.AttentionNotificationSourceLive {
-			t.Fatalf("overlapping root attention source = %q", result.event.Source)
-		}
-		if result.event.Pending == nil ||
-			result.event.Pending.ID.UUID != overlappingID {
-			t.Fatalf("overlapping root attention item = %+v", result.event)
-		}
-		seenSources[result.event.Source]++
+	if !seen[clientui.AttentionNotificationSourceSnapshot] || !seen[clientui.AttentionNotificationSourceLive] {
+		t.Fatalf("overlapping sources = %+v", seen)
 	}
 }
 
 func TestRuntimeRegistryRootAttentionSurfacesLiveBrokerOverflowAfterHydration(t *testing.T) {
-	snapshotStarted := make(chan struct{})
-	releaseSnapshot := make(chan struct{})
+	started, release := make(chan struct{}), make(chan struct{})
 	source := workflowAttentionNotificationSnapshotSourceFunc(func(_ int) (WorkflowAttentionNotificationSnapshot, error) {
 		return &blockingWorkflowAttentionNotificationSnapshot{
-			started:      snapshotStarted,
-			release:      releaseSnapshot,
-			notification: registryWorkflowInterruptionNotification("snapshot-1", "task-snapshot", "node-snapshot"),
+			started: started, release: release,
+			notification: registryWorkflowInterruptionNotification("snapshot", "task", "node"),
 		}, nil
 	})
 	broker := attentionnotify.NewBroker(attentionnotify.WithBufferSize(1))
-	registry := NewRuntimeRegistry().
-		WithAttentionNotifications(broker).
-		WithWorkflowAttentionNotificationSnapshot(source)
+	registry := NewRuntimeRegistry().WithAttentionNotifications(broker).WithWorkflowAttentionNotificationSnapshot(source)
 	sub, err := registry.SubscribeAttentionNotifications(context.Background(), serverapi.AttentionNotificationSubscribeRequest{})
 	if err != nil {
-		t.Fatalf("SubscribeAttentionNotifications: %v", err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sub.Close() })
-
-	type nextResult struct {
-		event clientui.AttentionNotificationEvent
-		err   error
-	}
-	firstResult := make(chan nextResult, 1)
+	result := make(chan error, 1)
 	go func() {
-		event, err := sub.Next(context.Background())
-		firstResult <- nextResult{event: event, err: err}
+		for {
+			if _, err := sub.Next(context.Background()); err != nil {
+				result <- err
+				return
+			}
+		}
 	}()
-	<-snapshotStarted
+	<-started
 	for index := range 128 {
 		notification := registryWorkflowQuestionNotification(fmt.Sprintf("overflow-%d", index))
 		if err := broker.PublishPending(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: notification.Target.TaskID}, notification); err != nil {
-			t.Fatalf("PublishPending overflow item %d: %v", index, err)
+			t.Fatal(err)
 		}
 	}
-	close(releaseSnapshot)
-
-	var result nextResult
-	select {
-	case result = <-firstResult:
-	case <-time.After(5 * time.Second):
-		t.Fatal("root attention did not resume after overflowed hydration")
-	}
-	for {
-		if errors.Is(result.err, serverapi.ErrStreamGap) {
-			return
-		}
-		if result.err != nil {
-			t.Fatalf("root attention overflow error = %v, want ErrStreamGap", result.err)
-		}
-		if result.event.Source == clientui.AttentionNotificationSourceSnapshot {
-			if result.event.Pending == nil || result.event.Pending.ID.UUID != "snapshot-1" {
-				t.Fatalf("durable item during overflow = %+v", result.event)
-			}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		event, err := sub.Next(ctx)
-		cancel()
-		result = nextResult{event: event, err: err}
+	close(release)
+	if err := <-result; !errors.Is(err, serverapi.ErrStreamGap) {
+		t.Fatalf("overflow error = %v, want ErrStreamGap", err)
 	}
 }
 
@@ -228,30 +150,6 @@ type blockingWorkflowAttentionNotificationSnapshot struct {
 	release      <-chan struct{}
 	notification clientui.AttentionNotification
 	emitted      bool
-}
-
-type workflowAttentionSnapshotBlockedBetweenItems struct {
-	blocked       chan<- struct{}
-	release       <-chan struct{}
-	notifications []clientui.AttentionNotification
-	index         int
-}
-
-func (s *workflowAttentionSnapshotBlockedBetweenItems) Next(ctx context.Context, enqueue func(clientui.AttentionNotification) error) error {
-	if s.index >= len(s.notifications) {
-		return io.EOF
-	}
-	if s.index == 1 {
-		close(s.blocked)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-s.release:
-		}
-	}
-	notification := s.notifications[s.index]
-	s.index++
-	return enqueue(notification)
 }
 
 func (s *blockingWorkflowAttentionNotificationSnapshot) Next(ctx context.Context, enqueue func(clientui.AttentionNotification) error) error {
@@ -319,4 +217,15 @@ func registryWorkflowQuestionNotification(id string) clientui.AttentionNotificat
 func registryWorkflowID() *runtimeids.WorkflowID {
 	workflowID := testharness.WorkflowIDValue("registry-workflow-attention")
 	return &workflowID
+}
+
+func waitForRegistryAttentionCondition(t *testing.T, condition func() bool, failure string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatal(failure)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }

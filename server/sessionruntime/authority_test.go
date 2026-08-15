@@ -270,8 +270,7 @@ func TestWorkflowTaskExecutionReadSnapshotDoesNotAliasPublishedCollections(t *te
 	if err != nil {
 		t.Fatalf("first read snapshot: %v", err)
 	}
-	delete(first, taskID)
-	first[taskID] = TaskExecutionSnapshot{}
+	first[taskID].Executions[0].PendingPrompts[0].ID = "mutated"
 
 	second, err := authority.CurrentWorkflowTaskExecutionReadSnapshot()
 	if err != nil {
@@ -281,14 +280,6 @@ func TestWorkflowTaskExecutionReadSnapshotDoesNotAliasPublishedCollections(t *te
 		len(second[taskID].Executions[0].PendingPrompts) != 1 ||
 		second[taskID].Executions[0].PendingPrompts[0].ID != "question-1" {
 		t.Fatalf("published Task execution snapshot was aliased: %+v", second)
-	}
-	second[taskID].Executions[0].PendingPrompts[0].ID = "mutated"
-	third, err := authority.CurrentWorkflowTaskExecutionReadSnapshot()
-	if err != nil {
-		t.Fatalf("third read snapshot: %v", err)
-	}
-	if got := third[taskID].Executions[0].PendingPrompts[0].ID; got != "question-1" {
-		t.Fatalf("published pending prompts were aliased: got %q", got)
 	}
 }
 

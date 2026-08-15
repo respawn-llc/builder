@@ -117,45 +117,45 @@ func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serve
 		return serverapi.SessionInitialInputResponse{}, errors.New("persisted Session resolver is required")
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
-	view, err := s.resolvePersistedSessionView(ctx, sessionID)
+	meta, err := s.resolvePersistedSessionMeta(ctx, sessionID)
 	if err != nil {
 		return serverapi.SessionInitialInputResponse{}, err
 	}
 	return serverapi.SessionInitialInputResponse{
-		Input: initialSessionInput(view.Meta(), req.TransitionInput),
+		Input: initialSessionInput(meta, req.TransitionInput),
 	}, nil
 }
 
-func (s *SessionLifecycleService) resolvePersistedSessionView(ctx context.Context, sessionID string) (*session.PersistedSessionView, error) {
+func (s *SessionLifecycleService) resolvePersistedSessionMeta(ctx context.Context, sessionID string) (session.Meta, error) {
 	if s == nil || s.persisted == nil {
-		return nil, errors.New("persisted Session resolver is required")
+		return session.Meta{}, errors.New("persisted Session resolver is required")
 	}
-	record, err := s.persisted.ResolvePersistedSession(ctx, sessionID)
+	record, err := session.ResolvePersistedSessionRecord(ctx, s.persisted, sessionID)
 	if err != nil {
-		return nil, err
+		return session.Meta{}, err
 	}
 	if containerDir := strings.TrimSpace(s.containerDir); containerDir != "" {
 		expectedDir, err := session.ResolveScopedSessionDir(containerDir, sessionID)
 		if err != nil {
-			return nil, err
+			return session.Meta{}, err
 		}
 		expectedIdentity, err := config.CanonicalPathIdentity(expectedDir)
 		if err != nil {
-			return nil, err
+			return session.Meta{}, err
 		}
 		recordIdentity, err := config.CanonicalPathIdentity(record.SessionDir)
 		if err != nil {
-			return nil, err
+			return session.Meta{}, err
 		}
 		if recordIdentity != expectedIdentity {
-			return nil, fmt.Errorf(
+			return session.Meta{}, fmt.Errorf(
 				"session %q is outside workspace container: %w",
 				sessionID,
 				session.ErrOutsideWorkspaceContainer,
 			)
 		}
 	}
-	return session.OpenPersistedSessionView(sessionID, record)
+	return *record.Meta, nil
 }
 
 func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
@@ -201,9 +201,6 @@ func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, 
 func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
-	}
-	if req.Transition.Action != serverapi.SessionTransitionActionForkRollback {
-		return s.resolveTransitionOnce(ctx, req)
 	}
 	memoReq := sessionTransitionMemoRequest{
 		SessionID:  strings.TrimSpace(req.SessionID),
@@ -261,7 +258,7 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 		return resolved, err
 	}
 	if req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
-		view, err := s.resolvePersistedSessionView(ctx, strings.TrimSpace(req.SessionID))
+		meta, err := s.resolvePersistedSessionMeta(ctx, strings.TrimSpace(req.SessionID))
 		if err != nil {
 			return serverapi.SessionResolveTransitionResponse{}, err
 		}
@@ -275,7 +272,7 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 		if err != nil {
 			return serverapi.SessionResolveTransitionResponse{}, err
 		}
-		return s.authorizeNavigationTransition(ctx, view.Meta(), resolved)
+		return s.authorizeNavigationTransition(ctx, meta, resolved)
 	}
 	return resolveSessionTransition(ctx, sessionTransitionResolveRequest{
 		Transition: sessionTransition{

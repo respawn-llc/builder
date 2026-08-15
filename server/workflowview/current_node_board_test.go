@@ -27,7 +27,8 @@ func (s boardDurableMutationObservationSource) ObserveWorkflowTaskExecutions(tas
 	}); err != nil {
 		return workflowexecution.WorkflowTaskExecutionObservation{}, err
 	}
-	quiescence := make(map[workflow.TaskID]bool, len(taskIDs))
+	quiescence := make(map[workflow.TaskID]bool, len(taskIDs)+1)
+	quiescence[s.taskID] = true
 	for _, taskID := range taskIDs {
 		quiescence[taskID] = true
 	}

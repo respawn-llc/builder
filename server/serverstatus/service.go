@@ -28,11 +28,7 @@ func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverap
 	if s != nil {
 		settings = s.settings
 	}
-	authRequired := authservice.StartupAuthRequired(settings)
-	// Only the OpenAI startup gate consults the auth store. When startup auth is
-	// not required (custom/non-OpenAI provider), readiness must not depend on the
-	// auth store at all, so a corrupt or inaccessible auth file can't block it.
-	if authRequired && s != nil && s.authManager != nil {
+	if s != nil && s.authManager != nil {
 		state, err := s.authManager.Load(ctx)
 		if err != nil {
 			return serverapi.ServerReadinessResponse{}, err

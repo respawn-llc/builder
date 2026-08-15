@@ -36,6 +36,23 @@ func (m *Manager) List() []Snapshot {
 	return out
 }
 
+func (m *Manager) CurrentSnapshots() []Snapshot {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	entries := make([]*processEntry, 0, len(m.entries))
+	for _, entry := range m.entries {
+		entries = append(entries, entry)
+	}
+	m.mu.Unlock()
+	out := make([]Snapshot, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.currentSnapshot())
+	}
+	return out
+}
+
 func (m *Manager) Count() int {
 	count := 0
 	for _, snapshot := range m.List() {

@@ -22,11 +22,8 @@ func ResolvePersistedSessionView(
 	resolver PersistedSessionResolver,
 	sessionID string,
 ) (*PersistedSessionView, error) {
-	if resolver == nil {
-		return nil, errPersistedSessionResolverRequired
-	}
 	id := strings.TrimSpace(sessionID)
-	record, err := resolver.ResolvePersistedSession(ctx, id)
+	record, err := ResolvePersistedSessionRecord(ctx, resolver, id)
 	if err != nil {
 		return nil, err
 	}

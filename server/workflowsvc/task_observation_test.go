@@ -31,57 +31,45 @@ type observationApprovalViewStub struct {
 type observationTaskDetailStub struct {
 	detail serverapi.WorkflowTaskDetail
 	nodes  []workflow.CurrentNode
+	get    func() serverapi.WorkflowTaskDetail
 }
 
 func (s observationTaskDetailStub) GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	if s.get != nil {
+		return s.get(), nil
+	}
 	return s.detail, nil
 }
 
-func (s observationTaskDetailStub) GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error) {
-	return s.detail, nil
+func (s observationTaskDetailStub) GetTaskByProjectShortID(ctx context.Context, _, _ string) (serverapi.WorkflowTaskDetail, error) {
+	return s.GetTask(ctx, "")
 }
 
-func (s observationTaskDetailStub) GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
-	return s.detail, nil
+func (s observationTaskDetailStub) GetTaskByShortID(ctx context.Context, _ string) (serverapi.WorkflowTaskDetail, error) {
+	return s.GetTask(ctx, "")
 }
 
 func (s observationTaskDetailStub) ListCurrentNodes(context.Context, string) ([]workflow.CurrentNode, error) {
 	return s.nodes, nil
 }
 
-type observationTaskDetailState struct {
-	mu     sync.Mutex
-	detail serverapi.WorkflowTaskDetail
-	calls  chan int
-	count  int
+type taskObservationState struct {
+	sync.Mutex
+	status serverapi.WorkflowTaskStatusKind
+	calls  chan struct{}
 }
 
-func (s *observationTaskDetailState) GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
-	s.mu.Lock()
-	s.count++
-	call := s.count
-	detail := s.detail
-	s.mu.Unlock()
-	s.calls <- call
-	return detail, nil
-}
-
-func (s *observationTaskDetailState) GetTaskByProjectShortID(ctx context.Context, _ string, _ string) (serverapi.WorkflowTaskDetail, error) {
-	return s.GetTask(ctx, "")
-}
-
-func (s *observationTaskDetailState) GetTaskByShortID(ctx context.Context, _ string) (serverapi.WorkflowTaskDetail, error) {
-	return s.GetTask(ctx, "")
-}
-
-func (s *observationTaskDetailState) ListCurrentNodes(context.Context, string) ([]workflow.CurrentNode, error) {
-	return nil, nil
-}
-
-func (s *observationTaskDetailState) setStatus(status serverapi.WorkflowTaskStatusKind) {
-	s.mu.Lock()
-	s.detail.Status.Kind = status
-	s.mu.Unlock()
+func (s *taskObservationState) detail() serverapi.WorkflowTaskDetail {
+	s.Lock()
+	defer s.Unlock()
+	status := s.status
+	s.calls <- struct{}{}
+	return serverapi.WorkflowTaskDetail{
+		Summary: serverapi.WorkflowTaskSummary{
+			ID: "task-1", ProjectID: "project-1", WorkflowID: runtimeids.NewWorkflowID(), ShortID: "T-1",
+		},
+		Status: serverapi.WorkflowTaskStatus{Kind: status},
+	}
 }
 
 type observationDefinitionStub struct{}
@@ -104,150 +92,91 @@ func (s observationApprovalViewStub) ListPendingApprovalsBySession(context.Conte
 	return serverapi.ApprovalListPendingBySessionResponse{Approvals: s.approvals}, nil
 }
 
-func newTaskObservationService(taskID, projectID string) (*Service, *observationTaskDetailState) {
-	state := &observationTaskDetailState{
-		detail: serverapi.WorkflowTaskDetail{
-			Summary: serverapi.WorkflowTaskSummary{
-				ID:         taskID,
-				ProjectID:  projectID,
-				WorkflowID: runtimeids.NewWorkflowID(),
-				ShortID:    "T-1",
-			},
-			Status: serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindRunning},
-		},
-		calls: make(chan int, 4),
-	}
+type taskObservationResult struct {
+	response serverapi.WorkflowTaskObservationResponse
+	err      error
+}
+
+func newTaskObservationTest() (*Service, *taskObservationState) {
+	state := &taskObservationState{status: serverapi.WorkflowTaskStatusKindRunning, calls: make(chan struct{}, 4)}
 	return &Service{
 		events: newWorkflowProjectEventBroker(),
 		readModels: ReadModels{
 			Definitions: observationDefinitionStub{},
-			TaskDetail:  state,
+			TaskDetail:  observationTaskDetailStub{get: state.detail},
 			Attention:   observationAttentionStub{},
 		},
 	}, state
 }
 
-func publishTaskObservationEvent(service *Service, taskID, projectID string) {
-	service.events.publish(serverapi.WorkflowProjectEvent{
-		ProjectID:       &projectID,
-		Resource:        serverapi.WorkflowProjectEventResourceTask,
-		Action:          serverapi.WorkflowProjectEventActionUpdated,
-		PrimaryEntityID: taskID,
-	})
-}
-
-func observeTaskAsync(
-	ctx context.Context,
-	service *Service,
-	req serverapi.WorkflowTaskObservationRequest,
-) <-chan struct {
-	response serverapi.WorkflowTaskObservationResponse
-	err      error
-} {
-	result := make(chan struct {
-		response serverapi.WorkflowTaskObservationResponse
-		err      error
-	}, 1)
+func observeTaskForTest(ctx context.Context, service *Service, mode serverapi.WorkflowTaskObservationMode) <-chan taskObservationResult {
+	result := make(chan taskObservationResult, 1)
 	go func() {
-		response, err := service.ObserveWorkflowTask(ctx, req)
-		result <- struct {
-			response serverapi.WorkflowTaskObservationResponse
-			err      error
-		}{response: response, err: err}
+		response, err := service.ObserveWorkflowTask(ctx, serverapi.WorkflowTaskObservationRequest{
+			TaskID: "task-1", ProjectID: "project-1", Mode: mode,
+		})
+		result <- taskObservationResult{response, err}
 	}()
 	return result
 }
 
-func TestObserveWorkflowTaskWaitReachesDurableDoneAfterTaskEvent(t *testing.T) {
-	const taskID = "task-1"
-	const projectID = "project-1"
-	service, state := newTaskObservationService(taskID, projectID)
-	result := observeTaskAsync(t.Context(), service, serverapi.WorkflowTaskObservationRequest{
-		TaskID: taskID, ProjectID: projectID, Mode: serverapi.WorkflowTaskObservationWait,
+func publishTaskObservationEvent(service *Service) {
+	projectID := "project-1"
+	service.events.publish(serverapi.WorkflowProjectEvent{
+		ProjectID: &projectID, Resource: serverapi.WorkflowProjectEventResourceTask,
+		Action: serverapi.WorkflowProjectEventActionUpdated, PrimaryEntityID: "task-1",
 	})
-	if call := <-state.calls; call != 1 {
-		t.Fatalf("initial Task projection call = %d, want 1", call)
-	}
+}
 
-	state.setStatus(serverapi.WorkflowTaskStatusKindDone)
-	publishTaskObservationEvent(service, taskID, projectID)
-
-	observed := <-result
-	if observed.err != nil {
-		t.Fatalf("ObserveWorkflowTask: %v", observed.err)
-	}
-	if len(observed.response.Outcomes) != 1 ||
-		observed.response.Outcomes[0].Kind != serverapi.WorkflowTaskObservationDone {
-		t.Fatalf("response = %+v, want durable Done outcome", observed.response)
+func TestObserveWorkflowTaskWaitReachesDurableDoneAfterTaskEvent(t *testing.T) {
+	service, state := newTaskObservationTest()
+	result := observeTaskForTest(t.Context(), service, serverapi.WorkflowTaskObservationWait)
+	<-state.calls
+	state.Lock()
+	state.status = serverapi.WorkflowTaskStatusKindDone
+	state.Unlock()
+	publishTaskObservationEvent(service)
+	got := <-result
+	if got.err != nil || len(got.response.Outcomes) != 1 ||
+		got.response.Outcomes[0].Kind != serverapi.WorkflowTaskObservationDone {
+		t.Fatalf("observation = %+v, err=%v", got.response, got.err)
 	}
 }
 
 func TestObserveWorkflowTaskWatchReprojectsAfterGenericTaskEvent(t *testing.T) {
-	const taskID = "task-1"
-	const projectID = "project-1"
-	service, state := newTaskObservationService(taskID, projectID)
+	service, state := newTaskObservationTest()
 	ctx, cancel := context.WithCancel(t.Context())
-	result := observeTaskAsync(ctx, service, serverapi.WorkflowTaskObservationRequest{
-		TaskID: taskID, ProjectID: projectID, Mode: serverapi.WorkflowTaskObservationWatch,
-	})
-	if call := <-state.calls; call != 1 {
-		t.Fatalf("initial Task projection call = %d, want 1", call)
-	}
-
-	// The generic event carries no typed observation outcome. Watch therefore
-	// reprojects current facts; a transient outcome gone before this projection
-	// is not observed. KENT-599 owns a stronger event-captured contract.
-	publishTaskObservationEvent(service, taskID, projectID)
-	if call := <-state.calls; call != 2 {
-		t.Fatalf("event-triggered Task projection call = %d, want 2", call)
-	}
+	result := observeTaskForTest(ctx, service, serverapi.WorkflowTaskObservationWatch)
+	<-state.calls
+	publishTaskObservationEvent(service)
+	<-state.calls
 	cancel()
-
-	observed := <-result
-	if !errors.Is(observed.err, context.Canceled) {
-		t.Fatalf("ObserveWorkflowTask error = %v, want cancellation after empty event-triggered projection", observed.err)
+	if err := (<-result).err; !errors.Is(err, context.Canceled) {
+		t.Fatalf("observation error = %v, want cancellation after reprojection", err)
 	}
 }
 
 func TestObserveWorkflowTaskPreservesTypedCancellationAndGapErrors(t *testing.T) {
-	const taskID = "task-1"
-	const projectID = "project-1"
-	tests := []struct {
+	for _, test := range []struct {
 		name    string
-		stop    func(context.CancelFunc, *Service)
+		gap     bool
 		wantErr error
 	}{
-		{
-			name: "cancellation",
-			stop: func(cancel context.CancelFunc, _ *Service) {
-				cancel()
-			},
-			wantErr: context.Canceled,
-		},
-		{
-			name: "stream gap",
-			stop: func(_ context.CancelFunc, service *Service) {
-				service.events.Close(serverapi.ErrStreamGap)
-			},
-			wantErr: serverapi.ErrStreamGap,
-		},
-	}
-	for _, test := range tests {
+		{"cancellation", false, context.Canceled},
+		{"stream gap", true, serverapi.ErrStreamGap},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			service, state := newTaskObservationService(taskID, projectID)
+			service, state := newTaskObservationTest()
 			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			result := observeTaskAsync(ctx, service, serverapi.WorkflowTaskObservationRequest{
-				TaskID: taskID, ProjectID: projectID, Mode: serverapi.WorkflowTaskObservationWatch,
-			})
-			if call := <-state.calls; call != 1 {
-				t.Fatalf("initial Task projection call = %d, want 1", call)
+			result := observeTaskForTest(ctx, service, serverapi.WorkflowTaskObservationWatch)
+			<-state.calls
+			if test.gap {
+				service.events.Close(serverapi.ErrStreamGap)
+			} else {
+				cancel()
 			}
-
-			test.stop(cancel, service)
-			observed := <-result
-			if !errors.Is(observed.err, test.wantErr) {
-				t.Fatalf("ObserveWorkflowTask error = %v, want %v", observed.err, test.wantErr)
+			if err := (<-result).err; !errors.Is(err, test.wantErr) {
+				t.Fatalf("observation error = %v, want %v", err, test.wantErr)
 			}
 		})
 	}

@@ -94,14 +94,12 @@ func (failingAuthStore) Load(context.Context) (auth.State, error) {
 
 func (failingAuthStore) Save(context.Context, auth.State) error { return nil }
 
-func TestGetServerReadinessIgnoresAuthStoreWhenStartupAuthNotRequired(t *testing.T) {
+func TestGetServerReadinessSurfacesAuthStoreErrorWhenStartupAuthNotRequired(t *testing.T) {
 	manager := auth.NewManager(failingAuthStore{}, nil, nil)
-	readiness := requireServerReadiness(t, manager, config.App{Settings: config.Settings{ProviderOverride: "anthropic"}})
-	if readiness.AuthRequired {
-		t.Fatalf("AuthRequired = true, want false for non-OpenAI provider")
-	}
-	if !readiness.Ready {
-		t.Fatalf("Ready = false, want true when startup auth is not required")
+	service := NewServerStatusService(manager, config.App{Settings: config.Settings{ProviderOverride: "anthropic"}}, nil)
+
+	if _, err := service.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{}); err == nil {
+		t.Fatal("expected auth store error to surface when startup auth is not required")
 	}
 }
 

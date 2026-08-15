@@ -8,6 +8,19 @@ import (
 	"core/server/session"
 )
 
+func Must[T any](value T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+func MustNoError(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
 // PersistenceGate delegates ordinary persistence while allowing tests to block
 // or fail one typed persistence observation.
 type PersistenceGate struct {
