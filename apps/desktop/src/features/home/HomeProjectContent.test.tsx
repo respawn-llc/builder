@@ -24,6 +24,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 
 vi.mock("@/app-facade", async (importOriginal) => ({
   ...(await importOriginal()),
+  useAppNavigation: () => ({ selectHomeProject: vi.fn() }),
   useAppServices: () => ({ api: {} }),
 }));
 

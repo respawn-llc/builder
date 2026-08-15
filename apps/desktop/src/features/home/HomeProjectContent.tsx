@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import type { SessionCatalogSummary } from "@/api";
-import { errorMessage } from "@/api";
+import { errorMessage, isProjectMissingError } from "@/api";
 import {
+  clearLastProjectRoute,
   formatRelativeTime,
   mainSessionCatalogInfiniteQueryOptions,
   queryKeys,
   subagentSessionCatalogInfiniteQueryOptions,
+  useAppNavigation,
   useAppServices,
   type SidebarMode,
 } from "@/app-facade";
@@ -37,11 +39,17 @@ export function HomeProjectContent({
   sidebarMode: SidebarMode;
 }>) {
   const { api } = useAppServices();
+  const navigation = useAppNavigation();
   const [taskListViewMemory] = useState(createProjectTasksViewMemory);
   const projectQuery = useQuery({
     queryKey: queryKeys.projectEdit(projectID),
     queryFn: async () => api.getProjectEdit(projectID),
   });
+  useEffect(() => {
+    if (!isProjectMissingError(projectQuery.error)) return;
+    clearLastProjectRoute(projectID);
+    void navigation.selectHomeProject(null);
+  }, [navigation, projectID, projectQuery.error]);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ProjectWorkspaceIdentity

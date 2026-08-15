@@ -75,16 +75,14 @@ export function useProjectTaskNewTaskAvailable(
   projectID: string,
   data: InfiniteData<ProjectTaskWorkflowPage, number> | undefined,
 ): boolean {
-  return (
-    useRetainedQueryData(projectID, firstPageNewTaskAvailability(data), (left, right) => left === right) ??
-    false
-  );
+  const currentAvailability = data === undefined ? false : firstPageNewTaskAvailability(data);
+  return useRetainedQueryData(projectID, currentAvailability, (left, right) => left === right) ?? false;
 }
 
 function firstPageNewTaskAvailability(
-  data: InfiniteData<ProjectTaskWorkflowPage, number> | undefined,
+  data: InfiniteData<ProjectTaskWorkflowPage, number>,
 ): boolean | undefined {
-  const firstPage = data?.pages.find((_page, index) => data.pageParams[index] === 0);
+  const firstPage = data.pages.find((_page, index) => data.pageParams[index] === 0);
   if (firstPage === undefined) {
     return undefined;
   }
