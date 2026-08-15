@@ -58,7 +58,7 @@ Just is the sole public developer command interface. Do not add standalone devel
 
 - `docs/package.json` exposes only the Cloudflare Pages `build` callback. Contributors and repository automation use `just build docs`; delete the callback when Cloudflare Pages invokes Just or deployment moves out of the Pages Git integration.
 - Install a current Just release, then run `just setup --apply` to prepare dependencies and Git hooks. Bare `just setup` is read-only.
-- `just build` builds the Go binary. `just test` runs active server and Desktop tests. `just lint` and `just check` cover active Go, Desktop, and docs areas. Use typed variants for narrower work and other build targets.
+- `just build`, `just lint`, and `just check` cover active Go, Desktop, and docs areas. `just test` runs active server and Desktop tests. Use typed variants for narrower work and other targets.
 - Frozen Rust remains explicit-only through the `rust` variants.
 - `just dump metadata-schema` and `just dump model-request` own diagnostics.
 - `scripts/install.sh` and `scripts/install.ps1` are public product installers, not developer tooling.

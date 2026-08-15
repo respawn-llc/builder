@@ -61,7 +61,7 @@ just lint docs --dry-run
 just check desktop --dry-run
 ```
 
-Bare `just test` runs server and desktop tests. Frozen Rust runs only through explicit `rust` variants. Native Tauri builds additionally require platform-specific WebView/build prerequisites.
+Bare `just build` builds the active Go, desktop, and docs areas. Bare `just test` runs server and desktop tests. Frozen Rust runs only through explicit `rust` variants. Native Tauri builds additionally require platform-specific WebView/build prerequisites.
 
 ## Pull Request Expectations
 

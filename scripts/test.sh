@@ -111,6 +111,7 @@ failure_labels=()
 failure_logs=()
 failure_statuses=()
 logs=()
+pty_fixture_root=""
 go_test_timeout_args=()
 if [ "$wall_clock_cap" -eq 1 ]; then
 	go_test_timeout_args=(-timeout "${timeout_seconds}s")
@@ -121,6 +122,9 @@ cleanup() {
 	for log in "${logs[@]}"; do
 		unlink "$log" 2>/dev/null || true
 	done
+	if [ -n "$pty_fixture_root" ]; then
+		find "$pty_fixture_root" -depth -delete 2>/dev/null || true
+	fi
 }
 trap cleanup EXIT
 
@@ -200,9 +204,26 @@ PY
 	failure_statuses+=("$status")
 }
 
+prepare_pty_fixtures() {
+	pty_fixture_root="$(mktemp -d -t kent-pty-fixtures.XXXXXX)"
+	go test -c -o "$pty_fixture_root/kent-pty-fixture.test" core/cli/app
+	just --quiet build _go --output "$pty_fixture_root/kent"
+	go build -o "$pty_fixture_root/ansi-writer" core/internal/testharness/pty/testdata/cmd/ansi-writer
+	go build -o "$pty_fixture_root/phase-input-writer" core/internal/testharness/pty/testdata/cmd/phase-input-writer
+	go build -o "$pty_fixture_root/phase-writer" core/internal/testharness/pty/testdata/cmd/phase-writer
+	export KENT_PTY_FIXTURE_BINARY="$pty_fixture_root/kent-pty-fixture.test"
+	export KENT_PTY_KENT_BINARY="$pty_fixture_root/kent"
+	export KENT_PTY_ANSI_WRITER_BINARY="$pty_fixture_root/ansi-writer"
+	export KENT_PTY_PHASE_INPUT_WRITER_BINARY="$pty_fixture_root/phase-input-writer"
+	export KENT_PTY_PHASE_WRITER_BINARY="$pty_fixture_root/phase-writer"
+}
+
 run_server() {
 	local args=("${tool_args[@]}")
-	[ "${#args[@]}" -gt 0 ] || args=(./...)
+	if [ "${#args[@]}" -eq 0 ]; then
+		prepare_pty_fixtures
+		args=(./...)
+	fi
 	run_suite server go test -p "$workers" "${go_test_timeout_args[@]}" "${args[@]}"
 }
 
