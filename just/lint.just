@@ -1,9 +1,7 @@
 set working-directory := ".."
 
-default mode="":
-    just lint server {{mode}}
-    just lint desktop {{mode}}
-    just lint docs {{mode}}
+[parallel]
+default mode="": (server mode) (desktop mode) (docs mode)
 
 server mode="":
     #!/usr/bin/env bash

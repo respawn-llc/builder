@@ -1,9 +1,7 @@
 set working-directory := ".."
 
-default:
-    just build go
-    just build docs
-    just build desktop
+[parallel]
+default: go docs desktop
 
 go *args:
     just build _go {{args}}

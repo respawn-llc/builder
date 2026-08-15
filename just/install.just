@@ -15,8 +15,13 @@ _docs-dependencies:
     pnpm --dir docs install --frozen-lockfile
 
 [private]
-_dependencies:
+_go-dependencies:
     go mod download
-    just install _apps-dependencies
-    just install _docs-dependencies
+
+[private]
+_desktop-dependencies:
     cargo fetch --manifest-path apps/desktop/src-tauri/Cargo.toml --locked
+
+[parallel]
+[private]
+_dependencies: _go-dependencies _apps-dependencies _docs-dependencies _desktop-dependencies

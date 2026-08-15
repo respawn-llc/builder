@@ -3,6 +3,8 @@ set lists
 set positional-arguments
 set unstable
 
+export JUST_JOBS := num_jobs()
+
 mod build 'just/build.just'
 [private]
 mod _check 'just/check.just'
@@ -38,10 +40,7 @@ setup *args: _node
     git config --local core.hooksPath .githooks
 
 # Regenerate protobuf-derived Go and TypeScript sources.
-gen: _node
-    just _lint-protobuf
-    just _gen-go
-    just _gen-typescript
+gen: _node _lint-protobuf _generate
 
 # Run active tests, or select server, desktop, tui, or explicit frozen rust.
 test *args:
@@ -98,6 +97,10 @@ _gen-go:
 [private]
 _gen-typescript:
     GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.ts.yaml
+
+[parallel]
+[private]
+_generate: _gen-go _gen-typescript
 
 [private]
 _node:
