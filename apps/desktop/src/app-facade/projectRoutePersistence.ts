@@ -4,10 +4,14 @@ import { workflowIDSchema } from "@/api";
 import { readBrowserStorage, removeBrowserStorage, writeBrowserStorage } from "./browserStorage";
 
 const lastProjectRouteStorageKey = "desktop.lastProjectRoute";
-const storedProjectRouteSchema = z.object({
-  projectId: z.string(),
-  workflowId: workflowIDSchema.optional(),
-});
+const storedProjectRouteSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("home_project"), projectId: z.string() }),
+  z.object({
+    kind: z.literal("workflow_board"),
+    projectId: z.string(),
+    workflowId: workflowIDSchema.optional(),
+  }),
+]);
 type StoredProjectRoute = z.output<typeof storedProjectRouteSchema>;
 
 export function readLastProjectRoute(): StoredProjectRoute | null {

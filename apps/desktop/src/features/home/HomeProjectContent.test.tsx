@@ -7,6 +7,9 @@ import { HomeProjectContent } from "./HomeProjectContent";
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal()),
+  useQuery: () => ({
+    data: { displayName: "Kent", projectKey: "KNT" },
+  }),
   useInfiniteQuery: () => ({
     data: { pages: [] },
     error: null,
@@ -49,6 +52,13 @@ vi.mock("./ProjectTasksSurface", () => ({
 }));
 
 beforeAll(async () => initializeI18n());
+
+it("shows the selected Project identity above its workspace", () => {
+  render(<HomeProjectContent projectID="project-1" sessionsVisible={false} sidebarMode="shift" />);
+
+  expect(screen.getByRole("heading", { name: "Kent" })).toBeInTheDocument();
+  expect(screen.getByText("KNT")).toBeInTheDocument();
+});
 
 it("restores Task-grid pixels after visiting another Project tab", () => {
   render(<HomeProjectContent projectID="project-1" sessionsVisible sidebarMode="shift" />);

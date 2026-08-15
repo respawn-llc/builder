@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import type { SessionCatalogSummary } from "@/api";
@@ -7,6 +7,7 @@ import { errorMessage } from "@/api";
 import {
   formatRelativeTime,
   mainSessionCatalogInfiniteQueryOptions,
+  queryKeys,
   subagentSessionCatalogInfiniteQueryOptions,
   useAppServices,
   type SidebarMode,
@@ -35,22 +36,50 @@ export function HomeProjectContent({
   sessionsVisible: boolean;
   sidebarMode: SidebarMode;
 }>) {
+  const { api } = useAppServices();
   const [taskListViewMemory] = useState(createProjectTasksViewMemory);
-  if (!sessionsVisible) {
-    return (
-      <ProjectTasksSurface
-        projectID={projectID}
-        sidebarMode={sidebarMode}
-        viewMemory={taskListViewMemory}
-      />
-    );
-  }
+  const projectQuery = useQuery({
+    queryKey: queryKeys.projectEdit(projectID),
+    queryFn: async () => api.getProjectEdit(projectID),
+  });
   return (
-    <ProjectContentTabs
-      projectID={projectID}
-      sidebarMode={sidebarMode}
-      taskListViewMemory={taskListViewMemory}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      <ProjectWorkspaceIdentity
+        displayName={projectQuery.data?.displayName}
+        projectKey={projectQuery.data?.projectKey}
+      />
+      <div className="min-h-0 flex-1">
+        {sessionsVisible ? (
+          <ProjectContentTabs
+            projectID={projectID}
+            sidebarMode={sidebarMode}
+            taskListViewMemory={taskListViewMemory}
+          />
+        ) : (
+          <ProjectTasksSurface
+            projectID={projectID}
+            sidebarMode={sidebarMode}
+            viewMemory={taskListViewMemory}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProjectWorkspaceIdentity({
+  displayName,
+  projectKey,
+}: Readonly<{
+  displayName: string | undefined;
+  projectKey: string | undefined;
+}>) {
+  if (displayName === undefined || projectKey === undefined) return null;
+  return (
+    <header className="z-10 flex shrink-0 items-baseline gap-[var(--space-2)] px-[var(--space-4)] pt-[var(--space-4)]">
+      <h1 className="min-w-0 truncate text-lg font-bold">{displayName}</h1>
+      <span className="shrink-0 font-mono text-xs text-[var(--color-muted)]">{projectKey}</span>
+    </header>
   );
 }
 
