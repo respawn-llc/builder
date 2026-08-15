@@ -861,6 +861,8 @@ func (s *Store) SetHeadlessActive(active bool) error {
 }
 
 func (s *Store) PromoteSubagentToMain() (bool, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	s.mu.Lock()
 	if s.meta.Category == nil || *s.meta.Category == sessioncontract.SessionCategoryMain {
 		s.mu.Unlock()
@@ -876,10 +878,14 @@ func (s *Store) PromoteSubagentToMain() (bool, error) {
 		}
 		return false, InvalidSessionCategoryError{SessionID: sessionID, Category: category, Err: err}
 	}
+	if err := s.requireMetadataPersistenceLocked(); err != nil {
+		s.mu.Unlock()
+		return false, err
+	}
 	mainCategory := sessioncontract.SessionCategoryMain
 	s.meta.Category = &mainCategory
 	s.meta.UpdatedAt = storeTimestamp(s.options)
-	return true, s.unlockAndObservePersistence(s.persistMetaLocked())
+	return true, s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func sessionCategoryPointer(category sessioncontract.SessionCategory) *sessioncontract.SessionCategory {

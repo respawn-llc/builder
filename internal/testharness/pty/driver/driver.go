@@ -372,8 +372,11 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 
 	var waitErr error
 	timeout := false
+	processCompleted := false
+	readDrainDeadline, _ := ctx.Deadline()
 	select {
 	case waitErr = <-waitDone:
+		processCompleted = true
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	case <-ctx.Done():
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
@@ -384,12 +387,36 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	}
 	cancel()
 	eventWG.Wait()
+	readCompleted := false
 	select {
 	case <-readDone:
-	case <-time.After(100 * time.Millisecond):
+		readCompleted = true
+	default:
 	}
-	_ = ptmx.Close()
-	<-readDone
+	if processCompleted && !readCompleted {
+		remaining := time.Until(readDrainDeadline)
+		if remaining > 0 {
+			timer := time.NewTimer(remaining)
+			select {
+			case <-readDone:
+				readCompleted = true
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			case <-timer.C:
+				timeout = true
+			}
+		} else {
+			timeout = true
+		}
+	}
+	if !readCompleted {
+		_ = ptmx.Close()
+		<-readDone
+	}
 	<-analysisDone
 	readinessErr := readiness.Close()
 
