@@ -230,7 +230,11 @@ describe("ProjectTasksSurface", () => {
   it("retains accessible column headers without displaying a header row", () => {
     renderSurface();
 
-    expect(screen.getAllByRole("columnheader")).toHaveLength(6);
+    const columnHeaders = screen.getAllByRole("columnheader");
+    expect(columnHeaders).toHaveLength(6);
+    for (const columnHeader of columnHeaders) {
+      expect(within(columnHeader).queryByRole("button")).not.toBeInTheDocument();
+    }
   });
 
   it("opens the server-defined Status legend from keyboard focus", async () => {

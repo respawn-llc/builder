@@ -6,7 +6,13 @@ import type { ProjectSummary } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation, useOwnedSidebarRoots, type SidebarMode } from "@/app-facade";
 import { WorkflowRow, useWorkflowPages } from "@/shared/workflow-library";
-import { cx, directionalBoundary, InfiniteListBoundary, VirtualizedInfiniteList } from "@/ui";
+import {
+  cx,
+  directionalBoundary,
+  EmptyState,
+  InfiniteListBoundary,
+  VirtualizedInfiniteList,
+} from "@/ui";
 import { OverlappingCrossfade } from "./OverlappingCrossfade";
 import { ProjectRow } from "./ProjectRow";
 import type { useProjectPages } from "./useHomeData";
@@ -56,7 +62,17 @@ export function HomeSidebar({
     retryLabel: t("app.retry"),
   });
   const empty =
-    initialBoundary === undefined ? undefined : (
+    initialBoundary === undefined ? (
+      <EmptyState
+        body={
+          selectedCategory === "projects" ? t("home.emptyBody") : t("workflowLibrary.emptyBody")
+        }
+        fullPage={false}
+        title={
+          selectedCategory === "projects" ? t("home.emptyTitle") : t("workflowLibrary.emptyTitle")
+        }
+      />
+    ) : (
       <InfiniteListBoundary direction="initial" state={initialBoundary} />
     );
   return (

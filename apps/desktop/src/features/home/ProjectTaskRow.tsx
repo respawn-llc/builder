@@ -8,7 +8,6 @@ import { TaskStatusIcon } from "@/shared/task-status";
 import { Spinner, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import type { ProjectTaskGroup } from "./projectTaskListData";
 import { ProjectTaskLabelsCell } from "./ProjectTaskLabelsCell";
-import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
 
 export const projectTaskColumnCount = 6;
 
@@ -66,7 +65,6 @@ export type ProjectTaskListEntry =
 
 export function projectTaskColumnEntry(
   t: ReturnType<typeof useTranslation>["t"],
-  definitions: readonly ProjectTaskGroupDefinition[] | undefined,
 ): ProjectTaskListEntry {
   return {
     kind: "column-header",
@@ -75,8 +73,7 @@ export function projectTaskColumnEntry(
       {
         key: "status",
         ariaLabel: t("task.status"),
-        content: <ProjectTaskStatusLegend definitions={definitions} />,
-        className: "flex h-full items-center justify-center",
+        content: t("task.status"),
       },
       {
         key: "id",

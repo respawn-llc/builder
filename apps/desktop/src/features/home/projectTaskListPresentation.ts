@@ -52,7 +52,7 @@ function groupedEntries(
   },
 ): readonly ProjectTaskListEntry[] {
   return [
-    projectTaskColumnEntry(input.t, input.definitions),
+    projectTaskColumnEntry(input.t),
     ...projectTaskGroups.flatMap((group) => groupEntries(group, input)),
   ];
 }
