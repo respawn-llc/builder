@@ -374,7 +374,7 @@ function ProjectTasksContent({
           onAction={onLinkWorkflow}
           title={t("home.prototype.noLinkedWorkflowsTitle")}
         />
-      ) : countsBoundary !== undefined && taskCount === null ? (
+      ) : countsBoundary?.state === "error" && taskCount === null ? (
         <InfiniteListBoundary direction="initial" state={countsBoundary} />
       ) : taskCount === 0 ? (
         <ProjectTasksEmpty
