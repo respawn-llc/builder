@@ -1,36 +1,41 @@
-import { useSyncExternalStore } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 
-import type { SidebarMode } from "@/app-facade";
+import {
+  sidebarProtectedMainMinWidthPx,
+  taskDetailSidebarSizePreference,
+  type SidebarMode,
+} from "@/app-facade";
 
-const homeShiftSidebarQuery = "(min-width: 1001px)";
+const homeShiftSidebarInsetPx = 8;
 
-export function useHomeSidebarMode(): SidebarMode {
-  const shifted = useSyncExternalStore(subscribeHomeSidebarMode, homeSidebarShifted, () => false);
-  return shifted ? "shift" : "overlay";
-}
-
-function homeSidebarMediaQuery(): MediaQueryList | null {
-  if (!(globalThis.matchMedia instanceof Function)) {
-    return null;
-  }
-  return globalThis.matchMedia(homeShiftSidebarQuery);
-}
-
-function subscribeHomeSidebarMode(onChange: () => void): () => void {
-  const query = homeSidebarMediaQuery();
-  if (query === null) {
-    return unavailableMediaQuerySubscription;
-  }
-  query.addEventListener("change", onChange);
-  return () => {
-    query.removeEventListener("change", onChange);
+export function useHomeSidebarMode(): Readonly<{
+  mainPaneRef: RefObject<HTMLElement | null>;
+  sidebarMode: SidebarMode;
+}> {
+  const mainPaneRef = useRef<HTMLElement | null>(null);
+  const [availableWidthPx, setAvailableWidthPx] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const mainPane = mainPaneRef.current;
+    if (mainPane === null) {
+      return;
+    }
+    const measure = () => {
+      setAvailableWidthPx(mainPane.getBoundingClientRect().width);
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(mainPane);
+    return () => {
+      observer?.disconnect();
+    };
+  }, []);
+  const shiftRequiredWidthPx =
+    sidebarProtectedMainMinWidthPx +
+    taskDetailSidebarSizePreference.desiredWidthPx +
+    homeShiftSidebarInsetPx;
+  return {
+    mainPaneRef,
+    sidebarMode:
+      availableWidthPx !== null && availableWidthPx >= shiftRequiredWidthPx ? "shift" : "overlay",
   };
-}
-
-function homeSidebarShifted(): boolean {
-  return homeSidebarMediaQuery()?.matches ?? false;
-}
-
-function unavailableMediaQuerySubscription(): void {
-  return;
 }

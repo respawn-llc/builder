@@ -159,7 +159,7 @@ export function DescriptionIsland({
 
   return (
     <div
-      className="task-detail-description-island grid h-full w-full min-h-0 min-w-0 max-w-full overflow-hidden gap-[var(--space-2)]"
+      className="task-detail-description-island grid h-full w-full min-h-0 min-w-0 max-w-full"
       data-testid="task-description-input-frame"
     >
       <CollapsibleMarkdownField

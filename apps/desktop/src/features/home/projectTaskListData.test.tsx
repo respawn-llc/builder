@@ -92,36 +92,28 @@ describe("Project Task-list data ownership", () => {
     state.subscriptionCloses = 0;
   });
 
-  it("gates counts and explicit group pages behind the board and keeps collapsed groups absent", async () => {
+  it("starts counts and expanded first pages in parallel while collapsed groups stay absent", async () => {
     const pendingCounts = deferred<ProjectTaskGroupCounts>();
     state.getCounts = async () => pendingCounts.promise;
     const harness = createHarness();
     const { result, rerender } = renderHook(
-      ({ gateReady, active, backlog, done }) =>
+      ({ active, backlog, done }) =>
         useProjectTaskListData({
           projectID: "project-1",
-          gateReady,
           expanded: { active, backlog, done },
         }),
       {
-        initialProps: { gateReady: false, active: true, backlog: true, done: false },
+        initialProps: { active: true, backlog: true, done: false },
         wrapper: ({ children }) => harness.render(children),
       },
     );
 
-    expect(state.countRequests).toBe(0);
-    expect(state.listRequests).toEqual([]);
-
-    rerender({ gateReady: true, active: true, backlog: true, done: false });
     await waitFor(() => {
       expect(state.countRequests).toBe(1);
-    });
-    expect(state.listRequests).toEqual([]);
-    pendingCounts.resolve(countsResponse(2));
-    await waitFor(() => {
       expect(state.listRequests).toHaveLength(2);
     });
     expect(state.listRequests.map((request) => request.group)).toEqual(["active", "backlog"]);
+    pendingCounts.resolve(countsResponse(2));
     await waitFor(() => {
       expect(
         harness.queryClient
@@ -132,7 +124,7 @@ describe("Project Task-list data ownership", () => {
       ).toHaveLength(3);
     });
 
-    rerender({ gateReady: true, active: false, backlog: true, done: false });
+    rerender({ active: false, backlog: true, done: false });
     await waitFor(() => {
       expect(
         harness.queryClient.getQueryData(queryKeys.projectTaskGroup("project-1", "active")),
@@ -154,7 +146,6 @@ describe("Project Task-list data ownership", () => {
       () =>
         useProjectTaskListData({
           projectID: "project-1",
-          gateReady: true,
           expanded: { active: true, backlog: false, done: false },
         }),
       { wrapper: ({ children }) => harness.render(children) },
@@ -209,7 +200,6 @@ describe("Project Task-list data ownership", () => {
       ({ expanded }) =>
         useProjectTaskListData({
           projectID: "project-1",
-          gateReady: true,
           expanded: { active: expanded, backlog: false, done: false },
         }),
       {
@@ -249,7 +239,6 @@ describe("Project Task-list data ownership", () => {
       () =>
         useProjectTaskListData({
           projectID: "project-1",
-          gateReady: true,
           expanded: { active: true, backlog: false, done: false },
         }),
       { wrapper: ({ children }) => harness.render(children) },
@@ -289,7 +278,6 @@ describe("Project Task-list data ownership", () => {
       ({ expanded }) =>
         useProjectTaskListData({
           projectID: "project-1",
-          gateReady: true,
           expanded: { active: expanded, backlog: false, done: false },
         }),
       {
@@ -326,7 +314,6 @@ describe("Project Task-list data ownership", () => {
       () =>
         useProjectTaskListData({
           projectID: "project-1",
-          gateReady: true,
           expanded: { active: true, backlog: false, done: false },
         }),
       { wrapper: ({ children }) => initialHarness.render(children) },
@@ -351,7 +338,6 @@ describe("Project Task-list data ownership", () => {
       () =>
         useProjectTaskListData({
           projectID: "project-1",
-          gateReady: true,
           expanded: { active: true, backlog: false, done: false },
         }),
       { wrapper: ({ children }) => edgeHarness.render(children) },

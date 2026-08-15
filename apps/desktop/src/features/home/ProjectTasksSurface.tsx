@@ -1,25 +1,35 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Plus } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, ChevronRight, Circle, CircleDot } from "lucide-react";
 import { useCallback, useState, type HTMLAttributes, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowPickerItem } from "@/api";
-import { canonicalBoardFilter, errorMessage } from "@/api";
+import { errorMessage, type WorkflowExecutionTargetSelection } from "@/api";
 import {
+  invalidateProjectBoardQueries,
+  invalidateProjectTaskSearches,
   queryKeys,
-  useAppNavigation,
+  reportNonCancelledError,
   useAppServices,
+  useConnectionSnapshot,
   useOwnedSidebarRoots,
   useSidebarShell,
+  useStatusController,
   type SidebarMode,
 } from "@/app-facade";
+import {
+  executeTaskInitiatingAction,
+  TaskInitiatingActionDialogs,
+  type TaskInitiatingAction,
+  type TaskInitiatingActionDialogResult,
+  useTaskInitiatingActionController,
+  useTaskResumeAction,
+} from "@/shared/execution-target";
 import {
   Button,
   createVirtualizedPixelOffsetRequest,
   directionalBoundary,
   EmptyState,
   InfiniteListBoundary,
-  InteractiveChip,
   Spinner,
   VirtualizedInfiniteList,
   type VirtualizedInfiniteListBoundaryState,
@@ -33,11 +43,25 @@ import {
   type ProjectTaskGroupDisclosure,
   type ProjectTaskListData,
 } from "./projectTaskListData";
+import {
+  projectTaskColumnStyle,
+  resolveProjectTaskVisibleColumns,
+  useProjectTaskColumnLayout,
+  useProjectTaskListWidth,
+  type ProjectTaskColumnLayout,
+} from "./projectTaskColumnLayout";
+import { ProjectTaskColumnMeasurements } from "./ProjectTaskColumnMeasurements";
 import { projectTasksPresentation } from "./projectTaskListPresentation";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
 import { projectTaskColumnCount, type ProjectTaskListEntry } from "./ProjectTaskRow";
-
-const stickyColumnKeys = new Set(["columns"]);
+import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
+import {
+  projectTaskWorkflowItems,
+  useProjectTaskNewTaskAvailable,
+  useProjectTaskWorkflowPages,
+} from "./projectTaskWorkflows";
+import { ProjectWorkflowStrip } from "./ProjectWorkflowStrip";
+import { useProjectLinkWorkflowAction } from "./useProjectLinkWorkflowAction";
 
 export function ProjectTasksSurface({
   projectID,
@@ -50,49 +74,90 @@ export function ProjectTasksSurface({
 }>) {
   const { t } = useTranslation();
   const { api } = useAppServices();
+  const connection = useConnectionSnapshot();
+  const { push } = useStatusController();
   const queryClient = useQueryClient();
   const { open } = useOwnedSidebarRoots();
   const { activeDestination } = useSidebarShell();
   const [disclosure, setDisclosure] = useState(viewMemory.read().disclosure);
   const [labelEditorTaskID, setLabelEditorTaskID] = useState<string | null>(null);
-  const query = useQuery({
-    queryKey: queryKeys.board(projectID, undefined, canonicalBoardFilter({ kind: "none" })),
-    queryFn: async () => api.getBoard(projectID, undefined, canonicalBoardFilter({ kind: "none" })),
-  });
+  const [paginationEnabled, setPaginationEnabled] = useState(false);
+  const workflowsQuery = useProjectTaskWorkflowPages(projectID);
   const data = useProjectTaskListData({
     expanded: disclosure,
-    gateReady: query.isSuccess && query.data.workflows.length > 0,
     projectID,
   });
-  useProjectTaskListEvents({ enabled: query.isSuccess, projectID });
-  const boardBoundary = directionalBoundary({
-    failed: query.isError,
-    loading: query.isPending,
+  const refreshTaskSurfaces = useCallback(async (): Promise<void> => {
+    await Promise.all([
+      invalidateProjectBoardQueries(queryClient, projectID),
+      invalidateProjectTaskSearches(queryClient, projectID),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.projectTaskListsRoot(projectID),
+        refetchType: "active",
+      }),
+    ]);
+  }, [projectID, queryClient]);
+  const reportResumeError = useCallback(
+    (error: unknown) => {
+      reportNonCancelledError(error, (failure) => {
+        push({
+          id: "project-task-list-resume-error",
+          tone: "danger",
+          title: t("board.resumeFailed"),
+          body: errorMessage(failure),
+          durationMs: Infinity,
+        });
+      });
+    },
+    [push, t],
+  );
+  const executeInitiatingAction = useCallback(
+    async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection) => {
+      const result = await executeTaskInitiatingAction(api, action, selection);
+      return result;
+    },
+    [api],
+  );
+  const initiatingAction = useTaskInitiatingActionController({
+    execute: executeInitiatingAction,
+    onApplied: refreshTaskSurfaces,
+    onAppliedError: reportResumeError,
+  });
+  const resumeAction = useTaskResumeAction(initiatingAction);
+  const { layout: columnLayout, retainRenderedWidths } = useProjectTaskColumnLayout(data);
+  useProjectTaskListEvents({ enabled: true, projectID });
+  const workflowsInitialState = projectTaskWorkflowInitialState(
+    workflowsQuery.data !== undefined,
+    workflowsQuery.isError,
+    workflowsQuery.isPending,
+  );
+  const workflowsBoundary = directionalBoundary({
+    failed: workflowsInitialState.failed,
+    loading: workflowsInitialState.loading,
     loadingLabel: t("states.loading"),
-    message: query.isError ? errorMessage(query.error) : "",
-    onRetry: () => void query.refetch(),
+    message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
+    onRetry: () => void workflowsQuery.refetch(),
     retryLabel: t("app.retry"),
   });
-  const workflows = query.data?.workflows ?? [];
-  const openLinkWorkflow = () => {
-    open({
-      kind: "linkWorkflow",
-      mode: sidebarMode,
-      onCompleted: async () => {
-        await Promise.all([
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.projectBoardsRoot(projectID),
-            refetchType: "active",
-          }),
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.projectTaskListsRoot(projectID),
-            refetchType: "active",
-          }),
-        ]);
-      },
-      projectID,
-    });
-  };
+  const previousWorkflowsBoundary = directionalBoundary({
+    failed: workflowsQuery.isFetchPreviousPageError,
+    loading: workflowsQuery.isFetchingPreviousPage,
+    loadingLabel: t("states.loading"),
+    message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
+    onRetry: () => void workflowsQuery.fetchPreviousPage(),
+    retryLabel: t("app.retry"),
+  });
+  const nextWorkflowsBoundary = directionalBoundary({
+    failed: workflowsQuery.isFetchNextPageError,
+    loading: workflowsQuery.isFetchingNextPage,
+    loadingLabel: t("app.loadingMore"),
+    message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
+    onRetry: () => void workflowsQuery.fetchNextPage(),
+    retryLabel: t("app.retry"),
+  });
+  const workflows = projectTaskWorkflowItems(workflowsQuery.data);
+  const newTaskAvailable = useProjectTaskNewTaskAvailable(projectID, workflowsQuery.data);
+  const openLinkWorkflow = useProjectLinkWorkflowAction(projectID, sidebarMode);
   const openNewTask = () => {
     open({
       boardQueryWorkflowID: undefined,
@@ -130,6 +195,18 @@ export function ProjectTasksSurface({
     },
     [activeTaskDetailMode, open, sidebarMode],
   );
+  const openTaskDependencies = useCallback(
+    (taskID: string) => {
+      setLabelEditorTaskID(null);
+      open({
+        kind: "taskDetail",
+        initialFocus: { kind: "dependencies" },
+        mode: activeTaskDetailMode ?? sidebarMode,
+        taskID,
+      });
+    },
+    [activeTaskDetailMode, open, sidebarMode],
+  );
   const presentation = projectTasksPresentation({
     data,
     disclosure,
@@ -138,9 +215,15 @@ export function ProjectTasksSurface({
     onLabelsActivate: (taskID) => {
       setLabelEditorTaskID((current) => (current === taskID ? null : taskID));
     },
+    onResumeTask: (taskID) => {
+      void resumeAction.execute(taskID).catch(reportResumeError);
+    },
     onTaskActivate: openTaskDetail,
     onToggle: toggleGroup,
+    pendingResumeTaskIDs: resumeAction.pendingTaskIDs,
     projectID,
+    resumeDisabled:
+      connection.phase !== "connected" || initiatingAction.pending !== null || initiatingAction.running,
     taskDetailID,
     t,
   });
@@ -148,33 +231,86 @@ export function ProjectTasksSurface({
   const onScrollElementChange = useCallback(
     (element: HTMLDivElement | null) => {
       if (element === null) return;
-      const memory = viewMemory.read();
-      element.scrollLeft = memory.horizontalOffsetPx;
+      element.scrollLeft = 0;
       element.onscroll = () => {
+        setPaginationEnabled(true);
         const current = viewMemory.read();
-        viewMemory.setScrollOffsets(
-          scrollRestorationReady ? element.scrollTop : current.verticalOffsetPx,
-          element.scrollLeft,
-        );
+        viewMemory.setScrollOffsets(scrollRestorationReady ? element.scrollTop : current.verticalOffsetPx, 0);
       };
     },
     [scrollRestorationReady, viewMemory],
   );
+  function handleTaskInitiatingDialogResult(result: TaskInitiatingActionDialogResult): void {
+    if (result.kind === "view_dependencies") {
+      openTaskDependencies(result.taskID);
+      return;
+    }
+    if (result.action.kind !== "resume") {
+      throw new Error(`Project Task list cannot continue a ${result.action.kind} action.`);
+    }
+    const resumed =
+      result.selection === undefined
+        ? resumeAction.execute(result.action.taskID)
+        : resumeAction.continueExecution(result.action, result.selection);
+    void resumed.catch(reportResumeError);
+  }
+
   return (
-    <ProjectTasksContent
-      boardBoundary={boardBoundary}
-      countsBoundary={countsBoundary}
-      entries={presentation.entries}
-      onLinkWorkflow={openLinkWorkflow}
-      onNewTask={openNewTask}
-      onScrollElementChange={onScrollElementChange}
-      projectID={projectID}
-      scrollRestorationReady={scrollRestorationReady}
-      taskCount={presentation.taskCount}
-      viewMemory={viewMemory}
-      workflows={workflows}
-    />
+    <>
+      <ProjectTaskColumnMeasurements data={data} onMeasure={retainRenderedWidths} />
+      <ProjectTasksContent
+        countsBoundary={countsBoundary}
+        columnLayout={columnLayout}
+        entries={presentation.entries}
+        onLinkWorkflow={openLinkWorkflow}
+        onNewTask={openNewTask}
+        onScrollElementChange={onScrollElementChange}
+        projectID={projectID}
+        scrollRestorationReady={scrollRestorationReady}
+        taskCount={presentation.taskCount}
+        viewMemory={viewMemory}
+        newTaskAvailable={newTaskAvailable}
+        workflowCount={workflows.length}
+        workflowsBoundary={workflowsBoundary}
+        workflowStrip={
+          <ProjectWorkflowStrip
+            hasNextPage={workflowsQuery.hasNextPage}
+            hasPreviousPage={workflowsQuery.hasPreviousPage}
+            initialBoundary={workflowsBoundary}
+            isFetchingNextPage={workflowsQuery.isFetchingNextPage}
+            isFetchingPreviousPage={workflowsQuery.isFetchingPreviousPage}
+            nextBoundary={nextWorkflowsBoundary}
+            onLinkWorkflow={openLinkWorkflow}
+            onLoadNext={() => {
+              void workflowsQuery.fetchNextPage();
+            }}
+            onLoadPrevious={() => {
+              void workflowsQuery.fetchPreviousPage();
+            }}
+            previousBoundary={previousWorkflowsBoundary}
+            projectID={projectID}
+            workflows={workflows}
+          />
+        }
+        paginationEnabled={paginationEnabled}
+      />
+      <TaskInitiatingActionDialogs
+        continuation={initiatingAction}
+        onResult={handleTaskInitiatingDialogResult}
+      />
+    </>
   );
+}
+
+function projectTaskWorkflowInitialState(
+  established: boolean,
+  failed: boolean,
+  loading: boolean,
+): Readonly<{ failed: boolean; loading: boolean }> {
+  return {
+    failed: !established && failed,
+    loading: !established && loading,
+  };
 }
 
 function projectTaskScrollRestorationReady(
@@ -191,7 +327,7 @@ function projectTaskScrollRestorationReady(
 }
 
 function ProjectTasksContent({
-  boardBoundary,
+  columnLayout,
   countsBoundary,
   entries,
   onLinkWorkflow,
@@ -201,9 +337,13 @@ function ProjectTasksContent({
   scrollRestorationReady,
   taskCount,
   viewMemory,
-  workflows,
+  workflowCount,
+  workflowsBoundary,
+  workflowStrip,
+  newTaskAvailable,
+  paginationEnabled,
 }: Readonly<{
-  boardBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  columnLayout: ProjectTaskColumnLayout;
   countsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   entries: readonly ProjectTaskListEntry[];
   onLinkWorkflow: () => void;
@@ -213,32 +353,30 @@ function ProjectTasksContent({
   scrollRestorationReady: boolean;
   taskCount: number | null;
   viewMemory: ProjectTasksViewMemory;
-  workflows: readonly WorkflowPickerItem[];
+  workflowCount: number;
+  workflowsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  workflowStrip: ReactNode;
+  newTaskAvailable: boolean;
+  paginationEnabled: boolean;
 }>) {
   const { t } = useTranslation();
-  if (boardBoundary !== undefined) {
-    return <InfiniteListBoundary direction="initial" state={boardBoundary} />;
-  }
-  if (countsBoundary?.state === "error" && taskCount === null) {
-    return <InfiniteListBoundary direction="initial" state={countsBoundary} />;
-  }
-  if (workflows.length === 0) {
-    return (
-      <TasksShell workflows={workflows} onLinkWorkflow={onLinkWorkflow} projectID={projectID}>
+  const listEntries = entries;
+  const { containerRef, widthPx } = useProjectTaskListWidth();
+  const visibleColumns = resolveProjectTaskVisibleColumns(widthPx, columnLayout);
+  const workflowsResolved = workflowsBoundary === undefined;
+  const memory = viewMemory.read();
+  return (
+    <TasksShell workflowStrip={workflowStrip}>
+      {workflowsResolved && workflowCount === 0 ? (
         <ProjectTasksEmpty
           actionLabel={t("workflowLibrary.linkWorkflow")}
           body={t("home.prototype.noLinkedWorkflowsBody")}
           onAction={onLinkWorkflow}
           title={t("home.prototype.noLinkedWorkflowsTitle")}
         />
-      </TasksShell>
-    );
-  }
-  const newTaskAvailable = workflows.length === 1 || workflows.some((workflow) => workflow.isProjectDefault);
-  const memory = viewMemory.read();
-  return (
-    <TasksShell workflows={workflows} onLinkWorkflow={onLinkWorkflow} projectID={projectID}>
-      {taskCount === 0 ? (
+      ) : countsBoundary !== undefined && taskCount === null ? (
+        <InfiniteListBoundary direction="initial" state={countsBoundary} />
+      ) : taskCount === 0 ? (
         <ProjectTasksEmpty
           actionLabel={newTaskAvailable ? t("board.newTask") : t("workflowLibrary.linkWorkflow")}
           body={t("home.prototype.noTasksBody")}
@@ -246,35 +384,44 @@ function ProjectTasksContent({
           title={t("home.prototype.noTasksTitle")}
         />
       ) : (
-        <VirtualizedInfiniteList
-          ariaLabel={t("home.prototype.projectTasksGrid")}
-          className="h-full min-h-0 w-[calc(100%+var(--space-3))] min-w-0 overflow-auto pr-[var(--space-3)] [scrollbar-width:thin]"
-          estimateSize={() => 38}
-          getItemAnchorKey={(entry) => (entry.kind === "task" ? entry.anchorKey : entry.key)}
-          getItemKey={(entry) => entry.key}
-          getItemOccurrenceKey={(entry) => entry.key}
-          getItemWrapperProps={projectTaskEntryWrapperProps}
-          hasNextPage={false}
-          isFetchingNextPage={false}
-          itemRole="row"
-          items={entries}
-          loadingLabel={t("app.loadingMore")}
-          onLoadMore={() => undefined}
-          onScrollElementChange={onScrollElementChange}
-          pixelOffsetRequest={
-            scrollRestorationReady
-              ? createVirtualizedPixelOffsetRequest(`restore-${projectID}`, memory.verticalOffsetPx)
-              : undefined
-          }
-          renderItem={renderProjectTaskEntry}
-          role="grid"
-          rowSpacing="tight"
-          stickyItemKeys={stickyColumnKeys}
-          testId="project-task-list-grid"
-          visibilityTriggers={projectTaskVisibilityTriggers(entries)}
-        />
+        <div
+          className="h-full min-h-0"
+          data-dependencies-visible={visibleColumns.dependencies}
+          data-labels-visible={visibleColumns.labelsPx !== null}
+          data-title-visible={visibleColumns.title}
+          data-workflow-visible={visibleColumns.workflow}
+          ref={containerRef}
+          style={projectTaskColumnStyle(columnLayout, visibleColumns)}
+        >
+          <VirtualizedInfiniteList
+            ariaLabel={t("home.prototype.projectTasksGrid")}
+            className="project-task-list-scroll h-full min-h-0 w-full min-w-0 overflow-x-hidden overflow-y-auto pb-[var(--space-2)] hide-scrollbar"
+            estimateSize={() => 44}
+            getItemAnchorKey={(entry) => (entry.kind === "task" ? entry.anchorKey : entry.key)}
+            getItemKey={(entry) => entry.key}
+            getItemOccurrenceKey={(entry) => entry.key}
+            getItemWrapperProps={projectTaskEntryWrapperProps}
+            hasNextPage={false}
+            isFetchingNextPage={false}
+            itemRole="row"
+            items={listEntries}
+            loadingLabel={t("app.loadingMore")}
+            onLoadMore={() => undefined}
+            onScrollElementChange={onScrollElementChange}
+            pixelOffsetRequest={
+              scrollRestorationReady
+                ? createVirtualizedPixelOffsetRequest(`restore-${projectID}`, memory.verticalOffsetPx)
+                : undefined
+            }
+            renderItem={renderProjectTaskEntry}
+            role="grid"
+            rowSpacing="tight"
+            testId="project-task-list-grid"
+            visibilityTriggers={projectTaskVisibilityTriggers(listEntries, paginationEnabled)}
+          />
+        </div>
       )}
-      {countsBoundary === undefined ? null : (
+      {countsBoundary === undefined || taskCount === null ? null : (
         <div className="absolute inset-x-0 top-10">
           <InfiniteListBoundary direction="initial" state={countsBoundary} />
         </div>
@@ -301,21 +448,48 @@ function renderProjectTaskEntry(entry: ProjectTaskListEntry): ReactNode {
   switch (entry.kind) {
     case "column-header":
       return entry.cells.map((cell) => (
-        <div aria-label={cell.ariaLabel} className={cell.className} key={cell.key} role="columnheader">
+        <div
+          aria-label={cell.ariaLabel}
+          className={cell.className}
+          data-project-task-column={cell.key}
+          key={cell.key}
+          role="columnheader"
+        >
           {cell.content}
         </div>
       ));
     case "group-header":
       return (
-        <div aria-colspan={projectTaskColumnCount} role="gridcell">
-          <button aria-expanded={entry.expanded} className="w-full" onClick={entry.onToggle} type="button">
+        <div
+          className="col-span-full flex h-10 items-center gap-[var(--space-2)]"
+          aria-colspan={projectTaskColumnCount}
+          role="gridcell"
+        >
+          <span className="inline-grid h-full w-4 shrink-0 place-items-center">
+            <ProjectTaskStatusLegend
+              definitions={entry.definitions}
+              trigger={<ProjectTaskGroupIcon group={entry.groupKey} />}
+            />
+          </span>
+          <button
+            aria-expanded={entry.expanded}
+            className="flex h-full min-w-0 flex-1 items-center gap-[var(--space-2)] text-left text-sm outline-none"
+            onClick={entry.onToggle}
+            type="button"
+          >
             <ChevronRight
               aria-hidden="true"
-              className={entry.expanded ? "inline-block rotate-90" : "inline-block"}
-              size={16}
+              className={`shrink-0 transition-transform duration-100 motion-reduce:transition-none ${
+                entry.expanded ? "rotate-90" : ""
+              }`}
+              size={14}
+              strokeWidth={1.8}
             />
-            <span aria-hidden="true">
-              {entry.label} {entry.count}
+            <span aria-hidden="true" className="font-semibold">
+              {entry.label}
+            </span>
+            <span aria-hidden="true" className="text-xs tabular-nums text-[var(--color-muted)]">
+              {entry.count}
             </span>
             <span className="sr-only">{entry.ariaLabel}</span>
           </button>
@@ -323,7 +497,7 @@ function renderProjectTaskEntry(entry: ProjectTaskListEntry): ReactNode {
       );
     case "boundary":
       return (
-        <div aria-colspan={projectTaskColumnCount} role="gridcell">
+        <div className="col-span-full" aria-colspan={projectTaskColumnCount} role="gridcell">
           {entry.state === undefined ? (
             <div
               aria-label={entry.isFetching === true ? entry.loadingLabel : undefined}
@@ -340,16 +514,36 @@ function renderProjectTaskEntry(entry: ProjectTaskListEntry): ReactNode {
       );
     case "task":
       return entry.cells.map((cell) => (
-        <div aria-label={cell.ariaLabel} className={cell.className} key={cell.key} role="gridcell">
+        <div
+          aria-label={cell.ariaLabel}
+          className={cell.className}
+          data-project-task-column={cell.key}
+          key={cell.key}
+          role="gridcell"
+        >
           {cell.content}
         </div>
       ));
   }
 }
 
+function ProjectTaskGroupIcon({ group }: Readonly<{ group: ProjectTaskGroup }>) {
+  if (group === "done") {
+    return <CheckCircle2 aria-hidden="true" className="text-[var(--color-success)]" size={15} />;
+  }
+  if (group === "backlog") {
+    return <Circle aria-hidden="true" className="text-[var(--color-muted)]" size={15} />;
+  }
+  return <CircleDot aria-hidden="true" className="text-[var(--color-primary)]" size={15} />;
+}
+
 function projectTaskVisibilityTriggers(
   entries: readonly ProjectTaskListEntry[],
+  enabled: boolean,
 ): readonly VirtualizedItemVisibilityTrigger[] {
+  if (!enabled) {
+    return [];
+  }
   return entries.flatMap((entry) =>
     entry.kind === "boundary" && entry.direction !== "initial"
       ? [
@@ -367,36 +561,15 @@ function projectTaskVisibilityTriggers(
 
 function TasksShell({
   children,
-  onLinkWorkflow,
-  projectID,
-  workflows,
+  workflowStrip,
 }: Readonly<{
   children: ReactNode;
-  onLinkWorkflow: () => void;
-  projectID: string;
-  workflows: readonly WorkflowPickerItem[];
+  workflowStrip: ReactNode;
 }>) {
-  const { t } = useTranslation();
-  const navigation = useAppNavigation();
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 gap-[var(--space-2)] overflow-x-auto px-[var(--space-4)] py-[var(--space-3)] hide-scrollbar">
-        {workflows.map((workflow) => (
-          <InteractiveChip
-            className="shrink-0"
-            key={workflow.id}
-            onClick={() => void navigation.openProject(projectID, workflow.id)}
-            title={workflow.description}
-          >
-            {workflow.name}
-          </InteractiveChip>
-        ))}
-        <InteractiveChip className="shrink-0" onClick={onLinkWorkflow}>
-          <Plus aria-hidden="true" size={14} strokeWidth={1.8} />
-          {t("workflowLibrary.linkWorkflow")}
-        </InteractiveChip>
-      </div>
-      <div className="relative m-[var(--space-4)] mt-0 min-h-0 flex-1 overflow-hidden rounded-[var(--radius-l)] border border-[var(--color-outline)] bg-[var(--color-island-1)]">
+      {workflowStrip}
+      <div className="relative mx-[var(--space-4)] mb-[var(--space-3)] min-h-0 flex-1 overflow-hidden">
         {children}
       </div>
     </div>

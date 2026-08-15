@@ -9,7 +9,6 @@ import { useCallback, useEffect } from "react";
 
 import {
   errorMessage,
-  boardNodeCardsPageSize,
   noTaskLabelFilter,
   type ProjectTaskGroupCounts,
   type ProjectTaskGroup,
@@ -22,7 +21,7 @@ import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
 export const projectTaskGroups = ["active", "backlog", "done"] as const satisfies readonly ProjectTaskGroup[];
 export type { ProjectTaskGroup } from "@/api";
 
-export const projectTaskGroupPageSize = boardNodeCardsPageSize;
+export const projectTaskGroupPageSize = 25;
 export const projectTaskGroupRetainedPages = 3;
 
 export type ProjectTaskGroupDisclosure = Readonly<Record<ProjectTaskGroup, boolean>>;
@@ -57,41 +56,19 @@ const updatedDescending = [{ field: "updated", direction: "desc" }] as const;
 
 export function useProjectTaskListData({
   expanded,
-  gateReady,
   projectID,
 }: Readonly<{
   expanded: ProjectTaskGroupDisclosure;
-  gateReady: boolean;
   projectID: string;
 }>): ProjectTaskListData {
-  const counts = useProjectTaskGroupCounts(projectID, gateReady);
-  const enabledGroups = enabledProjectTaskGroups(gateReady, expanded, counts.data);
-  const active = useProjectTaskGroupData(projectID, "active", enabledGroups.active);
-  const backlog = useProjectTaskGroupData(projectID, "backlog", enabledGroups.backlog);
-  const done = useProjectTaskGroupData(projectID, "done", enabledGroups.done);
+  const counts = useProjectTaskGroupCounts(projectID);
+  const active = useProjectTaskGroupData(projectID, "active", expanded.active);
+  const backlog = useProjectTaskGroupData(projectID, "backlog", expanded.backlog);
+  const done = useProjectTaskGroupData(projectID, "done", expanded.done);
   return { active, backlog, counts, done };
 }
 
-function enabledProjectTaskGroups(
-  gateReady: boolean,
-  expanded: ProjectTaskGroupDisclosure,
-  counts: ProjectTaskGroupCounts | undefined,
-): ProjectTaskGroupDisclosure {
-  return {
-    active: gateReady && expanded.active && hasProjectTaskGroupRows(counts, "active"),
-    backlog: gateReady && expanded.backlog && hasProjectTaskGroupRows(counts, "backlog"),
-    done: gateReady && expanded.done && hasProjectTaskGroupRows(counts, "done"),
-  };
-}
-
-function hasProjectTaskGroupRows(
-  counts: ProjectTaskGroupCounts | undefined,
-  group: ProjectTaskGroup,
-): boolean {
-  return counts !== undefined && counts.counts[group] > 0;
-}
-
-function useProjectTaskGroupCounts(projectID: string, enabled: boolean) {
+function useProjectTaskGroupCounts(projectID: string) {
   const { api } = useAppServices();
   return useQuery({
     queryKey: queryKeys.projectTaskGroupCounts(projectID),
@@ -99,7 +76,7 @@ function useProjectTaskGroupCounts(projectID: string, enabled: boolean) {
       api.getProjectTaskGroupCounts({
         projectID,
       }),
-    enabled: enabled && projectID.length > 0,
+    enabled: projectID.length > 0,
     placeholderData: (previous) => previous,
   });
 }
@@ -226,15 +203,26 @@ export function useProjectTaskListEvents({
       refetchType: "active",
     });
   }, [projectID, queryClient]);
-  const refreshBoardGate = useCallback(async (): Promise<void> => {
-    await queryClient.invalidateQueries({
-      queryKey: queryKeys.projectBoardsRoot(projectID),
-      refetchType: "active",
-    });
+  const refreshWorkflows = useCallback(async (): Promise<void> => {
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.projectWorkflowLinks(projectID),
+        exact: true,
+        refetchType: "active",
+      }),
+      queryClient.resetQueries({
+        queryKey: queryKeys.projectTaskWorkflows(projectID),
+        exact: true,
+      }),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.projectBoardsRoot(projectID),
+        refetchType: "active",
+      }),
+    ]);
   }, [projectID, queryClient]);
   const refreshBoundary = useCallback(async (): Promise<void> => {
-    await Promise.all([refreshBoardGate(), refreshTaskLists()]);
-  }, [refreshBoardGate, refreshTaskLists]);
+    await Promise.all([refreshWorkflows(), refreshTaskLists()]);
+  }, [refreshTaskLists, refreshWorkflows]);
 
   useEffect(() => {
     if (!enabled || projectID.length === 0 || connection.phase !== "connected") {
@@ -252,7 +240,7 @@ export function useProjectTaskListEvents({
           return;
         }
         if (event.resource === "workflow" || event.resource === "workflow_link") {
-          run(Promise.all([refreshBoardGate(), refreshTaskLists()]).then(() => undefined));
+          run(Promise.all([refreshWorkflows(), refreshTaskLists()]).then(() => undefined));
           return;
         }
         if (event.resource === "label") {
@@ -280,9 +268,9 @@ export function useProjectTaskListEvents({
     connection.phase,
     enabled,
     projectID,
-    refreshBoardGate,
     refreshBoundary,
     refreshTaskLists,
+    refreshWorkflows,
     reportBackgroundError,
   ]);
 }

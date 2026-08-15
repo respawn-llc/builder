@@ -66,6 +66,7 @@ export function RootRoute() {
 function RoutePersistence() {
   const navigate = rootRouteApi.useNavigate();
   const homeMatch = useMatch({ from: "/", shouldThrow: false });
+  const homeProjectId = homeMatch?.search.projectId ?? null;
   const isUnselectedHomeRoute = homeMatch !== undefined && homeMatch.search.projectId === undefined;
   const projectMatch = useMatch({ from: "/projects/$projectId", shouldThrow: false });
   const projectId = projectMatch?.params.projectId ?? null;
@@ -77,18 +78,26 @@ function RoutePersistence() {
       if (isUnselectedHomeRoute && restored !== null) {
         // Session restore is startup state hydration, not a user-initiated destination change, so it
         // intentionally bypasses the animated app navigation API.
-        void navigate({
-          to: "/projects/$projectId",
-          params: { projectId: restored.projectId },
-          search: { workflowId: restored.workflowId, taskId: "" },
-          replace: true,
-        });
+        void (restored.kind === "home_project"
+          ? navigate({
+              to: "/",
+              search: { projectId: restored.projectId },
+              replace: true,
+            })
+          : navigate({
+              to: "/projects/$projectId",
+              params: { projectId: restored.projectId },
+              search: { workflowId: restored.workflowId, taskId: "" },
+              replace: true,
+            }));
       }
     }
-    if (projectId !== null) {
-      writeLastProjectRoute({ projectId, workflowId });
+    if (homeProjectId !== null) {
+      writeLastProjectRoute({ kind: "home_project", projectId: homeProjectId });
+    } else if (projectId !== null) {
+      writeLastProjectRoute({ kind: "workflow_board", projectId, workflowId });
     }
-  }, [isUnselectedHomeRoute, projectId, workflowId, navigate]);
+  }, [homeProjectId, isUnselectedHomeRoute, projectId, workflowId, navigate]);
 
   return null;
 }

@@ -2,12 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider } from "react-i18next";
 
-import {
-  canonicalBoardFilter,
-  type ProjectTaskGroupCounts,
-  type ProjectTaskGroupDefinition,
-  type TaskListItem,
-} from "@/api";
+import { type ProjectTaskGroupCounts, type ProjectTaskGroupDefinition, type TaskListItem } from "@/api";
 import { queryKeys, type SidebarDestination, type SidebarRootController } from "@/app-facade";
 import type * as ProjectTaskListData from "./projectTaskListData";
 
@@ -60,6 +55,7 @@ const fixture = vi.hoisted<{
   labelCatalogRequests: number;
   projectSubscriptions: number;
   assignmentRequests: number;
+  resumeRequests: number;
 }>(() => ({
   activeDestination: null,
   board: {
@@ -102,6 +98,7 @@ const fixture = vi.hoisted<{
   labelCatalogRequests: 0,
   projectSubscriptions: 0,
   assignmentRequests: 0,
+  resumeRequests: 0,
 }));
 
 vi.mock("@/app-facade", async (importOriginal) => ({
@@ -109,7 +106,17 @@ vi.mock("@/app-facade", async (importOriginal) => ({
   useAppNavigation: () => ({ openProject: vi.fn() }),
   useAppServices: () => ({
     api: {
-      getBoard: async () => fixture.board.data,
+      listWorkflows: async () => ({
+        nextOffset: null,
+        workflows: fixture.board.data.workflows.map((workflow) => ({
+          description: workflow.description ?? "",
+          executionTargetPolicy: { customRef: null, mode: "default_branch" as const },
+          id: workflow.id,
+          name: workflow.name,
+          projectLink: { isDefault: workflow.isProjectDefault },
+          version: 1,
+        })),
+      }),
       getTaskLabels: async (taskID: string) => {
         fixture.assignmentRequests += 1;
         return { taskID, labelIDs: [] };
@@ -120,6 +127,10 @@ vi.mock("@/app-facade", async (importOriginal) => ({
           projectID: "project-1",
           labels: [{ id: "label-1", name: "Priority" }],
         };
+      },
+      resumeTask: async () => {
+        fixture.resumeRequests += 1;
+        return { outcome: "applied" as const, applied: { currentNodes: [] } };
       },
       subscribeProject: () => {
         fixture.projectSubscriptions += 1;
@@ -212,13 +223,29 @@ describe("ProjectTasksSurface", () => {
     fixture.labelCatalogRequests = 0;
     fixture.projectSubscriptions = 0;
     fixture.assignmentRequests = 0;
+    fixture.resumeRequests = 0;
     mockedActiveTasks = undefined;
+  });
+
+  it("retains accessible column headers without displaying a header row", () => {
+    renderSurface();
+
+    const columnHeaders = screen.getAllByRole("columnheader");
+    expect(columnHeaders).toHaveLength(6);
+    for (const columnHeader of columnHeaders) {
+      expect(within(columnHeader).queryByRole("button")).not.toBeInTheDocument();
+    }
   });
 
   it("opens the server-defined Status legend from keyboard focus", async () => {
     renderSurface();
 
-    fireEvent.focus(screen.getByRole("button", { name: appI18n.t("task.status") }));
+    const statusLegendTriggers = screen.getAllByRole("button", { name: appI18n.t("task.status") });
+    const statusLegendTrigger = statusLegendTriggers[0];
+    if (statusLegendTrigger === undefined) {
+      throw new Error("Expected a Task Status legend trigger.");
+    }
+    fireEvent.focus(statusLegendTrigger);
 
     expect(await screen.findByRole("tooltip")).toBeVisible();
   });
@@ -325,32 +352,6 @@ describe("ProjectTasksSurface", () => {
     );
   });
 
-  it("reveals authoritative Backlog after New Task success without opening Task Detail", async () => {
-    fixture.counts = { active: 0, backlog: 0, done: 0 };
-    const memory = createProjectTasksViewMemory();
-    const view = renderSurface(memory);
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("board.newTask") }));
-    const destination = openedDestination();
-    if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
-    fixture.open.mockClear();
-
-    await act(async () => {
-      await destination.onCreated?.("task-created");
-    });
-
-    expect(memory.read().disclosure.backlog).toBe(true);
-    expect(fixture.invalidations).toContainEqual({
-      queryKey: queryKeys.projectTaskListsRoot("project-1"),
-      refetchType: "active",
-    });
-    expect(fixture.open).not.toHaveBeenCalled();
-
-    fixture.counts = { active: 0, backlog: 1, done: 0 };
-    fixture.backlogTasks = [task("task-created", "KNT-5", "Created task")];
-    view.rerender(withQueryClient(surface(memory)));
-    expect(screen.getByRole("row", { name: "KNT-5 Created task" })).toBeInTheDocument();
-  });
-
   it("preserves collapsed Backlog after New Task success and exposes no persistent New Task action", async () => {
     fixture.counts = { active: 0, backlog: 0, done: 0 };
     const memory = createProjectTasksViewMemory();
@@ -375,7 +376,10 @@ describe("ProjectTasksSurface", () => {
     const memory = createProjectTasksViewMemory();
     const view = renderSurface(memory);
 
-    const activeGroupName = appI18n.t("home.prototype.taskGroupCount", { count: 2, group: appI18n.t("home.prototype.statusGroups.active") });
+    const activeGroupName = appI18n.t("home.prototype.taskGroupCount", {
+      count: 2,
+      group: appI18n.t("home.prototype.statusGroups.active"),
+    });
     const activeGroup = screen.getByRole("button", { name: activeGroupName });
     fireEvent.click(activeGroup);
     expect(activeGroup).toHaveAttribute("aria-expanded", "false");
@@ -412,16 +416,18 @@ describe("ProjectTasksSurface", () => {
       const view = renderSurface(memory);
       const loadingGrid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
       expect(loadingGrid.scrollTop).toBe(0);
-      expect(loadingGrid.scrollLeft).toBe(120);
+      expect(loadingGrid.scrollLeft).toBe(0);
       fireEvent.scroll(loadingGrid);
       expect(memory.read()).toMatchObject({
-        horizontalOffsetPx: 120,
+        horizontalOffsetPx: 0,
         verticalOffsetPx: 200,
       });
 
       fixture.initialGroupPagesError = true;
       view.rerender(withQueryClient(surface(memory)));
-      expect(screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }).scrollTop).toBe(0);
+      expect(screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }).scrollTop).toBe(
+        0,
+      );
 
       fixture.initialGroupPagesError = false;
       fixture.initialGroupPagesEstablished = true;
@@ -430,10 +436,10 @@ describe("ProjectTasksSurface", () => {
 
       const restoredGrid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
       expect(restoredGrid.scrollTop).toBe(200);
-      expect(restoredGrid.scrollLeft).toBe(120);
+      expect(restoredGrid.scrollLeft).toBe(0);
       fireEvent.scroll(restoredGrid);
       expect(memory.read()).toMatchObject({
-        horizontalOffsetPx: 120,
+        horizontalOffsetPx: 0,
         verticalOffsetPx: 200,
       });
     } finally {
@@ -454,7 +460,7 @@ describe("ProjectTasksSurface", () => {
 
     const grid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
     expect(grid.scrollTop).toBe(200);
-    expect(grid.scrollLeft).toBe(120);
+    expect(grid.scrollLeft).toBe(0);
   });
 
   it("replaces the complete Tasks surface when initial exact counts fail", () => {
@@ -466,7 +472,21 @@ describe("ProjectTasksSurface", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(countsError.message);
     expect(screen.getByRole("button", { name: appI18n.t("app.retry") })).toBeInTheDocument();
-    expect(screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the standard loading boundary until initial exact counts arrive", () => {
+    fixture.countsEstablished = false;
+    fixture.countsPending = true;
+
+    renderSurface();
+
+    expect(screen.getByRole("status", { name: appI18n.t("states.loading") })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+    ).not.toBeInTheDocument();
   });
 
   it("opens Task Detail with the containing sidebar mode", () => {
@@ -480,6 +500,37 @@ describe("ProjectTasksSurface", () => {
     });
   });
 
+  it("keeps informational status icons from opening Task Detail", () => {
+    renderSurface(createProjectTasksViewMemory(), "shift", [task("active-1", "KNT-1", "Task")]);
+
+    fireEvent.click(screen.getByTestId("project-task-status-active-1"));
+
+    expect(fixture.open).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the Project Task list after Resume applies", async () => {
+    renderSurface(createProjectTasksViewMemory(), "shift", [
+      task("active-1", "KNT-1", "Interrupted task", {
+        status: {
+          kind: "interrupted",
+          nativeState: "interrupted",
+          nodeIDs: [],
+          attentionTypes: [],
+        },
+      }),
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: `${appI18n.t("board.resume")}: KNT-1` }));
+
+    await waitFor(() => {
+      expect(fixture.resumeRequests).toBe(1);
+      expect(fixture.invalidations).toContainEqual({
+        queryKey: queryKeys.projectTaskListsRoot("project-1"),
+        refetchType: "active",
+      });
+    });
+  });
+
   it("opens Task Detail from the dependency chip and uses the active sidebar destination for selection", () => {
     fixture.activeDestination = { kind: "taskDetail", mode: "shift", taskID: "active-1" };
     renderSurface(createProjectTasksViewMemory(), "overlay", [
@@ -490,7 +541,11 @@ describe("ProjectTasksSurface", () => {
 
     const row = screen.getByRole("row", { name: "KNT-1 Selected task" });
     expect(row).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("task.dependenciesProgressAccessible", { completed: 2, total: 2 }) }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: appI18n.t("task.dependenciesProgressAccessible", { completed: 2, total: 2 }),
+      }),
+    );
     expect(fixture.open).toHaveBeenCalledWith({
       kind: "taskDetail",
       mode: "shift",
@@ -513,13 +568,19 @@ describe("ProjectTasksSurface", () => {
 
     const detailRow = screen.getByRole("row", { name: "KNT-1 Detail selected" });
     const labelsRow = screen.getByRole("row", { name: "KNT-2 Labels selected" });
-    expect(within(detailRow).getAllByRole("gridcell")[1]).toBeEmptyDOMElement();
+    const dependenciesCell = within(detailRow).getAllByRole("gridcell").at(3);
+    if (dependenciesCell === undefined) {
+      throw new Error("Expected the Task Dependencies cell.");
+    }
+    expect(dependenciesCell).toBeEmptyDOMElement();
     expect(detailRow).toHaveAttribute("aria-selected", "true");
     expect(labelsRow).toHaveAttribute("aria-selected", "false");
 
     expect(fixture.labelCatalogRequests).toBe(0);
     expect(fixture.assignmentRequests).toBe(0);
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("home.prototype.editTaskLabels", { shortID: "KNT-2" }) }));
+    fireEvent.click(
+      screen.getByRole("button", { name: appI18n.t("home.prototype.editTaskLabels", { shortID: "KNT-2" }) }),
+    );
     expect(fixture.open).not.toHaveBeenCalled();
     expect(detailRow).toHaveAttribute("aria-selected", "false");
     expect(labelsRow).toHaveAttribute("aria-selected", "true");
@@ -569,10 +630,20 @@ function withQueryClient(children: React.ReactNode) {
   vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async (filters) => {
     fixture.invalidations.push(filters);
   });
-  queryClient.setQueryData(
-    queryKeys.board("project-1", undefined, canonicalBoardFilter({ kind: "none" })),
-    fixture.board.data,
-  );
+  queryClient.setQueryData(queryKeys.projectTaskWorkflows("project-1"), {
+    pageParams: [0],
+    pages: [
+      {
+        nextOffset: null,
+        workflows: fixture.board.data.workflows.map((workflow) => ({
+          description: workflow.description ?? "",
+          id: workflow.id,
+          isProjectDefault: workflow.isProjectDefault,
+          name: workflow.name,
+        })),
+      },
+    ],
+  });
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 

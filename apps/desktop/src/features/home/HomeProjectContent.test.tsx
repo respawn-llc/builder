@@ -3,10 +3,14 @@ import { useCallback } from "react";
 
 import { appI18n, initializeI18n } from "@/i18n";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
-import { ProjectPrototypeDetail } from "./ProjectPrototypeDetail";
+import { HomeProjectContent } from "./HomeProjectContent";
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal()),
+  useQueryClient: () => ({ invalidateQueries: vi.fn(), resetQueries: vi.fn() }),
+  useQuery: () => ({
+    data: { displayName: "Kent", projectKey: "KNT" },
+  }),
   useInfiniteQuery: () => ({
     data: { pages: [] },
     error: null,
@@ -21,7 +25,9 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 
 vi.mock("@/app-facade", async (importOriginal) => ({
   ...(await importOriginal()),
+  useAppNavigation: () => ({ selectHomeProject: vi.fn() }),
   useAppServices: () => ({ api: {} }),
+  useOwnedSidebarRoots: () => ({ open: vi.fn() }),
 }));
 
 vi.mock("./ProjectTasksSurface", () => ({
@@ -50,18 +56,37 @@ vi.mock("./ProjectTasksSurface", () => ({
 
 beforeAll(async () => initializeI18n());
 
+it("shows the selected Project identity above its workspace", () => {
+  render(<HomeProjectContent projectID="project-1" sessionsVisible={false} sidebarMode="shift" />);
+
+  expect(screen.getByRole("heading", { name: "Kent" })).toBeInTheDocument();
+  expect(screen.getByText("KNT")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") })).toBeInTheDocument();
+});
+
 it("restores Task-grid pixels after visiting another Project tab", () => {
-  render(<ProjectPrototypeDetail projectID="project-1" sidebarMode="shift" />);
+  render(<HomeProjectContent projectID="project-1" sessionsVisible sidebarMode="shift" />);
   const grid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
   grid.scrollTop = 500;
-  grid.scrollLeft = 120;
+  grid.scrollLeft = 0;
   fireEvent.scroll(grid);
 
   fireEvent.click(screen.getByRole("tab", { name: appI18n.t("home.prototype.sessions") }));
-  expect(screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") })).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+  ).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("tab", { name: appI18n.t("home.prototype.tasks") }));
   const restoredGrid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
   expect(restoredGrid.scrollTop).toBe(500);
-  expect(restoredGrid.scrollLeft).toBe(120);
+  expect(restoredGrid.scrollLeft).toBe(0);
+});
+
+it("renders Tasks directly when Desktop Sessions are unavailable", () => {
+  render(<HomeProjectContent projectID="project-1" sessionsVisible={false} sidebarMode="shift" />);
+
+  expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+  ).toBeInTheDocument();
 });

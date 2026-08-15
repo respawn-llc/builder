@@ -2,7 +2,6 @@ import { createRoute, createRouter, createRootRoute } from "@tanstack/react-rout
 import { z } from "zod";
 
 import { workflowIDSchema } from "@/api";
-import { desktopChatEnabled } from "@/shared/feature-flags";
 import { createNativeDialogRoutes, workspaceUnlinkNativeDialogPath } from "./nativeDialogRoutes";
 import {
   HomeShellRoute,
@@ -76,7 +75,7 @@ const nativeDialogRoutes = createNativeDialogRoutes(rootRoute);
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
-  ...(desktopChatEnabled ? [projectTasksRoute] : []),
+  projectTasksRoute,
   projectRoute,
   workflowLibraryRoute,
   workflowEditorRoute,

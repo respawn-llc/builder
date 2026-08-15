@@ -12,7 +12,7 @@ export interface ProjectTasksViewMemory {
 
 export function createProjectTasksViewMemory(): ProjectTasksViewMemory {
   let value = {
-    disclosure: { active: true, backlog: true, done: false },
+    disclosure: { active: true, backlog: false, done: false },
     horizontalOffsetPx: 0,
     verticalOffsetPx: 0,
   };

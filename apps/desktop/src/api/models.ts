@@ -245,6 +245,7 @@ export type WorkflowRecord = Readonly<{
   description: string;
   version: number;
   executionTargetPolicy: WorkflowExecutionTargetPolicy;
+  projectLink?: Readonly<{ isDefault: boolean }> | undefined;
 }>;
 
 export type WorkflowPage = Readonly<{
