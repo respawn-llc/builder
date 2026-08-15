@@ -439,6 +439,48 @@ func TestPromptCtrlCContinuationUsesGlobalExitWhenOriginIsIdle(t *testing.T) {
 	}
 }
 
+func TestPromptCtrlCContinuationWaitsForPromptActivityToClear(t *testing.T) {
+	runtimeClient := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(runtimeClient)
+	model.sessionID = ongoingTestSessionID().String()
+	awaitingPrompt := runtimeTupleTestRunningActivity()
+	awaitingPrompt.State = clientui.RuntimeActivityAwaitingPrompt
+	if err := model.applyRuntimeActivityProjection(awaitingPrompt); err != nil {
+		t.Fatalf("apply awaiting-prompt runtime activity: %v", err)
+	}
+	continuation := promptCtrlCContinuationMsg{key: transcriptPromptKey{
+		sessionID: ongoingTestSessionID(),
+		stepID:    ongoingTestStepID(),
+		promptID:  "ask-awaiting-runtime",
+	}}
+
+	next, command := model.Update(continuation)
+	model = next.(*uiModel)
+	if command != nil || runtimeClient.interruptCalls != 0 || model.exitAction == UIActionExit {
+		t.Fatal("awaiting-prompt continuation routed global Ctrl+C before prompt wait cleared")
+	}
+
+	command = model.applyTranscriptRuntimeReadModelUpdate(runtimeTupleMergeResult{
+		decision: runtimeTupleApply,
+		project:  true,
+		view: clientui.RuntimeMainView{
+			Activity: runtimeTupleTestRunningActivity(),
+		},
+	})
+	if command == nil {
+		t.Fatal("running activity did not release the pending prompt Ctrl+C continuation")
+	}
+	next, interruptCommand := model.Update(command())
+	model = next.(*uiModel)
+	if interruptCommand == nil || runtimeClient.interruptCalls != 0 {
+		t.Fatal("released prompt Ctrl+C continuation did not defer interruption to its command")
+	}
+	model = updateUIModel(t, model, interruptCommand())
+	if runtimeClient.interruptCalls != 1 {
+		t.Fatalf("runtime interrupt calls = %d, want one after prompt wait cleared", runtimeClient.interruptCalls)
+	}
+}
+
 func TestAskDeliverySetupFailureKeepsQuestionActivity(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 	model, control := newProjectedPromptTestUIModel(t)

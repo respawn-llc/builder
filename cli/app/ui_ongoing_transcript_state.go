@@ -149,14 +149,15 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 			"",
 		)
 	}
+	promptCtrlCCmd := m.releasePendingPromptCtrlCContinuation()
 	if view.Activity.ActiveForControl() {
-		return nil
+		return promptCtrlCCmd
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
 		cmd = m.acknowledgePendingInterrupt()
 	}
-	return tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
+	return tea.Batch(promptCtrlCCmd, cmd, m.releaseDeferredRuntimeSyncs())
 }
 
 func (m *uiModel) applyTranscriptStepState(state clientui.TranscriptStepState) {
@@ -221,6 +222,7 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 		return titleCmd
 	}
 	m.askController().cancelActiveDelivery()
+	m.ask.pendingCtrlCContinuation = nil
 	promptCmd := m.reconcileTranscriptPrompts(nil)
 	rollbackCmd := m.discardRollbackStateForSessionReplacement()
 	cancelCmd := m.cancelPendingDetailTranscriptRequest()

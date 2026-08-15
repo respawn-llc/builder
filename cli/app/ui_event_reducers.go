@@ -1,11 +1,20 @@
 package app
 
 import (
+	"core/shared/clientui"
 	"runtime/debug"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+)
+
+type promptCtrlCContinuationDisposition uint8
+
+const (
+	promptCtrlCContinuationDiscard promptCtrlCContinuationDisposition = iota
+	promptCtrlCContinuationWait
+	promptCtrlCContinuationRoute
 )
 
 func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
@@ -26,9 +35,20 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
 	case promptCtrlCContinuationMsg:
-		if !m.promptCtrlCContinuationTargetsCurrentExecution(msg) {
+		switch m.promptCtrlCContinuationDisposition(msg.key) {
+		case promptCtrlCContinuationDiscard:
+			m.ask.pendingCtrlCContinuation = nil
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, nil)
+		case promptCtrlCContinuationWait:
+			key := msg.key
+			m.ask.pendingCtrlCContinuation = &key
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, nil)
+		case promptCtrlCContinuationRoute:
+			m.ask.pendingCtrlCContinuation = nil
+		default:
+			panic("unknown prompt Ctrl+C continuation disposition")
 		}
 		next, cmd := m.inputController().handleRuntimeCtrlC(nil)
 		nextModel := next.(*uiModel)
@@ -38,18 +58,46 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 	return uiFeatureUpdateResult{}
 }
 
-func (m *uiModel) promptCtrlCContinuationTargetsCurrentExecution(msg promptCtrlCContinuationMsg) bool {
+func (m *uiModel) promptCtrlCContinuationDisposition(key transcriptPromptKey) promptCtrlCContinuationDisposition {
 	if m == nil ||
-		msg.key.sessionID.IsZero() ||
-		msg.key.stepID.IsZero() ||
-		strings.TrimSpace(m.sessionID) != msg.key.sessionID.String() {
-		return false
+		key.sessionID.IsZero() ||
+		key.stepID.IsZero() ||
+		strings.TrimSpace(m.sessionID) != key.sessionID.String() {
+		return promptCtrlCContinuationDiscard
 	}
 	activity := m.runtimeActivityProjection
 	if activity.ActiveStep != nil {
-		return activity.ActiveStep.StepID == msg.key.stepID
+		if activity.ActiveStep.StepID != key.stepID {
+			return promptCtrlCContinuationDiscard
+		}
+		if activity.State == clientui.RuntimeActivityAwaitingPrompt {
+			return promptCtrlCContinuationWait
+		}
+		return promptCtrlCContinuationRoute
 	}
-	return !activity.ActiveForControl() && !m.hasLocalDispatchPending()
+	if activity.ActiveForControl() || m.hasLocalDispatchPending() {
+		return promptCtrlCContinuationDiscard
+	}
+	return promptCtrlCContinuationRoute
+}
+
+func (m *uiModel) releasePendingPromptCtrlCContinuation() tea.Cmd {
+	if m == nil || m.ask.pendingCtrlCContinuation == nil {
+		return nil
+	}
+	key := *m.ask.pendingCtrlCContinuation
+	switch m.promptCtrlCContinuationDisposition(key) {
+	case promptCtrlCContinuationDiscard:
+		m.ask.pendingCtrlCContinuation = nil
+		return nil
+	case promptCtrlCContinuationWait:
+		return nil
+	case promptCtrlCContinuationRoute:
+		m.ask.pendingCtrlCContinuation = nil
+		return func() tea.Msg { return promptCtrlCContinuationMsg{key: key} }
+	default:
+		panic("unknown prompt Ctrl+C continuation disposition")
+	}
 }
 
 func (m *uiModel) reducePathReferenceMessage(msg tea.Msg) uiFeatureUpdateResult {
