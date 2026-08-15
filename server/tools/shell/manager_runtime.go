@@ -105,15 +105,23 @@ func (m *Manager) Close() error {
 					fmt.Errorf("capture descendants for background shell %s: %w", entry.id, captureErr),
 				)
 			}
-			if !entry.isRunning() {
+			rootRunning := entry.isRunning()
+			if !rootRunning && len(descendants) == 0 {
 				continue
 			}
 			targets = append(targets, closeTarget{
 				entry:       entry,
 				process:     process,
 				descendants: descendants,
+				rootExited:  !rootRunning,
 			})
-			if terminateErr := terminateManagedProcess(process, descendants); terminateErr != nil {
+			var terminateErr error
+			if rootRunning {
+				terminateErr = terminateManagedProcess(process, descendants)
+			} else {
+				terminateErr = terminateManagedDescendants(descendants)
+			}
+			if terminateErr != nil {
 				cleanupErrors = append(
 					cleanupErrors,
 					fmt.Errorf("terminate background shell %s: %w", entry.id, terminateErr),
@@ -128,6 +136,9 @@ func (m *Manager) Close() error {
 	}
 	graceDeadline := time.Now().Add(gracePeriod)
 	for index := range targets {
+		if targets[index].rootExited {
+			continue
+		}
 		targets[index].rootExited = waitForEntryDone(targets[index].entry, time.Until(graceDeadline))
 	}
 	hasDescendants := false
@@ -148,7 +159,7 @@ func (m *Manager) Close() error {
 		}
 		allDescendantsExited := true
 		for _, target := range targets {
-			if !managedDescendantsExitedIn(target.descendants, processes) {
+			if len(livingManagedDescendantPIDsIn(target.descendants, processes)) > 0 {
 				allDescendantsExited = false
 				break
 			}
@@ -249,7 +260,7 @@ func (m *Manager) waitForExit(entry *processEntry) {
 	m.retainCompletedEntry(entry.id)
 	event := m.buildTerminalEvent(entry, eventType, snapshot)
 	m.emitCompletionEvent(entry, event)
-	entry.finalizeClosedExit()
+	entry.signal()
 }
 
 func (m *Manager) buildTerminalEvent(entry *processEntry, eventType EventType, snapshot Snapshot) Event {

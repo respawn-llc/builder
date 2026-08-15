@@ -37,10 +37,14 @@ func terminateManagedProcess(process *os.Process, descendants []managedProcessId
 	if pid <= 0 {
 		return nil
 	}
-	descendantErr := signalManagedDescendantPIDs(descendants, syscall.SIGTERM)
+	descendantErr := terminateManagedDescendants(descendants)
 	groupErr := signalManagedProcessGroup(process, syscall.SIGTERM, "terminate")
 	_ = process.Signal(os.Interrupt)
 	return errors.Join(descendantErr, groupErr)
+}
+
+func terminateManagedDescendants(descendants []managedProcessIdentity) error {
+	return signalManagedDescendantPIDs(descendants, syscall.SIGTERM)
 }
 
 func forceKillManagedDescendants(descendants []managedProcessIdentity) error {

@@ -23,6 +23,8 @@ func terminateManagedProcess(process *os.Process, _ []managedProcessIdentity) er
 	return process.Kill()
 }
 
+func terminateManagedDescendants([]managedProcessIdentity) error { return nil }
+
 func forceKillManagedDescendants([]managedProcessIdentity) error { return nil }
 
 func forceKillManagedRoot(process *os.Process) error {

@@ -409,13 +409,6 @@ func (p *processEntry) closeOnExit(exitCode int, state string) Snapshot {
 	return snapshot
 }
 
-func (p *processEntry) finalizeClosedExit() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.running = false
-	p.signal()
-}
-
 func (p *processEntry) snapshot() Snapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
