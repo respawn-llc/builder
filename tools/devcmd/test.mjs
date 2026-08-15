@@ -1,6 +1,15 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { cpus, homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -68,9 +77,8 @@ async function server(args) {
       if (name.startsWith("KENT_")) delete environment[name];
     }
   }
-  if (goArgs.length === 0) {
-    Object.assign(environment, await preparePtyFixtures());
-  }
+  const ptyFixtures = goArgs.length === 0 ? await preparePtyFixtures() : undefined;
+  if (ptyFixtures) Object.assign(environment, ptyFixtures.environment);
   const commandArgs =
     goArgs.length === 0
       ? [
@@ -81,11 +89,16 @@ async function server(args) {
           ...serverPackagePatterns,
         ]
       : ["test", "-json", "-p", String(workers), ...goArgs];
-  const status = await runTestProcess("go", commandArgs, {
-    env: environment,
-    usesJsonEvents: true,
-    timeoutMs: values["no-wall-clock-cap"] ? undefined : timeout * 1000,
-  });
+  let status;
+  try {
+    status = await runTestProcess("go", commandArgs, {
+      env: environment,
+      usesJsonEvents: goArgs.length === 0,
+      timeoutMs: values["no-wall-clock-cap"] ? undefined : timeout * 1000,
+    });
+  } finally {
+    if (ptyFixtures) await ptyFixtures.release();
+  }
   if (status !== 0) throw new CommandError(`Go tests exited with status ${status}`, status);
 }
 
@@ -225,6 +238,7 @@ async function taskkill(pid, force) {
 
 async function preparePtyFixtures() {
   const cacheRoot = resolve(systemCacheRoot(), "kent/test-fixtures");
+  const leasesRoot = resolve(cacheRoot, "leases");
   const identity = [
     await capture("go", ["version"]),
     await capture("go", ["env", "GOOS", "GOARCH", "CGO_ENABLED"]),
@@ -246,56 +260,111 @@ async function preparePtyFixtures() {
   const key = createHash("sha256").update(identity).update(version).digest("hex");
   const directory = resolve(cacheRoot, key);
   const complete = resolve(directory, "complete");
+  const leaseParent = resolve(leasesRoot, key);
+  const lease = resolve(leaseParent, randomUUID());
+  await mkdir(lease, { recursive: true });
   try {
-    await readFile(complete);
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-    await mkdir(cacheRoot, { recursive: true });
-    const staging = resolve(tmpdir(), `kent-pty-fixtures-${process.pid}-${Date.now()}`);
-    await mkdir(staging);
     try {
-      await run("go", [
-        "test",
-        "-c",
-        "-o",
-        join(staging, "kent-pty-fixture.test"),
-        "core/cli/app",
-      ]);
-      await run("go", [
-        "run",
-        "./tools/devcmd/gobuild",
-        "--output",
-        join(staging, "kent"),
-      ]);
-      for (const [name, packagePath] of [
-        ["ansi-writer", "core/internal/testharness/pty/testdata/cmd/ansi-writer"],
-        ["phase-input-writer", "core/internal/testharness/pty/testdata/cmd/phase-input-writer"],
-        ["phase-writer", "core/internal/testharness/pty/testdata/cmd/phase-writer"],
-      ]) {
-        await run("go", ["build", "-o", join(staging, name), packagePath]);
-      }
-      await writeFile(join(staging, "complete"), "");
-      await rename(staging, directory).catch(async (renameError) => {
-        if (renameError.code !== "EEXIST" && renameError.code !== "ENOTEMPTY") {
-          throw renameError;
+      await readFile(complete);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      await mkdir(cacheRoot, { recursive: true });
+      const staging = resolve(tmpdir(), `kent-pty-fixtures-${process.pid}-${Date.now()}`);
+      await mkdir(staging);
+      try {
+        await run("go", [
+          "test",
+          "-c",
+          "-o",
+          join(staging, "kent-pty-fixture.test"),
+          "core/cli/app",
+        ]);
+        await run("go", [
+          "run",
+          "./tools/devcmd/gobuild",
+          "--output",
+          join(staging, "kent"),
+        ]);
+        for (const [name, packagePath] of [
+          ["ansi-writer", "core/internal/testharness/pty/testdata/cmd/ansi-writer"],
+          ["phase-input-writer", "core/internal/testharness/pty/testdata/cmd/phase-input-writer"],
+          ["phase-writer", "core/internal/testharness/pty/testdata/cmd/phase-writer"],
+        ]) {
+          await run("go", ["build", "-o", join(staging, name), packagePath]);
         }
-      });
-    } finally {
-      await rm(staging, { recursive: true, force: true });
+        await writeFile(join(staging, "complete"), "");
+        await rename(staging, directory).catch(async (renameError) => {
+          if (renameError.code !== "EEXIST" && renameError.code !== "ENOTEMPTY") {
+            throw renameError;
+          }
+        });
+      } finally {
+        await rm(staging, { recursive: true, force: true });
+      }
     }
-  }
-  for (const entry of await readdir(cacheRoot, { withFileTypes: true })) {
-    if (entry.isDirectory() && entry.name !== key) {
-      await rm(resolve(cacheRoot, entry.name), { recursive: true, force: true });
-    }
+    await prunePtyFixtureCache(cacheRoot, leasesRoot, key);
+  } catch (error) {
+    await releasePtyFixtureLease(lease, leaseParent);
+    throw error;
   }
   return {
-    KENT_PTY_FIXTURE_BINARY: join(directory, "kent-pty-fixture.test"),
-    KENT_PTY_KENT_BINARY: join(directory, "kent"),
-    KENT_PTY_ANSI_WRITER_BINARY: join(directory, "ansi-writer"),
-    KENT_PTY_PHASE_INPUT_WRITER_BINARY: join(directory, "phase-input-writer"),
-    KENT_PTY_PHASE_WRITER_BINARY: join(directory, "phase-writer"),
+    environment: {
+      KENT_PTY_FIXTURE_BINARY: join(directory, "kent-pty-fixture.test"),
+      KENT_PTY_KENT_BINARY: join(directory, "kent"),
+      KENT_PTY_ANSI_WRITER_BINARY: join(directory, "ansi-writer"),
+      KENT_PTY_PHASE_INPUT_WRITER_BINARY: join(directory, "phase-input-writer"),
+      KENT_PTY_PHASE_WRITER_BINARY: join(directory, "phase-writer"),
+    },
+    release: () => releasePtyFixtureLease(lease, leaseParent),
   };
+}
+
+async function prunePtyFixtureCache(cacheRoot, leasesRoot, currentKey) {
+  let entries;
+  try {
+    entries = await readdir(cacheRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  const generations = await Promise.all(
+    entries
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          entry.name !== currentKey &&
+          resolve(cacheRoot, entry.name) !== leasesRoot,
+      )
+      .map(async (entry) => ({
+        key: entry.name,
+        path: resolve(cacheRoot, entry.name),
+        modified: (await stat(resolve(cacheRoot, entry.name))).mtimeMs,
+      })),
+  );
+  generations.sort((left, right) => right.modified - left.modified);
+  let retained = 0;
+  for (const generation of generations) {
+    if (await hasPtyFixtureLease(leasesRoot, generation.key)) continue;
+    retained += 1;
+    if (retained <= 7) continue;
+    await rm(generation.path, { recursive: true, force: true });
+  }
+}
+
+async function hasPtyFixtureLease(leasesRoot, key) {
+  try {
+    return (await readdir(resolve(leasesRoot, key))).length > 0;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function releasePtyFixtureLease(lease, parent) {
+  await rm(lease, { recursive: true, force: true });
+  await rmdir(parent).catch((error) => {
+    if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+  });
 }
 
 function systemCacheRoot() {
