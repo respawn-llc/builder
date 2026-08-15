@@ -100,6 +100,27 @@ func captureManagedDescendants(process *os.Process) ([]managedProcessIdentity, e
 	return descendants, nil
 }
 
+func captureCompletedManagedProcessGroup(process *os.Process) ([]managedProcessIdentity, error) {
+	if process == nil || process.Pid <= 0 {
+		return nil, nil
+	}
+	exited, probeErr := managedProcessExited(process)
+	if probeErr != nil {
+		return nil, fmt.Errorf("probe completed process group %d: %w", process.Pid, probeErr)
+	}
+	if !exited {
+		return nil, nil
+	}
+	processes, err := managedProcessSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("list completed process group %d: %w", process.Pid, err)
+	}
+	if _, reused := processes[process.Pid]; reused {
+		return nil, nil
+	}
+	return managedProcessGroupMembers(process.Pid, processes), nil
+}
+
 func managedProcessExited(process *os.Process) (bool, error) {
 	err := process.Signal(syscall.Signal(0))
 	if err == nil {

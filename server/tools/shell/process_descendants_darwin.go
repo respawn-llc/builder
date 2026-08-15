@@ -12,7 +12,8 @@ func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
 	snapshot := make(map[int]managedProcessSnapshotEntry, len(processes))
 	for _, process := range processes {
 		snapshot[int(process.Proc.P_pid)] = managedProcessSnapshotEntry{
-			parentPID: int(process.Eproc.Ppid),
+			parentPID:      int(process.Eproc.Ppid),
+			processGroupID: int(process.Eproc.Pgid),
 			startedAt: uint64(process.Proc.P_starttime.Sec)*1_000_000 +
 				uint64(process.Proc.P_starttime.Usec),
 		}

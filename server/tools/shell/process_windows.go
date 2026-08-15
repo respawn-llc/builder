@@ -36,6 +36,10 @@ func forceKillManagedRoot(process *os.Process) error {
 
 func captureManagedDescendants(*os.Process) ([]managedProcessIdentity, error) { return nil, nil }
 
+func captureCompletedManagedProcessGroup(*os.Process) ([]managedProcessIdentity, error) {
+	return nil, nil
+}
+
 func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
 	return map[int]managedProcessSnapshotEntry{}, nil
 }

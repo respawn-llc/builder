@@ -464,24 +464,19 @@ func normalizeWriteYieldTime(value time.Duration, fallback time.Duration) time.D
 	return value
 }
 
-func waitForEntryDone(entry *processEntry, timeout time.Duration) bool {
-	if entry == nil {
+func waitForEntryExit(entry *processEntry, timeout time.Duration) bool {
+	if entry == nil || !entry.isRunning() {
 		return true
 	}
 	if timeout <= 0 {
-		select {
-		case <-entry.done:
-			return true
-		default:
-			return false
-		}
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-entry.done:
-		return true
-	case <-timer.C:
 		return false
 	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(min(5*time.Millisecond, time.Until(deadline)))
+		if !entry.isRunning() {
+			return true
+		}
+	}
+	return !entry.isRunning()
 }

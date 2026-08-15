@@ -57,9 +57,17 @@ func readLinuxProcess(pid int) (managedProcessSnapshotEntry, error) {
 	if err != nil {
 		return managedProcessSnapshotEntry{}, fmt.Errorf("parse /proc/%d/stat parent PID: %w", pid, err)
 	}
+	processGroupID, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return managedProcessSnapshotEntry{}, fmt.Errorf("parse /proc/%d/stat process group ID: %w", pid, err)
+	}
 	startedAt, err := strconv.ParseUint(fields[19], 10, 64)
 	if err != nil {
 		return managedProcessSnapshotEntry{}, fmt.Errorf("parse /proc/%d/stat start time: %w", pid, err)
 	}
-	return managedProcessSnapshotEntry{parentPID: parentPID, startedAt: startedAt}, nil
+	return managedProcessSnapshotEntry{
+		parentPID:      parentPID,
+		processGroupID: processGroupID,
+		startedAt:      startedAt,
+	}, nil
 }

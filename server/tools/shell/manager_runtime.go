@@ -97,15 +97,24 @@ func (m *Manager) Close() error {
 		process := entry.cmd.Process
 		running := entry.running
 		entry.mu.Unlock()
-		if process != nil && running {
-			descendants, captureErr := captureManagedDescendants(process)
+		if process != nil {
+			var descendants []managedProcessIdentity
+			var captureErr error
+			if running {
+				descendants, captureErr = captureManagedDescendants(process)
+			}
+			rootRunning := entry.isRunning()
+			if !rootRunning {
+				groupMembers, groupCaptureErr := captureCompletedManagedProcessGroup(process)
+				descendants = mergeManagedProcessIdentities(descendants, groupMembers)
+				captureErr = errors.Join(captureErr, groupCaptureErr)
+			}
 			if captureErr != nil {
 				cleanupErrors = append(
 					cleanupErrors,
 					fmt.Errorf("capture descendants for background shell %s: %w", entry.id, captureErr),
 				)
 			}
-			rootRunning := entry.isRunning()
 			if !rootRunning && len(descendants) == 0 {
 				continue
 			}
@@ -139,7 +148,7 @@ func (m *Manager) Close() error {
 		if targets[index].rootExited {
 			continue
 		}
-		targets[index].rootExited = waitForEntryDone(targets[index].entry, time.Until(graceDeadline))
+		targets[index].rootExited = waitForEntryExit(targets[index].entry, time.Until(graceDeadline))
 	}
 	hasDescendants := false
 	for _, target := range targets {
@@ -187,7 +196,7 @@ func (m *Manager) Close() error {
 				)
 			}
 		}
-		rootExited := target.rootExited || waitForEntryDone(target.entry, 0)
+		rootExited := target.rootExited || waitForEntryExit(target.entry, 0)
 		if !rootExited {
 			if forceErr := forceKillManagedRoot(target.process); forceErr != nil {
 				cleanupErrors = append(
@@ -205,7 +214,7 @@ func (m *Manager) Close() error {
 	deadline := time.Now().Add(waitTimeout)
 	pending := make([]string, 0)
 	for _, entry := range entries {
-		if waitForEntryDone(entry, time.Until(deadline)) {
+		if waitForEntryExit(entry, time.Until(deadline)) {
 			continue
 		}
 		pending = append(pending, entry.id)
