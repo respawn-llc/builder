@@ -481,6 +481,63 @@ func TestPromptCtrlCContinuationWaitsForPromptActivityToClear(t *testing.T) {
 	}
 }
 
+func TestStalePromptCtrlCContinuationDoesNotClearNewerPendingContinuation(t *testing.T) {
+	runtimeClient := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(runtimeClient)
+	model.sessionID = ongoingTestSessionID().String()
+	newerRunID, err := runtimeids.ParseRunID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+	if err != nil {
+		t.Fatalf("parse newer run id: %v", err)
+	}
+	newerStepID, err := runtimeids.ParseStepID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+	if err != nil {
+		t.Fatalf("parse newer step id: %v", err)
+	}
+	newerActivity := clientui.RuntimeActivity{
+		State: clientui.RuntimeActivityAwaitingPrompt,
+		ActiveStep: &clientui.RuntimeActiveStep{
+			RunID:      newerRunID,
+			StepID:     newerStepID,
+			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+		},
+	}
+	if err := model.applyRuntimeActivityProjection(newerActivity); err != nil {
+		t.Fatalf("apply newer awaiting-prompt activity: %v", err)
+	}
+	newer := promptCtrlCContinuationMsg{key: transcriptPromptKey{
+		sessionID: ongoingTestSessionID(),
+		stepID:    newerStepID,
+		promptID:  "ask-newer",
+	}}
+	stale := promptCtrlCContinuationMsg{key: transcriptPromptKey{
+		sessionID: ongoingTestSessionID(),
+		stepID:    ongoingTestStepID(),
+		promptID:  "ask-stale",
+	}}
+
+	model = updateUIModel(t, model, newer)
+	model = updateUIModel(t, model, stale)
+
+	newerActivity.State = clientui.RuntimeActivityRunning
+	command := model.applyTranscriptRuntimeReadModelUpdate(runtimeTupleMergeResult{
+		decision: runtimeTupleApply,
+		project:  true,
+		view:     clientui.RuntimeMainView{Activity: newerActivity},
+	})
+	if command == nil {
+		t.Fatal("stale continuation cleared the newer pending Ctrl+C continuation")
+	}
+	next, interruptCommand := model.Update(command())
+	model = next.(*uiModel)
+	if interruptCommand == nil {
+		t.Fatal("newer pending continuation did not route after its prompt wait cleared")
+	}
+	model = updateUIModel(t, model, interruptCommand())
+	if runtimeClient.interruptCalls != 1 {
+		t.Fatalf("runtime interrupt calls = %d, want one for the newer continuation", runtimeClient.interruptCalls)
+	}
+}
+
 func TestAskDeliverySetupFailureKeepsQuestionActivity(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 	model, control := newProjectedPromptTestUIModel(t)

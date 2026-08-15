@@ -37,7 +37,7 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 	case promptCtrlCContinuationMsg:
 		switch m.promptCtrlCContinuationDisposition(msg.key) {
 		case promptCtrlCContinuationDiscard:
-			m.ask.pendingCtrlCContinuation = nil
+			m.clearPendingPromptCtrlCContinuation(msg.key)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, nil)
 		case promptCtrlCContinuationWait:
@@ -46,7 +46,7 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, nil)
 		case promptCtrlCContinuationRoute:
-			m.ask.pendingCtrlCContinuation = nil
+			m.clearPendingPromptCtrlCContinuation(msg.key)
 		default:
 			panic("unknown prompt Ctrl+C continuation disposition")
 		}
@@ -79,6 +79,15 @@ func (m *uiModel) promptCtrlCContinuationDisposition(key transcriptPromptKey) pr
 		return promptCtrlCContinuationDiscard
 	}
 	return promptCtrlCContinuationRoute
+}
+
+func (m *uiModel) clearPendingPromptCtrlCContinuation(key transcriptPromptKey) {
+	if m == nil ||
+		m.ask.pendingCtrlCContinuation == nil ||
+		*m.ask.pendingCtrlCContinuation != key {
+		return
+	}
+	m.ask.pendingCtrlCContinuation = nil
 }
 
 func (m *uiModel) releasePendingPromptCtrlCContinuation() tea.Cmd {
