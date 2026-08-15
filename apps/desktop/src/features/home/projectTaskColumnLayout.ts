@@ -11,7 +11,7 @@ export type ProjectTaskColumnLayout = Readonly<{
 
 type ProjectTaskVisibleColumns = Readonly<{
   dependencies: boolean;
-  labels: boolean;
+  labelsPx: number | null;
   title: boolean;
   workflow: boolean;
 }>;
@@ -104,7 +104,7 @@ export function projectTaskColumnStyle(
     `${layout.idCharacters.toString()}ch`,
     visible.title ? "minmax(7ch, 1fr)" : null,
     visible.dependencies ? `${layout.dependenciesPx.toString()}px` : null,
-    visible.labels ? `${layout.labelsPx.toString()}px` : null,
+    visible.labelsPx === null ? null : `${visible.labelsPx.toString()}px`,
     visible.workflow ? `${layout.workflowCharacters.toString()}ch` : null,
   ].filter((column): column is string => column !== null);
   return {
@@ -117,7 +117,7 @@ export function resolveProjectTaskVisibleColumns(
   layout: ProjectTaskColumnLayout,
 ): ProjectTaskVisibleColumns {
   if (widthPx === null) {
-    return { dependencies: true, labels: true, title: true, workflow: true };
+    return { dependencies: true, labelsPx: layout.labelsPx, title: true, workflow: true };
   }
   const characterWidthPx = 8;
   const horizontalPaddingPx = 24;
@@ -140,12 +140,17 @@ export function resolveProjectTaskVisibleColumns(
     layout.workflowCharacters * characterWidthPx,
   ];
   const workflow = requiredWidth(optionalWidths) <= widthPx;
-  const withoutWorkflow = optionalWidths.slice(0, 2);
-  const labels = workflow || requiredWidth(withoutWorkflow) <= widthPx;
+  const labelsAvailablePx = widthPx - requiredWidth([layout.dependenciesPx, 0]);
+  let labelsPx: number | null = null;
+  if (workflow) {
+    labelsPx = layout.labelsPx;
+  } else if (labelsAvailablePx >= initialProjectTaskColumnLayout.labelsPx) {
+    labelsPx = Math.min(layout.labelsPx, labelsAvailablePx);
+  }
   const withoutLabels = [layout.dependenciesPx];
-  const dependencies = labels || requiredWidth(withoutLabels) <= widthPx;
+  const dependencies = labelsPx !== null || requiredWidth(withoutLabels) <= widthPx;
   const title = dependencies || requiredWidth([]) <= widthPx;
-  return { dependencies, labels, title, workflow };
+  return { dependencies, labelsPx, title, workflow };
 }
 
 export function useProjectTaskListWidth(): Readonly<{

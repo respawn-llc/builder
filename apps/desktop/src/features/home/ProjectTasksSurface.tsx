@@ -411,7 +411,7 @@ function ProjectTasksContent({
         <div
           className="h-full min-h-0"
           data-dependencies-visible={visibleColumns.dependencies}
-          data-labels-visible={visibleColumns.labels}
+          data-labels-visible={visibleColumns.labelsPx !== null}
           data-title-visible={visibleColumns.title}
           data-workflow-visible={visibleColumns.workflow}
           ref={containerRef}
