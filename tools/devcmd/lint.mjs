@@ -10,20 +10,10 @@ import {
   run,
 } from "./runtime.mjs";
 import { assertWorkspacePrepared } from "./dependencies.mjs";
-
-const serverGoDirectories = Object.freeze([
-  "cli/app",
-  "cli/kent",
-  "cmd",
-  "internal",
-  "prompts",
-  "server",
-  "shared",
-  "tools",
-]);
-const serverPackagePatterns = Object.freeze(
-  serverGoDirectories.map((directory) => `./${directory}/...`),
-);
+import {
+  serverGoDirectories,
+  serverPackagePatterns,
+} from "./server-go-area.mjs";
 
 await main(async () => {
   const [area, ...args] = process.argv.slice(2);

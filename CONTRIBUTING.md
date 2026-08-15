@@ -35,6 +35,7 @@ Prerequisites:
 - Go `1.25`
 - Just
 - Node `22` or newer and pnpm for desktop and docs commands
+- ripgrep (`rg`)
 - Rust toolchain for Tauri native builds in `apps/desktop`
 
 Prepare the checkout:

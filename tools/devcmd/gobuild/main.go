@@ -11,30 +11,44 @@ import (
 
 func main() {
 	var output string
-	var version string
+	var version *string
 	var packagePath string
-	var goos string
-	var goarch string
+	var goos *string
+	var goarch *string
 	flag.StringVar(&output, "output", "./bin/kent", "output binary path")
-	flag.StringVar(&version, "version", "", "embedded Kent version")
+	flag.Func("version", "embedded Kent version", setOptionalString(&version))
 	flag.StringVar(&packagePath, "package", "./cli/kent", "Go main package")
-	flag.StringVar(&goos, "goos", "", "target GOOS")
-	flag.StringVar(&goarch, "goarch", "", "target GOARCH")
+	flag.Func("goos", "target GOOS", setOptionalString(&goos))
+	flag.Func("goarch", "target GOARCH", setOptionalString(&goarch))
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "unexpected build arguments:", strings.Join(flag.Args(), " "))
 		os.Exit(2)
 	}
 
-	if version == "" {
+	if strings.TrimSpace(output) == "" {
+		fmt.Fprintln(os.Stderr, "--output must not be blank")
+		os.Exit(2)
+	}
+	if strings.TrimSpace(packagePath) == "" {
+		fmt.Fprintln(os.Stderr, "--package must not be blank")
+		os.Exit(2)
+	}
+
+	var embeddedVersion string
+	if version == nil {
 		data, err := os.ReadFile("VERSION")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "read VERSION:", err)
 			os.Exit(1)
 		}
-		version = strings.TrimPrefix(strings.TrimSpace(string(data)), "v")
+		embeddedVersion = strings.TrimPrefix(strings.TrimSpace(string(data)), "v")
 	} else {
-		version = strings.TrimPrefix(version, "v")
+		embeddedVersion = strings.TrimPrefix(*version, "v")
+	}
+	if strings.TrimSpace(embeddedVersion) == "" {
+		fmt.Fprintln(os.Stderr, "Kent version must not be blank")
+		os.Exit(2)
 	}
 
 	resolvedOutput, err := resolveOutput(output)
@@ -47,10 +61,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ldflags := "-s -w"
-	if version != "" {
-		ldflags += " -X core/shared/config.Version=" + version
-	}
+	ldflags := "-s -w -X core/shared/config.Version=" + embeddedVersion
 	command := exec.Command(
 		"go",
 		"build",
@@ -65,13 +76,27 @@ func main() {
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	command.Stdin = os.Stdin
-	command.Env = buildEnvironment(goos, goarch)
+	command.Env, err = buildEnvironment(goos, goarch)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	if err := command.Run(); err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitError.ExitCode())
 		}
 		fmt.Fprintln(os.Stderr, "start go build:", err)
 		os.Exit(1)
+	}
+}
+
+func setOptionalString(target **string) func(string) error {
+	return func(value string) error {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("value must not be blank")
+		}
+		*target = &value
+		return nil
 	}
 }
 
@@ -102,16 +127,20 @@ func resolveOutput(path string) (string, error) {
 	}
 }
 
-func buildEnvironment(goos, goarch string) []string {
+func buildEnvironment(goos, goarch *string) ([]string, error) {
 	environment := os.Environ()
-	if os.Getenv("CGO_ENABLED") == "" {
+	cgoEnabled, configured := os.LookupEnv("CGO_ENABLED")
+	if configured && strings.TrimSpace(cgoEnabled) == "" {
+		return nil, fmt.Errorf("CGO_ENABLED must not be blank when configured")
+	}
+	if !configured {
 		environment = append(environment, "CGO_ENABLED=0")
 	}
-	if goos != "" {
-		environment = append(environment, "GOOS="+goos)
+	if goos != nil {
+		environment = append(environment, "GOOS="+*goos)
 	}
-	if goarch != "" {
-		environment = append(environment, "GOARCH="+goarch)
+	if goarch != nil {
+		environment = append(environment, "GOARCH="+*goarch)
 	}
-	return environment
+	return environment, nil
 }

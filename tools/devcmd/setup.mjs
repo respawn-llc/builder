@@ -17,7 +17,7 @@ await main(async () => {
   if (!values.just) throw new CommandError("--just is required", 2);
 
   const prerequisites = {};
-  for (const executable of ["go", "pnpm", "cargo", "git"]) {
+  for (const executable of ["go", "pnpm", "cargo", "git", "rg"]) {
     prerequisites[executable] = await requireExecutable(executable);
   }
 
