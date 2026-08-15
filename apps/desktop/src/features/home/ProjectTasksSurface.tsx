@@ -89,6 +89,10 @@ export function ProjectTasksSurface({
     await Promise.all([
       invalidateProjectBoardQueries(queryClient, projectID),
       invalidateProjectTaskSearches(queryClient, projectID),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.projectTaskListsRoot(projectID),
+        refetchType: "active",
+      }),
     ]);
   }, [projectID, queryClient]);
   const reportResumeError = useCallback(
@@ -380,7 +384,7 @@ function ProjectTasksContent({
   paginationEnabled: boolean;
 }>) {
   const { t } = useTranslation();
-  const listEntries = entries.filter((entry) => entry.kind !== "column-header");
+  const listEntries = entries;
   const { containerRef, widthPx } = useProjectTaskListWidth();
   const visibleColumns = resolveProjectTaskVisibleColumns(widthPx, columnLayout);
   const workflowsResolved = workflowsBoundary === undefined;

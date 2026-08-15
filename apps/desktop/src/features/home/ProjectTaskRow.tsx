@@ -92,9 +92,7 @@ export function projectTaskColumnEntry(
       { key: "labels", content: t("labels.filter") },
       { key: "workflow", content: t("home.prototype.workflowColumn") },
     ],
-    className: projectTaskGridClassName(
-      "min-h-9 rounded-[var(--radius-s)] text-xs font-medium text-[var(--color-muted)]",
-    ),
+    className: "sr-only !m-0 !h-0 !p-0",
   };
 }
 

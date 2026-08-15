@@ -55,6 +55,7 @@ const fixture = vi.hoisted<{
   labelCatalogRequests: number;
   projectSubscriptions: number;
   assignmentRequests: number;
+  resumeRequests: number;
 }>(() => ({
   activeDestination: null,
   board: {
@@ -97,6 +98,7 @@ const fixture = vi.hoisted<{
   labelCatalogRequests: 0,
   projectSubscriptions: 0,
   assignmentRequests: 0,
+  resumeRequests: 0,
 }));
 
 vi.mock("@/app-facade", async (importOriginal) => ({
@@ -125,6 +127,10 @@ vi.mock("@/app-facade", async (importOriginal) => ({
           projectID: "project-1",
           labels: [{ id: "label-1", name: "Priority" }],
         };
+      },
+      resumeTask: async () => {
+        fixture.resumeRequests += 1;
+        return { outcome: "applied" as const, applied: { currentNodes: [] } };
       },
       subscribeProject: () => {
         fixture.projectSubscriptions += 1;
@@ -217,7 +223,14 @@ describe("ProjectTasksSurface", () => {
     fixture.labelCatalogRequests = 0;
     fixture.projectSubscriptions = 0;
     fixture.assignmentRequests = 0;
+    fixture.resumeRequests = 0;
     mockedActiveTasks = undefined;
+  });
+
+  it("retains accessible column headers without displaying a header row", () => {
+    renderSurface();
+
+    expect(screen.getAllByRole("columnheader")).toHaveLength(6);
   });
 
   it("opens the server-defined Status legend from keyboard focus", async () => {
@@ -480,6 +493,29 @@ describe("ProjectTasksSurface", () => {
       kind: "taskDetail",
       mode: "overlay",
       taskID: "active-1",
+    });
+  });
+
+  it("refreshes the Project Task list after Resume applies", async () => {
+    renderSurface(createProjectTasksViewMemory(), "shift", [
+      task("active-1", "KNT-1", "Interrupted task", {
+        status: {
+          kind: "interrupted",
+          nativeState: "interrupted",
+          nodeIDs: [],
+          attentionTypes: [],
+        },
+      }),
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: `${appI18n.t("board.resume")}: KNT-1` }));
+
+    await waitFor(() => {
+      expect(fixture.resumeRequests).toBe(1);
+      expect(fixture.invalidations).toContainEqual({
+        queryKey: queryKeys.projectTaskListsRoot("project-1"),
+        refetchType: "active",
+      });
     });
   });
 
