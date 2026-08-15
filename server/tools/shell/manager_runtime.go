@@ -178,10 +178,7 @@ func (m *Manager) Close() error {
 		}
 	}
 	for _, target := range targets {
-		var livingDescendants []managedProcessIdentity
-		if probeErr == nil {
-			livingDescendants = livingManagedDescendantPIDsIn(target.descendants, currentProcesses)
-		}
+		livingDescendants := livingManagedDescendantPIDsIn(target.descendants, currentProcesses)
 		if len(livingDescendants) > 0 {
 			if forceErr := forceKillManagedDescendants(livingDescendants); forceErr != nil {
 				cleanupErrors = append(

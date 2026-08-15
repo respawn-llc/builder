@@ -3,11 +3,13 @@
 package shell
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
@@ -16,6 +18,7 @@ func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
 		return nil, err
 	}
 	snapshot := make(map[int]managedProcessSnapshotEntry, len(entries))
+	var snapshotErrors []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -26,11 +29,15 @@ func managedProcessSnapshot() (map[int]managedProcessSnapshotEntry, error) {
 		}
 		process, err := readLinuxProcess(pid)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+				continue
+			}
+			snapshotErrors = append(snapshotErrors, fmt.Errorf("inspect process %d: %w", pid, err))
 			continue
 		}
 		snapshot[pid] = process
 	}
-	return snapshot, nil
+	return snapshot, errors.Join(snapshotErrors...)
 }
 
 func readLinuxProcess(pid int) (managedProcessSnapshotEntry, error) {

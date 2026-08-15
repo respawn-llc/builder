@@ -93,10 +93,11 @@ func captureManagedDescendants(process *os.Process) ([]managedProcessIdentity, e
 		return nil, nil
 	}
 	processes, err := managedProcessSnapshot()
+	descendants := descendantProcesses(process.Pid, processes)
 	if err != nil {
-		return nil, fmt.Errorf("list descendants of process %d: %w", process.Pid, err)
+		return descendants, fmt.Errorf("list descendants of process %d: %w", process.Pid, err)
 	}
-	return descendantProcesses(process.Pid, processes), nil
+	return descendants, nil
 }
 
 func managedProcessExited(process *os.Process) (bool, error) {
