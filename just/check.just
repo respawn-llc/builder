@@ -1,6 +1,7 @@
 set working-directory := ".."
 
 default mode="":
+    if [ "{{mode}}" = "--dry-run" ]; then just _gen-typescript; fi
     just _lint default {{mode}}
     just test
     just build go
@@ -13,6 +14,7 @@ server mode="":
     just build go
 
 desktop mode="":
+    if [ "{{mode}}" = "--dry-run" ]; then just _gen-typescript; fi
     just _lint desktop {{mode}}
     just test desktop
     just build desktop

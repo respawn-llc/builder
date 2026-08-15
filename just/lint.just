@@ -8,11 +8,11 @@ default mode="":
 server mode="":
     #!/usr/bin/env bash
     set -euo pipefail
-    just _gen-go
     if [ "{{mode}}" = "--dry-run" ]; then
         files="$(gofmt -l .)"
         [ -z "$files" ] || { echo "$files"; exit 1; }
     elif [ -z "{{mode}}" ]; then
+        just _gen-go
         gofmt -w .
     else
         echo "Usage: just lint server [--dry-run]" >&2
@@ -25,14 +25,18 @@ desktop mode="":
     #!/usr/bin/env bash
     set -euo pipefail
     just _node
-    just _gen-typescript
     node apps/scripts/check-dependency-policy.mjs
     node apps/scripts/check-typescript-policy.mjs
     node --test apps/scripts/check-eslint-architecture.test.mjs
     if [ "{{mode}}" = "--dry-run" ]; then
+        [ -d apps/desktop/packages/server-api-contract/src/gen ] || {
+            echo "Generated TypeScript sources are required. Run 'just gen' first." >&2
+            exit 2
+        }
         pnpm --dir apps exec prettier --check .
         pnpm --dir apps/desktop exec eslint .
     elif [ -z "{{mode}}" ]; then
+        just _gen-typescript
         pnpm --dir apps exec prettier --write .
         pnpm --dir apps/desktop exec eslint . --fix
     else

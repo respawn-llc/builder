@@ -251,6 +251,9 @@ jobs:
       - name: Install GUI dependencies
         run: just install _apps-dependencies
 
+      - name: Generate GUI contracts
+        run: just _gen-typescript
+
       - name: Lint GUI
         run: just lint desktop --dry-run
 
