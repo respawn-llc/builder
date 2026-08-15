@@ -72,3 +72,102 @@ func assertRetainedTargetInvariantDiagnostic(t *testing.T, records []testsetup.C
 	}
 	t.Fatalf("typed retained-target invariant diagnostic not found: %+v", records)
 }
+
+func TestRetainedTargetSessionCreationPanicsWhenMatchingSessionExists(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	review := nodeByKey(t, definition, "review")
+	audit := nodeByKey(t, definition, "audit")
+	var reworkEdgeID workflow.EdgeID
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		reworkEdgeID = appendManualMoveRetainedReviewEdge(
+			req,
+			workflowID,
+			audit,
+			review,
+			"unauthorized-create",
+			workflow.ContextSourcePreviousTarget,
+		)
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	lineageSessionID := associateAndBindCurrentNodeSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		started.Reference,
+	)
+	lineageSource, err := workflow.NewExactMaterializedContinuationSource(lineageSessionID)
+	if err != nil {
+		t.Fatalf("NewExactMaterializedContinuationSource: %v", err)
+	}
+	reviewReference := replaceSerialCurrentNodeBindingFixture(
+		t,
+		ctx,
+		store,
+		started,
+		workflow.NodeIDOf(review),
+		nil,
+		lineageSource,
+	)
+	retainedReviewSessionID := associateAndBindCurrentNodeSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		reviewReference,
+	)
+	taskRow, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	taskRecord, err := taskRecordFromTask(taskRow)
+	if err != nil {
+		t.Fatalf("taskRecordFromTask: %v", err)
+	}
+	definition, workflowRecord, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition after graph save: %v", err)
+	}
+	store.invariantPolicy = invariant.NewPolicy(invariant.WithMode(invariant.ModePanic))
+	unauthorized := workflow.CurrentNode{
+		Reference:          reviewReference,
+		EnteredByEdgeID:    &reworkEdgeID,
+		ContinuationSource: lineageSource,
+		Scheduling: &workflow.CurrentNodeScheduling{
+			State: workflow.CurrentNodeSchedulingReady,
+		},
+		AgentExecutionSelection: &workflow.AgentExecutionSelection{
+			Assignee: "coder",
+			Origin:   workflow.AssigneeOriginConfiguredFallback,
+		},
+	}
+
+	defer func() {
+		recovered, ok := recover().(invariant.Diagnostic)
+		if !ok {
+			t.Fatalf("unauthorized retained-target Session creation panic = %T %v, want invariant.Diagnostic", recovered, recovered)
+		}
+		if recovered.Fields[invariant.FieldReason] != string(workflow.RetainedTargetInvariantUnauthorizedSessionCreation) ||
+			recovered.Fields[invariant.FieldRejectedRetainedSessionID] != retainedReviewSessionID.String() {
+			t.Fatalf("unauthorized creation diagnostic = %+v", recovered)
+		}
+	}()
+	_, _ = store.resolveMaterializedCurrentNodeStartContext(
+		ctx,
+		store.queries,
+		taskRecord,
+		workflowRecord,
+		definition,
+		unauthorized,
+		nil,
+	)
+}
