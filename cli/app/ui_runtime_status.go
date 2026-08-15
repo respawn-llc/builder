@@ -37,11 +37,10 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 			return nil
 		}
 	}
-	deferredInterruptCmd := m.dispatchDeferredInterruptIfReady()
 	if view.Activity.State != "" && !view.Activity.ActiveForControl() && m.hasPendingInterrupt() {
-		return tea.Batch(deferredInterruptCmd, m.acknowledgePendingInterrupt())
+		return m.acknowledgePendingInterrupt()
 	}
-	return deferredInterruptCmd
+	return nil
 }
 
 func (m *uiModel) runtimeMainView() clientui.RuntimeMainView {

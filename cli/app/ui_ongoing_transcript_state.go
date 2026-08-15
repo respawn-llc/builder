@@ -151,15 +151,14 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 		)
 	}
 	promptCtrlCCmd := m.releasePendingPromptCtrlCContinuation()
-	deferredInterruptCmd := m.dispatchDeferredInterruptIfReady()
 	if view.Activity.ActiveForControl() {
-		return tea.Batch(promptCtrlCCmd, deferredInterruptCmd)
+		return promptCtrlCCmd
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
 		cmd = m.acknowledgePendingInterrupt()
 	}
-	return tea.Batch(promptCtrlCCmd, deferredInterruptCmd, cmd, m.releaseDeferredRuntimeSyncs())
+	return tea.Batch(promptCtrlCCmd, cmd, m.releaseDeferredRuntimeSyncs())
 }
 
 func (m *uiModel) applyTranscriptStepState(state clientui.TranscriptStepState) {

@@ -142,7 +142,6 @@ func (m *uiModel) setPendingInterrupt(pending bool) {
 		m.interruptLifecycle = uiInterruptPending
 		m.interruptRunID = strings.TrimSpace(m.currentRunID)
 		m.interruptStepID = strings.TrimSpace(m.currentStepID)
-		m.interruptPreActive = false
 		m.completedRunID = ""
 		m.completedStepID = ""
 		return
@@ -154,31 +153,4 @@ func (m *uiModel) setPendingInterrupt(pending bool) {
 	m.interruptLifecycle = uiInterruptIdle
 	m.interruptRunID = ""
 	m.interruptStepID = ""
-	m.interruptPreActive = false
-}
-
-func (m *uiModel) deferInterruptUntilActive() {
-	if m == nil {
-		return
-	}
-	m.setPendingInterrupt(true)
-	m.interruptRunID = ""
-	m.interruptStepID = ""
-	m.interruptPreActive = true
-}
-
-func (m *uiModel) bindDeferredInterruptIfReady() bool {
-	if m == nil ||
-		!m.hasPendingInterrupt() ||
-		!m.interruptPreActive ||
-		!runtimeActivityAllowsOrdinaryInterrupt(m.runtimeActivityProjection) {
-		return false
-	}
-	m.interruptRunID = strings.TrimSpace(m.currentRunID)
-	m.interruptStepID = strings.TrimSpace(m.currentStepID)
-	if m.interruptRunID == "" || m.interruptStepID == "" {
-		return false
-	}
-	m.interruptPreActive = false
-	return true
 }

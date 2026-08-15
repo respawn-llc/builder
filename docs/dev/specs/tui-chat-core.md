@@ -56,10 +56,10 @@
 
 ## Interrupts And Exit
 
-- `Ctrl+C` interrupts only an active Agent Turn. It stops the current Agent Step and active tool, keeps the Session available, adds the Detail Mode control message `User interrupted you`, returns to idle with input ready, and requires explicit user text to resume.
-- `Ctrl+C` does not cancel a submission before its Agent Turn starts.
+- The server-published Run lifecycle is the TUI liveness authority for `Ctrl+C`: while the Run lifecycle is Running, the TUI sends Interrupt; otherwise it exits. A second `Ctrl+C` while Interrupt is still pending for that same Run exits locally; a different Running Run or Step sends a new Interrupt.
+- The server accepts Interrupt only for an active Agent Turn. An accepted Interrupt stops the current Agent Step and active tool, keeps the Session available, adds the Detail Mode control message `User interrupted you`, returns to idle with input ready, and requires explicit user text to resume.
 - The interrupt also drains pending messages into the main input so the user can edit or resend them.
-- `Ctrl+C` without an active `Agent Turn` exits the TUI. A submission already sent to the server may start or continue after the client detaches.
+- `Ctrl+C` while the server-published Run lifecycle is not Running exits the TUI. A submission already sent to the server may start or continue after the client detaches.
 - Graceful exit through `Ctrl+C` or `/exit` saves the current composer draft before releasing the Session attachment.
 - `/exit` detaches the client and does not interrupt the Active Session Runtime. Active work continues after this TUI releases its attachment.
 - Session-navigation commands persist the outgoing draft, resolve the typed transition, release the originating attachment, and only then plan or attach the destination. A release failure aborts navigation before destination attachment; an `/exit` release failure is reported after terminal teardown and exits nonzero.
