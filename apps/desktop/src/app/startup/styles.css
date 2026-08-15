@@ -655,18 +655,22 @@
   mask-image: linear-gradient(to bottom, black 0, black calc(100% - var(--space-4)), transparent 100%);
 }
 
-.task-detail-body-island-slot > * {
-  height: 100%;
-}
-
 @container (min-width: 720px) {
+  .task-detail-body-split {
+    grid-template-columns: minmax(0, 65fr) minmax(0, 35fr);
+  }
+
+  .task-detail-body-island-slot,
+  .task-detail-body-island-slot > * {
+    height: 100%;
+    min-height: 100%;
+  }
+
   .task-detail-description-island [data-slot="markdown-field-read-root"] {
     height: 100%;
   }
 
-  .task-detail-description-island
-    [data-slot="markdown-field-read-root"][data-collapsed="false"]
-    [data-slot="markdown-field-read-viewport"] {
+  .task-detail-description-island [data-slot="markdown-field-read-viewport"] {
     max-height: none !important;
   }
 }
