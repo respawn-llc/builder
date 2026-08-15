@@ -111,6 +111,10 @@ failure_labels=()
 failure_logs=()
 failure_statuses=()
 logs=()
+go_test_timeout_args=()
+if [ "$wall_clock_cap" -eq 1 ]; then
+	go_test_timeout_args=(-timeout "${timeout_seconds}s")
+fi
 
 cleanup() {
 	local log
@@ -199,7 +203,7 @@ PY
 run_server() {
 	local args=("${tool_args[@]}")
 	[ "${#args[@]}" -gt 0 ] || args=(./...)
-	run_suite server go test -p "$workers" -timeout "${timeout_seconds}s" "${args[@]}"
+	run_suite server go test -p "$workers" "${go_test_timeout_args[@]}" "${args[@]}"
 }
 
 run_desktop() {
@@ -208,7 +212,7 @@ run_desktop() {
 }
 
 run_tui() {
-	run_suite tui go test -p "$workers" -timeout "${timeout_seconds}s" ./cli/tui/... "${tool_args[@]}"
+	run_suite tui go test -p "$workers" "${go_test_timeout_args[@]}" ./cli/tui/... "${tool_args[@]}"
 }
 
 run_rust() {

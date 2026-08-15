@@ -9,12 +9,22 @@ cd "$repo_root"
 usage() {
 	cat <<'USAGE'
 Usage:
-  scripts/release-artifacts.sh build --version X.Y.Z [--dist-dir dist]
+  scripts/release-artifacts.sh build [--version X.Y.Z] [--dist-dir dist]
   scripts/release-artifacts.sh verify-manifest [--dist-dir dist]
   scripts/release-artifacts.sh verify-linux-static --version X.Y.Z [--dist-dir dist]
   scripts/release-artifacts.sh smoke-test --version X.Y.Z --goos <os> --goarch <arch> --archive-ext <ext> [--binary-ext <ext>] [--dist-dir dist]
   scripts/release-artifacts.sh smoke-windows-installer --version X.Y.Z --goarch <arch> [--dist-dir dist]
+
+Build version defaults to KENT_VERSION or the repository VERSION file.
 USAGE
+}
+
+resolve_version() {
+	local value="${KENT_VERSION:-}"
+	if [ -z "$value" ] && [ -f "$repo_root/VERSION" ]; then
+		value="$(tr -d '[:space:]' <"$repo_root/VERSION")"
+	fi
+	printf '%s' "${value#v}"
 }
 
 resolve_path() {
@@ -310,6 +320,9 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+if [ "$mode" = "build" ] && [ -z "$version" ]; then
+	version="$(resolve_version)"
+fi
 version="${version#v}"
 
 case "$mode" in
