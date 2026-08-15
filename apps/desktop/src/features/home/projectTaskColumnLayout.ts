@@ -10,8 +10,8 @@ export type ProjectTaskColumnLayout = Readonly<{
 }>;
 
 export type ProjectTaskRenderedColumnWidths = Readonly<{
-  labelsPx: number;
-  workflowPx: number;
+  labelsPx: number | null;
+  workflowPx: number | null;
 }>;
 
 type ProjectTaskStructuralColumnWidths = Readonly<{
@@ -44,8 +44,9 @@ export function useProjectTaskColumnLayout(data: ProjectTaskListData): Readonly<
       setLayout((current) => {
         const expanded = {
           ...current,
-          labelsPx: Math.max(current.labelsPx, widths.labelsPx),
-          workflowPx: Math.max(current.workflowPx, widths.workflowPx),
+          labelsPx: widths.labelsPx === null ? current.labelsPx : Math.max(current.labelsPx, widths.labelsPx),
+          workflowPx:
+            widths.workflowPx === null ? current.workflowPx : Math.max(current.workflowPx, widths.workflowPx),
         };
         return projectTaskColumnLayoutsEqual(current, expanded) ? current : expanded;
       });

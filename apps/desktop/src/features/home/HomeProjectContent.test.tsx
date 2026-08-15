@@ -7,6 +7,7 @@ import { HomeProjectContent } from "./HomeProjectContent";
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal()),
+  useQueryClient: () => ({ invalidateQueries: vi.fn(), resetQueries: vi.fn() }),
   useQuery: () => ({
     data: { displayName: "Kent", projectKey: "KNT" },
   }),
@@ -26,6 +27,7 @@ vi.mock("@/app-facade", async (importOriginal) => ({
   ...(await importOriginal()),
   useAppNavigation: () => ({ selectHomeProject: vi.fn() }),
   useAppServices: () => ({ api: {} }),
+  useOwnedSidebarRoots: () => ({ open: vi.fn() }),
 }));
 
 vi.mock("./ProjectTasksSurface", () => ({
@@ -59,6 +61,7 @@ it("shows the selected Project identity above its workspace", () => {
 
   expect(screen.getByRole("heading", { name: "Kent" })).toBeInTheDocument();
   expect(screen.getByText("KNT")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") })).toBeInTheDocument();
 });
 
 it("restores Task-grid pixels after visiting another Project tab", () => {

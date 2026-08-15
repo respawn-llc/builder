@@ -61,6 +61,7 @@ import {
   useProjectTaskWorkflowPages,
 } from "./projectTaskWorkflows";
 import { ProjectWorkflowStrip } from "./ProjectWorkflowStrip";
+import { useProjectLinkWorkflowAction } from "./useProjectLinkWorkflowAction";
 
 export function ProjectTasksSurface({
   projectID,
@@ -156,34 +157,7 @@ export function ProjectTasksSurface({
   });
   const workflows = projectTaskWorkflowItems(workflowsQuery.data);
   const newTaskAvailable = useProjectTaskNewTaskAvailable(projectID, workflowsQuery.data);
-  const openLinkWorkflow = () => {
-    open({
-      kind: "linkWorkflow",
-      mode: sidebarMode,
-      onCompleted: async () => {
-        await Promise.all([
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.projectWorkflowLinks(projectID),
-            exact: true,
-            refetchType: "active",
-          }),
-          queryClient.resetQueries({
-            queryKey: queryKeys.projectTaskWorkflows(projectID),
-            exact: true,
-          }),
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.projectBoardsRoot(projectID),
-            refetchType: "active",
-          }),
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.projectTaskListsRoot(projectID),
-            refetchType: "active",
-          }),
-        ]);
-      },
-      projectID,
-    });
-  };
+  const openLinkWorkflow = useProjectLinkWorkflowAction(projectID, sidebarMode);
   const openNewTask = () => {
     open({
       boardQueryWorkflowID: undefined,

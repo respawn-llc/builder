@@ -15,6 +15,7 @@ import {
   type SidebarMode,
 } from "@/app-facade";
 import {
+  Button,
   directionalBoundary,
   EmptyState,
   homeListCardListMaxWidthClassName,
@@ -26,6 +27,7 @@ import {
 import { OverlappingCrossfade } from "./OverlappingCrossfade";
 import { ProjectTasksSurface } from "./ProjectTasksSurface";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
+import { useProjectLinkWorkflowAction } from "./useProjectLinkWorkflowAction";
 
 type ProjectContentTab = "tasks" | "sessions" | "subagents";
 
@@ -40,6 +42,7 @@ export function HomeProjectContent({
 }>) {
   const { api } = useAppServices();
   const navigation = useAppNavigation();
+  const openLinkWorkflow = useProjectLinkWorkflowAction(projectID, sidebarMode);
   const [taskListViewMemory] = useState(createProjectTasksViewMemory);
   const projectQuery = useQuery({
     queryKey: queryKeys.projectEdit(projectID),
@@ -54,6 +57,7 @@ export function HomeProjectContent({
     <div className="flex h-full min-h-0 flex-col">
       <ProjectWorkspaceIdentity
         displayName={projectQuery.data?.displayName}
+        onLinkWorkflow={openLinkWorkflow}
         projectKey={projectQuery.data?.projectKey}
       />
       <div className="min-h-0 flex-1">
@@ -77,16 +81,22 @@ export function HomeProjectContent({
 
 function ProjectWorkspaceIdentity({
   displayName,
+  onLinkWorkflow,
   projectKey,
 }: Readonly<{
   displayName: string | undefined;
+  onLinkWorkflow: () => void;
   projectKey: string | undefined;
 }>) {
+  const { t } = useTranslation();
   if (displayName === undefined || projectKey === undefined) return null;
   return (
-    <header className="z-10 flex shrink-0 items-baseline gap-[var(--space-2)] px-[var(--space-4)] pt-[var(--space-4)]">
+    <header className="z-10 flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-4)] pt-[var(--space-4)]">
       <h1 className="min-w-0 truncate text-lg font-bold">{displayName}</h1>
       <span className="shrink-0 font-mono text-xs text-[var(--color-muted)]">{projectKey}</span>
+      <Button className="ml-auto shrink-0" onClick={onLinkWorkflow}>
+        {t("workflowLibrary.linkWorkflow")}
+      </Button>
     </header>
   );
 }

@@ -500,6 +500,14 @@ describe("ProjectTasksSurface", () => {
     });
   });
 
+  it("keeps informational status icons from opening Task Detail", () => {
+    renderSurface(createProjectTasksViewMemory(), "shift", [task("active-1", "KNT-1", "Task")]);
+
+    fireEvent.click(screen.getByTestId("project-task-status-active-1"));
+
+    expect(fixture.open).not.toHaveBeenCalled();
+  });
+
   it("refreshes the Project Task list after Resume applies", async () => {
     renderSurface(createProjectTasksViewMemory(), "shift", [
       task("active-1", "KNT-1", "Interrupted task", {

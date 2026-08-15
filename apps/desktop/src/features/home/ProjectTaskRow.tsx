@@ -63,9 +63,7 @@ export type ProjectTaskListEntry =
       className?: string | undefined;
     }>;
 
-export function projectTaskColumnEntry(
-  t: ReturnType<typeof useTranslation>["t"],
-): ProjectTaskListEntry {
+export function projectTaskColumnEntry(t: ReturnType<typeof useTranslation>["t"]): ProjectTaskListEntry {
   return {
     kind: "column-header",
     key: "columns",
@@ -144,26 +142,32 @@ export function projectTaskEntry({
         key: "status",
         ariaLabel: `${t("task.status")}: ${t(`task.statusKinds.${task.status.kind}`)}`,
         className: "flex h-full items-center justify-center",
-        content: task.status.kind === "interrupted" ? (
-          <button
-            aria-label={`${t("board.resume")}: ${task.shortID}`}
-            className="inline-grid size-6 place-items-center rounded-full outline-none transition-colors hover:bg-[var(--color-island-3)] focus-visible:ring-[2px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_45%,transparent)] disabled:cursor-not-allowed disabled:opacity-45"
-            data-testid={`project-task-status-${task.id}`}
-            disabled={resumeDisabled || pendingResume}
-            onClick={(event) => {
-              event.stopPropagation();
-              onResumeTask(task.id);
-            }}
-            title={t("board.resume")}
-            type="button"
-          >
-            {pendingResume ? <Spinner size="sm" /> : <TaskStatusIcon status={task.status.kind} />}
-          </button>
-        ) : (
-          <span data-testid={`project-task-status-${task.id}`}>
-            <TaskStatusIcon status={task.status.kind} />
-          </span>
-        ),
+        content:
+          task.status.kind === "interrupted" ? (
+            <button
+              aria-label={`${t("board.resume")}: ${task.shortID}`}
+              className="inline-grid size-6 place-items-center rounded-full outline-none transition-colors hover:bg-[var(--color-island-3)] focus-visible:ring-[2px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_45%,transparent)] disabled:cursor-not-allowed disabled:opacity-45"
+              data-testid={`project-task-status-${task.id}`}
+              disabled={resumeDisabled || pendingResume}
+              onClick={(event) => {
+                event.stopPropagation();
+                onResumeTask(task.id);
+              }}
+              title={t("board.resume")}
+              type="button"
+            >
+              {pendingResume ? <Spinner size="sm" /> : <TaskStatusIcon status={task.status.kind} />}
+            </button>
+          ) : (
+            <span
+              data-testid={`project-task-status-${task.id}`}
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              <TaskStatusIcon status={task.status.kind} />
+            </span>
+          ),
       },
       {
         key: "id",

@@ -118,10 +118,11 @@ function retainMeasurementElement(
   elements.set(key, element);
 }
 
-function maximumMeasuredWidth(elements: Iterable<HTMLSpanElement>): number {
-  let width = 0;
+function maximumMeasuredWidth(elements: Iterable<HTMLSpanElement>): number | null {
+  let width: number | null = null;
   for (const element of elements) {
-    width = Math.max(width, Math.ceil(element.getBoundingClientRect().width));
+    const measured = Math.ceil(element.getBoundingClientRect().width);
+    width = width === null ? measured : Math.max(width, measured);
   }
   return width;
 }
