@@ -3,16 +3,26 @@ import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const defaultWorkspaceRoot = fileURLToPath(new URL("..", import.meta.url));
-const dependencySections = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+const dependencySections = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+];
 
-export async function checkDependencyPolicy(workspaceRoot = defaultWorkspaceRoot) {
+export async function checkDependencyPolicy(
+  workspaceRoot = defaultWorkspaceRoot,
+) {
   const policyPath = join(workspaceRoot, "dependency-policy.json");
   const workspacePath = join(workspaceRoot, "pnpm-workspace.yaml");
   const policy = JSON.parse(await readFile(policyPath, "utf8"));
   const workspaceConfig = await readFile(workspacePath, "utf8");
   const errors = [];
 
-  const releaseAgePattern = new RegExp(`^minimumReleaseAge:\\s*${policy.minimumReleaseAgeMinutes}\\s*$`, "m");
+  const releaseAgePattern = new RegExp(
+    `^minimumReleaseAge:\\s*${policy.minimumReleaseAgeMinutes}\\s*$`,
+    "m",
+  );
   if (!releaseAgePattern.test(workspaceConfig)) {
     errors.push(
       `pnpm-workspace.yaml must set minimumReleaseAge: ${policy.minimumReleaseAgeMinutes} to enforce dependency maturity.`,
@@ -20,12 +30,16 @@ export async function checkDependencyPolicy(workspaceRoot = defaultWorkspaceRoot
   }
 
   if (!/^onlyBuiltDependencies:\s*\[\]\s*$/m.test(workspaceConfig)) {
-    errors.push("pnpm-workspace.yaml must set onlyBuiltDependencies: [] so install scripts need explicit review.");
+    errors.push(
+      "pnpm-workspace.yaml must set onlyBuiltDependencies: [] so install scripts need explicit review.",
+    );
   }
 
   for (const dependencyName of policy.minimumReleaseAgeExclude ?? []) {
     if (!workspaceConfig.includes(`- "${dependencyName}"`)) {
-      errors.push(`pnpm-workspace.yaml must list approved minimumReleaseAgeExclude ${dependencyName}.`);
+      errors.push(
+        `pnpm-workspace.yaml must list approved minimumReleaseAgeExclude ${dependencyName}.`,
+      );
     }
   }
 
@@ -36,14 +50,18 @@ export async function checkDependencyPolicy(workspaceRoot = defaultWorkspaceRoot
     const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
     const packageName = packageJson.name;
     if (typeof packageName !== "string" || packageName.length === 0) {
-      errors.push(`${displayPath(workspaceRoot, packagePath)} is missing package name.`);
+      errors.push(
+        `${displayPath(workspaceRoot, packagePath)} is missing package name.`,
+      );
       continue;
     }
     packagesByName.set(packageName, packagePath);
 
     const packagePolicy = policy.directDependencyAllowlist[packageName];
     if (packagePolicy === undefined) {
-      errors.push(`${packageName} has no direct dependency allowlist in dependency-policy.json.`);
+      errors.push(
+        `${packageName} has no direct dependency allowlist in dependency-policy.json.`,
+      );
       continue;
     }
 
@@ -53,21 +71,29 @@ export async function checkDependencyPolicy(workspaceRoot = defaultWorkspaceRoot
 
       for (const dependencyName of actualDependencies) {
         if (!allowedDependencies.includes(dependencyName)) {
-          errors.push(`${packageName} ${section} contains unreviewed dependency ${dependencyName}.`);
+          errors.push(
+            `${packageName} ${section} contains unreviewed dependency ${dependencyName}.`,
+          );
         }
       }
 
       for (const dependencyName of allowedDependencies) {
         if (!actualDependencies.includes(dependencyName)) {
-          errors.push(`${packageName} policy allowlists absent ${section} dependency ${dependencyName}.`);
+          errors.push(
+            `${packageName} policy allowlists absent ${section} dependency ${dependencyName}.`,
+          );
         }
       }
     }
   }
 
-  for (const packageName of Object.keys(policy.directDependencyAllowlist).sort()) {
+  for (const packageName of Object.keys(
+    policy.directDependencyAllowlist,
+  ).sort()) {
     if (!packagesByName.has(packageName)) {
-      errors.push(`dependency-policy.json contains package ${packageName}, but no matching package.json exists.`);
+      errors.push(
+        `dependency-policy.json contains package ${packageName}, but no matching package.json exists.`,
+      );
     }
   }
 

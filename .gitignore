@@ -49,10 +49,8 @@ cover.out
 # Go workspace/module local files
 go.work.sum
 
-# Lazy Protobuf generation cache and disposable generated sources.
+# Disposable protobuf generation cache.
 /.generated/protobuf/
-/shared/protoapi/gen/
-/apps/desktop/packages/server-api-contract/src/gen/
 
 # Rendered only while metadata SQL adapters are generated.
 /server/metadata/queries.sql

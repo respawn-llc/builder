@@ -1,32 +1,32 @@
 ---
-import '@docsearch/css/dist/modal.css';
-import type docsearch from '@docsearch/js';
+import "@docsearch/css/dist/modal.css";
+import type docsearch from "@docsearch/js";
 
 type DocSearchTranslationProps = Pick<
   Parameters<typeof docsearch>[0],
-  'placeholder' | 'translations'
+  "placeholder" | "translations"
 >;
 
 const pick = (keyStart: string) =>
   Object.fromEntries(
     Object.entries(Astro.locals.t.all())
       .filter(([key]) => key.startsWith(keyStart))
-      .map(([key, value]) => [key.replace(keyStart, ''), value]),
+      .map(([key, value]) => [key.replace(keyStart, ""), value]),
   );
 
 const docsearchTranslations: DocSearchTranslationProps = {
-  placeholder: Astro.locals.t('search.label'),
+  placeholder: Astro.locals.t("search.label"),
   translations: {
     button: {
-      buttonText: Astro.locals.t('search.label'),
-      buttonAriaLabel: Astro.locals.t('search.label'),
+      buttonText: Astro.locals.t("search.label"),
+      buttonAriaLabel: Astro.locals.t("search.label"),
     },
     modal: {
-      searchBox: pick('docsearch.searchBox.'),
-      startScreen: pick('docsearch.startScreen.'),
-      errorScreen: pick('docsearch.errorScreen.'),
-      footer: pick('docsearch.footer.'),
-      noResultsScreen: pick('docsearch.noResultsScreen.'),
+      searchBox: pick("docsearch.searchBox."),
+      startScreen: pick("docsearch.startScreen."),
+      errorScreen: pick("docsearch.errorScreen."),
+      footer: pick("docsearch.footer."),
+      noResultsScreen: pick("docsearch.noResultsScreen."),
     },
   },
 };
@@ -36,10 +36,15 @@ const docsearchTranslations: DocSearchTranslationProps = {
   <button
     type="button"
     class="DocSearch DocSearch-Button"
-    aria-label={Astro.locals.t('search.label')}
+    aria-label={Astro.locals.t("search.label")}
   >
     <span class="DocSearch-Button-Container">
-      <svg width="20" height="20" class="DocSearch-Search-Icon" viewBox="0 0 20 20">
+      <svg
+        width="20"
+        height="20"
+        class="DocSearch-Search-Icon"
+        viewBox="0 0 20 20"
+      >
         <path
           d="M14.386 14.386l4.0877 4.0877-4.0877-4.0877c-2.9418 2.9419-7.7115 2.9419-10.6533 0-2.9419-2.9418-2.9419-7.7115 0-10.6533 2.9418-2.9419 7.7115-2.9419 10.6533 0 2.9419 2.9418 2.9419 7.7115 0 10.6533z"
           stroke="currentColor"
@@ -48,7 +53,9 @@ const docsearchTranslations: DocSearchTranslationProps = {
           stroke-linecap="round"
           stroke-linejoin="round"></path>
       </svg>
-      <span class="DocSearch-Button-Placeholder">{Astro.locals.t('search.label')}</span>
+      <span class="DocSearch-Button-Placeholder"
+        >{Astro.locals.t("search.label")}</span
+      >
     </span>
     <span class="DocSearch-Button-Keys"></span>
   </button>
@@ -68,7 +75,10 @@ const docsearchTranslations: DocSearchTranslationProps = {
     --docsearch-modal-background: var(--sl-color-gray-6);
     --docsearch-modal-shadow: var(--sl-shadow-lg);
     --docsearch-searchbox-height: 56px;
-    --docsearch-searchbox-background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+    --docsearch-searchbox-background: var(
+      --sl-color-gray-7,
+      var(--sl-color-gray-6)
+    );
     --docsearch-searchbox-focus-background: var(--sl-color-black);
     --docsearch-searchbox-shadow: inset 0 0 0 1px var(--docsearch-primary-color);
     --docsearch-hit-height: 56px;
@@ -152,7 +162,7 @@ const docsearchTranslations: DocSearchTranslationProps = {
     }
 
     .DocSearch-Button-Keys::before {
-      content: '/';
+      content: "/";
       display: grid;
       place-items: center;
       width: 1.4em;
@@ -165,9 +175,12 @@ const docsearchTranslations: DocSearchTranslationProps = {
 </style>
 
 <script>
-  import config from 'virtual:starlight/docsearch-config';
+  import config from "virtual:starlight/docsearch-config";
 
   class StarlightDocSearch extends HTMLElement {
+    docsearchMounted: boolean;
+    cleanupDocSearch: (() => void) | undefined;
+
     constructor() {
       super();
       this.docsearchMounted = false;
@@ -180,10 +193,10 @@ const docsearchTranslations: DocSearchTranslationProps = {
       }
 
       this.docsearchMounted = true;
-      this.dataset.docsearchMounted = 'true';
+      this.dataset.docsearchMounted = "true";
       const [{ default: docsearch }, { render }] = await Promise.all([
-        import('@docsearch/js'),
-        import('preact'),
+        import("@docsearch/js"),
+        import("preact"),
       ]);
 
       if (!this.isConnected) {
@@ -192,21 +205,28 @@ const docsearchTranslations: DocSearchTranslationProps = {
         return;
       }
 
-      for (const container of document.querySelectorAll('.DocSearch-Container')) {
+      for (const container of document.querySelectorAll(
+        ".DocSearch-Container",
+      )) {
         container.remove();
       }
 
       const options = { ...config, container: this };
       try {
-        const translations = JSON.parse(this.dataset.translations || '{}');
+        const translations = JSON.parse(this.dataset.translations || "{}");
         Object.assign(options, translations);
       } catch (error) {
-        console.warn('Failed to parse DocSearch translations; using default translations.', error);
+        console.warn(
+          "Failed to parse DocSearch translations; using default translations.",
+          error,
+        );
       }
       docsearch(options);
       this.cleanupDocSearch = () => {
         render(null, this);
-        for (const container of document.querySelectorAll('.DocSearch-Container')) {
+        for (const container of document.querySelectorAll(
+          ".DocSearch-Container",
+        )) {
           container.remove();
         }
         this.docsearchMounted = false;
@@ -220,7 +240,7 @@ const docsearchTranslations: DocSearchTranslationProps = {
     }
   }
 
-  if (!customElements.get('sl-doc-search')) {
-    customElements.define('sl-doc-search', StarlightDocSearch);
+  if (!customElements.get("sl-doc-search")) {
+    customElements.define("sl-doc-search", StarlightDocSearch);
   }
 </script>

@@ -26,7 +26,6 @@ const (
 
 func main() {
 	workers := flag.Int("workers", min(runtime.NumCPU(), 18), "maximum concurrent package test processes")
-	fresh := flag.Bool("fresh", false, "disable Go test-result caching")
 	packagesPattern := flag.String("packages", "", "Go package pattern to test (deprecated; use positional patterns)")
 	flag.Parse()
 	if *workers <= 0 {
@@ -51,7 +50,7 @@ func main() {
 	if err != nil {
 		fatalf("plan Go test shards: %v", err)
 	}
-	if err := runJobs(jobs, *workers, *fresh); err != nil {
+	if err := runJobs(jobs, *workers); err != nil {
 		fatalf("run Go test shards: %v", err)
 	}
 }

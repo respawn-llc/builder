@@ -1,32 +1,33 @@
-import path from 'node:path';
+import path from "node:path";
 
-import { fromHtml } from 'hast-util-from-html';
-import { toHtml } from 'hast-util-to-html';
-import { unified } from 'unified';
-import remarkGfm from 'remark-gfm';
-import remarkParse from 'remark-parse';
-import remarkStringify from 'remark-stringify';
-import { visit } from 'unist-util-visit';
+import { fromHtml } from "hast-util-from-html";
+import { toHtml } from "hast-util-to-html";
+import { unified } from "unified";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import remarkStringify from "remark-stringify";
+import { visit } from "unist-util-visit";
 
-const RAW_HTML_OPENING_TAG_SENTINEL_PREFIX = 'kent-raw-html-opening-tag-sentinel';
+const RAW_HTML_OPENING_TAG_SENTINEL_PREFIX =
+  "kent-raw-html-opening-tag-sentinel";
 const VOID_HTML_ELEMENTS = new Set([
-  'area',
-  'base',
-  'br',
-  'col',
-  'embed',
-  'hr',
-  'img',
-  'input',
-  'link',
-  'meta',
-  'source',
-  'track',
-  'wbr',
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "source",
+  "track",
+  "wbr",
 ]);
 
 function isFragmentOnly(url) {
-  return url.startsWith('#') || url.startsWith('?');
+  return url.startsWith("#") || url.startsWith("?");
 }
 
 function isAbsoluteUrl(url) {
@@ -38,11 +39,11 @@ function isAbsoluteUrl(url) {
 }
 
 function shouldRewriteUrl(url) {
-  if (typeof url !== 'string' || url.length === 0) {
+  if (typeof url !== "string" || url.length === 0) {
     return false;
   }
 
-  if (isFragmentOnly(url) || url.startsWith('/')) {
+  if (isFragmentOnly(url) || url.startsWith("/")) {
     return false;
   }
 
@@ -50,9 +51,9 @@ function shouldRewriteUrl(url) {
 }
 
 function splitHash(url) {
-  const hashIndex = url.indexOf('#');
+  const hashIndex = url.indexOf("#");
   if (hashIndex === -1) {
-    return { pathname: url, hash: '' };
+    return { pathname: url, hash: "" };
   }
 
   return {
@@ -63,9 +64,9 @@ function splitHash(url) {
 
 function getMirroredRootDocumentPath(pathname, docsConfig) {
   const mirroredPaths = new Map([
-    ['README.md', docsConfig.docsHomePath],
-    ['CONTRIBUTING.md', docsConfig.contributingPath],
-    ['SECURITY.md', docsConfig.securityPath],
+    ["README.md", docsConfig.docsHomePath],
+    ["CONTRIBUTING.md", docsConfig.contributingPath],
+    ["SECURITY.md", docsConfig.securityPath],
   ]);
 
   return mirroredPaths.get(pathname);
@@ -74,15 +75,26 @@ function getMirroredRootDocumentPath(pathname, docsConfig) {
 function rewriteRelativeUrl(url, docsConfig) {
   const { pathname, hash } = splitHash(url);
   const normalizedPath = path.posix.normalize(pathname);
-  const mirroredRootDocumentPath = getMirroredRootDocumentPath(normalizedPath, docsConfig);
+  const mirroredRootDocumentPath = getMirroredRootDocumentPath(
+    normalizedPath,
+    docsConfig,
+  );
 
   if (mirroredRootDocumentPath) {
     return `${mirroredRootDocumentPath}${hash}`;
   }
 
-  const isDirectory = pathname.endsWith('/');
+  const isDirectory = pathname.endsWith("/");
   const extension = path.posix.extname(normalizedPath).toLowerCase();
-  const isImage = ['.avif', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp'].includes(extension);
+  const isImage = [
+    ".avif",
+    ".gif",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".svg",
+    ".webp",
+  ].includes(extension);
 
   if (isImage) {
     return new URL(normalizedPath, docsConfig.repoRawRootUrl).toString() + hash;
@@ -94,25 +106,38 @@ function rewriteRelativeUrl(url, docsConfig) {
   return new URL(normalizedPath, `${targetRoot}`).toString() + hash;
 }
 
-function rewriteHtmlUrlProperties(html, docsConfig, { preserveOpeningTag = false } = {}) {
-  if (html.trim().startsWith('</')) {
+function rewriteHtmlUrlProperties(
+  html,
+  docsConfig,
+  { preserveOpeningTag = false } = {},
+) {
+  if (html.trim().startsWith("</")) {
     return html;
   }
 
   const tree = fromHtml(html, { fragment: true });
 
-  visit(tree, 'element', (node) => {
+  visit(tree, "element", (node) => {
     const properties = node.properties ?? {};
-    for (const propertyName of ['href', 'src', 'poster']) {
+    for (const propertyName of ["href", "src", "poster"]) {
       const propertyValue = properties[propertyName];
-      if (typeof propertyValue === 'string' && shouldRewriteUrl(propertyValue)) {
-        properties[propertyName] = rewriteRelativeUrl(propertyValue, docsConfig);
+      if (
+        typeof propertyValue === "string" &&
+        shouldRewriteUrl(propertyValue)
+      ) {
+        properties[propertyName] = rewriteRelativeUrl(
+          propertyValue,
+          docsConfig,
+        );
       }
     }
   });
 
   const firstChild = tree.children[0];
-  if (preserveOpeningTag && isSingleNonVoidHtmlElement(tree.children, firstChild)) {
+  if (
+    preserveOpeningTag &&
+    isSingleNonVoidHtmlElement(tree.children, firstChild)
+  ) {
     return serializeOpeningTag(firstChild);
   }
 
@@ -122,7 +147,7 @@ function rewriteHtmlUrlProperties(html, docsConfig, { preserveOpeningTag = false
 function isSingleNonVoidHtmlElement(children, node) {
   return (
     children.length === 1 &&
-    node?.type === 'element' &&
+    node?.type === "element" &&
     !VOID_HTML_ELEMENTS.has(node.tagName)
   );
 }
@@ -137,7 +162,7 @@ function serializeOpeningTag(node) {
 
     const html = toHtml({
       ...node,
-      children: [...node.children, { type: 'text', value: sentinel }],
+      children: [...node.children, { type: "text", value: sentinel }],
     });
     const sentinelIndex = html.indexOf(sentinel);
     if (sentinelIndex !== -1) {
@@ -145,24 +170,31 @@ function serializeOpeningTag(node) {
     }
   }
 
-  throw new Error(`failed to preserve raw HTML opening tag <${node.tagName}> while mirroring docs`);
+  throw new Error(
+    `failed to preserve raw HTML opening tag <${node.tagName}> while mirroring docs`,
+  );
 }
 
 function getHtmlElementFromFragment(html) {
   const tree = fromHtml(html, { fragment: true });
   const firstChild = tree.children[0];
-  return isSingleNonVoidHtmlElement(tree.children, firstChild) ? firstChild : undefined;
+  return isSingleNonVoidHtmlElement(tree.children, firstChild)
+    ? firstChild
+    : undefined;
 }
 
 function closingHtmlTagName(html) {
   const trimmedHtml = html.trim();
-  if (!trimmedHtml.startsWith('</') || !trimmedHtml.endsWith('>')) {
+  if (!trimmedHtml.startsWith("</") || !trimmedHtml.endsWith(">")) {
     return undefined;
   }
 
   const tagNameStart = 2;
   let tagNameEnd = tagNameStart;
-  while (tagNameEnd < trimmedHtml.length && ![' ', '\t', '\n', '\r', '>'].includes(trimmedHtml[tagNameEnd])) {
+  while (
+    tagNameEnd < trimmedHtml.length &&
+    ![" ", "\t", "\n", "\r", ">"].includes(trimmedHtml[tagNameEnd])
+  ) {
     tagNameEnd += 1;
   }
   const tagName = trimmedHtml.slice(tagNameStart, tagNameEnd).toLowerCase();
@@ -170,7 +202,7 @@ function closingHtmlTagName(html) {
 }
 
 function isSplitRawHtmlOpeningTag(node, index, parent) {
-  if (node.type !== 'html' || typeof index !== 'number' || !parent?.children) {
+  if (node.type !== "html" || typeof index !== "number" || !parent?.children) {
     return false;
   }
 
@@ -181,7 +213,11 @@ function isSplitRawHtmlOpeningTag(node, index, parent) {
 
   return parent.children
     .slice(index + 1)
-    .some((sibling) => sibling.type === 'html' && closingHtmlTagName(sibling.value) === element.tagName);
+    .some(
+      (sibling) =>
+        sibling.type === "html" &&
+        closingHtmlTagName(sibling.value) === element.tagName,
+    );
 }
 
 function rewriteMarkdownHtmlNode(node, docsConfig, index, parent) {
@@ -191,13 +227,9 @@ function rewriteMarkdownHtmlNode(node, docsConfig, index, parent) {
 }
 
 function buildFrontmatter(title, editUrl) {
-  return [
-    '---',
-    `title: ${title}`,
-    `editUrl: ${editUrl}`,
-    '---',
-    '',
-  ].join('\n');
+  return ["---", `title: ${title}`, `editUrl: ${editUrl}`, "---", ""].join(
+    "\n",
+  );
 }
 
 export function mirrorRepoMarkdownDocument(markdown, docsConfig, options) {
@@ -207,7 +239,7 @@ export function mirrorRepoMarkdownDocument(markdown, docsConfig, options) {
     .use(remarkGfm)
     .use(() => (tree) => {
       const firstTopLevelHeadingIndex = tree.children.findIndex(
-        (node) => node.type === 'heading' && node.depth === 1,
+        (node) => node.type === "heading" && node.depth === 1,
       );
 
       if (firstTopLevelHeadingIndex >= 0) {
@@ -215,25 +247,31 @@ export function mirrorRepoMarkdownDocument(markdown, docsConfig, options) {
       }
 
       visit(tree, (node, index, parent) => {
-        if ((node.type === 'link' || node.type === 'image') && shouldRewriteUrl(node.url)) {
+        if (
+          (node.type === "link" || node.type === "image") &&
+          shouldRewriteUrl(node.url)
+        ) {
           node.url = rewriteRelativeUrl(node.url, docsConfig);
         }
-        if (node.type === 'html') {
+        if (node.type === "html") {
           rewriteMarkdownHtmlNode(node, docsConfig, index, parent);
         }
       });
     })
     .use(remarkGfm)
     .use(remarkStringify, {
-      bullet: '-',
+      bullet: "-",
       fences: true,
-      listItemIndent: 'one',
-      rule: '-',
-      strong: '*',
+      listItemIndent: "one",
+      rule: "-",
+      strong: "*",
     });
 
   const transformedBody = String(processor.processSync(markdown)).trim();
-  const frontmatter = buildFrontmatter(title, `${docsConfig.repoEditRootUrl}${editPath}`);
+  const frontmatter = buildFrontmatter(
+    title,
+    `${docsConfig.repoEditRootUrl}${editPath}`,
+  );
 
   return `${frontmatter}${transformedBody}\n`;
 }
@@ -241,6 +279,6 @@ export function mirrorRepoMarkdownDocument(markdown, docsConfig, options) {
 export function mirrorReadme(markdown, docsConfig) {
   return mirrorRepoMarkdownDocument(markdown, docsConfig, {
     title: docsConfig.docsHomeTitle,
-    editPath: 'README.md',
+    editPath: "README.md",
   });
 }

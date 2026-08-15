@@ -375,7 +375,10 @@ describe("ProjectTasksSurface", () => {
     const memory = createProjectTasksViewMemory();
     const view = renderSurface(memory);
 
-    const activeGroupName = appI18n.t("home.prototype.taskGroupCount", { count: 2, group: appI18n.t("home.prototype.statusGroups.active") });
+    const activeGroupName = appI18n.t("home.prototype.taskGroupCount", {
+      count: 2,
+      group: appI18n.t("home.prototype.statusGroups.active"),
+    });
     const activeGroup = screen.getByRole("button", { name: activeGroupName });
     fireEvent.click(activeGroup);
     expect(activeGroup).toHaveAttribute("aria-expanded", "false");
@@ -421,7 +424,9 @@ describe("ProjectTasksSurface", () => {
 
       fixture.initialGroupPagesError = true;
       view.rerender(withQueryClient(surface(memory)));
-      expect(screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }).scrollTop).toBe(0);
+      expect(screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }).scrollTop).toBe(
+        0,
+      );
 
       fixture.initialGroupPagesError = false;
       fixture.initialGroupPagesEstablished = true;
@@ -466,7 +471,9 @@ describe("ProjectTasksSurface", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(countsError.message);
     expect(screen.getByRole("button", { name: appI18n.t("app.retry") })).toBeInTheDocument();
-    expect(screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+    ).not.toBeInTheDocument();
   });
 
   it("opens Task Detail with the containing sidebar mode", () => {
@@ -490,7 +497,11 @@ describe("ProjectTasksSurface", () => {
 
     const row = screen.getByRole("row", { name: "KNT-1 Selected task" });
     expect(row).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("task.dependenciesProgressAccessible", { completed: 2, total: 2 }) }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: appI18n.t("task.dependenciesProgressAccessible", { completed: 2, total: 2 }),
+      }),
+    );
     expect(fixture.open).toHaveBeenCalledWith({
       kind: "taskDetail",
       mode: "shift",
@@ -519,7 +530,9 @@ describe("ProjectTasksSurface", () => {
 
     expect(fixture.labelCatalogRequests).toBe(0);
     expect(fixture.assignmentRequests).toBe(0);
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("home.prototype.editTaskLabels", { shortID: "KNT-2" }) }));
+    fireEvent.click(
+      screen.getByRole("button", { name: appI18n.t("home.prototype.editTaskLabels", { shortID: "KNT-2" }) }),
+    );
     expect(fixture.open).not.toHaveBeenCalled();
     expect(detailRow).toHaveAttribute("aria-selected", "false");
     expect(labelsRow).toHaveAttribute("aria-selected", "true");

@@ -40,7 +40,7 @@ A Kent sandbox image should contain:
 - A `kent` binary compatible with the client version you use.
 - Mandatory server dependencies: shell, `rg` and `git`, for normal operation of the server.
 - A `config.toml` file with your setup.
-- Optional tools the agent may need: language toolchains, package managers, `rg`, `fd`, `jq`, `patch`, `curl`, `gh`, `wget`, `python` and project-specific CLIs. 
+- Optional tools the agent may need: language toolchains, package managers, `rg`, `fd`, `jq`, `patch`, `curl`, `gh`, `wget`, `python` and project-specific CLIs.
 - An (ideally persistent) workspace directory such as `/workspace`.
 - A writable Kent persistence root, usually under the sandbox user's home.
 - Network policy that matches the task; disable or restrict egress when needed.

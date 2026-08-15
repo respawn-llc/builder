@@ -41,9 +41,7 @@ export function setWorkflowEdgeSelector(
     : { ...edge, parameters, thinkingSelection: selection };
 }
 
-export function isProtectedWorkflowParameter(parameter: {
-  purpose: WorkflowParameterPurpose;
-}): boolean {
+export function isProtectedWorkflowParameter(parameter: { purpose: WorkflowParameterPurpose }): boolean {
   return parameter.purpose === "target_assignee" || parameter.purpose === "target_thinking";
 }
 
@@ -56,10 +54,14 @@ export function visibleWorkflowEdgeParameters(
 ): readonly DraftWorkflowEdge["parameters"][number][] {
   return edge.parameters.filter((parameter) => {
     if (parameter.purpose === "target_assignee") {
-      return edge.assigneeSelection === "previous_node" && protectedParameterVisibility.target_assignee !== false;
+      return (
+        edge.assigneeSelection === "previous_node" && protectedParameterVisibility.target_assignee !== false
+      );
     }
     if (parameter.purpose === "target_thinking") {
-      return edge.thinkingSelection === "previous_node" && protectedParameterVisibility.target_thinking !== false;
+      return (
+        edge.thinkingSelection === "previous_node" && protectedParameterVisibility.target_thinking !== false
+      );
     }
     return true;
   });

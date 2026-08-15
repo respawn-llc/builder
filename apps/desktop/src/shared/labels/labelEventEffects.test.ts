@@ -67,9 +67,7 @@ describe("Project label event effects", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const onBackgroundError = vi.fn();
     const effects = createEffects(queryClient, { onBackgroundError });
-    const invalidate = vi
-      .spyOn(queryClient, "invalidateQueries")
-      .mockRejectedValue(new CancelledError());
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockRejectedValue(new CancelledError());
 
     effects.scheduleCatalogRefresh();
 

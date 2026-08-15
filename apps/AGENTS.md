@@ -31,9 +31,9 @@ Boundary enforcement is fail-closed: every desktop TypeScript file and local dep
 
 ## Checks
 
-- From `apps/`, run `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, and relevant build scripts after GUI code changes.
-- `pnpm lint` enforces the architecture policy. `scripts/ci-check.sh all` runs the same workspace command, and pre-push delegates to that CI script.
-- Use browser-client QA as the primary manual GUI QA path. Run `pnpm --dir apps/desktop dev:browser` for interactive QA against an existing Kent server.
+- Run `just setup --apply` before GUI work, then use `just lint desktop`, `just test desktop`, `just build desktop`, or `just check desktop --dry-run`.
+- `just lint desktop` enforces the architecture and dependency policies.
+- Use browser-client QA as the primary manual GUI QA path. Run `just dev desktop` for interactive QA against an existing Kent server.
 - Tauri native builds require Rust toolchain plus platform-specific WebView/build dependencies.
 - Commit `apps/desktop/src-tauri/gen/schemas/*.json` when Tauri regenerates them; they are generated, but keeping them in the repo avoids dirty editor/schema state on clean clones.
 - Frontend dependency policy is enforced by `apps/dependency-policy.json` and `apps/scripts/check-dependency-policy.mjs`. New direct dependencies are blocked until they are added to the allowlist intentionally.

@@ -1,5 +1,5 @@
 ---
-import { Icon } from '@astrojs/starlight/components';
+import { Icon } from "@astrojs/starlight/components";
 ---
 
 <kent-theme-toggle>
@@ -14,7 +14,7 @@ import { Icon } from '@astrojs/starlight/components';
 </kent-theme-toggle>
 
 <script>
-  type Theme = 'light' | 'dark';
+  type Theme = "light" | "dark";
 
   interface KentThemeProvider extends StarlightThemeProvider {
     applyEffectiveTheme(): Theme;
@@ -25,26 +25,30 @@ import { Icon } from '@astrojs/starlight/components';
 
   const themeProvider = window.StarlightThemeProvider as KentThemeProvider;
 
-  const updateToggleUi = (root) => {
-    const button = root.querySelector('button');
+  const updateToggleUi = (root: Element) => {
+    const button = root.querySelector("button");
     if (!(button instanceof HTMLButtonElement)) {
       return;
     }
 
     const currentTheme = themeProvider.getEffectiveTheme();
-    const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    const nextTheme = currentTheme === "dark" ? "light" : "dark";
     button.dataset.currentTheme = currentTheme;
-    button.setAttribute('aria-label', `Switch to ${nextTheme} theme`);
+    button.setAttribute("aria-label", `Switch to ${nextTheme} theme`);
   };
 
   const updateAllToggleUis = () => {
-    document.querySelectorAll('kent-theme-toggle').forEach(updateToggleUi);
+    document.querySelectorAll("kent-theme-toggle").forEach(updateToggleUi);
   };
 
   class KentThemeToggle extends HTMLElement {
+    mediaQuery: MediaQueryList;
+    onSystemThemeChange: () => void;
+    onToggleClick: () => void;
+
     constructor() {
       super();
-      this.mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+      this.mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
       this.onSystemThemeChange = () => {
         if (themeProvider.getStoredTheme() === null) {
           themeProvider.applyEffectiveTheme();
@@ -58,29 +62,29 @@ import { Icon } from '@astrojs/starlight/components';
     }
 
     connectedCallback() {
-      const button = this.querySelector('button');
+      const button = this.querySelector("button");
       if (!(button instanceof HTMLButtonElement)) {
         return;
       }
 
       themeProvider.applyEffectiveTheme();
       updateAllToggleUis();
-      button.addEventListener('click', this.onToggleClick);
+      button.addEventListener("click", this.onToggleClick);
 
-      this.mediaQuery.addEventListener('change', this.onSystemThemeChange);
+      this.mediaQuery.addEventListener("change", this.onSystemThemeChange);
     }
 
     disconnectedCallback() {
-      const button = this.querySelector('button');
+      const button = this.querySelector("button");
       if (button instanceof HTMLButtonElement) {
-        button.removeEventListener('click', this.onToggleClick);
+        button.removeEventListener("click", this.onToggleClick);
       }
-      this.mediaQuery.removeEventListener('change', this.onSystemThemeChange);
+      this.mediaQuery.removeEventListener("change", this.onSystemThemeChange);
     }
   }
 
-  if (!customElements.get('kent-theme-toggle')) {
-    customElements.define('kent-theme-toggle', KentThemeToggle);
+  if (!customElements.get("kent-theme-toggle")) {
+    customElements.define("kent-theme-toggle", KentThemeToggle);
   }
 </script>
 
@@ -110,7 +114,11 @@ import { Icon } from '@astrojs/starlight/components';
     }
 
     .theme-toggle:hover {
-      background-color: color-mix(in srgb, var(--sl-color-accent) 12%, transparent);
+      background-color: color-mix(
+        in srgb,
+        var(--sl-color-accent) 12%,
+        transparent
+      );
       border-color: color-mix(in srgb, var(--sl-color-accent) 35%, transparent);
     }
 
@@ -125,8 +133,8 @@ import { Icon } from '@astrojs/starlight/components';
       line-height: 1;
     }
 
-    :global(html[data-theme='light']) .theme-toggle .icon-light,
-    :global(html[data-theme='dark']) .theme-toggle .icon-dark {
+    :global(html[data-theme="light"]) .theme-toggle .icon-light,
+    :global(html[data-theme="dark"]) .theme-toggle .icon-dark {
       display: inline-flex;
     }
   }

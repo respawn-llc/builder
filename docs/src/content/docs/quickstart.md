@@ -53,6 +53,7 @@ It uses 20 MB of RAM when idle, lets unlimited frontends stay lightweight by con
 The desktop app lets you use Kent's [Workflows and Tasks](../workflows/) feature to build agentic loops and deterministic pipelines to **fully automate** processes and scale to 10s or 100s of agents.
 
 ![Kent Desktop showing a project kanban board with tasks grouped by workflow stage](/desktop/desktop-kanban.webp)
+
 ### Manual Install
 
 Download the installer for macOS Apple Silicon, Linux x86_64, or Windows x64 at [kent.sh/desktop](https://kent.sh/desktop), or install the macOS app via Homebrew:
@@ -124,6 +125,7 @@ You can disable skills for new sessions in `config.toml`:
 [skills]
 creating-skills = false
 ```
+
 Changes take effect when a session starts or after compaction.
 
 Custom slash commands are server-owned and appear in the picker with 256-character previews. See [Slash commands](../slash-commands/) for discovery precedence, argument expansion, and unavailable-command behavior.

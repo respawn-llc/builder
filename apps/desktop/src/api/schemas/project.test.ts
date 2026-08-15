@@ -22,7 +22,9 @@ const project = {
 
 describe("projectSummarySchema", () => {
   it("propagates a null default Workflow identity", () => {
-    expect(projectSummarySchema.parse({ ...project, default_workflow_id: null }).defaultWorkflowID).toBeNull();
+    expect(
+      projectSummarySchema.parse({ ...project, default_workflow_id: null }).defaultWorkflowID,
+    ).toBeNull();
   });
 
   it("rejects a prefixed default Workflow identity", () => {

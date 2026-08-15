@@ -78,7 +78,10 @@ export function ValidationDetails({
     <DetailSection title={title ?? t("workflowEditor.validationErrors")}>
       <ul className="m-0 grid list-disc gap-[var(--space-1)] pl-[1.1rem] text-sm leading-snug">
         {errors.map((error, index) => (
-          <li className="pl-[2px] marker:text-[var(--color-error)]" key={workflowValidationErrorKey(error, index)}>
+          <li
+            className="pl-[2px] marker:text-[var(--color-error)]"
+            key={workflowValidationErrorKey(error, index)}
+          >
             <span>{error.message}</span>
             <WorkflowValidationErrorDetailsLine error={error} />
           </li>

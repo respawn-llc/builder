@@ -1,8 +1,9 @@
 ---
-import { resolveDocsConfig } from '../../scripts/site-config.mjs';
+import { resolveDocsConfig } from "../../scripts/site-config.mjs";
 
 const docsConfig = resolveDocsConfig();
-const docsTargetPath = `${docsConfig.basePath}${docsConfig.docsHomePath}` || docsConfig.docsHomePath;
+const docsTargetPath =
+  `${docsConfig.basePath}${docsConfig.docsHomePath}` || docsConfig.docsHomePath;
 const docsTargetUrl = docsConfig.getPublicUrl(docsConfig.docsHomePath);
 ---
 
@@ -16,7 +17,10 @@ const docsTargetUrl = docsConfig.getPublicUrl(docsConfig.docsHomePath);
     <title>Redirecting | Kent</title>
   </head>
   <body>
-    <script is:inline set:html={`window.location.replace(${JSON.stringify(docsTargetPath)});`} />
+    <script
+      is:inline
+      set:html={`window.location.replace(${JSON.stringify(docsTargetPath)});`}
+    />
     <p>
       Redirecting to <a href={docsTargetPath}>{docsTargetUrl}</a>.
     </p>

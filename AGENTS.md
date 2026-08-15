@@ -54,13 +54,13 @@ These should guide default architectural choices in addition to user preferences
 - GUI clients are thin remote-control surfaces over Kent server APIs/read models. The server remains authoritative for all access to data. Only server manages storage (accesses config, database, workspace or session files). Only server manages business logic. CLI interfaces talk to the existing server.
 
 ## Tooling
-Prefer using scripts provided in `./scripts/` over raw commands like `cargo build`, `go test`, unless you need something specific.
+Just is the sole public developer command interface. Do not add standalone developer scripts, package-manager scripts, or documented direct tool invocations that bypass it.
 
-- build.sh - Prefer to build executables. Bare `./scripts/build.sh` builds the Go server/CLI only. Pass `desktop` for frontend assets. Frozen Rust remains explicit-only via `tui`. Before handing off the task, build relevant targets **once** to verify correctness.
-- test.sh - runs affected cached tests by default. Use `./scripts/test.sh` during implementation; it selects changed Go packages plus reverse dependencies and affected desktop tests. Pass `server`, `desktop`, explicit Go packages, or `-run` for narrower checks. Use `./scripts/test.sh --full` **once before final handoff** for fresh repository-wide server and desktop verification. `--full` disables Go's test-result cache; never use it as an inner-loop command or rerun it after unchanged results. Rust is frozen and remains explicit-only via `./scripts/test.sh tui`.
-- dump-metadata-schema.sh - prints executable DDL for the latest effective metadata schema from an isolated migrated SQLite database.
-- ci-check.sh - run CI-like extensive check setup needed to open PRs.
-- install.sh/install.ps1 - production, user-facing installer scripts of the product. Not for development.
+- Install a current Just release, then run `just setup --apply` to prepare dependencies and Git hooks. Bare `just setup` is read-only.
+- `just build`, `just test`, `just lint`, and `just check` operate on active Go, desktop, and docs areas. Use their typed variants for narrower work.
+- Frozen Rust remains explicit-only through the `rust` variants.
+- `just dump metadata-schema` and `just dump model-request` own diagnostics.
+- `scripts/install.sh` and `scripts/install.ps1` are public product installers, not developer tooling.
 
 # Critical Rules - Authoritative Guidance Applicable Always and Everywhere.
 ---
@@ -94,20 +94,20 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 
 - `tui-rs/` and all Rust client, contract, fixture, manifest, and test code are dead and frozen.
 - Do not edit, regenerate, migrate, build, or test Rust code unless the User explicitly reactivates Rust work for the task.
-- Rust artifacts do not constrain Go server/API, Desktop, CLI, or protocol changes. Do not include `./scripts/test.sh tui` in non-Rust completion criteria.
+- Rust artifacts do not constrain Go server/API, Desktop, CLI, or protocol changes. Do not include `just check rust --dry-run` in non-Rust completion criteria.
 - Documents under `docs/dev/rust/` and `docs/dev/rust-tui-tests.md` are historical records and do not authorize Rust implementation.
 
 ## Coding Guidelines & Memories
 -- Tauri/native APIs must stay behind GUI-side bridge packages; do not import Tauri APIs directly from feature components.
-- Use browser-client QA as the primary manual GUI QA path. Run `pnpm --dir apps/desktop dev:browser` for interactive QA against an existing Kent server. QAing a native Mac app is tough.
+- Use browser-client QA as the primary manual GUI QA path. Run `just dev desktop` for interactive QA against an existing Kent server. QAing a native Mac app is tough.
 - Production API shape is dictated by product/domain seams, runtime contracts, and operator-visible behavior. Do not add or widen production APIs, exported hooks, global overrides, interfaces, or configuration only so tests can fake, mock, or inspect internals.
 - Tests must adapt to product shape. Prefer product-boundary tests, package-local tests, or harness-level verification when a unit test would require fake-only interfaces or test-only production hooks.
 - Tests must not inspect production source files, ASTs, type information, imports, symbol names, call sites, fields, filenames, or package layout to assert that code is present or absent. Enforce repository policy through dedicated linters or compiler boundaries, and test those tools against fixtures rather than scanning production source from a test. Verify product architecture through observable behavior and compiled contracts.
 - Delete or rewrite tests that only preserve implementation shape, fake call order, literal human-readable text, colors/styles, private route tables, file layout, or compatibility shims without a current product contract.
 - Use red/green TDD when developing new features.
 - Never write tests that assert literal prompt strings, log lines, colors, styles, or other textual/visual content. Such tests check the wording of an artifact rather than its behavior, break on every copy edit, and provide no signal — the prompt/log itself is the source of truth. Test behavior, parsing, structure, or invariants instead. (PTY terminal-contract exception: PTY tests may assert ANSI-derived cell styling and compare terminal content with shared product constants. They must not hardcode product copy/raw text or use text matching for synchronization, parsing, or control flow.)
-- Before handing off to the user after Go code changes, rebuild via `./scripts/build.sh --output ./bin/kent`.
-- Releases are driven by `VERSION`; keep Homebrew release plumbing in sync with `scripts/update-brew-tap.sh` and the tap formula. Tap formula lives in a separate repo.
+- Before handing off to the user after Go code changes, rebuild via `just build go`.
+- Releases are driven by `VERSION`; keep `just release brew` and the separate tap repository in sync.
 - Runtime activity is server live state only. Do not use session DB rows, transcript rows, goal status, `PendingModelRecovery`, or client-local booleans as active/idle authority.
 - Workflow Interrupt authority is exact live execution only. Clients may offer Interrupt from a stale read snapshot, but accepting it must revalidate an Exact Execution Scope that is actively executing an agent loop or Script process. If the selected Task or Session is already durably interrupted, the stale request may succeed as a no-op. Durable Run/current-Node rows, Automatic Intents, runtime gates, Session records, and waiting-Question scopes never authorize stopping execution. If persistence and live execution disagree, fail at the Workflow Execution owner; do not add store-derived or client-derived liveness fallbacks.
 - TUI ongoing mode (native scrollback) must not use `?1007`.

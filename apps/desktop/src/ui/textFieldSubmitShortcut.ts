@@ -16,14 +16,7 @@ type TextFieldSubmitKeyEvent = Readonly<{
 export function isTextFieldSubmitShortcut(
   event: Pick<
     TextFieldSubmitKeyEvent,
-    | "altKey"
-    | "ctrlKey"
-    | "isComposing"
-    | "key"
-    | "metaKey"
-    | "nativeEvent"
-    | "repeat"
-    | "shiftKey"
+    "altKey" | "ctrlKey" | "isComposing" | "key" | "metaKey" | "nativeEvent" | "repeat" | "shiftKey"
   >,
   policy: TextFieldSubmitShortcutPolicy,
 ): boolean {

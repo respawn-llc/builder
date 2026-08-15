@@ -13,7 +13,11 @@ import { Button, EmptyState, ErrorState, LoadingState, VirtualizedInfiniteList }
 const workflowLibraryItemMaxWidthClassName = "[&>*]:max-w-[1280px]";
 
 export function WorkflowLibraryRoute() {
-  return <SidebarRootOwner><WorkflowLibraryContent /></SidebarRootOwner>;
+  return (
+    <SidebarRootOwner>
+      <WorkflowLibraryContent />
+    </SidebarRootOwner>
+  );
 }
 
 function WorkflowLibraryContent() {

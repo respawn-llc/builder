@@ -26,13 +26,13 @@ Use [command post-processing](../command-postprocessing/) instead to transform `
 
 Kent sends these categories to the configured command:
 
-| `category` | `hook_event_name` | `details` |
-| --- | --- | --- |
-| `session.start` | `SessionStart` | `kind` is `new` or `resumed`. |
-| `task.complete` | `Stop` | `final_answer` and `work_performed` describe the completed run. |
-| `task.error` | `PostToolUseFailure` | `diagnostic` describes the runtime failure. |
-| `input.required` | `PermissionRequest` | `kind` is `question` or `approval`; `summary` contains the prompt. |
-| `resource.limit` | `PreCompact` | `compaction_mode` identifies the compaction mode that started. |
+| `category`       | `hook_event_name`    | `details`                                                          |
+| ---------------- | -------------------- | ------------------------------------------------------------------ |
+| `session.start`  | `SessionStart`       | `kind` is `new` or `resumed`.                                      |
+| `task.complete`  | `Stop`               | `final_answer` and `work_performed` describe the completed run.    |
+| `task.error`     | `PostToolUseFailure` | `diagnostic` describes the runtime failure.                        |
+| `input.required` | `PermissionRequest`  | `kind` is `question` or `approval`; `summary` contains the prompt. |
+| `resource.limit` | `PreCompact`         | `compaction_mode` identifies the compaction mode that started.     |
 
 `category` is the canonical event name. `hook_event_name` is an OpenPeon-compatible alias.
 

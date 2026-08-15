@@ -10,433 +10,120 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
+  check:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.0
         with:
           persist-credentials: false
-
-      - name: Setup Go
-        uses: actions/setup-go@v6.5.0
+      - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          components: clippy,rustfmt
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2.9.1
-        with:
-          workspaces: tui-rs
-
-      - name: Run Rust lints
-        working-directory: tui-rs
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-      - name: Verify formatting
-        run: ./scripts/ci-check.sh format
-
-      - name: Run vet
-        run: ./scripts/ci-check.sh vet
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup Go
-        uses: actions/setup-go@v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.9
+      - uses: pnpm/action-setup@v6.0.9
         with:
           version: 11.11.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6.4.0
+      - uses: actions/setup-node@v6.4.0
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          components: clippy,rustfmt
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2.9.1
-        with:
-          workspaces: tui-rs
-
-      - name: Build
-        run: ./scripts/ci-check.sh build
-
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup Go
-        uses: actions/setup-go@v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.9
-        with:
-          version: 11.11.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          components: clippy,rustfmt
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2.9.1
-        with:
-          workspaces: tui-rs
-
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
-
-      - name: Test
-        env:
-          KENT_TEST_DISABLE_WALL_CLOCK_CAP: "1"
-        run: ./scripts/ci-check.sh test
-
-  windows-installer:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup Go
-        uses: actions/setup-go@v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Build mocked Windows release assets
-        env:
-          VERSION: 0.0.0
-        run: |
-          mkdir -p dist staging
-          : > dist/checksums.txt
-          for goarch in amd64 arm64; do
-            asset="kent_${VERSION}_windows_${goarch}"
-            GOOS=windows GOARCH="$goarch" KENT_VERSION="$VERSION" \
-              bash scripts/build.sh server --output "staging/${asset}.exe"
-            powershell -NoProfile -Command "Compress-Archive -LiteralPath 'staging/${asset}.exe' -DestinationPath 'dist/${asset}.zip' -Force"
-            checksum=$(powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/${asset}.zip').Hash.ToLowerInvariant()")
-            printf '%s  %s\n' "$checksum" "${asset}.zip" >> dist/checksums.txt
-          done
-
-      - name: Smoke test installer
-        env:
-          VERSION: 0.0.0
-        run: bash scripts/release-artifacts.sh smoke-windows-installer --version "$VERSION" --goarch amd64 --dist-dir dist
-
-      - name: Smoke test installer restores stopped service after failure
-        env:
-          VERSION: 0.0.0
-        run: |
-          cat > fake-kent.go <<'GO'
-          package main
-          import (
-            "fmt"
-            "os"
-            "strings"
-          )
-          func mark(value string) {
-            path := os.Getenv("KENT_FAKE_MARKER")
-            if path == "" { return }
-            f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-            if err == nil { _, _ = f.WriteString(value + "\n"); _ = f.Close() }
-          }
-          func main() {
-            args := os.Args[1:]
-            if len(args) == 1 && args[0] == "--version" { fmt.Println(os.Getenv("KENT_FAKE_VERSION")); return }
-            if len(args) >= 2 && args[0] == "service" && args[1] == "status" {
-              exe, _ := os.Executable()
-              fmt.Printf(`{"installed":true,"loaded":true,"running":true,"command":[%q],"endpoint":"","logs":[]}`+"\n", exe)
-              return
-            }
-            if len(args) >= 2 && args[0] == "service" && args[1] == "stop" { mark("stopped"); return }
-            if len(args) >= 3 && strings.Join(args[:3], " ") == "service restart --if-installed" { mark("restarted"); return }
-            fmt.Fprintf(os.Stderr, "unexpected args: %v\n", args)
-            os.Exit(1)
-          }
-          GO
-          mkdir -p "recovery-release/v${VERSION}" "recovery-install" "recovery-staging"
-          GOOS=windows GOARCH=amd64 go build -o recovery-install/kent.exe fake-kent.go
-          cp recovery-install/kent.exe "recovery-staging/kent_${VERSION}_windows_amd64.exe"
-          powershell -NoProfile -Command "Compress-Archive -LiteralPath 'recovery-staging/kent_${VERSION}_windows_amd64.exe' -DestinationPath 'recovery-release/v${VERSION}/kent_${VERSION}_windows_amd64.zip' -Force"
-          checksum=$(powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath 'recovery-release/v${VERSION}/kent_${VERSION}_windows_amd64.zip').Hash.ToLowerInvariant()")
-          printf '%s  %s\n' "$checksum" "kent_${VERSION}_windows_amd64.zip" > "recovery-release/v${VERSION}/checksums.txt"
-          release_base="$(cygpath -w "$PWD/recovery-release")"
-          install_dir="$(cygpath -w "$PWD/recovery-install")"
-          marker_path="$PWD/recovery-marker.txt"
-          marker_win="$(cygpath -w "$marker_path")"
-          if KENT_RELEASE_BASE="$release_base" KENT_FAKE_MARKER="$marker_win" KENT_FAKE_VERSION="wrong" \
-            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 \
-              -Version "$VERSION" -InstallDir "$install_dir" -Yes -NoPath -NoDeps; then
-            echo "installer unexpectedly succeeded" >&2
-            exit 1
-          fi
-          grep -q '^stopped$' "$marker_path"
-          grep -q '^restarted$' "$marker_path"
-
-  docs:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.9
-        with:
-          version: 11.11.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: docs/pnpm-lock.yaml
-
-      - name: Install docs dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Test docs
-        run: pnpm test
-
-      - name: Build docs
-        run: pnpm build
-
-  gui:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup Go
-        uses: actions/setup-go@v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.9
-        with:
-          version: 11.11.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Check GUI dependency policy
-        run: node scripts/check-dependency-policy.mjs
-
-      - name: Install GUI dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint GUI
-        run: pnpm lint
-
-      - name: Typecheck GUI
-        run: pnpm typecheck
-
-      - name: Test GUI
-        run: pnpm test
-
-      - name: Build GUI web assets
-        run: pnpm build
-
-  gui-native:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup Go
-        uses: actions/setup-go@v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.95.0
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2.9.1
+          cache-dependency-path: |
+            apps/pnpm-lock.yaml
+            docs/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: apps/desktop/src-tauri
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.9
-        with:
-          version: 11.11.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Install GUI dependencies
-        run: pnpm --dir apps install --frozen-lockfile
-
-      - name: Build macOS desktop bundle
-        run: bash scripts/build-desktop.sh --skip-install -- --bundles dmg
-
-      - name: Smoke test macOS desktop bundle
-        run: |
-          shopt -s nullglob
-          dmgs=(apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg)
-          if [[ "${#dmgs[@]}" -ne 1 ]]; then
-            echo "Expected exactly one macOS DMG, found ${#dmgs[@]}." >&2
-            exit 1
-          fi
-
-          mount_dir="$RUNNER_TEMP/kent-desktop-dmg"
-          mkdir -p "$mount_dir"
-          printf 'Y\n' | hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir"
-          trap 'hdiutil detach "$mount_dir"' EXIT
-
-          app="$mount_dir/Kent.app"
-          executable="$app/Contents/MacOS/kent-desktop"
-          minimum_system_version="$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")"
-          if [[ "$minimum_system_version" != "15.0" ]]; then
-            echo "Expected LSMinimumSystemVersion 15.0, got ${minimum_system_version}." >&2
-            exit 1
-          fi
-          lipo "$executable" -verify_arch arm64
-
-          "$executable" >"$RUNNER_TEMP/kent-desktop.log" 2>&1 &
-          app_pid=$!
-          sleep 10
-          if ! kill -0 "$app_pid"; then
-            set +e
-            wait "$app_pid"
-            app_status=$?
-            set -e
-            cat "$RUNNER_TEMP/kent-desktop.log" >&2
-            exit "$app_status"
-          fi
-          kill -TERM "$app_pid"
-          wait "$app_pid" || true
-
-      - name: Upload macOS desktop bundle
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: desktop-bundle-macos-arm64
-          path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
-          if-no-files-found: error
-
-  desktop_bundle:
-    # Catch desktop packaging breakage (bundling, AppImage/deb generation, updater
-    # artifact signing) on PRs — gui-native only cargo-checks the Rust shell. Linux
-    # only: it is the cheap runner and the most common packaging break; the macOS
-    # .dmg/glass-icon path is validated by the release job + first-bundle manual QA.
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup Go
-        uses: actions/setup-go@v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Install Linux bundling dependencies
+      - uses: extractions/setup-just@v3
+      - name: Install Linux desktop prerequisites
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
             patchelf libfuse2 file build-essential
+      - name: Prepare repository dependencies
+        run: just install _dependencies
+      - name: Run the full active suite
+        run: just check default --dry-run
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.95.0
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2.9.1
+  frozen-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
         with:
-          workspaces: apps/desktop/src-tauri
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: tui-rs
+      - uses: extractions/setup-just@v3
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Run the explicit frozen Rust suite
+        run: just check rust --dry-run
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.9
+  portable-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: pnpm/action-setup@v6.0.9
         with:
           version: 11.11.0
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: extractions/setup-just@v3
+      - run: just setup
+      - run: just install _docs-dependencies
+      - run: just build go
+      - run: just test tui
+      - run: just lint docs --dry-run
+      - run: just build docs
+      - name: Build installer fixtures
+        run: just release _cli-build --version 0.0.0 --dist-dir dist
+      - name: Smoke test Windows installer
+        run: just release _windows-installer-smoke --version 0.0.0 --goarch amd64 --dist-dir dist
 
-      - name: Setup Node
-        uses: actions/setup-node@v6.4.0
+  native-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: pnpm/action-setup@v6.0.9
+        with:
+          version: 11.11.0
+      - uses: actions/setup-node@v6.4.0
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Install GUI dependencies
-        run: pnpm --dir apps install --frozen-lockfile
-
-      # build-desktop.sh signs updater artifacts (createUpdaterArtifacts is on). PRs
-      # (incl. forks) have no secret, so mint a throwaway key and pass it by content.
-      # The signer runs under pnpm --dir apps/desktop, so the key path must be
-      # absolute ($RUNNER_TEMP); the signed debug artifacts are discarded.
-      - name: Build desktop bundle (unsigned, debug)
-        run: |
-          pnpm --dir apps/desktop exec tauri signer generate -f -w "$RUNNER_TEMP/ci-updater.key" -p ""
-          TAURI_SIGNING_PRIVATE_KEY="$(cat "$RUNNER_TEMP/ci-updater.key")"
-          export TAURI_SIGNING_PRIVATE_KEY
-          export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
-          bash scripts/build-desktop.sh --skip-install -- --debug
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: apps/desktop/src-tauri
+      - uses: extractions/setup-just@v3
+      - run: just install _apps-dependencies
+      - run: just build desktop -- --bundles dmg
+      - run: just build _desktop-smoke-macos --bundle-dir apps/desktop/src-tauri/target/release/bundle/dmg
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: desktop-bundle-macos-arm64
+          path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error

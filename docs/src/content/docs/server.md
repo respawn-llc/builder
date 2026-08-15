@@ -8,6 +8,7 @@ Kent runs all its work through a local server process. Frontends are clients: TU
 The server owns all long-running work: sessions, projects, runtime orchestration, background shells, tool execution, tasks, workflows, and storage.
 
 While annoying at times, this:
+
 - Gives ability to fully isolate work on another machine, VM, or container. See [Sandboxing](../sandboxing/) for remote/container setup.
 - Drastically reduces resource consumption
 - Allows agents to work asynchronously during workflows.
@@ -30,6 +31,7 @@ kent service uninstall
 All service commands accept `--persistence-root` and honor `KENT_PERSISTENCE_ROOT`. The root you install with is remembered, so pass the same root on `status`/`start`/`stop`/`restart`/`uninstall` to target that instance.
 
 ### Service recovery
+
 On Linux, status `2` suppresses automatic crash recovery for the active service-manager activation, while other exits continue restoration; macOS retains restoration after every server exit.
 On Windows, an observed numeric status `2` stops the service cleanly without recovery, and every other observed numeric status continues restoration; an unexpected service-host failure retains recovery.
 If Windows cannot confirm termination, the service retains ownership and neither reports `Stopped` nor launches a replacement.
@@ -38,12 +40,11 @@ A human start or restart, or `kent service install` without `--no-start`, begins
 
 ## Backends
 
-| OS | Service |
-| --- | --- |
-| macOS | LaunchAgent |
+| OS           | Service          |
+| ------------ | ---------------- |
+| macOS        | LaunchAgent      |
 | Linux / WSL2 | `systemd --user` |
-| Windows | Windows Service |
-
+| Windows      | Windows Service  |
 
 - On windows, `uninstall --keep-running` is not supported; the server is bound to the service and stops with it.
 - Linux headless machines may need lingering enabled so the server survives logout `loginctl enable-linger "$USER"`.

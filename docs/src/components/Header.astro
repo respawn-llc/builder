@@ -1,14 +1,14 @@
 ---
-import config from 'virtual:starlight/user-config';
+import config from "virtual:starlight/user-config";
 
-import Search from 'virtual:starlight/components/Search';
-import SiteTitle from 'virtual:starlight/components/SiteTitle';
-import SocialIcons from 'virtual:starlight/components/SocialIcons';
-import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
+import Search from "virtual:starlight/components/Search";
+import SiteTitle from "virtual:starlight/components/SiteTitle";
+import SocialIcons from "virtual:starlight/components/SocialIcons";
+import ThemeSelect from "virtual:starlight/components/ThemeSelect";
 
 const shouldRenderSearch =
   config.pagefind ||
-  config.components.Search !== '@astrojs/starlight/components/Search.astro';
+  config.components.Search !== "@astrojs/starlight/components/Search.astro";
 ---
 
 <div class="header-shell">
@@ -16,11 +16,13 @@ const shouldRenderSearch =
     <SiteTitle />
   </div>
 
-  {shouldRenderSearch && (
-    <div class="sl-flex print:hidden search-wrapper">
-      <Search />
-    </div>
-  )}
+  {
+    shouldRenderSearch && (
+      <div class="sl-flex print:hidden search-wrapper">
+        <Search />
+      </div>
+    )
+  }
 
   <div class="sl-hidden md:sl-flex print:hidden right-group">
     <span class="copyright" aria-label="Copyright">2026 Respawn OSS</span>
@@ -33,11 +35,11 @@ const shouldRenderSearch =
 
 <script>
   const root = document.documentElement;
-  const hiddenState = 'hidden';
-  const shownState = 'shown';
+  const hiddenState = "hidden";
+  const shownState = "shown";
   let lastScrollY = window.scrollY;
 
-  const applyHeaderState = (nextState) => {
+  const applyHeaderState = (nextState: "hidden" | "shown") => {
     root.dataset.headerState = nextState;
   };
 
@@ -58,7 +60,7 @@ const shouldRenderSearch =
     lastScrollY = currentScrollY;
   };
 
-  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener("scroll", onScroll, { passive: true });
 </script>
 
 <style>
@@ -108,14 +110,17 @@ const shouldRenderSearch =
       will-change: transform;
     }
 
-    :global(:root[data-header-state='hidden'] header.header) {
+    :global(:root[data-header-state="hidden"] header.header) {
       transform: translateY(calc(-1 * var(--sl-nav-height) - 1px));
       box-shadow: none;
     }
 
     @media (min-width: 50rem) {
       .header-shell {
-        grid-template-columns: minmax(max-content, 1fr) minmax(0, 25rem) minmax(max-content, 1fr);
+        grid-template-columns: minmax(max-content, 1fr) minmax(0, 25rem) minmax(
+            max-content,
+            1fr
+          );
       }
 
       .title-wrapper {
