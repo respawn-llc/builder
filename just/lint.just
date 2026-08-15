@@ -18,6 +18,7 @@ server mode="":
         echo "Usage: just lint server [--dry-run]" >&2
         exit 2
     fi
+    just _lint-protobuf
     go run ./cmd/architectureguard .
     go vet ./...
 

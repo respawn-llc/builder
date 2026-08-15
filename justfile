@@ -39,7 +39,7 @@ setup *args: _node
 
 # Regenerate protobuf-derived Go and TypeScript sources.
 gen: _node
-    go run github.com/bufbuild/buf/cmd/buf@v1.72.0 lint
+    just _lint-protobuf
     just _gen-go
     just _gen-typescript
 
@@ -86,6 +86,10 @@ _area-command *args:
     else
         just "$command_name" "$target"
     fi
+
+[private]
+_lint-protobuf:
+    GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 lint
 
 [private]
 _gen-go:
