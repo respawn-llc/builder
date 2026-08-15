@@ -36,7 +36,7 @@ export function projectTasksPresentation(input: ProjectTaskPresentationInput): R
   taskCount: number | null;
 }> {
   if (input.groupCounts === undefined) {
-    return { entries: [projectTaskColumnEntry(input.t, undefined)], taskCount: null };
+    return { entries: [projectTaskColumnEntry(input.t)], taskCount: null };
   }
   const { counts, definitions } = input.groupCounts;
   return {
