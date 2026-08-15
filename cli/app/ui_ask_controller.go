@@ -316,7 +316,8 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (c uiAskController) handleCtrlC() (tea.Model, tea.Cmd) {
 	m := c.model
 	if m.ask.activeDelivery != nil &&
-		m.ask.activeDelivery.continuation == promptAnswerDeliveryContinuationRuntimeCtrlC {
+		m.ask.activeDelivery.continuation != nil &&
+		*m.ask.activeDelivery.continuation == promptAnswerDeliveryContinuationRuntimeCtrlC {
 		return m, nil
 	}
 	c.cancelActiveDelivery()
@@ -324,7 +325,8 @@ func (c uiAskController) handleCtrlC() (tea.Model, tea.Cmd) {
 	accepted, hasNext, answerCmd := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
 	runtimeCtrlCCmd := tea.Cmd(nil)
 	if m.ask.activeDelivery != nil {
-		m.ask.activeDelivery.continuation = promptAnswerDeliveryContinuationRuntimeCtrlC
+		continuation := promptAnswerDeliveryContinuationRuntimeCtrlC
+		m.ask.activeDelivery.continuation = &continuation
 	} else if accepted && (m.ask.currentToken != currentToken || !m.ask.hasCurrent()) && m.blocksRuntimeInput() {
 		_, runtimeCtrlCCmd = m.inputController().handleRuntimeCtrlC(nil)
 	}
@@ -517,18 +519,19 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 }
 
 func promptAnswerDeliveryContinuationCmd(delivery *activePromptAnswerDelivery) tea.Cmd {
-	if delivery == nil {
+	if delivery == nil || delivery.continuation == nil {
 		return nil
 	}
-	switch delivery.continuation {
-	case promptAnswerDeliveryContinuationNone:
-		return nil
+	switch *delivery.continuation {
 	case promptAnswerDeliveryContinuationRuntimeCtrlC:
-		key := delivery.key
-		return func() tea.Msg { return promptCtrlCContinuationMsg{key: key} }
+		return promptCtrlCContinuationCmd(delivery.key)
 	default:
-		panic(fmt.Sprintf("unknown prompt answer delivery continuation %d", delivery.continuation))
+		panic(fmt.Sprintf("unknown prompt answer delivery continuation %d", *delivery.continuation))
 	}
+}
+
+func promptCtrlCContinuationCmd(key transcriptPromptKey) tea.Cmd {
+	return func() tea.Msg { return promptCtrlCContinuationMsg{key: key} }
 }
 
 func askVisibleOptions(req clientui.TranscriptPrompt) []string {

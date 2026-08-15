@@ -34,15 +34,14 @@ type transcriptPromptKey struct {
 type promptAnswerDeliveryContinuation uint8
 
 const (
-	promptAnswerDeliveryContinuationNone promptAnswerDeliveryContinuation = iota
-	promptAnswerDeliveryContinuationRuntimeCtrlC
+	promptAnswerDeliveryContinuationRuntimeCtrlC promptAnswerDeliveryContinuation = iota + 1
 )
 
 type activePromptAnswerDelivery struct {
 	key          transcriptPromptKey
 	generation   uint64
 	cancel       context.CancelFunc
-	continuation promptAnswerDeliveryContinuation
+	continuation *promptAnswerDeliveryContinuation
 }
 
 type promptAnswerDeliveryResultMsg struct {

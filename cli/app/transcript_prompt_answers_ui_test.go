@@ -517,12 +517,14 @@ func TestPromptCtrlCContinuationCancelsSameStepSuccessorBeforeRuntimeInterrupt(t
 	next, successorCommand := model.Update(askEventMsg{event: model.transcriptPromptEvent(successor)})
 	model = next.(*uiModel)
 	var successorContinuation promptCtrlCContinuationMsg
+	foundSuccessorContinuation := false
 	for _, message := range collectCmdMessages(t, successorCommand) {
 		if candidate, ok := message.(promptCtrlCContinuationMsg); ok {
 			successorContinuation = candidate
+			foundSuccessorContinuation = true
 		}
 	}
-	if successorContinuation.key.promptID == "" {
+	if !foundSuccessorContinuation {
 		t.Fatal("same-Step successor did not release the pending Ctrl+C continuation")
 	}
 	next, successorCancellation := model.Update(successorContinuation)
@@ -560,6 +562,58 @@ func TestPromptCtrlCContinuationCancelsSameStepSuccessorBeforeRuntimeInterrupt(t
 		if request.Entries[0].Declined == nil {
 			t.Fatalf("prompt cancellation %d = %+v, want declined", index, request)
 		}
+	}
+}
+
+func TestPromptCtrlCContinuationCancelsSuccessorInstalledByHydration(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	control := newRecordingPromptControl()
+	runtimeClient := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(runtimeClient)
+	model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
+	model.sessionID = ongoingTestSessionID().String()
+	awaitingPrompt := runtimeTupleTestRunningActivity()
+	awaitingPrompt.State = clientui.RuntimeActivityAwaitingPrompt
+	if err := model.applyRuntimeActivityProjection(awaitingPrompt); err != nil {
+		t.Fatalf("apply awaiting-prompt runtime activity: %v", err)
+	}
+	originKey := transcriptPromptKey{
+		sessionID: ongoingTestSessionID(),
+		stepID:    ongoingTestStepID(),
+		promptID:  "ask-hydration-origin",
+	}
+	model = updateUIModel(t, model, promptCtrlCContinuationMsg{key: originKey})
+
+	hydrationMessage := runtimeTupleTestHydration(2, awaitingPrompt)
+	hydration := hydrationMessage.Payload().(clientui.TranscriptHydration)
+	successor := testQuestionPrompt("ask-hydration-successor", "Anything else?", "Yes", "No")
+	hydration.PendingPrompts = []clientui.TranscriptPrompt{successor}
+	hydrationMessage = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydration))
+	command := model.applyAdmittedTranscriptMessageState(hydrationMessage, runtimeTupleMergeResult{
+		decision: runtimeTupleApply,
+		project:  true,
+		view:     clientui.RuntimeMainView{Activity: awaitingPrompt},
+	})
+
+	var successorContinuation promptCtrlCContinuationMsg
+	foundSuccessorContinuation := false
+	for _, message := range collectCmdMessages(t, command) {
+		if candidate, ok := message.(promptCtrlCContinuationMsg); ok {
+			successorContinuation = candidate
+			foundSuccessorContinuation = true
+		}
+	}
+	if !foundSuccessorContinuation {
+		t.Fatal("hydrated same-Step successor did not release the pending Ctrl+C continuation")
+	}
+	next, successorCancellation := model.Update(successorContinuation)
+	model = next.(*uiModel)
+	if successorCancellation == nil {
+		t.Fatal("pending Ctrl+C continuation did not cancel the hydrated successor")
+	}
+	result := successorCancellation().(promptAnswerDeliveryResultMsg)
+	if result.key.promptID != successor.PromptID {
+		t.Fatalf("canceled prompt = %q, want hydrated successor %q", result.key.promptID, successor.PromptID)
 	}
 }
 

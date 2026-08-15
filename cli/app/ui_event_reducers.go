@@ -127,7 +127,7 @@ func (m *uiModel) releasePendingPromptCtrlCContinuation() tea.Cmd {
 		return nil
 	case promptCtrlCContinuationCancelPrompt, promptCtrlCContinuationRoute:
 		m.ask.pendingCtrlCContinuation = nil
-		return func() tea.Msg { return promptCtrlCContinuationMsg{key: key} }
+		return promptCtrlCContinuationCmd(key)
 	default:
 		panic("unknown prompt Ctrl+C continuation disposition")
 	}

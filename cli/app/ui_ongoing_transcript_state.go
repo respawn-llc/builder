@@ -107,6 +107,7 @@ func (m *uiModel) applyTranscriptHydration(
 
 	m.reconcileTranscriptQueuedMessages(hydration.QueuedMessages)
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
+	cmds = append(cmds, m.releasePendingPromptCtrlCContinuation())
 	currentSessionID := strings.TrimSpace(m.sessionID)
 	preserved := m.processList.entries[:0]
 	for _, entry := range m.processList.entries {
