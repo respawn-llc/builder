@@ -50,6 +50,7 @@ import {
   useProjectTaskListWidth,
   type ProjectTaskColumnLayout,
 } from "./projectTaskColumnLayout";
+import { ProjectTaskColumnMeasurements } from "./ProjectTaskColumnMeasurements";
 import { projectTasksPresentation } from "./projectTaskListPresentation";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
 import { projectTaskColumnCount, type ProjectTaskListEntry } from "./ProjectTaskRow";
@@ -122,7 +123,7 @@ export function ProjectTasksSurface({
     onAppliedError: reportResumeError,
   });
   const resumeAction = useTaskResumeAction(initiatingAction);
-  const columnLayout = useProjectTaskColumnLayout(data);
+  const { layout: columnLayout, retainRenderedWidths } = useProjectTaskColumnLayout(data);
   useProjectTaskListEvents({ enabled: true, projectID });
   const workflowsInitialState = projectTaskWorkflowInitialState(
     workflowsQuery.data !== undefined,
@@ -282,6 +283,7 @@ export function ProjectTasksSurface({
 
   return (
     <>
+      <ProjectTaskColumnMeasurements data={data} onMeasure={retainRenderedWidths} />
       <ProjectTasksContent
         countsBoundary={countsBoundary}
         columnLayout={columnLayout}

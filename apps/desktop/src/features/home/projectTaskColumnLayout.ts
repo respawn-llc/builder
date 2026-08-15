@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 
 import { projectTaskGroups, type ProjectTaskListData } from "./projectTaskListData";
 
@@ -6,7 +6,17 @@ export type ProjectTaskColumnLayout = Readonly<{
   dependenciesPx: number;
   idCharacters: number;
   labelsPx: number;
-  workflowCharacters: number;
+  workflowPx: number;
+}>;
+
+export type ProjectTaskRenderedColumnWidths = Readonly<{
+  labelsPx: number;
+  workflowPx: number;
+}>;
+
+type ProjectTaskStructuralColumnWidths = Readonly<{
+  dependenciesPx: number;
+  idCharacters: number;
 }>;
 
 type ProjectTaskVisibleColumns = Readonly<{
@@ -20,43 +30,56 @@ const initialProjectTaskColumnLayout: ProjectTaskColumnLayout = {
   dependenciesPx: 18,
   idCharacters: 2,
   labelsPx: 48,
-  workflowCharacters: 8,
+  workflowPx: 64,
 };
 
-export function useProjectTaskColumnLayout(data: ProjectTaskListData): ProjectTaskColumnLayout {
+export function useProjectTaskColumnLayout(data: ProjectTaskListData): Readonly<{
+  layout: ProjectTaskColumnLayout;
+  retainRenderedWidths: (widths: ProjectTaskRenderedColumnWidths) => void;
+}> {
   const measured = measureProjectTaskColumns(data);
   const [layout, setLayout] = useState(initialProjectTaskColumnLayout);
+  const retainRenderedWidths = useCallback((widths: ProjectTaskRenderedColumnWidths) => {
+    setLayout((current) => {
+      const expanded = {
+        ...current,
+        labelsPx: Math.max(current.labelsPx, widths.labelsPx),
+        workflowPx: Math.max(current.workflowPx, widths.workflowPx),
+      };
+      return projectTaskColumnLayoutsEqual(current, expanded) ? current : expanded;
+    });
+  }, []);
   const expanded = expandProjectTaskColumnLayout(layout, measured);
   if (!projectTaskColumnLayoutsEqual(layout, expanded)) {
     setLayout(expanded);
-    return expanded;
+    return { layout: expanded, retainRenderedWidths };
   }
-  return layout;
+  return { layout, retainRenderedWidths };
 }
 
 function expandProjectTaskColumnLayout(
   current: ProjectTaskColumnLayout,
-  measured: ProjectTaskColumnLayout,
+  measured: ProjectTaskStructuralColumnWidths,
 ): ProjectTaskColumnLayout {
   return {
+    ...current,
     dependenciesPx: Math.max(current.dependenciesPx, measured.dependenciesPx),
     idCharacters: Math.max(current.idCharacters, measured.idCharacters),
-    labelsPx: Math.max(current.labelsPx, measured.labelsPx),
-    workflowCharacters: Math.max(current.workflowCharacters, measured.workflowCharacters),
   };
 }
 
-function measureProjectTaskColumns(data: ProjectTaskListData): ProjectTaskColumnLayout {
+function measureProjectTaskColumns(data: ProjectTaskListData): ProjectTaskStructuralColumnWidths {
   return projectTaskGroups
     .flatMap((group) => data[group].tasks)
-    .reduce<ProjectTaskColumnLayout>(
+    .reduce<ProjectTaskStructuralColumnWidths>(
       (layout, task) => ({
         dependenciesPx: Math.max(layout.dependenciesPx, dependencyChipWidthPx(task.dependencyProgress)),
         idCharacters: Math.max(layout.idCharacters, Math.min(18, task.shortID.length)),
-        labelsPx: Math.max(layout.labelsPx, taskLabelsWidthPx(task.labels.map((label) => label.name))),
-        workflowCharacters: Math.max(layout.workflowCharacters, Math.min(24, task.workflowName?.length ?? 0)),
       }),
-      initialProjectTaskColumnLayout,
+      {
+        dependenciesPx: initialProjectTaskColumnLayout.dependenciesPx,
+        idCharacters: initialProjectTaskColumnLayout.idCharacters,
+      },
     );
 }
 
@@ -70,14 +93,6 @@ function dependencyChipWidthPx(
   return Math.min(76, 29 + textLength * 7);
 }
 
-function taskLabelsWidthPx(names: readonly string[]): number {
-  if (names.length === 0) {
-    return initialProjectTaskColumnLayout.labelsPx;
-  }
-  const contentWidth = names.reduce((width, name) => width + 14 + name.length * 7, 0);
-  return Math.min(320, contentWidth + Math.max(0, names.length - 1) * 4);
-}
-
 function projectTaskColumnLayoutsEqual(
   left: ProjectTaskColumnLayout,
   right: ProjectTaskColumnLayout,
@@ -86,7 +101,7 @@ function projectTaskColumnLayoutsEqual(
     left.dependenciesPx === right.dependenciesPx &&
     left.idCharacters === right.idCharacters &&
     left.labelsPx === right.labelsPx &&
-    left.workflowCharacters === right.workflowCharacters
+    left.workflowPx === right.workflowPx
   );
 }
 
@@ -105,7 +120,7 @@ export function projectTaskColumnStyle(
     visible.title ? "minmax(7ch, 1fr)" : null,
     visible.dependencies ? `${layout.dependenciesPx.toString()}px` : null,
     visible.labelsPx === null ? null : `${visible.labelsPx.toString()}px`,
-    visible.workflow ? `${layout.workflowCharacters.toString()}ch` : null,
+    visible.workflow ? `${layout.workflowPx.toString()}px` : null,
   ].filter((column): column is string => column !== null);
   return {
     "--project-task-grid-columns": columns.join(" "),
@@ -134,11 +149,7 @@ export function resolveProjectTaskVisibleColumns(
     optionalWidths.reduce((total, columnWidth) => total + columnWidth, 0) +
     gapPx * (2 + optionalWidths.length);
 
-  const optionalWidths = [
-    layout.dependenciesPx,
-    layout.labelsPx,
-    layout.workflowCharacters * characterWidthPx,
-  ];
+  const optionalWidths = [layout.dependenciesPx, layout.labelsPx, layout.workflowPx];
   const workflow = requiredWidth(optionalWidths) <= widthPx;
   const labelsAvailablePx = widthPx - requiredWidth([layout.dependenciesPx, 0]);
   let labelsPx: number | null = null;

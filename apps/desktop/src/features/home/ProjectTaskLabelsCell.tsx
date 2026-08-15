@@ -9,7 +9,18 @@ import {
   TaskLabelAssignmentProvider,
   useTaskLabelAssignment,
 } from "@/shared/labels";
-import { Badge, OneLineOverflowRow, Spinner } from "@/ui";
+import { Badge, OneLineOverflowRow, Spinner, type OneLineOverflowItem } from "@/ui";
+
+export function projectTaskLabelItems(labels: TaskListItem["labels"]): readonly OneLineOverflowItem[] {
+  return labels.map((label) => ({
+    content: (
+      <Badge className="py-[3px]" size="compact" tone="neutral">
+        {label.name}
+      </Badge>
+    ),
+    id: label.id,
+  }));
+}
 
 export function ProjectTaskLabelsCell({
   onOpenChange,
@@ -127,14 +138,7 @@ function TaskLabelTrigger({
         <OneLineOverflowRow
           ariaLabel={t("labels.filter")}
           className="w-full"
-          items={task.labels.map((label) => ({
-            content: (
-              <Badge className="py-[3px]" size="compact" tone="neutral">
-                {label.name}
-              </Badge>
-            ),
-            id: label.id,
-          }))}
+          items={projectTaskLabelItems(task.labels)}
           renderOverflow={(hiddenCount) => (
             <Badge className="py-[3px]" size="compact" tone="neutral">
               +{hiddenCount}

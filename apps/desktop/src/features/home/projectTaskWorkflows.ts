@@ -84,8 +84,7 @@ export function useProjectTaskNewTaskAvailable(
 function firstPageNewTaskAvailability(
   data: InfiniteData<ProjectTaskWorkflowPage, number> | undefined,
 ): boolean | undefined {
-  const firstPageIndex = data?.pageParams.findIndex((pageParam) => pageParam === 0) ?? -1;
-  const firstPage = firstPageIndex < 0 ? undefined : data?.pages[firstPageIndex];
+  const firstPage = data?.pages.find((_page, index) => data.pageParams[index] === 0);
   if (firstPage === undefined) {
     return undefined;
   }

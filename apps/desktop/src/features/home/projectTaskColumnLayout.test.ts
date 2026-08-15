@@ -4,7 +4,7 @@ const layout: ProjectTaskColumnLayout = {
   dependenciesPx: 48,
   idCharacters: 8,
   labelsPx: 320,
-  workflowCharacters: 12,
+  workflowPx: 96,
 };
 
 describe("Project Task responsive columns", () => {
