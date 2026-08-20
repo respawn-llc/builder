@@ -27,20 +27,27 @@ func TestNewRunnerRejectsPresentBlankHook(t *testing.T) {
 	}
 }
 
-func TestNewRunnerWithAbsentHookSurfacesUnavailableWarning(t *testing.T) {
-	runner, err := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser})
-	if err != nil {
-		t.Fatalf("NewRunner: %v", err)
-	}
-	result, err := runner.Apply(context.Background(), Request{
-		ToolName: toolspec.ToolExecCommand,
-		Output:   "input",
-	})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if result.Output != "input" || result.Warning == nil {
-		t.Fatalf("absent hook result = %+v, want unchanged output with warning", result)
+func TestNewRunnerWithAbsentHookSilentlySkipsUserStage(t *testing.T) {
+	for _, mode := range []config.ShellPostprocessingMode{
+		config.ShellPostprocessingModeUser,
+		config.ShellPostprocessingModeAll,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			runner, err := NewRunner(Settings{Mode: mode})
+			if err != nil {
+				t.Fatalf("NewRunner: %v", err)
+			}
+			result, err := runner.Apply(context.Background(), Request{
+				ToolName: toolspec.ToolExecCommand,
+				Output:   "input",
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if result.Output != "input" || result.Warning != nil {
+				t.Fatalf("absent hook result = %+v, want unchanged output without warning", result)
+			}
+		})
 	}
 }
 

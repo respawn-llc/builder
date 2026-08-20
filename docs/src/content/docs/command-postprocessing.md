@@ -15,7 +15,7 @@ postprocessing_mode = "all" # none | builtin | user | all
 postprocess_hook = "~/.kent/shell_postprocess_hook"
 ```
 
-Omit `postprocess_hook` when no hook is configured.
+Omit `postprocess_hook` when no hook is configured; Kent silently skips the hook stage.
 
 ### `postprocessing_mode`
 
@@ -23,8 +23,8 @@ Allowed values:
 
 - `none`: disable command post-processing.
 - `builtin`: run Kent's output cleanup and built-in processing.
-- `user`: run Kent's output cleanup, then your configured hook.
-- `all`: run Kent's output cleanup, built-in processing, then your configured hook.
+- `user`: run Kent's output cleanup, then run the configured hook when present; an omitted hook is skipped.
+- `all`: run Kent's output cleanup and built-in processing, then run the configured hook when present; an omitted hook is skipped.
 
 In `builtin`, `user`, and `all`, Kent's final model-visible command-output pass limits each line to 1,000 Unicode code points; oversized lines keep only their prefix and end with `… [N characters omitted]`, where `N` is exact. This runs after user-hook replacement; `none` bypasses the limit, and Kent operational warnings are not command-output lines.
 
@@ -63,4 +63,4 @@ Hook **must** return JSON like:
 }
 ```
 
-Return `{"processed": false}` for no-op passthrough. If the hook is missing, times out, exits nonzero, or returns invalid JSON, Kent falls back to the current output and reports a warning.
+Return `{"processed": false}` for no-op passthrough. An omitted `postprocess_hook` is skipped without a warning. If a configured hook executable is missing, times out, exits nonzero, or returns invalid JSON, Kent falls back to the current output and reports a warning.
