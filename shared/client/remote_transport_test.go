@@ -18,10 +18,16 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/protoapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+
+	serverpb "core/shared/protoapi/gen/kent/api/server"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestDialConfiguredRemotePrefersLocalUnixSocket(t *testing.T) {
@@ -59,13 +65,14 @@ func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
 			if event.Err != nil {
 				return
 			}
+			if _, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{}); handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "setup: %v", err)
+				}
+				continue
+			}
 			req := event.Frame.Request()
 			switch req.Method {
-			case protocol.MethodHandshake:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
 			case protocol.MethodSessionRuntimeRelease:
 				var params serverapi.SessionRuntimeReleaseRequest
 				if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -126,28 +133,41 @@ func TestRemoteUpdateStatusCancellationLeavesControlUsable(t *testing.T) {
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			switch req.Method {
-			case protocol.MethodHandshake:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{
-					Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
-				}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
+			if _, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{}); handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "setup: %v", err)
+				}
+				continue
+			}
+			if handled, err := handleRemoteProjectListFrame(ctx, conn, event.Frame, "project-1"); handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "Project List: %v", err)
+				}
+				return
+			}
+			if event.Frame.Kind == rpcwire.FrameBinary {
+				envelope, err := protoapi.DecodeEnvelope(event.Frame.Payload)
+				if err != nil {
+					reportHandlerError(handlerErrs, "decode update call: %v", err)
 					return
 				}
-			case protocol.MethodServerUpdateStatusGet:
+				call := envelope.GetCall()
+				method := bootstrapMethod(serverpb.File_kent_api_server_server_proto, "ServerService", "GetUpdateStatus")
+				operation, err := protoapi.OperationFromDescriptor(method)
+				if err != nil {
+					reportHandlerError(handlerErrs, "update operation: %v", err)
+					return
+				}
+				if call == nil || call.Operation != operation.Name {
+					reportHandlerError(handlerErrs, "unexpected binary operation")
+					return
+				}
 				updateStarted <- struct{}{}
 				<-conn.Closed()
 				return
-			case protocol.MethodProjectList:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.ProjectListResponse{}))); err != nil {
-					reportHandlerError(handlerErrs, "send project list response: %w", err)
-				}
-				return
-			default:
-				reportHandlerError(handlerErrs, "unexpected method %q", req.Method)
-				return
 			}
+			reportHandlerError(handlerErrs, "unexpected frame kind %d", event.Frame.Kind)
+			return
 		}
 	}))
 	defer server.Close()
@@ -310,41 +330,103 @@ func TestRemoteCanceledUnaryRequestKeepsPersistentControlConnection(t *testing.T
 	var connectionCount atomic.Int32
 	handlerErrs := make(chan error, 8)
 	firstRequestSeen := make(chan string, 1)
+	method := serverpb.File_kent_api_server_server_proto.Services().ByName("ServerService").Methods().ByName("GetReadiness")
+	operation, err := protoapi.OperationFromDescriptor(method)
+	if err != nil {
+		t.Fatalf("GetReadiness operation: %v", err)
+	}
 	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
 		connectionCount.Add(1)
-		firstRequestID := ""
+		var firstCorrelation *string
 		for event := range conn.Events() {
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			if req.Method == protocol.MethodHandshake {
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
+			if _, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{}); handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "setup: %v", err)
 				}
 				continue
 			}
-			switch req.Method {
-			case protocol.MethodProjectList:
-				firstRequestID = req.ID
-				firstRequestSeen <- firstRequestID
-			case protocol.MethodProjectResolvePath:
-				if firstRequestID == "" {
-					reportHandlerError(handlerErrs, "expected first request id before second call")
+			switch event.Frame.Kind {
+			case rpcwire.FrameBinary:
+				envelope, err := protoapi.DecodeEnvelope(event.Frame.Payload)
+				if err != nil {
+					reportHandlerError(handlerErrs, "decode binary envelope: %v", err)
 					return
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.ProjectResolvePathResponse{CanonicalRoot: "/tmp/workspace-a"}))); err != nil {
-					reportHandlerError(handlerErrs, "send second response: %w", err)
+				call := envelope.GetCall()
+				if call == nil {
+					reportHandlerError(handlerErrs, "binary frame is not a call")
 					return
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(firstRequestID, serverapi.ProjectListResponse{}))); err != nil {
+				if firstCorrelation == nil {
+					projectList := projectpb.File_kent_api_project_project_proto.Services().
+						ByName("ProjectCatalogService").Methods().ByName("List")
+					projectListOperation, operationErr := protoapi.OperationFromDescriptor(projectList)
+					if operationErr != nil {
+						reportHandlerError(handlerErrs, "Project List operation: %v", operationErr)
+						return
+					}
+					if call.Operation != projectListOperation.Name || call.Correlation == nil {
+						reportHandlerError(handlerErrs, "first binary operation = %q, want %q", call.Operation, projectListOperation.Name)
+						return
+					}
+					firstCorrelation = call.Correlation
+					firstRequestSeen <- call.GetCorrelation()
+					continue
+				}
+				if call.Operation != operation.Name {
+					reportHandlerError(handlerErrs, "binary operation = %q, want %q", call.Operation, operation.Name)
+					return
+				}
+				if err := protoapi.Decode(call.Payload, &emptypb.Empty{}); err != nil {
+					reportHandlerError(handlerErrs, "decode GetReadiness request: %v", err)
+					return
+				}
+				result := &serverpb.GetReadinessResult{
+					Outcome: &serverpb.GetReadinessResult_Success{Success: &serverpb.GetReadinessSuccess{
+						Readiness: &serverpb.Readiness{
+							Ready:           true,
+							ServerId:        "server-1",
+							ServerVersion:   "test",
+							ServerBuild:     "test",
+							ProtocolVersion: protocol.Version,
+						},
+					}},
+				}
+				payload, err := protoapi.Encode(result)
+				if err != nil {
+					reportHandlerError(handlerErrs, "encode binary result: %v", err)
+					return
+				}
+				encoded, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
+					Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+						Operation:   call.Operation,
+						Correlation: call.Correlation,
+						Payload:     payload,
+					}},
+				})
+				if err != nil {
+					reportHandlerError(handlerErrs, "encode binary result envelope: %v", err)
+					return
+				}
+				if err := conn.Send(ctx, rpcwire.Frame{Kind: rpcwire.FrameBinary, Payload: encoded}); err != nil {
+					reportHandlerError(handlerErrs, "send binary response: %v", err)
+					return
+				}
+				lateFrame, err := remoteProjectListResultFrame("project-1", firstCorrelation)
+				if err != nil {
+					reportHandlerError(handlerErrs, "encode late first response: %v", err)
+					return
+				}
+				if err := conn.Send(ctx, lateFrame); err != nil {
 					reportHandlerError(handlerErrs, "send late first response: %w", err)
 					return
 				}
 				return
-			default:
-				reportHandlerError(handlerErrs, "unexpected unary method %q", req.Method)
+			case rpcwire.FrameText:
+				reportHandlerError(handlerErrs, "unexpected frame kind %d", event.Frame.Kind)
 				return
 			}
 		}
@@ -377,12 +459,12 @@ func TestRemoteCanceledUnaryRequestKeepsPersistentControlConnection(t *testing.T
 		t.Fatalf("ListProjects error = %v, want context canceled", err)
 	}
 
-	resolveResp, err := remote.ResolveProjectPath(context.Background(), serverapi.ProjectResolvePathRequest{Path: "/tmp/workspace-a"})
-	if err != nil {
-		t.Fatalf("ResolveProjectPath: %v", err)
+	readiness := &serverpb.GetReadinessResult{}
+	if err := remote.callBinary(context.Background(), method, &emptypb.Empty{}, readiness); err != nil {
+		t.Fatalf("binary GetReadiness: %v", err)
 	}
-	if resolveResp.CanonicalRoot != "/tmp/workspace-a" {
-		t.Fatalf("CanonicalRoot = %q, want /tmp/workspace-a", resolveResp.CanonicalRoot)
+	if readiness.GetSuccess().GetReadiness().GetServerId() != "server-1" {
+		t.Fatalf("readiness = %+v, want server-1", readiness)
 	}
 	if got := connectionCount.Load(); got != 1 {
 		t.Fatalf("connectionCount = %d, want 1", got)
@@ -401,27 +483,24 @@ func TestRemoteReconnectsUnaryControlConnectionAfterDrop(t *testing.T) {
 				if event.Err != nil {
 					return
 				}
-				req := event.Frame.Request()
-				if !handshaken {
-					if req.Method != protocol.MethodHandshake {
-						reportHandlerError(handlerErrs, "first method = %q, want handshake", req.Method)
-						return
+				if kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{}); handled {
+					if err != nil {
+						reportHandlerError(handlerErrs, "setup: %v", err)
 					}
-					if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-						reportHandlerError(handlerErrs, "send handshake response: %w", err)
-						return
-					}
-					handshaken = true
+					handshaken = handshaken || kind == remoteTestSetupHandshake
 					continue
 				}
-				if req.Method != protocol.MethodProjectList {
-					reportHandlerError(handlerErrs, "first method = %q, want %q", req.Method, protocol.MethodProjectList)
+				if !handshaken {
+					reportHandlerError(handlerErrs, "application frame arrived before handshake")
 					return
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.ProjectListResponse{}))); err != nil {
-					reportHandlerError(handlerErrs, "send first response: %w", err)
+				if handled, err := handleRemoteProjectListFrame(ctx, conn, event.Frame, "project-1"); handled {
+					if err != nil {
+						reportHandlerError(handlerErrs, "send first Project List: %v", err)
+					}
 					return
 				}
+				reportHandlerError(handlerErrs, "unexpected first application frame")
 				return
 			}
 		}
@@ -429,27 +508,24 @@ func TestRemoteReconnectsUnaryControlConnectionAfterDrop(t *testing.T) {
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			if !handshaken {
-				if req.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "second method = %q, want handshake", req.Method)
-					return
+			if kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{}); handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "setup: %v", err)
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-				handshaken = true
+				handshaken = handshaken || kind == remoteTestSetupHandshake
 				continue
 			}
-			if req.Method != protocol.MethodProjectResolvePath {
-				reportHandlerError(handlerErrs, "second method = %q, want %q", req.Method, protocol.MethodProjectResolvePath)
+			if !handshaken {
+				reportHandlerError(handlerErrs, "application frame arrived before handshake")
 				return
 			}
-			if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.ProjectResolvePathResponse{CanonicalRoot: "/tmp/reconnected"}))); err != nil {
-				reportHandlerError(handlerErrs, "send second response: %w", err)
+			if handled, err := handleRemoteProjectListFrame(ctx, conn, event.Frame, "project-1"); handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "send second Project List: %v", err)
+				}
 				return
 			}
+			reportHandlerError(handlerErrs, "unexpected second application frame")
 			return
 		}
 	}))
@@ -467,12 +543,8 @@ func TestRemoteReconnectsUnaryControlConnectionAfterDrop(t *testing.T) {
 	requireNoHandlerError(t, handlerErrs)
 	waitForRemoteControlDisconnect(t, remote, handlerErrs)
 
-	resp, err := remote.ResolveProjectPath(context.Background(), serverapi.ProjectResolvePathRequest{Path: "/tmp/reconnected"})
-	if err != nil {
-		t.Fatalf("ResolveProjectPath after reconnect: %v", err)
-	}
-	if resp.CanonicalRoot != "/tmp/reconnected" {
-		t.Fatalf("CanonicalRoot = %q, want /tmp/reconnected", resp.CanonicalRoot)
+	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+		t.Fatalf("ListProjects after reconnect: %v", err)
 	}
 	if got := connectionCount.Load(); got != 2 {
 		t.Fatalf("connectionCount = %d, want 2", got)
@@ -492,50 +564,34 @@ func TestRemoteSessionAttachmentSurvivesUnaryControlReconnect(t *testing.T) {
 			if event.Err != nil {
 				return
 			}
+			kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{
+				projectID: "project-1", workspaceID: "workspace-1", workspaceRoot: "/workspace",
+			})
+			if handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "connection %d setup: %v", connIndex, err)
+					return
+				}
+				handshaken = handshaken || kind == remoteTestSetupHandshake
+				attached = attached || kind == remoteTestSetupSession
+				if kind == remoteTestSetupSession {
+					attachCount.Add(1)
+				}
+				continue
+			}
 			req := event.Frame.Request()
-			switch {
-			case !handshaken:
-				if req.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "connection %d first method = %q, want handshake", connIndex, req.Method)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{
-					Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
-				}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-				handshaken = true
-			case !attached:
-				if req.Method != protocol.MethodAttachSession {
-					reportHandlerError(handlerErrs, "connection %d second method = %q, want attach-session", connIndex, req.Method)
-					return
-				}
-				var attach protocol.AttachSessionRequest
-				if err := json.Unmarshal(req.Params, &attach); err != nil {
-					reportHandlerError(handlerErrs, "decode attach-session: %v", err)
-					return
-				}
-				if attach.SessionID != "session-1" {
-					reportHandlerError(handlerErrs, "attach session id = %q, want session-1", attach.SessionID)
-					return
-				}
-				attachCount.Add(1)
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", attach.SessionID)))); err != nil {
-					reportHandlerError(handlerErrs, "send attach-session response: %w", err)
-					return
-				}
-				attached = true
-			default:
-				if req.Method != protocol.MethodWorktreeStatus {
-					reportHandlerError(handlerErrs, "connection %d method = %q, want worktree status", connIndex, req.Method)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{}))); err != nil {
-					reportHandlerError(handlerErrs, "send worktree status response: %w", err)
-				}
+			if !handshaken || !attached {
+				reportHandlerError(handlerErrs, "connection %d sent %q before binary setup completed", connIndex, req.Method)
 				return
 			}
+			if req.Method != protocol.MethodWorktreeStatus {
+				reportHandlerError(handlerErrs, "connection %d method = %q, want worktree status", connIndex, req.Method)
+				return
+			}
+			if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{}))); err != nil {
+				reportHandlerError(handlerErrs, "send worktree status response: %w", err)
+			}
+			return
 		}
 	}))
 	defer server.Close()
@@ -578,66 +634,39 @@ func TestRemoteProjectRootAttachmentRejectsDifferentWorkspaceOnReconnect(t *test
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			switch {
-			case !handshaken:
-				if req.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "connection %d first method = %q, want handshake", connIndex, req.Method)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{
-					Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
-				}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-				handshaken = true
-			case !attached:
-				if req.Method != protocol.MethodAttachProject {
-					reportHandlerError(handlerErrs, "connection %d second method = %q, want attach-project", connIndex, req.Method)
-					return
-				}
-				var attach protocol.AttachProjectRequest
-				if err := json.Unmarshal(req.Params, &attach); err != nil {
-					reportHandlerError(handlerErrs, "decode attach-project: %v", err)
-					return
-				}
-				responseRequest := attach
-				workspaceID := "workspace-a"
-				canonicalRoot := "/canonical/workspace-a"
-				if connIndex >= 2 {
-					var err error
-					responseRequest, err = protocol.AttachProjectRequestForWorkspaceRoot("project-1", "/workspace-b")
-					if err != nil {
-						reportHandlerError(handlerErrs, "construct substituted request: %v", err)
-						return
-					}
-					workspaceID = "workspace-b"
-					canonicalRoot = "/canonical/workspace-b"
-				}
-				response, err := protocol.ProjectAttachResponseForRequest(responseRequest, workspaceID, canonicalRoot)
+			workspaceID := "workspace-a"
+			workspaceRoot := "/canonical/workspace-a"
+			if connIndex >= 2 {
+				workspaceID = "workspace-b"
+				workspaceRoot = "/canonical/workspace-b"
+			}
+			kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{
+				projectID: "project-1", workspaceID: workspaceID, workspaceRoot: workspaceRoot,
+			})
+			if handled {
 				if err != nil {
-					reportHandlerError(handlerErrs, "construct attach response: %v", err)
+					reportHandlerError(handlerErrs, "connection %d setup: %v", connIndex, err)
 					return
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, response))); err != nil {
-					reportHandlerError(handlerErrs, "send attach response: %w", err)
+				handshaken = handshaken || kind == remoteTestSetupHandshake
+				attached = attached || kind == remoteTestSetupProject
+				if kind == remoteTestSetupProject && connIndex >= 2 {
 					return
 				}
-				attached = true
-				if connIndex >= 2 {
-					return
-				}
-			default:
-				if req.Method != protocol.MethodProjectList {
-					reportHandlerError(handlerErrs, "connection %d method = %q, want project list", connIndex, req.Method)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.ProjectListResponse{}))); err != nil {
-					reportHandlerError(handlerErrs, "send project list response: %w", err)
+				continue
+			}
+			if !handshaken || !attached {
+				reportHandlerError(handlerErrs, "connection %d sent application traffic before binary setup completed", connIndex)
+				return
+			}
+			if handled, err := handleRemoteProjectListFrame(ctx, conn, event.Frame, "project-1"); handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "send Project List response: %v", err)
 				}
 				return
 			}
+			reportHandlerError(handlerErrs, "connection %d received unexpected application traffic", connIndex)
+			return
 		}
 	}))
 	defer server.Close()
@@ -680,30 +709,26 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			if !handshaken {
-				if req.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "first method = %q, want handshake", req.Method)
+			kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{
+				projectID: "project-1", workspaceID: "workspace-1", workspaceRoot: "/tmp/workspace-a",
+			})
+			if handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "setup: %v", err)
 					return
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-				handshaken = true
+				handshaken = handshaken || kind == remoteTestSetupHandshake
+				attached = attached || kind == remoteTestSetupProject
 				continue
 			}
+			req := event.Frame.Request()
+			if !handshaken {
+				reportHandlerError(handlerErrs, "application method %q arrived before handshake", req.Method)
+				return
+			}
 			if !attached {
-				if req.Method != protocol.MethodAttachProject {
-					reportHandlerError(handlerErrs, "second method = %q, want attach project", req.Method)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
-					reportHandlerError(handlerErrs, "send attach response: %w", err)
-					return
-				}
-				attached = true
-				continue
+				reportHandlerError(handlerErrs, "application method %q arrived before Project attachment", req.Method)
+				return
 			}
 			switch req.Method {
 			case protocol.MethodRuntimeSubmitUserTurn:
@@ -857,31 +882,28 @@ func TestRemoteReconnectRejectsChangedPersistenceRoot(t *testing.T) {
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			if !handshaken {
-				if req.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "first method = %q, want handshake", req.Method)
-					return
+			if kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{rootID: rootID}); handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "setup: %v", err)
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1", PersistenceRootID: rootID}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-				handshaken = true
+				handshaken = handshaken || kind == remoteTestSetupHandshake
 				continue
 			}
-			if connIndex == 1 {
-				if req.Method != protocol.MethodProjectList {
-					reportHandlerError(handlerErrs, "first method = %q, want %q", req.Method, protocol.MethodProjectList)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.ProjectListResponse{}))); err != nil {
-					reportHandlerError(handlerErrs, "send first response: %w", err)
-					return
-				}
+			if !handshaken {
+				reportHandlerError(handlerErrs, "application traffic arrived before handshake")
 				return
 			}
-			reportHandlerError(handlerErrs, "mismatched-root connection should not receive method %q", req.Method)
+			if connIndex == 1 {
+				if handled, err := handleRemoteProjectListFrame(ctx, conn, event.Frame, "project-1"); handled {
+					if err != nil {
+						reportHandlerError(handlerErrs, "send first Project List: %v", err)
+					}
+					return
+				}
+				reportHandlerError(handlerErrs, "unexpected first application traffic")
+				return
+			}
+			reportHandlerError(handlerErrs, "mismatched-root connection should not receive application traffic")
 			return
 		}
 	}))
@@ -913,14 +935,13 @@ func serveHandshakeWithRoot(ctx context.Context, conn rpcwire.Conn, rootID strin
 		if event.Err != nil {
 			return
 		}
-		req := event.Frame.Request()
-		if req.Method == protocol.MethodHandshake {
-			if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1", PersistenceRootID: rootID}}))); err != nil {
-				reportHandlerError(handlerErrs, "send handshake response: %w", err)
-				return
+		if _, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{rootID: rootID}); handled {
+			if err != nil {
+				reportHandlerError(handlerErrs, "setup: %v", err)
 			}
 			continue
 		}
+		req := event.Frame.Request()
 		reportHandlerError(handlerErrs, "unexpected method %q", req.Method)
 		return
 	}
@@ -1010,23 +1031,20 @@ func serveProjectListRPCWithProjectID(ctx context.Context, conn rpcwire.Conn, pr
 		if event.Err != nil {
 			return
 		}
-		req := event.Frame.Request()
-		if req.Method == protocol.MethodHandshake {
-			if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-				reportHandlerError(handlerErrs, "send handshake response: %w", err)
-				return
+		if _, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{}); handled {
+			if err != nil {
+				reportHandlerError(handlerErrs, "setup: %v", err)
 			}
 			continue
 		}
-		if req.Method != protocol.MethodProjectList {
-			reportHandlerError(handlerErrs, "project list method = %q", req.Method)
+		if handled, err := handleRemoteProjectListFrame(ctx, conn, event.Frame, projectID); handled {
+			if err != nil {
+				reportHandlerError(handlerErrs, "send Project List response: %w", err)
+			}
 			return
 		}
-		response := serverapi.ProjectListResponse{Projects: []clientui.ProjectSummary{{ProjectID: projectID}}}
-		if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, response))); err != nil {
-			reportHandlerError(handlerErrs, "send project list response: %w", err)
-			return
-		}
+		reportHandlerError(handlerErrs, "unexpected Project List frame kind %d", event.Frame.Kind)
+		return
 	}
 }
 

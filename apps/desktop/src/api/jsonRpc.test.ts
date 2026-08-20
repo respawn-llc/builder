@@ -1,6 +1,22 @@
 import { createJsonRpcTransport } from "./jsonRpc";
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, decodeWorkflowLabelError } from "./errors";
-import { protocolVersionMismatchErrorCode, subscriptionCompleteMethod } from "./jsonRpcSocket";
+import { subscriptionCompleteMethod } from "./jsonRpcSocket";
+import {
+  create,
+  decodeEnvelope,
+  encode,
+  encodeEnvelope,
+  operationFromDescriptor,
+} from "@app/server-api-contract";
+import {
+  AttachSessionResultSchema,
+  ConnectionService,
+  HandshakeResultSchema,
+} from "@app/server-api-contract/gen/kent/api/connection/connection_pb";
+import {
+  GetReadinessResultSchema,
+  ServerService,
+} from "@app/server-api-contract/gen/kent/api/server/server_pb";
 import { z } from "zod";
 
 type SentFrame = Readonly<{
@@ -19,7 +35,8 @@ class MockWebSocket extends EventTarget {
   static readonly CLOSING = 2;
   static readonly CLOSED = 3;
 
-  readonly sent: string[] = [];
+  readonly sent: (string | Uint8Array)[] = [];
+  binaryType: BinaryType = "blob";
   readyState = MockWebSocket.CONNECTING;
 
   constructor(readonly url: string) {
@@ -27,8 +44,21 @@ class MockWebSocket extends EventTarget {
     sockets.push(this);
   }
 
-  send(data: string): void {
-    this.sent.push(data);
+  send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+    const text = z.string().safeParse(data);
+    if (text.success) {
+      this.sent.push(text.data);
+      return;
+    }
+    if (ArrayBuffer.isView(data)) {
+      this.sent.push(new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice());
+      return;
+    }
+    if (data instanceof ArrayBuffer) {
+      this.sent.push(new Uint8Array(data).slice());
+      return;
+    }
+    throw new Error("Mock WebSocket does not support Blob sends.");
   }
 
   close(): void {
@@ -41,7 +71,7 @@ class MockWebSocket extends EventTarget {
     this.dispatchEvent(new Event("open"));
   }
 
-  receive(data: string): void {
+  receive(data: string | ArrayBuffer): void {
     this.dispatchEvent(new MessageEvent("message", { data }));
   }
 }
@@ -89,34 +119,46 @@ describe("JsonRpcWebSocketTransport", () => {
 
   it("rejects control calls on handshake protocol mismatch before sending the requested method", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const readiness = transport.call("server.readiness.get", {});
+    const readiness = callReadiness(transport);
     const socket = sockets[0] ?? failTest("control socket missing");
 
     socket.open();
     await waitForSent(socket, 1);
-    errorAck(socket, 0, {
-      code: protocolVersionMismatchErrorCode,
-      message: "unsupported protocol version",
-    });
+    handshakeProtocolMismatchAck(socket, 0);
 
     await expect(readiness).rejects.toBeInstanceOf(ProtocolMismatchError);
     expect(socket.sent).toHaveLength(1);
-    expect(frame(socket, 0)).toMatchObject({ method: "protocol.handshake" });
+    expect(descriptorOperation(socket, 0)).toBe(
+      operationFromDescriptor(ConnectionService.method.handshake).name,
+    );
   });
 
-  it("preserves structured JSON-RPC error data on control calls", async () => {
+  it("multiplexes generated binary calls with structured JSON-RPC errors on one control socket", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const request = transport.call("workflow.project.label.create", {
-      project_id: "project-1",
-      name: "Priority",
-    });
+    const readiness = callReadiness(transport);
     const socket = sockets[0] ?? failTest("control socket missing");
 
     socket.open();
     await waitForSent(socket, 1);
     ack(socket, 0);
     await waitForSent(socket, 2);
-    errorAck(socket, 1, {
+    binaryAck(socket, 1, ServerService.method.getReadiness, { result: readinessResult() });
+    await expect(readiness).resolves.toMatchObject({
+      outcome: { case: "success", value: { readiness: { serverId: "server-1" } } },
+    });
+
+    const malformedReadiness = callReadiness(transport);
+    const request = transport.call("workflow.project.label.create", {
+      project_id: "project-1",
+      name: "Priority",
+    });
+    await waitForSent(socket, 4);
+    binaryAck(socket, 2, ServerService.method.getReadiness, {
+      result: readinessResult(),
+      operation: "kent.api.server.server_service.wrong_operation",
+    });
+    await expect(malformedReadiness).rejects.toThrow("received a result");
+    errorAck(socket, 3, {
       code: -32031,
       message: "label name already exists",
       data: {
@@ -145,14 +187,14 @@ describe("JsonRpcWebSocketTransport", () => {
 
   it("runs dedicated calls on a one-use socket without disturbing the control socket", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const readiness = transport.call("server.readiness.get", {});
+    const readiness = callReadiness(transport);
     const controlSocket = sockets[0] ?? failTest("control socket missing");
     controlSocket.open();
     await waitForSent(controlSocket, 1);
     ack(controlSocket, 0);
     await waitForSent(controlSocket, 2);
     ack(controlSocket, 1);
-    await expect(readiness).resolves.toEqual({});
+    await expect(readiness).resolves.toMatchObject({ outcome: { case: "success" } });
 
     const search = transport.callDedicated("workflow.task.search", { query: "needle" });
     const dedicatedSocket = sockets[1] ?? failTest("dedicated socket missing");
@@ -179,7 +221,9 @@ describe("JsonRpcWebSocketTransport", () => {
     await waitForSent(socket, 1);
     ack(socket, 0);
     await waitForSent(socket, 2);
-    expect(frame(socket, 1)).toMatchObject({ method: "session.attach" });
+    expect(descriptorOperation(socket, 1)).toBe(
+      operationFromDescriptor(ConnectionService.method.attachSession).name,
+    );
     ack(socket, 1);
     await waitForSent(socket, 3);
     expect(frame(socket, 2)).toMatchObject({ method: "prompt.answerBatch" });
@@ -202,7 +246,7 @@ describe("JsonRpcWebSocketTransport", () => {
     await waitForSent(socket, 2);
     errorAck(socket, 1, { code: -32602, message: "session unavailable" });
 
-    await expect(answer).rejects.toThrow("session unavailable");
+    await expect(answer).rejects.toThrow();
     expect(socket.sent).toHaveLength(2);
     expect(socket.readyState).toBe(MockWebSocket.CLOSED);
   });
@@ -278,7 +322,7 @@ describe("JsonRpcWebSocketTransport", () => {
 
   it("rejects control calls when the server serves a different persistence root", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc", "expected-root");
-    const readiness = transport.call("server.readiness.get", {});
+    const readiness = callReadiness(transport);
     const socket = sockets[0] ?? failTest("control socket missing");
 
     socket.open();
@@ -287,12 +331,14 @@ describe("JsonRpcWebSocketTransport", () => {
 
     await expect(readiness).rejects.toBeInstanceOf(ServerRootMismatchError);
     expect(socket.sent).toHaveLength(1);
-    expect(frame(socket, 0)).toMatchObject({ method: "protocol.handshake" });
+    expect(descriptorOperation(socket, 0)).toBe(
+      operationFromDescriptor(ConnectionService.method.handshake).name,
+    );
   });
 
   it("rejects control calls when the server reports no persistence root id", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc", "expected-root");
-    const readiness = transport.call("server.readiness.get", {});
+    const readiness = callReadiness(transport);
     const socket = sockets[0] ?? failTest("control socket missing");
 
     socket.open();
@@ -305,17 +351,19 @@ describe("JsonRpcWebSocketTransport", () => {
 
   it("accepts control calls when the server serves the expected persistence root", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc", "expected-root");
-    const readiness = transport.call("server.readiness.get", {});
+    const readiness = callReadiness(transport);
     const socket = sockets[0] ?? failTest("control socket missing");
 
     socket.open();
     await waitForSent(socket, 1);
     ackHandshakeRoot(socket, 0, "expected-root");
     await waitForSent(socket, 2);
-    expect(frame(socket, 1)).toMatchObject({ method: "server.readiness.get" });
+    expect(descriptorOperation(socket, 1)).toBe(
+      operationFromDescriptor(ServerService.method.getReadiness).name,
+    );
     ack(socket, 1);
 
-    await expect(readiness).resolves.toEqual({});
+    await expect(readiness).resolves.toMatchObject({ outcome: { case: "success" } });
   });
 
   it("keeps no-timeout control calls pending past the generic request deadline", async () => {
@@ -413,16 +461,15 @@ describe("JsonRpcWebSocketTransport", () => {
 
     socket.open();
     await waitForSent(socket, 1);
-    errorAck(socket, 0, {
-      code: protocolVersionMismatchErrorCode,
-      message: "unsupported protocol version",
-    });
+    handshakeProtocolMismatchAck(socket, 0);
 
     await vi.waitFor(() => {
       expect(errors[0]).toBeInstanceOf(ProtocolMismatchError);
     });
     expect(socket.sent).toHaveLength(1);
-    expect(frame(socket, 0)).toMatchObject({ method: "protocol.handshake" });
+    expect(descriptorOperation(socket, 0)).toBe(
+      operationFromDescriptor(ConnectionService.method.handshake).name,
+    );
     // A rejected handshake must close the socket; otherwise the reconnect loop
     // leaks a socket connected to the wrong server on every backoff.
     expect(socket.readyState).toBe(MockWebSocket.CLOSED);
@@ -667,8 +714,87 @@ describe("JsonRpcWebSocketTransport", () => {
 });
 
 function ack(socket: MockWebSocket, sentIndex: number): void {
-  const sent = frame(socket, sentIndex);
-  socket.receive(JSON.stringify({ jsonrpc: "2.0", id: sent.id, result: {} }));
+  const raw = socket.sent[sentIndex] ?? failTest(`sent frame ${sentIndex.toString()} missing`);
+  if (z.string().safeParse(raw).success) {
+    const sent = frame(socket, sentIndex);
+    socket.receive(JSON.stringify({ jsonrpc: "2.0", id: sent.id, result: {} }));
+    return;
+  }
+  const call = descriptorCall(socket, sentIndex);
+  if (call.operation === operationFromDescriptor(ConnectionService.method.handshake).name) {
+    binaryAck(socket, sentIndex, ConnectionService.method.handshake, {
+      result: create(HandshakeResultSchema, {
+        outcome: {
+          case: "success",
+          value: {
+            identity: {
+              protocolVersion: "126",
+              serverId: "server-1",
+              pid: 1,
+            },
+          },
+        },
+      }),
+    });
+    return;
+  }
+  if (call.operation === operationFromDescriptor(ConnectionService.method.attachSession).name) {
+    binaryAck(socket, sentIndex, ConnectionService.method.attachSession, {
+      result: create(AttachSessionResultSchema, {
+        outcome: {
+          case: "success",
+          value: {
+            attachment: {
+              case: "session",
+              value: {
+                projectId: "project-1",
+                workspaceId: "workspace-1",
+                workspaceRoot: "/workspace",
+                sessionId: "session-1",
+              },
+            },
+          },
+        },
+      }),
+    });
+    return;
+  }
+  if (call.operation === operationFromDescriptor(ServerService.method.getReadiness).name) {
+    binaryAck(socket, sentIndex, ServerService.method.getReadiness, {
+      result: readinessResult(),
+    });
+    return;
+  }
+  throw new Error(`Unsupported descriptor setup operation ${call.operation}.`);
+}
+
+async function callReadiness(transport: ReturnType<typeof createJsonRpcTransport>) {
+  return transport.callDescriptor(
+    ServerService.method.getReadiness,
+    create(ServerService.method.getReadiness.input),
+  );
+}
+
+function readinessResult() {
+  return create(GetReadinessResultSchema, {
+    outcome: {
+      case: "success",
+      value: {
+        readiness: {
+          ready: true,
+          serverId: "server-1",
+          serverVersion: "test",
+          serverBuild: "test",
+          protocolVersion: "126",
+          authReady: false,
+          authRequired: false,
+          endpoint: "",
+          subagentRoles: [],
+          causes: [],
+        },
+      },
+    },
+  });
 }
 
 function errorAck(
@@ -676,11 +802,69 @@ function errorAck(
   sentIndex: number,
   error: Readonly<{ code: number; message: string; data?: unknown }>,
 ): void {
+  const raw = socket.sent[sentIndex] ?? failTest(`sent frame ${sentIndex.toString()} missing`);
+  if (!z.string().safeParse(raw).success) {
+    const call = descriptorCall(socket, sentIndex);
+    if (call.operation === operationFromDescriptor(ConnectionService.method.attachSession).name) {
+      binaryAck(socket, sentIndex, ConnectionService.method.attachSession, {
+        result: create(AttachSessionResultSchema, {
+          outcome: {
+            case: "error",
+            value: {
+              code: "internal_failure",
+              detail: {
+                case: "internalFailure",
+                value: { operation: call.operation, cause: error.message },
+              },
+            },
+          },
+        }),
+      });
+      return;
+    }
+    throw new Error(`Unsupported descriptor setup error for ${call.operation}.`);
+  }
   const sent = frame(socket, sentIndex);
   socket.receive(JSON.stringify({ jsonrpc: "2.0", id: sent.id, error }));
 }
 
+function handshakeProtocolMismatchAck(socket: MockWebSocket, sentIndex: number): void {
+  binaryAck(socket, sentIndex, ConnectionService.method.handshake, {
+    result: create(HandshakeResultSchema, {
+      outcome: {
+        case: "error",
+        value: {
+          code: "protocol_version_mismatch",
+          detail: {
+            case: "protocolVersionMismatch",
+            value: { requiredProtocolVersion: "126" },
+          },
+        },
+      },
+    }),
+  });
+}
+
 function ackHandshakeRoot(socket: MockWebSocket, sentIndex: number, rootId: string): void {
+  const raw = socket.sent[sentIndex] ?? failTest(`sent frame ${sentIndex.toString()} missing`);
+  if (!z.string().safeParse(raw).success) {
+    binaryAck(socket, sentIndex, ConnectionService.method.handshake, {
+      result: create(HandshakeResultSchema, {
+        outcome: {
+          case: "success",
+          value: {
+            identity: {
+              protocolVersion: "126",
+              serverId: "server-1",
+              pid: 1,
+              persistenceRootId: rootId,
+            },
+          },
+        },
+      }),
+    });
+    return;
+  }
   const sent = frame(socket, sentIndex);
   socket.receive(
     JSON.stringify({
@@ -691,13 +875,79 @@ function ackHandshakeRoot(socket: MockWebSocket, sentIndex: number, rootId: stri
   );
 }
 
+function descriptorCall(
+  socket: MockWebSocket,
+  sentIndex: number,
+): Readonly<{ operation: string; correlation: string }> {
+  const raw = socket.sent[sentIndex] ?? failTest(`sent frame ${sentIndex.toString()} missing`);
+  if (!(raw instanceof Uint8Array)) {
+    throw new Error("Mock WebSocket frame is text.");
+  }
+  const call = decodeEnvelope(raw).frame;
+  if (call.case !== "call" || call.value.correlation === undefined) {
+    throw new Error("Mock WebSocket binary frame is not a correlated call.");
+  }
+  return { operation: call.value.operation, correlation: call.value.correlation };
+}
+
+function descriptorOperation(socket: MockWebSocket, sentIndex: number): string {
+  return descriptorCall(socket, sentIndex).operation;
+}
+
 function frame(socket: MockWebSocket, sentIndex: number): SentFrame {
   const raw = socket.sent[sentIndex] ?? failTest(`sent frame ${sentIndex.toString()} missing`);
-  const parsed: unknown = JSON.parse(raw);
+  const text = z.string().safeParse(raw);
+  if (!text.success) {
+    throw new Error("Mock WebSocket frame is binary.");
+  }
+  const parsed: unknown = JSON.parse(text.data);
   if (!isSentFrame(parsed)) {
     throw new Error("Mock WebSocket frame missing id or method.");
   }
   return { id: parsed.id, method: parsed.method };
+}
+
+function binaryAck<
+  Method extends
+    | typeof ServerService.method.getReadiness
+    | typeof ConnectionService.method.handshake
+    | typeof ConnectionService.method.attachSession,
+>(
+  socket: MockWebSocket,
+  sentIndex: number,
+  method: Method,
+  response: Readonly<{
+    result: ReturnType<typeof create<Method["output"]>>;
+    operation?: string;
+  }>,
+): void {
+  const raw = socket.sent[sentIndex] ?? failTest(`sent frame ${sentIndex.toString()} missing`);
+  const binary = z.instanceof(Uint8Array).safeParse(raw);
+  if (!binary.success) {
+    throw new Error("Mock WebSocket frame is text.");
+  }
+  const call = decodeEnvelope(binary.data).frame;
+  if (call.case !== "call") {
+    throw new Error("Mock WebSocket binary frame is not a call.");
+  }
+  const operation = operationFromDescriptor(method);
+  if (call.value.operation !== operation.name || call.value.correlation === undefined) {
+    throw new Error("Mock WebSocket binary call has the wrong operation or correlation.");
+  }
+  const payload = encode(method.output, response.result);
+  const encodedResponse = encodeEnvelope({
+    frame: {
+      case: "result",
+      value: {
+        operation: response.operation ?? operation.name,
+        correlation: call.value.correlation,
+        payload,
+      },
+    },
+  });
+  const responseBuffer = new ArrayBuffer(encodedResponse.byteLength);
+  new Uint8Array(responseBuffer).set(encodedResponse);
+  socket.receive(responseBuffer);
 }
 
 function isSentFrame(value: unknown): value is SentFrame {

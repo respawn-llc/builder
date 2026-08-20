@@ -131,9 +131,8 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
 	plan, err := launchClient.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "plan-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)

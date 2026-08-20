@@ -260,9 +260,8 @@ type ProjectWorkspaceUnlinkResponse struct {
 }
 
 type ProjectWorkspaceUnlinkBlocker struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Count   int    `json:"count,omitempty"`
+	Code  string `json:"code"`
+	Count int    `json:"count,omitempty"`
 }
 
 func (s ProjectHomeSummary) Validate() error {
@@ -370,9 +369,6 @@ func (r ProjectWorkspaceUnlinkResponse) Validate() error {
 		if strings.TrimSpace(blocker.Code) == "" {
 			return errors.New("unlink blocker code must not be blank")
 		}
-		if strings.TrimSpace(blocker.Message) == "" {
-			return errors.New("unlink blocker message must not be blank")
-		}
 		if blocker.Count < 0 {
 			return errors.New("unlink blocker count must not be negative")
 		}
@@ -396,9 +392,8 @@ type ProjectDeleteResponse struct {
 }
 
 type ProjectDeleteBlocker struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Count   int    `json:"count,omitempty"`
+	Code  string `json:"code"`
+	Count int    `json:"count,omitempty"`
 }
 
 type ProjectAttachWorkspaceRequest struct {

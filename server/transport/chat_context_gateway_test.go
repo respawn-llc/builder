@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/chatcontext"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -69,7 +70,11 @@ func TestGatewayChatContextDispatchesOnlyWorkspaceOwner(t *testing.T) {
 		GatewayDependencies: appCore,
 		workspaceOwner:      workspaceOwner,
 	}
-	response := (&Gateway{deps: deps}).dispatch(
+	registration, err := productionGatewayRegistration()
+	if err != nil {
+		t.Fatalf("production Gateway registration: %v", err)
+	}
+	response := (&Gateway{deps: deps, registration: registration}).dispatch(
 		t.Context(),
 		&connectionState{
 			handshakeDone:       true,
@@ -103,7 +108,11 @@ func TestGatewayChatContextDispatchesOnlySessionOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse Session id: %v", err)
 	}
-	response := (&Gateway{deps: deps}).dispatch(
+	registration, err := productionGatewayRegistration()
+	if err != nil {
+		t.Fatalf("production Gateway registration: %v", err)
+	}
+	response := (&Gateway{deps: deps, registration: registration}).dispatch(
 		t.Context(),
 		&connectionState{handshakeDone: true, attachedProject: appCore.ProjectID()},
 		chatContextProtocolRequest(t, serverapi.NewSessionChatContextRequest(sessionID)),
@@ -142,7 +151,9 @@ func TestGatewayChatContextValidatesTargetBeforeWorkspaceAuth(t *testing.T) {
 		t.Fatalf("pre-auth Session Context response: %v", err)
 	}
 
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	if result := attachGatewayProject(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()}); result.GetSuccess() == nil {
+		t.Fatalf("attach Project failed: %+v", result.GetError())
+	}
 	if got := callGatewayExpectError(t, conn, "workspace-context", protocol.MethodChatContextGet, serverapi.NewWorkspaceChatContextRequest()); got.Code != protocol.ErrCodeAuthRequired {
 		t.Fatalf("workspace Context error = %+v, want auth required", got)
 	}

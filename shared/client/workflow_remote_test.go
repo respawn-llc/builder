@@ -21,19 +21,8 @@ func TestRemoteWorkflowListRoute(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if req.Method != protocol.MethodHandshake {
-			handlerErr <- fmt.Errorf("handshake method = %q", req.Method)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive workflow list: %w", err)
 			return
@@ -79,15 +68,8 @@ func TestRemoteWorkflowProjectLabelCreateAndListRoutes(t *testing.T) {
 	labelID := "11111111-1111-4111-8111-111111111111"
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive project label create: %w", err)
 			return
@@ -160,15 +142,8 @@ func TestRemoteWorkflowProjectLabelAndTaskAssignmentMutationRoutes(t *testing.T)
 	labelID := "11111111-1111-4111-8111-111111111111"
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := expectWorkflowRemoteMethod(ws, &req, protocol.MethodWorkflowProjectLabelRename); err != nil {
 			handlerErr <- err
 			return
@@ -259,15 +234,8 @@ func TestRemoteWorkflowProjectLabelRoutePreservesTypedError(t *testing.T) {
 	}
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := expectWorkflowRemoteMethod(ws, &req, protocol.MethodWorkflowProjectLabelCreate); err != nil {
 			handlerErr <- err
 			return
@@ -308,15 +276,8 @@ func TestRemoteWorkflowTaskCreateCarriesLabelIDs(t *testing.T) {
 	labelID := "11111111-1111-4111-8111-111111111111"
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := expectWorkflowRemoteMethod(ws, &req, protocol.MethodWorkflowTaskCreate); err != nil {
 			handlerErr <- err
 			return
@@ -378,15 +339,8 @@ func TestRemoteWorkflowTaskListRoundTripsTypedScope(t *testing.T) {
 	workflowID := runtimeids.NewWorkflowID()
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive task list: %w", err)
 			return
@@ -439,19 +393,8 @@ func TestRemoteWorkflowTaskSearchUsesDedicatedConnectionAndClosesIt(t *testing.T
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
 		connectionCount.Add(1)
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if req.Method != protocol.MethodHandshake {
-			handlerErr <- fmt.Errorf("handshake method = %q", req.Method)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			return
 		}
@@ -522,17 +465,8 @@ func TestRemoteWorkflowTaskSearchRejectsInvalidResponse(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{
-			Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
-		})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			return
 		}
@@ -573,15 +507,8 @@ func TestRemoteWorkflowAttentionListRoundTripsGlobalRequest(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive workflow attention list: %w", err)
 			return
@@ -693,15 +620,8 @@ func newWorkflowResponseRemote(t *testing.T, wantMethod string, response any) *R
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive workflow response request: %w", err)
 			return
@@ -769,15 +689,8 @@ func TestRemoteWorkflowStartRejectsInvalidResponse(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive workflow start: %w", err)
 			return
@@ -814,15 +727,8 @@ func TestRemoteWorkflowTaskDetailRejectsInvalidResponse(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive handshake: %w", err)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			handlerErr <- fmt.Errorf("send handshake response: %w", err)
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive workflow task get: %w", err)
 			return

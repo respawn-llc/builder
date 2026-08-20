@@ -133,15 +133,11 @@ func TestProjectWorkspaceMutationResponseValidateRejectsMalformedResponses(t *te
 		"missing workspace ID": {ProjectID: "project-1"},
 		"blank blocker code": {
 			ProjectID: "project-1", WorkspaceID: "workspace-1",
-			Blockers: []ProjectWorkspaceUnlinkBlocker{{Message: "blocked"}},
-		},
-		"blank blocker message": {
-			ProjectID: "project-1", WorkspaceID: "workspace-1",
-			Blockers: []ProjectWorkspaceUnlinkBlocker{{Code: "blocked"}},
+			Blockers: []ProjectWorkspaceUnlinkBlocker{{}},
 		},
 		"negative blocker count": {
 			ProjectID: "project-1", WorkspaceID: "workspace-1",
-			Blockers: []ProjectWorkspaceUnlinkBlocker{{Code: "blocked", Message: "blocked", Count: -1}},
+			Blockers: []ProjectWorkspaceUnlinkBlocker{{Code: "blocked", Count: -1}},
 		},
 		"malformed optional project": {
 			ProjectID: "project-1", WorkspaceID: "workspace-1",

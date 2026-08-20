@@ -1,7 +1,8 @@
 import { z } from "zod";
+import { create } from "@app/server-api-contract";
+import { ServerService } from "@app/server-api-contract/gen/kent/api/server/server_pb";
 
 import { ApiClient } from "./client";
-import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { protocolVersion } from "./jsonRpcSocket";
 import { canonicalBoardFilter } from "./workflowBoardFilters";
@@ -27,17 +28,24 @@ describe("ApiClient", () => {
   it("parses readiness and sends mutation params through typed method boundary", async () => {
     const transport = new FakeRpcTransport([
       {
-        method: "server.readiness.get",
-        result: {
-          ready: true,
-          server_id: "server-1",
-          server_version: "1.3.0",
-          protocol_version: protocolVersion,
-          auth_ready: true,
-          auth_required: false,
-          endpoint: "ws://127.0.0.1:53082/rpc",
-          subagent_roles: [{ name: "default" }, { name: "coder" }],
-        },
+        descriptor: ServerService.method.getReadiness,
+        result: create(ServerService.method.getReadiness.output, {
+          outcome: {
+            case: "success",
+            value: {
+              readiness: {
+                ready: true,
+                serverId: "server-1",
+                serverVersion: "1.3.0",
+                serverBuild: "1.3.0",
+                protocolVersion,
+                authReady: true,
+                endpoint: "ws://127.0.0.1:53082/rpc",
+                subagentRoles: [{ name: "default" }, { name: "coder" }],
+              },
+            },
+          },
+        }),
       },
       { method: "workflow.task.start", result: appliedStartResponse },
     ]);
@@ -50,6 +58,7 @@ describe("ApiClient", () => {
       protocolVersion: protocolVersion,
       subagentRoles: [{ name: "default" }, { name: "coder" }],
     });
+    expect(transport.descriptorCalls[0]?.descriptor).toBe(ServerService.method.getReadiness);
     await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({
       outcome: "applied",
       applied: {
@@ -60,14 +69,6 @@ describe("ApiClient", () => {
     const startCall = transport.calls.find((call) => call.method === "workflow.task.start");
     expect(startCall?.options).toEqual({ timeoutMs: null });
     expect(startTaskParamsSchema.parse(startCall?.params).task_id).toBe("task-1");
-  });
-
-  it("rejects server contract drift before feature code receives raw data", async () => {
-    const client = new ApiClient(
-      new FakeRpcTransport([{ method: "server.readiness.get", result: { ready: true } }]),
-    );
-
-    await expect(client.getReadiness()).rejects.toBeInstanceOf(ContractError);
   });
 
   it("preserves absent board workflow selectors and normalizes empty slices", async () => {
@@ -248,61 +249,6 @@ describe("ApiClient", () => {
 
     await expect(client.getTask("task-1")).resolves.toMatchObject({
       sourceURL: "https://github.com/respawn-llc/kent/issues/1",
-    });
-  });
-
-  it("uses metadata-only Project Settings and mutation RPC contracts", async () => {
-    const transport = new FakeRpcTransport([
-      {
-        method: "project.edit.get",
-        result: {
-          project_id: "project-1",
-          project_key: "PROJ",
-          display_name: "Project",
-        },
-      },
-      { method: "project.update", result: { project: projectSummaryResponse } },
-      { method: "project.defaultWorkspace.set", result: { project: projectSummaryResponse } },
-      {
-        method: "project.unlinkWorkspace",
-        result: {
-          project_id: "project-1",
-          workspace_id: "workspace-1",
-          blockers: [{ code: "default_workspace", message: "Default workspace cannot be unlinked." }],
-        },
-      },
-    ]);
-    const client = new ApiClient(transport);
-
-    await expect(client.getProjectEdit("project-1")).resolves.toMatchObject({
-      projectID: "project-1",
-    });
-    await client.updateProject("project-1", "Renamed");
-    await client.updateProject("project-1", "Renamed", "ABC");
-    await client.setDefaultWorkspace("project-1", "workspace-1");
-    await expect(client.unlinkWorkspace("project-1", "workspace-1")).resolves.toMatchObject({
-      blockers: [{ code: "default_workspace", count: 0 }],
-    });
-
-    expect(transport.calls).toContainEqual({
-      method: "project.edit.get",
-      params: { project_id: "project-1" },
-    });
-    expect(transport.calls).toContainEqual({
-      method: "project.update",
-      params: { project_id: "project-1", display_name: "Renamed", project_key: "" },
-    });
-    expect(transport.calls).toContainEqual({
-      method: "project.update",
-      params: { project_id: "project-1", display_name: "Renamed", project_key: "ABC" },
-    });
-    expect(transport.calls).toContainEqual({
-      method: "project.defaultWorkspace.set",
-      params: { project_id: "project-1", workspace_id: "workspace-1" },
-    });
-    expect(transport.calls).toContainEqual({
-      method: "project.unlinkWorkspace",
-      params: { project_id: "project-1", workspace_id: "workspace-1" },
     });
   });
 
@@ -897,20 +843,6 @@ const workspaceResponse = {
   availability: "available",
   is_primary: true,
   updated_at_unix_ms: 1,
-};
-
-const projectSummaryResponse = {
-  project_id: "project-1",
-  project_key: "PROJ",
-  display_name: "Project",
-  primary_workspace: workspaceResponse,
-  default_workflow_id: "11111111-1111-4111-8111-111111111111",
-  default_workflow_name: "Delivery",
-  default_workflow_valid: true,
-  updated_at_unix_ms: 1,
-  task_count: 0,
-  attention_count: 0,
-  workflow_count: 1,
 };
 
 const emptyTaskDetailResponse = {

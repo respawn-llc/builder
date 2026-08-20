@@ -210,7 +210,6 @@ service ConnectionService {
       scope_policy: SCOPE_POLICY_NONE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "protocol.handshake"
     };
   }
 
@@ -221,7 +220,6 @@ service ConnectionService {
       scope_policy: SCOPE_POLICY_ATTACH_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.attach"
     };
   }
 
@@ -232,7 +230,6 @@ service ConnectionService {
       scope_policy: SCOPE_POLICY_ATTACH_SESSION
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "session.attach"
     };
   }
 }

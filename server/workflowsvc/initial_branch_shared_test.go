@@ -25,6 +25,22 @@ func (initialBranchControllerRunner) StartCurrentNode(
 	return errors.New("runner must not start after branch preparation failure")
 }
 
+type concurrentResumeControllerRunner struct {
+	release <-chan struct{}
+}
+
+func (runner concurrentResumeControllerRunner) StartCurrentNode(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+	*workflowexecution.CurrentNodeClassifiedAssignment,
+	sessionruntime.WorkflowExecutionLease,
+	workflowruntime.Controller,
+) error {
+	<-runner.release
+	return errors.New("concurrent Resume test runner released")
+}
+
 type initialBranchControllerSteerer struct{}
 
 func (initialBranchControllerSteerer) SteerCurrentNodeAssignment(

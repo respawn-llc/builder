@@ -81,8 +81,8 @@ func TestBindingMutationResultValidation(t *testing.T) {
 
 func TestBindingMutationTypedErrorProjection(t *testing.T) {
 	blocked, err := newBindingMutationBlockedError(" project-1 ", " workspace-1 ", []serverapi.ProjectWorkspaceUnlinkBlocker{
-		{Code: "default_workspace", Message: "default", Count: 1},
-		{Code: "active_sessions", Message: "active"},
+		{Code: "non_terminal_tasks", Count: 1},
+		{Code: "default_workspace"},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -215,24 +215,32 @@ func projectDeleteErrorCode(err error) string {
 func projectDeleteBlockersForCLI(blockers []serverapi.ProjectDeleteBlocker) ([]projectDeleteBlocker, error) {
 	output := make([]projectDeleteBlocker, 0, len(blockers))
 	for _, blocker := range blockers {
-		if strings.TrimSpace(blocker.Code) == "" || strings.TrimSpace(blocker.Message) == "" {
-			return nil, errors.New("project deletion returned an incomplete blocker")
+		message, err := projectDeleteBlockerMessage(blocker.Code)
+		if err != nil {
+			return nil, err
 		}
-		if blocker.Count < 0 {
-			return nil, errors.New("project deletion returned a negative blocker count")
+		if blocker.Count <= 0 {
+			return nil, errors.New("project deletion returned a non-positive blocker count")
 		}
-		var count *int
-		if blocker.Count > 0 {
-			value := blocker.Count
-			count = &value
-		}
+		count := blocker.Count
 		output = append(output, projectDeleteBlocker{
-			Code:    blocker.Code,
-			Message: blocker.Message,
-			Count:   count,
+			Code:    strings.TrimSpace(blocker.Code),
+			Message: message,
+			Count:   &count,
 		})
 	}
 	return output, nil
+}
+
+func projectDeleteBlockerMessage(code string) (string, error) {
+	switch strings.TrimSpace(code) {
+	case "non_terminal_tasks":
+		return "Project has active or non-terminal tasks.", nil
+	case "active_sessions":
+		return "Project has active runtime sessions.", nil
+	default:
+		return "", fmt.Errorf("project deletion returned unsupported blocker code %q", code)
+	}
 }
 
 func writeProjectDeleteOutcome(stdout io.Writer, stderr io.Writer, outcome projectDeleteOutcome, jsonOut bool) int {

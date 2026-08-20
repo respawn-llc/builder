@@ -306,53 +306,6 @@ func newServerIdentity(cfg config.App) protocol.ServerIdentity {
 		ServerID:          fmt.Sprintf(config.Command+":%d", os.Getpid()),
 		PID:               os.Getpid(),
 		PersistenceRootID: config.PersistenceRootHash(cfg.PersistenceRoot),
-		Capabilities:      serverCapabilityFlags(apicontract.Routes()),
-	}
-}
-
-func serverCapabilityFlags(routes []apicontract.Route) protocol.CapabilityFlags {
-	methods := make(map[string]struct{}, len(routes))
-	dependencies := make(map[apicontract.Dependency]struct{}, len(routes))
-	for _, route := range routes {
-		methods[route.Method] = struct{}{}
-		dependencies[route.Dependency] = struct{}{}
-	}
-	hasMethod := func(method string) bool {
-		_, ok := methods[method]
-		return ok
-	}
-	hasDependency := func(dependency apicontract.Dependency) bool {
-		_, ok := dependencies[dependency]
-		return ok
-	}
-	methodHasDependency := func(method string, dependency apicontract.Dependency) bool {
-		for _, route := range routes {
-			if route.Method == method && route.Dependency == dependency {
-				return true
-			}
-		}
-		return false
-	}
-	return protocol.CapabilityFlags{
-		JSONRPCWebSocket:       hasMethod(protocol.MethodHandshake),
-		AuthBootstrap:          hasDependency(apicontract.DependencyAuthBootstrap),
-		ProjectAttach:          methodHasDependency(protocol.MethodAttachProject, apicontract.DependencyProtocolAttach),
-		SessionAttach:          methodHasDependency(protocol.MethodAttachSession, apicontract.DependencyProtocolAttach),
-		HealthEndpoint:         true,
-		ReadinessEndpoint:      true,
-		RunPrompt:              hasDependency(apicontract.DependencyRunPrompt),
-		SessionPlan:            hasMethod(protocol.MethodSessionPlan),
-		SessionLifecycle:       hasDependency(apicontract.DependencySessionLifecycle),
-		SessionTranscript:      hasDependency(apicontract.DependencySessionTranscript),
-		SessionRuntime:         hasDependency(apicontract.DependencySessionRuntime),
-		RuntimeControl:         hasDependency(apicontract.DependencyRuntimeControl),
-		RuntimeLiveControl:     hasDependency(apicontract.DependencyRuntimeControl) && transport.RuntimeLiveControlRoutesExecutable(),
-		PromptControl:          hasDependency(apicontract.DependencyPromptControl),
-		AttentionNotifications: hasDependency(apicontract.DependencyAttentionNotification),
-		OnboardingFinalize:     hasDependency(apicontract.DependencyOnboardingFinalize),
-		PromptCommands: hasDependency(apicontract.DependencyPromptCommandCatalog) &&
-			hasDependency(apicontract.DependencyRuntimeControl) &&
-			hasMethod(protocol.MethodRuntimeSubmitUserTurn),
 	}
 }
 
@@ -663,7 +616,7 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 
 func (d *startupGatewayDependencies) AuthManager() *auth.Manager { return d.authSupport.AuthManager }
 func (d *startupGatewayDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
-	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, d.snapshotConfig().Settings, apicontract.AllowedPreAuthMethods())
+	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, d.snapshotConfig().Settings)
 }
 func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusService {
 	return authservice.NewStatusService(d.authSupport.AuthManager, d.snapshotConfig().Settings)

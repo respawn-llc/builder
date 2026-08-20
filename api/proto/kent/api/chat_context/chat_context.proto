@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+package kent.api.chat_context;
+
+import "buf/validate/validate.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/chat_context;chatcontextpb";
+
+message WorkspaceChatTarget {}
+
+message SessionTarget {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message Target {
+  oneof target {
+    option (buf.validate.oneof).required = true;
+
+    WorkspaceChatTarget workspace_chat = 1;
+    SessionTarget session = 2;
+  }
+}
+
+message GetRequest {
+  Target target = 1 [(buf.validate.field).required = true];
+}
+
+enum CompactionMode {
+  COMPACTION_MODE_UNSPECIFIED = 0;
+  COMPACTION_MODE_DISABLED = 1;
+  COMPACTION_MODE_LOCAL = 2;
+  COMPACTION_MODE_PROVIDER_NATIVE = 3;
+}
+
+message Context {
+  int64 context_window_tokens = 1 [(buf.validate.field).int64 = {
+    gte: 1
+    lte: 9007199254740991
+  }];
+  int64 used_tokens = 2 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 remaining_tokens = 3 [(buf.validate.field).int64 = {
+    gte: -9007199254740991
+    lte: 9007199254740991
+  }];
+  int64 automatic_threshold_tokens = 4 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  bool auto_compaction_enabled = 5;
+  CompactionMode compaction_mode = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  int64 completed_compaction_count = 7 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  bool compaction_running = 8;
+  bool manual_compact_available = 9;
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_context.remaining_tokens"
+    message: "remaining tokens must equal context window tokens minus used tokens"
+    expression: "this.remaining_tokens == this.context_window_tokens - this.used_tokens"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.chat_context.automatic_threshold"
+    message: "automatic threshold tokens must not exceed the context window"
+    expression: "this.automatic_threshold_tokens <= this.context_window_tokens"
+  };
+}
+
+message GetSuccess {
+  Context context = 1 [(buf.validate.field).required = true];
+}
+
+message AuthRequiredDetails {}
+
+message GetError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    AuthRequiredDetails auth_required = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message GetResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    GetSuccess success = 1 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS
+    ];
+    GetError error = 2 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR
+    ];
+  }
+}
+
+service ChatContextService {
+  rpc Get(GetRequest) returns (GetResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT_IF_SET
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "chat.context.get"
+    };
+  }
+}

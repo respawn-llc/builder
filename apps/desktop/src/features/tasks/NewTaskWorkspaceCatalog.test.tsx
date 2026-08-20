@@ -27,10 +27,7 @@ interface TestState {
     refetch: ReturnType<typeof vi.fn>;
   };
   exact: {
-    data:
-      | { kind: "attached"; workspace: WorkspaceCatalogRow }
-      | { kind: "not_attached" }
-      | undefined;
+    data: { kind: "attached"; workspace: WorkspaceCatalogRow } | { kind: "not_attached" } | undefined;
     error: Error | null;
     isError: boolean;
     isPending: boolean;
@@ -77,11 +74,7 @@ vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock("@/app-facade", () => ({
   projectWorkspaceQueryOptions: () => ({}),
   queryKeys: {
-    projectWorkspaceCatalog: (projectID: string) => [
-      "project-catalog",
-      projectID,
-      "workspaces",
-    ],
+    projectWorkspaceCatalog: (projectID: string) => ["project-catalog", projectID, "workspaces"],
   },
   useAppServices: () => ({ api: {} }),
   useConnectionSnapshot: () => ({ phase: "connected" }),
@@ -123,7 +116,9 @@ vi.mock("@/ui", () => ({
           <button
             disabled={props.disabled}
             key={option.value}
-            onClick={() => { props.onValueChange(option.value); }}
+            onClick={() => {
+              props.onValueChange(option.value);
+            }}
           >
             {option.label}
           </button>
@@ -354,9 +349,9 @@ describe("New Task Workspace catalog integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "other" }));
     fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), { target: { value: "Task" } });
     fireEvent.click(screen.getByRole("button", { name: "task.create" }));
-    await vi.waitFor(() =>
-      { expect(state.create).toHaveBeenCalledWith(expect.objectContaining({ sourceWorkspaceID: "other" })); },
-    );
+    await vi.waitFor(() => {
+      expect(state.create).toHaveBeenCalledWith(expect.objectContaining({ sourceWorkspaceID: "other" }));
+    });
     view.unmount();
     state.exact.error = new RpcError({
       code: rpcErrorCodes.projectNotFound,
@@ -366,6 +361,8 @@ describe("New Task Workspace catalog integration", () => {
     state.exact.data = undefined;
     state.exact.isError = true;
     render(<NewTaskForm {...props} onProjectMissing={onProjectMissing} />);
-    await vi.waitFor(() => { expect(onProjectMissing).toHaveBeenCalled(); });
+    await vi.waitFor(() => {
+      expect(onProjectMissing).toHaveBeenCalled();
+    });
   });
 });

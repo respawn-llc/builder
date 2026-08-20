@@ -272,8 +272,8 @@ func TestProjectDeleteProjectsServerBlockersInOrderWithTypedCounts(t *testing.T)
 		deleteResponse: serverapi.ProjectDeleteResponse{
 			ProjectID: projectID,
 			Blockers: []serverapi.ProjectDeleteBlocker{
-				{Code: "first", Message: "first blocker"},
-				{Code: "second", Message: "second blocker", Count: 3},
+				{Code: "non_terminal_tasks", Count: 1},
+				{Code: "active_sessions", Count: 3},
 			},
 		},
 	}
@@ -303,10 +303,11 @@ func TestProjectDeleteProjectsServerBlockersInOrderWithTypedCounts(t *testing.T)
 		envelope.Error.ProjectID != projectID || len(envelope.Error.Blockers) != 2 {
 		t.Fatalf("envelope = %+v, want ordered blockers", envelope)
 	}
-	if envelope.Error.Blockers[0].Code != "first" || envelope.Error.Blockers[0].Count != nil ||
-		envelope.Error.Blockers[1].Code != "second" || envelope.Error.Blockers[1].Count == nil ||
+	if envelope.Error.Blockers[0].Code != "non_terminal_tasks" || envelope.Error.Blockers[0].Count == nil ||
+		*envelope.Error.Blockers[0].Count != 1 ||
+		envelope.Error.Blockers[1].Code != "active_sessions" || envelope.Error.Blockers[1].Count == nil ||
 		*envelope.Error.Blockers[1].Count != 3 {
-		t.Fatalf("blockers = %+v, want absent zero and positive count", envelope.Error.Blockers)
+		t.Fatalf("blockers = %+v, want ordered positive counts", envelope.Error.Blockers)
 	}
 }
 
@@ -337,7 +338,7 @@ func TestProjectDeletePlainOutputUsesExpectedStreams(t *testing.T) {
 			listResponse: projectDeleteTaskListResponse(projectID),
 			deleteResponse: serverapi.ProjectDeleteResponse{
 				ProjectID: projectID,
-				Blockers:  []serverapi.ProjectDeleteBlocker{{Code: "blocked", Message: "blocked", Count: 2}},
+				Blockers:  []serverapi.ProjectDeleteBlocker{{Code: "active_sessions", Count: 2}},
 			},
 		},
 		projectID,
@@ -421,7 +422,7 @@ func TestProjectDeleteRejectsNegativeServerBlockerCount(t *testing.T) {
 		deleteResponse: serverapi.ProjectDeleteResponse{
 			ProjectID: projectID,
 			Blockers: []serverapi.ProjectDeleteBlocker{
-				{Code: "invalid", Message: "invalid blocker", Count: -1},
+				{Code: "non_terminal_tasks", Count: -1},
 			},
 		},
 	}
@@ -489,7 +490,7 @@ func TestProjectDeleteRejectsMalformedDeleteResponses(t *testing.T) {
 				ProjectID: projectID,
 				Deleted:   true,
 				Blockers: []serverapi.ProjectDeleteBlocker{
-					{Code: "blocker", Message: "blocker"},
+					{Code: "active_sessions", Count: 1},
 				},
 			},
 		},
@@ -504,16 +505,7 @@ func TestProjectDeleteRejectsMalformedDeleteResponses(t *testing.T) {
 			response: serverapi.ProjectDeleteResponse{
 				ProjectID: projectID,
 				Blockers: []serverapi.ProjectDeleteBlocker{
-					{Message: "blocker"},
-				},
-			},
-		},
-		{
-			name: "blank blocker message",
-			response: serverapi.ProjectDeleteResponse{
-				ProjectID: projectID,
-				Blockers: []serverapi.ProjectDeleteBlocker{
-					{Code: "blocker"},
+					{Count: 1},
 				},
 			},
 		},

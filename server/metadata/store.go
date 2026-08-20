@@ -1101,9 +1101,9 @@ func (s *Store) ListWorkspaceSessionIDs(ctx context.Context, workspaceID string)
 
 func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workspace sqlitegen.Workspace) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
 	blockers := []serverapi.ProjectWorkspaceUnlinkBlocker{}
-	addCountBlocker := func(code string, message string, count int64) {
+	addCountBlocker := func(code string, count int64) {
 		if count > 0 {
-			blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: code, Message: message, Count: int(count)})
+			blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: code, Count: int(count)})
 		}
 	}
 	primaryWorkspaceID, err := q.GetProjectPrimaryWorkspaceID(ctx, strings.TrimSpace(projectID))
@@ -1111,24 +1111,24 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 		return nil, fmt.Errorf("get project primary workspace: %w", err)
 	}
 	if strings.TrimSpace(primaryWorkspaceID) == strings.TrimSpace(workspace.ID) {
-		blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: "default_workspace", Message: "Workspace is the project default workspace."})
+		blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: "default_workspace"})
 	}
 	workspaceID := sql.NullString{String: workspace.ID, Valid: strings.TrimSpace(workspace.ID) != ""}
 	nonTerminalTasks, err := q.CountNonTerminalTasksBySourceWorkspace(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count non-terminal workspace tasks: %w", err)
 	}
-	addCountBlocker("non_terminal_tasks", "Active or non-terminal tasks still depend on this workspace.", nonTerminalTasks)
+	addCountBlocker("non_terminal_tasks", nonTerminalTasks)
 	executableCurrentNodes, err := q.CountExecutableCurrentNodesByWorkspace(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count executable workspace current nodes: %w", err)
 	}
-	addCountBlocker("executable_current_nodes", "Executable current nodes still depend on this workspace.", executableCurrentNodes)
+	addCountBlocker("executable_current_nodes", executableCurrentNodes)
 	worktrees, err := q.CountWorktreesByWorkspace(ctx, workspace.ID)
 	if err != nil {
 		return nil, fmt.Errorf("count workspace worktrees: %w", err)
 	}
-	addCountBlocker("managed_owned_worktrees", "Worktrees still depend on this workspace.", worktrees)
+	addCountBlocker("managed_owned_worktrees", worktrees)
 	missingSnapshots, err := q.CountTasksMissingSourceWorkspaceSnapshot(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count missing workspace snapshots: %w", err)
@@ -1152,11 +1152,7 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 	if err != nil {
 		return nil, fmt.Errorf("count missing session workspace snapshots: %w", err)
 	}
-	addCountBlocker(
-		"missing_history_snapshot",
-		"Historical task or retained Session references do not have a durable workspace path/name snapshot.",
-		missingSnapshots+missingSessionSnapshots,
-	)
+	addCountBlocker("missing_history_snapshot", missingSnapshots+missingSessionSnapshots)
 	return blockers, nil
 }
 

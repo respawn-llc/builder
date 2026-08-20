@@ -24,11 +24,25 @@ export default defineConfig({
     sourcemap: false,
   },
   resolve: {
-    alias: {
-      "@": fileURLToPath(new URL("../src", import.meta.url)),
-      "@app/native-bridge": fileURLToPath(new URL("../packages/native-bridge/src/index.ts", import.meta.url)),
-      "@app/ui-kit": fileURLToPath(new URL("../packages/ui-kit/src/ReorderableList.tsx", import.meta.url)),
-    },
+    alias: [
+      {
+        find: "@app/server-api-contract/gen",
+        replacement: fileURLToPath(new URL("../packages/server-api-contract/src/gen", import.meta.url)),
+      },
+      {
+        find: "@app/server-api-contract",
+        replacement: fileURLToPath(new URL("../packages/server-api-contract/src/index.ts", import.meta.url)),
+      },
+      { find: "@", replacement: fileURLToPath(new URL("../src", import.meta.url)) },
+      {
+        find: "@app/native-bridge",
+        replacement: fileURLToPath(new URL("../packages/native-bridge/src/index.ts", import.meta.url)),
+      },
+      {
+        find: "@app/ui-kit",
+        replacement: fileURLToPath(new URL("../packages/ui-kit/src/ReorderableList.tsx", import.meta.url)),
+      },
+    ],
   },
   server: {
     host: "127.0.0.1",

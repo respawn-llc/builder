@@ -542,16 +542,39 @@ func configWriteFailed(path, op string, cause error) error {
 }
 
 func rollbackFailed(primary error, rollback error) error {
-	primaryDetail := any(map[string]string{"cause": primary.Error()})
+	primaryDetail := serverapi.OnboardingRollbackPrimaryFailure{
+		InternalFailure: &serverapi.OnboardingInternalFailureDetails{},
+	}
 	var finalizeErr *serverapi.OnboardingFinalizeError
 	if errors.As(primary, &finalizeErr) {
-		primaryDetail = serverapi.OnboardingFinalizeErrorEnvelope{Type: "onboarding_finalize_error", Code: finalizeErr.Code, Details: finalizeErr.Details}
+		switch details := finalizeErr.Details.(type) {
+		case serverapi.OnboardingInvalidRequestDetails:
+			primaryDetail = serverapi.OnboardingRollbackPrimaryFailure{InvalidRequest: &details}
+		case serverapi.OnboardingConfigAlreadyExistsDetails:
+			primaryDetail = serverapi.OnboardingRollbackPrimaryFailure{ConfigAlreadyExists: &details}
+		case serverapi.OnboardingImportUnavailableDetails:
+			primaryDetail = serverapi.OnboardingRollbackPrimaryFailure{ImportUnavailable: &details}
+		case serverapi.OnboardingImportFailedDetails:
+			primaryDetail = serverapi.OnboardingRollbackPrimaryFailure{ImportFailed: &details}
+		case serverapi.OnboardingConfigWriteFailedDetails:
+			primaryDetail = serverapi.OnboardingRollbackPrimaryFailure{ConfigWriteFailed: &details}
+		case serverapi.OnboardingCanceledDetails:
+			primaryDetail = serverapi.OnboardingRollbackPrimaryFailure{Canceled: &details}
+		default:
+			cause := primary.Error()
+			primaryDetail = serverapi.OnboardingRollbackPrimaryFailure{
+				InternalFailure: &serverapi.OnboardingInternalFailureDetails{Cause: &cause},
+			}
+		}
+	} else {
+		cause := primary.Error()
+		primaryDetail.InternalFailure.Cause = &cause
 	}
-	rollbackDetail := map[string]string{"operation": "rollback", "cause": rollback.Error()}
+	rollbackDetail := serverapi.OnboardingRollbackFailureFact{Operation: "rollback", Cause: rollback.Error()}
 	var rollbackErr rollbackFailure
 	if errors.As(rollback, &rollbackErr) {
-		rollbackDetail["operation"] = rollbackErr.operation
-		rollbackDetail["cause"] = rollbackErr.cause.Error()
+		rollbackDetail.Operation = rollbackErr.operation
+		rollbackDetail.Cause = rollbackErr.cause.Error()
 	}
 	return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeRollbackFailed, serverapi.OnboardingRollbackFailedDetails{Primary: primaryDetail, Rollback: rollbackDetail}, errors.Join(primary, rollback))
 }

@@ -102,7 +102,7 @@ func explicitProviderFacts(providerIDs []string) ([]serverapi.LLMProviderCapabil
 		caps, err := llm.InferProviderCapabilities(providerID)
 		if err != nil {
 			if errors.Is(err, llm.ErrUnsupportedProvider) {
-				return nil, fmt.Errorf("%w: %s", serverapi.ErrUnsupportedProvider, providerID)
+				return nil, &serverapi.UnsupportedProviderError{ProviderID: providerID}
 			}
 			return nil, err
 		}

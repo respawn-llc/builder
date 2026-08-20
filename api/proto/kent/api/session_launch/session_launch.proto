@@ -37,7 +37,7 @@ message SessionLaunchIntent {
   oneof intent {
     option (buf.validate.oneof).required = true;
 
-    SessionCreateOrigin create_new = 1 [(buf.validate.field).required = true];
+    SessionCreateOrigin create_new = 1;
     string open_existing_session_id = 2 [
       (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
@@ -382,6 +382,8 @@ message SessionPlanSuccess {
   repeated string warnings = 2;
 }
 
+message AuthRequiredDetails {}
+
 enum SubagentLaunchDenialKind {
   SUBAGENT_LAUNCH_DENIAL_KIND_UNSPECIFIED = 0;
   SUBAGENT_LAUNCH_DENIAL_KIND_INVALID_TARGET = 1;
@@ -436,6 +438,12 @@ message SessionPlanError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    AuthRequiredDetails auth_required = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
       }
     ];
   }
@@ -503,6 +511,18 @@ message WorkspaceChatDraftError {
         error_code: "internal_failure"
       }
     ];
+    AuthRequiredDetails auth_required = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
+      }
+    ];
+    kent.api.project.WorkspaceNotRegisteredDetails workspace_not_registered = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_not_registered"
+      }
+    ];
   }
 }
 
@@ -534,6 +554,18 @@ message MaterializeWorkspaceChatError {
         error_code: "internal_failure"
       }
     ];
+    AuthRequiredDetails auth_required = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
+      }
+    ];
+    kent.api.project.WorkspaceNotRegisteredDetails workspace_not_registered = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_not_registered"
+      }
+    ];
   }
 }
 
@@ -554,7 +586,6 @@ service SessionLaunchService {
       scope_policy: SCOPE_POLICY_PROJECT_WORKSPACE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "session.plan"
     };
   }
 
@@ -565,7 +596,6 @@ service SessionLaunchService {
       scope_policy: SCOPE_POLICY_PROJECT_WORKSPACE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "session.workspaceChatDraft"
     };
   }
 
@@ -576,7 +606,6 @@ service SessionLaunchService {
       scope_policy: SCOPE_POLICY_PROJECT_WORKSPACE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "session.materializeWorkspaceChat"
     };
   }
 }

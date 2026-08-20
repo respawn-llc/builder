@@ -98,14 +98,11 @@ func attachRunPromptRemote(ctx context.Context, req AttachRunPromptRequest) (*cl
 		DialWorkspace:    req.DialWorkspace,
 		Accept: func(candidate protocol.ServerIdentity) bool {
 			identity = candidate
-			if rootMatches(rootID, candidate) {
-				return true
+			if !rootMatches(rootID, candidate) {
+				verdict.rootMismatchReason = rootMismatchReason(candidate)
+				return false
 			}
-			verdict.rootMismatchReason = rootMismatchReason(candidate)
-			return false
-		},
-		Supports: func(flags protocol.CapabilityFlags) bool {
-			if identity.ProtocolVersion == protocol.Version && remoteattach.SupportsRunPrompt(flags) {
+			if identity.ProtocolVersion == protocol.Version {
 				return true
 			}
 			verdict.reason = incompatibilityReason(identity)

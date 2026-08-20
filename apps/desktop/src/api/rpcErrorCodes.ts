@@ -1,5 +1,12 @@
 export const rpcErrorCodes = {
+  internal: -32603,
+  workspaceNotRegistered: -32013,
   projectNotFound: -32014,
+  projectUnavailable: -32015,
+  authRequired: -32018,
+  workspacePathIdentity: -32049,
+  workspaceDetachConflict: -32050,
+  workspaceMutationFailed: -32051,
   worktreeSelector: -32037,
   worktreeTransitionPending: -32038,
   worktreeSetupRetained: -32039,

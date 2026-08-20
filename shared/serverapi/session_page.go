@@ -7,27 +7,16 @@ import (
 	"time"
 
 	"core/shared/clientui"
-	"core/shared/protocol"
 	"core/shared/sessioncontract"
 )
 
 const MaxSessionPageSize = OffsetPaginationMaxLimit
 
 type SessionPageRequest struct {
-	ProjectID string                          `json:"project_id"`
-	Category  sessioncontract.SessionCategory `json:"category"`
-	Offset    *int                            `json:"offset,omitempty"`
-	Limit     *int                            `json:"limit,omitempty"`
-}
-
-func (r *SessionPageRequest) UnmarshalJSON(data []byte) error {
-	type wire SessionPageRequest
-	var decoded wire
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	*r = SessionPageRequest(decoded)
-	return nil
+	ProjectID string
+	Category  sessioncontract.SessionCategory
+	Offset    *int
+	Limit     *int
 }
 
 func (r SessionPageRequest) ResolveWindow() (OffsetWindow, error) {
@@ -49,20 +38,10 @@ func (r SessionPageRequest) Validate() error {
 }
 
 type SessionPageResponse struct {
-	ProjectID  string                          `json:"project_id"`
-	Category   sessioncontract.SessionCategory `json:"category"`
-	Sessions   []clientui.SessionSummary       `json:"sessions"`
-	NextOffset *int                            `json:"next_offset,omitempty"`
-}
-
-func (r *SessionPageResponse) UnmarshalJSON(data []byte) error {
-	type wire SessionPageResponse
-	var decoded wire
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	*r = SessionPageResponse(decoded)
-	return nil
+	ProjectID  string
+	Category   sessioncontract.SessionCategory
+	Sessions   []clientui.SessionSummary
+	NextOffset *int
 }
 
 func (r SessionPageResponse) Validate() error {

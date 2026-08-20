@@ -1425,10 +1425,11 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	if _, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID)); err != nil {
+	taskID := workflow.TaskID(task.Task.ID)
+	if _, err := service.store.StartTask(ctx, taskID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	currentNodes, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
+	currentNodes, err := service.store.ListCurrentNodes(ctx, taskID)
 	if err != nil {
 		t.Fatalf("ListCurrentNodes: %v", err)
 	}
@@ -1445,10 +1446,27 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 			t.Fatalf("InterruptCurrentNode: %v", err)
 		}
 	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if err := service.store.LockTaskExecutionTarget(ctx, taskID, &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   targetContext.SourceWorkspaceID,
+			SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+		},
+	}); err != nil {
+		t.Fatalf("LockTaskExecutionTarget: %v", err)
+	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	releaseRunner := make(chan struct{})
 	controller, err := workflowexecution.NewCurrentNodeController(
 		service.store,
-		initialBranchControllerRunner{},
+		concurrentResumeControllerRunner{release: releaseRunner},
 		authority,
 		service.taskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
@@ -1460,6 +1478,7 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 		t.Fatalf("NewCurrentNodeController: %v", err)
 	}
 	t.Cleanup(func() {
+		close(releaseRunner)
 		_ = controller.Close()
 		_ = authority.Close(context.Background())
 	})
@@ -1467,9 +1486,6 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 	request := serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
-		},
 	}
 
 	responses := make(chan serverapi.WorkflowTaskResumeResponse, 2)

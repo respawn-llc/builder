@@ -2,14 +2,12 @@ package client
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
 	"testing"
 	"time"
 
 	"core/shared/clientui"
-	"core/shared/protocol"
+	"core/shared/protoapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -23,55 +21,34 @@ func TestRemoteSessionPageRoundTripUsesProjectAttachment(t *testing.T) {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		for {
-			if err := websocket.JSON.Receive(ws, &req); err != nil {
-				if errors.Is(err, io.EOF) {
-					return
-				}
-				t.Fatalf("receive session page request: %v", err)
-			}
-			switch req.Method {
-			case protocol.MethodAttachProject:
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/workspace"))); err != nil {
-					t.Fatalf("send attach response: %v", err)
-				}
-			case protocol.MethodSessionPage:
-				var params serverapi.SessionPageRequest
-				if err := json.Unmarshal(req.Params, &params); err != nil {
-					t.Fatalf("decode session page request: %v", err)
-				}
-				if err := params.Validate(); err != nil {
-					t.Fatalf("validate session page request: %v", err)
-				}
-				window, err := params.ResolveWindow()
-				if err != nil {
-					t.Fatalf("resolve session page window: %v", err)
-				}
-				if params.ProjectID != "project-1" ||
-					params.Category != sessioncontract.SessionCategorySubagent ||
-					window.Offset != 50 ||
-					window.Limit != 20 {
-					t.Fatalf("session page request = %+v", params)
-				}
-				nextOffset := 70
-				response := serverapi.SessionPageResponse{
-					ProjectID:  "project-1",
-					Category:   sessioncontract.SessionCategorySubagent,
-					NextOffset: &nextOffset,
-					Sessions: []clientui.SessionSummary{{
-						SessionID: sessionID,
-						Category:  sessioncontract.SessionCategorySubagent,
-						UpdatedAt: time.Unix(1, 0).UTC(),
-					}},
-				}
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
-					t.Fatalf("send session page response: %v", err)
-				}
-			default:
-				t.Fatalf("unexpected method %q", req.Method)
-			}
+		acceptRemoteHandshake(t, ws)
+		acceptRemoteProjectAttachment(t, ws, "workspace-1", "/workspace")
+		method := sessionCatalogMethod("Page")
+		request := &projectpb.SessionPageRequest{}
+		correlation := receiveRemoteDescriptorCall(t, ws, method, request)
+		if request.ProjectId != "project-1" ||
+			request.Category != projectpb.SessionCategory_SESSION_CATEGORY_SUBAGENT ||
+			request.Offset == nil || *request.Offset != 50 ||
+			request.Limit == nil || *request.Limit != 20 {
+			t.Fatalf("session page request = %+v", request)
 		}
+		nextOffset := 70
+		success, err := protoapi.SessionPageToProto(serverapi.SessionPageResponse{
+			ProjectID:  "project-1",
+			Category:   sessioncontract.SessionCategorySubagent,
+			NextOffset: &nextOffset,
+			Sessions: []clientui.SessionSummary{{
+				SessionID: sessionID,
+				Category:  sessioncontract.SessionCategorySubagent,
+				UpdatedAt: time.Unix(1, 0).UTC(),
+			}},
+		})
+		if err != nil {
+			t.Fatalf("encode session page response: %v", err)
+		}
+		sendRemoteDescriptorResult(t, ws, method, correlation, &projectpb.SessionPageResult{
+			Outcome: &projectpb.SessionPageResult_Success{Success: success},
+		})
 	})
 
 	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
@@ -119,27 +96,17 @@ func TestRemoteSessionPageRejectsResponseIdentityMismatch(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				req := acceptRemoteHandshake(t, ws)
-				for {
-					if err := websocket.JSON.Receive(ws, &req); err != nil {
-						if errors.Is(err, io.EOF) {
-							return
-						}
-						t.Fatalf("receive session page request: %v", err)
-					}
-					switch req.Method {
-					case protocol.MethodAttachProject:
-						if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/workspace"))); err != nil {
-							t.Fatalf("send attach response: %v", err)
-						}
-					case protocol.MethodSessionPage:
-						if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, test.response)); err != nil {
-							t.Fatalf("send session page response: %v", err)
-						}
-					default:
-						t.Fatalf("unexpected method %q", req.Method)
-					}
+				acceptRemoteHandshake(t, ws)
+				acceptRemoteProjectAttachment(t, ws, "workspace-1", "/workspace")
+				method := sessionCatalogMethod("Page")
+				correlation := receiveRemoteDescriptorCall(t, ws, method, &projectpb.SessionPageRequest{})
+				success, err := protoapi.SessionPageToProto(test.response)
+				if err != nil {
+					t.Fatalf("encode session page response: %v", err)
 				}
+				sendRemoteDescriptorResult(t, ws, method, correlation, &projectpb.SessionPageResult{
+					Outcome: &projectpb.SessionPageResult_Success{Success: success},
+				})
 			})
 
 			remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
@@ -155,67 +122,6 @@ func TestRemoteSessionPageRejectsResponseIdentityMismatch(t *testing.T) {
 				Limit:     remoteTestIntPointer(20),
 			}); err == nil {
 				t.Fatal("ListSessionPage accepted mismatched response identity")
-			}
-		})
-	}
-}
-
-func TestRemoteSessionPageRejectsObsoleteResponseFields(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		body json.RawMessage
-	}{
-		{
-			name: "old only",
-			body: json.RawMessage(`{"project_id":"project-1","category":"main","sessions":[],"older":"opaque"}`),
-		},
-		{
-			name: "mixed continuation and offset",
-			body: json.RawMessage(`{"project_id":"project-1","category":"main","sessions":[],"next_offset":50,"newer":"opaque"}`),
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				req := acceptRemoteHandshake(t, ws)
-				for {
-					if err := websocket.JSON.Receive(ws, &req); err != nil {
-						if errors.Is(err, io.EOF) {
-							return
-						}
-						t.Fatalf("receive session page request: %v", err)
-					}
-					switch req.Method {
-					case protocol.MethodAttachProject:
-						if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/workspace"))); err != nil {
-							t.Fatalf("send attach response: %v", err)
-						}
-					case protocol.MethodSessionPage:
-						if err := websocket.JSON.Send(ws, protocol.Response{
-							JSONRPC: protocol.JSONRPCVersion,
-							ID:      req.ID,
-							Result:  test.body,
-						}); err != nil {
-							t.Fatalf("send obsolete session page response: %v", err)
-						}
-					default:
-						t.Fatalf("unexpected method %q", req.Method)
-					}
-				}
-			})
-
-			remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
-			if err != nil {
-				t.Fatalf("DialRemoteURLForProject: %v", err)
-			}
-			defer func() { _ = remote.Close() }()
-
-			if _, err := remote.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-				ProjectID: "project-1",
-				Category:  sessioncontract.SessionCategoryMain,
-				Offset:    remoteTestIntPointer(0),
-				Limit:     remoteTestIntPointer(50),
-			}); err == nil {
-				t.Fatalf("ListSessionPage accepted obsolete response: %s", test.body)
 			}
 		})
 	}

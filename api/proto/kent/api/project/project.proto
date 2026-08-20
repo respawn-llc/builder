@@ -51,10 +51,10 @@ message ProjectSummary {
       id: "kent.project.summary.project_key"
       message: "project_key must start with A-Z and contain only A-Z or 0-9"
       expression:
-        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
-        "bytes(this).all(character, "
-        "(character >= uint(65) && character <= uint(90)) || "
-        "(character >= uint(48) && character <= uint(57)))"
+        "this.charAt(0) >= 'A' && this.charAt(0) <= 'Z' && "
+        "[0, 1, 2, 3, 4, 5, 6, 7].all(index, index >= size(this) || "
+        "(this.charAt(index) >= 'A' && this.charAt(index) <= 'Z') || "
+        "(this.charAt(index) >= '0' && this.charAt(index) <= '9'))"
     }
   ];
   string display_name = 3 [
@@ -119,10 +119,10 @@ message ProjectBinding {
       id: "kent.project.binding.project_key"
       message: "project_key must start with A-Z and contain only A-Z or 0-9"
       expression:
-        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
-        "bytes(this).all(character, "
-        "(character >= uint(65) && character <= uint(90)) || "
-        "(character >= uint(48) && character <= uint(57)))"
+        "this.charAt(0) >= 'A' && this.charAt(0) <= 'Z' && "
+        "[0, 1, 2, 3, 4, 5, 6, 7].all(index, index >= size(this) || "
+        "(this.charAt(index) >= 'A' && this.charAt(index) <= 'Z') || "
+        "(this.charAt(index) >= '0' && this.charAt(index) <= '9'))"
     }
   ];
   string project_name = 3 [(buf.validate.field).string.min_len = 1];
@@ -146,10 +146,10 @@ message ProjectMutationBinding {
       id: "kent.project.mutation_binding.project_key"
       message: "project_key must start with A-Z and contain only A-Z or 0-9"
       expression:
-        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
-        "bytes(this).all(character, "
-        "(character >= uint(65) && character <= uint(90)) || "
-        "(character >= uint(48) && character <= uint(57)))"
+        "this.charAt(0) >= 'A' && this.charAt(0) <= 'Z' && "
+        "[0, 1, 2, 3, 4, 5, 6, 7].all(index, index >= size(this) || "
+        "(this.charAt(index) >= 'A' && this.charAt(index) <= 'Z') || "
+        "(this.charAt(index) >= '0' && this.charAt(index) <= '9'))"
     }
   ];
   string project_name = 3 [(buf.validate.field).string.min_len = 1];
@@ -159,11 +159,34 @@ message ProjectMutationBinding {
     defined_only: true
     not_in: [0]
   }];
+  string canonical_root = 7 [(buf.validate.field).string.min_len = 1];
 }
 
 message SelectedProjectWorkspace {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
   string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message ProjectHomeWorkspaceSummary {
+  string workspace_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "project_home_workspace_summary.workspace_id.trimmed"
+      message: "workspace_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string display_name = 2;
+  string root_path = 3 [(buf.validate.field).string.min_len = 1];
+  ProjectAvailability availability = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  bool is_primary = 5;
+  google.protobuf.Timestamp updated_at = 6 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
 }
 
 message ProjectHomeSummary {
@@ -177,10 +200,10 @@ message ProjectHomeSummary {
       id: "kent.project.home_summary.project_key"
       message: "project_key must start with A-Z and contain only A-Z or 0-9"
       expression:
-        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
-        "bytes(this).all(character, "
-        "(character >= uint(65) && character <= uint(90)) || "
-        "(character >= uint(48) && character <= uint(57)))"
+        "this.charAt(0) >= 'A' && this.charAt(0) <= 'Z' && "
+        "[0, 1, 2, 3, 4, 5, 6, 7].all(index, index >= size(this) || "
+        "(this.charAt(index) >= 'A' && this.charAt(index) <= 'Z') || "
+        "(this.charAt(index) >= '0' && this.charAt(index) <= '9'))"
     }
   ];
   string display_name = 3 [
@@ -194,7 +217,7 @@ message ProjectHomeSummary {
       expression: "this == this.trim()"
     }
   ];
-  ProjectWorkspaceCatalogSummary primary_workspace = 4 [(buf.validate.field).required = true];
+  ProjectHomeWorkspaceSummary primary_workspace = 4 [(buf.validate.field).required = true];
   optional string default_workflow_id = 5 [(buf.validate.field).string.min_len = 1];
   optional string default_workflow_name = 6 [(buf.validate.field).string.min_len = 1];
   bool default_workflow_valid = 7;
@@ -274,11 +297,12 @@ message ProjectUnavailableDetails {
 message WorkspaceNotRegisteredDetails {
   optional string project_id = 1 [(buf.validate.field).string.min_len = 1];
   optional string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional string workspace_root = 3 [(buf.validate.field).string.min_len = 1];
 
   option (buf.validate.message).cel = {
     id: "workspace_not_registered.identity"
     message: "at least one workspace lookup identity must be present"
-    expression: "has(this.project_id) || has(this.workspace_id)"
+    expression: "has(this.project_id) || has(this.workspace_id) || has(this.workspace_root)"
   };
 }
 
@@ -303,7 +327,9 @@ message WorkspaceBindingAmbiguousMutationDetails {
   }];
 }
 
-message WorkspacePathIdentityDetails {}
+message WorkspacePathIdentityDetails {
+  string workspace_root = 1 [(buf.validate.field).string.min_len = 1];
+}
 
 message ProjectKeyConflictDetails {
   string project_key = 1 [
@@ -315,10 +341,10 @@ message ProjectKeyConflictDetails {
       id: "kent.project.key_conflict.project_key"
       message: "project_key must start with A-Z and contain only A-Z or 0-9"
       expression:
-        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
-        "bytes(this).all(character, "
-        "(character >= uint(65) && character <= uint(90)) || "
-        "(character >= uint(48) && character <= uint(57)))"
+        "this.charAt(0) >= 'A' && this.charAt(0) <= 'Z' && "
+        "[0, 1, 2, 3, 4, 5, 6, 7].all(index, index >= size(this) || "
+        "(this.charAt(index) >= 'A' && this.charAt(index) <= 'Z') || "
+        "(this.charAt(index) >= '0' && this.charAt(index) <= '9'))"
     }
   ];
 }
@@ -326,6 +352,8 @@ message ProjectKeyConflictDetails {
 message WorkspaceAlreadyBoundDetails {}
 
 message WorkspacePathMissingDetails {}
+
+message AuthRequiredDetails {}
 
 message WorkspaceMutationDetails {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
@@ -566,10 +594,10 @@ message CreateProjectRequest {
       id: "kent.project.create.project_key"
       message: "project_key must start with A-Z and contain only A-Z or 0-9"
       expression:
-        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
-        "bytes(this).all(character, "
-        "(character >= uint(65) && character <= uint(90)) || "
-        "(character >= uint(48) && character <= uint(57)))"
+        "this.charAt(0) >= 'A' && this.charAt(0) <= 'Z' && "
+        "[0, 1, 2, 3, 4, 5, 6, 7].all(index, index >= size(this) || "
+        "(this.charAt(index) >= 'A' && this.charAt(index) <= 'Z') || "
+        "(this.charAt(index) >= '0' && this.charAt(index) <= '9'))"
     }
   ];
   string workspace_root = 3 [(buf.validate.field).string.min_len = 1];
@@ -607,6 +635,12 @@ message CreateProjectError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    AuthRequiredDetails auth_required = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
       }
     ];
   }
@@ -649,10 +683,10 @@ message GetProjectEditSuccess {
       id: "kent.project.edit.project_key"
       message: "project_key must start with A-Z and contain only A-Z or 0-9"
       expression:
-        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
-        "bytes(this).all(character, "
-        "(character >= uint(65) && character <= uint(90)) || "
-        "(character >= uint(48) && character <= uint(57)))"
+        "this.charAt(0) >= 'A' && this.charAt(0) <= 'Z' && "
+        "[0, 1, 2, 3, 4, 5, 6, 7].all(index, index >= size(this) || "
+        "(this.charAt(index) >= 'A' && this.charAt(index) <= 'Z') || "
+        "(this.charAt(index) >= '0' && this.charAt(index) <= '9'))"
     }
   ];
   string display_name = 3 [(buf.validate.field).string.min_len = 1];
@@ -709,10 +743,10 @@ message UpdateProjectRequest {
       id: "kent.project.update.project_key"
       message: "project_key must start with A-Z and contain only A-Z or 0-9"
       expression:
-        "bytes(this)[0] >= uint(65) && bytes(this)[0] <= uint(90) && "
-        "bytes(this).all(character, "
-        "(character >= uint(65) && character <= uint(90)) || "
-        "(character >= uint(48) && character <= uint(57)))"
+        "this.charAt(0) >= 'A' && this.charAt(0) <= 'Z' && "
+        "[0, 1, 2, 3, 4, 5, 6, 7].all(index, index >= size(this) || "
+        "(this.charAt(index) >= 'A' && this.charAt(index) <= 'Z') || "
+        "(this.charAt(index) >= '0' && this.charAt(index) <= '9'))"
     }
   ];
 }
@@ -743,6 +777,12 @@ message UpdateProjectError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    AuthRequiredDetails auth_required = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
       }
     ];
   }
@@ -821,6 +861,12 @@ message SetDefaultWorkspaceError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    AuthRequiredDetails auth_required = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
       }
     ];
   }
@@ -1003,6 +1049,12 @@ message UnlinkWorkspaceError {
         error_code: "internal_failure"
       }
     ];
+    AuthRequiredDetails auth_required = 8 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
+      }
+    ];
   }
 }
 
@@ -1040,6 +1092,12 @@ message DeleteProjectError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    AuthRequiredDetails auth_required = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
       }
     ];
   }
@@ -1102,6 +1160,12 @@ message AttachWorkspaceError {
         error_code: "internal_failure"
       }
     ];
+    AuthRequiredDetails auth_required = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
+      }
+    ];
   }
 }
 
@@ -1156,6 +1220,12 @@ message RebindWorkspaceError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    AuthRequiredDetails auth_required = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
       }
     ];
   }
@@ -1220,7 +1290,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.list"
     };
   }
 
@@ -1231,7 +1300,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.home.list"
     };
   }
 
@@ -1242,7 +1310,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.resolvePath"
     };
   }
 
@@ -1253,7 +1320,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.planWorkspaceBinding"
     };
   }
 
@@ -1264,7 +1330,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.create"
     };
   }
 
@@ -1275,7 +1340,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.edit.get"
     };
   }
 
@@ -1286,7 +1350,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.update"
     };
   }
 
@@ -1297,7 +1360,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.defaultWorkspace.set"
     };
   }
 
@@ -1308,7 +1370,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.workspace.list"
     };
   }
 
@@ -1319,7 +1380,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.workspace.get"
     };
   }
 
@@ -1330,7 +1390,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.unlinkWorkspace"
     };
   }
 
@@ -1341,7 +1400,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.delete"
     };
   }
 
@@ -1352,7 +1410,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.attachWorkspace"
     };
   }
 
@@ -1363,7 +1420,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.rebindWorkspace"
     };
   }
 
@@ -1374,7 +1430,6 @@ service ProjectCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "project.getOverview"
     };
   }
 }

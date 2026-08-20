@@ -13,6 +13,7 @@ import (
 	"core/server/session"
 	rpccontract "core/shared/apicontract"
 	"core/shared/clientui"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 )
@@ -76,13 +77,6 @@ func (e routePolicyExecutor) preflight(ctx context.Context, state *connectionSta
 }
 
 func (e routePolicyExecutor) decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error) {
-	if route.Method == protocol.MethodOnboardingFinalize && e.gateway != nil {
-		params, err := e.gateway.onboardingFinalizeRequestContract.Decode(raw)
-		if err != nil {
-			return nil, fmt.Errorf("decode params: %w", err)
-		}
-		return params, nil
-	}
 	if route.Method == protocol.MethodSessionGetExecutionEnvironment && e.gateway != nil {
 		params, err := e.gateway.sessionExecutionRequestContract.Decode(raw)
 		if err != nil {
@@ -103,7 +97,19 @@ func (e gatewayRouteError) Error() string {
 }
 
 func (e routePolicyExecutor) requireAuth(ctx context.Context, state *connectionState, method string) error {
-	if !e.requiresServerAuth(method) {
+	stage, known := e.authenticationStage(method)
+	if !known {
+		stage = sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_SERVER
+	}
+	return e.requireAuthenticationStage(ctx, state, stage)
+}
+
+func (e routePolicyExecutor) requireAuthenticationStage(
+	ctx context.Context,
+	state *connectionState,
+	stage sharedpb.AuthenticationStage,
+) error {
+	if stage != sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_SERVER {
 		return nil
 	}
 	ready, err := e.serverAuthReady(ctx, state)
@@ -117,20 +123,36 @@ func (e routePolicyExecutor) requireAuth(ctx context.Context, state *connectionS
 }
 
 func (e routePolicyExecutor) requiresServerAuth(method string) bool {
+	stage, known := e.authenticationStage(method)
+	return !known || stage == sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_SERVER
+}
+
+func (e routePolicyExecutor) authenticationStage(method string) (sharedpb.AuthenticationStage, bool) {
 	trimmed := strings.TrimSpace(method)
 	if trimmed == "" {
-		return false
+		return sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_NONE, true
 	}
-	route, ok := rpccontract.RouteByMethod(trimmed)
+	var registration gatewayRegistration
+	if e.gateway != nil {
+		registration = e.gateway.registration
+	}
+	if len(registration.operations) == 0 {
+		var err error
+		registration, err = productionGatewayRegistration()
+		if err != nil {
+			panic(err)
+		}
+	}
+	if operation, exists := registration.operations[trimmed]; exists {
+		if _, migrated := registration.BinaryBinding(trimmed); migrated {
+			return operation.Options.AuthenticationStage, true
+		}
+	}
+	operation, _, ok := registration.LegacyOperation(trimmed)
 	if !ok {
-		return true
+		return sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_UNSPECIFIED, false
 	}
-	switch route.Auth {
-	case rpccontract.AuthNone, rpccontract.AuthPreServerAuth:
-		return false
-	default:
-		return true
-	}
+	return operation.Options.AuthenticationStage, true
 }
 
 func (e routePolicyExecutor) serverAuthReady(ctx context.Context, connection *connectionState) (bool, error) {
@@ -189,7 +211,17 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	if err != nil {
 		return err
 	}
-	switch route.Scope {
+	return e.authorizeScopeFacts(ctx, state, route.Scope, route.Method, scopeParams)
+}
+
+func (e routePolicyExecutor) authorizeScopeFacts(
+	ctx context.Context,
+	state *connectionState,
+	scope rpccontract.ScopePolicy,
+	method string,
+	scopeParams routeScopeParams,
+) error {
+	switch scope {
 	case rpccontract.ScopeNone, rpccontract.ScopeProjectView, rpccontract.ScopeAttachProject, rpccontract.ScopeNotification:
 		return nil
 	case rpccontract.ScopeProjectWorkspace:
@@ -246,7 +278,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 		}
 		return nil
 	default:
-		return fmt.Errorf("unsupported route scope %q for method %q", route.Scope, route.Method)
+		return fmt.Errorf("unsupported route scope %q for method %q", scope, method)
 	}
 }
 
@@ -307,8 +339,6 @@ func routeProjectWorkspaceBinding(params any) (string, string, bool) {
 
 func routeSessionID(params any) (string, bool) {
 	switch p := params.(type) {
-	case protocol.AttachSessionRequest:
-		return p.SessionID, true
 	case serverapi.ChatContextRequest:
 		sessionID, selected := p.Target.SessionID()
 		if !selected {

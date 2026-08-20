@@ -11,7 +11,6 @@ import (
 	"core/server/chatcontext"
 	"core/server/launch"
 	"core/server/llm"
-	"core/server/requestmemo"
 	"core/server/runtimeview"
 	"core/server/session"
 	"core/server/sessionruntime"
@@ -39,7 +38,6 @@ type Service struct {
 	authStates                  authStateReader
 	promptHistory               promptHistoryReader
 	runtime                     *sessionruntime.Authority
-	plans                       *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
 	workspaceID                 string
 	draftOwner                  *WorkspaceChatDraftOwner
 	materializationStoreOptions []session.StoreOption
@@ -52,15 +50,8 @@ type PlanResult struct {
 	Warnings []string
 }
 
-type sessionPlanMemoRequest struct {
-	Mode            serverapi.SessionLaunchMode
-	Intent          serverapi.SessionLaunchIntent
-	CallerSessionID serverapi.OptionalStringKey
-	Overrides       serverapi.RunPromptOverridesKey
-}
-
 func NewService(planner launch.Planner) *Service {
-	return &Service{planner: planner, plans: requestmemo.New[sessionPlanMemoRequest, PlanResult]()}
+	return &Service{planner: planner}
 }
 
 func (s *Service) ReadWorkspaceChatContext(ctx context.Context) (serverapi.ChatContext, error) {
@@ -452,84 +443,72 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 			parentAgentSessionID = &sourceID
 		}
 	}
-	overrides, err := req.Overrides.CanonicalKey()
+	planner := s.planner
+	if planner.ReloadConfig != nil {
+		snapshot, snapshotErr := planner.ReloadConfig()
+		if snapshotErr != nil {
+			return PlanResult{}, snapshotErr
+		}
+		planner.Config = snapshot
+		planner.ReloadConfig = nil
+	}
+	roleOverride, err := req.Overrides.AgentRoleOverride()
 	if err != nil {
 		return PlanResult{}, err
 	}
-	memoReq := sessionPlanMemoRequest{
-		Mode:            req.Mode,
-		Intent:          req.Intent,
-		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
-		Overrides:       overrides,
+	var caller *subagentpolicy.Caller
+	if req.Mode == serverapi.SessionLaunchModeHeadless {
+		if req.CallerSessionID != nil {
+			resolved, callerErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, *req.CallerSessionID)
+			if callerErr != nil {
+				return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialCallerMissing}
+			}
+			caller = &resolved
+			if parentAgentSessionID != nil {
+				callerSessionID, parseErr := runtimeids.ParseSessionID(*req.CallerSessionID)
+				if parseErr != nil || *parentAgentSessionID != callerSessionID {
+					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialInvalidTarget}
+				}
+			}
+		}
+		if parentAgentSessionID != nil && req.CallerSessionID == nil {
+			if _, parentErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, parentAgentSessionID.String()); parentErr != nil {
+				return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialParentMissing}
+			}
+		}
 	}
-	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, func(ctx context.Context) (PlanResult, error) {
-		planner := s.planner
-		if planner.ReloadConfig != nil {
-			snapshot, snapshotErr := planner.ReloadConfig()
-			if snapshotErr != nil {
-				return PlanResult{}, snapshotErr
-			}
-			planner.Config = snapshot
-			planner.ReloadConfig = nil
+	target := subagentpolicy.TargetFromOverride(roleOverride)
+	if err := subagentpolicy.Authorize(planner.Config.Settings, caller, target); err != nil {
+		return PlanResult{}, err
+	}
+	authState := auth.EmptyState()
+	if req.Overrides.NeedsAuthState() && s.authStates != nil {
+		var authErr error
+		authState, authErr = s.authStates.CurrentState(ctx)
+		if authErr != nil {
+			return PlanResult{}, authErr
 		}
-		roleOverride, err := req.Overrides.AgentRoleOverride()
-		if err != nil {
-			return PlanResult{}, err
-		}
-		var caller *subagentpolicy.Caller
-		if req.Mode == serverapi.SessionLaunchModeHeadless {
-			if req.CallerSessionID != nil {
-				resolved, callerErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, *req.CallerSessionID)
-				if callerErr != nil {
-					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialCallerMissing}
-				}
-				caller = &resolved
-				if parentAgentSessionID != nil {
-					callerSessionID, parseErr := runtimeids.ParseSessionID(*req.CallerSessionID)
-					if parseErr != nil || *parentAgentSessionID != callerSessionID {
-						return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialInvalidTarget}
-					}
-				}
-			}
-			if parentAgentSessionID != nil && req.CallerSessionID == nil {
-				if _, parentErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, parentAgentSessionID.String()); parentErr != nil {
-					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialParentMissing}
-				}
-			}
-		}
-		target := subagentpolicy.TargetFromOverride(roleOverride)
-		if err := subagentpolicy.Authorize(planner.Config.Settings, caller, target); err != nil {
-			return PlanResult{}, err
-		}
-		authState := auth.EmptyState()
-		if req.Overrides.NeedsAuthState() && s.authStates != nil {
-			var authErr error
-			authState, authErr = s.authStates.CurrentState(ctx)
-			if authErr != nil {
-				return PlanResult{}, authErr
-			}
-		}
-		if selectedSessionID != nil {
-			return s.planExistingSession(ctx, planner, req, *selectedSessionID, roleOverride, caller, authState)
-		}
-		preparation := launch.RunPromptPreparationContext{}
-		preparedOverrides, err := launch.PrepareRunPromptOverridesWithContext(planner.Config, req.Overrides, authState, preparation)
-		if err != nil {
-			return PlanResult{}, err
-		}
-		preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
-		return s.finalizeLaunchPlan(
-			ctx,
-			func() (launch.SessionPlan, []string, error) {
-				return planner.PlanNewSessionWithPreparedOverrides(ctx, launch.SessionRequest{
-					Mode:                                launch.Mode(req.Mode),
-					Intent:                              req.Intent,
-					SkipContinuationAgentRoleValidation: roleOverride.Default,
-					PreparedPromptFacingTarget:          preparedPromptFacingTarget,
-				}, req.Overrides, preparedOverrides)
-			},
-		)
-	})
+	}
+	if selectedSessionID != nil {
+		return s.planExistingSession(ctx, planner, req, *selectedSessionID, roleOverride, caller, authState)
+	}
+	preparation := launch.RunPromptPreparationContext{}
+	preparedOverrides, err := launch.PrepareRunPromptOverridesWithContext(planner.Config, req.Overrides, authState, preparation)
+	if err != nil {
+		return PlanResult{}, err
+	}
+	preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
+	return s.finalizeLaunchPlan(
+		ctx,
+		func() (launch.SessionPlan, []string, error) {
+			return planner.PlanNewSessionWithPreparedOverrides(ctx, launch.SessionRequest{
+				Mode:                                launch.Mode(req.Mode),
+				Intent:                              req.Intent,
+				SkipContinuationAgentRoleValidation: roleOverride.Default,
+				PreparedPromptFacingTarget:          preparedPromptFacingTarget,
+			}, req.Overrides, preparedOverrides)
+		},
+	)
 }
 
 func (s *Service) planExistingSession(
@@ -857,13 +836,6 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		ThinkingOverrideExplicit: result.Plan.ThinkingOverrideExplicit,
 		Source:                   result.Plan.Source,
 	}, Warnings: result.Warnings}
-}
-
-func sameSessionPlanMemoRequest(a sessionPlanMemoRequest, b sessionPlanMemoRequest) bool {
-	return a.Mode == b.Mode &&
-		a.Intent.Equal(b.Intent) &&
-		a.CallerSessionID == b.CallerSessionID &&
-		a.Overrides == b.Overrides
 }
 
 var _ servicecontract.SessionLaunchService = (*Service)(nil)

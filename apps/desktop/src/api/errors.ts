@@ -412,11 +412,12 @@ export class CatalogContractError extends ContractError {
   }
 
   static sessionCategoryMismatch(
+    method: string,
     expectedCategory: "main" | "subagent",
     actualCategory: "main" | "subagent",
   ): CatalogContractError {
-    return new CatalogContractError("session.page response category did not match the request.", "session_category_mismatch", {
-      method: "session.page", expectedCategory, actualCategory,
+    return new CatalogContractError(`${method} response category did not match the request.`, "session_category_mismatch", {
+      method, expectedCategory, actualCategory,
     });
   }
 }

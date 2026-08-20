@@ -9,7 +9,7 @@ import (
 	shelltool "core/server/tools/shell"
 	remoteclient "core/shared/client"
 	"core/shared/config"
-	"core/shared/protocol"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"net/http/httptest"
@@ -34,7 +34,7 @@ func newGatewayTestServerForConfig(t *testing.T, cfg config.App) (*core.Core, *h
 		t.Fatalf("core.New: %v", err)
 	}
 	t.Cleanup(func() { _ = appCore.Close() })
-	gateway, err := NewGateway(appCore, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(appCore, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -85,22 +85,22 @@ func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *te
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	respErr := callGatewayExpectError(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingA.ProjectID})
-	if !strings.Contains(respErr.Message, "requires explicit workspace selection") {
-		t.Fatalf("expected explicit workspace selection error, got %+v", respErr)
+	attachResult := attachGatewayProject(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: bindingA.ProjectID})
+	if attachResult.GetError() == nil {
+		t.Fatalf("expected explicit workspace selection error, got %+v", attachResult)
 	}
 
-	attachWorkspaceB, err := protocol.AttachProjectRequestForWorkspaceID(bindingA.ProjectID, bindingB.WorkspaceID)
-	if err != nil {
-		t.Fatalf("AttachProjectRequestForWorkspaceID: %v", err)
+	attachResult = attachGatewayProject(t, conn, "attach-project-explicit", &connectionpb.AttachProjectRequest{
+		ProjectId: bindingA.ProjectID,
+		Workspace: &connectionpb.AttachProjectRequest_WorkspaceId{WorkspaceId: bindingB.WorkspaceID},
+	})
+	if attachResult.GetSuccess() == nil {
+		t.Fatalf("explicit Project attachment failed: %+v", attachResult.GetError())
 	}
-	callGateway(t, conn, "attach-project-explicit", protocol.MethodAttachProject, attachWorkspaceB, nil)
-	var planResp serverapi.SessionPlanResponse
-	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
-		ClientRequestID: "plan-after-explicit-workspace",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-	}, &planResp)
+	planResp := callGatewaySessionPlan(t, conn, "session-plan", serverapi.SessionPlanRequest{
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	})
 	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-explicit-workspace", planResp.Plan.SessionID)
 	if got, want := target.EffectiveWorkdir, bindingB.CanonicalRoot; got != want {
 		t.Fatalf("planned execution workdir = %q, want %q", got, want)
@@ -143,19 +143,21 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	attachWorkspaceA, err := protocol.AttachProjectRequestForWorkspaceRoot(bindingB.ProjectID, resolvedA.Config.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("AttachProjectRequestForWorkspaceRoot: %v", err)
+	attachResult := attachGatewayProject(t, conn, "attach-project", &connectionpb.AttachProjectRequest{
+		ProjectId: bindingB.ProjectID,
+		Workspace: &connectionpb.AttachProjectRequest_WorkspaceRoot{WorkspaceRoot: resolvedA.Config.WorkspaceRoot},
+	})
+	if attachResult.GetSuccess() == nil {
+		t.Fatalf("Project attachment failed: %+v", attachResult.GetError())
 	}
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, attachWorkspaceA, nil)
-	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: storeB.Meta().SessionID}, nil)
+	if result := attachGatewaySession(t, conn, "attach-session", storeB.Meta().SessionID); result.GetSuccess() == nil {
+		t.Fatalf("Session attachment failed: %+v", result.GetError())
+	}
 
-	var planResp serverapi.SessionPlanResponse
-	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
-		ClientRequestID: "new-after-attach-session",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-	}, &planResp)
+	planResp := callGatewaySessionPlan(t, conn, "session-plan", serverapi.SessionPlanRequest{
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	})
 	wantWorkspaceRoot, err := config.CanonicalWorkspaceRoot(resolvedB.Config.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot B: %v", err)

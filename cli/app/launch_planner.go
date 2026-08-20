@@ -16,8 +16,6 @@ import (
 	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 type launchMode string
@@ -144,10 +142,9 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		return sessionLaunchPlan{}, err
 	}
 	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, serverapi.SessionPlanRequest{
-		ClientRequestID: uuid.NewString(),
-		Mode:            serverapi.SessionLaunchMode(req.Mode),
-		Intent:          req.Intent,
-		Overrides:       mergeSessionPlanOverrides(sessionPlanOverridesFromConfig(p.server.Config()), req.Overrides),
+		Mode:      serverapi.SessionLaunchMode(req.Mode),
+		Intent:    req.Intent,
+		Overrides: mergeSessionPlanOverrides(sessionPlanOverridesFromConfig(p.server.Config()), req.Overrides),
 	})
 	if err != nil {
 		return sessionLaunchPlan{}, err

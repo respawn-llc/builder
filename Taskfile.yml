@@ -21,8 +21,10 @@ tasks:
       - buf.yaml
     generates:
       - shared/protoapi/gen/**/*.go
+      - shared/protoapi/gen/kent_api.binpb
     cmds:
       - "{{.BUF}} generate --template buf.gen.go.yaml"
+      - "{{.BUF}} build --as-file-descriptor-set --exclude-source-info --output shared/protoapi/gen/kent_api.binpb"
 
   protobuf:ts:
     sources:

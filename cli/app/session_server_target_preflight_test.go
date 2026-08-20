@@ -10,10 +10,6 @@ import (
 func TestValidateStartupRemoteIdentityRequiresExactOnboardingControlSurface(t *testing.T) {
 	compatible := protocol.ServerIdentity{
 		ProtocolVersion: protocol.Version,
-		Capabilities: protocol.CapabilityFlags{
-			AuthBootstrap:      true,
-			OnboardingFinalize: true,
-		},
 	}
 	if err := validateStartupRemoteIdentity(compatible); err != nil {
 		t.Fatalf("compatible identity: %v", err)
@@ -24,16 +20,8 @@ func TestValidateStartupRemoteIdentityRequiresExactOnboardingControlSurface(t *t
 		issue    startupRemoteCompatibilityIssue
 	}{
 		{
-			identity: protocol.ServerIdentity{ProtocolVersion: "different", Capabilities: compatible.Capabilities},
+			identity: protocol.ServerIdentity{ProtocolVersion: "different"},
 			issue:    startupRemoteProtocolVersionMismatch,
-		},
-		{
-			identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, Capabilities: protocol.CapabilityFlags{OnboardingFinalize: true}},
-			issue:    startupRemoteAuthBootstrapUnavailable,
-		},
-		{
-			identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, Capabilities: protocol.CapabilityFlags{AuthBootstrap: true}},
-			issue:    startupRemoteOnboardingFinalizeUnavailable,
 		},
 	} {
 		err := validateStartupRemoteIdentity(test.identity)

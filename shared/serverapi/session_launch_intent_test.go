@@ -151,37 +151,14 @@ func TestSessionLaunchIntentRejectsMalformedUnknownMixedAndLegacyShapes(t *testi
 func TestSessionPlanRequestOwnsExactlyOneTypedLaunchIntent(t *testing.T) {
 	target := mustSessionLaunchIntentID(t, "target-session")
 	request := SessionPlanRequest{
-		ClientRequestID: "request-1",
-		Mode:            SessionLaunchModeInteractive,
-		Intent:          OpenExistingSessionLaunchIntent(target),
+		Mode:   SessionLaunchModeInteractive,
+		Intent: OpenExistingSessionLaunchIntent(target),
 	}
 	if err := request.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	data, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	var decoded SessionPlanRequest
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if decoded.Intent.Kind() != SessionLaunchIntentOpenExisting {
-		t.Fatalf("intent kind = %q, want open_existing", decoded.Intent.Kind())
-	}
-
-	for _, raw := range []string{
-		`{"client_request_id":"request-1","mode":"interactive"}`,
-		`{"client_request_id":"request-1","mode":"interactive","selected_session_id":"target-session","intent":{"kind":"open_existing","session_id":"target-session"}}`,
-		`{"client_request_id":"request-1","mode":"interactive","force_new_session":true,"intent":{"kind":"create_new","origin":{"kind":"independent"}}}`,
-		`{"client_request_id":"request-1","mode":"interactive","parent_session_id":"legacy-parent","intent":{"kind":"create_new","origin":{"kind":"parent_agent","session_id":"parent-agent"}}}`,
-	} {
-		var legacy SessionPlanRequest
-		if err := json.Unmarshal([]byte(raw), &legacy); err == nil {
-			if validateErr := legacy.Validate(); validateErr == nil {
-				t.Fatalf("legacy request shape succeeded: %s", raw)
-			}
-		}
+	if request.Intent.Kind() != SessionLaunchIntentOpenExisting {
+		t.Fatalf("intent kind = %q, want open_existing", request.Intent.Kind())
 	}
 }
 

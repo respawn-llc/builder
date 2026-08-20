@@ -231,51 +231,24 @@ func (i *SessionLaunchIntent) UnmarshalJSON(data []byte) error {
 }
 
 type SessionPlanRequest struct {
-	ClientRequestID string              `json:"client_request_id"`
-	Mode            SessionLaunchMode   `json:"mode"`
-	Intent          SessionLaunchIntent `json:"intent"`
-	CallerSessionID *string             `json:"caller_session_id,omitempty"`
-	Overrides       RunPromptOverrides  `json:"overrides,omitempty"`
-}
-
-func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
-	type wire struct {
-		ClientRequestID string              `json:"client_request_id"`
-		Mode            SessionLaunchMode   `json:"mode"`
-		Intent          SessionLaunchIntent `json:"intent"`
-		CallerSessionID *string             `json:"caller_session_id"`
-		Overrides       RunPromptOverrides  `json:"overrides"`
-	}
-	var decoded wire
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	request := SessionPlanRequest{
-		ClientRequestID: decoded.ClientRequestID,
-		Mode:            decoded.Mode,
-		Intent:          decoded.Intent,
-		CallerSessionID: decoded.CallerSessionID,
-		Overrides:       decoded.Overrides,
-	}
-	if err := request.Validate(); err != nil {
-		return err
-	}
-	*r = request
-	return nil
+	Mode            SessionLaunchMode
+	Intent          SessionLaunchIntent
+	CallerSessionID *string
+	Overrides       RunPromptOverrides
 }
 
 type SessionPlan struct {
-	SessionID                string              `json:"session_id"`
-	ActiveSettings           config.Settings     `json:"active_settings"`
-	EnabledToolIDs           []string            `json:"enabled_tool_ids,omitempty"`
-	ConfiguredModelName      string              `json:"configured_model_name,omitempty"`
-	SessionName              *string             `json:"session_name"`
-	PromptHistory            []string            `json:"prompt_history,omitempty"`
-	ModelContractLocked      bool                `json:"model_contract_locked,omitempty"`
-	QuestionsEnabled         bool                `json:"questions_enabled"`
-	AutoCompactionEnabled    bool                `json:"auto_compaction_enabled"`
-	ThinkingOverrideExplicit bool                `json:"thinking_override_explicit"`
-	Source                   config.SourceReport `json:"source"`
+	SessionID                string
+	ActiveSettings           config.Settings
+	EnabledToolIDs           []string
+	ConfiguredModelName      string
+	SessionName              *string
+	PromptHistory            []string
+	ModelContractLocked      bool
+	QuestionsEnabled         bool
+	AutoCompactionEnabled    bool
+	ThinkingOverrideExplicit bool
+	Source                   config.SourceReport
 }
 
 func (p SessionPlan) Validate() error {
@@ -286,14 +259,11 @@ func (p SessionPlan) Validate() error {
 }
 
 type SessionPlanResponse struct {
-	Plan     SessionPlan `json:"plan"`
-	Warnings []string    `json:"warnings,omitempty"`
+	Plan     SessionPlan
+	Warnings []string
 }
 
 func (r SessionPlanRequest) Validate() error {
-	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return errors.New("client_request_id is required")
-	}
 	mode := strings.TrimSpace(string(r.Mode))
 	if mode == "" {
 		return errors.New("mode is required")

@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"core/shared/clientui"
-	"core/shared/protocol"
 )
 
 type WorkspaceChatDraftOperationKind string
@@ -17,8 +16,8 @@ const (
 )
 
 type WorkspaceChatDraftOperation struct {
-	Kind    WorkspaceChatDraftOperationKind `json:"kind"`
-	Message *string                         `json:"message,omitempty"`
+	Kind    WorkspaceChatDraftOperationKind
+	Message *string
 }
 
 func (o WorkspaceChatDraftOperation) Validate() error {
@@ -36,33 +35,14 @@ func (o WorkspaceChatDraftOperation) Validate() error {
 	}
 	return nil
 }
-func (o *WorkspaceChatDraftOperation) UnmarshalJSON(data []byte) error {
-	type wire WorkspaceChatDraftOperation
-	var decoded wire
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	*o = WorkspaceChatDraftOperation(decoded)
-	return o.Validate()
-}
 
 type WorkspaceChatDraftRequest struct {
-	Operation WorkspaceChatDraftOperation `json:"operation"`
-}
-
-func (r *WorkspaceChatDraftRequest) UnmarshalJSON(data []byte) error {
-	type wire WorkspaceChatDraftRequest
-	var decoded wire
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	*r = WorkspaceChatDraftRequest(decoded)
-	return r.Operation.Validate()
+	Operation WorkspaceChatDraftOperation
 }
 
 type WorkspaceChatDraftResponse struct {
-	Message          string                    `json:"message"`
-	GoalAvailability clientui.GoalAvailability `json:"goal_availability"`
+	Message          string
+	GoalAvailability clientui.GoalAvailability
 }
 
 func (r WorkspaceChatDraftResponse) Validate() error {

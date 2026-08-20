@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"testing"
@@ -10,8 +9,14 @@ import (
 	"core/server/core"
 	"core/shared/apicontract"
 	remoteclient "core/shared/client"
+	"core/shared/protoapi"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/proto"
 )
 
 type gatewayOnboardingOverride struct {
@@ -50,24 +55,33 @@ func (s gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req se
 }
 
 func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
-	blue := serverapi.OnboardingTheme("blue")
 	tests := []struct {
 		name       string
 		authReady  bool
-		params     any
-		code       int
+		request    *onboardingpb.FinalizeRequest
+		payload    []byte
 		structured bool
 	}{
-		{name: "unauthenticated domain invalid is typed", params: serverapi.OnboardingFinalizeRequest{Theme: &blue}, code: protocol.ErrCodeOnboardingFinalizeFailed, structured: true},
-		{name: "malformed params remain invalid params", authReady: true, params: "not an object", code: protocol.ErrCodeInvalidParams},
-		{name: "null params remain invalid params", authReady: true, params: json.RawMessage(`null`), code: protocol.ErrCodeInvalidParams},
-		{name: "extra params remain invalid params", authReady: true, params: json.RawMessage(`{"unknown":true}`), code: protocol.ErrCodeInvalidParams},
+		{name: "unauthenticated domain invalid is typed", request: &onboardingpb.FinalizeRequest{}, structured: true},
+		{name: "malformed params remain invalid params", authReady: true, payload: []byte{0x0a}},
+		{name: "unspecified enum remains invalid params", authReady: true, request: &onboardingpb.FinalizeRequest{Theme: onboardingpb.Theme_THEME_UNSPECIFIED.Enum()}},
+		{name: "invalid tool override remains invalid params", authReady: true, request: &onboardingpb.FinalizeRequest{ToolOverrides: []*onboardingpb.ToolOverride{{Id: onboardingpb.ToolID_TOOL_ID_ASK_QUESTION}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			appCore, _ := newGatewayTestCore(t, true, tt.authReady)
 			defer func() { _ = appCore.Close() }()
-			gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: gatewayOnboardingService{}}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+			service := gatewayOnboardingService{}
+			if tt.structured {
+				service.handler = func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+					return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(
+						serverapi.OnboardingFinalizeInvalidRequest,
+						serverapi.OnboardingInvalidRequestDetails{FieldErrors: []serverapi.OnboardingFinalizeFieldError{{Field: "theme", Code: "unsupported"}}},
+						nil,
+					)
+				}
+			}
+			gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: service}, gatewayTestIdentity())
 			if err != nil {
 				t.Fatalf("NewGateway: %v", err)
 			}
@@ -77,17 +91,29 @@ func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 			defer func() { _ = conn.Close() }()
 			handshakeGateway(t, conn)
 
-			errResp := callGatewayExpectError(t, conn, "finalize-invalid", protocol.MethodOnboardingFinalize, tt.params)
-			if errResp.Code != tt.code {
-				t.Fatalf("error code = %d, want %d", errResp.Code, tt.code)
+			payload := tt.payload
+			if tt.request != nil {
+				payload, err = proto.Marshal(tt.request)
+				if err != nil {
+					t.Fatalf("marshal Finalize request: %v", err)
+				}
 			}
+			method := onboardingpb.File_kent_api_onboarding_onboarding_proto.Services().ByName("OnboardingService").Methods().ByName("Finalize")
+			envelope := callGatewayDescriptorPayload(t, conn, "finalize-invalid", method, payload)
 			if !tt.structured {
-				if len(errResp.Data) != 0 {
-					t.Fatalf("malformed finalize response = %+v, want no structured data", errResp)
+				failure := envelope.GetTransportFailure()
+				if failure == nil || failure.Code != sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_INVALID_PAYLOAD {
+					t.Fatalf("malformed finalize response = %+v, want invalid payload transport failure", envelope)
 				}
 				return
 			}
-			if decoded := serverapi.DecodeOnboardingFinalizeError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrOnboardingFinalizeInvalidRequest) {
+			result := &onboardingpb.FinalizeResult{}
+			if response := envelope.GetResult(); response == nil {
+				t.Fatalf("finalize result is required: %+v", envelope)
+			} else if err := protoapi.Decode(response.Payload, result); err != nil {
+				t.Fatalf("decode Finalize result: %v", err)
+			}
+			if decoded := protoapi.OnboardingFinalizeErrorFromProto(result.GetError()); !errors.Is(decoded, serverapi.ErrOnboardingFinalizeInvalidRequest) {
 				t.Fatalf("decoded error = %v, want invalid_request", decoded)
 			}
 		})
@@ -113,8 +139,8 @@ func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T
 		{name: "progress auth and preflight", dependency: apicontract.DependencyRunPrompt, method: protocol.MethodRunPrompt, params: func(*core.Core) any {
 			return serverapi.RunPromptRequest{ClientRequestID: "run-prompt", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "test"}
 		}},
-		{name: "attach after handshake", dependency: apicontract.DependencyProtocolAttach, method: protocol.MethodAttachProject, params: func(appCore *core.Core) any {
-			return protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}
+		{name: "attach after handshake", dependency: apicontract.DependencyProtocolAttach, params: func(appCore *core.Core) any {
+			return &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()}
 		}},
 	}
 	for _, tt := range tests {
@@ -123,7 +149,7 @@ func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T
 			if tt.authReady {
 				appCore = authReadyCore
 			}
-			gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{Core: appCore, unavailable: tt.dependency}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+			gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{Core: appCore, unavailable: tt.dependency}, gatewayTestIdentity())
 			if err != nil {
 				t.Fatalf("NewGateway: %v", err)
 			}
@@ -133,6 +159,18 @@ func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T
 			defer func() { _ = conn.Close() }()
 			handshakeGateway(t, conn)
 
+			if tt.dependency == apicontract.DependencyProtocolAttach {
+				result := attachGatewayProject(
+					t,
+					conn,
+					"dependency-unavailable",
+					tt.params(appCore).(*connectionpb.AttachProjectRequest),
+				)
+				if result.GetError() == nil {
+					t.Fatalf("unavailable attachment dependency unexpectedly succeeded: %+v", result)
+				}
+				return
+			}
 			errResp := callGatewayExpectError(t, conn, "dependency-unavailable", tt.method, tt.params(appCore))
 			if errResp.Code != protocol.ErrCodeServerNotReady {
 				t.Fatalf("error code = %d, want server not ready", errResp.Code)
@@ -154,7 +192,7 @@ func TestRemoteOnboardingFinalizePreservesStructuredSentinels(t *testing.T) {
 				return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: "/tmp/config.toml"}, nil)
 			},
 		},
-	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	}, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -189,8 +227,8 @@ func TestConfiguredCoreOnboardingFinalizeReturnsConfigAlreadyExists(t *testing.T
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	blue := serverapi.OnboardingTheme("blue")
-	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{Theme: &blue})
+	dark := serverapi.OnboardingThemeDark
+	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{Theme: &dark})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
 		t.Fatalf("FinalizeOnboarding error = %v, want config_already_exists", err)
 	}

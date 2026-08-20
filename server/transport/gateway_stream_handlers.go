@@ -8,6 +8,7 @@ import (
 
 	rpccontract "core/shared/apicontract"
 	"core/shared/clientui"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
@@ -82,8 +83,8 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 		return
 	}
-	route, ok := rpccontract.RouteByMethod(req.Method)
-	if !ok {
+	operation, route, ok := g.registration.LegacyOperation(req.Method)
+	if !ok || operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION {
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
 		return
 	}
@@ -93,79 +94,26 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 			return
 		}
 	}
-	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
+	if err := newRoutePolicyExecutor(g).requireAuthenticationStage(
+		ctx,
+		state,
+		operation.Options.AuthenticationStage,
+	); err != nil {
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 		return
 	}
-	handler, ok := gatewaySubscriptionHandlers[req.Method]
-	if !ok {
-		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
-		return
-	}
+	route.Scope = routeScopePolicy(operation.Options.ScopePolicy)
 	if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {
 		_ = sendResponse(ctx, conn, resp)
 		return
 	}
-	handler(g, conn, ctx, state, route, req)
+	gatewaySubscriptionHandlers[req.Method](g, conn, ctx, state, route, req)
 }
 
 func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	subscribe := g.deps.SessionTranscriptClient().SubscribeSessionTranscript
-	if !state.clientCapabilities.TranscriptLiveRunFinished {
-		subscribe = func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
-			subscription, err := g.deps.SessionTranscriptClient().SubscribeSessionTranscript(ctx, req)
-			if err != nil {
-				return nil, err
-			}
-			return &legacyTranscriptSubscription{inner: subscription}, nil
-		}
-	}
-	serveGatewaySubscription(conn, ctx, route, req, subscribe, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
+	serveGatewaySubscription(conn, ctx, route, req, g.deps.SessionTranscriptClient().SubscribeSessionTranscript, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
 		return protocol.SessionTranscriptEventParams{Message: message}
 	})
-}
-
-type legacyTranscriptSubscription struct {
-	inner      serverapi.TranscriptSubscription
-	suppressed uint64
-}
-
-type legacyTranscriptSequenceError struct {
-	Sequence   uint64
-	Suppressed uint64
-}
-
-func (e *legacyTranscriptSequenceError) Error() string {
-	return fmt.Sprintf(
-		"legacy transcript sequence %d is below suppressed message count %d",
-		e.Sequence,
-		e.Suppressed,
-	)
-}
-
-func (s *legacyTranscriptSubscription) Next(ctx context.Context) (clientui.TranscriptMessage, error) {
-	for {
-		message, err := s.inner.Next(ctx)
-		if err != nil {
-			return clientui.TranscriptMessage{}, err
-		}
-		if message.Kind() == clientui.TranscriptMessageLiveRunFinished {
-			s.suppressed++
-			continue
-		}
-		if message.Sequence < s.suppressed {
-			return clientui.TranscriptMessage{}, &legacyTranscriptSequenceError{
-				Sequence:   message.Sequence,
-				Suppressed: s.suppressed,
-			}
-		}
-		message.Sequence -= s.suppressed
-		return message, nil
-	}
-}
-
-func (s *legacyTranscriptSubscription) Close() error {
-	return s.inner.Close()
 }
 
 func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire any, Sub gatewaySubscription[Event]](

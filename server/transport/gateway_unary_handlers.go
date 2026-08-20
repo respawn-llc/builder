@@ -9,7 +9,6 @@ import (
 	"core/server/chatcontext"
 	"core/shared/apicontract"
 	"core/shared/protocol"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -30,92 +29,6 @@ func gatewayClientCallNoResponse[C any, Req any](getClient func(GatewayDependenc
 }
 
 var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
-	protocol.MethodHandshake: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		params, err := decodeParams[protocol.HandshakeRequest](req.Params)
-		if err != nil {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
-		}
-		if err := params.Validate(); err != nil {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
-		}
-		if params.ProtocolVersion != protocol.Version {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeProtocolVersionMismatch, fmt.Sprintf("unsupported protocol version %q; server requires %q, upgrade the older Kent process", params.ProtocolVersion, protocol.Version))
-		}
-		if params.ClientCapabilities != nil {
-			state.clientCapabilities = *params.ClientCapabilities
-		}
-		state.handshakeDone = true
-		return protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: g.identity})
-	},
-	protocol.MethodAuthGetBootstrapStatus: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-			bootstrapClient := g.deps.AuthBootstrapClient()
-			if bootstrapClient == nil {
-				return serverapi.AuthGetBootstrapStatusResponse{}, serverapi.ErrServerAuthRequired
-			}
-			return bootstrapClient.GetAuthBootstrapStatus(ctx, params)
-		})
-	},
-	protocol.MethodServerReadinessGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
-			statusClient := g.deps.ServerStatusClient()
-			if statusClient == nil {
-				return serverapi.ServerReadinessResponse{}, errors.New("server status client is required")
-			}
-			response, err := statusClient.GetServerReadiness(ctx, params)
-			if err != nil {
-				return serverapi.ServerReadinessResponse{}, err
-			}
-			response.ServerID = g.identity.ServerID
-			response.ProtocolVersion = g.identity.ProtocolVersion
-			return response, nil
-		})
-	},
-	protocol.MethodServerUpdateStatusGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-			statusClient := g.deps.ServerStatusClient()
-			if statusClient == nil {
-				return serverapi.UpdateStatusResponse{}, errors.New("server status client is required")
-			}
-			return statusClient.GetUpdateStatus(ctx, params)
-		})
-	},
-	protocol.MethodAuthCompleteBootstrap: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-			bootstrapClient := g.deps.AuthBootstrapClient()
-			if bootstrapClient == nil {
-				return serverapi.AuthCompleteBootstrapResponse{}, serverapi.ErrServerAuthRequired
-			}
-			resp, err := bootstrapClient.CompleteAuthBootstrap(ctx, params)
-			if err == nil {
-				state.noAuthAccepted = resp.NoAuthSelected
-			}
-			return resp, err
-		})
-	},
-	protocol.MethodAuthAcknowledgeNoAuth: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-			bootstrapClient := g.deps.AuthBootstrapClient()
-			if bootstrapClient == nil {
-				return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
-			}
-			resp, err := bootstrapClient.AcknowledgeNoAuth(ctx, params)
-			if err == nil {
-				state.noAuthAccepted = resp.NoAuthSelected
-			}
-			return resp, err
-		})
-	},
-	protocol.MethodAuthGetStatus: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-			statusClient := g.deps.AuthStatusClient()
-			if statusClient == nil {
-				return serverapi.AuthStatusResponse{}, serverapi.ErrServerAuthRequired
-			}
-			return statusClient.GetAuthStatus(ctx, params)
-		})
-	},
-	protocol.MethodCapabilityFactsGet: gatewayClientCall[apicontract.CapabilityFactsService, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, apicontract.CapabilityFactsService.GetCapabilityFacts),
 	protocol.MethodChatContextGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
 			if params.Target.IsWorkspaceChat() {
@@ -183,81 +96,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		}
 		return protocol.NewSuccessResponse(req.ID, resp)
 	},
-	protocol.MethodOnboardingFinalize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		params, err := g.onboardingFinalizeRequestContract.Decode(req.Params)
-		if err != nil {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, fmt.Sprintf("decode params: %v", err))
-		}
-		finalizeClient := g.deps.OnboardingFinalizeClient()
-		if finalizeClient == nil {
-			return responseForError(req.ID, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil))
-		}
-		resp, err := finalizeClient.FinalizeOnboarding(ctx, params)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		return protocol.NewSuccessResponse(req.ID, resp)
-	},
-	protocol.MethodAttachProject: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params protocol.AttachProjectRequest) (protocol.AttachResponse, error) {
-			if err := params.Validate(); err != nil {
-				return protocol.AttachResponse{}, err
-			}
-			if err := g.deps.ProjectExists(ctx, params.ProjectID); err != nil {
-				return protocol.AttachResponse{}, err
-			}
-			attachedWorkspaceID, attachedRoot, err := g.resolveAttachedProjectWorkspace(ctx, params)
-			if err != nil {
-				return protocol.AttachResponse{}, err
-			}
-			state.attachedProject = params.ProjectID
-			state.attachedWorkspaceID = attachedWorkspaceID
-			state.attachedWorkspaceRoot = attachedRoot
-			state.attachedSession = nil
-			return protocol.ProjectAttachResponseForRequest(params, attachedWorkspaceID, attachedRoot)
-		})
-	},
-	protocol.MethodAttachSession: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params protocol.AttachSessionRequest) (protocol.AttachResponse, error) {
-			if err := params.Validate(); err != nil {
-				return protocol.AttachResponse{}, err
-			}
-			binding, err := g.resolveSessionAttachment(ctx, state, params.SessionID)
-			if err != nil {
-				return protocol.AttachResponse{}, err
-			}
-			state.attachedProject = binding.ProjectID
-			state.attachedWorkspaceID = binding.WorkspaceID
-			state.attachedWorkspaceRoot = binding.CanonicalRoot
-			parsedSessionID, parseErr := runtimeids.ParseSessionID(params.SessionID)
-			if parseErr != nil {
-				return protocol.AttachResponse{}, parseErr
-			}
-			state.attachedSession = &parsedSessionID
-			return protocol.SessionAttachResponse(
-				binding.ProjectID,
-				binding.WorkspaceID,
-				binding.CanonicalRoot,
-				params.SessionID,
-			)
-		})
-	},
-	protocol.MethodProjectList:                   gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectListRequest, serverapi.ProjectListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjects),
-	protocol.MethodProjectHomeList:               gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectHomeListRequest, serverapi.ProjectHomeListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjectHome),
-	protocol.MethodProjectResolvePath:            gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectResolvePathRequest, serverapi.ProjectResolvePathResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ResolveProjectPath),
-	protocol.MethodProjectPlanWorkspaceBinding:   gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectBindingPlanRequest, serverapi.ProjectBindingPlanResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.PlanWorkspaceBinding),
-	protocol.MethodProjectCreate:                 gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectCreateRequest, serverapi.ProjectCreateResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.CreateProject),
-	protocol.MethodProjectEditGet:                gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectEditGetRequest, serverapi.ProjectEditGetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectEdit),
-	protocol.MethodProjectUpdate:                 gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectUpdateRequest, serverapi.ProjectUpdateResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.UpdateProject),
-	protocol.MethodProjectSetDefaultWorkspace:    gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectDefaultWorkspaceSetRequest, serverapi.ProjectDefaultWorkspaceSetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.SetDefaultWorkspace),
-	protocol.MethodProjectWorkspaceList:          gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceListRequest, serverapi.ProjectWorkspaceListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjectWorkspaces),
-	protocol.MethodProjectWorkspaceGet:           gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceGetRequest, serverapi.ProjectWorkspaceGetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectWorkspace),
-	protocol.MethodProjectUnlinkWorkspace:        gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceUnlinkRequest, serverapi.ProjectWorkspaceUnlinkResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.UnlinkWorkspaceFromProject),
-	protocol.MethodProjectDelete:                 gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectDeleteRequest, serverapi.ProjectDeleteResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.DeleteProject),
-	protocol.MethodProjectAttachWorkspace:        gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectAttachWorkspaceRequest, serverapi.ProjectAttachWorkspaceResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.AttachWorkspaceToProject),
-	protocol.MethodProjectRebindWorkspace:        gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectRebindWorkspaceRequest, serverapi.ProjectRebindWorkspaceResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.RebindWorkspace),
-	protocol.MethodProjectGetOverview:            gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectGetOverviewRequest, serverapi.ProjectGetOverviewResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectOverview),
-	protocol.MethodSessionPage:                   gatewayClientCall[apicontract.ProjectViewService, serverapi.SessionPageRequest, serverapi.SessionPageResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListSessionPage),
 	protocol.MethodWorkflowCreate:                gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowCreateRequest, serverapi.WorkflowCreateResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CreateWorkflow),
 	protocol.MethodWorkflowCreateAndLinkProject:  gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowCreateAndLinkProjectRequest, serverapi.WorkflowCreateAndLinkProjectResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CreateAndLinkWorkflowToProject),
 	protocol.MethodWorkflowUpdate:                gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowUpdateRequest, serverapi.WorkflowGetResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.UpdateWorkflow),
@@ -309,33 +147,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowBoardNodeCardsList:    gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowBoardNodeCardsListRequest, serverapi.WorkflowBoardNodeCardsListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowBoardNodeCards),
 	protocol.MethodWorkflowTaskGet:               gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskGetRequest, serverapi.WorkflowTaskGetResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.GetWorkflowTask),
 	protocol.MethodWorkflowTaskObserve:           gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ObserveWorkflowTask),
-	protocol.MethodSessionPlan: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-			launchClient, err := g.sessionLaunchClientForState(ctx, state)
-			if err != nil {
-				return serverapi.SessionPlanResponse{}, err
-			}
-			return launchClient.PlanSession(ctx, params)
-		})
-	},
-	protocol.MethodSessionWorkspaceChatDraft: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
-			launchClient, err := g.sessionLaunchClientForState(ctx, state)
-			if err != nil {
-				return serverapi.WorkspaceChatDraftResponse{}, err
-			}
-			return launchClient.WorkspaceChatDraft(ctx, params)
-		})
-	},
-	protocol.MethodSessionWorkspaceChatMaterialize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
-			launchClient, err := g.sessionLaunchClientForState(ctx, state)
-			if err != nil {
-				return serverapi.WorkspaceChatMaterializeResponse{}, err
-			}
-			return launchClient.MaterializeWorkspaceChat(ctx, params)
-		})
-	},
 	protocol.MethodChatSettingsRead: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
 			switch params.Target.TargetKind {

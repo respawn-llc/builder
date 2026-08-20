@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"testing"
 
@@ -20,7 +19,6 @@ import (
 	"core/server/sessionlaunch"
 	"core/shared/clientui"
 	brand "core/shared/config"
-	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -232,12 +230,6 @@ func writeCorePromptFixture(t *testing.T, workspace, name, content string) {
 	}
 }
 
-func TestProtocolIdentityHasNoCapabilityFactsFlag(t *testing.T) {
-	if _, ok := reflect.TypeOf(protocol.CapabilityFlags{}).FieldByName("CapabilityFacts"); ok {
-		t.Fatal("capability facts must be signaled by protocol version/route availability, not a handshake capability flag")
-	}
-}
-
 func TestNewProvidesRegistrationSafeClientsForUnregisteredWorkspace(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -359,47 +351,6 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsUnavailableProjectRoot(t *
 	}
 }
 
-func TestSessionLaunchClientForProjectWorkspaceReplaysForceNewSessionAcrossClientInstances(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-
-	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
-	if err != nil {
-		t.Fatalf("ResolveConfig: %v", err)
-	}
-	binding, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, resolved.Config.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterBinding: %v", err)
-	}
-	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
-
-	firstClient, err := appCore.SessionLaunchClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
-	if err != nil {
-		t.Fatalf("SessionLaunchClientForProjectWorkspace first: %v", err)
-	}
-	secondClient, err := appCore.SessionLaunchClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
-	if err != nil {
-		t.Fatalf("SessionLaunchClientForProjectWorkspace second: %v", err)
-	}
-	req := serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-	}
-	firstPlan, err := firstClient.PlanSession(context.Background(), req)
-	if err != nil {
-		t.Fatalf("PlanSession first: %v", err)
-	}
-	secondPlan, err := secondClient.PlanSession(context.Background(), req)
-	if err != nil {
-		t.Fatalf("PlanSession second: %v", err)
-	}
-	if firstPlan.Plan.SessionID != secondPlan.Plan.SessionID {
-		t.Fatalf("session ids = %q and %q, want stable replay", firstPlan.Plan.SessionID, secondPlan.Plan.SessionID)
-	}
-}
-
 func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testing.T) {
 	home := t.TempDir()
 	workspaceA := t.TempDir()
@@ -430,7 +381,7 @@ func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testi
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{ClientRequestID: "req-1", Mode: serverapi.SessionLaunchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
+	plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{Mode: serverapi.SessionLaunchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -618,10 +569,9 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 
 	worker := "worker"
 	if _, err := client.PlanSession(t.Context(), serverapi.SessionPlanRequest{
-		ClientRequestID: "editable-agent",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(materialized.SessionID),
-		Overrides:       serverapi.RunPromptOverrides{AgentRole: &worker},
+		Mode:      serverapi.SessionLaunchModeInteractive,
+		Intent:    serverapi.OpenExistingSessionLaunchIntent(materialized.SessionID),
+		Overrides: serverapi.RunPromptOverrides{AgentRole: &worker},
 	}); err != nil {
 		t.Fatalf("materialized Agent was not editable: %v", err)
 	}

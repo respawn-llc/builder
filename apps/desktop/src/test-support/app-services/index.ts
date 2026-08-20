@@ -1,4 +1,10 @@
 import { createBrowserNativeBridge, type NativePlatform } from "@app/native-bridge";
+import { create } from "@app/server-api-contract";
+import {
+  GetReadinessResultSchema,
+  ServerService,
+} from "@app/server-api-contract/gen/kent/api/server/server_pb";
+import { ProjectCatalogService } from "@app/server-api-contract/gen/kent/api/project/project_pb";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, useMemo, type ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
@@ -117,26 +123,43 @@ function createTestLogger(): TestLogger {
 
 export const startupRoutes: readonly FakeRoute[] = [
   {
-    method: "server.readiness.get",
-    result: {
-      ready: true,
-      server_id: "server-1",
-      server_version: "1.3.0",
-      server_build: "1.3.0",
-      protocol_version: protocolVersion,
-      auth_ready: true,
-      auth_required: true,
-      endpoint: "ws://127.0.0.1:53082/rpc",
-      subagent_roles: [{ name: "default" }, { name: "fast" }, { name: "coder" }, { name: "reviewer" }],
-    },
+    descriptor: ServerService.method.getReadiness,
+    result: create(GetReadinessResultSchema, {
+      outcome: {
+        case: "success",
+        value: {
+          readiness: {
+            ready: true,
+            serverId: "server-1",
+            serverVersion: "1.3.0",
+            serverBuild: "1.3.0",
+            protocolVersion,
+            authReady: true,
+            authRequired: true,
+            endpoint: "ws://127.0.0.1:53082/rpc",
+            subagentRoles: [
+              { name: "default" },
+              { name: "fast" },
+              { name: "coder" },
+              { name: "reviewer" },
+            ],
+            causes: [],
+          },
+        },
+      },
+    }),
   },
   {
-    method: "project.home.list",
-    result: {
-      projects: [],
-      next_page_token: "",
-      generated_at_unix_ms: 1,
-    },
+    descriptor: ProjectCatalogService.method.listHome,
+    result: create(ProjectCatalogService.method.listHome.output, {
+      outcome: {
+        case: "success",
+        value: {
+          projects: [],
+          generatedAt: { seconds: 1n, nanos: 0 },
+        },
+      },
+    }),
   },
   {
     method: "workflow.attention.list",

@@ -26,43 +26,48 @@ func TestRemoteNoAuthAcknowledgementPropagatesToFreshConnectionStrategies(t *tes
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			if !handshaken {
-				if req.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "conn %d first method = %q, want handshake", connIndex, req.Method)
-					return
+			kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{
+				projectID: "project-1", workspaceID: "workspace-1", workspaceRoot: "/tmp/workspace-a",
+			})
+			if err != nil {
+				reportHandlerError(handlerErrs, "conn %d setup: %v", connIndex, err)
+				return
+			}
+			if handled {
+				handshaken = handshaken || kind == remoteTestSetupHandshake
+				if kind == remoteTestSetupProject {
+					if connIndex > 1 && !sawAck {
+						reportHandlerError(handlerErrs, "conn %d attached project before no-auth acknowledgement", connIndex)
+						return
+					}
+					attached = true
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-				handshaken = true
 				continue
 			}
-			switch req.Method {
-			case protocol.MethodAuthAcknowledgeNoAuth:
+			authKind, handled, err := handleRemoteTestAuthFrame(ctx, conn, event.Frame, remoteTestAuthResponse{
+				acknowledge: &serverapi.AuthAcknowledgeNoAuthResponse{NoAuthSelected: true},
+			})
+			if err != nil {
+				reportHandlerError(handlerErrs, "conn %d auth: %v", connIndex, err)
+				return
+			}
+			if handled {
+				if authKind != remoteTestAuthAcknowledge {
+					reportHandlerError(handlerErrs, "conn %d sent unexpected auth operation", connIndex)
+					return
+				}
 				sawAck = true
 				if connIndex > 1 {
 					freshAckCount.Add(1)
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.AuthAcknowledgeNoAuthResponse{NoAuthSelected: true}))); err != nil {
-					reportHandlerError(handlerErrs, "send no-auth ack response: %w", err)
-				}
-			case protocol.MethodAttachProject:
-				if connIndex > 1 && !sawAck {
-					reportHandlerError(handlerErrs, "conn %d attached project before no-auth acknowledgement", connIndex)
-					return
-				}
-				attached = true
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
-					reportHandlerError(handlerErrs, "send attach response: %w", err)
-					return
-				}
-			case protocol.MethodAttachSession:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a", "session-1")))); err != nil {
-					reportHandlerError(handlerErrs, "send attach-session response: %w", err)
-					return
-				}
+				continue
+			}
+			req := event.Frame.Request()
+			if !handshaken {
+				reportHandlerError(handlerErrs, "conn %d sent application traffic before handshake", connIndex)
+				return
+			}
+			switch req.Method {
 			case protocol.MethodRuntimeSubmitUserTurn:
 				if !attached {
 					reportHandlerError(handlerErrs, "submit before project attach")
@@ -137,31 +142,38 @@ func TestRemoteNoAuthAcknowledgementDisabledWhenServerReportsRealAuthReady(t *te
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			if !handshaken {
-				if req.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "conn %d first method = %q, want handshake", connIndex, req.Method)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-				handshaken = true
+			kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{
+				projectID: "project-1", workspaceID: "workspace-1", workspaceRoot: "/tmp/workspace-a",
+			})
+			if err != nil {
+				reportHandlerError(handlerErrs, "conn %d setup: %v", connIndex, err)
+				return
+			}
+			if handled {
+				handshaken = handshaken || kind == remoteTestSetupHandshake
 				continue
 			}
-			switch req.Method {
-			case protocol.MethodAttachProject:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
-					reportHandlerError(handlerErrs, "send attach response: %w", err)
+			authKind, handled, err := handleRemoteTestAuthFrame(ctx, conn, event.Frame, remoteTestAuthResponse{
+				acknowledge: &serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: true},
+			})
+			if err != nil {
+				reportHandlerError(handlerErrs, "conn %d auth: %v", connIndex, err)
+				return
+			}
+			if handled {
+				if authKind != remoteTestAuthAcknowledge {
+					reportHandlerError(handlerErrs, "conn %d sent unexpected auth operation", connIndex)
 					return
 				}
-			case protocol.MethodAuthAcknowledgeNoAuth:
 				ackCount.Add(1)
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: true}))); err != nil {
-					reportHandlerError(handlerErrs, "send ack response: %w", err)
-					return
-				}
+				continue
+			}
+			req := event.Frame.Request()
+			if !handshaken {
+				reportHandlerError(handlerErrs, "conn %d sent application traffic before handshake", connIndex)
+				return
+			}
+			switch req.Method {
 			case protocol.MethodRuntimeSubmitUserTurn:
 				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
 					Message:    textutil.Value("ok"),
@@ -207,40 +219,43 @@ func TestRemoteRealAuthCompletionDisablesNoAuthAcknowledgementPolicy(t *testing.
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			if !handshaken {
-				if req.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "conn %d first method = %q, want handshake", connIndex, req.Method)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-				handshaken = true
+			kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{
+				projectID: "project-1", workspaceID: "workspace-1", workspaceRoot: "/tmp/workspace-a",
+			})
+			if err != nil {
+				reportHandlerError(handlerErrs, "conn %d setup: %v", connIndex, err)
+				return
+			}
+			if handled {
+				handshaken = handshaken || kind == remoteTestSetupHandshake
 				continue
 			}
+			authKind, handled, err := handleRemoteTestAuthFrame(ctx, conn, event.Frame, remoteTestAuthResponse{
+				acknowledge: &serverapi.AuthAcknowledgeNoAuthResponse{NoAuthSelected: true},
+				complete:    &serverapi.AuthCompleteBootstrapResponse{AuthReady: true, MethodType: "api_key"},
+			})
+			if err != nil {
+				reportHandlerError(handlerErrs, "conn %d auth: %v", connIndex, err)
+				return
+			}
+			if handled {
+				switch authKind {
+				case remoteTestAuthAcknowledge:
+					ackCount.Add(1)
+					if connIndex > 1 {
+						reportHandlerError(handlerErrs, "fresh connection sent stale no-auth acknowledgement after real auth")
+						return
+					}
+				case remoteTestAuthComplete:
+				}
+				continue
+			}
+			req := event.Frame.Request()
+			if !handshaken {
+				reportHandlerError(handlerErrs, "conn %d sent application traffic before handshake", connIndex)
+				return
+			}
 			switch req.Method {
-			case protocol.MethodAttachProject:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
-					reportHandlerError(handlerErrs, "send attach response: %w", err)
-					return
-				}
-			case protocol.MethodAuthAcknowledgeNoAuth:
-				ackCount.Add(1)
-				if connIndex > 1 {
-					reportHandlerError(handlerErrs, "fresh connection sent stale no-auth acknowledgement after real auth")
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.AuthAcknowledgeNoAuthResponse{NoAuthSelected: true}))); err != nil {
-					reportHandlerError(handlerErrs, "send no-auth ack response: %w", err)
-					return
-				}
-			case protocol.MethodAuthCompleteBootstrap:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.AuthCompleteBootstrapResponse{AuthReady: true, MethodType: "api_key"}))); err != nil {
-					reportHandlerError(handlerErrs, "send complete response: %w", err)
-					return
-				}
 			case protocol.MethodRuntimeSubmitUserTurn:
 				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
 					Message:    textutil.Value("ok"),
@@ -288,28 +303,23 @@ func TestRemoteDoesNotAcknowledgeNoAuthWhenPolicyDisabled(t *testing.T) {
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			if !handshaken {
-				if req.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "first method = %q, want handshake", req.Method)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-				handshaken = true
+			kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{
+				projectID: "project-1", workspaceID: "workspace-1", workspaceRoot: "/tmp/workspace-a",
+			})
+			if err != nil {
+				reportHandlerError(handlerErrs, "setup: %v", err)
+				return
+			}
+			if handled {
+				handshaken = handshaken || kind == remoteTestSetupHandshake
 				continue
 			}
-			switch req.Method {
-			case protocol.MethodAttachProject:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
-					reportHandlerError(handlerErrs, "send attach response: %w", err)
-					return
-				}
-			case protocol.MethodAuthAcknowledgeNoAuth:
-				reportHandlerError(handlerErrs, "unexpected no-auth acknowledgement while policy disabled")
+			req := event.Frame.Request()
+			if !handshaken {
+				reportHandlerError(handlerErrs, "application traffic before handshake")
 				return
+			}
+			switch req.Method {
 			case protocol.MethodRuntimeSubmitUserTurn:
 				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
 					Message:    textutil.Value("ok"),

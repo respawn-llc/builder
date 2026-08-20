@@ -675,22 +675,6 @@ func TestProductionProviderCatalogUUIDsAreStableV4Values(t *testing.T) {
 	}
 }
 
-func TestFinalizeErrorSentinelsSurviveRemoteDecode(t *testing.T) {
-	encoded := serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: "/tmp/config.toml"}, nil)
-	decoded := serverapi.DecodeOnboardingFinalizeError(encoded.RPCErrorData(), encoded.Error())
-
-	if !errors.Is(decoded, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
-		t.Fatalf("decoded error = %v, want config_already_exists sentinel", decoded)
-	}
-	var finalizeErr *serverapi.OnboardingFinalizeError
-	if !errors.As(decoded, &finalizeErr) {
-		t.Fatalf("decoded error = %T %v, want OnboardingFinalizeError", decoded, decoded)
-	}
-	if _, ok := finalizeErr.Details.(serverapi.OnboardingConfigAlreadyExistsDetails); !ok {
-		t.Fatalf("decoded details = %T, want OnboardingConfigAlreadyExistsDetails", finalizeErr.Details)
-	}
-}
-
 func newTestFinalizer(t *testing.T, root string, home string) *onboarding.Finalizer {
 	t.Helper()
 	finalizer, err := onboarding.NewFinalizer(onboarding.Options{PersistenceRoot: root, HomeDir: home})

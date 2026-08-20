@@ -15,16 +15,14 @@ type BootstrapService struct {
 	manager        *auth.Manager
 	oauthOptions   auth.OpenAIOAuthOptions
 	authRequired   bool
-	allowedPreAuth []string
 	supportedModes []serverapi.AuthBootstrapMode
 }
 
-func NewBootstrapService(manager *auth.Manager, oauthOptions auth.OpenAIOAuthOptions, settings config.Settings, allowedPreAuthMethods []string) *BootstrapService {
+func NewBootstrapService(manager *auth.Manager, oauthOptions auth.OpenAIOAuthOptions, settings config.Settings) *BootstrapService {
 	return &BootstrapService{
-		manager:        manager,
-		oauthOptions:   oauthOptions,
-		authRequired:   StartupAuthRequired(settings),
-		allowedPreAuth: append([]string(nil), allowedPreAuthMethods...),
+		manager:      manager,
+		oauthOptions: oauthOptions,
+		authRequired: StartupAuthRequired(settings),
 		supportedModes: []serverapi.AuthBootstrapMode{
 			serverapi.AuthBootstrapModeNone,
 			serverapi.AuthBootstrapModeBrowserCallbackURL,
@@ -49,7 +47,6 @@ func (s *BootstrapService) GetAuthBootstrapStatus(ctx context.Context, _ servera
 		AuthRequired:           s.authRequired,
 		NoAuthSelected:         stored.IsNoAuthSelected(),
 		AuthBootstrapSupported: true,
-		AllowedPreAuthMethods:  append([]string(nil), s.allowedPreAuth...),
 		SupportedModes:         append([]serverapi.AuthBootstrapMode(nil), s.supportedModes...),
 		OAuth: serverapi.AuthBootstrapOAuthConfig{
 			Issuer:   strings.TrimSpace(s.oauthOptions.Issuer),

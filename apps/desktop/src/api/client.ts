@@ -1,11 +1,18 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
-import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 import {
-  parseCatalogResponse,
-  requireCatalogProject,
-  sessionPageCall,
-} from "./clientCatalog";
+  classifyResult,
+  create,
+  OperationOutcome,
+  operationFromDescriptor,
+} from "@app/server-api-contract";
+import {
+  ReadinessSeverity,
+  ServerService,
+  type Readiness,
+} from "@app/server-api-contract/gen/kent/api/server/server_pb";
+import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
+import { listSessionPage as listSessionCatalogPage } from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import * as taskDependencies from "./clientTaskDependencies";
@@ -80,12 +87,7 @@ import type {
 } from "./models";
 import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
-import {
-  projectPageSchema,
-} from "./schemas/project";
-import { sessionPageResponseSchema } from "./schemas/catalog";
-import { CatalogContractError } from "./errors";
-import { readinessSchema } from "./schemas/status";
+import { ContractError, TransportError } from "./errors";
 import { workflowIDSchema } from "./schemas/workflowID";
 import {
   attentionPageSchema,
@@ -106,7 +108,7 @@ import {
   workflowListSchema,
   workflowValidationSchema,
 } from "./schemas/workflow";
-import type { RpcTransport } from "./transport";
+import type { DescriptorRpcTransport } from "./transport";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
 import { workflowProjectEventRpcHandler } from "./workflowProjectEvents";
@@ -117,27 +119,35 @@ export const guiTaskCommentAuthor = "user";
 
 export class ApiClient implements ApiService {
   readonly connection: ApiConnectionSource;
-  readonly #transport: RpcTransport;
+  readonly #transport: DescriptorRpcTransport;
 
-  constructor(transport: RpcTransport) {
+  constructor(transport: DescriptorRpcTransport) {
     this.#transport = transport;
     this.connection = transport.connection;
   }
 
   async getReadiness(): Promise<ServerReadiness> {
-    return parse(
-      "server.readiness.get",
-      readinessSchema,
-      await this.#transport.call("server.readiness.get", emptyJsonObject),
-    );
+    const method = ServerService.method.getReadiness;
+    const result = await this.#transport.callDescriptor(method, create(method.input));
+    let classified: ReturnType<typeof classifyResult>;
+    try {
+      classified = classifyResult(method.output, result);
+    } catch {
+      throw new ContractError(`${operationFromDescriptor(method).name} response did not match GUI contract.`);
+    }
+    if (classified.outcome !== OperationOutcome.SUCCESS) {
+      throw new TransportError(
+        `${operationFromDescriptor(method).name} failed with code ${classified.failure.code}.`,
+      );
+    }
+    if (result.outcome.case !== "success" || result.outcome.value.readiness === undefined) {
+      throw new ContractError(`${operationFromDescriptor(method).name} response did not match GUI contract.`);
+    }
+    return projectReadiness(result.outcome.value.readiness);
   }
 
   async listProjects(pageToken: string): Promise<ProjectPage> {
-    return parse(
-      "project.home.list",
-      projectPageSchema,
-      await this.#transport.call("project.home.list", { page_size: 40, page_token: pageToken }),
-    );
+    return project.listProjectHome(this.#transport, pageToken);
   }
 
   async listSessionPage(
@@ -145,17 +155,7 @@ export class ApiClient implements ApiService {
     category: SessionCategory,
     offset: number,
   ): Promise<SessionCatalogPage> {
-    const request = sessionPageCall(projectID, category, offset);
-    const response = parseCatalogResponse(
-      "session.page",
-      sessionPageResponseSchema,
-      await this.#transport.call("session.page", request.params),
-    );
-    requireCatalogProject("session.page", request.expectedProjectID, response.projectID);
-    if (response.category !== request.expectedCategory) {
-      throw CatalogContractError.sessionCategoryMismatch(request.expectedCategory, response.category);
-    }
-    return response;
+    return listSessionCatalogPage(this.#transport, projectID, category, offset);
   }
 
   listWorkspaces = async (projectID: string, offset: number) =>
@@ -597,4 +597,32 @@ export class ApiClient implements ApiService {
   ) => worktree.deleteWorktree(this.#transport, sessionID, preview, confirmation);
   subscribeWorktreeSetup = (setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler) =>
     subscribeWorktreeSetup(this.#transport, setupOperationID, handler);
+}
+
+function projectReadiness(readiness: Readiness): ServerReadiness {
+  return {
+    ready: readiness.ready,
+    serverID: readiness.serverId,
+    serverVersion: readiness.serverVersion,
+    serverBuild: readiness.serverBuild,
+    protocolVersion: readiness.protocolVersion,
+    authReady: readiness.authReady,
+    authRequired: readiness.authRequired,
+    endpoint: readiness.endpoint,
+    subagentRoles: readiness.subagentRoles.map((role) => ({ name: role.name })),
+    causes: readiness.causes.map((cause) => ({
+      code: cause.code,
+      severity: projectReadinessSeverity(cause.severity),
+      ...(cause.summary === undefined ? {} : { summary: cause.summary }),
+      ...(cause.nextAction === undefined ? {} : { nextAction: cause.nextAction }),
+      diagnosticID: cause.diagnosticId ?? "",
+    })),
+  };
+}
+
+function projectReadinessSeverity(severity: ReadinessSeverity): string {
+  if (severity === ReadinessSeverity.ERROR) {
+    return "error";
+  }
+  throw new ContractError("server readiness response contained an unsupported cause severity.");
 }

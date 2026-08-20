@@ -17,11 +17,11 @@ import (
 	serverstartup "core/server/startup"
 	"core/shared/client"
 	"core/shared/config"
-	"core/shared/protocol"
+	"core/shared/protoapi"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
+	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/theme"
-
-	"golang.org/x/net/websocket"
 )
 
 const onboardingRemoteLifecycleConfigEnv = "KENT_ONBOARDING_REMOTE_LIFECYCLE_CONFIG"
@@ -111,17 +111,17 @@ func cancelOnboardingLifecycleWhenFileExists(ctx context.Context, cancel context
 }
 
 type onboardingRPCGate struct {
-	backendURL     string
-	started        chan struct{}
-	release        chan struct{}
-	finalized      chan struct{}
-	closed         chan struct{}
-	finalizationMu sync.Mutex
-	finalizationID string
-	startOnce      sync.Once
-	releaseOnce    sync.Once
-	finalizedOnce  sync.Once
-	closeOnce      sync.Once
+	backendURL              string
+	started                 chan struct{}
+	release                 chan struct{}
+	finalized               chan struct{}
+	closed                  chan struct{}
+	finalizationMu          sync.Mutex
+	finalizationCorrelation string
+	startOnce               sync.Once
+	releaseOnce             sync.Once
+	finalizedOnce           sync.Once
+	closeOnce               sync.Once
 }
 
 func newOnboardingRPCGate(backendURL string) *onboardingRPCGate {
@@ -138,9 +138,13 @@ func (g *onboardingRPCGate) Release() {
 	g.releaseOnce.Do(func() { close(g.release) })
 }
 
-func (g *onboardingRPCGate) Handler(conn *websocket.Conn) {
+func (g *onboardingRPCGate) Handler(ctx context.Context, conn rpcwire.Conn) {
 	defer g.closeOnce.Do(func() { close(g.closed) })
-	backend, err := websocket.Dial(g.backendURL, "", g.backendURL)
+	endpoint, err := rpcwire.ParseWebSocketEndpoint(g.backendURL)
+	if err != nil {
+		return
+	}
+	backend, err := rpcwire.NewWebSocketTransport().Dial(ctx, endpoint)
 	if err != nil {
 		return
 	}
@@ -148,41 +152,64 @@ func (g *onboardingRPCGate) Handler(conn *websocket.Conn) {
 	forwardDone := make(chan struct{})
 	go func() {
 		defer close(forwardDone)
-		for {
-			var response protocol.Response
-			if err := websocket.JSON.Receive(backend, &response); err != nil {
+		for event := range backend.Events() {
+			if event.Err != nil {
 				return
 			}
-			if g.isFinalizationResponse(response.ID) {
+			if g.isFinalizationResponse(event.Frame) {
 				g.finalizedOnce.Do(func() { close(g.finalized) })
 			}
-			if err := websocket.JSON.Send(conn, response); err != nil {
+			if err := conn.Send(ctx, event.Frame); err != nil {
 				return
 			}
 		}
 	}()
-	for {
-		var request protocol.Request
-		if err := websocket.JSON.Receive(conn, &request); err != nil {
+	for event := range conn.Events() {
+		if event.Err != nil {
 			return
 		}
-		if request.Method == protocol.MethodOnboardingFinalize {
+		if correlation, finalization := onboardingFinalizationCorrelation(event.Frame); finalization {
 			g.finalizationMu.Lock()
-			g.finalizationID = request.ID
+			g.finalizationCorrelation = correlation
 			g.finalizationMu.Unlock()
 			g.startOnce.Do(func() { close(g.started) })
 			<-g.release
 		}
-		if err := websocket.JSON.Send(backend, request); err != nil {
+		if err := backend.Send(ctx, event.Frame); err != nil {
 			return
 		}
 	}
 }
 
-func (g *onboardingRPCGate) isFinalizationResponse(id string) bool {
+func onboardingFinalizationCorrelation(frame rpcwire.Frame) (string, bool) {
+	if frame.Kind != rpcwire.FrameBinary {
+		return "", false
+	}
+	envelope, err := protoapi.DecodeEnvelope(frame.Payload)
+	if err != nil || envelope.GetCall() == nil || envelope.GetCall().Correlation == nil {
+		return "", false
+	}
+	method := onboardingpb.File_kent_api_onboarding_onboarding_proto.Services().
+		ByName("OnboardingService").Methods().ByName("Finalize")
+	operation, err := protoapi.OperationFromDescriptor(method)
+	if err != nil || envelope.GetCall().Operation != operation.Name {
+		return "", false
+	}
+	return envelope.GetCall().GetCorrelation(), true
+}
+
+func (g *onboardingRPCGate) isFinalizationResponse(frame rpcwire.Frame) bool {
+	if frame.Kind != rpcwire.FrameBinary {
+		return false
+	}
+	envelope, err := protoapi.DecodeEnvelope(frame.Payload)
+	if err != nil || envelope.GetResult() == nil {
+		return false
+	}
 	g.finalizationMu.Lock()
 	defer g.finalizationMu.Unlock()
-	return g.finalizationID != "" && g.finalizationID == id
+	return g.finalizationCorrelation != "" &&
+		g.finalizationCorrelation == envelope.GetResult().GetCorrelation()
 }
 
 type gatedOnboardingServer struct {
@@ -221,7 +248,7 @@ func newGatedOnboardingServer(t *testing.T) *gatedOnboardingServer {
 		time.Sleep(10 * time.Millisecond)
 	}
 	gate := newOnboardingRPCGate(config.ServerRPCURL(cfg))
-	server := httptest.NewServer(websocket.Handler(gate.Handler))
+	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(gate.Handler))
 	t.Cleanup(server.Close)
 	return &gatedOnboardingServer{
 		gate:   gate,
@@ -329,7 +356,7 @@ func TestOnboardingFinalizationRemoteDeadlineIsIndeterminateUntilCallerClosesRem
 		t.Fatalf("dial gated remote: %v", err)
 	}
 	finalization := newOnboardingFinalization(remote, context.Background())
-	finalization.timeout = 25 * time.Millisecond
+	finalization.timeout = time.Second
 	if err := finalization.start(serverapi.OnboardingFinalizeRequest{
 		Theme:          ptrOnboardingTheme(theme.Dark),
 		CommandsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeNone},

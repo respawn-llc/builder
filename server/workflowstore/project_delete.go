@@ -97,8 +97,7 @@ func projectDeleteBlockersFromCounts(nonTerminalTasks int64) []serverapi.Project
 		return nil
 	}
 	return []serverapi.ProjectDeleteBlocker{{
-		Code:    "non_terminal_tasks",
-		Message: "Project has active or non-terminal tasks.",
-		Count:   int(nonTerminalTasks),
+		Code:  "non_terminal_tasks",
+		Count: int(nonTerminalTasks),
 	}}
 }

@@ -12,9 +12,15 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
+	"core/shared/protoapi"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type ProjectViewRemote = remoteattach.ProjectViewRemote
@@ -53,14 +59,6 @@ func (s *projectViewRemoteStub) PlanWorkspaceBinding(ctx context.Context, req se
 	return serverapi.ProjectBindingPlanResponse{}, errors.New("unexpected PlanWorkspaceBinding call")
 }
 
-func compatibleCapabilities() protocol.CapabilityFlags {
-	return protocol.CapabilityFlags{
-		AuthBootstrap: true,
-		ProjectAttach: true,
-		RunPrompt:     true,
-	}
-}
-
 func boundPlanResponse() serverapi.ProjectBindingPlanResponse {
 	return serverapi.ProjectBindingPlanResponse{
 		Kind:    serverapi.ProjectBindingPlanKindBound,
@@ -70,7 +68,7 @@ func boundPlanResponse() serverapi.ProjectBindingPlanResponse {
 
 func boundProjectView(plan func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error)) *projectViewRemoteStub {
 	return &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, Capabilities: compatibleCapabilities()},
+		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version},
 		plan:     plan,
 	}
 }
@@ -120,7 +118,7 @@ func TestAttachRunPromptWithoutReachableServer(t *testing.T) {
 
 func boundProjectViewWithRoot(rootID string) *projectViewRemoteStub {
 	return &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, Capabilities: compatibleCapabilities(), PersistenceRootID: rootID},
+		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, PersistenceRootID: rootID},
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			return boundPlanResponse(), nil
 		},
@@ -133,7 +131,6 @@ func TestAttachRunPromptReportsTypedPersistenceRootMismatch(t *testing.T) {
 			req := testAttachRequest(func(context.Context, config.App) (remoteattach.ProjectViewRemote, error) {
 				projectViews := boundProjectViewWithRoot(reportedRoot)
 				projectViews.identity.ProtocolVersion = "legacy"
-				projectViews.identity.Capabilities = protocol.CapabilityFlags{}
 				return projectViews, nil
 			})
 			requireExplicitRoot(&req)
@@ -186,17 +183,10 @@ func dialWorkspaceServerWithRoot(t *testing.T, rootID string, attachProject bool
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			switch req.Method {
-			case protocol.MethodHandshake:
-				_ = conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1", PersistenceRootID: rootID}})))
-			case protocol.MethodAttachProject:
-				attachment, err := protocol.ProjectAttachResponse("project-1", "workspace-1", "/workspace")
-				if err != nil {
-					return
-				}
-				_ = conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, attachment)))
-			default:
+			if event.Frame.Kind != rpcwire.FrameBinary {
+				return
+			}
+			if err := serveWorkspaceConnectionSetup(ctx, conn, event.Frame, rootID); err != nil {
 				return
 			}
 		}
@@ -211,6 +201,82 @@ func dialWorkspaceServerWithRoot(t *testing.T, rootID string, attachProject bool
 	return dial, server.Close, disconnected
 }
 
+func serveWorkspaceConnectionSetup(ctx context.Context, conn rpcwire.Conn, frame rpcwire.Frame, rootID string) error {
+	envelope, err := protoapi.DecodeEnvelope(frame.Payload)
+	if err != nil {
+		return err
+	}
+	call := envelope.GetCall()
+	if call == nil || call.Correlation == nil {
+		return errors.New("correlated Connection call is required")
+	}
+	service := connectionpb.File_kent_api_connection_connection_proto.Services().ByName("ConnectionService")
+	for _, setup := range []struct {
+		name   string
+		result func() (proto.Message, error)
+	}{
+		{name: "Handshake", result: func() (proto.Message, error) {
+			identity := &connectionpb.ServerIdentity{
+				ProtocolVersion: protocol.Version,
+				ServerId:        "server-1",
+				Pid:             1,
+			}
+			if rootID != "" {
+				identity.PersistenceRootId = &rootID
+			}
+			return &connectionpb.HandshakeResult{
+				Outcome: &connectionpb.HandshakeResult_Success{
+					Success: &connectionpb.HandshakeSuccess{Identity: identity},
+				},
+			}, nil
+		}},
+		{name: "AttachProject", result: func() (proto.Message, error) {
+			var request connectionpb.AttachProjectRequest
+			if err := protoapi.Decode(call.Payload, &request); err != nil {
+				return nil, err
+			}
+			return &connectionpb.AttachProjectResult{
+				Outcome: &connectionpb.AttachProjectResult_Success{
+					Success: &connectionpb.AttachmentSuccess{
+						Attachment: &connectionpb.AttachmentSuccess_Project{
+							Project: &connectionpb.ProjectAttachment{
+								ProjectId: request.ProjectId, WorkspaceId: "workspace-1", WorkspaceRoot: "/workspace",
+							},
+						},
+					},
+				},
+			}, nil
+		}},
+	} {
+		method := service.Methods().ByName(protoreflect.Name(setup.name))
+		operation, err := protoapi.OperationFromDescriptor(method)
+		if err != nil {
+			return err
+		}
+		if call.Operation != operation.Name {
+			continue
+		}
+		result, err := setup.result()
+		if err != nil {
+			return err
+		}
+		payload, err := protoapi.Encode(result)
+		if err != nil {
+			return err
+		}
+		encoded, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
+			Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+				Operation: operation.Name, Correlation: call.Correlation, Payload: payload,
+			}},
+		})
+		if err != nil {
+			return err
+		}
+		return conn.Send(ctx, rpcwire.Frame{Kind: rpcwire.FrameBinary, Payload: encoded})
+	}
+	return errors.New("unsupported Connection setup operation")
+}
+
 func TestAttachRunPromptReportsTypedIncompatibleServerReason(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -218,12 +284,8 @@ func TestAttachRunPromptReportsTypedIncompatibleServerReason(t *testing.T) {
 		reasonParts []string
 	}{
 		{
-			name:     "missing capabilities",
-			identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version},
-		},
-		{
 			name:        "protocol version mismatch",
-			identity:    protocol.ServerIdentity{ProtocolVersion: "0.0.0-legacy", ServerID: "kent:7", PID: 7, Capabilities: compatibleCapabilities()},
+			identity:    protocol.ServerIdentity{ProtocolVersion: "0.0.0-legacy", ServerID: "kent:7", PID: 7},
 			reasonParts: []string{"0.0.0-legacy", protocol.Version},
 		},
 	} {

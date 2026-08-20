@@ -217,6 +217,11 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 		TargetFinalAssistantCount: 1,
 		HookRecordPath:            recordPath,
 		HookBehavior:              appfixture.LifecycleHookBehaviorNonzero,
+		HookObservationBarrier: &appfixture.LifecycleHookObservationBarrier{
+			RequiredCategories: []lifecyclecontract.Category{
+				lifecyclecontract.CategoryTaskComplete,
+			},
+		},
 	}
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path:       buildPTYFixtureBinary(t, ctx),
@@ -224,8 +229,7 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 		Env:        []string{lifecyclePTYProcessEnv(t, root, processConfig)},
 		Dimensions: pty.MustDimensions(24, 80),
 		PhaseInputs: []pty.PhaseInputEvent{{
-			Phase: pty.PhaseScenarioFinalApplied,
-			After: 2 * time.Second,
+			Phase: pty.PhaseLifecycleHooksObserved,
 			Bytes: []byte{0x03, 0x03},
 		}},
 		Timeout: 5 * time.Second,

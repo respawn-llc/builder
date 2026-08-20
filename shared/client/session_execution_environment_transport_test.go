@@ -60,7 +60,9 @@ func TestRemoteSessionExecutionEnvironmentRoundTripsAuthApplicability(t *testing
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				req := acceptRemoteHandshake(t, ws)
+				acceptRemoteHandshake(t, ws)
+				acceptRemoteProjectAttachment(t, ws, "workspace-1", "/workspace")
+				var req protocol.Request
 				for {
 					if err := websocket.JSON.Receive(ws, &req); err != nil {
 						if errors.Is(err, io.EOF) {
@@ -69,10 +71,6 @@ func TestRemoteSessionExecutionEnvironmentRoundTripsAuthApplicability(t *testing
 						t.Fatalf("receive execution environment request: %v", err)
 					}
 					switch req.Method {
-					case protocol.MethodAttachProject:
-						if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/workspace"))); err != nil {
-							t.Fatalf("send attach response: %v", err)
-						}
 					case protocol.MethodSessionGetExecutionEnvironment:
 						if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, test.response)); err != nil {
 							t.Fatalf("send execution environment response: %v", err)
@@ -106,7 +104,9 @@ func TestRemoteSessionExecutionEnvironmentRoundTripsAuthApplicability(t *testing
 
 func TestRemoteSessionExecutionEnvironmentRejectsExtraResponseField(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
+		acceptRemoteHandshake(t, ws)
+		acceptRemoteProjectAttachment(t, ws, "workspace-1", "/workspace")
+		var req protocol.Request
 		for {
 			if err := websocket.JSON.Receive(ws, &req); err != nil {
 				if errors.Is(err, io.EOF) {
@@ -115,10 +115,6 @@ func TestRemoteSessionExecutionEnvironmentRejectsExtraResponseField(t *testing.T
 				t.Fatalf("receive execution environment request: %v", err)
 			}
 			switch req.Method {
-			case protocol.MethodAttachProject:
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/workspace"))); err != nil {
-					t.Fatalf("send attach response: %v", err)
-				}
 			case protocol.MethodSessionGetExecutionEnvironment:
 				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, map[string]any{
 					"environment": map[string]any{

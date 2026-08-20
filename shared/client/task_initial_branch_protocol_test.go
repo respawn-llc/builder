@@ -2,13 +2,10 @@ package client
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"core/shared/protocol"
 	"core/shared/rpcwire"
 )
 
@@ -19,25 +16,9 @@ func TestInitialBranchClientStopsAtOldServerHandshake(t *testing.T) {
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			if req.Method != protocol.MethodHandshake {
-				handlerErrs <- errors.New("client sent a request before protocol handshake succeeded")
-				return
-			}
-			var handshake protocol.HandshakeRequest
-			if err := json.Unmarshal(req.Params, &handshake); err != nil {
+			if err := rejectRemoteTestHandshake(ctx, conn, event.Frame, "125"); err != nil {
 				handlerErrs <- err
-				return
 			}
-			if handshake.ProtocolVersion != protocol.Version {
-				handlerErrs <- errors.New("client handshake did not use the current protocol version")
-				return
-			}
-			_ = conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewErrorResponse(
-				req.ID,
-				protocol.ErrCodeProtocolVersionMismatch,
-				"old server rejects newer client protocol",
-			)))
 			return
 		}
 	}))

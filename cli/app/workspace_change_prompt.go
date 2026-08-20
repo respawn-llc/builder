@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/clientui"
-	"core/shared/protocol"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -53,7 +53,7 @@ func newSessionWorkspaceRetargetContext(workspaceRoot string, theme string) (*se
 	}, nil
 }
 
-func sessionWorkspaceRetargetContextFromBinding(binding protocol.ProjectAttachment, theme string) *sessionWorkspaceRetargetContext {
+func sessionWorkspaceRetargetContextFromBinding(binding client.ProjectAttachment, theme string) *sessionWorkspaceRetargetContext {
 	return &sessionWorkspaceRetargetContext{
 		workspaceRoot: normalizeWorkspaceChangeDisplayRoot(binding.WorkspaceRoot),
 		theme:         strings.TrimSpace(theme),

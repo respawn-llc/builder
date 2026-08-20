@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -28,12 +29,19 @@ import (
 	remoteclient "core/shared/client"
 	"core/shared/clientui"
 	"core/shared/llmerrors"
+	"core/shared/protoapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func gatewaySessionExecutionTarget(t *testing.T, conn *websocket.Conn, requestID, sessionID string) clientui.SessionExecutionTarget {
@@ -100,13 +108,6 @@ func TestProtocolErrorMapsModelStreamStalled(t *testing.T) {
 	code, _ := protocolError(fmt.Errorf("model generation failed after retries: %w", llmerrors.ErrModelStreamStalled))
 	if code != protocol.ErrCodeModelStreamStalled {
 		t.Fatalf("protocol error code = %d, want %d", code, protocol.ErrCodeModelStreamStalled)
-	}
-}
-
-func TestProtocolErrorMapsUnsupportedProvider(t *testing.T) {
-	code, _ := protocolError(serverapi.ErrUnsupportedProvider)
-	if code != protocol.ErrCodeUnsupportedProvider {
-		t.Fatalf("protocol error code = %d, want %d", code, protocol.ErrCodeUnsupportedProvider)
 	}
 }
 
@@ -192,38 +193,6 @@ func TestResponseForErrorPreservesRuntimeCommandNotAcceptedUnavailableCause(t *t
 	}
 }
 
-func TestResponseForErrorMapsProjectWorkspaceTypedFailures(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		code int
-	}{
-		{
-			name: "path identity",
-			err:  serverapi.WorkspacePathIdentityError{WorkspaceRoot: "/missing", Cause: errors.New("inaccessible")},
-			code: protocol.ErrCodeWorkspacePathIdentity,
-		},
-		{
-			name: "detach conflict",
-			err:  &serverapi.WorkspaceDetachConflictError{ProjectID: "project-1", WorkspaceID: "workspace-1"},
-			code: protocol.ErrCodeWorkspaceDetachConflict,
-		},
-		{
-			name: "mutation failure",
-			err:  &serverapi.WorkspaceMutationError{ProjectID: "project-1", WorkspaceID: "workspace-1", Cause: errors.New("write failed")},
-			code: protocol.ErrCodeWorkspaceMutationFailed,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			response := responseForError("project-workspace", test.err)
-			if response.Error == nil || response.Error.Code != test.code || len(response.Error.Data) == 0 {
-				t.Fatalf("response = %+v, want code %d with data", response.Error, test.code)
-			}
-		})
-	}
-}
-
 func TestResponseForErrorSurfacesIrreconcilableRecoveryEvidence(t *testing.T) {
 	detail := &session.IrreconcilableRecoveryDetail{
 		SessionID:             "session-1",
@@ -275,7 +244,7 @@ func TestStreamCompleteParamsMapsTerminalErrors(t *testing.T) {
 func TestNewGatewayRejectsTypedNilDependencies(t *testing.T) {
 	var appCore *core.Core
 
-	gateway, err := NewGateway(appCore, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(appCore, gatewayTestIdentity())
 	if err == nil {
 		t.Fatal("expected typed nil dependencies to be rejected")
 	}
@@ -299,15 +268,20 @@ func TestCancellationMessageRoundTripsThroughRemoteClient(t *testing.T) {
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			switch req.Method {
-			case protocol.MethodHandshake:
-				resp := protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(resp)); err != nil {
-					reportGatewayHandlerError(handlerErrs, "send handshake: %w", err)
+			if event.Frame.Kind == rpcwire.FrameBinary {
+				if err := serveGatewayRemoteTestHandshake(ctx, conn, event.Frame); err != nil {
+					reportGatewayHandlerError(handlerErrs, "send handshake: %v", err)
 					return
 				}
-			case protocol.MethodProjectList:
+				continue
+			}
+			req, err := event.Frame.DecodeRequest()
+			if err != nil {
+				reportGatewayHandlerError(handlerErrs, "decode request: %v", err)
+				return
+			}
+			switch req.Method {
+			case protocol.MethodChatContextGet:
 				resp := protocol.NewErrorResponse(req.ID, code, message)
 				if err := conn.Send(ctx, rpcwire.FrameFromResponse(resp)); err != nil {
 					reportGatewayHandlerError(handlerErrs, "send project list error: %w", err)
@@ -327,9 +301,9 @@ func TestCancellationMessageRoundTripsThroughRemoteClient(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	_, err = remote.ListProjects(context.Background(), serverapi.ProjectListRequest{})
+	_, err = remote.GetChatContext(context.Background(), serverapi.NewWorkspaceChatContextRequest())
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("ListProjects error = %v, want context.Canceled", err)
+		t.Fatalf("GetChatContext error = %v, want context.Canceled", err)
 	}
 	if err == nil || err.Error() != message {
 		t.Fatalf("expected cancellation message %q, got %v", message, err)
@@ -474,7 +448,7 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 		activateAttachments:   []*serverapi.SessionRuntimeAttachment{{Generation: 1}, {Generation: 2}},
 		releaseResponse:       &serverapi.SessionRuntimeReleaseResponse{Released: true},
 	}
-	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -544,7 +518,7 @@ func TestGatewayDetachOnlyReleaseInjectsOwnerAndSkipsDisconnectRelease(t *testin
 		activateAttachments:   []*serverapi.SessionRuntimeAttachment{{Generation: 1}},
 		releaseResponse:       &serverapi.SessionRuntimeReleaseResponse{Active: true},
 	}
-	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -596,7 +570,7 @@ func TestGatewayCloseIfIdleReleasePropagatesPolicy(t *testing.T) {
 		activateAttachments:   []*serverapi.SessionRuntimeAttachment{{Generation: 1}},
 		releaseResponse:       &serverapi.SessionRuntimeReleaseResponse{Released: true},
 	}
-	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -638,7 +612,7 @@ func TestGatewayMissingActivationAttachmentDoesNotRecordRuntimeOwnership(t *test
 		SessionRuntimeService: appCore.SessionRuntimeClient(),
 		activateAttachments:   []*serverapi.SessionRuntimeAttachment{nil},
 	}
-	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -666,16 +640,124 @@ func TestGatewayHandshakeAndProjectList(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	var handshake protocol.HandshakeResponse
-	callGateway(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: protocol.Version}, &handshake)
-	if handshake.Identity.ProtocolVersion != protocol.Version || handshake.Identity.ServerID != "server-1" {
-		t.Fatalf("unexpected handshake: %+v", handshake.Identity)
+	handshakeGateway(t, conn)
+	if protocol.Version != "126" {
+		t.Fatalf("protocol version = %q, want 126", protocol.Version)
 	}
 
-	var projects serverapi.ProjectListResponse
-	callGateway(t, conn, "2", protocol.MethodProjectList, serverapi.ProjectListRequest{}, &projects)
+	projectCatalog := projectpb.File_kent_api_project_project_proto.Services().ByName("ProjectCatalogService")
+	if projectCatalog == nil {
+		t.Fatal("Project Catalog descriptor is required")
+	}
+	projectList := projectCatalog.Methods().ByName("List")
+	if projectList == nil {
+		t.Fatal("Project List descriptor is required")
+	}
+	result := &projectpb.ProjectListResult{}
+	callGatewayDescriptor(t, conn, "2", projectList, &emptypb.Empty{}, result)
+	if result.GetError() != nil {
+		t.Fatalf("Project List error: %+v", result.GetError())
+	}
+	projects, err := protoapi.ProjectListFromProto(result.GetSuccess())
+	if err != nil {
+		t.Fatalf("decode Project List: %v", err)
+	}
 	if len(projects.Projects) != 1 || projects.Projects[0].ProjectID != appCore.ProjectID() {
 		t.Fatalf("unexpected project list: %+v", projects.Projects)
+	}
+
+	registration, err := productionGatewayRegistration()
+	if err != nil {
+		t.Fatalf("production Gateway registration: %v", err)
+	}
+	if err := registration.Validate(); err != nil {
+		t.Fatalf("validate complete production Gateway registration: %v", err)
+	}
+	cloneRegistration := func() gatewayRegistration {
+		clone := gatewayRegistration{
+			operations: make(map[string]protoapi.Operation, len(registration.operations)),
+			legacy:     make(map[string]apicontract.Route, len(registration.legacy)),
+			binary:     make(map[string]gatewayBinaryBinding, len(registration.binary)),
+		}
+		for name, operation := range registration.operations {
+			clone.operations[name] = operation
+		}
+		for name, route := range registration.legacy {
+			clone.legacy[name] = route
+		}
+		for name, binding := range registration.binary {
+			clone.binary[name] = binding
+		}
+		return clone
+	}
+	var migratedName string
+	for name := range registration.binary {
+		migratedName = name
+		break
+	}
+	if migratedName == "" {
+		t.Fatal("production Gateway registration has no migrated operation")
+	}
+	var legacyName string
+	var legacyRoute apicontract.Route
+	for name, route := range registration.legacy {
+		if route.Kind == apicontract.KindUnary {
+			legacyName = name
+			legacyRoute = route
+			break
+		}
+	}
+	if legacyName == "" {
+		t.Fatal("production Gateway registration has no legacy unary operation")
+	}
+
+	missingAuthority := cloneRegistration()
+	delete(missingAuthority.binary, migratedName)
+	if err := missingAuthority.Validate(); err == nil {
+		t.Fatal("Gateway registration accepted an operation with no active authority")
+	}
+
+	overlappingAuthority := cloneRegistration()
+	overlappingAuthority.legacy[migratedName] = legacyRoute
+	if err := overlappingAuthority.Validate(); err == nil {
+		t.Fatal("Gateway registration accepted migrated and legacy authorities for one operation")
+	}
+
+	staleProvenance := cloneRegistration()
+	migratedOperation := staleProvenance.operations[migratedName]
+	migratedOperation.LegacyWireName = &legacyRoute.Method
+	staleProvenance.operations[migratedName] = migratedOperation
+	if err := staleProvenance.Validate(); err == nil {
+		t.Fatal("Gateway registration accepted legacy provenance on a migrated operation")
+	}
+
+	unresolvedProvenance := cloneRegistration()
+	delete(unresolvedProvenance.operations, legacyName)
+	delete(unresolvedProvenance.legacy, legacyName)
+	if err := unresolvedProvenance.Validate(); err == nil {
+		t.Fatal("Gateway registration accepted a legacy route without descriptor provenance")
+	}
+
+	wrongKind := cloneRegistration()
+	route := wrongKind.legacy[legacyName]
+	route.Kind = apicontract.KindProgress
+	wrongKind.legacy[legacyName] = route
+	if err := wrongKind.Validate(); err == nil {
+		t.Fatal("Gateway registration accepted a legacy handler with the wrong operation kind")
+	}
+
+	handler, exists := gatewayUnaryHandlers[legacyRoute.Method]
+	if !exists {
+		t.Fatalf("legacy unary route %q has no unary handler before mutation", legacyRoute.Method)
+	}
+	delete(gatewayUnaryHandlers, legacyRoute.Method)
+	missingHandlerErr := registration.Validate()
+	gatewayUnaryHandlers[legacyRoute.Method] = handler
+	if missingHandlerErr == nil {
+		t.Fatal("Gateway registration accepted a legacy unary operation without its unary handler")
+	}
+	if err := registration.Validate(); err != nil {
+		t.Fatalf("restore complete production Gateway registration: %v", err)
 	}
 }
 
@@ -686,12 +768,12 @@ func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "46"})
-	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch ||
-		!strings.Contains(respErr.Message, "unsupported protocol version") ||
-		!strings.Contains(respErr.Message, "server requires "+strconv.Quote(protocol.Version)) ||
-		!strings.Contains(respErr.Message, "upgrade the older Kent process") {
-		t.Fatalf("expected unsupported protocol version error, got %+v", respErr)
+	result := handshakeGatewayVersion(t, conn, "46")
+	failure := result.GetError()
+	if failure == nil ||
+		failure.Code != "protocol_version_mismatch" ||
+		failure.GetProtocolVersionMismatch().RequiredProtocolVersion != protocol.Version {
+		t.Fatalf("expected unsupported protocol version error, got %+v", failure)
 	}
 }
 
@@ -702,9 +784,9 @@ func TestGatewayHandshakeRejectsPreviousProtocolVersion(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "115"})
-	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
-		t.Fatalf("expected previous protocol version rejection, got %+v", respErr)
+	result := handshakeGatewayVersion(t, conn, "125")
+	if result.GetError().GetProtocolVersionMismatch().RequiredProtocolVersion != "126" {
+		t.Fatalf("expected previous protocol version rejection, got %+v", result.GetError())
 	}
 }
 
@@ -896,41 +978,32 @@ func TestGatewayRejectsMethodsBeforeHandshake(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodProjectList, serverapi.ProjectListRequest{})
-	if respErr.Code != protocol.ErrCodeInvalidRequest {
-		t.Fatalf("expected handshake-required error, got %+v", respErr)
+	sendGatewayRequest(t, conn, "1", protocol.MethodProcessList, serverapi.ProcessListRequest{})
+	var response protocol.Response
+	if err := websocket.JSON.Receive(conn, &response); err == nil {
+		t.Fatalf("pre-handshake application traffic unexpectedly received %+v", response)
 	}
 }
 
 func TestGatewayPreAuthMethodPolicy(t *testing.T) {
-	tests := []struct {
-		name         string
-		method       string
-		requiresAuth bool
-	}{
-		{name: "handshake", method: protocol.MethodHandshake, requiresAuth: false},
-		{name: "capability facts", method: protocol.MethodCapabilityFactsGet, requiresAuth: false},
-		{name: "bootstrap status", method: protocol.MethodAuthGetBootstrapStatus, requiresAuth: false},
-		{name: "bootstrap complete", method: protocol.MethodAuthCompleteBootstrap, requiresAuth: false},
-		{name: "auth status", method: protocol.MethodAuthGetStatus, requiresAuth: false},
-		{name: "project list", method: protocol.MethodProjectList, requiresAuth: false},
-		{name: "project binding plan", method: protocol.MethodProjectPlanWorkspaceBinding, requiresAuth: false},
-		{name: "project attach workspace", method: protocol.MethodProjectAttachWorkspace, requiresAuth: true},
-		{name: "attach project", method: protocol.MethodAttachProject, requiresAuth: false},
-		{name: "attach session", method: protocol.MethodAttachSession, requiresAuth: false},
-		{name: "session transcript subscription", method: protocol.MethodSessionSubscribeTranscript, requiresAuth: true},
-		{name: "process list", method: protocol.MethodProcessList, requiresAuth: false},
-		{name: "session plan", method: protocol.MethodSessionPlan, requiresAuth: true},
-		{name: "persist input draft", method: protocol.MethodSessionPersistInputDraft, requiresAuth: true},
-		{name: "run prompt", method: protocol.MethodRunPrompt, requiresAuth: true},
+	registration, err := productionGatewayRegistration()
+	if err != nil {
+		t.Fatalf("production Gateway registration: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := newRoutePolicyExecutor(&Gateway{}).requiresServerAuth(tt.method)
-			if got != tt.requiresAuth {
-				t.Fatalf("requiresServerAuth(%q) = %t, want %t", tt.method, got, tt.requiresAuth)
-			}
-		})
+	if err := registration.Validate(); err != nil {
+		t.Fatalf("validate production Gateway registration: %v", err)
+	}
+	executor := newRoutePolicyExecutor(&Gateway{registration: registration})
+	for name, operation := range registration.operations {
+		activeIdentity := name
+		if route, legacy := registration.legacy[name]; legacy {
+			activeIdentity = route.Method
+		}
+		got := executor.requiresServerAuth(activeIdentity)
+		want := operation.Options.AuthenticationStage == sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_SERVER
+		if got != want {
+			t.Fatalf("requiresServerAuth(%q) = %t, want %t from descriptor", activeIdentity, got, want)
+		}
 	}
 }
 
@@ -943,14 +1016,33 @@ func TestGatewayCapabilityFactsAllowedBeforeAuthAndAttach(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
 
-	var facts serverapi.CapabilityFactsResponse
-	callGateway(t, conn, "facts-1", protocol.MethodCapabilityFactsGet, serverapi.CapabilityFactsRequest{}, &facts)
-	if facts.Defaults.PrimaryModelID == "" || facts.Providers.CurrentEffective == nil {
+	method := capabilitypb.File_kent_api_capability_capability_proto.Services().
+		ByName("CapabilityService").
+		Methods().
+		ByName("GetFacts")
+	var factsResult capabilitypb.GetFactsResult
+	callGatewayDescriptor(t, conn, "facts-1", method, &capabilitypb.GetFactsRequest{}, &factsResult)
+	facts := factsResult.GetSuccess()
+	if facts == nil {
+		t.Fatalf("capability facts failed: %+v", factsResult.GetError())
+	}
+	if facts.Defaults.PrimaryModelId == "" || facts.Providers.CurrentEffective == nil {
 		t.Fatalf("capability facts response missing defaults/provider: %+v", facts)
 	}
 
 	badWorkspace := filepath.Join(t.TempDir(), "missing")
-	callGateway(t, conn, "facts-2", protocol.MethodCapabilityFactsGet, serverapi.CapabilityFactsRequest{WorkspaceRoot: &badWorkspace}, &facts)
+	callGatewayDescriptor(
+		t,
+		conn,
+		"facts-2",
+		method,
+		&capabilitypb.GetFactsRequest{WorkspaceRoot: &badWorkspace},
+		&factsResult,
+	)
+	facts = factsResult.GetSuccess()
+	if facts == nil {
+		t.Fatalf("capability facts with workspace failed: %+v", factsResult.GetError())
+	}
 	if len(facts.Imports.Errors) == 0 {
 		t.Fatalf("expected invalid workspace as import fact, got %+v", facts.Imports)
 	}
@@ -965,22 +1057,35 @@ func TestGatewayAuthBootstrapStatusAllowedBeforeAttach(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
 
-	var status serverapi.AuthGetBootstrapStatusResponse
-	callGateway(t, conn, "status-1", protocol.MethodAuthGetBootstrapStatus, serverapi.AuthGetBootstrapStatusRequest{}, &status)
+	status := callGatewayAuthBootstrapStatus(t, conn, "status-1")
 	if status.AuthReady {
 		t.Fatal("expected unauthenticated bootstrap status")
 	}
 	if !status.AuthBootstrapSupported {
 		t.Fatal("expected auth bootstrap to be supported")
 	}
-	if !containsString(status.AllowedPreAuthMethods, protocol.MethodProjectList) {
-		t.Fatalf("allowed pre-auth methods = %+v, want %q", status.AllowedPreAuthMethods, protocol.MethodProjectList)
+	registration, err := productionGatewayRegistration()
+	if err != nil {
+		t.Fatalf("production Gateway registration: %v", err)
 	}
-	if !containsString(status.AllowedPreAuthMethods, protocol.MethodAuthCompleteBootstrap) {
-		t.Fatalf("allowed pre-auth methods = %+v, want %q", status.AllowedPreAuthMethods, protocol.MethodAuthCompleteBootstrap)
+	var expected []string
+	for name, operation := range registration.operations {
+		if operation.Options.AuthenticationStage != sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_PRE_SERVER {
+			continue
+		}
+		if _, migrated := registration.binary[name]; migrated {
+			expected = append(expected, name)
+			continue
+		}
+		route, legacy := registration.legacy[name]
+		if !legacy {
+			t.Fatalf("pre-server operation %q has no active identity", name)
+		}
+		expected = append(expected, route.Method)
 	}
-	if !sameStringSet(status.AllowedPreAuthMethods, apicontract.AllowedPreAuthMethods()) {
-		t.Fatalf("allowed pre-auth methods = %+v, want %+v", status.AllowedPreAuthMethods, apicontract.AllowedPreAuthMethods())
+	sort.Strings(expected)
+	if !reflect.DeepEqual(status.AllowedPreAuthMethods, expected) {
+		t.Fatalf("allowed pre-auth methods = %+v, want exact active descriptor projection %+v", status.AllowedPreAuthMethods, expected)
 	}
 }
 
@@ -1014,7 +1119,7 @@ func TestGatewayAuthStatusRoundTripsTypedFactsBeforeAttach(t *testing.T) {
 						return fixture.Response, nil
 					}),
 				},
-				protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+				gatewayTestIdentity(),
 			)
 			if err != nil {
 				t.Fatalf("NewGateway: %v", err)
@@ -1025,8 +1130,7 @@ func TestGatewayAuthStatusRoundTripsTypedFactsBeforeAttach(t *testing.T) {
 			conn := dialGateway(t, server)
 			defer func() { _ = conn.Close() }()
 			handshakeGateway(t, conn)
-			var got serverapi.AuthStatusResponse
-			callGateway(t, conn, "auth-status", protocol.MethodAuthGetStatus, serverapi.AuthStatusRequest{}, &got)
+			got := callGatewayAuthStatus(t, conn, "auth-status", serverapi.AuthStatusRequest{})
 			if !reflect.DeepEqual(got, fixture.Response) {
 				t.Fatalf("auth status = %+v, want %+v", got, fixture.Response)
 			}
@@ -1051,8 +1155,7 @@ func TestGatewayAuthStatusReturnsOnlyRedactedAPIKeyFacts(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	var status serverapi.AuthStatusResponse
-	callGateway(t, conn, "auth-status", protocol.MethodAuthGetStatus, serverapi.AuthStatusRequest{}, &status)
+	status := callGatewayAuthStatus(t, conn, "auth-status", serverapi.AuthStatusRequest{})
 	if err := status.Validate(); err != nil {
 		t.Fatalf("auth status validation: %v", err)
 	}
@@ -1076,17 +1179,16 @@ func TestGatewayAuthBootstrapAPIKeyCompletionEnablesAuthRequiredMethods(t *testi
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
 
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
 	if respErr := callGatewayExpectError(t, conn, "run-1", protocol.MethodRunPrompt, serverapi.RunPromptRequest{ClientRequestID: "run-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "test"}); respErr.Code != protocol.ErrCodeAuthRequired {
 		t.Fatalf("run.prompt error = %+v, want auth required", respErr)
 	}
 
-	callGateway(t, conn, "complete-1", protocol.MethodAuthCompleteBootstrap, serverapi.AuthCompleteBootstrapRequest{
+	callGatewayAuthCompleteBootstrap(t, conn, "complete-1", serverapi.AuthCompleteBootstrapRequest{
 		Mode:   serverapi.AuthBootstrapModeAPIKey,
 		APIKey: "server-key",
-	}, nil)
-	var status serverapi.AuthGetBootstrapStatusResponse
-	callGateway(t, conn, "status-2", protocol.MethodAuthGetBootstrapStatus, serverapi.AuthGetBootstrapStatusRequest{}, &status)
+	})
+	status := callGatewayAuthBootstrapStatus(t, conn, "status-2")
 	if !status.AuthReady {
 		t.Fatal("expected bootstrap completion to configure server auth")
 	}
@@ -1098,10 +1200,9 @@ func TestGatewayAuthBootstrapAPIKeyCompletionEnablesAuthRequiredMethods(t *testi
 		t.Fatalf("unexpected stored auth method: %+v", state.Method)
 	}
 
-	var secondComplete serverapi.AuthCompleteBootstrapResponse
-	callGateway(t, conn, "complete-2", protocol.MethodAuthCompleteBootstrap, serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeAPIKey, APIKey: "server-key-2"}, &secondComplete)
+	secondComplete := callGatewayAuthCompleteBootstrap(t, conn, "complete-2", serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeAPIKey, APIKey: "server-key-2"})
 	if !secondComplete.AuthReady || secondComplete.MethodType != string(auth.MethodAPIKey) {
-		t.Fatalf("unexpected second auth.completeBootstrap result: %+v", secondComplete)
+		t.Fatalf("unexpected second CompleteBootstrap result: %+v", secondComplete)
 	}
 	state, err = authSupport.AuthManager.StoredState(context.Background())
 	if err != nil {
@@ -1120,19 +1221,17 @@ func TestGatewayAuthBootstrapNoneAuthorizesSameConnectionOnly(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-	if respErr := callGatewayExpectError(t, conn, "plan-before-no-auth", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-before-no-auth")); respErr.Code != protocol.ErrCodeAuthRequired {
-		t.Fatalf("session.plan before no-auth = %+v, want auth required", respErr)
+	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
+	if result := callGatewaySessionPlanResult(t, conn, "plan-before-no-auth", gatewaySessionPlanRequest()); result.GetError().Code != "auth_required" {
+		t.Fatalf("Session Plan before no-auth = %+v, want auth_required", result.GetError())
 	}
 
-	var complete serverapi.AuthCompleteBootstrapResponse
-	callGateway(t, conn, "complete-no-auth", protocol.MethodAuthCompleteBootstrap, serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone}, &complete)
+	complete := callGatewayAuthCompleteBootstrap(t, conn, "complete-no-auth", serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone})
 	if complete.AuthReady || !complete.NoAuthSelected {
-		t.Fatalf("auth.completeBootstrap none = %+v, want not ready and no-auth selected", complete)
+		t.Fatalf("CompleteBootstrap none = %+v, want not ready and no-auth selected", complete)
 	}
 
-	var plan serverapi.SessionPlanResponse
-	callGateway(t, conn, "plan-after-no-auth", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-after-no-auth"), &plan)
+	plan := callGatewaySessionPlan(t, conn, "plan-after-no-auth", gatewaySessionPlanRequest())
 	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-no-auth", plan.Plan.SessionID)
 	if strings.TrimSpace(target.EffectiveWorkdir) == "" {
 		t.Fatalf("typed session target after no-auth has empty effective workdir: %+v", target)
@@ -1150,23 +1249,21 @@ func TestGatewayBootstrapStatusDoesNotAuthorizeNoAuthConnection(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
 
-	var status serverapi.AuthGetBootstrapStatusResponse
-	callGateway(t, conn, "status-no-auth", protocol.MethodAuthGetBootstrapStatus, serverapi.AuthGetBootstrapStatusRequest{}, &status)
+	status := callGatewayAuthBootstrapStatus(t, conn, "status-no-auth")
 	if status.AuthReady || !status.NoAuthSelected {
 		t.Fatalf("bootstrap status = %+v, want no-auth selected but not ready", status)
 	}
-	if respErr := callGatewayExpectError(t, conn, "plan-after-status", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-after-status")); respErr.Code != protocol.ErrCodeAuthRequired {
-		t.Fatalf("session.plan after status = %+v, want auth required", respErr)
+	if result := callGatewaySessionPlanResult(t, conn, "plan-after-status", gatewaySessionPlanRequest()); result.GetError().Code != "auth_required" {
+		t.Fatalf("Session Plan after status = %+v, want auth_required", result.GetError())
 	}
 
-	var ack serverapi.AuthAcknowledgeNoAuthResponse
-	callGateway(t, conn, "ack-no-auth", protocol.MethodAuthAcknowledgeNoAuth, serverapi.AuthAcknowledgeNoAuthRequest{}, &ack)
+	ack := callGatewayAuthAcknowledgeNoAuth(t, conn, "ack-no-auth")
 	if ack.AuthReady || !ack.NoAuthSelected {
-		t.Fatalf("auth.acknowledgeNoAuth = %+v, want no-auth selected but not ready", ack)
+		t.Fatalf("AcknowledgeNoAuth = %+v, want no-auth selected but not ready", ack)
 	}
-	callGateway(t, conn, "plan-after-ack", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-after-ack"), nil)
+	_ = callGatewaySessionPlan(t, conn, "plan-after-ack", gatewaySessionPlanRequest())
 }
 
 func TestGatewayPersistedNoAuthDoesNotAuthorizeFreshConnectionsWithoutAck(t *testing.T) {
@@ -1181,16 +1278,16 @@ func TestGatewayPersistedNoAuthDoesNotAuthorizeFreshConnectionsWithoutAck(t *tes
 	control := dialGateway(t, server)
 	defer func() { _ = control.Close() }()
 	handshakeGateway(t, control)
-	callGateway(t, control, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-	if respErr := callGatewayExpectError(t, control, "plan-fresh-no-ack", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-fresh-no-ack")); respErr.Code != protocol.ErrCodeAuthRequired {
-		t.Fatalf("fresh session.plan = %+v, want auth required", respErr)
+	requireGatewayProjectAttachment(t, control, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
+	if result := callGatewaySessionPlanResult(t, control, "plan-fresh-no-ack", gatewaySessionPlanRequest()); result.GetError().Code != "auth_required" {
+		t.Fatalf("fresh Session Plan = %+v, want auth_required", result.GetError())
 	}
 
 	subscription := dialGateway(t, server)
 	defer func() { _ = subscription.Close() }()
 	handshakeGateway(t, subscription)
-	callGateway(t, subscription, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-	callGateway(t, subscription, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
+	requireGatewayProjectAttachment(t, subscription, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
+	requireGatewaySessionAttachment(t, subscription, "attach-session", store.Meta().SessionID)
 	if respErr := callGatewayExpectError(t, subscription, "subscribe-fresh-no-ack", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: store.Meta().SessionID}); respErr.Code != protocol.ErrCodeAuthRequired {
 		t.Fatalf("fresh session transcript subscribe = %+v, want auth required", respErr)
 	}
@@ -1204,10 +1301,16 @@ func TestGatewayRejectsProjectWorkspaceMutationBeforeServerAuthReady(t *testing.
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
 
-	if respErr := callGatewayExpectError(t, conn, "attach-workspace", protocol.MethodProjectAttachWorkspace, serverapi.ProjectAttachWorkspaceRequest{ProjectID: appCore.ProjectID(), WorkspaceRoot: "/tmp/workspace"}); respErr.Code != protocol.ErrCodeAuthRequired {
-		t.Fatalf("project.attachWorkspace error = %+v, want auth required", respErr)
+	method := projectpb.File_kent_api_project_project_proto.Services().
+		ByName("ProjectCatalogService").Methods().ByName("AttachWorkspace")
+	var result projectpb.AttachWorkspaceResult
+	callGatewayDescriptor(t, conn, "attach-workspace", method, &projectpb.AttachWorkspaceRequest{
+		ProjectId: appCore.ProjectID(), WorkspaceRoot: "/tmp/workspace",
+	}, &result)
+	if failure := result.GetError(); failure == nil || failure.Code != "auth_required" {
+		t.Fatalf("Project AttachWorkspace result = %+v, want auth_required", &result)
 	}
 }
 
@@ -1222,8 +1325,8 @@ func TestGatewaySessionTranscriptSubscriptionReturnsHydrationOnDedicatedRoute(t 
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
+	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
+	requireGatewaySessionAttachment(t, conn, "attach-session", store.Meta().SessionID)
 	callGateway(t, conn, "subscribe-transcript", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: store.Meta().SessionID}, nil)
 
 	var notification protocol.Request
@@ -1258,43 +1361,47 @@ func TestGatewaySessionTranscriptSubscriptionReturnsHydrationOnDedicatedRoute(t 
 	}
 }
 
-func containsString(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
-}
-
-func gatewaySessionPlanRequest(id string) serverapi.SessionPlanRequest {
+func gatewaySessionPlanRequest() serverapi.SessionPlanRequest {
 	return serverapi.SessionPlanRequest{
-		ClientRequestID: id,
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}
 }
 
-func sameStringSet(left []string, right []string) bool {
-	if len(left) != len(right) {
-		return false
+func callGatewaySessionPlanResult(
+	t *testing.T,
+	conn *websocket.Conn,
+	correlation string,
+	request serverapi.SessionPlanRequest,
+) *sessionlaunchpb.SessionPlanResult {
+	t.Helper()
+	message, err := protoapi.SessionPlanRequestToProto(request)
+	if err != nil {
+		t.Fatalf("encode Session Plan request: %v", err)
 	}
-	counts := make(map[string]int, len(left))
-	for _, item := range left {
-		counts[item]++
+	method := sessionlaunchpb.File_kent_api_session_launch_session_launch_proto.Services().
+		ByName("SessionLaunchService").Methods().ByName("Plan")
+	result := &sessionlaunchpb.SessionPlanResult{}
+	callGatewayDescriptor(t, conn, correlation, method, message, result)
+	return result
+}
+
+func callGatewaySessionPlan(
+	t *testing.T,
+	conn *websocket.Conn,
+	correlation string,
+	request serverapi.SessionPlanRequest,
+) serverapi.SessionPlanResponse {
+	t.Helper()
+	result := callGatewaySessionPlanResult(t, conn, correlation, request)
+	if failure := result.GetError(); failure != nil {
+		t.Fatalf("Session Plan failed: %+v", failure)
 	}
-	for _, item := range right {
-		counts[item]--
-		if counts[item] < 0 {
-			return false
-		}
+	response, err := protoapi.SessionPlanFromProto(result.GetSuccess())
+	if err != nil {
+		t.Fatalf("decode Session Plan response: %v", err)
 	}
-	for _, count := range counts {
-		if count != 0 {
-			return false
-		}
-	}
-	return true
+	return response
 }
 
 func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
@@ -1371,7 +1478,7 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-project-for-foreign-goal-checks", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingA.ProjectID}, nil)
+	requireGatewayProjectAttachment(t, conn, "attach-project-for-foreign-goal-checks", &connectionpb.AttachProjectRequest{ProjectId: bindingA.ProjectID})
 	assertForeignGoalAccessRejected(t, conn, foreignSession.Meta().SessionID)
 	if bindingA.ProjectID == bindingB.ProjectID {
 		t.Fatalf("expected distinct project ids, both=%q", bindingA.ProjectID)
@@ -1426,14 +1533,7 @@ func TestGatewayAuthorizesBothChatSettingsTargetArms(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(
-		t,
-		conn,
-		"attach-project-chat-settings",
-		protocol.MethodAttachProject,
-		protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()},
-		nil,
-	)
+	requireGatewayProjectAttachment(t, conn, "attach-project-chat-settings", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
 	mismatched := callGatewayExpectError(
 		t,
 		conn,
@@ -1509,7 +1609,7 @@ func TestGatewayAllowsUnscopedSessionRetargetOutsideServerDefaultProject(t *test
 		t.Fatalf("core.New: %v", err)
 	}
 	defer func() { _ = appCore.Close() }()
-	gateway, err := NewGateway(appCore, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(appCore, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -1629,9 +1729,9 @@ func TestGatewayProjectReattachClearsStaleSessionAttachment(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-project-a", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingA.ProjectID}, nil)
-	callGateway(t, conn, "attach-session-a", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: storeA.Meta().SessionID}, nil)
-	callGateway(t, conn, "attach-project-b", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingB.ProjectID}, nil)
+	requireGatewayProjectAttachment(t, conn, "attach-project-a", &connectionpb.AttachProjectRequest{ProjectId: bindingA.ProjectID})
+	requireGatewaySessionAttachment(t, conn, "attach-session-a", storeA.Meta().SessionID)
+	requireGatewayProjectAttachment(t, conn, "attach-project-b", &connectionpb.AttachProjectRequest{ProjectId: bindingB.ProjectID})
 
 	if respErr := callGatewayExpectError(t, conn, "subscribe", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: storeA.Meta().SessionID}); respErr.Code != protocol.ErrCodeInvalidRequest {
 		t.Fatalf("expected session-attach-required error after project reattach, got %+v", respErr)
@@ -1655,12 +1755,11 @@ func TestGatewayRejectsAttachProjectWorkspaceOutsideProject(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	request, err := protocol.AttachProjectRequestForWorkspaceRoot(bindingA.ProjectID, resolvedB.Config.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("AttachProjectRequestForWorkspaceRoot: %v", err)
-	}
-	respErr := callGatewayExpectError(t, conn, "attach-project", protocol.MethodAttachProject, request)
-	if !strings.Contains(respErr.Message, "not bound to project") {
-		t.Fatalf("expected workspace/project mismatch error, got %+v", respErr)
+	result := attachGatewayProject(t, conn, "attach-project", &connectionpb.AttachProjectRequest{
+		ProjectId: bindingA.ProjectID,
+		Workspace: &connectionpb.AttachProjectRequest_WorkspaceRoot{WorkspaceRoot: resolvedB.Config.WorkspaceRoot},
+	})
+	if result.GetError() == nil {
+		t.Fatalf("expected workspace/project mismatch error, got %+v", result)
 	}
 }

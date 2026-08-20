@@ -215,7 +215,7 @@ func (s *Service) CreateProject(ctx context.Context, req serverapi.ProjectCreate
 	}
 	binding, err := s.metadata.CreateProjectForWorkspaceWithKey(ctx, req.WorkspaceRoot, req.DisplayName, req.ProjectKey)
 	if err != nil {
-		return serverapi.ProjectCreateResponse{}, err
+		return serverapi.ProjectCreateResponse{}, projectMutationStorageError(err, req.ProjectKey)
 	}
 	return serverapi.ProjectCreateResponse{Binding: projectBindingFromMetadata(binding)}, nil
 }
@@ -228,7 +228,7 @@ func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdate
 		return serverapi.ProjectUpdateResponse{}, errors.New("project service is required")
 	}
 	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, req.ProjectKey); err != nil {
-		return serverapi.ProjectUpdateResponse{}, err
+		return serverapi.ProjectUpdateResponse{}, projectMutationStorageError(err, req.ProjectKey)
 	}
 	project, err := s.projectHomeSummary(ctx, req.ProjectID)
 	if err != nil {
@@ -381,9 +381,8 @@ func (s *Service) projectActiveSessionBlockers(ctx context.Context, sessionIDs [
 		return nil, err
 	}
 	return []serverapi.ProjectDeleteBlocker{{
-		Code:    "active_sessions",
-		Message: "Project has active runtime sessions.",
-		Count:   count,
+		Code:  "active_sessions",
+		Count: count,
 	}}, nil
 }
 
@@ -393,9 +392,8 @@ func (s *Service) workspaceActiveSessionBlockers(ctx context.Context, sessionIDs
 		return nil, err
 	}
 	return []serverapi.ProjectWorkspaceUnlinkBlocker{{
-		Code:    "active_sessions",
-		Message: "Active runtime sessions still depend on this workspace.",
-		Count:   count,
+		Code:  "active_sessions",
+		Count: count,
 	}}, nil
 }
 
@@ -581,7 +579,7 @@ func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.Pr
 	}
 	result, err := s.metadata.AttachWorkspaceToProjectWithResult(ctx, req.ProjectID, req.WorkspaceRoot)
 	if err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
+		return serverapi.ProjectAttachWorkspaceResponse{}, projectMutationStorageError(err, "")
 	}
 	outcome := serverapi.ProjectWorkspaceAttachOutcomeAlreadyAttached
 	if result.Attached {
@@ -606,7 +604,7 @@ func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebi
 	}
 	prepared, err := s.metadata.PrepareWorkspaceRebind(ctx, req.OldWorkspaceRoot)
 	if err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, err
+		return serverapi.ProjectRebindWorkspaceResponse{}, projectMutationStorageError(err, "")
 	}
 	binding, err := s.metadata.RebindWorkspaceWithExpectedBinding(
 		ctx,
@@ -616,9 +614,22 @@ func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebi
 		prepared.WorkspaceID,
 	)
 	if err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, err
+		return serverapi.ProjectRebindWorkspaceResponse{}, projectMutationStorageError(err, "")
 	}
 	return serverapi.ProjectRebindWorkspaceResponse{Binding: projectBindingFromMetadata(binding)}, nil
+}
+
+func projectMutationStorageError(err error, projectKey string) error {
+	switch {
+	case errors.Is(err, metadata.ErrProjectKeyAlreadyInUse):
+		return serverapi.ProjectKeyConflictError{ProjectKey: strings.TrimSpace(projectKey)}
+	case errors.Is(err, metadata.ErrWorkspaceAlreadyBound):
+		return errors.Join(serverapi.ErrWorkspaceAlreadyBound, err)
+	case errors.Is(err, metadata.ErrWorkspacePathMissing):
+		return errors.Join(serverapi.ErrWorkspacePathMissing, err)
+	default:
+		return err
+	}
 }
 
 func (s *Service) GetProjectOverview(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {

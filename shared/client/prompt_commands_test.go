@@ -23,24 +23,9 @@ import (
 
 func TestRemotePromptCommandCatalogUsesAttachedWorkspaceAndValidatesResponse(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			t.Fatalf("receive attach request: %v", err)
-		}
-		if req.Method != protocol.MethodAttachProject {
-			t.Fatalf("first post-handshake method = %q, want attach-project", req.Method)
-		}
-		var attach protocol.AttachProjectRequest
-		if err := json.Unmarshal(req.Params, &attach); err != nil {
-			t.Fatalf("decode attach request: %v", err)
-		}
-		response, err := protocol.ProjectAttachResponseForRequest(attach, "workspace-b", "/workspace-b")
-		if err != nil {
-			t.Fatalf("attach response: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
-			t.Fatalf("send attach response: %v", err)
-		}
+		acceptRemoteHandshake(t, ws)
+		acceptRemoteProjectAttachment(t, ws, "workspace-b", "/workspace-b")
+		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive catalog request: %v", err)
 		}
@@ -149,37 +134,18 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 	service := promptcommands.New(serverRoot, serverWorkspace)
 	resolvedContent := make(chan string, 1)
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
+		acceptRemoteHandshake(t, ws)
+		attach := acceptRemoteProjectAttachment(t, ws, "workspace-server", serverWorkspace)
+		if attach.GetWorkspaceRoot() != clientRoot {
+			t.Errorf("client workspace root = %q, want %q", attach.GetWorkspaceRoot(), clientRoot)
+			return
+		}
+		var req protocol.Request
 		for {
 			if err := websocket.JSON.Receive(ws, &req); err != nil {
 				return
 			}
 			switch req.Method {
-			case protocol.MethodAttachProject:
-				var attach protocol.AttachProjectRequest
-				if err := json.Unmarshal(req.Params, &attach); err != nil {
-					t.Errorf("decode attach request: %v", err)
-					return
-				}
-				selector, present := attach.Workspace()
-				if !present {
-					t.Error("attach request omitted workspace selector")
-					return
-				}
-				attachedRoot, present := selector.WorkspaceRoot()
-				if !present || attachedRoot != clientRoot {
-					t.Errorf("client workspace root = %q, want %q", attachedRoot, clientRoot)
-					return
-				}
-				attachResponse, err := protocol.ProjectAttachResponseForRequest(attach, "workspace-server", serverWorkspace)
-				if err != nil {
-					t.Errorf("attach response: %v", err)
-					return
-				}
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, attachResponse)); err != nil {
-					t.Errorf("send attach response: %v", err)
-					return
-				}
 			case protocol.MethodPromptCommandCatalogGet:
 				entries, err := service.Catalog()
 				if err != nil {

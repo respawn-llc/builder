@@ -14,6 +14,10 @@ import (
 	shelltool "core/server/tools/shell"
 	rpccontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/protoapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -21,18 +25,30 @@ import (
 )
 
 func TestRoutePolicyAuthPolicyHandlesBlankAndUnknownMethods(t *testing.T) {
-	executor := newRoutePolicyExecutor(nil)
+	registration, err := productionGatewayRegistration()
+	if err != nil {
+		t.Fatalf("production Gateway registration: %v", err)
+	}
+	if err := registration.Validate(); err != nil {
+		t.Fatalf("validate production Gateway registration: %v", err)
+	}
+	executor := newRoutePolicyExecutor(&Gateway{registration: registration})
 	if err := executor.requireAuth(context.Background(), nil, ""); err != nil {
 		t.Fatalf("blank method auth: %v", err)
 	}
-	if err := executor.requireAuth(context.Background(), nil, protocol.MethodProjectList); err != nil {
-		t.Fatalf("pre-auth method auth: %v", err)
-	}
-	if err := executor.requireAuth(context.Background(), nil, protocol.MethodProjectAttachWorkspace); !errors.Is(err, serverapi.ErrServerAuthRequired) {
-		t.Fatalf("auth-required method error = %v, want server auth required", err)
-	}
-	if err := executor.requireAuth(context.Background(), nil, protocol.MethodServerUpdateStatusGet); !errors.Is(err, serverapi.ErrServerAuthRequired) {
-		t.Fatalf("update status auth error = %v, want server auth required", err)
+	for name, operation := range registration.operations {
+		activeIdentity := name
+		if route, legacy := registration.legacy[name]; legacy {
+			activeIdentity = route.Method
+		}
+		authErr := executor.requireAuth(context.Background(), nil, activeIdentity)
+		requiresServerAuth := operation.Options.AuthenticationStage == sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_SERVER
+		if requiresServerAuth && !errors.Is(authErr, serverapi.ErrServerAuthRequired) {
+			t.Fatalf("auth-required method %q error = %v, want server auth required", activeIdentity, authErr)
+		}
+		if !requiresServerAuth && authErr != nil {
+			t.Fatalf("pre-server method %q auth: %v", activeIdentity, authErr)
+		}
 	}
 	if err := executor.requireAuth(context.Background(), nil, "missing.method"); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("unknown method error = %v, want server auth required", err)
@@ -46,9 +62,6 @@ func TestRoutePolicyAllowsStatelessScopesWithoutGateway(t *testing.T) {
 		method string
 		params any
 	}{
-		{name: "none", method: protocol.MethodHandshake, params: protocol.HandshakeRequest{}},
-		{name: "project view", method: protocol.MethodProjectList, params: serverapi.ProjectListRequest{}},
-		{name: "attach project", method: protocol.MethodAttachProject, params: protocol.AttachProjectRequest{}},
 		{name: "notification", method: protocol.MethodRunPromptProgress, params: serverapi.RunPromptProgress{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,6 +69,19 @@ func TestRoutePolicyAllowsStatelessScopesWithoutGateway(t *testing.T) {
 				t.Fatalf("authorize scope: %v", err)
 			}
 		})
+	}
+	if err := executor.authorizeScopeFacts(
+		context.Background(),
+		&connectionState{},
+		routeScopePolicy(sharedpb.ScopePolicy_SCOPE_POLICY_PROJECT_VIEW),
+		gatewayOperationName(
+			t,
+			projectpb.File_kent_api_project_project_proto.Services().
+				ByName("ProjectCatalogService").Methods().ByName("List"),
+		),
+		routeScopeParams{},
+	); err != nil {
+		t.Fatalf("authorize Project view scope: %v", err)
 	}
 }
 
@@ -148,11 +174,22 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		t.Fatal("optional foreign session unexpectedly allowed")
 	}
 
-	attachSessionRoute := routeForTest(t, protocol.MethodAttachSession)
-	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, attachSessionRoute, protocol.AttachSessionRequest{SessionID: fixture.ownSessionID}); err != nil {
+	if err := executor.authorizeScopeFacts(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		rpccontract.ScopeAttachSession,
+		"AttachSession",
+		routeScopeParams{sessionID: fixture.ownSessionID},
+	); err != nil {
 		t.Fatalf("attach own session: %v", err)
 	}
-	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, attachSessionRoute, protocol.AttachSessionRequest{SessionID: fixture.foreignSessionID}); err == nil {
+	if err := executor.authorizeScopeFacts(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		rpccontract.ScopeAttachSession,
+		"AttachSession",
+		routeScopeParams{sessionID: fixture.foreignSessionID},
+	); err == nil {
 		t.Fatal("attach foreign session unexpectedly allowed")
 	}
 }
@@ -160,7 +197,7 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 func TestRoutePolicyAuthorizesGoalExceptionWithoutWebSocket(t *testing.T) {
 	appCore, server := newUnboundGatewayTestServer(t)
 	server.Close()
-	gateway, err := NewGateway(appCore, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(appCore, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -278,7 +315,7 @@ func TestRoutePolicyAuthorizesProcessScopesWithoutWebSocket(t *testing.T) {
 func TestFilterProcessesForActiveProjectSkipsWhenActiveProjectUnset(t *testing.T) {
 	appCore, server := newUnboundGatewayTestServer(t)
 	server.Close()
-	gateway, err := NewGateway(appCore, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(appCore, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -325,12 +362,34 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 		t.Fatalf("attached transcript mismatch error = %v, want invalid request route error", err)
 	}
 
-	projectWorkspaceRoute := routeForTest(t, protocol.MethodSessionPlan)
-	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, projectWorkspaceRoute, serverapi.SessionPlanRequest{}); err != nil {
+	projectWorkspaceMethod := sessionlaunchpb.File_kent_api_session_launch_session_launch_proto.Services().
+		ByName("SessionLaunchService").Methods().ByName("Plan")
+	projectWorkspaceOperation, err := protoapi.OperationFromDescriptor(projectWorkspaceMethod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.authorizeScopeFacts(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		routeScopePolicy(projectWorkspaceOperation.Options.ScopePolicy),
+		projectWorkspaceOperation.Name,
+		routeScopeParams{},
+	); err != nil {
 		t.Fatalf("project workspace with attached project: %v", err)
 	}
-	materializationRoute := routeForTest(t, protocol.MethodSessionWorkspaceChatMaterialize)
-	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, materializationRoute, serverapi.WorkspaceChatMaterializeRequest{}); err != nil {
+	materializationMethod := sessionlaunchpb.File_kent_api_session_launch_session_launch_proto.Services().
+		ByName("SessionLaunchService").Methods().ByName("MaterializeWorkspaceChat")
+	materializationOperation, err := protoapi.OperationFromDescriptor(materializationMethod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.authorizeScopeFacts(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		routeScopePolicy(materializationOperation.Options.ScopePolicy),
+		materializationOperation.Name,
+		routeScopeParams{},
+	); err != nil {
 		t.Fatalf("workspace Chat materialization with attached project: %v", err)
 	}
 	workspaceListRoute := routeForTest(t, protocol.MethodWorktreeWorkspaceList)
@@ -357,14 +416,26 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	}
 	unboundCore, unboundServer := newUnboundGatewayTestServer(t)
 	unboundServer.Close()
-	unboundGateway, err := NewGateway(unboundCore, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	unboundGateway, err := NewGateway(unboundCore, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway unbound: %v", err)
 	}
-	if err := newRoutePolicyExecutor(unboundGateway).authorizeScope(ctx, &connectionState{}, projectWorkspaceRoute, serverapi.SessionPlanRequest{}); err == nil {
+	if err := newRoutePolicyExecutor(unboundGateway).authorizeScopeFacts(
+		ctx,
+		&connectionState{},
+		routeScopePolicy(projectWorkspaceOperation.Options.ScopePolicy),
+		projectWorkspaceOperation.Name,
+		routeScopeParams{},
+	); err == nil {
 		t.Fatal("project workspace without active project unexpectedly allowed")
 	}
-	if err := newRoutePolicyExecutor(unboundGateway).authorizeScope(ctx, &connectionState{}, materializationRoute, serverapi.WorkspaceChatMaterializeRequest{}); err == nil {
+	if err := newRoutePolicyExecutor(unboundGateway).authorizeScopeFacts(
+		ctx,
+		&connectionState{},
+		routeScopePolicy(materializationOperation.Options.ScopePolicy),
+		materializationOperation.Name,
+		routeScopeParams{},
+	); err == nil {
 		t.Fatal("workspace Chat materialization without active project unexpectedly allowed")
 	}
 }
@@ -431,7 +502,7 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 	if err := foreignStore.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable foreign: %v", err)
 	}
-	gateway, err := NewGateway(appCore, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(appCore, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}

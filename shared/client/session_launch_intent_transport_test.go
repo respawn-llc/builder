@@ -2,19 +2,20 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
-	"core/shared/protocol"
+	"core/shared/config"
+	"core/shared/protoapi"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"golang.org/x/net/websocket"
 )
 
 func TestRemoteSessionLaunchPreservesTypedIntent(t *testing.T) {
-	previous := mustTransportSessionID(t, "previous-session")
-	parentAgent := mustTransportSessionID(t, "parent-agent-session")
-	target := mustTransportSessionID(t, "target-session")
+	previous := runtimeids.NewSessionID()
+	parentAgent := runtimeids.NewSessionID()
+	target := runtimeids.NewSessionID()
 	tests := []struct {
 		name       string
 		intent     serverapi.SessionLaunchIntent
@@ -53,25 +54,21 @@ func TestRemoteSessionLaunchPreservesTypedIntent(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			success := remoteSessionPlanSuccess(t)
 			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				req := acceptRemoteHandshake(t, ws)
-				if err := websocket.JSON.Receive(ws, &req); err != nil {
-					t.Errorf("receive session.plan: %v", err)
-					return
-				}
-				if req.Method != protocol.MethodSessionPlan {
-					t.Errorf("method = %q, want %q", req.Method, protocol.MethodSessionPlan)
-					return
-				}
-				var plan serverapi.SessionPlanRequest
-				if err := json.Unmarshal(req.Params, &plan); err != nil {
-					t.Errorf("decode session.plan params: %v", err)
+				acceptRemoteHandshake(t, ws)
+				method := sessionLaunchMethod("Plan")
+				request := &sessionlaunchpb.SessionPlanRequest{}
+				correlation := receiveRemoteDescriptorCall(t, ws, method, request)
+				plan, err := protoapi.SessionPlanRequestFromProto(request)
+				if err != nil {
+					t.Errorf("decode Session Plan request: %v", err)
 					return
 				}
 				assertTransportIntent(t, plan.Intent, test.wantKind, test.wantOrigin, test.wantSource, test.wantTarget)
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.SessionPlanResponse{})); err != nil {
-					t.Errorf("send session.plan response: %v", err)
-				}
+				sendRemoteDescriptorResult(t, ws, method, correlation, &sessionlaunchpb.SessionPlanResult{
+					Outcome: &sessionlaunchpb.SessionPlanResult_Success{Success: success},
+				})
 			})
 
 			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
@@ -81,9 +78,8 @@ func TestRemoteSessionLaunchPreservesTypedIntent(t *testing.T) {
 			defer func() { _ = remote.Close() }()
 
 			if _, err := remote.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-				ClientRequestID: "remote-request-" + test.name,
-				Mode:            serverapi.SessionLaunchModeInteractive,
-				Intent:          test.intent,
+				Mode:   serverapi.SessionLaunchModeInteractive,
+				Intent: test.intent,
 			}); err != nil {
 				t.Fatalf("PlanSession: %v", err)
 			}
@@ -93,16 +89,17 @@ func TestRemoteSessionLaunchPreservesTypedIntent(t *testing.T) {
 
 func TestRemoteSessionLaunchPropagatesTypedIntentRejection(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			t.Errorf("receive session.plan: %v", err)
-			return
-		}
-		if req.Method != protocol.MethodSessionPlan {
-			t.Errorf("method = %q, want %q", req.Method, protocol.MethodSessionPlan)
-			return
-		}
-		_ = websocket.JSON.Send(ws, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, "invalid session launch intent"))
+		acceptRemoteHandshake(t, ws)
+		method := sessionLaunchMethod("Plan")
+		correlation := receiveRemoteDescriptorCall(t, ws, method, &sessionlaunchpb.SessionPlanRequest{})
+		sendRemoteDescriptorResult(t, ws, method, correlation, &sessionlaunchpb.SessionPlanResult{
+			Outcome: &sessionlaunchpb.SessionPlanResult_Error{Error: &sessionlaunchpb.SessionPlanError{
+				Code: "auth_required",
+				Detail: &sessionlaunchpb.SessionPlanError_AuthRequired{
+					AuthRequired: &sessionlaunchpb.AuthRequiredDetails{},
+				},
+			}},
+		})
 	})
 
 	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
@@ -112,9 +109,8 @@ func TestRemoteSessionLaunchPropagatesTypedIntentRejection(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	_, err = remote.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "legacy-request",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	})
 	if err == nil {
 		t.Fatal("PlanSession accepted a request rejected by the remote gateway")
@@ -154,11 +150,21 @@ func assertTransportIntent(t *testing.T, got serverapi.SessionLaunchIntent, want
 	}
 }
 
-func mustTransportSessionID(t *testing.T, raw string) runtimeids.SessionID {
+func remoteSessionPlanSuccess(t *testing.T) *sessionlaunchpb.SessionPlanSuccess {
 	t.Helper()
-	id, err := runtimeids.ParseSessionID(raw)
+	cfg, err := config.Load(t.TempDir(), config.LoadOptions{ConfigRoot: t.TempDir()})
 	if err != nil {
-		t.Fatalf("ParseSessionID(%q): %v", raw, err)
+		t.Fatalf("load Session Plan config: %v", err)
 	}
-	return id
+	success, err := protoapi.SessionPlanToProto(serverapi.SessionPlanResponse{
+		Plan: serverapi.SessionPlan{
+			SessionID:      runtimeids.NewSessionID().String(),
+			ActiveSettings: cfg.Settings,
+			Source:         cfg.Source,
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode Session Plan success: %v", err)
+	}
+	return success
 }

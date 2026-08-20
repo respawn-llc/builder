@@ -219,5 +219,5 @@ func newTestAuthBootstrapServiceWithSettings(initial auth.State, settings config
 	manager := auth.NewManager(store, nil, func() time.Time {
 		return time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	})
-	return NewBootstrapService(manager, auth.OpenAIOAuthOptions{}, settings, nil), store
+	return NewBootstrapService(manager, auth.OpenAIOAuthOptions{}, settings), store
 }

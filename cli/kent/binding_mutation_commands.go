@@ -445,9 +445,13 @@ func projectWorkspaceMutationErrorProjection(err error, requestedProjectID strin
 			if guidanceErr != nil {
 				return bindingMutationJSONError{}, guidanceErr
 			}
+			message, messageErr := workspaceUnlinkBlockerMessage(blocker.Code)
+			if messageErr != nil {
+				return bindingMutationJSONError{}, messageErr
+			}
 			projected := bindingMutationBlocker{
 				Code:     strings.TrimSpace(blocker.Code),
-				Message:  strings.TrimSpace(blocker.Message),
+				Message:  message,
 				Guidance: renderBlockerGuidance(guidanceAction),
 			}
 			if blocker.Count > 0 {
@@ -491,11 +495,15 @@ func projectWorkspaceMutationErrorMessage(err error, projectID string, defaultMu
 			return "", guidanceErr
 		}
 		blocker := blockedErr.Blockers[0]
+		blockerMessage, messageErr := workspaceUnlinkBlockerMessage(blocker.Code)
+		if messageErr != nil {
+			return "", messageErr
+		}
 		message := fmt.Sprintf("[%s]", strings.TrimSpace(blocker.Code))
 		if blocker.Count > 0 {
 			message += fmt.Sprintf(" (%d)", blocker.Count)
 		}
-		message += " " + strings.TrimSpace(blocker.Message)
+		message += " " + blockerMessage
 		message += ": " + renderBlockerGuidance(guidanceAction)
 		return message, nil
 	}
@@ -506,6 +514,25 @@ func projectWorkspaceMutationErrorMessage(err error, projectID string, defaultMu
 		return fmt.Sprintf("%s; retry with --workspace <workspace-id>", err), nil
 	}
 	return err.Error(), nil
+}
+
+func workspaceUnlinkBlockerMessage(code string) (string, error) {
+	switch strings.TrimSpace(code) {
+	case "default_workspace":
+		return "Workspace is the project default workspace.", nil
+	case "non_terminal_tasks":
+		return "Active or non-terminal tasks still depend on this workspace.", nil
+	case "executable_current_nodes":
+		return "Executable current nodes still depend on this workspace.", nil
+	case "managed_owned_worktrees":
+		return "Worktrees still depend on this workspace.", nil
+	case "missing_history_snapshot":
+		return "Historical task or retained Session references do not have a durable workspace path/name snapshot.", nil
+	case "active_sessions":
+		return "Active runtime sessions still depend on this workspace.", nil
+	default:
+		return "", fmt.Errorf("workspace detach returned unsupported blocker code %q", code)
+	}
 }
 
 var _ apicontract.ProjectViewService = (*client.Remote)(nil)

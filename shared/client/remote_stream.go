@@ -78,10 +78,14 @@ func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, 
 		if err != nil {
 			return serverapi.RunPromptResponse{}, err
 		}
-		if frame.Method == route.EventMethod {
+		message, err := frame.DecodeRequest()
+		if err != nil {
+			return serverapi.RunPromptResponse{}, err
+		}
+		if message.Method == route.EventMethod {
 			if progress != nil {
 				var update serverapi.RunPromptProgress
-				if err := json.Unmarshal(frame.Params, &update); err != nil {
+				if err := json.Unmarshal(message.Params, &update); err != nil {
 					return serverapi.RunPromptResponse{}, err
 				}
 				if err := update.Validate(); err != nil {
@@ -91,10 +95,13 @@ func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, 
 			}
 			continue
 		}
-		if frame.ID != requestID {
-			return serverapi.RunPromptResponse{}, fmt.Errorf("unexpected rpc frame id %q", frame.ID)
+		if message.ID != requestID {
+			return serverapi.RunPromptResponse{}, fmt.Errorf("unexpected rpc frame id %q", message.ID)
 		}
-		resp := frame.Response()
+		resp, err := frame.DecodeResponse()
+		if err != nil {
+			return serverapi.RunPromptResponse{}, err
+		}
 		if resp.Error != nil {
 			return serverapi.RunPromptResponse{}, protocolError(resp.Error)
 		}
@@ -201,14 +208,10 @@ func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.Workt
 
 func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID string, req any, sessionID string, attachSession bool) (rpcwire.Conn, rpccontract.Route, error) {
 	route := mustRemoteRoute(method)
-	conn, cleanup, err := c.openRPCConn(ctx)
-	if err != nil {
-		return nil, rpccontract.Route{}, err
-	}
+	var additionalAttachmentIntent *remoteAttachmentIntent
 	if attachSession {
 		attachedSessionID, attachedToSession := c.attachIntent.sessionID()
 		if attachedToSession && attachedSessionID != strings.TrimSpace(sessionID) {
-			cleanup()
 			return nil, rpccontract.Route{}, fmt.Errorf(
 				"remote is attached to session %q, cannot subscribe to session %q",
 				attachedSessionID,
@@ -218,14 +221,14 @@ func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID stri
 		if !attachedToSession {
 			intent, err := newRemoteSessionAttachmentIntent(sessionID)
 			if err != nil {
-				cleanup()
 				return nil, rpccontract.Route{}, err
 			}
-			if _, err := attachSessionRPC(ctx, conn, intent); err != nil {
-				cleanup()
-				return nil, rpccontract.Route{}, err
-			}
+			additionalAttachmentIntent = intent
 		}
+	}
+	conn, cleanup, err := c.openRPCConnWithAdditionalAttachment(ctx, additionalAttachmentIntent)
+	if err != nil {
+		return nil, rpccontract.Route{}, err
 	}
 	var ack protocol.SubscribeResponse
 	if err := callRPC(ctx, conn, requestID, method, req, &ack); err != nil {
@@ -259,10 +262,15 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 		var zero Event
 		return zero, serverapi.NormalizeStreamError(err)
 	}
-	switch frame.Method {
+	message, err := frame.DecodeRequest()
+	if err != nil {
+		var zero Event
+		return zero, errors.Join(serverapi.ErrStreamFailed, err)
+	}
+	switch message.Method {
 	case s.route.EventMethod:
 		var params Wire
-		if err := json.Unmarshal(frame.Params, &params); err != nil {
+		if err := json.Unmarshal(message.Params, &params); err != nil {
 			var zero Event
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
 		}
@@ -274,7 +282,7 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 		return event, nil
 	case s.route.CompleteMethod:
 		var params protocol.StreamCompleteParams
-		if err := json.Unmarshal(frame.Params, &params); err != nil {
+		if err := json.Unmarshal(message.Params, &params); err != nil {
 			var zero Event
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
 		}
@@ -290,7 +298,7 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 		return zero, terminalErr
 	default:
 		var zero Event
-		return zero, errors.Join(serverapi.ErrStreamFailed, fmt.Errorf("unexpected notification method %q", frame.Method))
+		return zero, errors.Join(serverapi.ErrStreamFailed, fmt.Errorf("unexpected notification method %q", message.Method))
 	}
 }
 

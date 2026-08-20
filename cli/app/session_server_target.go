@@ -101,12 +101,6 @@ func validateStartupRemoteIdentity(identity protocol.ServerIdentity) error {
 			serverVersion: identity.ProtocolVersion,
 		}
 	}
-	if !identity.Capabilities.AuthBootstrap {
-		return &startupRemoteCompatibilityError{issue: startupRemoteAuthBootstrapUnavailable}
-	}
-	if !identity.Capabilities.OnboardingFinalize {
-		return &startupRemoteCompatibilityError{issue: startupRemoteOnboardingFinalizeUnavailable}
-	}
 	return nil
 }
 
@@ -114,8 +108,6 @@ type startupRemoteCompatibilityIssue uint8
 
 const (
 	startupRemoteProtocolVersionMismatch startupRemoteCompatibilityIssue = iota + 1
-	startupRemoteAuthBootstrapUnavailable
-	startupRemoteOnboardingFinalizeUnavailable
 )
 
 type startupRemoteCompatibilityError struct {
@@ -127,10 +119,6 @@ func (e *startupRemoteCompatibilityError) Error() string {
 	switch e.issue {
 	case startupRemoteProtocolVersionMismatch:
 		return fmt.Sprintf("server protocol version %q is incompatible with client protocol version %q", e.serverVersion, protocol.Version)
-	case startupRemoteAuthBootstrapUnavailable:
-		return "server does not advertise auth bootstrap support"
-	case startupRemoteOnboardingFinalizeUnavailable:
-		return "server does not advertise onboarding finalization support"
 	default:
 		return "server startup control surface is incompatible"
 	}

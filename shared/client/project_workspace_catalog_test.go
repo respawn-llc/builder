@@ -5,7 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"core/shared/protocol"
+	"core/shared/protoapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 	"golang.org/x/net/websocket"
 )
@@ -20,14 +21,17 @@ func TestRemoteProjectWorkspaceCatalogRejectsInvalidBoundaries(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				request := acceptRemoteHandshake(t, ws)
-				if err := websocket.JSON.Receive(ws, &request); err != nil {
+				acceptRemoteHandshake(t, ws)
+				method := projectpb.File_kent_api_project_project_proto.Services().
+					ByName("ProjectCatalogService").Methods().ByName("ListWorkspaces")
+				correlation := receiveRemoteDescriptorCall(t, ws, method, &projectpb.ProjectWorkspaceListRequest{})
+				success, err := protoapi.ProjectWorkspaceListToProto(response)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if request.Method != protocol.MethodProjectWorkspaceList {
-					t.Fatalf("method = %q", request.Method)
-				}
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, response))
+				sendRemoteDescriptorResult(t, ws, method, correlation, &projectpb.ListProjectWorkspacesResult{
+					Outcome: &projectpb.ListProjectWorkspacesResult_Success{Success: success},
+				})
 			})
 			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
 			if err != nil {
@@ -66,16 +70,19 @@ func TestRemoteGetsTypedExactProjectWorkspaceResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		request := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &request); err != nil {
-			t.Fatal(err)
-		}
-		if request.Method != protocol.MethodProjectWorkspaceGet {
-			t.Fatalf("method = %q", request.Method)
-		}
-		_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.ProjectWorkspaceGetResponse{
+		acceptRemoteHandshake(t, ws)
+		method := projectpb.File_kent_api_project_project_proto.Services().
+			ByName("ProjectCatalogService").Methods().ByName("GetWorkspace")
+		correlation := receiveRemoteDescriptorCall(t, ws, method, &projectpb.GetProjectWorkspaceRequest{})
+		success, conversionErr := protoapi.ProjectWorkspaceGetToProto(serverapi.ProjectWorkspaceGetResponse{
 			ProjectID: "project-1", Result: serverapi.ProjectWorkspaceGetResultNotAttached,
-		}))
+		})
+		if conversionErr != nil {
+			t.Fatal(conversionErr)
+		}
+		sendRemoteDescriptorResult(t, ws, method, correlation, &projectpb.GetProjectWorkspaceResult{
+			Outcome: &projectpb.GetProjectWorkspaceResult_Success{Success: success},
+		})
 	})
 	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
 	if err != nil {
