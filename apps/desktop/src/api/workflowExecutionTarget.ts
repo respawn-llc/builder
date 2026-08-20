@@ -90,15 +90,13 @@ export type TaskResumeResponse =
       selectionRequired: WorkflowExecutionTargetSelectionRequirement;
     }>;
 export type TaskMoveResponse =
-  | WorkflowExecutionTargetActionResponse<TaskMoveApplied>
-  | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;
+  WorkflowExecutionTargetActionResponse<TaskMoveApplied> | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;
 export type TaskApproveResponse = WorkflowExecutionTargetActionResponse<TaskApproveApplied>;
 
 export type TaskMovePreviewBlocker =
   | "invalid_workflow"
   | "no_source_position"
   | "unsupported_destination"
-  | "waiting_question"
   | "lifecycle_conflict"
   | "context_session_unavailable"
   | "no_usable_transition"

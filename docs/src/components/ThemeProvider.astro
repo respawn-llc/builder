@@ -1,31 +1,39 @@
 <script is:inline>
   window.StarlightThemeProvider = (() => {
-    const storageKey = 'starlight-theme';
-    const lightTheme = 'light';
-    const darkTheme = 'dark';
+    const storageKey = "starlight-theme";
+    const lightTheme = "light";
+    const darkTheme = "dark";
 
     const isTheme = (value) => value === lightTheme || value === darkTheme;
 
     const getStoredTheme = () => {
       try {
-        const value = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) : null;
+        const value =
+          typeof localStorage !== "undefined"
+            ? localStorage.getItem(storageKey)
+            : null;
         return isTheme(value) ? value : null;
       } catch (error) {
-        console.warn('Kent docs could not read the saved theme; using the system theme.', error);
+        console.warn(
+          "Kent docs could not read the saved theme; using the system theme.",
+          error,
+        );
         return null;
       }
     };
 
     const getSystemTheme = () =>
-      window.matchMedia('(prefers-color-scheme: light)').matches ? lightTheme : darkTheme;
+      window.matchMedia("(prefers-color-scheme: light)").matches
+        ? lightTheme
+        : darkTheme;
 
     let activeTheme = darkTheme;
 
     const getEffectiveTheme = () => activeTheme;
 
-    const updatePickers = (theme = getStoredTheme() ?? 'auto') => {
-      document.querySelectorAll('starlight-theme-select').forEach((picker) => {
-        const select = picker.querySelector('select');
+    const updatePickers = (theme = getStoredTheme() ?? "auto") => {
+      document.querySelectorAll("starlight-theme-select").forEach((picker) => {
+        const select = picker.querySelector("select");
         if (select) {
           select.value = theme;
         }
@@ -36,7 +44,7 @@
       const storedTheme = getStoredTheme();
       activeTheme = storedTheme ?? getSystemTheme();
       document.documentElement.dataset.theme = activeTheme;
-      updatePickers(storedTheme ?? 'auto');
+      updatePickers(storedTheme ?? "auto");
       return activeTheme;
     };
 
@@ -46,7 +54,7 @@
         localStorage.setItem(storageKey, activeTheme);
       } catch (error) {
         console.warn(
-          'Kent docs could not save the selected theme; applying it for this page only.',
+          "Kent docs could not save the selected theme; applying it for this page only.",
           error,
         );
       }

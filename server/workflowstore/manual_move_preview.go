@@ -28,7 +28,6 @@ const (
 	ManualMoveBlockerInvalidWorkflow              ManualMoveBlocker = "invalid_workflow"
 	ManualMoveBlockerNoSourcePosition             ManualMoveBlocker = "no_source_position"
 	ManualMoveBlockerUnsupportedDestination       ManualMoveBlocker = "unsupported_destination"
-	ManualMoveBlockerWaitingQuestion              ManualMoveBlocker = "waiting_question"
 	ManualMoveBlockerLifecycleConflict            ManualMoveBlocker = "lifecycle_conflict"
 	ManualMoveBlockerContextSessionUnavailable    ManualMoveBlocker = "context_session_unavailable"
 	ManualMoveBlockerNoUsableTransition           ManualMoveBlocker = "no_usable_transition"
@@ -181,7 +180,14 @@ func (s *Store) resolveManualMoveExecutablePreview(
 	currentNodes []workflow.CurrentNode,
 	req ManualMoveRequest,
 ) (ManualMovePreview, error) {
-	valueEnvironment, err := s.manualMoveValueEnvironment(ctx, q, definition, req.TaskID, currentNodes)
+	valueEnvironment, err := s.manualMoveValueEnvironment(
+		ctx,
+		q,
+		definition,
+		req.TaskID,
+		currentNodes,
+		workflow.NodeIDOf(target),
+	)
 	if err != nil {
 		return ManualMovePreview{}, err
 	}
@@ -651,11 +657,12 @@ func (s *Store) manualMoveValueEnvironment(
 	definition workflow.Definition,
 	taskID workflow.TaskID,
 	currentNodes []workflow.CurrentNode,
+	targetNodeID workflow.NodeID,
 ) (manualMoveValueEnvironment, error) {
 	environment := newManualMoveValueEnvironment()
 	wiring := workflow.DeriveWiring(definition)
 	for _, currentNode := range currentNodes {
-		if err := addManualMoveCurrentNodeValues(definition, wiring, currentNode, &environment); err != nil {
+		if err := addManualMoveCurrentNodeValues(definition, wiring, currentNode, targetNodeID, &environment); err != nil {
 			return manualMoveValueEnvironment{}, err
 		}
 	}
@@ -679,7 +686,13 @@ func (s *Store) manualMoveValueEnvironment(
 			environment.add(workflow.NodeKey(source), outputName, value)
 		}
 		for _, branch := range approval.Branches {
-			if err := addManualMoveCurrentNodeValues(definition, wiring, branch.Target.CurrentNode, &environment); err != nil {
+			if err := addManualMoveCurrentNodeValues(
+				definition,
+				wiring,
+				branch.Target.CurrentNode,
+				targetNodeID,
+				&environment,
+			); err != nil {
 				return manualMoveValueEnvironment{}, err
 			}
 		}
@@ -735,10 +748,11 @@ func addManualMoveCurrentNodeValues(
 	definition workflow.Definition,
 	wiring workflow.DerivedWiring,
 	currentNode workflow.CurrentNode,
+	targetNodeID workflow.NodeID,
 	environment *manualMoveValueEnvironment,
 ) error {
 	if currentNode.EnteredByEdgeID != nil {
-		edge, err := currentNodeDefinitionEnteringEdge(definition, currentNode)
+		edge, err := currentNodeDefinitionEnteringEdgeForManualMove(definition, currentNode, targetNodeID)
 		if err != nil {
 			return err
 		}
@@ -762,4 +776,19 @@ func addManualMoveCurrentNodeValues(
 		}
 	}
 	return nil
+}
+
+func currentNodeDefinitionEnteringEdgeForManualMove(
+	definition workflow.Definition,
+	currentNode workflow.CurrentNode,
+	targetNodeID workflow.NodeID,
+) (workflow.Edge, error) {
+	edge, err := currentNodeDefinitionEnteringEdgeByID(definition, currentNode)
+	if err != nil {
+		return workflow.Edge{}, err
+	}
+	if edge.TargetNodeID != currentNode.Reference.NodeID && edge.TargetNodeID != targetNodeID {
+		return workflow.Edge{}, currentNodeEnteringEdgeTargetError(currentNode, edge)
+	}
+	return edge, nil
 }

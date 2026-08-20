@@ -125,7 +125,14 @@ function MarkdownFieldCore({
   const showEditor = editing && !disabled;
 
   return (
-    <div className="grid h-full w-full min-h-0 min-w-0 max-w-full grid-rows-[minmax(0,1fr)_auto] gap-[var(--space-2)]">
+    <div
+      className={cx(
+        "grid h-full w-full min-h-0 min-w-0 max-w-full",
+        errorText === undefined
+          ? "grid-rows-[minmax(0,1fr)]"
+          : "grid-rows-[minmax(0,1fr)_auto] gap-[var(--space-2)]",
+      )}
+    >
       <div className="min-h-0 min-w-0 max-w-full">
         {showEditor ? (
           <MarkdownFieldEditor
@@ -280,14 +287,18 @@ function MarkdownFieldReadViewport({
   });
   const affordancePhase = useOpacityExit(collapsible && !readPresentation.expanded && overflows);
 
-  const surfaceStyle: CSSProperties = collapsed
+  const collapsedContentStyle: CSSProperties = collapsed
     ? { maxHeight: heightClamp(readPresentation.collapsedHeightClamp) }
     : {};
   const taskListProps = markdownTaskListProps(disabled, taskListInteraction, onChange);
   const expandLabel = readPresentation.kind === "collapsible" ? readPresentation.expandLabel : undefined;
 
   return (
-    <div className={cx("relative w-full min-h-0 min-w-0 max-w-full", !collapsed && "h-full")}>
+    <div
+      className={cx("relative w-full min-h-0 min-w-0 max-w-full", !collapsed && "h-full")}
+      data-collapsed={collapsed}
+      data-slot="markdown-field-read-root"
+    >
       <div
         aria-label={label}
         aria-readonly
@@ -295,7 +306,7 @@ function MarkdownFieldReadViewport({
           fieldIslandInputClassName(1, surfaceRadius),
           "relative block h-full min-h-0 min-w-0 max-w-full p-[var(--space-2)]",
           !disabled && "cursor-text",
-          collapsed ? "overflow-hidden" : "overflow-clip",
+          "overflow-clip",
         )}
         onKeyDown={(event) => {
           activateFromKeyboard(event, disabled, onEdit);
@@ -303,21 +314,28 @@ function MarkdownFieldReadViewport({
         onPointerUp={(event) => {
           activateFromPointer(event, disabled, onEdit);
         }}
-        ref={viewportRef}
+        data-slot="markdown-field-read-viewport"
         role="textbox"
-        style={surfaceStyle}
         tabIndex={disabled ? -1 : 0}
       >
-        <div className="min-w-0 max-w-full" ref={contentRef}>
-          {value.trim().length > 0 ? (
-            <StaticMarkdown disabled={disabled} {...(taskListProps ?? {})} value={value} />
-          ) : (
-            <span className="text-[var(--color-muted)]">{placeholder}</span>
-          )}
+        <div
+          className={cx("relative min-w-0 max-w-full", collapsed && "overflow-hidden")}
+          data-slot="markdown-field-read-content-viewport"
+          data-testid="markdown-field-read-content-viewport"
+          ref={viewportRef}
+          style={collapsedContentStyle}
+        >
+          <div className="min-w-0 max-w-full" ref={contentRef}>
+            {value.trim().length > 0 ? (
+              <StaticMarkdown disabled={disabled} {...(taskListProps ?? {})} value={value} />
+            ) : (
+              <span className="text-[var(--color-muted)]">{placeholder}</span>
+            )}
+          </div>
+          {renderMarkdownFieldFade(affordancePhase, expandLabel, onExpand)}
+          {renderMarkdownFieldExpandButton(affordancePhase, expandLabel, onExpand)}
         </div>
-        {renderMarkdownFieldFade(affordancePhase, expandLabel, onExpand)}
       </div>
-      {renderMarkdownFieldExpandButton(affordancePhase, expandLabel, onExpand)}
     </div>
   );
 }

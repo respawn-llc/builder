@@ -10,7 +10,9 @@ const fixture = vi.hoisted(() => ({
   openWindow: vi.fn(async () => undefined),
   openProject: vi.fn(async () => undefined),
   openWorkflowEditor: vi.fn(async () => undefined),
+  push: vi.fn(),
   workflowEditorProps: vi.fn<(props: unknown) => void>(),
+  newTaskProps: vi.fn<(props: unknown) => void>(),
 }));
 vi.mock("@/app-facade", () => ({
   sidebarTitle: () => "",
@@ -26,7 +28,7 @@ vi.mock("@/app-facade", () => ({
     },
   }),
   usePublishSidebarHeaderAction: headerAction,
-  useStatusController: () => ({ push: vi.fn() }),
+  useStatusController: () => ({ push: fixture.push }),
 }));
 vi.mock("@/features/task-detail", () => ({
   TaskDetailSurface: () => <div />,
@@ -41,33 +43,35 @@ vi.mock("@/features/home", () => ({
 vi.mock("@/features/tasks", () => ({
   NewTaskForm: (
     props: Readonly<{
+      navigator: ReturnType<typeof createTestSidebarNavigator>;
+      onCreated?: ((taskID: string) => void | Promise<void>) | undefined;
       onPendingChange?: (pending: boolean) => void;
-      onProjectMissing?: () => void;
-      onSubmitted: (taskID: string) => void;
     }>,
-  ) => (
-    <>
-      <button
-        data-testid="new-task-pending"
-        onClick={() => {
-          props.onPendingChange?.(true);
-        }}
-      />
-      <button
-        data-testid="new-task-settled"
-        onClick={() => {
-          props.onPendingChange?.(false);
-        }}
-      />
-      <button data-testid="new-task-missing" onClick={props.onProjectMissing} />
-      <button
-        data-testid="new-task-success"
-        onClick={() => {
-          props.onSubmitted("task-created");
-        }}
-      />
-    </>
-  ),
+  ) => {
+    fixture.newTaskProps(props);
+    return (
+      <>
+        <button
+          data-testid="new-task-pending"
+          onClick={() => {
+            props.onPendingChange?.(true);
+          }}
+        />
+        <button
+          data-testid="new-task-settled"
+          onClick={() => {
+            props.onPendingChange?.(false);
+          }}
+        />
+        <button
+          data-testid="new-task-success"
+          onClick={() => {
+            if (props.navigator.back() === "accepted") void props.onCreated?.("task-created");
+          }}
+        />
+      </>
+    );
+  },
 }));
 
 vi.mock("@/features/workflows", () => ({
@@ -149,11 +153,24 @@ describe("Sidebar destination completion ownership", () => {
       workflowID: "workflow-1",
     });
   });
-  it("locks header exit only for a pending related New Task and replaces it on success", () => {
+  it("locks header exit only for a pending Task Detail-originated New Task", () => {
+    const initialPreparedDependency = {
+      direction: "blocks",
+      taskID: "task-1",
+      shortID: "KENT-1",
+      title: "Origin",
+      workflowID: "workflow-1",
+      status: {
+        kind: "backlog",
+        nativeState: "active",
+        nodeIDs: [],
+        attentionTypes: [],
+      },
+    } as const;
     const pageNavigator = mountDestination({
       boardQueryWorkflowID: "workflow-1",
+      initialPreparedDependency,
       kind: "newTask",
-      pendingRelationship: { newTaskRole: "blocker", originTaskID: "task-1" },
       projectID: "project-1",
       workflowID: "workflow-1",
     });
@@ -162,27 +179,55 @@ describe("Sidebar destination completion ownership", () => {
     expect(pageNavigator.registerAvailability).toHaveBeenLastCalledWith({ back: false, close: false });
     fireEvent.click(screen.getByTestId("new-task-settled"));
     expect(pageNavigator.registerAvailability).toHaveBeenLastCalledWith({ back: true, close: true });
-    fireEvent.click(screen.getByTestId("new-task-success"));
-    expect(pageNavigator.replace).toHaveBeenCalledWith({ kind: "taskDetail", taskID: "task-created" });
-    expect(pageNavigator.close).not.toHaveBeenCalled();
+    expect(fixture.newTaskProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialPreparedDependency,
+        navigator: pageNavigator,
+      }),
+    );
   });
-  it("keeps ordinary New Task exit available while pending and scopes success/missing dismissal", () => {
+  it.each([{}, { parentReturnDirection: "blocked-by" as const }])(
+    "keeps root and stacked New Task exit available while pending",
+    (context) => {
+      const pageNavigator = mountDestination({
+        boardQueryWorkflowID: "workflow-1",
+        ...context,
+        kind: "newTask",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      });
+
+      fireEvent.click(screen.getByTestId("new-task-pending"));
+      expect(pageNavigator.registerAvailability).toHaveBeenLastCalledWith({ back: true, close: true });
+    },
+  );
+  it("passes omitted Workflow only through a Project-scoped New Task destination", () => {
+    const onCreated = vi.fn();
     const pageNavigator = mountDestination({
-      boardQueryWorkflowID: "workflow-1",
+      boardQueryWorkflowID: undefined,
       kind: "newTask",
+      onCreated,
       projectID: "project-1",
-      workflowID: "workflow-1",
     });
 
-    fireEvent.click(screen.getByTestId("new-task-pending"));
-    expect(pageNavigator.registerAvailability).toHaveBeenLastCalledWith({ back: true, close: true });
-    fireEvent.click(screen.getByTestId("new-task-missing"));
+    expect(fixture.newTaskProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        boardQueryWorkflowID: undefined,
+        navigator: pageNavigator,
+        projectID: "project-1",
+      }),
+    );
+    expect(fixture.newTaskProps.mock.lastCall?.[0]).not.toHaveProperty("workflowID");
     fireEvent.click(screen.getByTestId("new-task-success"));
     expect(pageNavigator.back).toHaveBeenCalledOnce();
-    expect(pageNavigator.close).toHaveBeenCalledOnce();
+    expect(onCreated).toHaveBeenCalledWith("task-created");
   });
   it("publishes Link Workflow creation through scoped replace", () => {
-    const destination = { kind: "linkWorkflow", projectID: "project-1" } as const;
+    const destination = {
+      kind: "linkWorkflow",
+      onCompleted: vi.fn(),
+      projectID: "project-1",
+    } as const;
     const navigator = mountDestination(destination);
     const action = headerAction.mock.lastCall?.[0];
     if (!isValidElement(action)) throw new Error("Expected the Link Workflow header action.");
@@ -200,13 +245,20 @@ describe("Sidebar destination completion ownership", () => {
       destination: {
         kind: "linkWorkflow",
         creating: true,
+        onCompleted: async () => {
+          await fixture.openWorkflowEditor();
+        },
         projectID: "project-1",
       } satisfies SidebarDestination,
       trigger: "workflow-created",
       follow: () => fixture.openWorkflowEditor,
     },
     {
-      destination: { kind: "linkWorkflow", projectID: "project-1" } satisfies SidebarDestination,
+      destination: {
+        kind: "linkWorkflow",
+        onCompleted: fixture.openProject,
+        projectID: "project-1",
+      } satisfies SidebarDestination,
       trigger: "workflow-linked",
       follow: () => fixture.openProject,
     },
@@ -223,6 +275,25 @@ describe("Sidebar destination completion ownership", () => {
     fireEvent.click(staleTrigger);
     expect(stale.close).toHaveBeenCalledOnce();
     expect(follow()).toHaveBeenCalledOnce();
+  });
+
+  it("runs caller-owned Link Workflow completion without global navigation and reports failure", async () => {
+    const failure = new Error("follow-up failed");
+    const onCompleted = vi.fn(async () => Promise.reject(failure));
+    const navigator = mountDestination({
+      kind: "linkWorkflow",
+      onCompleted,
+      projectID: "project-1",
+    });
+
+    fireEvent.click(screen.getByTestId("workflow-linked"));
+
+    expect(navigator.close).toHaveBeenCalledOnce();
+    expect(onCompleted).toHaveBeenCalledWith({ kind: "linked", workflowID: "workflow-linked" });
+    expect(fixture.openProject).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(fixture.push).toHaveBeenCalledWith(expect.objectContaining({ body: failure.message }));
+    });
   });
 
   it("closes Workflow Inspector through its scoped navigator when the selected node is missing", () => {

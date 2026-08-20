@@ -245,6 +245,7 @@ export type WorkflowRecord = Readonly<{
   description: string;
   version: number;
   executionTargetPolicy: WorkflowExecutionTargetPolicy;
+  projectLink?: Readonly<{ isDefault: boolean }> | undefined;
 }>;
 
 export type WorkflowPage = Readonly<{
@@ -493,6 +494,13 @@ export type TaskStatus = Readonly<{
   nativeState: string;
   nodeIDs: readonly string[];
   attentionTypes: readonly string[];
+}>;
+
+export type CreatedTaskSummary = Readonly<{
+  id: string;
+  shortID: string;
+  title: string;
+  workflowID: string;
 }>;
 
 export type TaskActions = Readonly<{

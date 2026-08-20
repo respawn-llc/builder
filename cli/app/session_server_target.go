@@ -96,34 +96,10 @@ func attachConfiguredStartupRemote(ctx context.Context, cfg config.App) (attache
 
 func validateStartupRemoteIdentity(identity protocol.ServerIdentity) error {
 	if identity.ProtocolVersion != protocol.Version {
-		return &startupRemoteCompatibilityError{
-			issue:         startupRemoteProtocolVersionMismatch,
-			serverVersion: identity.ProtocolVersion,
-		}
+		return fmt.Errorf("server protocol version %q is incompatible with client protocol version %q", identity.ProtocolVersion, protocol.Version)
 	}
 	return nil
 }
-
-type startupRemoteCompatibilityIssue uint8
-
-const (
-	startupRemoteProtocolVersionMismatch startupRemoteCompatibilityIssue = iota + 1
-)
-
-type startupRemoteCompatibilityError struct {
-	issue         startupRemoteCompatibilityIssue
-	serverVersion string
-}
-
-func (e *startupRemoteCompatibilityError) Error() string {
-	switch e.issue {
-	case startupRemoteProtocolVersionMismatch:
-		return fmt.Sprintf("server protocol version %q is incompatible with client protocol version %q", e.serverVersion, protocol.Version)
-	default:
-		return "server startup control surface is incompatible"
-	}
-}
-
 type configuredServerPreflightError struct {
 	endpoint  string
 	operation string

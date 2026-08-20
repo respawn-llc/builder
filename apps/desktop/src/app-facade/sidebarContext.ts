@@ -1,5 +1,14 @@
-import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import type { CreatedTaskSummary, TaskDependencyDirection, TaskStatus } from "@/api";
 import type { ResolvedSidebarWidth, SidebarSizePreference } from "./sidebarSizing";
 
 export type SidebarMode = "overlay" | "shift";
@@ -7,6 +16,21 @@ export type SidebarPhase = "closing" | "open";
 export type SidebarTransitionDirection = "back" | "push" | "replace";
 export type SidebarRootOutcome = "closed" | "released" | "replaced";
 export type SidebarNavigationOutcome = "accepted" | "stale" | "unavailable";
+
+export type NewTaskPreparedDependency = Readonly<{
+  direction: TaskDependencyDirection;
+  taskID: string;
+  shortID: string;
+  title: string;
+  workflowID: string;
+  status: TaskStatus;
+}>;
+
+export type SidebarBackResult = Readonly<{
+  kind: "newTaskCreated";
+  direction: TaskDependencyDirection;
+  task: CreatedTaskSummary & Readonly<{ status: TaskStatus }>;
+}>;
 
 export type WorkflowInspectorSelection =
   | Readonly<{ kind: "workflow" }>
@@ -22,21 +46,29 @@ export type TaskDetailInitialFocus =
   | Readonly<{ kind: "interrupted_current_node" }>
   | Readonly<{ kind: "dependencies" }>;
 
+export type LinkWorkflowCompletion =
+  Readonly<{ kind: "created"; workflowID: string }> | Readonly<{ kind: "linked"; workflowID: string }>;
+
 export type SidebarDestination =
-  | Readonly<{
+  | (Readonly<{
       kind: "newTask";
       mode?: SidebarMode;
-      boardQueryWorkflowID: string | undefined;
       initialSourceWorkspaceID?: string | undefined;
-      pendingRelationship?:
-        | Readonly<{
-            originTaskID: string;
-            newTaskRole: "blocker" | "blocked";
-          }>
-        | undefined;
+      initialPreparedDependency?: NewTaskPreparedDependency | undefined;
+      onCreated?: ((taskID: string) => void | Promise<void>) | undefined;
+      parentReturnDirection?: TaskDependencyDirection | undefined;
       projectID: string;
-      workflowID: string;
-    }>
+    }> &
+      (
+        | Readonly<{
+            boardQueryWorkflowID: string | undefined;
+            workflowID: string;
+          }>
+        | Readonly<{
+            boardQueryWorkflowID: undefined;
+            workflowID?: undefined;
+          }>
+      ))
   | Readonly<{
       kind: "taskDetail";
       mode?: SidebarMode;
@@ -54,6 +86,7 @@ export type SidebarDestination =
       kind: "linkWorkflow";
       mode?: SidebarMode;
       creating?: boolean | undefined;
+      onCompleted: (completion: LinkWorkflowCompletion) => void | Promise<void>;
       projectID: string;
       selectedWorkflowID?: string | undefined;
     }>
@@ -89,12 +122,13 @@ export type SidebarDestination =
     }>;
 
 export type SidebarDestinationPolicy = Readonly<{
+  applyBackResult(destination: SidebarDestination, state: unknown, result: SidebarBackResult): unknown;
   equals(left: SidebarDestination, right: SidebarDestination): boolean;
   retainedState(destination: SidebarDestination, state: unknown): unknown;
 }>;
 
 export type SidebarPageNavigator = Readonly<{
-  back(): Exclude<SidebarNavigationOutcome, "unavailable">;
+  back(result?: SidebarBackResult): Exclude<SidebarNavigationOutcome, "unavailable">;
   close(): Exclude<SidebarNavigationOutcome, "unavailable">;
   push(destination: SidebarDestination): SidebarNavigationOutcome;
   replace(destination: SidebarDestination): Exclude<SidebarNavigationOutcome, "unavailable">;
@@ -175,10 +209,7 @@ export function useOwnedSidebarRoots(): SidebarRootController {
   return value;
 }
 
-export function useSidebarBackWhen(
-  condition: boolean,
-  navigator: SidebarPageNavigator | undefined,
-): void {
+export function useSidebarBackWhen(condition: boolean, navigator: SidebarPageNavigator | undefined): void {
   useEffect(() => {
     if (condition) navigator?.back();
   }, [condition, navigator]);

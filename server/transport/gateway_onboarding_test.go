@@ -185,7 +185,6 @@ func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T
 		})
 	}
 }
-
 func TestRemoteOnboardingFinalizePreservesStructuredSentinels(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	defer func() { _ = appCore.Close() }()

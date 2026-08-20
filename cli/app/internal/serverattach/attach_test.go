@@ -130,14 +130,12 @@ func TestAttachRunPromptReportsTypedPersistenceRootMismatch(t *testing.T) {
 		t.Run(reportedRoot, func(t *testing.T) {
 			req := testAttachRequest(func(context.Context, config.App) (remoteattach.ProjectViewRemote, error) {
 				projectViews := boundProjectViewWithRoot(reportedRoot)
-				projectViews.identity.ProtocolVersion = "legacy"
 				return projectViews, nil
 			})
 			requireExplicitRoot(&req)
 			_, _, err := AttachRunPrompt(context.Background(), req)
 			if !errors.Is(err, ErrReachableServerRootMismatch) ||
-				errors.Is(err, ErrNoServerAvailable) ||
-				errors.Is(err, ErrServerIncompatible) {
+				errors.Is(err, ErrNoServerAvailable) {
 				t.Fatalf("err = %v, want root mismatch distinct from no server", err)
 			}
 			var mismatch *RootMismatchServerError
@@ -276,38 +274,6 @@ func serveWorkspaceConnectionSetup(ctx context.Context, conn rpcwire.Conn, frame
 	}
 	return errors.New("unsupported Connection setup operation")
 }
-
-func TestAttachRunPromptReportsTypedIncompatibleServerReason(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		identity    protocol.ServerIdentity
-		reasonParts []string
-	}{
-		{
-			name:        "protocol version mismatch",
-			identity:    protocol.ServerIdentity{ProtocolVersion: "0.0.0-legacy", ServerID: "kent:7", PID: 7},
-			reasonParts: []string{"0.0.0-legacy", protocol.Version},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			req := testAttachRequest(func(context.Context, config.App) (ProjectViewRemote, error) {
-				return &projectViewRemoteStub{identity: tc.identity}, nil
-			})
-			_, _, err := AttachRunPrompt(context.Background(), req)
-			var incompatible *IncompatibleServerError
-			if !errors.Is(err, ErrServerIncompatible) || errors.Is(err, ErrNoServerAvailable) ||
-				!errors.As(err, &incompatible) || strings.TrimSpace(incompatible.Reason) == "" {
-				t.Fatalf("err = %v, want typed incompatibility distinct from no server", err)
-			}
-			for _, part := range tc.reasonParts {
-				if !strings.Contains(incompatible.Reason, part) {
-					t.Fatalf("reason = %q, want %q", incompatible.Reason, part)
-				}
-			}
-		})
-	}
-}
-
 func TestAttachRunPromptPropagatesHeadlessWorkspaceFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

@@ -128,6 +128,9 @@
 - Kent validates and applies one relationship mutation atomically.
 - A relationship validation failure changes neither Task nor relationship
   state.
+- Task creation may request multiple incoming and outgoing Task Dependencies.
+- Kent validates Task creation and every requested Task Dependency as one operation, then atomically creates the Task and all requested relationships.
+- A validation failure during Task creation creates neither the Task nor any requested relationship.
 - Concurrent relationship additions cannot exceed either cardinality limit.
 - Typed relationship errors identify the violated rule and the affected Tasks.
 - A Task Dependency is satisfied if and only if its Blocker Task has
@@ -391,7 +394,8 @@
 - Stale live facts must not authorize a Workflow mutation. Lifecycle owners revalidate exact Runtime activity and Task Quiescence when applying an action.
 - After required selection, Task Start durably places the Task and acknowledges that placement before Execution Target resolution, filesystem work, setup, Session creation, or runtime startup. Those operations run asynchronously without retaining the Task's lifecycle mutation ownership; failure interrupts the placed Current Node through the ordinary runtime-start error path.
 - Once a Manual Move is ready to apply and any required Execution Target selection has succeeded, Kent automatically interrupts all live Agent and Script work on the Task, waits for it to stop, revalidates the move, and applies it. A separate Interrupt action is not required.
-- Manual Move does not cancel or join a waiting Question scope. The operator must answer the Question or wait for scope retirement before moving the Task.
+- As part of that interruption, Manual Move cancels every pending Question on the Task.
+- A pending Approval in a Session blocks Manual Move until it resolves.
 - Other conflicting lifecycle operations block Manual Move.
 - If revalidation or movement fails after live work has been interrupted, the origin Current Nodes remain interrupted and Kent surfaces the move failure instead of resuming them.
 
@@ -422,11 +426,10 @@
 - If unresolved legacy state reaches strict `previous_target`, a non-Agent `previous_target_or_new` target, or a final Join, production reports a typed actionable error without changing Workflow state. Debug operation fails fast.
 - Kent removes this unresolved-legacy compatibility handling in v2.6.2.
 - If a fresh retained-target Session binds but later start preparation fails, Resume reports the invalid binding and does not create another Session. Recovery requires operator intervention.
-- `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Current Node's materialized Assignee.
-- Workflow validation rejects statically known Assignee incompatibility, runtime rejects retained-Session Assignee incompatibility, and valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
+- Every valid `continue_session` reuse preserves the retained Session's Assignee, contract generation, and cache lineage.
 - Transition-selected Assignees never rotate or invalidate an established Session's prompt-cache lineage.
 - A retained Session may adopt the target Current Node's materialized thinking without rotating or invalidating its prompt-cache lineage.
-- `compact_and_continue_session` compacts the reused Session and establishes the target Current Node's materialized Assignee and thinking in a fresh contract generation, resolving current role configuration for model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
+- `compact_and_continue_session` compacts the reused Session and establishes the target Current Node's materialized Assignee and thinking in a fresh contract generation, resolving current role configuration for model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and prompt-facing request content.
 - `new_session` establishes the target Current Node's materialized Assignee and thinking at its fresh context boundary and resolves current role configuration for that Assignee.
 - Kent derives `compact_and_continue_session` timing from the accepted Workflow path. Workflow authors do not configure eager or lazy timing.
 - Guaranteed future reuse compacts eagerly after the source assignment completes, regardless of context usage. Reuse is guaranteed when at least one branch that the accepted fan-out will execute guarantees it; unrelated accepted siblings do not need to reuse the Session.
@@ -434,7 +437,7 @@
 - Kent derives guarantee from every valid path to a reachable Terminal Node after narrowing the graph to the accepted Transition. Unselected outgoing alternatives, manual movement, later Workflow edits, Task deletion, and restart do not affect the classification. A decision cycle with an exit does not become optional merely because execution may revisit that cycle.
 - When static Session provenance cannot prove that every terminal path reaches compact-and-continue reuse, Kent treats that reuse as optional rather than eager.
 - Guarantee and eligibility follow all Context Source semantics, including direct and transitive `immediate_source`, `node:<node_key>`, `previous_target`, and `previous_target_or_new`. A source that may fall back to a new Session remains optional unless the accepted path guarantees selection of the retained Session.
-- Eager `compact_and_continue_session` and threshold-triggered Workflow Pre-Compaction share one post-completion history replacement. A later target establishes its fresh Session Contract generation, rotates cache lineage again at that contract boundary, and appends its assignment without producing a second summary for the already-compacted history. No model request uses the intermediate post-completion key.
+- Eager `compact_and_continue_session` and threshold-triggered Workflow Pre-Compaction share one post-completion history replacement. A later target establishes its fresh Session Contract and appends its assignment without producing a second summary for the already-compacted history. The selected Session's prompt-cache key remains its Kent Session ID.
 - A target skips its existing lazy CAC summary only when the selected Session has an unconsumed committed Workflow Pre-Compaction replacement. Otherwise existing CAC behavior is unchanged.
 - Nodes own no agent input or output contract. Transition Branches exclusively declare the Parameters they provide to their targets.
 - Prompt placeholders validate against the prompt-owning Transition Branch's Parameters through `.Params.<parameter_key>`.
@@ -445,6 +448,7 @@
 
 ## Workflow Pre-Compaction
 
+- Workflow Pre-Compaction remains separate from ordinary-session eager compaction. Ordinary eager compaction never runs for a Workflow Session.
 - `[workflow].pre_compaction_tokens` is a root config-file setting with no environment or per-subagent override.
 - When omitted, the Workflow Pre-Compaction threshold is 70% of `context_compaction_threshold_tokens`, rounded down to a whole token. An explicit value must be positive and no greater than that ordinary threshold; equality is valid.
 - Workflow Pre-Compaction uses the same authoritative context-usage value and compaction operation as ordinary context management. It does not introduce another token measurement authority.
@@ -455,10 +459,10 @@
 - Terminal-only or unreachable reuse is ineligible. A direct same-Session continuation without Approval is also ineligible because the Session does not structurally become dormant; later admission, capacity, or startup delay does not change that decision.
 - An Approval wait makes the completed Session dormant and eligible. Kent starts eligible compaction after the terminal output is durable. While live source finalization runs, existing Workflow lifecycle sequencing prevents Approval apply.
 - The compaction request uses the pre-compaction cache key and includes the durable completed assignment and handoff. The replacement summary describes that assignment as completed and cannot present it as still in progress.
-- A successful replacement rotates cache lineage before dormancy. No model request uses the fresh key before dormancy, and Kent never reuses the old key. Ordinary `continue_session` makes its next request on that replacement key. `compact_and_continue_session` rotates again when it establishes the fresh target Session Contract, and its first target request uses that second key.
+- A successful replacement does not change the retained Session's prompt-cache key. Ordinary `continue_session` and `compact_and_continue_session` keep using that Kent Session ID; changed Workflow assignment and Session Contract content naturally invalidate the changed request prefix.
 - Fan-out compacts the source history once before Session copies are created. Reusing successors receive the same summary with distinct fresh cache keys.
 - Workflow Pre-Compaction is best-effort after durable completion. Kent preserves the history-replacement CommitReceipt separately from later operational errors and does not roll back completion or strand the existing held continuation.
-- A committed replacement remains the authoritative Workflow Pre-Compaction boundary even when later usage, observer, prompt-snapshot, status, or other finalization work reports an error. Kent surfaces that diagnostic nonfatally, releases held continuation, and a later CAC target must not generate a second summary or cache rotation.
+- A committed replacement remains the authoritative Workflow Pre-Compaction boundary even when later usage, observer, prompt-snapshot, status, or other finalization work reports an error. Kent surfaces that diagnostic nonfatally, releases held continuation, and a later CAC target must not generate a second summary.
 - An uncommitted replacement leaves no boundary. Kent surfaces the operational diagnostic nonfatally and releases held continuation. Threshold-only work proceeds without pre-compaction; authored `compact_and_continue_session` retains its existing target-time CAC, disabled/error, interruption, and ordinary Resume behavior.
 - Nonfatal diagnostics must not fail or interrupt the already-completed source; an Approval source remains waiting for Approval. Lifecycle cancellation or interruption remains fatal through the normal source-scope path without invalidating an already-committed replacement. This feature adds no restart-stable retry, Assignment repair, durable Approval gate, or Resume prerequisite.
 
@@ -662,7 +666,7 @@
 - Current Nodes have no independent product identity.
 - Every Agent Current Node materializes and persists its effective Assignee and thinking when it is created.
 - During upgrade, the Session resolved as continuation context does not by itself determine the target Assignee.
-- An unstarted target that will establish a fresh or compacted Session contract, or that requires retained-context Assignee compatibility, materializes the required target Agent Node fallback. An unstarted target-owned retained continuation preserves the retained Session Assignee, treating an absent retained role as Kent's canonical default role.
+- An unstarted target that will establish a fresh or compacted Session contract materializes the required target Agent Node fallback. An unstarted retained continuation preserves the retained Session Assignee, treating an absent retained role as Kent's canonical default role.
 - A target execution already bound to a Session preserves that Session's Assignee. A pending Approval target has not started and therefore derives its Assignee only from its frozen Context-Preservation Mode and Context Source resolution.
 - Pre-feature state migrates with absent/no-thinking because it had no frozen thinking value. Migration does not validate preserved role availability against current configuration; an unavailable role becomes an ordinary Current Node start failure after startup.
 - Later Workflow edits do not change an admitted Agent Current Node's materialized Assignee or thinking.

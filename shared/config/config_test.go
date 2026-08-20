@@ -1,6 +1,7 @@
 package config
 
 import (
+	"core/internal/testharness/testenv"
 	"core/shared/toolspec"
 	"errors"
 	"os"
@@ -11,7 +12,16 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	testenv.ClearAtProcessStart(PersistenceRootEnvName)
 	os.Exit(m.Run())
+}
+
+func TestConfigProcessClearsPersistenceRoot(t *testing.T) {
+	testenv.AssertUnsetAtProcessStart(
+		t,
+		"TestConfigProcessClearsPersistenceRoot",
+		PersistenceRootEnvName,
+	)
 }
 
 func TestPreparePersistenceRootRefusesProcessStartRootUnderGoTest(t *testing.T) {

@@ -1,7 +1,14 @@
 version: v2
 clean: true
+inputs:
+  - directory: api/proto
 plugins:
-  - remote: buf.build/protocolbuffers/go:v1.36.11
+  - local:
+      - go
+      - tool
+      - -modfile=tools.mod
+      - protoc-gen-go
     out: shared/protoapi/gen
+    strategy: all
     opt:
       - paths=source_relative

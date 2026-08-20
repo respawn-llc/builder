@@ -1,21 +1,21 @@
 ---
-import DefaultHead from '@astrojs/starlight/components/Head.astro';
-import { ClientRouter } from 'astro:transitions';
+import DefaultHead from "@astrojs/starlight/components/Head.astro";
+import { ClientRouter } from "astro:transitions";
 ---
 
 <DefaultHead />
 <ClientRouter />
 
 <script>
-  const smoothHashScrollInstalledKey = '__kentDocsSmoothHashScrollInstalled';
+  const smoothHashScrollInstalledKey = "__kentDocsSmoothHashScrollInstalled";
   const tocHashLinkSelector = [
     'starlight-toc a[href^="#"]',
     'mobile-starlight-toc a[href^="#"]',
-  ].join(',');
+  ].join(",");
   const smoothScrollDurationMs = 400;
   let activeScrollAnimation = 0;
 
-  const decodeHash = (hash) => {
+  const decodeHash = (hash: string) => {
     try {
       return decodeURIComponent(hash.slice(1));
     } catch {
@@ -23,30 +23,34 @@ import { ClientRouter } from 'astro:transitions';
     }
   };
 
-  const getHashTarget = (hash) => document.getElementById(decodeHash(hash));
+  const getHashTarget = (hash: string) =>
+    document.getElementById(decodeHash(hash));
 
   const prefersReducedMotion = () =>
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  const easeOutCubic = (progress) => 1 - Math.pow(1 - progress, 3);
+  const easeOutCubic = (progress: number) => 1 - Math.pow(1 - progress, 3);
 
-  const getTargetScrollY = (target) => {
+  const getTargetScrollY = (target: HTMLElement) => {
     const scrollPaddingTop =
-      parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0;
-    const maxScrollY = document.documentElement.scrollHeight - window.innerHeight;
-    const targetScrollY = target.getBoundingClientRect().top + window.scrollY - scrollPaddingTop;
+      parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) ||
+      0;
+    const maxScrollY =
+      document.documentElement.scrollHeight - window.innerHeight;
+    const targetScrollY =
+      target.getBoundingClientRect().top + window.scrollY - scrollPaddingTop;
     return Math.max(0, Math.min(targetScrollY, maxScrollY));
   };
 
   // User decision: Firefox ignored CSS/native smooth-scrolling for Starlight ToC
   // hash links, so this narrow ToC-only bridge uses a custom tween while still
   // respecting reduced motion.
-  const animateScrollTo = (targetScrollY, onComplete) => {
+  const animateScrollTo = (targetScrollY: number, onComplete?: () => void) => {
     activeScrollAnimation += 1;
     const animationId = activeScrollAnimation;
 
     if (prefersReducedMotion()) {
-      window.scrollTo({ top: targetScrollY, behavior: 'auto' });
+      window.scrollTo({ top: targetScrollY, behavior: "auto" });
       onComplete?.();
       return;
     }
@@ -54,19 +58,22 @@ import { ClientRouter } from 'astro:transitions';
     const startScrollY = window.scrollY;
     const delta = targetScrollY - startScrollY;
     if (Math.abs(delta) < 1) {
-      window.scrollTo({ top: targetScrollY, behavior: 'auto' });
+      window.scrollTo({ top: targetScrollY, behavior: "auto" });
       onComplete?.();
       return;
     }
 
     const startTime = performance.now();
-    const step = (now) => {
+    const step = (now: number) => {
       if (animationId !== activeScrollAnimation) {
         return;
       }
 
       const progress = Math.min(1, (now - startTime) / smoothScrollDurationMs);
-      window.scrollTo({ top: startScrollY + delta * easeOutCubic(progress), behavior: 'auto' });
+      window.scrollTo({
+        top: startScrollY + delta * easeOutCubic(progress),
+        behavior: "auto",
+      });
       if (progress < 1) {
         requestAnimationFrame(step);
       } else {
@@ -77,7 +84,7 @@ import { ClientRouter } from 'astro:transitions';
     requestAnimationFrame(step);
   };
 
-  const scrollToHashTarget = (hash, target) => {
+  const scrollToHashTarget = (hash: string, target: HTMLElement) => {
     const targetScrollY = getTargetScrollY(target);
     const stateBeforeHash = window.history.state;
     animateScrollTo(targetScrollY, () => {
@@ -86,11 +93,15 @@ import { ClientRouter } from 'astro:transitions';
         if (
           window.history.state === null &&
           stateBeforeHash &&
-          typeof stateBeforeHash === 'object'
+          typeof stateBeforeHash === "object"
         ) {
           window.history.replaceState(
-            { ...stateBeforeHash, scrollX: window.scrollX, scrollY: window.scrollY },
-            '',
+            {
+              ...stateBeforeHash,
+              scrollX: window.scrollX,
+              scrollY: window.scrollY,
+            },
+            "",
           );
         }
       }
@@ -101,10 +112,12 @@ import { ClientRouter } from 'astro:transitions';
   if (!window[smoothHashScrollInstalledKey]) {
     window[smoothHashScrollInstalledKey] = true;
     document.addEventListener(
-      'click',
+      "click",
       (event) => {
         const link =
-          event.target instanceof Element ? event.target.closest(tocHashLinkSelector) : null;
+          event.target instanceof Element
+            ? event.target.closest(tocHashLinkSelector)
+            : null;
         if (!(link instanceof HTMLAnchorElement)) {
           return;
         }
@@ -121,7 +134,7 @@ import { ClientRouter } from 'astro:transitions';
         }
         event.preventDefault();
         event.stopImmediatePropagation();
-        const mobileToc = link.closest('details');
+        const mobileToc = link.closest("details");
         if (mobileToc) {
           mobileToc.open = false;
         }

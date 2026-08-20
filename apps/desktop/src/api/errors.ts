@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { JsonValue } from "./json";
+import { workflowIDSchema } from "./schemas/workflowID";
 import { labelIDSchema } from "./schemas/workflowLabels";
 import { workflowLabelMaxIDs } from "./workflowLabelContract";
 import { rpcErrorCodes } from "./rpcErrorCodes";
@@ -34,9 +35,81 @@ const projectMissingDataSchema = z.looseObject({ reason: z.literal("project_not_
 export function isProjectMissingError(error: unknown): boolean {
   return (
     error instanceof RpcError &&
-    (error.code === rpcErrorCodes.projectNotFound ||
-      projectMissingDataSchema.safeParse(error.data).success)
+    (error.code === rpcErrorCodes.projectNotFound || projectMissingDataSchema.safeParse(error.data).success)
   );
+}
+
+export const workflowTaskCreateSelectionErrorReasons = [
+  "no_linked_workflows",
+  "workflow_not_linked",
+  "ambiguous_without_default",
+] as const;
+export type WorkflowTaskCreateSelectionErrorReason = (typeof workflowTaskCreateSelectionErrorReasons)[number];
+
+export class WorkflowTaskCreateSelectionError extends RpcError {
+  readonly reason: WorkflowTaskCreateSelectionErrorReason;
+  readonly projectID: string;
+  readonly workflowID: string | null;
+
+  constructor(
+    rpcError: RpcError,
+    info: Readonly<{
+      reason: WorkflowTaskCreateSelectionErrorReason;
+      projectID: string;
+      workflowID: string | null;
+    }>,
+  ) {
+    super({
+      code: rpcError.code,
+      message: rpcError.message,
+      method: rpcError.method,
+      data: rpcError.data,
+    });
+    this.name = "WorkflowTaskCreateSelectionError";
+    this.reason = info.reason;
+    this.projectID = info.projectID;
+    this.workflowID = info.workflowID;
+  }
+}
+
+const workflowTaskCreateSelectionErrorDataSchema = z
+  .object({
+    type: z.literal("workflow_task_create_selection_error"),
+    reason: z.enum(workflowTaskCreateSelectionErrorReasons),
+    project_id: z.string().trim().min(1),
+    workflow_id: workflowIDSchema.optional(),
+  })
+  .strict()
+  .superRefine((data, context) => {
+    const workflowRequired = data.reason === "workflow_not_linked";
+    if (workflowRequired !== (data.workflow_id !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: workflowRequired
+          ? "workflow_id is required for workflow_not_linked"
+          : "workflow_id is forbidden for Project-scoped selection errors",
+        path: ["workflow_id"],
+      });
+    }
+  })
+  .transform((data) => ({
+    reason: data.reason,
+    projectID: data.project_id,
+    workflowID: data.workflow_id ?? null,
+  }));
+
+export function decodeWorkflowTaskCreateSelectionError(
+  error: unknown,
+): WorkflowTaskCreateSelectionError | null {
+  if (
+    !(error instanceof RpcError) ||
+    error.code !== rpcErrorCodes.workflowTaskCreateSelection ||
+    error.method !== "workflow.task.create"
+  ) {
+    return null;
+  }
+  const parsed = workflowTaskCreateSelectionErrorDataSchema.safeParse(error.data);
+  return parsed.success ? new WorkflowTaskCreateSelectionError(error, parsed.data) : null;
 }
 
 export type TaskSearchErrorReason = "normalized_too_short";
@@ -373,32 +446,49 @@ export class ContractError extends Error {
 }
 
 export type CatalogContractErrorReason =
-  | "malformed_response"
-  | "project_mismatch"
-  | "session_category_mismatch";
+  "malformed_response" | "project_mismatch" | "session_category_mismatch";
 
 export class CatalogContractError extends ContractError {
   readonly reason: CatalogContractErrorReason;
-  readonly method: string | null; readonly expectedProjectID: string | null; readonly actualProjectID: string | null;
-  readonly expectedCategory: "main" | "subagent" | null; readonly actualCategory: "main" | "subagent" | null;
+  readonly method: string | null;
+  readonly expectedProjectID: string | null;
+  readonly actualProjectID: string | null;
+  readonly expectedCategory: "main" | "subagent" | null;
+  readonly actualCategory: "main" | "subagent" | null;
 
   private constructor(
     message: string,
     reason: CatalogContractErrorReason,
-    facts: Readonly<{ method?: string; expectedProjectID?: string; actualProjectID?: string;
-      expectedCategory?: "main" | "subagent"; actualCategory?: "main" | "subagent";
-      diagnostics?: readonly ContractIssueDiagnostic[]; totalDiagnosticCount?: number }>,
+    facts: Readonly<{
+      method?: string;
+      expectedProjectID?: string;
+      actualProjectID?: string;
+      expectedCategory?: "main" | "subagent";
+      actualCategory?: "main" | "subagent";
+      diagnostics?: readonly ContractIssueDiagnostic[];
+      totalDiagnosticCount?: number;
+    }>,
   ) {
     super(message, facts.diagnostics, facts.totalDiagnosticCount);
-    this.name = "CatalogContractError"; this.reason = reason; this.method = facts.method ?? null;
-    this.expectedProjectID = facts.expectedProjectID ?? null; this.actualProjectID = facts.actualProjectID ?? null;
-    this.expectedCategory = facts.expectedCategory ?? null; this.actualCategory = facts.actualCategory ?? null;
+    this.name = "CatalogContractError";
+    this.reason = reason;
+    this.method = facts.method ?? null;
+    this.expectedProjectID = facts.expectedProjectID ?? null;
+    this.actualProjectID = facts.actualProjectID ?? null;
+    this.expectedCategory = facts.expectedCategory ?? null;
+    this.actualCategory = facts.actualCategory ?? null;
   }
 
   static malformedResponse(method: string, error: ContractError): CatalogContractError {
-    return new CatalogContractError(`${method} response did not match the catalog contract.`, "malformed_response", {
-      method, diagnostics: error.diagnostics, totalDiagnosticCount: error.totalDiagnosticCount,
-    });
+    return new CatalogContractError(
+      `${method} response did not match the catalog contract.`,
+      "malformed_response",
+      {
+        method,
+        diagnostics: error.diagnostics,
+        totalDiagnosticCount: error.totalDiagnosticCount,
+      },
+    );
   }
 
   static projectMismatch(
@@ -406,9 +496,15 @@ export class CatalogContractError extends ContractError {
     expectedProjectID: string,
     actualProjectID: string,
   ): CatalogContractError {
-    return new CatalogContractError(`${method} response Project identity did not match the request.`, "project_mismatch", {
-      method, expectedProjectID, actualProjectID,
-    });
+    return new CatalogContractError(
+      `${method} response Project identity did not match the request.`,
+      "project_mismatch",
+      {
+        method,
+        expectedProjectID,
+        actualProjectID,
+      },
+    );
   }
 
   static sessionCategoryMismatch(
@@ -416,9 +512,15 @@ export class CatalogContractError extends ContractError {
     expectedCategory: "main" | "subagent",
     actualCategory: "main" | "subagent",
   ): CatalogContractError {
-    return new CatalogContractError(`${method} response category did not match the request.`, "session_category_mismatch", {
-      method, expectedCategory, actualCategory,
-    });
+    return new CatalogContractError(
+      `${method} response category did not match the request.`,
+      "session_category_mismatch",
+      {
+        method,
+        expectedCategory,
+        actualCategory,
+      },
+    );
   }
 }
 

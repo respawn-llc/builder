@@ -9,10 +9,6 @@
       "import": "./dist/index.js"
     }
   },
-  "scripts": {
-    "build": "node ./node_modules/typescript7/bin/tsc -b --pretty false",
-    "typecheck": "node ./node_modules/typescript7/bin/tsc -b --pretty false"
-  },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",

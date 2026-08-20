@@ -146,6 +146,12 @@ func TestPersistedWorkflowAssignmentSnapshotRestoresExactPriorAssignment(t *test
 	if receipt, waitErr := initialSteer.Wait(t.Context()); waitErr != nil || !receipt.Committed {
 		t.Fatalf("initial workflow assignment receipt = %+v, %v", receipt, waitErr)
 	}
+	legacySnapshot := store.PromptFacingMetadataSnapshot()
+	legacySnapshot.ActiveWorkflowAssignment = nil
+	legacySnapshot.ActiveWorkflowAssignmentState = nil
+	if err := store.RestorePromptFacingMetadata(legacySnapshot); err != nil {
+		t.Fatalf("simulate Session created before assignment projection: %v", err)
+	}
 	snapshot, found, err := CapturePersistedWorkflowAssignment(store)
 	if err != nil || !found {
 		t.Fatalf("capture initial workflow assignment = found %v, %v", found, err)

@@ -16,8 +16,7 @@ func TestPromptCommandCatalogRouteIsAuthenticatedWorkspaceControlRead(t *testing
 	if route.Kind != KindUnary ||
 		route.Auth != AuthServer ||
 		route.Scope != ScopeProjectWorkspace ||
-		route.Connection != ConnectionControl ||
-		route.Dependency != DependencyPromptCommandCatalog {
+		route.Connection != ConnectionControl {
 		t.Fatalf("route = %+v", route)
 	}
 	if route.RequestType != typeOf[serverapi.PromptCommandCatalogRequest]() ||

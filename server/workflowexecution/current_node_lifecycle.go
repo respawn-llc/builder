@@ -19,7 +19,6 @@ type ManualMoveDisposition string
 const (
 	ManualMoveDispositionQuiescent         ManualMoveDisposition = "quiescent"
 	ManualMoveDispositionAutoInterruptible ManualMoveDisposition = "auto_interruptible"
-	ManualMoveDispositionWaitingQuestion   ManualMoveDisposition = "waiting_question"
 	ManualMoveDispositionLifecycleConflict ManualMoveDisposition = "lifecycle_conflict"
 )
 
@@ -60,13 +59,10 @@ func (c *CurrentNodeController) ManualMoveDisposition(taskID workflow.TaskID) (M
 	if err != nil {
 		return "", err
 	}
-	if state.WaitingQuestions > 0 {
-		return ManualMoveDispositionWaitingQuestion, nil
-	}
 	if state.WaitingApprovals > 0 || state.Queued > 0 || state.Finalizing > 0 {
 		return ManualMoveDispositionLifecycleConflict, nil
 	}
-	if state.Running > 0 {
+	if state.Running > 0 || state.WaitingQuestions > 0 {
 		return ManualMoveDispositionAutoInterruptible, nil
 	}
 	if quiescent {
@@ -405,10 +401,14 @@ func (c *CurrentNodeController) resumeTask(
 				continue
 			}
 			seen[key] = struct{}{}
+			promptDelivery := workflowruntime.TaskPromptDeliveryResume
+			if currentNode.AgentExecutionSelection != nil && currentNode.SessionID == nil {
+				promptDelivery = workflowruntime.TaskPromptDeliveryAssignment
+			}
 			eligible = append(eligible, currentNode)
 			eligibleStarts = append(eligibleStarts, currentNodeQueuedStart{
 				reference:          currentNode.Reference,
-				taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+				taskPromptDelivery: promptDelivery,
 			})
 		}
 		c.mu.Lock()

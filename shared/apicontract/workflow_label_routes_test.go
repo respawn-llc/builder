@@ -63,7 +63,6 @@ func TestWorkflowLabelRoutesUseExistingWorkflowBoundary(t *testing.T) {
 				route.Auth != tt.auth ||
 				route.Scope != ScopeProjectView ||
 				route.Connection != ConnectionUnscoped ||
-				route.Dependency != DependencyWorkflow ||
 				route.RequestType != tt.requestType ||
 				route.ResponseType != tt.responseType ||
 				!route.ValidatesRequest {

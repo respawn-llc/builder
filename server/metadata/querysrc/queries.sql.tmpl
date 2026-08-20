@@ -220,8 +220,8 @@ WHERE id = sqlc.arg(id)
   AND project_id = sqlc.arg(project_id)
 RETURNING id, project_id, name, ordinal;
 
--- name: ListTaskAssignedLabelIDsByTasks :many
-SELECT tla.task_id, pl.id AS label_id
+-- name: ListTaskAssignedLabelsByTasks :many
+SELECT tla.task_id, pl.id AS label_id, pl.name AS label_name
 FROM task_label_assignments tla
 JOIN project_labels pl ON pl.id = tla.label_id
 WHERE tla.task_id IN (sqlc.slice('task_ids'))
@@ -1532,7 +1532,6 @@ matching_workflows AS (
           WHERE eligible.project_workflow_link_id = task_link.id
           LIMIT 1
       )
-    LIMIT 2
 ),
 page_rows AS (
     SELECT rows.*
@@ -1588,6 +1587,29 @@ ORDER BY
     CASE WHEN args.sort_selector_count >= {{.Index}} AND args.sort_{{.Index}}_desc != 0 THEN page.sort_{{.Index}}_value END DESC,
 {{- end}}
     page.id ASC;
+
+-- name: CountProjectTaskGroups :one
+WITH
+args AS (
+    SELECT
+        CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
+        CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json
+),
+{{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
+eligible_rows AS (
+    SELECT status.kind
+    FROM args
+    CROSS JOIN project_workflow_links pwl
+    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
+    JOIN effective_status status ON status.task_id = t.id
+    WHERE pwl.project_id = args.project_id
+      AND t.project_workflow_link_id = pwl.id
+)
+SELECT
+{{- range $group := .TaskGroups}}
+    CAST(COUNT(*) FILTER (WHERE kind IN ({{range $index, $kind := $group.StatusKinds}}{{if $index}}, {{end}}'{{$kind}}'{{end}})) AS INTEGER) AS {{$group.Name}}_count{{if ne $group.Name "done"}},{{end}}
+{{- end}}
+FROM eligible_rows;
 
 -- name: UpdateTaskEditableFields :execrows
 UPDATE tasks
@@ -2076,7 +2098,7 @@ SELECT
     p.display_name,
     p.project_key,
     COALESCE(w.canonical_root_path, '') AS root_path,
-    CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
+    CAST(COALESCE(COUNT(s.project_id), 0) AS INTEGER) AS session_count,
     COALESCE(MAX(s.updated_at_unix_ms), p.updated_at_unix_ms) AS latest_activity_unix_ms
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
@@ -2135,7 +2157,7 @@ SELECT
     p.display_name,
     p.project_key,
     COALESCE(w.canonical_root_path, '') AS root_path,
-    CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
+    CAST(COALESCE(COUNT(s.project_id), 0) AS INTEGER) AS session_count,
     COALESCE(MAX(s.updated_at_unix_ms), p.updated_at_unix_ms) AS latest_activity_unix_ms
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
@@ -2149,7 +2171,7 @@ SELECT
     w.id,
     w.canonical_root_path AS root_path,
     CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_primary,
-    CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
+    CAST(COALESCE(COUNT(s.workspace_id), 0) AS INTEGER) AS session_count,
     COALESCE(MAX(s.updated_at_unix_ms), w.updated_at_unix_ms) AS latest_activity_unix_ms,
     w.created_at_unix_ms AS attached_at_unix_ms,
     w.id AS workspace_order_id
@@ -2181,7 +2203,7 @@ SELECT
     w.id,
     w.canonical_root_path AS root_path,
     CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_primary,
-    CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
+    CAST(COALESCE(COUNT(s.workspace_id), 0) AS INTEGER) AS session_count,
     COALESCE(MAX(s.updated_at_unix_ms), w.updated_at_unix_ms) AS latest_activity_unix_ms
 FROM workspaces w
 JOIN projects p ON p.id = w.project_id

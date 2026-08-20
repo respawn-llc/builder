@@ -113,7 +113,6 @@ const (
 	CodeMissingProtectedParameter        ValidationErrorCode = "workflow.validation.missing_protected_parameter"
 	CodeDuplicateProtectedParameter      ValidationErrorCode = "workflow.validation.duplicate_protected_parameter"
 	CodeInvalidContextSource             ValidationErrorCode = "workflow.validation.invalid_context_source"
-	CodeInvalidContinueSessionRole       ValidationErrorCode = "workflow.validation.invalid_continue_session_role"
 	CodeAssigneeSelectionInapplicable    ValidationErrorCode = "workflow.validation.assignee_selection_inapplicable"
 	CodeAssigneeSelectionUnavailable     ValidationErrorCode = "workflow.validation.assignee_selection_unavailable"
 	CodeThinkingSelectionInapplicable    ValidationErrorCode = "workflow.validation.thinking_selection_inapplicable"

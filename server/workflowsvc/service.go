@@ -683,17 +683,17 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		SourceWorkspaceID: req.SourceWorkspaceID,
 		LabelIDs:          req.LabelIDs,
 	}
-	if req.DependencyIntent != nil {
+	for _, requestedIntent := range req.DependencyIntents {
 		intent := workflow.TaskDependencyCreateIntent{
-			RelatedTaskID: workflow.TaskID(req.DependencyIntent.RelatedTaskID),
+			RelatedTaskID: workflow.TaskID(requestedIntent.RelatedTaskID),
 		}
-		switch req.DependencyIntent.NewTaskRole {
+		switch requestedIntent.NewTaskRole {
 		case serverapi.WorkflowTaskDependencyRoleBlocker:
 			intent.NewTaskRole = workflow.TaskDependencyRoleBlocker
 		case serverapi.WorkflowTaskDependencyRoleBlocked:
 			intent.NewTaskRole = workflow.TaskDependencyRoleBlocked
 		}
-		taskRequest.DependencyIntent = &intent
+		taskRequest.DependencyIntents = append(taskRequest.DependencyIntents, intent)
 	}
 	task, err := s.store.CreateTask(ctx, taskRequest)
 	if err != nil {
@@ -704,9 +704,12 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskCreateResponse{}, workflowTaskCreateError(err, req.ProjectID)
 	}
 	s.publishProjectWorkflowEvent(ctx, task.ProjectID, task.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCreated, string(task.ID))
-	if req.DependencyIntent != nil {
-		relatedID := req.DependencyIntent.RelatedTaskID
-		s.publishProjectWorkflowEvent(ctx, task.ProjectID, task.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDependenciesChanged, string(task.ID), relatedID)
+	if len(req.DependencyIntents) > 0 {
+		relatedIDs := make([]string, 0, len(req.DependencyIntents))
+		for _, intent := range req.DependencyIntents {
+			relatedIDs = append(relatedIDs, intent.RelatedTaskID)
+		}
+		s.publishProjectWorkflowEvent(ctx, task.ProjectID, task.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDependenciesChanged, string(task.ID), relatedIDs...)
 	}
 	detail, err := s.readModels.TaskDetail.GetTask(ctx, string(task.ID))
 	if err != nil {
@@ -919,16 +922,9 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		target,
 		observation,
 		func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
-			decision, preparationErr := s.initiatingActionTarget(
-				preparationCtx,
-				workflow.TaskID(req.TaskID),
-				&req.SetupOperationID,
-				target,
+			return s.prepareInitiatingActionTarget(
+				preparationCtx, workflow.TaskID(req.TaskID), &req.SetupOperationID, target,
 			)
-			if decision.prepared == nil {
-				return preparedInitiatingActionTarget{}, preparationErr
-			}
-			return *decision.prepared, preparationErr
 		},
 	)
 	started, err := s.currentNodeExecution.StartTask(
@@ -962,12 +958,18 @@ func (s *Service) initiatingActionPreparation(
 	materialize func(context.Context) (preparedInitiatingActionTarget, error),
 ) workflowexecution.TaskStartPreparation {
 	var preparedTarget preparedInitiatingActionTarget
+	targetAlreadyLocked := target.context.Task.ExecutionTarget != nil
 	return workflowexecution.TaskStartPreparation{
 		Prepare: func(ctx context.Context) error {
 			var preparationErr error
 			preparedTarget, preparationErr = materialize(ctx)
-			if preparationErr == nil && preparedTarget.candidate == nil {
-				preparationErr = errors.New("Task target preparation produced no lock candidate")
+			if preparationErr == nil {
+				switch {
+				case targetAlreadyLocked && preparedTarget.candidate != nil:
+					preparationErr = errors.New("locked Task target preparation produced a lock candidate")
+				case !targetAlreadyLocked && preparedTarget.candidate == nil:
+					preparationErr = errors.New("Task target preparation produced no lock candidate")
+				}
 			}
 			if preparationErr != nil {
 				preparationErr = taskPreparationError(
@@ -979,6 +981,9 @@ func (s *Service) initiatingActionPreparation(
 			return preparationErr
 		},
 		Commit: func(ctx context.Context) error {
+			if targetAlreadyLocked {
+				return nil
+			}
 			lockErr := s.store.LockTaskExecutionTarget(ctx, taskID, preparedTarget.candidate)
 			lockErr = taskPreparationError(
 				setupOperationID, target, preparedTarget.setupResult, preparedTarget.retainedWorktree,
@@ -988,6 +993,25 @@ func (s *Service) initiatingActionPreparation(
 			return lockErr
 		},
 	}
+}
+
+func (s *Service) prepareInitiatingActionTarget(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	setupOperationID *serverapi.WorktreeSetupOperationID,
+	target initiatingActionTargetPreflight,
+) (preparedInitiatingActionTarget, error) {
+	decision, preparationErr := s.initiatingActionTarget(ctx, taskID, setupOperationID, target)
+	if target.context.Task.ExecutionTarget != nil {
+		if preparationErr == nil && (decision.prepared != nil || decision.selectionRequired != nil) {
+			preparationErr = errors.New("locked Task target returned an initial target decision")
+		}
+		return preparedInitiatingActionTarget{}, preparationErr
+	}
+	if decision.prepared == nil {
+		return preparedInitiatingActionTarget{}, preparationErr
+	}
+	return *decision.prepared, preparationErr
 }
 
 func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (*T, error)) (initiatingActionResult[T], error) {
@@ -1593,25 +1617,17 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 		)
 		preparation = &prepared
 	} else if target.context.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
-		prepared := workflowexecution.TaskStartPreparation{
-			Prepare: func(preparationCtx context.Context) error {
-				decision, preparationErr := s.initiatingActionTarget(
-					preparationCtx,
-					taskID,
-					&req.SetupOperationID,
-					target,
+		prepared := s.initiatingActionPreparation(
+			taskID,
+			req.SetupOperationID,
+			target,
+			observation,
+			func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
+				return s.prepareInitiatingActionTarget(
+					preparationCtx, taskID, &req.SetupOperationID, target,
 				)
-				if preparationErr == nil && (decision.prepared != nil || decision.selectionRequired != nil) {
-					preparationErr = errors.New("locked Resume target returned an initial target decision")
-				}
-				preparationErr = taskPreparationError(
-					req.SetupOperationID, target, nil, nil, nil, preparationErr,
-				)
-				observation.record(preparedInitiatingActionTarget{}, preparationErr)
-				return preparationErr
 			},
-			Commit: func(context.Context) error { return nil },
-		}
+		)
 		preparation = &prepared
 	}
 	var resumeResult workflowexecution.TaskResumeResult
@@ -1736,13 +1752,6 @@ func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.Wor
 		return serverapi.WorkflowTaskMovePreviewResponse{}, err
 	}
 	switch disposition {
-	case workflowexecution.ManualMoveDispositionWaitingQuestion:
-		return serverapi.WorkflowTaskMovePreviewResponse{
-			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
-			Blocked: &serverapi.WorkflowTaskMovePreviewBlocked{
-				Reason: serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion,
-			},
-		}, nil
 	case workflowexecution.ManualMoveDispositionLifecycleConflict:
 		return serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
@@ -1948,8 +1957,6 @@ func manualMovePreviewBlocker(blocker workflowstore.ManualMoveBlocker) (serverap
 		return serverapi.WorkflowTaskMovePreviewBlockerNoSourcePosition, nil
 	case workflowstore.ManualMoveBlockerUnsupportedDestination:
 		return serverapi.WorkflowTaskMovePreviewBlockerUnsupportedDestination, nil
-	case workflowstore.ManualMoveBlockerWaitingQuestion:
-		return serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion, nil
 	case workflowstore.ManualMoveBlockerLifecycleConflict:
 		return serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict, nil
 	case workflowstore.ManualMoveBlockerContextSessionUnavailable:
@@ -2231,6 +2238,13 @@ func (s *Service) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowT
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	return s.readModels.TaskList.List(ctx, req)
+}
+
+func (s *Service) GetWorkflowProjectTaskGroupCounts(ctx context.Context, req serverapi.WorkflowProjectTaskGroupCountsRequest) (serverapi.WorkflowProjectTaskGroupCountsResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	return s.readModels.TaskList.CountGroups(ctx, req)
 }
 
 func (s *Service) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {

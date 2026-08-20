@@ -16,8 +16,7 @@ func TestPromptAnswerBatchRouteContract(t *testing.T) {
 	if route.Kind != KindUnary ||
 		route.Auth != AuthServer ||
 		route.Scope != ScopeSessionActiveProject ||
-		route.Connection != ConnectionControl ||
-		route.Dependency != DependencyPromptControl {
+		route.Connection != ConnectionControl {
 		t.Fatalf("prompt answer batch route metadata = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.PromptAnswerBatchRequest{}) ||
@@ -35,8 +34,7 @@ func TestPromptFollowUpRouteIsARegistrationAcknowledgedTerminalStream(t *testing
 	if route.Kind != KindSubscription ||
 		route.Auth != AuthServer ||
 		route.Scope != ScopeSessionActiveProject ||
-		route.Connection != ConnectionSubscription ||
-		route.Dependency != DependencyPromptControl {
+		route.Connection != ConnectionSubscription {
 		t.Fatalf("prompt follow-up route metadata = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.PromptFollowUpWatchRequest{}) ||

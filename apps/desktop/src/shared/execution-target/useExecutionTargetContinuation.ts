@@ -5,10 +5,8 @@ import type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
-import {
-  decodeWorktreeSetupRetainedError,
-  type WorktreeSetupRetainedError,
-} from "@/api";
+import { decodeWorktreeSetupRetainedError, type WorktreeSetupRetainedError } from "@/api";
+import { reportNonCancelledError } from "@/app-facade";
 import {
   initialExecutionTargetSelectionDraft,
   taskInitiatingActionID,
@@ -30,8 +28,10 @@ export type PendingTaskInitiatingAction =
       selection: ExecutionTargetSelectionDraft;
     }>
   | Readonly<{
-      kind: "setup_recovery"; action: Extract<TaskInitiatingAction, { kind: "move" }>;
-      failure: WorktreeSetupRetainedError; retrySelection?: WorkflowExecutionTargetSelection;
+      kind: "setup_recovery";
+      action: Extract<TaskInitiatingAction, { kind: "move" }>;
+      failure: WorktreeSetupRetainedError;
+      retrySelection?: WorkflowExecutionTargetSelection;
     }>;
 
 export type TaskInitiatingActionController = Readonly<{
@@ -72,7 +72,7 @@ export function useTaskInitiatingActionController({
         try {
           await onApplied(result);
         } catch (error) {
-          onAppliedError(error);
+          reportNonCancelledError(error, onAppliedError);
         }
         return;
       }
@@ -102,8 +102,12 @@ export function useTaskInitiatingActionController({
         if (action.kind !== "move") throw error;
         const failure = decodeWorktreeSetupRetainedError(error);
         if (failure === null) throw error;
-        updatePending({ kind: "setup_recovery", action, failure,
-          ...(selection === undefined ? {} : { retrySelection: selection }) });
+        updatePending({
+          kind: "setup_recovery",
+          action,
+          failure,
+          ...(selection === undefined ? {} : { retrySelection: selection }),
+        });
       }
     },
     [execute, handleResult, updatePending],
@@ -117,10 +121,7 @@ export function useTaskInitiatingActionController({
       }
       const executeScheduled = async () => {
         const pendingAction = pendingRef.current?.action;
-        if (
-          pendingAction !== undefined &&
-          taskInitiatingActionID(pendingAction).toJSONValue() !== actionID
-        ) {
+        if (pendingAction !== undefined && taskInitiatingActionID(pendingAction).toJSONValue() !== actionID) {
           throw new Error("Finish or dismiss the pending Task action before starting another one.");
         }
         await executeRun(action, selection);
@@ -152,27 +153,33 @@ export function useTaskInitiatingActionController({
     updatePending(null);
   }, [updatePending]);
 
-  const selectMode = useCallback((mode: WorkflowExecutionTargetSelectionMode) => {
-    const current = pendingRef.current;
-    if (current?.kind !== "execution_target") {
-      return;
-    }
-    updatePending({
-      ...current,
-      selection: { ...current.selection, mode },
-    });
-  }, [updatePending]);
+  const selectMode = useCallback(
+    (mode: WorkflowExecutionTargetSelectionMode) => {
+      const current = pendingRef.current;
+      if (current?.kind !== "execution_target") {
+        return;
+      }
+      updatePending({
+        ...current,
+        selection: { ...current.selection, mode },
+      });
+    },
+    [updatePending],
+  );
 
-  const setCustomRef = useCallback((customRef: string | null) => {
-    const current = pendingRef.current;
-    if (current?.kind !== "execution_target") {
-      return;
-    }
-    updatePending({
-      ...current,
-      selection: { ...current.selection, customRef },
-    });
-  }, [updatePending]);
+  const setCustomRef = useCallback(
+    (customRef: string | null) => {
+      const current = pendingRef.current;
+      if (current?.kind !== "execution_target") {
+        return;
+      }
+      updatePending({
+        ...current,
+        selection: { ...current.selection, customRef },
+      });
+    },
+    [updatePending],
+  );
 
   return {
     pending,

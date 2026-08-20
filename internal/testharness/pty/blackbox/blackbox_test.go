@@ -259,63 +259,6 @@ func TestResponsesStubAcceptsLosslessResponseDTOAndStaticAdaptiveDefaults(t *tes
 	}
 }
 
-func TestResponsesStubAcceptsCompactedSessionCacheKey(t *testing.T) {
-	t.Parallel()
-
-	sessionID := uuid.New().String()
-	cacheKey := sessionID + "/compact-1"
-	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID: uuid.New(), Route: blackbox.RouteResponses, SessionCacheKey: true, Outcome: blackbox.OutcomeJSON,
-	}})
-	if err != nil {
-		t.Fatalf("StartResponsesStub: %v", err)
-	}
-	t.Cleanup(stub.Close)
-
-	request, err := http.NewRequest(http.MethodPost, stub.URL()+"/responses", bytes.NewBufferString(`{"input":[],"prompt_cache_key":"`+cacheKey+`"}`))
-	if err != nil {
-		t.Fatalf("NewRequest response: %v", err)
-	}
-	request.Header.Set("session-id", sessionID)
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatalf("POST response: %v", err)
-	}
-	drainResponseBody(t, response)
-	if err := stub.Verify(); err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-}
-
-func TestResponsesStubAcceptsSupervisorCompactedSessionCacheKey(t *testing.T) {
-	t.Parallel()
-
-	sessionID := uuid.New().String()
-	sessionKey := sessionID + "/supervisor"
-	cacheKey := sessionKey + "/compact-1"
-	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID: uuid.New(), Route: blackbox.RouteResponses, SessionCacheKey: true, Outcome: blackbox.OutcomeJSON,
-	}})
-	if err != nil {
-		t.Fatalf("StartResponsesStub: %v", err)
-	}
-	t.Cleanup(stub.Close)
-
-	request, err := http.NewRequest(http.MethodPost, stub.URL()+"/responses", bytes.NewBufferString(`{"input":[],"prompt_cache_key":"`+cacheKey+`"}`))
-	if err != nil {
-		t.Fatalf("NewRequest response: %v", err)
-	}
-	request.Header.Set("session-id", sessionKey)
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatalf("POST response: %v", err)
-	}
-	drainResponseBody(t, response)
-	if err := stub.Verify(); err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-}
-
 func TestResponsesStubRejectsProbeMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -483,7 +426,7 @@ func TestResponsesStubRejectsConcurrentDeclaredOperation(t *testing.T) {
 		}
 		firstDone <- requestErr
 	}()
-	waitForActiveRequest(t, stub)
+	waitForRequiredOperationAdmission(t, stub, 1)
 	response, err := http.Post(stub.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":[]}`))
 	if err != nil {
 		t.Fatalf("POST concurrent request: %v", err)
@@ -503,15 +446,22 @@ func TestResponsesStubRejectsConcurrentDeclaredOperation(t *testing.T) {
 	}
 }
 
-func waitForActiveRequest(t *testing.T, stub *blackbox.ResponsesStub) {
+func waitForRequiredOperationAdmission(t *testing.T, stub *blackbox.ResponsesStub, admitted int) {
 	t.Helper()
 	deadline := time.NewTimer(time.Second)
 	defer deadline.Stop()
-	for stub.Snapshot().ActiveRequests == 0 {
+	for {
+		snapshot := stub.Snapshot()
+		if snapshot.Failure != nil {
+			t.Fatalf("model request failed before operation admission: %v", snapshot.Failure)
+		}
+		if snapshot.RequiredIndex >= admitted {
+			return
+		}
 		select {
 		case <-stub.Events():
 		case <-deadline.C:
-			t.Fatal("model request did not become active")
+			t.Fatalf("model operation admission = %d, want at least %d", snapshot.RequiredIndex, admitted)
 		}
 	}
 }

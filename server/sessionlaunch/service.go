@@ -477,6 +477,9 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 			}
 		}
 	}
+	if selectedSessionID != nil {
+		return s.planExistingSession(ctx, planner, req, *selectedSessionID, roleOverride, caller)
+	}
 	target := subagentpolicy.TargetFromOverride(roleOverride)
 	if err := subagentpolicy.Authorize(planner.Config.Settings, caller, target); err != nil {
 		return PlanResult{}, err
@@ -488,9 +491,6 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		if authErr != nil {
 			return PlanResult{}, authErr
 		}
-	}
-	if selectedSessionID != nil {
-		return s.planExistingSession(ctx, planner, req, *selectedSessionID, roleOverride, caller, authState)
 	}
 	preparation := launch.RunPromptPreparationContext{}
 	preparedOverrides, err := launch.PrepareRunPromptOverridesWithContext(planner.Config, req.Overrides, authState, preparation)
@@ -518,7 +518,6 @@ func (s *Service) planExistingSession(
 	sessionID runtimeids.SessionID,
 	roleOverride serverapi.RunPromptAgentRoleOverride,
 	caller *subagentpolicy.Caller,
-	authState auth.State,
 ) (result PlanResult, resultErr error) {
 	if s.runtime == nil {
 		return PlanResult{}, ErrExistingSessionAuthorityRequired
@@ -543,7 +542,7 @@ func (s *Service) planExistingSession(
 		}
 	}
 	maintenanceCallback := func(ctx context.Context, store *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
-		result, resultErr = s.planExistingSessionWithStore(ctx, planner, req, roleOverride, caller, authState, store, maintenance)
+		result, resultErr = s.planExistingSessionWithStore(ctx, planner, req, roleOverride, caller, store, maintenance)
 		return resultErr
 	}
 	resultErr = s.runtime.RunSessionMaintenance(ctx, sessionID.String(), maintenanceCallback)
@@ -580,7 +579,7 @@ func (s *Service) planExistingSessionSnapshot(
 	caller *subagentpolicy.Caller,
 	store *session.Store,
 ) (PlanResult, error) {
-	if err := authorizePersistedHeadlessRole(planner, req, roleOverride, caller, store); err != nil {
+	if err := authorizeExistingSessionRole(planner, req, roleOverride, caller, store); err != nil {
 		return PlanResult{}, err
 	}
 	return s.finalizeLaunchPlan(
@@ -612,16 +611,26 @@ func (s *Service) planExistingSessionWithStore(
 	req serverapi.SessionPlanRequest,
 	roleOverride serverapi.RunPromptAgentRoleOverride,
 	caller *subagentpolicy.Caller,
-	authState auth.State,
 	store *session.Store,
 	maintenance *sessionruntime.ActiveRuntimeMaintenance,
 ) (PlanResult, error) {
-	if err := authorizePersistedHeadlessRole(planner, req, roleOverride, caller, store); err != nil {
-		return PlanResult{}, err
-	}
 	locked, err := planner.SelectedSessionLockedContractWithStore(store)
 	if err != nil {
 		return PlanResult{}, err
+	}
+	if locked != nil && roleOverride.Present {
+		req.Overrides.AgentRole = nil
+		roleOverride = serverapi.RunPromptAgentRoleOverride{}
+	}
+	if err := authorizeExistingSessionRole(planner, req, roleOverride, caller, store); err != nil {
+		return PlanResult{}, err
+	}
+	authState := auth.EmptyState()
+	if req.Overrides.NeedsAuthState() && s.authStates != nil {
+		authState, err = s.authStates.CurrentState(ctx)
+		if err != nil {
+			return PlanResult{}, err
+		}
 	}
 	preparation := launch.RunPromptPreparationContext{ModelLock: locked, ToolLock: locked}
 	if !roleOverride.Present {
@@ -658,6 +667,23 @@ func (s *Service) planExistingSessionWithStore(
 			})
 		},
 	)
+}
+
+func authorizeExistingSessionRole(
+	planner launch.Planner,
+	req serverapi.SessionPlanRequest,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	caller *subagentpolicy.Caller,
+	store *session.Store,
+) error {
+	if roleOverride.Present {
+		return subagentpolicy.Authorize(
+			planner.Config.Settings,
+			caller,
+			subagentpolicy.TargetFromOverride(roleOverride),
+		)
+	}
+	return authorizePersistedHeadlessRole(planner, req, roleOverride, caller, store)
 }
 
 func authorizePersistedHeadlessRole(
@@ -754,7 +780,7 @@ func applyPreparedAgentChatSettings(
 		},
 	})
 	if errors.Is(err, session.ErrChatAgentLocked) {
-		return false, fmt.Errorf("%w: current=%q requested=%q", launch.ErrLockedAgentRoleChange, state.Agent, targetAgent)
+		return false, nil
 	}
 	if err != nil && !result.Committed {
 		return false, err

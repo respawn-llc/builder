@@ -868,11 +868,11 @@ func TestCurrentNodeAgentStartsFreshSessionWithLatestRoleAndCompletionContract(t
 	}
 	assignments := workflowAssignments(modelRequests[0])
 	wantBaseContextTypes := []llm.MessageType{
-		llm.MessageTypeEnvironment,
-		llm.MessageTypeSkills,
 		llm.MessageTypeSubagents,
+		llm.MessageTypeSkills,
 		llm.MessageTypeAgentsMD,
 		llm.MessageTypeAgentsMD,
+		llm.MessageTypeEnvironment,
 	}
 	if !slices.Equal(baseContextTypes, wantBaseContextTypes) {
 		t.Fatalf("fresh workflow request base context types = %v, want %v", baseContextTypes, wantBaseContextTypes)
@@ -1142,6 +1142,23 @@ func TestManualMoveToRetainedTargetAssignsBeforeResumingLockedSession(t *testing
 			nodes[0].Scheduling.Interruption != nil
 	})
 	f.waitForTaskQuiescence(t, task.ID)
+	retainedRecord, err := f.metadata.ResolvePersistedSession(context.Background(), review.SessionID.String())
+	if err != nil {
+		t.Fatalf("resolve retained Review Session: %v", err)
+	}
+	retainedStore, err := session.Open(
+		retainedRecord.SessionDir,
+		f.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("open retained Review Session: %v", err)
+	}
+	legacySnapshot := retainedStore.PromptFacingMetadataSnapshot()
+	legacySnapshot.ActiveWorkflowAssignment = nil
+	legacySnapshot.ActiveWorkflowAssignmentState = nil
+	if err := retainedStore.RestorePromptFacingMetadata(legacySnapshot); err != nil {
+		t.Fatalf("simulate retained Session created before assignment projection: %v", err)
+	}
 	rework := workflow.TransitionID("rework")
 	prepared, err := f.store.PrepareManualMove(context.Background(), workflowstore.ManualMoveRequest{
 		TaskID:        task.ID,
@@ -1378,7 +1395,6 @@ func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata
 		before.Meta.FirstPromptPreview != after.Meta.FirstPromptPreview ||
 		!reflect.DeepEqual(before.Meta.Continuation, after.Meta.Continuation) ||
 		!reflect.DeepEqual(before.Meta.ChatSettings, after.Meta.ChatSettings) ||
-		before.Meta.PromptCacheLineageGeneration != after.Meta.PromptCacheLineageGeneration ||
 		!reflect.DeepEqual(before.Meta.Locked, after.Meta.Locked) {
 		t.Fatalf("retained Session prompt-facing metadata changed after rejected Manual Move:\nbefore=%+v\nafter=%+v", before.Meta, after.Meta)
 	}
@@ -1388,6 +1404,110 @@ func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata
 			assignments,
 			beforeAssignments,
 		)
+	}
+}
+
+func TestAutomaticFreshSessionBindsOnlyAfterAssignmentCommit(t *testing.T) {
+	f := newCurrentNodeRunnerFixtureWithPersistenceGate(
+		t,
+		NewScriptedClient(
+			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+			ScriptedRuntimeError(ErrScriptedRuntime),
+		),
+	)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	assignmentPending, releaseAssignment := f.persistenceGate.BlockWhen(
+		func(snapshot session.PersistedStoreSnapshot) bool {
+			return snapshot.Meta.LastSequence >= 2
+		},
+	)
+	t.Cleanup(releaseAssignment)
+
+	currentNode := f.startTask(t, task)
+	select {
+	case <-assignmentPending:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("workflow assignment did not reach persistence")
+	}
+	nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("list Current Nodes before assignment commit: %v", err)
+	}
+	if len(nodes) != 1 || !nodes[0].Reference.Equal(currentNode) || nodes[0].SessionID != nil {
+		t.Fatalf("Current Nodes before assignment commit = %+v, want unbound %v", nodes, currentNode)
+	}
+
+	releaseAssignment()
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].SessionID != nil &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil &&
+			len(f.client.Requests()) == 1
+	})
+}
+
+func TestAutomaticUncommittedFreshAssignmentDoesNotBindSessionToCurrentNode(t *testing.T) {
+	cause := errors.New("assignment persistence failed")
+	f := newCurrentNodeRunnerFixtureWithPersistenceGate(
+		t,
+		NewScriptedClient(
+			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+			ScriptedRuntimeError(ErrScriptedRuntime),
+		),
+	)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	f.persistenceGate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.LastSequence >= 2
+	}, cause)
+
+	currentNode := f.startTask(t, task)
+	nodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	})
+	f.waitForTaskQuiescence(t, task.ID)
+	if nodes[0].SessionID != nil {
+		t.Fatalf(
+			"Current Node retained unassigned Session %s after assignment failure",
+			*nodes[0].SessionID,
+		)
+	}
+	sessionIDs, err := f.metadata.ListProjectSessionIDs(context.Background(), f.projectID)
+	if err != nil {
+		t.Fatalf("list project Sessions: %v", err)
+	}
+	if len(sessionIDs) != 0 {
+		t.Fatalf("project Sessions after uncommitted assignment = %+v, want none", sessionIDs)
+	}
+
+	f.restartRuntime(t)
+	resumed, err := f.controller.ResumeTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ResumeTask after assignment failure: %v", err)
+	}
+	if resumed.Outcome != workflowexecution.TaskResumeApplied ||
+		len(resumed.CurrentNodes) != 1 ||
+		!resumed.CurrentNodes[0].Reference.Equal(currentNode) {
+		t.Fatalf("ResumeTask result = %+v, want applied %v", resumed, currentNode)
+	}
+	nodes = f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].SessionID != nil &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil &&
+			len(f.client.Requests()) == 1
+	})
+	assignments := workflowAssignments(f.client.Requests()[0])
+	if len(assignments) != 1 ||
+		assignments[0].sourcePath != workflowruntime.CurrentNodePromptIdentity(currentNode) {
+		t.Fatalf("resumed request assignments = %+v, want original Current Node assignment", assignments)
 	}
 }
 
@@ -1571,9 +1691,6 @@ func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) 
 	if meta.Continuation == nil || meta.Continuation.AgentRole == nil || *meta.Continuation.AgentRole != "reviewer" {
 		t.Fatalf("compacted workflow Session continuation = %+v, want persisted reviewer identity", meta.Continuation)
 	}
-	if meta.PromptCacheLineageGeneration != 1 {
-		t.Fatalf("compacted workflow Session cache lineage = %d, want 1", meta.PromptCacheLineageGeneration)
-	}
 }
 
 func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t *testing.T) {
@@ -1653,8 +1770,8 @@ func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t 
 		t.Fatalf("target request compaction summaries = %d, want one", summaries)
 	}
 	if requests[1].PromptCacheKey == "" || requests[2].PromptCacheKey == "" ||
-		requests[1].PromptCacheKey == requests[2].PromptCacheKey {
-		t.Fatalf("source/target cache keys = %q/%q, want distinct non-empty keys", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
+		requests[1].PromptCacheKey != requests[2].PromptCacheKey {
+		t.Fatalf("source/target cache keys = %q/%q, want the same non-empty Session key", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
 	}
 }
 
@@ -1849,8 +1966,8 @@ func TestWorkflowPostCompletionCompactionPreservesOrdinaryContinueReplacementKey
 		t.Fatalf("ordinary continuation post-completions = %d, want one", len(client.CompactionCalls()))
 	}
 	if requests[1].PromptCacheKey == "" || requests[2].PromptCacheKey == "" ||
-		requests[1].PromptCacheKey == requests[2].PromptCacheKey {
-		t.Fatalf("ordinary continuation cache keys = %q/%q, want replacement key after source key", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
+		requests[1].PromptCacheKey != requests[2].PromptCacheKey {
+		t.Fatalf("ordinary continuation cache keys = %q/%q, want the same non-empty Session key", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
 	}
 }
 
@@ -2182,78 +2299,6 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	}); err != nil {
 		t.Fatalf("attached Resource Generation was replaced on Resume: %v", err)
 	}
-}
-
-func TestResumeAssignsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testing.T) {
-	responseStarted := make(chan struct{})
-	responseRelease := make(chan struct{})
-	var releaseResponse sync.Once
-	t.Cleanup(func() {
-		releaseResponse.Do(func() { close(responseRelease) })
-	})
-	f := newCurrentNodeRunnerFixture(t, ScriptedRuntimeStep{
-		BeforeResponse: func(ctx context.Context) error {
-			close(responseStarted)
-			select {
-			case <-responseRelease:
-				return nil
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		},
-		Response: ScriptedFinalAnswer(`{"commentary":"done"}`).Response,
-	})
-	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
-	task := f.createTask(t, workflowID)
-	if err := f.store.LockTaskExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
-		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:       workflow.ExecutionTargetModeNone,
-			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-		},
-		Root: workflowstore.ExecutionRoot{
-			SourceWorkspaceID:   f.workspaceID,
-			SourceWorkspaceRoot: f.workspace,
-		},
-	}); err != nil {
-		t.Fatalf("LockTaskExecutionTarget: %v", err)
-	}
-	started, err := f.store.StartTask(context.Background(), task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	currentNode := started.Mutation.Created[0]
-	if currentNode.SessionID != nil {
-		t.Fatalf("unprepared Current Node Session = %s, want absent", *currentNode.SessionID)
-	}
-	f.restartRuntime(t)
-	recovered, err := f.controller.Recover(context.Background())
-	if err != nil {
-		t.Fatalf("recover restarted Current Nodes: %v", err)
-	}
-	if recovered != 1 {
-		t.Fatalf("recovered Current Nodes = %d, want one", recovered)
-	}
-
-	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
-		t.Fatalf("ResumeTask: %v", err)
-	}
-	f.waitForModelRequests(t, 1)
-	f.waitForWorkflowExecution(t, currentNode.Reference)
-	select {
-	case <-responseStarted:
-	case <-time.After(currentNodeRunnerWait):
-		t.Fatal("resumed Agent did not begin its model response")
-	}
-	resumed := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 &&
-			nodes[0].Reference.Equal(currentNode.Reference) &&
-			nodes[0].SessionID != nil
-	})
-	if resumed[0].Scheduling != nil &&
-		resumed[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted {
-		t.Fatalf("resumed Current Node remained interrupted: %+v", resumed[0].Scheduling)
-	}
-	releaseResponse.Do(func() { close(responseRelease) })
 }
 
 func requestAdvertisesTool(request llm.Request, id toolspec.ID) bool {

@@ -3,23 +3,6 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "scripts": {
-    "dev": "vite --config tooling/vite.config.ts --host 127.0.0.1",
-    "dev:browser": "vite --config tooling/vite.config.ts --host 127.0.0.1 --open /",
-    "build": "pnpm build:web",
-    "build:web": "go run github.com/go-task/task/v3/cmd/task@v3.52.0 --dir ../.. --temp-dir .generated/protobuf/task protobuf:ts && node ./node_modules/typescript7/bin/tsc -b --pretty false && vite --config tooling/vite.config.ts build && node ../scripts/check-desktop-font-assets.mjs",
-    "preview": "vite --config tooling/vite.config.ts preview",
-    "lint": "eslint .",
-    "typecheck": "node ./node_modules/typescript7/bin/tsc -b --pretty false",
-    "test": "vitest --config tooling/vite.config.ts run",
-    "test:watch": "vitest --config tooling/vite.config.ts",
-    "format": "prettier --check .",
-    "format:write": "prettier --write .",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "../../scripts/build-desktop.sh --skip-install",
-    "tauri:install": "../../scripts/build-desktop.sh --install"
-  },
   "dependencies": {
     "@app/native-bridge": "workspace:*",
     "@app/server-api-contract": "workspace:*",

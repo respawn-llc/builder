@@ -37,9 +37,7 @@ export function WorkflowRow({
       </div>
       <div className="pointer-events-none flex min-w-0 items-center gap-[var(--space-2)] text-left">
         <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-muted)]">
-          {workflow.description.length > 0
-            ? workflow.description
-            : t("workflowLibrary.reusableDefinition")}
+          {workflow.description.length > 0 ? workflow.description : t("workflowLibrary.reusableDefinition")}
         </span>
         <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">
           v{workflow.version}

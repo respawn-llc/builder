@@ -1,24 +1,24 @@
-import { defineConfig } from 'astro/config';
-import { satteri } from '@astrojs/markdown-satteri';
-import sitemap from '@astrojs/sitemap';
-import starlight from '@astrojs/starlight';
-import starlightDocSearch from '@astrojs/starlight-docsearch';
-import starlightLlmsTxt from 'starlight-llms-txt';
+import { defineConfig } from "astro/config";
+import { satteri } from "@astrojs/markdown-satteri";
+import sitemap from "@astrojs/sitemap";
+import starlight from "@astrojs/starlight";
+import starlightDocSearch from "@astrojs/starlight-docsearch";
+import starlightLlmsTxt from "starlight-llms-txt";
 
-import { resolveDocsConfig } from './scripts/site-config.mjs';
+import { resolveDocsConfig } from "./scripts/site-config.mjs";
 
 const docsConfig = resolveDocsConfig();
 const socialPreviewUrl = docsConfig.getPublicUrl(docsConfig.socialPreviewPath);
 // Apply the local Search override after starlightDocSearch installs its virtual
 // config module, avoiding the plugin's false-positive "custom Search" warning.
 const kentDocSearchLifecyclePlugin = {
-  name: 'kent-docsearch-lifecycle',
+  name: "kent-docsearch-lifecycle",
   hooks: {
-    'config:setup'({ config, updateConfig }) {
+    "config:setup"({ config, updateConfig }) {
       updateConfig({
         components: {
           ...config.components,
-          Search: './src/components/Search.astro',
+          Search: "./src/components/Search.astro",
         },
       });
     },
@@ -26,7 +26,7 @@ const kentDocSearchLifecyclePlugin = {
 };
 
 export default defineConfig({
-  output: 'static',
+  output: "static",
   site: docsConfig.siteUrl,
   base: docsConfig.basePath,
   integrations: [
@@ -34,12 +34,12 @@ export default defineConfig({
       title: docsConfig.siteTitle,
       logo: {
         alt: docsConfig.siteTitle,
-        src: './src/assets/logo.svg',
+        src: "./src/assets/logo.svg",
       },
       social: [
         {
-          icon: 'github',
-          label: 'GitHub',
+          icon: "github",
+          label: "GitHub",
           href: docsConfig.repoUrl,
         },
       ],
@@ -49,79 +49,79 @@ export default defineConfig({
           link: docsConfig.docsHomePath,
         },
         {
-          label: 'Quickstart',
-          link: '/quickstart/',
+          label: "Quickstart",
+          link: "/quickstart/",
         },
         {
-          label: 'Workflows',
-          link: '/workflows/',
+          label: "Workflows",
+          link: "/workflows/",
         },
         {
-          label: 'Slash Commands',
-          link: '/slash-commands/',
+          label: "Slash Commands",
+          link: "/slash-commands/",
         },
         {
-          label: 'Worktrees',
-          link: '/worktrees/',
+          label: "Worktrees",
+          link: "/worktrees/",
         },
         {
-          label: 'Prompts',
-          link: '/prompts/',
+          label: "Prompts",
+          link: "/prompts/",
         },
         {
-          label: 'Subagents / Headless',
-          link: '/headless/',
+          label: "Subagents / Headless",
+          link: "/headless/",
         },
         {
-          label: 'Sandboxing',
-          link: '/sandboxing/',
+          label: "Sandboxing",
+          link: "/sandboxing/",
         },
         {
-          label: 'Kent Server',
-          link: '/server/',
+          label: "Kent Server",
+          link: "/server/",
         },
         {
-          label: 'Lifecycle Hooks',
-          link: '/lifecycle-hooks/',
+          label: "Lifecycle Hooks",
+          link: "/lifecycle-hooks/",
         },
         {
-          label: 'Configuration',
-          link: '/config/',
+          label: "Configuration",
+          link: "/config/",
         },
         {
-          label: 'Contributing',
+          label: "Contributing",
           link: docsConfig.contributingPath,
         },
         {
-          label: 'Security',
+          label: "Security",
           link: docsConfig.securityPath,
         },
       ],
       editLink: {
         baseUrl: docsConfig.docsProjectEditRootUrl,
       },
-      customCss: ['./src/styles/custom.css'],
+      customCss: ["./src/styles/custom.css"],
       pagefind: false,
       markdown: {
         headingLinks: true,
       },
       components: {
-        Head: './src/components/Head.astro',
-        Header: './src/components/Header.astro',
-        MobileMenuFooter: './src/components/MobileMenuFooter.astro',
-        Footer: './src/components/Footer.astro',
-        PageTitle: './src/components/PageTitle.astro',
-        ThemeProvider: './src/components/ThemeProvider.astro',
-        ThemeSelect: './src/components/ThemeSelect.astro',
+        Head: "./src/components/Head.astro",
+        Header: "./src/components/Header.astro",
+        MobileMenuFooter: "./src/components/MobileMenuFooter.astro",
+        Footer: "./src/components/Footer.astro",
+        PageTitle: "./src/components/PageTitle.astro",
+        ThemeProvider: "./src/components/ThemeProvider.astro",
+        ThemeSelect: "./src/components/ThemeSelect.astro",
       },
       expressiveCode: {
-        themes: ['one-light', 'one-dark-pro'],
+        themes: ["one-light", "one-dark-pro"],
         useStarlightDarkModeSwitch: true,
         useStarlightUiThemeColors: true,
       },
       lastUpdated: false,
       pagination: true,
-      favicon: '/favicon.svg',
+      favicon: "/favicon.svg",
       credits: false,
       disable404Route: true,
       plugins: [
@@ -133,87 +133,88 @@ export default defineConfig({
         kentDocSearchLifecyclePlugin,
         starlightLlmsTxt({
           projectName: docsConfig.siteTitle,
-          description: 'Kent terminal coding agent documentation.',
+          description: "Kent terminal coding agent documentation.",
           rawContent: true,
         }),
       ],
       head: [
         {
-          tag: 'link',
+          tag: "link",
           attrs: {
-            rel: 'preconnect',
-            href: 'https://fonts.googleapis.com',
+            rel: "preconnect",
+            href: "https://fonts.googleapis.com",
           },
         },
         {
-          tag: 'link',
+          tag: "link",
           attrs: {
-            rel: 'preconnect',
-            href: 'https://fonts.gstatic.com',
-            crossorigin: '',
+            rel: "preconnect",
+            href: "https://fonts.gstatic.com",
+            crossorigin: "",
           },
         },
         {
-          tag: 'link',
+          tag: "link",
           attrs: {
-            rel: 'stylesheet',
-            href:
-              'https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&family=Montserrat+Alternates:wght@500;600;700&display=swap',
+            rel: "stylesheet",
+            href: "https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&family=Montserrat+Alternates:wght@500;600;700&display=swap",
           },
         },
         {
-          tag: 'meta',
+          tag: "meta",
           attrs: {
-            name: 'robots',
-            content: 'index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1',
+            name: "robots",
+            content:
+              "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1",
           },
         },
         {
-          tag: 'meta',
+          tag: "meta",
           attrs: {
-            name: 'googlebot',
-            content: 'index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1',
+            name: "googlebot",
+            content:
+              "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1",
           },
         },
         {
-          tag: 'meta',
+          tag: "meta",
           attrs: {
-            property: 'og:image',
+            property: "og:image",
             content: socialPreviewUrl,
           },
         },
         {
-          tag: 'meta',
+          tag: "meta",
           attrs: {
-            property: 'og:image:alt',
-            content: 'Kent social preview',
+            property: "og:image:alt",
+            content: "Kent social preview",
           },
         },
         {
-          tag: 'meta',
+          tag: "meta",
           attrs: {
-            property: 'og:image:width',
-            content: '1200',
+            property: "og:image:width",
+            content: "1200",
           },
         },
         {
-          tag: 'meta',
+          tag: "meta",
           attrs: {
-            property: 'og:image:height',
-            content: '630',
+            property: "og:image:height",
+            content: "630",
           },
         },
         {
-          tag: 'meta',
+          tag: "meta",
           attrs: {
-            name: 'twitter:card',
-            content: 'summary_large_image',
+            name: "twitter:card",
+            content: "summary_large_image",
           },
         },
         {
-          tag: 'meta',
+          tag: "meta",
           attrs: {
-            name: 'twitter:image',
+            name: "twitter:image",
             content: socialPreviewUrl,
           },
         },

@@ -21,6 +21,7 @@ const (
 
 type currentEventLog struct {
 	path               string
+	version            int
 	firstEventOffset   int64
 	lastSequence       int64
 	mode               currentEventLogMode
@@ -42,7 +43,11 @@ type EventRecordWindow struct {
 }
 
 func createCurrentEventLog(path string) (_ *currentEventLog, resultErr error) {
-	header, err := encodeEventLogHeaderV1()
+	return createCurrentEventLogVersion(path, EventLogVersionV2)
+}
+
+func createCurrentEventLogVersion(path string, version int) (_ *currentEventLog, resultErr error) {
+	header, err := encodeEventLogHeader(version)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +79,7 @@ func createCurrentEventLog(path string) (_ *currentEventLog, resultErr error) {
 
 	return &currentEventLog{
 		path:             path,
+		version:          version,
 		firstEventOffset: int64(len(encoded)),
 		mode:             currentEventLogAuthoritative,
 	}, nil
@@ -101,7 +107,7 @@ func openCurrentEventLog(
 			resultErr = errors.Join(resultErr, fmt.Errorf("close current event log: %w", closeErr))
 		}
 	}()
-	_, firstEventOffset, err := readCurrentEventLogHeader(fp)
+	header, firstEventOffset, err := readCurrentEventLogHeader(fp)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +132,7 @@ func openCurrentEventLog(
 	}
 	return &currentEventLog{
 		path:             path,
+		version:          header.Version,
 		firstEventOffset: firstEventOffset,
 		lastSequence:     lastSequence,
 		mode:             mode,
@@ -186,7 +193,7 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 			resultErr = errors.Join(resultErr, fmt.Errorf("close current event log append: %w", closeErr))
 		}
 	}()
-	_, firstEventOffset, err := readCurrentEventLogHeader(fp)
+	header, firstEventOffset, err := readCurrentEventLogHeader(fp)
 	if err != nil {
 		return 0, err
 	}
@@ -196,6 +203,9 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 			l.firstEventOffset,
 			firstEventOffset,
 		)
+	}
+	if header.Version != l.version {
+		return 0, fmt.Errorf("current event log version changed from %d to %d", l.version, header.Version)
 	}
 	info, err := fp.Stat()
 	if err != nil {
@@ -221,7 +231,7 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 		)
 	}
 
-	payload, err := encodeCurrentEventRecordLines(records, needsSeparator)
+	payload, err := encodeCurrentEventRecordLines(records, needsSeparator, l.version)
 	if err != nil {
 		return 0, err
 	}
@@ -322,6 +332,7 @@ func (l *currentEventLog) readSegmentForward(
 			fp,
 			startOffset,
 			l.firstEventOffset,
+			l.version,
 		)
 		if err != nil {
 			return EventRecordWindow{}, err
@@ -344,6 +355,7 @@ func (l *currentEventLog) readSegmentForward(
 			position,
 			size,
 			chunkBytes,
+			l.version,
 		)
 		if err != nil {
 			return EventRecordWindow{}, err
@@ -468,6 +480,7 @@ func (l *currentEventLog) readRecentRecords(
 		fp,
 		window.StartOffset,
 		l.firstEventOffset,
+		l.version,
 	)
 	if err != nil {
 		return EventRecordWindow{}, err
@@ -535,7 +548,7 @@ func (l *currentEventLog) readSegmentBackward(
 	atEOF := endOffset == size
 	var newerSequence *int64
 	if endOffset < size {
-		newer, _, err := readCurrentEventRecordAtOffset(fp, endOffset, size, chunkBytes)
+		newer, _, err := readCurrentEventRecordAtOffset(fp, endOffset, size, chunkBytes, l.version)
 		if err != nil {
 			return EventRecordWindow{}, err
 		}
@@ -571,7 +584,7 @@ func (l *currentEventLog) readSegmentBackward(
 				recordOffset,
 			)
 		}
-		record, err := decodeEventRecordV1(trimmed)
+		record, err := decodeEventRecordForVersion(l.version, trimmed)
 		if err != nil {
 			if !terminated && atEOF && position == endOffset && !json.Valid(trimmed) {
 				position = recordOffset
@@ -630,6 +643,7 @@ func readCurrentEventRecordAtOffset(
 	offset int64,
 	size int64,
 	chunkBytes int64,
+	version int,
 ) (*EventRecord, int64, error) {
 	if offset >= size {
 		return nil, size, nil
@@ -647,7 +661,7 @@ func readCurrentEventRecordAtOffset(
 		}
 		if newline := bytes.IndexByte(piece, '\n'); newline >= 0 {
 			line = append(line, piece[:newline]...)
-			record, err := decodeCompleteCurrentEventLine(line, offset)
+			record, err := decodeCompleteCurrentEventLine(line, offset, version)
 			if err != nil {
 				return nil, offset, err
 			}
@@ -660,7 +674,7 @@ func readCurrentEventRecordAtOffset(
 	if len(trimmed) == 0 {
 		return nil, size, nil
 	}
-	record, err := decodeEventRecordV1(trimmed)
+	record, err := decodeEventRecordForVersion(version, trimmed)
 	if err != nil {
 		if json.Valid(trimmed) {
 			return nil, size, fmt.Errorf(
@@ -678,6 +692,7 @@ func readCurrentEventRecordBeforeOffset(
 	fp *os.File,
 	endOffset int64,
 	firstEventOffset int64,
+	version int,
 ) (*EventRecord, error) {
 	line, startOffset, _, err := readPreviousCurrentEventLine(
 		fp,
@@ -690,14 +705,14 @@ func readCurrentEventRecordBeforeOffset(
 	if len(bytes.TrimSpace(line)) == 0 {
 		return nil, nil
 	}
-	record, err := decodeCompleteCurrentEventLine(line, startOffset)
+	record, err := decodeCompleteCurrentEventLine(line, startOffset, version)
 	if err != nil {
 		return nil, err
 	}
 	return &record, nil
 }
 
-func decodeCompleteCurrentEventLine(line []byte, offset int64) (EventRecord, error) {
+func decodeCompleteCurrentEventLine(line []byte, offset int64, version int) (EventRecord, error) {
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 {
 		return EventRecord{}, fmt.Errorf(
@@ -705,7 +720,7 @@ func decodeCompleteCurrentEventLine(line []byte, offset int64) (EventRecord, err
 			offset,
 		)
 	}
-	record, err := decodeEventRecordV1(trimmed)
+	record, err := decodeEventRecordForVersion(version, trimmed)
 	if err != nil {
 		return EventRecord{}, fmt.Errorf(
 			"decode current event record at byte %d: %w",
@@ -716,13 +731,13 @@ func decodeCompleteCurrentEventLine(line []byte, offset int64) (EventRecord, err
 	return record, nil
 }
 
-func encodeCurrentEventRecordLines(records []EventRecord, needsSeparator bool) ([]byte, error) {
+func encodeCurrentEventRecordLines(records []EventRecord, needsSeparator bool, version int) ([]byte, error) {
 	buffer := bytes.NewBuffer(nil)
 	if needsSeparator {
 		buffer.WriteByte('\n')
 	}
 	for _, record := range records {
-		line, err := encodeEventRecordV1(record)
+		line, err := encodeEventRecordForVersion(version, record)
 		if err != nil {
 			return nil, err
 		}
@@ -771,7 +786,11 @@ func repairCurrentEventLogTail(
 		return 0, false, fmt.Errorf("read current event log tail record: %w", err)
 	}
 	trimmedTail := bytes.TrimSpace(tail)
-	if _, err := decodeEventRecordV1(trimmedTail); err == nil {
+	header, _, headerErr := readCurrentEventLogHeader(fp)
+	if headerErr != nil {
+		return 0, false, headerErr
+	}
+	if _, err := decodeEventRecordForVersion(header.Version, trimmedTail); err == nil {
 		return size, true, nil
 	} else if json.Valid(trimmedTail) {
 		return 0, false, fmt.Errorf(
@@ -815,7 +834,11 @@ func readLastCurrentEventRecord(
 			continue
 		}
 		trimmedLine := bytes.TrimSpace(line)
-		record, err := decodeEventRecordV1(trimmedLine)
+		header, _, headerErr := readCurrentEventLogHeader(fp)
+		if headerErr != nil {
+			return nil, headerErr
+		}
+		record, err := decodeEventRecordForVersion(header.Version, trimmedLine)
 		if err == nil {
 			return &record, nil
 		}
@@ -831,33 +854,43 @@ func readLastCurrentEventRecord(
 	return nil, nil
 }
 
+func encodeEventRecordForVersion(version int, record EventRecord) ([]byte, error) {
+	switch version {
+	case EventLogVersionV1:
+		return encodeEventRecordV1(record)
+	case EventLogVersionV2:
+		return encodeEventRecordV2(record)
+	default:
+		return nil, fmt.Errorf("unsupported event log version %d", version)
+	}
+}
+
+func decodeEventRecordForVersion(version int, line []byte) (EventRecord, error) {
+	switch version {
+	case EventLogVersionV1:
+		return decodeEventRecordV1(line)
+	case EventLogVersionV2:
+		return decodeEventRecordV2(line)
+	default:
+		return EventRecord{}, fmt.Errorf("unsupported event log version %d", version)
+	}
+}
+
 func readPreviousCurrentEventLine(
 	fp *os.File,
 	endOffset int64,
 	firstEventOffset int64,
 ) (line []byte, startOffset int64, terminated bool, err error) {
-	if endOffset <= firstEventOffset {
-		return nil, firstEventOffset, false, nil
-	}
-	lineEnd := endOffset
-	lastByte := [1]byte{}
-	if _, err := fp.ReadAt(lastByte[:], endOffset-1); err != nil {
-		return nil, 0, false, fmt.Errorf("read current event line end: %w", err)
-	}
-	if lastByte[0] == '\n' {
-		lineEnd--
-		terminated = true
-	}
-	if lineEnd <= firstEventOffset {
-		return nil, firstEventOffset, terminated, nil
-	}
-	previousNewline, err := lastNewlineOffset(fp, lineEnd)
+	startOffset, lineEnd, terminated, err := previousCurrentEventLineRange(
+		fp,
+		endOffset,
+		firstEventOffset,
+	)
 	if err != nil {
 		return nil, 0, false, err
 	}
-	startOffset = previousNewline + 1
-	if startOffset < firstEventOffset {
-		startOffset = firstEventOffset
+	if lineEnd <= startOffset {
+		return nil, startOffset, terminated, nil
 	}
 	line = make([]byte, lineEnd-startOffset)
 	if _, err := fp.ReadAt(line, startOffset); err != nil {

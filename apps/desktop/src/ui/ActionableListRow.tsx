@@ -61,7 +61,10 @@ export function ActionableListRow({
       )}
       {actions === undefined && contextualActions === undefined ? null : (
         <div
-          className={cx("ml-auto flex shrink-0 items-center gap-[var(--space-1)]", selected ? "pr-[calc(var(--space-5)+var(--space-1))]" : undefined)}
+          className={cx(
+            "ml-auto flex shrink-0 items-center gap-[var(--space-1)]",
+            selected ? "pr-[calc(var(--space-5)+var(--space-1))]" : undefined,
+          )}
         >
           {contextualActions === undefined ? null : (
             <div className="pointer-events-none flex items-center gap-[var(--space-1)] opacity-0 transition-opacity duration-100 motion-reduce:transition-none group-hover/actionable-row:pointer-events-auto group-hover/actionable-row:opacity-100 group-focus-within/actionable-row:pointer-events-auto group-focus-within/actionable-row:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100">

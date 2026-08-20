@@ -27,11 +27,10 @@ import {
   VirtualizedInfiniteList,
 } from "@/ui";
 import { cx } from "@/ui";
-import { HomePrimaryPane, type HomePrimaryTab } from "./HomePrimaryPane";
-import { HomePrototypeSidebar } from "./HomePrototypeSidebar";
+import { HomeSidebar, type HomeSidebarCategory } from "./HomeSidebar";
+import { HomeProjectContent } from "./HomeProjectContent";
 import { OverlappingCrossfade } from "./OverlappingCrossfade";
 import { ProjectCreateDialog, type ProjectDraft } from "./ProjectCreateForm";
-import { ProjectPrototypeDetail } from "./ProjectPrototypeDetail";
 import { useHomeSidebarMode } from "./useHomeSidebarMode";
 import {
   useGlobalAttentionPages,
@@ -55,7 +54,7 @@ function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: s
   const { api, nativeBridge } = useAppServices();
   const { push } = useStatusController();
   const connection = useConnectionSnapshot();
-  const sidebarMode = useHomeSidebarMode();
+  const { mainPaneRef, sidebarMode } = useHomeSidebarMode();
   const navigation = useAppNavigation();
   const { open } = useOwnedSidebarRoots();
   const queryClient = useQueryClient();
@@ -63,8 +62,7 @@ function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: s
   const projects = useProjectPages();
   const attentionSubscriptionReady = useGlobalAttentionEvents();
   const attention = useGlobalAttentionPages(attentionSubscriptionReady);
-  const [primaryTab, setPrimaryTab] = useState<HomePrimaryTab>("projects");
-  const [prototypeCategory, setPrototypeCategory] = useState<HomePrimaryTab>("projects");
+  const [category, setCategory] = useState<HomeSidebarCategory>("projects");
   const projectItems = projects.data?.pages.flatMap((page) => page.projects) ?? [];
   const attentionItems = attention.data?.pages.flatMap((page) => page.items) ?? [];
   const disabled = connection.phase !== "connected";
@@ -177,88 +175,57 @@ function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: s
 
   useProjectCreationEvents(handleNativeProjectCreated);
 
-  if (desktopChatEnabled) {
-    const selectedCategory = selectedProjectID === null ? prototypeCategory : "projects";
-    const detailKey = selectedProjectID === null ? "inbox" : `project:${selectedProjectID}`;
-    return (
-      <div className="h-full min-h-0" data-testid="home-route-root">
-        {projectCreationDialog.fallback}
-        <div className="grid h-full min-h-0 grid-cols-[350px_minmax(0,1fr)]" data-testid="home-pane-grid">
-          <HomePrototypeSidebar
-            disabled={disabled}
-            onChooseWorkspace={() => void chooseWorkspace()}
-            onCreateWorkflow={() => {
-              open({ kind: "workflowCreate", mode: sidebarMode });
-            }}
-            onProjectSelect={(projectID) => {
-              if (selectedProjectID === projectID) {
-                void navigation.selectHomeProject(null);
-                return;
-              }
-              void navigation.selectHomeProject(projectID);
-            }}
-            onCategorySelect={(category) => {
-              if (prototypeCategory === category && selectedProjectID === null) {
-                return;
-              }
-              setPrototypeCategory(category);
-              if (selectedProjectID !== null) {
-                void navigation.selectHomeProject(null);
-              }
-            }}
-            selectedCategory={selectedCategory}
-            projectItems={projectItems}
-            projectsQuery={projects}
-            sidebarMode={sidebarMode}
-            selectedProjectID={selectedProjectID}
-          />
-          <section className="island-glass my-[var(--space-2)] mr-[var(--space-2)] min-h-0 overflow-hidden rounded-[var(--radius-xl)]">
-            <OverlappingCrossfade contentKey={detailKey}>
-              {selectedProjectID !== null ? (
-                <ProjectPrototypeDetail
-                  key={selectedProjectID}
-                  projectID={selectedProjectID}
-                  sidebarMode={sidebarMode}
-                />
-              ) : (
-                <AttentionList items={attentionItems} query={attention} sidebarMode={sidebarMode} />
-              )}
-            </OverlappingCrossfade>
-          </section>
-        </div>
-      </div>
-    );
-  }
-
+  const selectedCategory = selectedProjectID === null ? category : "projects";
+  const detailKey = selectedProjectID === null ? "inbox" : `project:${selectedProjectID}`;
   return (
     <div className="h-full min-h-0" data-testid="home-route-root">
       {projectCreationDialog.fallback}
-      <div
-        className="grid h-full min-h-0 grid-cols-[repeat(auto-fit,minmax(min(100%,360px),1fr))] gap-[var(--space-3)]"
-        data-testid="home-pane-grid"
-      >
+      <div className="grid h-full min-h-0 grid-cols-[350px_minmax(0,1fr)]" data-testid="home-pane-grid">
+        <HomeSidebar
+          disabled={disabled}
+          onChooseWorkspace={() => void chooseWorkspace()}
+          onCreateWorkflow={() => {
+            open({ kind: "workflowCreate", mode: sidebarMode });
+          }}
+          onProjectSelect={(projectID) => {
+            if (selectedProjectID === projectID) {
+              void navigation.selectHomeProject(null);
+              return;
+            }
+            void navigation.selectHomeProject(projectID);
+          }}
+          onCategorySelect={(nextCategory) => {
+            if (category === nextCategory && selectedProjectID === null) {
+              return;
+            }
+            setCategory(nextCategory);
+            if (selectedProjectID !== null) {
+              void navigation.selectHomeProject(null);
+            }
+          }}
+          selectedCategory={selectedCategory}
+          projectItems={projectItems}
+          projectsQuery={projects}
+          sidebarMode={sidebarMode}
+          selectedProjectID={selectedProjectID}
+        />
         <section
-          aria-labelledby="home-primary-pane-title"
-          className="island-glass min-h-0 overflow-hidden rounded-[var(--radius-xl)]"
+          className="island-glass my-[var(--space-2)] mr-[var(--space-2)] min-h-0 overflow-hidden rounded-[var(--radius-xl)]"
+          data-sidebar-protected-main
+          ref={mainPaneRef}
         >
-          <HomePrimaryPane
-            activeTab={primaryTab}
-            disabled={disabled}
-            onChooseWorkspace={() => void chooseWorkspace()}
-            onCreateWorkflow={() => {
-              open({ kind: "workflowCreate", mode: sidebarMode });
-            }}
-            onTabChange={setPrimaryTab}
-            projectItems={projectItems}
-            projectsQuery={projects}
-            sidebarMode={sidebarMode}
-          />
-        </section>
-        <section
-          aria-labelledby="attention-title"
-          className="island-glass min-h-0 overflow-hidden rounded-[var(--radius-xl)]"
-        >
-          <AttentionList items={attentionItems} query={attention} sidebarMode={sidebarMode} />
+          <OverlappingCrossfade contentKey={detailKey}>
+            {selectedProjectID !== null ? (
+              <HomeProjectContent
+                key={selectedProjectID}
+                projectID={selectedProjectID}
+                sessionsVisible={desktopChatEnabled}
+                sidebarMode={sidebarMode}
+              />
+            ) : (
+              <AttentionList items={attentionItems} query={attention} sidebarMode={sidebarMode} />
+            )}
+          </OverlappingCrossfade>
         </section>
       </div>
     </div>

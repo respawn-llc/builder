@@ -1,9 +1,17 @@
 version: v2
 clean: true
+inputs:
+  - directory: api/proto
 plugins:
-  - remote: buf.build/bufbuild/es:v2.13.0
+  - local:
+      - pnpm
+      - --dir
+      - apps
+      - exec
+      - protoc-gen-es
     out: apps/desktop/packages/server-api-contract/src/gen
     include_imports: true
+    strategy: all
     opt:
       - target=ts
       - import_extension=js

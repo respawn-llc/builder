@@ -52,7 +52,6 @@ func TestDialHeadlessPinsProjectViewRootBeforeDiscovery(t *testing.T) {
 	cfg := config.App{WorkspaceRoot: "/workspace"}
 	pinErr := errors.New("root mismatch")
 	projectViews := &projectViewRemoteStub{
-		identity:    protocol.ServerIdentity{},
 		requireRoot: func(string) error { return pinErr },
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			t.Fatal("discovery must not run when the project-view root pin fails")
@@ -91,7 +90,6 @@ func TestDialHeadlessUsesWorkspaceDiscoveryAndFreshWorkspaceDialTimeout(t *testi
 	cfg := config.App{WorkspaceRoot: "/workspace"}
 	attachTimeout := 20 * time.Millisecond
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{},
 		plan: func(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			if req.Path != cfg.WorkspaceRoot {
 				t.Fatalf("path = %q, want %q", req.Path, cfg.WorkspaceRoot)
@@ -172,7 +170,6 @@ func TestDialHeadlessRejectsNilDialers(t *testing.T) {
 func TestDialHeadlessClosesAndReturnsPlanFailure(t *testing.T) {
 	wantErr := errors.New("plan failed")
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{},
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			return serverapi.ProjectBindingPlanResponse{}, wantErr
 		},
@@ -206,7 +203,6 @@ func TestDialHeadlessClosesAndReturnsPlanFailure(t *testing.T) {
 func TestDialHeadlessReturnsWorkspaceDialFailure(t *testing.T) {
 	wantErr := errors.New("workspace dial failed")
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{},
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			return serverapi.ProjectBindingPlanResponse{
 				Kind:    serverapi.ProjectBindingPlanKindBound,
@@ -249,7 +245,6 @@ func TestDialInteractiveRejectsNilDialers(t *testing.T) {
 func TestDialInteractiveBoundWorkspaceDialsWorkspaceAndClosesProjectView(t *testing.T) {
 	cfg := config.App{WorkspaceRoot: "/workspace"}
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{},
 		plan: func(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			if err := ctx.Err(); err != nil {
 				return serverapi.ProjectBindingPlanResponse{}, err
@@ -292,7 +287,6 @@ func TestDialInteractiveBoundWorkspaceDialsWorkspaceAndClosesProjectView(t *test
 
 func TestDialInteractiveClosesNonRemoteUnboundFallback(t *testing.T) {
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{},
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			return serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindLocalUnbound}, nil
 		},

@@ -102,7 +102,8 @@ export const workflowEditorEnglish = {
   previousNodeThinking: "Let the previous node select thinking level",
   previousNodeThinkingHelp: "Allow this transition's source to choose the target thinking level.",
   edgeAssigneeSelection: "Transition assignee",
-  edgeAssigneeSelectionHelp: "Choose whether this transition uses the target node fallback or source-selected role.",
+  edgeAssigneeSelectionHelp:
+    "Choose whether this transition uses the target node fallback or source-selected role.",
   edgeAssigneeConfigured: "Use target node's configured assignee",
   edgeThinkingSelectionHelp:
     "Choose whether this transition uses configured thinking or source-selected thinking.",

@@ -10,6 +10,7 @@ export type {
   TaskMutationInput,
   TaskStartInput,
   TaskDependencyCreateIntent,
+  ProjectTaskGroupCountsInput,
   TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
@@ -22,6 +23,7 @@ export type {
   WorkflowProjectLinkInput,
   WorkflowScriptPathValidateInput,
 } from "./clientInputs";
+export { workflowPageSize } from "./clientInputs";
 export type {
   AttentionNotification,
   AttentionNotificationEvent,
@@ -46,10 +48,12 @@ export {
   ProtocolMismatchError,
   RpcError,
   WorkflowLabelError,
+  WorkflowTaskCreateSelectionError,
   WorkflowTaskDependencyError,
   TaskSearchError,
   decodeTaskSearchError,
   decodeWorkflowLabelError,
+  decodeWorkflowTaskCreateSelectionError,
   decodeWorkflowTaskDependencyError,
   isProjectMissingError,
   isTaskMissingError,
@@ -61,6 +65,7 @@ export {
 export type { WorkflowLabelErrorReason } from "./errors";
 export type { CatalogContractErrorReason } from "./errors";
 export type { WorkflowTaskDependencyErrorReason } from "./errors";
+export type { WorkflowTaskCreateSelectionErrorReason } from "./errors";
 export type { TaskSearchErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
@@ -116,6 +121,7 @@ export type {
   TaskAttention,
   TaskCommentAuthorKind,
   CommentPage,
+  CreatedTaskSummary,
   OffsetPage,
   TaskDetail,
   TaskDependencies,
@@ -216,6 +222,9 @@ export type {
   CanonicalTaskLabelFilter,
   ProjectLabel,
   ProjectLabelCatalog,
+  ProjectTaskGroup,
+  ProjectTaskGroupDefinition,
+  ProjectTaskGroupCounts,
   TaskLabelAssignment,
   TaskLabelFilter,
   TaskListItem,

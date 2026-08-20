@@ -226,9 +226,10 @@ func (d RetainedTargetDecision) InvariantDetail() (RetainedTargetInvariantDetail
 type RetainedTargetInvariantReason string
 
 const (
-	RetainedTargetInvariantActiveSourceUnavailable  RetainedTargetInvariantReason = "active_source_unavailable"
-	RetainedTargetInvariantProoflessCurrentTarget   RetainedTargetInvariantReason = "proofless_current_target"
-	RetainedTargetInvariantStructurallyInvalidProof RetainedTargetInvariantReason = "structurally_invalid_proof"
+	RetainedTargetInvariantActiveSourceUnavailable     RetainedTargetInvariantReason = "active_source_unavailable"
+	RetainedTargetInvariantProoflessCurrentTarget      RetainedTargetInvariantReason = "proofless_current_target"
+	RetainedTargetInvariantStructurallyInvalidProof    RetainedTargetInvariantReason = "structurally_invalid_proof"
+	RetainedTargetInvariantUnauthorizedSessionCreation RetainedTargetInvariantReason = "unauthorized_session_creation"
 )
 
 type RetainedTargetInvariantDetail struct {

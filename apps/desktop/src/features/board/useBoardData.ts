@@ -8,16 +8,21 @@ import {
 import { useCallback, useEffect } from "react";
 
 import { boardNodeCardsPageSize, type BoardNodeCardsPage, type WorkflowProjectEvent } from "@/api";
-import { invalidateProjectBoardQueries, invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
+import {
+  invalidateProjectBoardQueries,
+  invalidateProjectTaskSearches,
+  queryKeys,
+  reportNonCancelledError,
+} from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { workflowProjectEventCanChangeTaskSearch } from "@/app-facade";
 import { workflowProjectQuestionTaskID } from "@/app-facade";
 import { useRetainedQueryData } from "@/app-facade";
+import { useTaskLifecycleAction } from "@/shared/execution-target";
 import { useProjectLabelEffects } from "@/shared/labels";
 import { workflowProjectEventAffectsDependencyBoard } from "@/shared/task-dependencies";
 import { useBoardQuery } from "./BoardQueryRuntime";
-import { useBoardTaskLifecycleAction } from "./useBoardTaskLifecycleAction";
 
 export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
@@ -123,7 +128,7 @@ export function useProjectBoardSubscription(
   const { onBackgroundError, onSelectedTaskDeleted, selectedTaskID, selectedWorkflowID } = input;
   const consumeBackgroundError = useCallback(
     (error: unknown): void => {
-      onBackgroundError?.(error);
+      reportNonCancelledError(error, (failure) => onBackgroundError?.(failure));
     },
     [onBackgroundError],
   );
@@ -258,7 +263,7 @@ export function useBoardTaskActions(projectID: string) {
     mutationFn: async (taskID: string) => api.interruptTask(taskID),
     onSettled: refresh,
   });
-  const interrupt = useBoardTaskLifecycleAction();
+  const interrupt = useTaskLifecycleAction();
   return {
     refresh,
     interrupt: {

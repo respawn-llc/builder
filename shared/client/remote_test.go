@@ -26,6 +26,7 @@ import (
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/transcript"
 	"golang.org/x/net/websocket"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -1167,6 +1168,100 @@ func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(
 	}
 	if message.Sequence != 2 || message.Kind() != clientui.TranscriptMessageOperationalDiagnostic {
 		t.Fatalf("transcript message = %+v, want seq=2 operational diagnostic", message)
+	}
+}
+
+func TestRemoteQuestionHistorySubscriptionAttachesAndDecodesTerminalStream(t *testing.T) {
+	at := transcript.CommittedAtUnixMs(1_723_456_789_012)
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		if acceptRemoteSessionAttachmentOrClosed(t, ws, "project-1", "workspace-1", "/workspace") == nil {
+			return
+		}
+		var req protocol.Request
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive Question-history subscribe: %v", err)
+		}
+		if req.Method != protocol.MethodSessionQuestionHistorySubscribe {
+			t.Fatalf("subscribe method = %q, want %q", req.Method, protocol.MethodSessionQuestionHistorySubscribe)
+		}
+		var params serverapi.QuestionHistorySubscribeRequest
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			t.Fatalf("decode Question-history subscribe params: %v", err)
+		}
+		if params.SessionID != "session-1" || params.MaxHandoffs != 3 {
+			t.Fatalf("Question-history subscribe params = %+v", params)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
+			t.Fatalf("send subscribe response: %v", err)
+		}
+		large := false
+		started := protocol.SessionQuestionHistoryEventParams{Event: protocol.SessionQuestionHistoryEvent{
+			Kind: string(serverapi.QuestionHistoryEventStarted), LargeHistory: &large,
+		}}
+		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodSessionQuestionHistoryEvent, Params: mustJSON(t, started)}); err != nil {
+			t.Fatalf("send started event: %v", err)
+		}
+		selected := 2
+		commentary := "context"
+		question := protocol.SessionQuestionHistoryEventParams{Event: protocol.SessionQuestionHistoryEvent{
+			Kind: string(serverapi.QuestionHistoryEventQuestion),
+			Question: &protocol.SessionQuestionHistoryQuestion{
+				Question: "choose",
+				Answer:   "second", SelectedOptionNumber: &selected,
+				Commentary: &commentary, At: &at,
+			},
+		}}
+		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodSessionQuestionHistoryEvent, Params: mustJSON(t, question)}); err != nil {
+			t.Fatalf("send Question event: %v", err)
+		}
+		omitted := true
+		completed := protocol.SessionQuestionHistoryEventParams{Event: protocol.SessionQuestionHistoryEvent{
+			Kind: string(serverapi.QuestionHistoryEventCompleted), HistoryOmitted: &omitted,
+		}}
+		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodSessionQuestionHistoryEvent, Params: mustJSON(t, completed)}); err != nil {
+			t.Fatalf("send completed event: %v", err)
+		}
+		if err := websocket.JSON.Send(ws, protocol.Request{
+			JSONRPC: protocol.JSONRPCVersion,
+			Method:  protocol.MethodSessionQuestionHistoryComplete,
+			Params:  mustJSON(t, protocol.StreamCompleteParams{Code: protocol.ErrCodeStreamFailed, Message: "terminal failure"}),
+		}); err != nil {
+			t.Fatalf("send terminal failure: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemote: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	sub, err := remote.SubscribeQuestionHistory(context.Background(), serverapi.QuestionHistorySubscribeRequest{
+		SessionID: "session-1", MaxHandoffs: 3,
+	})
+	if err != nil {
+		t.Fatalf("SubscribeQuestionHistory: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	started, err := sub.Next(context.Background())
+	if err != nil || started.Kind != serverapi.QuestionHistoryEventStarted {
+		t.Fatalf("started = %+v error %v", started, err)
+	}
+	question, err := sub.Next(context.Background())
+	if err != nil || question.Question == nil ||
+		question.Question.SelectedOptionNumber == nil ||
+		*question.Question.SelectedOptionNumber != 2 ||
+		question.Question.Commentary == nil ||
+		question.Question.At == nil ||
+		question.Question.At.UnixMs() != at.UnixMs() {
+		t.Fatalf("Question = %+v error %v", question, err)
+	}
+	completed, err := sub.Next(context.Background())
+	if err != nil || completed.HistoryOmitted == nil || !*completed.HistoryOmitted {
+		t.Fatalf("completed = %+v error %v", completed, err)
+	}
+	if _, err := sub.Next(context.Background()); !errors.Is(err, serverapi.ErrStreamFailed) {
+		t.Fatalf("terminal error = %v, want stream failure", err)
 	}
 }
 

@@ -1,11 +1,4 @@
-import {
-  Activity,
-  CircleAlert,
-  Copy,
-  FileText,
-  FolderOpen,
-  ShieldCheck,
-} from "lucide-react";
+import { Activity, CircleAlert, Copy, FileText, FolderOpen, ShieldCheck } from "lucide-react";
 import { StrictMode, useEffect, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -74,13 +67,13 @@ export function TranscriptDisclosureShowcase() {
   }, [reducedMotion]);
 
   return (
-    <div
-      className="transcript-disclosure-showcase h-full overflow-y-auto bg-[var(--color-background)] px-[var(--space-4)] py-[var(--space-5)] text-[var(--color-on-background)]"
-    >
+    <div className="transcript-disclosure-showcase h-full overflow-y-auto bg-[var(--color-background)] px-[var(--space-4)] py-[var(--space-5)] text-[var(--color-on-background)]">
       <div className="mx-auto grid w-full max-w-[1120px] gap-[var(--space-5)]">
         <header className="grid gap-[var(--space-3)]">
           <div>
-            <p className="m-0 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-muted)]">Development showcase</p>
+            <p className="m-0 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-muted)]">
+              Development showcase
+            </p>
             <h1 className="m-0 text-2xl font-semibold">Transcript disclosure</h1>
             <p className="m-0 max-w-[720px] text-sm text-[var(--color-muted)]">
               Temporary fixture catalog for the flat Desktop Chat transcript primitive.
@@ -96,15 +89,33 @@ export function TranscriptDisclosureShowcase() {
           />
         </header>
 
-        <main className={width === "narrow" ? "mx-auto grid w-full max-w-[620px] gap-[var(--space-4)]" : "grid w-full gap-[var(--space-4)]"}>
+        <main
+          className={
+            width === "narrow"
+              ? "mx-auto grid w-full max-w-[620px] gap-[var(--space-4)]"
+              : "grid w-full gap-[var(--space-4)]"
+          }
+        >
           <ShowcaseStory title="Collapsed">
-            <DisclosureStory defaultExpanded={false} iconTone="neutral" summary="Loaded context is available when needed." />
+            <DisclosureStory
+              defaultExpanded={false}
+              iconTone="neutral"
+              summary="Loaded context is available when needed."
+            />
           </ShowcaseStory>
           <ShowcaseStory title="Expanded">
-            <DisclosureStory defaultExpanded iconTone="neutral" summary="Expanded transcript content keeps its compact identity." />
+            <DisclosureStory
+              defaultExpanded
+              iconTone="neutral"
+              summary="Expanded transcript content keeps its compact identity."
+            />
           </ShowcaseStory>
           <ShowcaseStory title="Supplied default expanded">
-            <DisclosureStory defaultExpanded iconTone="warning" summary="A row type can supply its mount default." />
+            <DisclosureStory
+              defaultExpanded
+              iconTone="warning"
+              summary="A row type can supply its mount default."
+            />
           </ShowcaseStory>
           <ShowcaseStory title="Live">
             <TranscriptDisclosure
@@ -134,15 +145,17 @@ export function TranscriptDisclosureShowcase() {
           </ShowcaseStory>
           <ShowcaseStory title="Semantic icon tones">
             <div className="grid gap-[var(--space-2)]">
-              {(["neutral", "warning", "error", "success"] satisfies TranscriptDisclosureIconTone[]).map((iconTone) => (
-                <DisclosureStory
-                  key={iconTone}
-                  defaultExpanded={false}
-                  iconTone={iconTone}
-                  summary={`Leading icon tone: ${iconTone}`}
-                  typeLabel={iconTone}
-                />
-              ))}
+              {(["neutral", "warning", "error", "success"] satisfies TranscriptDisclosureIconTone[]).map(
+                (iconTone) => (
+                  <DisclosureStory
+                    key={iconTone}
+                    defaultExpanded={false}
+                    iconTone={iconTone}
+                    summary={`Leading icon tone: ${iconTone}`}
+                    typeLabel={iconTone}
+                  />
+                ),
+              )}
             </div>
           </ShowcaseStory>
           <ShowcaseStory title="Action versus header">

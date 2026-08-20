@@ -17,7 +17,6 @@ func TestWorkflowTaskMovePreviewRouteContract(t *testing.T) {
 		route.Auth != AuthServer ||
 		route.Scope != ScopeProjectView ||
 		route.Connection != ConnectionUnscoped ||
-		route.Dependency != DependencyWorkflow ||
 		route.RequestType != reflect.TypeOf(serverapi.WorkflowTaskMovePreviewRequest{}) ||
 		route.ResponseType != reflect.TypeOf(serverapi.WorkflowTaskMovePreviewResponse{}) ||
 		!route.ValidatesRequest {

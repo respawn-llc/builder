@@ -35,6 +35,9 @@ type stubQuestionCommandRemote struct {
 	watchNexts        int
 	remoteClosed      bool
 	subscription      *stubPromptFollowUpSubscription
+	historyRequests   []serverapi.QuestionHistorySubscribeRequest
+	historySub        serverapi.QuestionHistorySubscription
+	historyErr        error
 }
 
 type stubPromptFollowUpSubscription struct {
@@ -139,6 +142,25 @@ func (r *stubQuestionCommandRemote) SubscribeFollowUp(_ context.Context, req ser
 	r.followUpKind = kind
 	r.subscription = &stubPromptFollowUpSubscription{remote: r}
 	return r.subscription, nil
+}
+
+func (r *stubQuestionCommandRemote) SubscribeQuestionHistory(
+	_ context.Context,
+	req serverapi.QuestionHistorySubscribeRequest,
+) (serverapi.QuestionHistorySubscription, error) {
+	r.historyRequests = append(r.historyRequests, req)
+	if r.historyErr != nil {
+		return nil, r.historyErr
+	}
+	if r.historySub == nil {
+		r.historySub = &questionHistoryScriptSubscription{
+			events: []serverapi.QuestionHistoryEvent{
+				{Kind: serverapi.QuestionHistoryEventStarted, LargeHistory: boolPointer(false)},
+				{Kind: serverapi.QuestionHistoryEventCompleted, HistoryOmitted: boolPointer(false)},
+			},
+		}
+	}
+	return r.historySub, nil
 }
 
 func (r *stubQuestionCommandRemote) Close() error {

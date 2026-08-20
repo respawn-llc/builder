@@ -20,9 +20,10 @@ import {
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { TaskDetailInboxRow } from "./TaskDetailInboxRow";
+import { TaskDetailBodyIslands } from "./TaskDetailBodyIslands";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
-import { TaskDependenciesArea } from "./TaskDependenciesArea";
+import { TaskDependenciesArea } from "./TaskDependenciesAreaAdapter";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import { promptAnswerKey, type PromptAnswerKey, type PromptAnswerState } from "./PromptAnswerState";
 import type { PromptPrimaryFocusRequest } from "./PromptPrimaryControlRegistry";
@@ -399,23 +400,22 @@ function BodyRow({
   updatePending,
 }: TaskDetailListRowProps): ReactNode {
   return (
-    <div
-      className="task-detail-body-split grid w-full min-w-0 max-w-full items-stretch gap-[var(--space-2)]"
-      data-testid="task-detail-body-split"
-    >
-      <DescriptionIsland
-        disabled={disabled}
-        draft={draft}
-        draftDirty={draftDirty}
-        error={updateError}
-        onDraftChange={onDraftChange}
-        onPresentationChange={onDescriptionPresentationChange}
-        onSave={onSaveDraft}
-        presentation={descriptionPresentation}
-        submitting={updatePending}
-      />
-      <PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />
-    </div>
+    <TaskDetailBodyIslands
+      description={
+        <DescriptionIsland
+          disabled={disabled}
+          draft={draft}
+          draftDirty={draftDirty}
+          error={updateError}
+          onDraftChange={onDraftChange}
+          onPresentationChange={onDescriptionPresentationChange}
+          onSave={onSaveDraft}
+          presentation={descriptionPresentation}
+          submitting={updatePending}
+        />
+      }
+      metadata={<PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />}
+    />
   );
 }
 

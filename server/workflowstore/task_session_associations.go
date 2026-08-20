@@ -887,6 +887,15 @@ func (s *Store) resolveMaterializedCurrentNodeStartContext(
 	if err != nil {
 		return CurrentNodeStartContext{}, fmt.Errorf("resolve entering source node for current node %v: %w", currentNode.Reference, err)
 	}
+	if err := s.validateRetainedTargetSessionCreationAuthorization(
+		ctx,
+		q,
+		enteringEdge,
+		workflow.NodeIDOf(sourceNode),
+		currentNode,
+	); err != nil {
+		return CurrentNodeStartContext{}, err
+	}
 	nodeRecord, err := nodeRecordFromCurrentDefinition(node)
 	if err != nil {
 		return CurrentNodeStartContext{}, err

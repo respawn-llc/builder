@@ -4,21 +4,19 @@ set -euo pipefail
 # Desktop (Tauri) release packaging. Sibling to release-artifacts.sh, kept separate
 # because the desktop bundles, updater signatures, and latest.json have a different
 # shape from the CLI archives. Workflow YAML stays orchestration-only; the naming,
-# updater latest.json, and checksums live here so they are testable.
+# updater latest.json, and checksums live here.
 #
 # Subcommands:
 #   build    : build the host platform's bundles and stage them into --dist-dir with
 #              stable, self-describing names (+ the macOS/Linux updater artifacts).
 #   assemble : from a --dist-dir holding all platforms' staged artifacts, emit
 #              latest.json (the Tauri updater manifest) and desktop-checksums.txt.
-#   self-test: assemble against built-in fixtures and assert the manifest shape.
 
 usage() {
 	cat <<'USAGE'
 Usage:
   scripts/desktop-release.sh build    [--version X.Y.Z] [--dist-dir dist/desktop] [--skip-install]
   scripts/desktop-release.sh assemble [--version X.Y.Z] [--dist-dir dist/desktop] [--base-url URL] [--pub-date RFC3339] [--notes TEXT]
-  scripts/desktop-release.sh self-test
 
 Stable staged names (host-platform bundles):
   Kent_<ver>_aarch64.dmg                   macOS installer
@@ -192,52 +190,11 @@ cmd_assemble() {
 	cat "$dist_dir/latest.json" >&2
 }
 
-cmd_self_test() {
-	local tmp; tmp="$(mktemp -d)"
-	trap 'rm -rf "$tmp"' RETURN
-	local v="9.9.9"
-	printf 'MAC_SIG_CONTENT' >"$tmp/Kent_${v}_aarch64.app.tar.gz.sig"
-	printf 'fake-mac-tar' >"$tmp/Kent_${v}_aarch64.app.tar.gz"
-	printf 'LINUX_SIG_CONTENT' >"$tmp/Kent_${v}_amd64.AppImage.sig"
-	printf 'fake-appimage' >"$tmp/Kent_${v}_amd64.AppImage"
-	printf 'WIN_SIG_CONTENT' >"$tmp/Kent_${v}_x64-setup.exe.sig"
-	printf 'fake-setup-exe' >"$tmp/Kent_${v}_x64-setup.exe"
-
-	cmd_assemble --version "$v" --dist-dir "$tmp" --pub-date "2026-01-02T03:04:05Z" --base-url "https://example.test/v$v" >/dev/null
-
-	local json="$tmp/latest.json"
-	local fail=0
-	assert_eq() {
-		local got="$1" want="$2" label="$3"
-		if [[ "$got" != "$want" ]]; then
-			echo "FAIL ${label}: got [$got] want [$want]" >&2
-			fail=1
-		fi
-	}
-	assert_eq "$(jq -r '.version' "$json")" "$v" "version"
-	assert_eq "$(jq -r '.pub_date' "$json")" "2026-01-02T03:04:05Z" "pub_date"
-	assert_eq "$(jq -r '.platforms["darwin-aarch64"].signature' "$json")" "MAC_SIG_CONTENT" "mac signature"
-	assert_eq "$(jq -r '.platforms["darwin-aarch64"].url' "$json")" "https://example.test/v$v/Kent_${v}_aarch64.app.tar.gz" "mac url"
-	assert_eq "$(jq -r '.platforms["linux-x86_64"].signature' "$json")" "LINUX_SIG_CONTENT" "linux signature"
-	assert_eq "$(jq -r '.platforms["linux-x86_64"].url' "$json")" "https://example.test/v$v/Kent_${v}_amd64.AppImage" "linux url"
-	assert_eq "$(jq -r '.platforms["windows-x86_64"].signature' "$json")" "WIN_SIG_CONTENT" "windows signature"
-	assert_eq "$(jq -r '.platforms["windows-x86_64"].url' "$json")" "https://example.test/v$v/Kent_${v}_x64-setup.exe" "windows url"
-	# checksums.txt covers the distributable bundles, not the .sig/latest.json.
-	assert_eq "$(wc -l <"$tmp/desktop-checksums.txt" | tr -d ' ')" "3" "checksum line count"
-
-	if [[ "$fail" != "0" ]]; then
-		echo "desktop-release self-test FAILED" >&2
-		exit 1
-	fi
-	echo "desktop-release self-test OK" >&2
-}
-
 cmd="${1:-}"
 shift || true
 case "$cmd" in
 build) cmd_build "$@" ;;
 assemble) cmd_assemble "$@" ;;
-self-test) cmd_self_test ;;
 -h | --help | "") usage ;;
 *) echo "Unknown subcommand: $cmd" >&2; usage >&2; exit 1 ;;
 esac

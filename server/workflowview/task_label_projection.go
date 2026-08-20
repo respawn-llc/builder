@@ -9,10 +9,10 @@ import (
 )
 
 type taskLabelAssignmentReader interface {
-	ListTaskAssignedLabelIDsByTasks(context.Context, []string) ([]sqlitegen.ListTaskAssignedLabelIDsByTasksRow, error)
+	ListTaskAssignedLabelsByTasks(context.Context, []string) ([]sqlitegen.ListTaskAssignedLabelsByTasksRow, error)
 }
 
-func loadTaskLabelIDsByTask(ctx context.Context, queries taskLabelAssignmentReader, taskIDs []string) (map[string][]string, error) {
+func loadTaskLabelsByTask(ctx context.Context, queries taskLabelAssignmentReader, taskIDs []string) (map[string][]serverapi.WorkflowProjectLabel, error) {
 	if len(taskIDs) > serverapi.WorkflowPaginationMaxLimit {
 		return nil, fmt.Errorf(
 			"task label projection requires at most %d task ids, got %d",
@@ -20,14 +20,14 @@ func loadTaskLabelIDsByTask(ctx context.Context, queries taskLabelAssignmentRead
 			len(taskIDs),
 		)
 	}
-	labelsByTaskID := make(map[string][]string, len(taskIDs))
+	labelsByTaskID := make(map[string][]serverapi.WorkflowProjectLabel, len(taskIDs))
 	for _, taskID := range taskIDs {
-		labelsByTaskID[taskID] = []string{}
+		labelsByTaskID[taskID] = []serverapi.WorkflowProjectLabel{}
 	}
 	if len(taskIDs) == 0 {
 		return labelsByTaskID, nil
 	}
-	rows, err := queries.ListTaskAssignedLabelIDsByTasks(ctx, taskIDs)
+	rows, err := queries.ListTaskAssignedLabelsByTasks(ctx, taskIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,22 @@ func loadTaskLabelIDsByTask(ctx context.Context, queries taskLabelAssignmentRead
 				row.TaskID,
 			)
 		}
-		labelsByTaskID[row.TaskID] = append(labelIDs, row.LabelID)
+		labelsByTaskID[row.TaskID] = append(labelIDs, serverapi.WorkflowProjectLabel{
+			ID:   row.LabelID,
+			Name: row.LabelName,
+		})
 	}
 	return labelsByTaskID, nil
+}
+
+func taskLabelIDsByTask(labelsByTaskID map[string][]serverapi.WorkflowProjectLabel) map[string][]string {
+	labelIDsByTaskID := make(map[string][]string, len(labelsByTaskID))
+	for taskID, labels := range labelsByTaskID {
+		labelIDs := make([]string, 0, len(labels))
+		for _, label := range labels {
+			labelIDs = append(labelIDs, label.ID)
+		}
+		labelIDsByTaskID[taskID] = labelIDs
+	}
+	return labelIDsByTaskID
 }

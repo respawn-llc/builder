@@ -1,40 +1,40 @@
-import { spawn } from 'node:child_process';
-import { access, readFile, readdir } from 'node:fs/promises';
-import net from 'node:net';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { spawn } from "node:child_process";
+import { access, readFile, readdir } from "node:fs/promises";
+import net from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { fromHtml } from 'hast-util-from-html';
-import { unified } from 'unified';
-import { visit } from 'unist-util-visit';
-import remarkParse from 'remark-parse';
+import { fromHtml } from "hast-util-from-html";
+import { unified } from "unified";
+import { visit } from "unist-util-visit";
+import remarkParse from "remark-parse";
 
-import { resolveDocsConfig } from './site-config.mjs';
+import { resolveDocsConfig } from "./site-config.mjs";
 
 const currentFilePath = fileURLToPath(import.meta.url);
 const docsRoot = path.dirname(path.dirname(currentFilePath));
-const distRoot = path.join(docsRoot, 'dist');
+const distRoot = path.join(docsRoot, "dist");
 const docsConfig = resolveDocsConfig();
 
 const representativePages = [
   {
-    path: 'docs/index.html',
+    path: "docs/index.html",
     canonicalPath: docsConfig.docsHomePath,
     requiresDescription: false,
   },
   {
-    path: 'quickstart/index.html',
-    canonicalPath: '/quickstart/',
+    path: "quickstart/index.html",
+    canonicalPath: "/quickstart/",
     requiresDescription: true,
   },
   {
-    path: 'sandboxing/index.html',
-    canonicalPath: '/sandboxing/',
+    path: "sandboxing/index.html",
+    canonicalPath: "/sandboxing/",
     requiresDescription: true,
   },
   {
-    path: 'workflows/index.html',
-    canonicalPath: '/workflows/',
+    path: "workflows/index.html",
+    canonicalPath: "/workflows/",
     requiresDescription: true,
   },
 ];
@@ -50,20 +50,22 @@ async function assertFileExists(relativePath) {
   try {
     await access(absolutePath);
   } catch (error) {
-    throw new Error(`expected built artifact ${relativePath} to exist`, { cause: error });
+    throw new Error(`expected built artifact ${relativePath} to exist`, {
+      cause: error,
+    });
   }
 }
 
 function textContent(node) {
-  if (node.type === 'text') {
+  if (node.type === "text") {
     return node.value;
   }
 
   if (!Array.isArray(node.children)) {
-    return '';
+    return "";
   }
 
-  return node.children.map(textContent).join('');
+  return node.children.map(textContent).join("");
 }
 
 function relIncludes(node, rel) {
@@ -73,14 +75,20 @@ function relIncludes(node, rel) {
 
 function propertyIncludes(node, property, expectedValue) {
   const value = node.properties?.[property];
-  return Array.isArray(value) ? value.includes(expectedValue) : value === expectedValue;
+  return Array.isArray(value)
+    ? value.includes(expectedValue)
+    : value === expectedValue;
 }
 
 function hasScriptWithSource(tree, sourcePart) {
-  return collectElements(
-    tree,
-    (node) => node.tagName === 'script' && String(node.properties?.src ?? '').includes(sourcePart),
-  ).length > 0;
+  return (
+    collectElements(
+      tree,
+      (node) =>
+        node.tagName === "script" &&
+        String(node.properties?.src ?? "").includes(sourcePart),
+    ).length > 0
+  );
 }
 
 function hasClass(node, className) {
@@ -90,7 +98,7 @@ function hasClass(node, className) {
 
 function collectElements(tree, predicate) {
   const elements = [];
-  visit(tree, 'element', (node) => {
+  visit(tree, "element", (node) => {
     if (predicate(node)) {
       elements.push(node);
     }
@@ -101,60 +109,80 @@ function collectElements(tree, predicate) {
 function findMeta(tree, key, value) {
   return collectElements(
     tree,
-    (node) => node.tagName === 'meta' && node.properties?.[key] === value,
+    (node) => node.tagName === "meta" && node.properties?.[key] === value,
   )[0];
 }
 
-async function assertRepresentativePage({ path: relativePath, canonicalPath, requiresDescription }) {
-  const html = await readFile(path.join(distRoot, relativePath), 'utf8');
+async function assertRepresentativePage({
+  path: relativePath,
+  canonicalPath,
+  requiresDescription,
+}) {
+  const html = await readFile(path.join(distRoot, relativePath), "utf8");
   const tree = fromHtml(html);
 
-  const titles = collectElements(tree, (node) => node.tagName === 'title');
+  const titles = collectElements(tree, (node) => node.tagName === "title");
   assert(titles.length === 1, `${relativePath} should contain one <title>`);
-  assert(textContent(titles[0]).trim().length > 0, `${relativePath} should contain title text`);
+  assert(
+    textContent(titles[0]).trim().length > 0,
+    `${relativePath} should contain title text`,
+  );
 
   const canonicalLinks = collectElements(
     tree,
-    (node) => node.tagName === 'link' && relIncludes(node, 'canonical'),
+    (node) => node.tagName === "link" && relIncludes(node, "canonical"),
   );
-  assert(canonicalLinks.length === 1, `${relativePath} should contain one canonical link`);
   assert(
-    canonicalLinks[0].properties?.href === docsConfig.getPublicUrl(canonicalPath),
+    canonicalLinks.length === 1,
+    `${relativePath} should contain one canonical link`,
+  );
+  assert(
+    canonicalLinks[0].properties?.href ===
+      docsConfig.getPublicUrl(canonicalPath),
     `${relativePath} canonical link should target the configured public URL`,
   );
 
   for (const [kind, key, value] of [
-    ['robots', 'name', 'robots'],
-    ['googlebot', 'name', 'googlebot'],
-    ['Open Graph title', 'property', 'og:title'],
-    ['Open Graph URL', 'property', 'og:url'],
-    ['Open Graph image', 'property', 'og:image'],
-    ['Twitter card', 'name', 'twitter:card'],
-    ['Twitter image', 'name', 'twitter:image'],
+    ["robots", "name", "robots"],
+    ["googlebot", "name", "googlebot"],
+    ["Open Graph title", "property", "og:title"],
+    ["Open Graph URL", "property", "og:url"],
+    ["Open Graph image", "property", "og:image"],
+    ["Twitter card", "name", "twitter:card"],
+    ["Twitter image", "name", "twitter:image"],
   ]) {
     const meta = findMeta(tree, key, value);
-    assert(meta?.properties?.content, `${relativePath} should contain ${kind} metadata`);
+    assert(
+      meta?.properties?.content,
+      `${relativePath} should contain ${kind} metadata`,
+    );
   }
 
   if (requiresDescription) {
     assert(
-      findMeta(tree, 'name', 'description')?.properties?.content,
+      findMeta(tree, "name", "description")?.properties?.content,
       `${relativePath} should contain description metadata`,
     );
     assert(
-      findMeta(tree, 'property', 'og:description')?.properties?.content,
+      findMeta(tree, "property", "og:description")?.properties?.content,
       `${relativePath} should contain Open Graph description metadata`,
     );
   }
 
   const stylesheetLinks = collectElements(
     tree,
-    (node) => node.tagName === 'link' && relIncludes(node, 'stylesheet'),
+    (node) => node.tagName === "link" && relIncludes(node, "stylesheet"),
   );
-  assert(stylesheetLinks.length > 0, `${relativePath} should contain stylesheet links`);
+  assert(
+    stylesheetLinks.length > 0,
+    `${relativePath} should contain stylesheet links`,
+  );
 
-  const mainElements = collectElements(tree, (node) => node.tagName === 'main');
-  assert(mainElements.length === 1, `${relativePath} should contain one static <main>`);
+  const mainElements = collectElements(tree, (node) => node.tagName === "main");
+  assert(
+    mainElements.length === 1,
+    `${relativePath} should contain one static <main>`,
+  );
   assert(
     textContent(mainElements[0]).trim().length > 200,
     `${relativePath} should contain crawlable main body text`,
@@ -162,67 +190,109 @@ async function assertRepresentativePage({ path: relativePath, canonicalPath, req
 
   const headings = collectElements(
     mainElements[0],
-    (node) => node.tagName === 'h1' && node.properties?.id === '_top',
+    (node) => node.tagName === "h1" && node.properties?.id === "_top",
   );
-  assert(headings.length === 1, `${relativePath} should contain one static h1#_top`);
-  assert(textContent(headings[0]).trim().length > 0, `${relativePath} h1 should contain text`);
+  assert(
+    headings.length === 1,
+    `${relativePath} should contain one static h1#_top`,
+  );
+  assert(
+    textContent(headings[0]).trim().length > 0,
+    `${relativePath} h1 should contain text`,
+  );
 
-  const docSearchRoots = collectElements(tree, (node) => node.tagName === 'sl-doc-search');
-  assert(docSearchRoots.length === 1, `${relativePath} should render one DocSearch root`);
+  const docSearchRoots = collectElements(
+    tree,
+    (node) => node.tagName === "sl-doc-search",
+  );
+  assert(
+    docSearchRoots.length === 1,
+    `${relativePath} should render one DocSearch root`,
+  );
 
-  const docSearchButtons = collectElements(tree, (node) => hasClass(node, 'DocSearch-Button'));
-  assert(docSearchButtons.length === 1, `${relativePath} should render one DocSearch trigger`);
+  const docSearchButtons = collectElements(tree, (node) =>
+    hasClass(node, "DocSearch-Button"),
+  );
+  assert(
+    docSearchButtons.length === 1,
+    `${relativePath} should render one DocSearch trigger`,
+  );
 
-  const localSearchRoots = collectElements(tree, (node) => node.tagName === 'site-search');
-  assert(localSearchRoots.length === 0, `${relativePath} should not render local Pagefind search`);
+  const localSearchRoots = collectElements(
+    tree,
+    (node) => node.tagName === "site-search",
+  );
+  assert(
+    localSearchRoots.length === 0,
+    `${relativePath} should not render local Pagefind search`,
+  );
 }
 
 async function assertRootRedirectPage() {
-  const relativePath = 'index.html';
-  const tree = fromHtml(await readFile(path.join(distRoot, relativePath), 'utf8'));
+  const relativePath = "index.html";
+  const tree = fromHtml(
+    await readFile(path.join(distRoot, relativePath), "utf8"),
+  );
   const refreshMetas = collectElements(
     tree,
-    (node) => node.tagName === 'meta' && propertyIncludes(node, 'httpEquiv', 'refresh'),
+    (node) =>
+      node.tagName === "meta" && propertyIncludes(node, "httpEquiv", "refresh"),
   );
-  assert(refreshMetas.length === 1, `${relativePath} should contain one meta refresh`);
+  assert(
+    refreshMetas.length === 1,
+    `${relativePath} should contain one meta refresh`,
+  );
   assert(
     refreshMetas[0].properties?.content === `0; url=${docsConfig.docsHomePath}`,
     `${relativePath} should redirect to the docs home path`,
   );
   assert(
-    collectElements(tree, (node) => node.tagName === 'a' && node.properties?.href === docsConfig.docsHomePath)
-      .length === 1,
+    collectElements(
+      tree,
+      (node) =>
+        node.tagName === "a" &&
+        node.properties?.href === docsConfig.docsHomePath,
+    ).length === 1,
     `${relativePath} should contain a crawlable docs-home fallback link`,
   );
   assert(
-    collectElements(tree, (node) => node.tagName === 'main').length === 0,
+    collectElements(tree, (node) => node.tagName === "main").length === 0,
     `${relativePath} should remain a redirect shell`,
   );
-  assert(!hasScriptWithSource(tree, 'ClientRouter'), `${relativePath} should not include ClientRouter`);
   assert(
-    collectElements(tree, (node) => node.tagName === 'sl-doc-search').length === 0,
+    !hasScriptWithSource(tree, "ClientRouter"),
+    `${relativePath} should not include ClientRouter`,
+  );
+  assert(
+    collectElements(tree, (node) => node.tagName === "sl-doc-search").length ===
+      0,
     `${relativePath} should not render DocSearch`,
   );
 }
 
 async function assertDesktopRedirectPage() {
-  const relativePath = 'desktop/index.html';
-  const tree = fromHtml(await readFile(path.join(distRoot, relativePath), 'utf8'));
-  const htmlElements = collectElements(tree, (node) => node.tagName === 'html');
+  const relativePath = "desktop/index.html";
+  const tree = fromHtml(
+    await readFile(path.join(distRoot, relativePath), "utf8"),
+  );
+  const htmlElements = collectElements(tree, (node) => node.tagName === "html");
   assert(
-    htmlElements.length === 1 && htmlElements[0].properties?.dataTheme === 'dark',
+    htmlElements.length === 1 &&
+      htmlElements[0].properties?.dataTheme === "dark",
     `${relativePath} should bootstrap with one deterministic initial theme`,
   );
   assert(
-    findMeta(tree, 'name', 'robots')?.properties?.content === 'noindex',
+    findMeta(tree, "name", "robots")?.properties?.content === "noindex",
     `${relativePath} should keep noindex robots metadata`,
   );
   assert(
-    collectElements(tree, (node) => node.tagName === 'link' && relIncludes(node, 'stylesheet'))
-      .length > 0,
+    collectElements(
+      tree,
+      (node) => node.tagName === "link" && relIncludes(node, "stylesheet"),
+    ).length > 0,
     `${relativePath} should contain a generated stylesheet`,
   );
-  const mainElements = collectElements(tree, (node) => node.tagName === 'main');
+  const mainElements = collectElements(tree, (node) => node.tagName === "main");
   assert(
     mainElements.length === 1 && mainElements[0].properties?.hidden === true,
     `${relativePath} should contain one initially hidden confirmation surface`,
@@ -230,35 +300,42 @@ async function assertDesktopRedirectPage() {
   const releaseLinks = collectElements(
     mainElements[0],
     (node) =>
-      node.tagName === 'a' && node.properties?.href === `${docsConfig.repoUrl}/releases/latest`,
+      node.tagName === "a" &&
+      node.properties?.href === `${docsConfig.repoUrl}/releases/latest`,
   );
   assert(
     releaseLinks.length === 1 &&
       (releaseLinks[0].properties?.target === undefined ||
-        releaseLinks[0].properties?.target === '_self'),
+        releaseLinks[0].properties?.target === "_self"),
     `${relativePath} should link to the latest desktop release`,
   );
-  assert(!hasScriptWithSource(tree, 'ClientRouter'), `${relativePath} should not include ClientRouter`);
   assert(
-    collectElements(tree, (node) => node.tagName === 'sl-doc-search').length === 0,
+    !hasScriptWithSource(tree, "ClientRouter"),
+    `${relativePath} should not include ClientRouter`,
+  );
+  assert(
+    collectElements(tree, (node) => node.tagName === "sl-doc-search").length ===
+      0,
     `${relativePath} should not render DocSearch`,
   );
 }
 
 async function assertNotFoundPage() {
-  const relativePath = '404.html';
-  const tree = fromHtml(await readFile(path.join(distRoot, relativePath), 'utf8'));
+  const relativePath = "404.html";
+  const tree = fromHtml(
+    await readFile(path.join(distRoot, relativePath), "utf8"),
+  );
   assert(
-    collectElements(tree, (node) => node.tagName === 'main').length === 1,
+    collectElements(tree, (node) => node.tagName === "main").length === 1,
     `${relativePath} should contain static fallback content`,
   );
   assert(
-    collectElements(tree, (node) => node.tagName === 'h1').length === 1,
+    collectElements(tree, (node) => node.tagName === "h1").length === 1,
     `${relativePath} should contain one heading`,
   );
   assert(
-    findMeta(tree, 'name', 'robots')?.properties?.content ===
-      'index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1',
+    findMeta(tree, "name", "robots")?.properties?.content ===
+      "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1",
     `${relativePath} should keep the configured robots metadata`,
   );
 }
@@ -277,7 +354,9 @@ function parsedJSONExamples(sources) {
 
 function parsedCodeExamples(tree) {
   return parsedJSONExamples(
-    collectElements(tree, (node) => node.tagName === 'code').map((node) => textContent(node)),
+    collectElements(tree, (node) => node.tagName === "code").map((node) =>
+      textContent(node),
+    ),
   );
 }
 
@@ -285,7 +364,7 @@ function parsedMarkdownCodeExamples(markdown) {
   const tree = unified().use(remarkParse).parse(markdown);
   const sources = [];
   const collectCodeBlocks = (node) => {
-    if (node.type === 'code') {
+    if (node.type === "code") {
       sources.push(node.value);
     }
     if (Array.isArray(node.children)) {
@@ -298,70 +377,106 @@ function parsedMarkdownCodeExamples(markdown) {
 
 function assertScriptKentIdentity(value, label) {
   assert(
-    value !== null && typeof value === 'object' && !Array.isArray(value),
+    value !== null && typeof value === "object" && !Array.isArray(value),
     `${label} must be an object`,
   );
   const kent = value._kent;
   assert(
-    kent !== null && typeof kent === 'object' && !Array.isArray(kent),
+    kent !== null && typeof kent === "object" && !Array.isArray(kent),
     `${label} must contain an object _kent identity`,
   );
-  const allowedKeys = new Set(['task_id', 'node_id', 'transition_branch_key']);
+  const allowedKeys = new Set(["task_id", "node_id", "transition_branch_key"]);
   assert(
     Object.keys(kent).every((key) => allowedKeys.has(key)),
     `${label} _kent identity must contain only task_id, node_id, and optional transition_branch_key`,
   );
-  for (const key of ['task_id', 'node_id']) {
+  for (const key of ["task_id", "node_id"]) {
     assert(
-      typeof kent[key] === 'string' && kent[key].trim().length > 0,
+      typeof kent[key] === "string" && kent[key].trim().length > 0,
       `${label} _kent.${key} must be a non-empty string`,
     );
   }
-  if ('transition_branch_key' in kent) {
+  if ("transition_branch_key" in kent) {
     assert(
-      typeof kent.transition_branch_key === 'string' && kent.transition_branch_key.trim().length > 0,
+      typeof kent.transition_branch_key === "string" &&
+        kent.transition_branch_key.trim().length > 0,
       `${label} _kent.transition_branch_key must be a non-empty string when present`,
     );
   }
 }
 
 async function assertWorkflowGuide() {
-  const relativePath = 'workflows/index.html';
-  const tree = fromHtml(await readFile(path.join(distRoot, relativePath), 'utf8'));
-  const scriptInputs = parsedCodeExamples(tree).filter(
-    ({ value }) => value !== null && typeof value === 'object' && !Array.isArray(value) && '_kent' in value,
+  const relativePath = "workflows/index.html";
+  const tree = fromHtml(
+    await readFile(path.join(distRoot, relativePath), "utf8"),
   );
-  assert(scriptInputs.length === 1, `${relativePath} should contain one structured Script input example`);
-  assertScriptKentIdentity(scriptInputs[0].value, `${relativePath} Script input`);
-
-  const completionCommands = collectElements(tree, (node) => node.tagName === 'code')
-    .map((node) => textContent(node).trim())
-    .filter((source) => source.startsWith('kent task complete '));
+  const scriptInputs = parsedCodeExamples(tree).filter(
+    ({ value }) =>
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "_kent" in value,
+  );
   assert(
-    completionCommands.some((command) => command.includes('--force --session ')),
+    scriptInputs.length === 1,
+    `${relativePath} should contain one structured Script input example`,
+  );
+  assertScriptKentIdentity(
+    scriptInputs[0].value,
+    `${relativePath} Script input`,
+  );
+
+  const completionCommands = collectElements(
+    tree,
+    (node) => node.tagName === "code",
+  )
+    .map((node) => textContent(node).trim())
+    .filter((source) => source.startsWith("kent task complete "));
+  assert(
+    completionCommands.some((command) =>
+      command.includes("--force --session "),
+    ),
     `${relativePath} should document Session-selected forced completion`,
   );
   assert(
-    completionCommands.some((command) => command.includes('--force --task ')),
+    completionCommands.some((command) => command.includes("--force --task ")),
     `${relativePath} should document Task-selected forced completion`,
   );
   assert(
-    completionCommands.every((command) => !command.includes('--node')),
+    completionCommands.every((command) => !command.includes("--node")),
     `${relativePath} completion examples must not select Current Nodes`,
   );
 }
 
 async function assertWorkflowSkill() {
-  const skillPath = path.join(docsRoot, '..', 'prompts', 'skills', 'kent-workflows', 'SKILL.md');
-  const scriptInputs = parsedMarkdownCodeExamples(await readFile(skillPath, 'utf8')).filter(
-    ({ value }) => value !== null && typeof value === 'object' && !Array.isArray(value) && '_kent' in value,
+  const skillPath = path.join(
+    docsRoot,
+    "..",
+    "prompts",
+    "skills",
+    "kent-workflows",
+    "SKILL.md",
   );
-  assert(scriptInputs.length === 1, `${skillPath} should contain one structured Script input example`);
+  const scriptInputs = parsedMarkdownCodeExamples(
+    await readFile(skillPath, "utf8"),
+  ).filter(
+    ({ value }) =>
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "_kent" in value,
+  );
+  assert(
+    scriptInputs.length === 1,
+    `${skillPath} should contain one structured Script input example`,
+  );
   assertScriptKentIdentity(scriptInputs[0].value, `${skillPath} Script input`);
 }
 
-async function walkFiles(root, prefix = '') {
-  const entries = await readdir(path.join(root, prefix), { withFileTypes: true });
+async function walkFiles(root, prefix = "") {
+  const entries = await readdir(path.join(root, prefix), {
+    withFileTypes: true,
+  });
   const files = [];
 
   for (const entry of entries) {
@@ -378,8 +493,13 @@ async function walkFiles(root, prefix = '') {
 
 async function assertNoPagefindArtifacts() {
   const files = await walkFiles(distRoot);
-  const pagefindFiles = files.filter((filePath) => filePath.split(path.sep).includes('pagefind'));
-  assert(pagefindFiles.length === 0, `expected no Pagefind artifacts, found ${pagefindFiles.join(', ')}`);
+  const pagefindFiles = files.filter((filePath) =>
+    filePath.split(path.sep).includes("pagefind"),
+  );
+  assert(
+    pagefindFiles.length === 0,
+    `expected no Pagefind artifacts, found ${pagefindFiles.join(", ")}`,
+  );
 }
 
 async function assertBuiltStaticArtifacts() {
@@ -388,15 +508,15 @@ async function assertBuiltStaticArtifacts() {
     assertNotFoundPage(),
     assertRootRedirectPage(),
     assertDesktopRedirectPage(),
-    assertFileExists('robots.txt'),
-    assertFileExists('sitemap-index.xml'),
-    assertFileExists('sitemap-0.xml'),
-    assertFileExists('llms.txt'),
-    assertFileExists('llms-full.txt'),
-    assertFileExists('llms-small.txt'),
-    assertFileExists('docs.md'),
-    assertFileExists('quickstart.md'),
-    assertFileExists('sandboxing.md'),
+    assertFileExists("robots.txt"),
+    assertFileExists("sitemap-index.xml"),
+    assertFileExists("sitemap-0.xml"),
+    assertFileExists("llms.txt"),
+    assertFileExists("llms-full.txt"),
+    assertFileExists("llms-small.txt"),
+    assertFileExists("docs.md"),
+    assertFileExists("quickstart.md"),
+    assertFileExists("sandboxing.md"),
     assertWorkflowGuide(),
     assertWorkflowSkill(),
     assertNoPagefindArtifacts(),
@@ -406,14 +526,16 @@ async function assertBuiltStaticArtifacts() {
 async function findOpenPort() {
   const server = net.createServer();
   await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
-  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
 
-  if (!address || typeof address === 'string') {
-    throw new Error('failed to allocate preview port');
+  if (!address || typeof address === "string") {
+    throw new Error("failed to allocate preview port");
   }
 
   return address.port;
@@ -437,7 +559,9 @@ async function waitForPreview(baseUrl, processOutput) {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
 
-  throw new Error(`preview did not become ready: ${lastError?.message ?? 'unknown error'}\n${processOutput()}`);
+  throw new Error(
+    `preview did not become ready: ${lastError?.message ?? "unknown error"}\n${processOutput()}`,
+  );
 }
 
 async function fetchText(url) {
@@ -451,15 +575,19 @@ async function fetchText(url) {
 const port = await findOpenPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const outputChunks = [];
-const astroBin = path.join(docsRoot, 'node_modules', '.bin', 'astro');
-const preview = spawn(astroBin, ['preview', '--host', '127.0.0.1', '--port', String(port)], {
-  cwd: docsRoot,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-const processOutput = () => Buffer.concat(outputChunks).toString('utf8');
+const astroBin = path.join(docsRoot, "node_modules", ".bin", "astro");
+const preview = spawn(
+  astroBin,
+  ["preview", "--host", "127.0.0.1", "--port", String(port)],
+  {
+    cwd: docsRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+  },
+);
+const processOutput = () => Buffer.concat(outputChunks).toString("utf8");
 
-preview.stdout.on('data', (chunk) => outputChunks.push(chunk));
-preview.stderr.on('data', (chunk) => outputChunks.push(chunk));
+preview.stdout.on("data", (chunk) => outputChunks.push(chunk));
+preview.stderr.on("data", (chunk) => outputChunks.push(chunk));
 
 try {
   await assertBuiltStaticArtifacts();
@@ -469,13 +597,32 @@ try {
   const llmsUrl = `${baseUrl}${docsConfig.basePath}/llms.txt`;
   const sandboxingUrl = `${baseUrl}${docsConfig.basePath}/sandboxing/`;
   const sandboxingMarkdownUrl = `${baseUrl}${docsConfig.basePath}/sandboxing.md`;
-  const [markdownText, llmsText, , sandboxingMarkdown, sourceMarkdown, sandboxingSourceMarkdown] = await Promise.all([
+  const [
+    markdownText,
+    llmsText,
+    ,
+    sandboxingMarkdown,
+    sourceMarkdown,
+    sandboxingSourceMarkdown,
+  ] = await Promise.all([
     fetchText(markdownUrl),
     fetchText(llmsUrl),
     fetchText(sandboxingUrl),
     fetchText(sandboxingMarkdownUrl),
-    readFile(path.join(docsRoot, 'src', 'content', 'docs', 'command-postprocessing.md'), 'utf8'),
-    readFile(path.join(docsRoot, 'src', 'content', 'docs', 'sandboxing.md'), 'utf8'),
+    readFile(
+      path.join(
+        docsRoot,
+        "src",
+        "content",
+        "docs",
+        "command-postprocessing.md",
+      ),
+      "utf8",
+    ),
+    readFile(
+      path.join(docsRoot, "src", "content", "docs", "sandboxing.md"),
+      "utf8",
+    ),
   ]);
 
   if (markdownText !== sourceMarkdown) {
@@ -486,22 +633,28 @@ try {
   }
 
   const rawMarkdownLinks = llmsText
-    .split('\n')
-    .filter((line) => line.startsWith('- [') && line.endsWith('.md)'))
-    .map((line) => line.slice(line.indexOf('](') + 2, -1));
-  const duplicateRawMarkdownLinks = rawMarkdownLinks.filter((link, index) => rawMarkdownLinks.indexOf(link) !== index);
+    .split("\n")
+    .filter((line) => line.startsWith("- [") && line.endsWith(".md)"))
+    .map((line) => line.slice(line.indexOf("](") + 2, -1));
+  const duplicateRawMarkdownLinks = rawMarkdownLinks.filter(
+    (link, index) => rawMarkdownLinks.indexOf(link) !== index,
+  );
   if (duplicateRawMarkdownLinks.length > 0) {
-    throw new Error(`llms.txt includes duplicate raw markdown links: ${duplicateRawMarkdownLinks.join(', ')}`);
+    throw new Error(
+      `llms.txt includes duplicate raw markdown links: ${duplicateRawMarkdownLinks.join(", ")}`,
+    );
   }
   const expectedDiscoveryLinks = [
-    docsConfig.getPublicUrl('/command-postprocessing.md'),
-    docsConfig.getPublicUrl('/sandboxing.md'),
+    docsConfig.getPublicUrl("/command-postprocessing.md"),
+    docsConfig.getPublicUrl("/sandboxing.md"),
   ];
   for (const expectedLink of expectedDiscoveryLinks) {
     if (!rawMarkdownLinks.includes(expectedLink)) {
-      throw new Error(`llms.txt does not include raw markdown discovery link ${expectedLink}`);
+      throw new Error(
+        `llms.txt does not include raw markdown discovery link ${expectedLink}`,
+      );
     }
   }
 } finally {
-  preview.kill('SIGTERM');
+  preview.kill("SIGTERM");
 }

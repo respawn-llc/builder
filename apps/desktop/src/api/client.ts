@@ -35,6 +35,7 @@ import type {
   TaskResumeInput,
   TaskStartInput,
   TaskMutationInput,
+  ProjectTaskGroupCountsInput,
   TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
@@ -47,6 +48,7 @@ import type {
   WorkflowListInput,
   WorkflowProjectLinkInput,
 } from "./clientInputs";
+import { workflowPageSize } from "./clientInputs";
 import { compactJsonObject, emptyJsonObject } from "./json";
 import type { SetupOperationID } from "./setupOperationID";
 import type * as worktreeModels from "./schemas/worktree";
@@ -56,6 +58,7 @@ import type {
   AttentionPage,
   BoardNodeCardsPage,
   CommentPage,
+  CreatedTaskSummary,
   PendingAsk,
   ProjectWorkflowLink,
   ProjectPage,
@@ -85,7 +88,13 @@ import type {
   WorkflowRecord,
   WorkflowValidation,
 } from "./models";
-import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
+import type {
+  ProjectLabel,
+  ProjectLabelCatalog,
+  ProjectTaskGroupCounts,
+  TaskLabelAssignment,
+  TaskListPage,
+} from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import { ContractError, TransportError } from "./errors";
 import { workflowIDSchema } from "./schemas/workflowID";
@@ -234,7 +243,8 @@ export class ApiClient implements ApiService {
         "workflow.list",
         compactJsonObject({
           offset: input.offset ?? 0,
-          limit: input.limit ?? 40,
+          limit: input.limit ?? workflowPageSize,
+          project_id: input.projectID,
           query: input.query ?? "",
         }),
       ),
@@ -441,7 +451,7 @@ export class ApiClient implements ApiService {
     return taskDetail.listTaskAttention(this.#transport, taskID);
   }
 
-  async createTask(input: TaskMutationInput): Promise<string> {
+  async createTask(input: TaskMutationInput): Promise<CreatedTaskSummary> {
     return workflowLabels.createTask(this.#transport, input);
   }
 
@@ -468,6 +478,10 @@ export class ApiClient implements ApiService {
 
   async listTasks(input: TaskListInput): Promise<TaskListPage> {
     return workflowLabels.listTasks(this.#transport, input);
+  }
+
+  async getProjectTaskGroupCounts(input: ProjectTaskGroupCountsInput): Promise<ProjectTaskGroupCounts> {
+    return workflowLabels.getProjectTaskGroupCounts(this.#transport, input);
   }
 
   async searchTasks(input: TaskSearchInput, signal?: AbortSignal): Promise<TaskSearchResponse> {

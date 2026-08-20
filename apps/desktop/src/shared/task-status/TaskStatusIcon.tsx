@@ -1,4 +1,4 @@
-import { CheckCircle2, Circle, CircleDot } from "lucide-react";
+import { CheckCircle2, Circle, CircleDot, CircleHelp, CirclePause, CircleStop } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { TaskStatusKind } from "@/api";
@@ -12,13 +12,15 @@ export function TaskStatusIcon({ status }: Readonly<{ status: TaskStatusKind }>)
       return <Circle aria-hidden="true" size={15} />;
     case "active":
       return <CircleDot aria-hidden="true" className="text-[var(--color-primary)]" size={15} />;
-    case "queued":
     case "running":
       return <Spinner className="size-[15px]" size="sm" strokeWidth={2} />;
+    case "queued":
+      return <CirclePause aria-hidden="true" className="text-[var(--color-warning)]" size={15} />;
     case "waiting_approval":
-    case "interrupted":
       return <CircleDot aria-hidden="true" className="text-[var(--color-secondary)]" size={15} />;
+    case "interrupted":
+      return <CircleStop aria-hidden="true" className="text-[var(--color-error)]" size={15} />;
     case "waiting_question":
-      return <CircleDot aria-hidden="true" className="text-[var(--color-primary)]" size={15} />;
+      return <CircleHelp aria-hidden="true" className="text-[var(--color-primary)]" size={15} />;
   }
 }

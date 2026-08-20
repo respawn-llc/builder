@@ -14,6 +14,7 @@ GUI workspace for Kent desktop/web client surfaces.
 
 ## Desktop TypeScript Ownership
 
+- Wide Task Detail layouts must give Description and Metadata exactly one shared height: the maximum of their two intrinsic heights. Measure both intrinsic heights before applying that shared height to either outer island. Keep the behavioral regression test that covers both the Description-taller and Metadata-taller cases.
 - `desktop/src/app/**` owns shell composition, including startup under `app/startup/**`, routes, sidebars, providers, native-window controllers, and the developer showcase.
 - `desktop/src/app-facade/**` is the feature-facing shell seam for app services, navigation, query keys, status, sidebar contracts, and native helpers. It may depend on public API/UI/native seams, but never on shell or features.
 - Each `desktop/src/features/<feature>/**` directory is an isolated feature module. Features may depend on `@/app-facade`, `@/api`, `@/ui`, `@/i18n`, and public `@/shared/<capability>` entrypoints, but never on another feature, API internals/composition, shell, or the native package.
@@ -31,9 +32,9 @@ Boundary enforcement is fail-closed: every desktop TypeScript file and local dep
 
 ## Checks
 
-- From `apps/`, run `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, and relevant build scripts after GUI code changes.
-- `pnpm lint` enforces the architecture policy. `scripts/ci-check.sh all` runs the same workspace command, and pre-push delegates to that CI script.
-- Use browser-client QA as the primary manual GUI QA path. Run `pnpm --dir apps/desktop dev:browser` for interactive QA against an existing Kent server.
+- Run `just setup --apply` before GUI work, then use `just lint desktop`, `just test desktop`, `just build desktop`, or `just check desktop --dry-run`.
+- `just lint desktop` enforces the architecture and dependency policies.
+- Use browser-client QA as the primary manual GUI QA path. Run `just dev desktop` for interactive QA against an existing Kent server.
 - Tauri native builds require Rust toolchain plus platform-specific WebView/build dependencies.
 - Commit `apps/desktop/src-tauri/gen/schemas/*.json` when Tauri regenerates them; they are generated, but keeping them in the repo avoids dirty editor/schema state on clean clones.
 - Frontend dependency policy is enforced by `apps/dependency-policy.json` and `apps/scripts/check-dependency-policy.mjs`. New direct dependencies are blocked until they are added to the allowlist intentionally.

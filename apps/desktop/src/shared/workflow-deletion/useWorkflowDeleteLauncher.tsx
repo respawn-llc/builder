@@ -226,7 +226,6 @@ export function useWorkflowDeleteLauncher(
   };
 }
 
-
 async function invalidateWorkflowDeleteQueries(queryClient: QueryClient, workflowID: string): Promise<void> {
   queryClient.removeQueries({ queryKey: queryKeys.workflowDefinition(workflowID) });
   queryClient.removeQueries({ queryKey: queryKeys.workflowValidation(workflowID, "execution") });

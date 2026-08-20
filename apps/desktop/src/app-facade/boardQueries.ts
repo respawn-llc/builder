@@ -1,12 +1,13 @@
 import type { QueryClient } from "@tanstack/react-query";
 
 import { queryKeys } from "./queryKeys";
+import { awaitAllQueryOperations } from "./queryErrors";
 
 export async function invalidateProjectBoardQueries(
   queryClient: QueryClient,
   projectID: string,
 ): Promise<void> {
-  await Promise.all([
+  await awaitAllQueryOperations([
     queryClient.invalidateQueries({
       queryKey: queryKeys.projectBoardsRoot(projectID),
       refetchType: "active",

@@ -1,9 +1,9 @@
 import { getRouteApi, Outlet, useMatch } from "@tanstack/react-router";
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { BoardRoute } from "@/features/board";
-import { HomeRoute, ProjectTasksSurface } from "@/features/home";
+import { createProjectTasksViewMemory, HomeRoute, ProjectTasksSurface } from "@/features/home";
 import { StartupGate } from "@/features/startup";
 import { StandaloneTaskRoute } from "@/features/task-detail";
 import { LoadingState } from "@/ui";
@@ -66,6 +66,7 @@ export function RootRoute() {
 function RoutePersistence() {
   const navigate = rootRouteApi.useNavigate();
   const homeMatch = useMatch({ from: "/", shouldThrow: false });
+  const homeProjectId = homeMatch?.search.projectId ?? null;
   const isUnselectedHomeRoute = homeMatch !== undefined && homeMatch.search.projectId === undefined;
   const projectMatch = useMatch({ from: "/projects/$projectId", shouldThrow: false });
   const projectId = projectMatch?.params.projectId ?? null;
@@ -77,18 +78,26 @@ function RoutePersistence() {
       if (isUnselectedHomeRoute && restored !== null) {
         // Session restore is startup state hydration, not a user-initiated destination change, so it
         // intentionally bypasses the animated app navigation API.
-        void navigate({
-          to: "/projects/$projectId",
-          params: { projectId: restored.projectId },
-          search: { workflowId: restored.workflowId, taskId: "" },
-          replace: true,
-        });
+        void (restored.kind === "home_project"
+          ? navigate({
+              to: "/",
+              search: { projectId: restored.projectId },
+              replace: true,
+            })
+          : navigate({
+              to: "/projects/$projectId",
+              params: { projectId: restored.projectId },
+              search: { workflowId: restored.workflowId, taskId: "" },
+              replace: true,
+            }));
       }
     }
-    if (projectId !== null) {
-      writeLastProjectRoute({ projectId, workflowId });
+    if (homeProjectId !== null) {
+      writeLastProjectRoute({ kind: "home_project", projectId: homeProjectId });
+    } else if (projectId !== null) {
+      writeLastProjectRoute({ kind: "workflow_board", projectId, workflowId });
     }
-  }, [isUnselectedHomeRoute, projectId, workflowId, navigate]);
+  }, [homeProjectId, isUnselectedHomeRoute, projectId, workflowId, navigate]);
 
   return null;
 }
@@ -125,19 +134,19 @@ export function ProjectTasksRoute() {
   const { t } = useTranslation();
   const params = projectTasksRouteApi.useParams();
   useWindowChromeTitle(t("home.prototype.tasks"));
+  const [viewMemory] = useState(createProjectTasksViewMemory);
   return (
     <SidebarRootOwner>
       <section className="island-glass h-full min-h-0 overflow-hidden rounded-[var(--radius-xl)]">
-        <ProjectTasksSurface projectID={params.projectId} sidebarMode="shift" />
+        <ProjectTasksSurface projectID={params.projectId} sidebarMode="shift" viewMemory={viewMemory} />
       </section>
     </SidebarRootOwner>
   );
 }
 
 export function HomeShellRoute() {
-  const { t } = useTranslation();
   const search = homeRouteApi.useSearch();
-  useWindowChromeTitle(t("home.projectsPane"));
+  useWindowChromeTitle(null);
   return <HomeRoute selectedProjectID={search.projectId ?? null} />;
 }
 

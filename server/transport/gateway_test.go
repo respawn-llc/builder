@@ -1361,6 +1361,52 @@ func TestGatewaySessionTranscriptSubscriptionReturnsHydrationOnDedicatedRoute(t 
 	}
 }
 
+func TestGatewayQuestionHistorySubscriptionPassesAttachedSessionPreflight(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	store := createGatewayAuthoritativeSession(t, appCore)
+	if _, err := store.MaterializeEventLog(); err != nil {
+		t.Fatalf("materialize Question-history event log: %v", err)
+	}
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
+	requireGatewaySessionAttachment(t, conn, "attach-session", store.Meta().SessionID)
+	callGateway(t, conn, "subscribe-question-history", protocol.MethodSessionQuestionHistorySubscribe, serverapi.QuestionHistorySubscribeRequest{
+		SessionID: store.Meta().SessionID, MaxHandoffs: 1,
+	}, nil)
+
+	for _, wantKind := range []serverapi.QuestionHistoryEventKind{
+		serverapi.QuestionHistoryEventStarted,
+		serverapi.QuestionHistoryEventCompleted,
+	} {
+		var notification protocol.Request
+		if err := websocket.JSON.Receive(conn, &notification); err != nil {
+			t.Fatalf("receive Question-history notification: %v", err)
+		}
+		if notification.Method != protocol.MethodSessionQuestionHistoryEvent {
+			t.Fatalf("notification method = %q, want Question-history event", notification.Method)
+		}
+		var params protocol.SessionQuestionHistoryEventParams
+		if err := json.Unmarshal(notification.Params, &params); err != nil {
+			t.Fatalf("decode Question-history event: %v", err)
+		}
+		if params.Event.Kind != string(wantKind) {
+			t.Fatalf("Question-history event kind = %q, want %q", params.Event.Kind, wantKind)
+		}
+	}
+	var complete protocol.Request
+	if err := websocket.JSON.Receive(conn, &complete); err != nil {
+		t.Fatalf("receive Question-history completion: %v", err)
+	}
+	if complete.Method != protocol.MethodSessionQuestionHistoryComplete {
+		t.Fatalf("completion method = %q, want Question-history complete", complete.Method)
+	}
+}
+
 func gatewaySessionPlanRequest() serverapi.SessionPlanRequest {
 	return serverapi.SessionPlanRequest{
 		Mode:   serverapi.SessionLaunchModeInteractive,

@@ -5,22 +5,8 @@
   "engines": {
     "node": ">=22"
   },
-  "scripts": {
-    "contract:generate": "go run github.com/go-task/task/v3/cmd/task@v3.52.0 --dir .. --temp-dir .generated/protobuf/task protobuf:ts",
-    "deps:policy": "node ./scripts/check-dependency-policy.mjs",
-    "desktop:dev": "pnpm --filter @app/desktop tauri:dev",
-    "desktop:dev:browser": "pnpm --filter @app/desktop dev:browser",
-    "desktop:build": "pnpm --filter @app/desktop tauri:build",
-    "desktop:install": "pnpm --filter @app/desktop tauri:install",
-    "architecture:policy": "node --test ./scripts/check-eslint-architecture.test.mjs",
-    "lint": "pnpm contract:generate && pnpm deps:policy && pnpm ts:policy && pnpm architecture:policy && pnpm --recursive --if-present lint",
-    "ts:policy": "node ./scripts/check-typescript-policy.mjs",
-    "typecheck": "pnpm contract:generate && pnpm --recursive --if-present typecheck",
-    "test": "pnpm deps:policy && pnpm ts:policy && pnpm architecture:policy && pnpm --recursive --if-present test",
-    "format": "pnpm --recursive --if-present format",
-    "build": "pnpm contract:generate && pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present build"
-  },
   "devDependencies": {
+    "@bufbuild/protoc-gen-es": "2.13.0",
     "postcss": "8.5.25",
     "prettier": "^3.9.6"
   }

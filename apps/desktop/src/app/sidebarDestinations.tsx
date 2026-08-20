@@ -36,7 +36,9 @@ export function SidebarDestinationView({
   retainedState?: unknown;
 }>): ReactElement {
   if (destination.kind === "newTask")
-    return <NewTaskDestination destination={destination} navigator={navigator} />;
+    return (
+      <NewTaskDestination destination={destination} navigator={navigator} retainedState={retainedState} />
+    );
   if (destination.kind === "taskDetail") {
     return (
       <TaskDetailDestination destination={destination} navigator={navigator} retainedState={retainedState} />
@@ -140,39 +142,37 @@ function TaskDetailHeaderActions({
 function NewTaskDestination({
   destination,
   navigator,
+  retainedState,
 }: Readonly<{
   destination: Extract<SidebarDestination, { kind: "newTask" }>;
   navigator: SidebarPageNavigator;
+  retainedState?: unknown;
 }>): ReactElement {
   const [pending, setPending] = useState(false);
   useEffect(
     () =>
       navigator.registerAvailability({
-        back: destination.pendingRelationship === undefined || !pending,
-        close: destination.pendingRelationship === undefined || !pending,
+        back: destination.initialPreparedDependency === undefined || !pending,
+        close: destination.initialPreparedDependency === undefined || !pending,
       }),
-    [destination.pendingRelationship, navigator, pending],
+    [destination.initialPreparedDependency, navigator, pending],
   );
-  return (
-    <NewTaskForm
-      boardQueryWorkflowID={destination.boardQueryWorkflowID}
-      className="w-full"
-      initialSourceWorkspaceID={destination.initialSourceWorkspaceID}
-      onPendingChange={setPending}
-      onProjectMissing={navigator.back}
-      onSubmitted={(taskID) => {
-        if (destination.pendingRelationship === undefined) navigator.close();
-        else
-          navigator.replace({
-            kind: "taskDetail",
-            taskID,
-            ...(destination.mode === undefined ? {} : { mode: destination.mode }),
-          });
-      }}
-      projectID={destination.projectID}
-      pendingRelationship={destination.pendingRelationship}
-      workflowID={destination.workflowID}
-    />
+  const formProps = {
+    boardQueryWorkflowID: destination.boardQueryWorkflowID,
+    className: "w-full",
+    initialPreparedDependency: destination.initialPreparedDependency,
+    initialSourceWorkspaceID: destination.initialSourceWorkspaceID,
+    navigator,
+    onCreated: destination.onCreated,
+    onPendingChange: setPending,
+    parentReturnDirection: destination.parentReturnDirection,
+    projectID: destination.projectID,
+    retainedState,
+  };
+  return destination.workflowID === undefined ? (
+    <NewTaskForm {...formProps} />
+  ) : (
+    <NewTaskForm {...formProps} workflowID={destination.workflowID} />
   );
 }
 
@@ -199,26 +199,32 @@ function LinkWorkflowDestinationView({
   destination: Extract<SidebarDestination, { kind: "linkWorkflow" }>;
   navigator: SidebarPageNavigator;
 }>): ReactElement {
+  const { t } = useTranslation();
+  const { push } = useStatusController();
   usePublishSidebarHeaderAction(
     destination.creating === true ? null : (
       <LinkWorkflowCreateHeaderButton destination={destination} navigator={navigator} />
     ),
   );
-  const navigation = useAppNavigation();
-  const follow = (action: () => Promise<void>) => {
-    if (navigator.close() === "accepted") void action();
+  const complete = (completion: Parameters<typeof destination.onCompleted>[0]) => {
+    if (navigator.close() !== "accepted") return;
+    void (async () => destination.onCompleted(completion))().catch((error: unknown) => {
+      push({
+        body: errorMessage(error),
+        durationMs: Infinity,
+        id: "workflow-link-completion-error",
+        title: t("states.error"),
+        tone: "danger",
+      });
+    });
   };
   return (
     <LinkWorkflowSidebar
       onCreated={(workflowID) => {
-        follow(async () => {
-          await navigation.openWorkflowEditor({ projectID: destination.projectID, workflowID });
-        });
+        complete({ kind: "created", workflowID });
       }}
       onLinked={(workflowID) => {
-        follow(async () => {
-          await navigation.openProject(destination.projectID, workflowID);
-        });
+        complete({ kind: "linked", workflowID });
       }}
       creating={destination.creating === true}
       navigator={navigator}

@@ -76,7 +76,7 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 			{Phase: pty.PhasePromptReady, Bytes: []byte("\r")},
 			{Phase: pty.PhaseLifecycleHooksObserved, Bytes: []byte{0x03, 0x03}},
 		},
-		Timeout: 5 * time.Second,
+		Timeout: ptyFixtureCommandTimeout,
 	})
 	if err != nil {
 		t.Fatalf("run local lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
@@ -175,7 +175,7 @@ func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
 			Phase: pty.PhaseLifecycleHooksObserved,
 			Bytes: []byte{0x03, 0x03},
 		}},
-		Timeout: 5 * time.Second,
+		Timeout: ptyFixtureCommandTimeout,
 	})
 	if err != nil {
 		t.Fatalf("run remote lifecycle PTY fixture: %v raw=%q server=%q", err, string(capture.Raw), serverOutput.String())
@@ -232,7 +232,7 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 			Phase: pty.PhaseLifecycleHooksObserved,
 			Bytes: []byte{0x03, 0x03},
 		}},
-		Timeout: 5 * time.Second,
+		Timeout: ptyFixtureCommandTimeout,
 	})
 	if err != nil {
 		t.Fatalf("run failing-hook lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))

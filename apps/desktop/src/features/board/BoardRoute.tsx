@@ -9,18 +9,18 @@ import { useConnectionSnapshot } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
-import { useStatusController } from "@/app-facade";
+import { reportNonCancelledError, useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import {
   TaskInitiatingActionDialogs,
   startTaskInitiatingAction,
   type TaskInitiatingActionDialogResult,
+  useTaskResumeAction,
 } from "@/shared/execution-target";
 import { ProjectLabelsProvider, useProjectLabelFilter } from "@/shared/labels";
 import { TaskDeleteConfirmationDialog } from "@/shared/task-delete";
 import { WorkflowValidationIssues } from "@/shared/workflow-validation";
 import { ErrorState, FloatingNoticeIsland, LoadingState } from "@/ui";
-import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { BoardRailMotionController } from "./BoardRailMotionController";
 import { taskDeleteWindowOptions, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
@@ -32,11 +32,11 @@ import { classifyDrop } from "./BoardDropActions";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import { ManualMoveDialog } from "./ManualMoveDialog";
 import { useBoardInitiatingActionController } from "./useBoardInitiatingActionController";
-import { useBoardResumeAction } from "./useBoardResumeAction";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterRow } from "./BoardFilterRow";
 import { BoardQueryProvider } from "./BoardQueryContext";
+import { completeBoardWorkflowLink } from "./boardWorkflowLinkCompletion";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
 
@@ -60,7 +60,6 @@ const manualMoveBlockerTranslationKeys = {
   invalid_workflow: "board.moveBlockedInvalidWorkflow",
   no_source_position: "board.moveBlockedNoSource",
   unsupported_destination: "board.moveBlockedUnsupportedDestination",
-  waiting_question: "board.moveBlockedWaitingQuestion",
   lifecycle_conflict: "board.moveBlockedLifecycle",
   context_session_unavailable: "board.moveBlockedContextSession",
   no_usable_transition: "board.moveBlockedNoUsableTransition",
@@ -219,8 +218,10 @@ function BoardContent({
   const actions = useBoardTaskActions(board.projectID);
   const reportActionError = useCallback(
     (id: string, title: string, error: unknown) => {
-      const body = errorMessage(error);
-      push({ id, tone: "danger", title, body, durationMs: Infinity });
+      reportNonCancelledError(error, (failure) => {
+        const body = errorMessage(failure);
+        push({ id, tone: "danger", title, body, durationMs: Infinity });
+      });
     },
     [push],
   );
@@ -258,7 +259,7 @@ function BoardContent({
     refreshErrorTitle: t("board.loadFailed"),
     startErrorTitle: t("board.startFailed"),
   });
-  const resumeAction = useBoardResumeAction(initiatingAction);
+  const resumeAction = useTaskResumeAction(initiatingAction);
   const manualMove = useManualMoveController({
     api,
     onPreviewBlocked: reportMovePreviewBlocked,
@@ -266,9 +267,7 @@ function BoardContent({
     runAction: runCardAction,
   });
   const actionsDisabled =
-    connection.phase !== "connected" ||
-    initiatingAction.pending !== null ||
-    manualMove.actionsDisabled;
+    connection.phase !== "connected" || initiatingAction.pending !== null || manualMove.actionsDisabled;
   const dragDisabled = boardDragDisabled(
     actionsDisabled,
     initiatingAction.running,
@@ -512,12 +511,6 @@ function BoardContent({
     void navigation.openProjectTasks(board.projectID).catch(reportNavigationError);
   }
 
-  function editWorkflow(workflowID: string): void {
-    void navigation
-      .openWorkflowEditor({ projectID: board.projectID, workflowID })
-      .catch(reportNavigationError);
-  }
-
   function openNewTask(): void {
     open({
       boardQueryWorkflowID,
@@ -532,6 +525,9 @@ function BoardContent({
     open({
       kind: "linkWorkflow",
       mode: "overlay",
+      onCompleted: async (completion) => {
+        await completeBoardWorkflowLink(navigation, board.projectID, completion);
+      },
       projectID: board.projectID,
       selectedWorkflowID: board.selectedWorkflow.id,
     });
@@ -601,14 +597,6 @@ function BoardContent({
         <BoardBackgroundRefreshNotice error={boardRefreshError} onRetry={onBoardRefreshRetry} />
       )}
       <BoardWorkflowIssuesNotice workflow={board.selectedWorkflow} />
-      <BoardHoverMenu
-        board={board}
-        canCreateTask={connection.phase === "connected"}
-        onNewTask={openNewTask}
-        onWorkflowEdit={editWorkflow}
-        onWorkflowLink={openLinkWorkflow}
-        onWorkflowSelect={selectWorkflow}
-      />
     </div>
   );
 }

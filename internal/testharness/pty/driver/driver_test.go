@@ -19,13 +19,17 @@ import (
 	"github.com/google/uuid"
 )
 
-const commandTestTimeout = 5 * time.Second
+const (
+	commandDefaultTimeout = 5 * time.Second
+	commandTestTimeout    = 30 * time.Second
+	commandTimeoutCap     = time.Minute
+)
 
 func TestRunCommandRejectsTimeoutAboveHarnessBudget(t *testing.T) {
 	_, err := driver.RunCommand(context.Background(), driver.CommandSpec{
 		Path:       "unused",
 		Dimensions: pty.MustDimensions(2, 8),
-		Timeout:    commandTestTimeout + time.Nanosecond,
+		Timeout:    commandTimeoutCap + time.Nanosecond,
 	})
 	if err == nil || !strings.Contains(err.Error(), "exceeds PTY command timeout cap") {
 		t.Fatalf("RunCommand error = %v, want timeout-cap error", err)
@@ -42,8 +46,8 @@ func TestRunCommandAppliesHarnessBudgetWhenTimeoutIsOmitted(t *testing.T) {
 	if !errors.As(err, new(*driver.TimeoutError)) {
 		t.Fatalf("RunCommand error = %v, want TimeoutError", err)
 	}
-	if elapsed := time.Since(started); elapsed > commandTestTimeout+time.Second {
-		t.Fatalf("RunCommand elapsed = %s, want hard cap near %s", elapsed, commandTestTimeout)
+	if elapsed := time.Since(started); elapsed > commandDefaultTimeout+time.Second {
+		t.Fatalf("RunCommand elapsed = %s, want hard cap near %s", elapsed, commandDefaultTimeout)
 	}
 }
 

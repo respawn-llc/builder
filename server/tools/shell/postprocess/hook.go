@@ -54,7 +54,7 @@ func (p userHookProcessor) Process(ctx context.Context, envelope Envelope) (Deci
 		return Decision{}, err
 	}
 	if !ok {
-		return Decision{}, ProcessorError{Severity: FailureRecoverable, Message: "command postprocess hook unavailable"}
+		return Skip(envelope), nil
 	}
 	payload, err := json.Marshal(hookRequest{
 		ToolName:        req.ToolName,

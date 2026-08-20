@@ -438,7 +438,9 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.listWorkflows({ offset: 0, limit: 10, query: "ship" })).resolves.toMatchObject({
+    await expect(
+      client.listWorkflows({ offset: 0, limit: 10, projectID: "project-1", query: "ship" }),
+    ).resolves.toMatchObject({
       nextOffset: 10,
       workflows: [
         {
@@ -446,6 +448,7 @@ describe("ApiClient", () => {
           name: "Delivery",
           version: 4,
           executionTargetPolicy: { mode: "custom_ref", customRef: "release/v1" },
+          projectLink: { isDefault: true },
         },
       ],
     });
@@ -476,7 +479,7 @@ describe("ApiClient", () => {
 
     expect(transport.calls).toContainEqual({
       method: "workflow.list",
-      params: { offset: 0, limit: 10, query: "ship" },
+      params: { offset: 0, limit: 10, project_id: "project-1", query: "ship" },
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.createAndLinkProject",

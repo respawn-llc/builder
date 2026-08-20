@@ -1,6 +1,11 @@
 import type { SidebarDestination } from "./sidebarContext";
 import { defaultSidebarSizePreference, type SidebarSizePreference } from "./sidebarSizing";
 
+export const taskDetailSidebarSizePreference: SidebarSizePreference = {
+  desiredWidthPx: 650,
+  minWidthPx: 520,
+};
+
 export type SidebarWidthProfile =
   | Readonly<{ kind: "custom"; sizing: SidebarSizePreference | null }>
   | Readonly<{ kind: "form" }>
@@ -47,7 +52,7 @@ function sidebarSizePreferenceForProfile(profile: SidebarWidthProfile): SidebarS
     return profile.sizing ?? defaultSidebarSizePreference;
   }
   if (profile.kind === "taskDetail") {
-    return { desiredWidthPx: 650, minWidthPx: 520 };
+    return taskDetailSidebarSizePreference;
   }
   if (profile.kind === "workflowEditor") {
     return { desiredWidthPx: 550, minWidthPx: 420 };

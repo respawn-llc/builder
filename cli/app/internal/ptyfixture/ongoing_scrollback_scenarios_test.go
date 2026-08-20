@@ -339,7 +339,7 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 		FrameInputSequences: inputPlan.frameSequences,
 		FrameResizes:        inputPlan.frameResizes,
 		Resizes:             resizes,
-		Timeout:             5 * time.Second,
+		Timeout:             ptyFixtureCommandTimeout,
 	})
 	if err != nil {
 		t.Fatalf("run fixture: %v raw=%q", err, string(capture.Raw))

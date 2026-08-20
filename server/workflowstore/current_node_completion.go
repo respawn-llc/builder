@@ -527,20 +527,26 @@ func currentNodeDefinitionEnteringEdge(
 	definition workflow.Definition,
 	currentNode workflow.CurrentNode,
 ) (workflow.Edge, error) {
+	edge, err := currentNodeDefinitionEnteringEdgeByID(definition, currentNode)
+	if err != nil {
+		return workflow.Edge{}, err
+	}
+	if edge.TargetNodeID != currentNode.Reference.NodeID {
+		return workflow.Edge{}, currentNodeEnteringEdgeTargetError(currentNode, edge)
+	}
+	return edge, nil
+}
+
+func currentNodeDefinitionEnteringEdgeByID(
+	definition workflow.Definition,
+	currentNode workflow.CurrentNode,
+) (workflow.Edge, error) {
 	if currentNode.EnteredByEdgeID == nil {
 		return workflow.Edge{}, fmt.Errorf("current workflow node %v has no entering edge", currentNode.Reference)
 	}
 	for _, edge := range definition.Edges {
 		if edge.ID != *currentNode.EnteredByEdgeID {
 			continue
-		}
-		if edge.TargetNodeID != currentNode.Reference.NodeID {
-			return workflow.Edge{}, fmt.Errorf(
-				"current workflow node %v entering edge %q targets node %q",
-				currentNode.Reference,
-				edge.ID,
-				edge.TargetNodeID,
-			)
 		}
 		return edge, nil
 	}
@@ -549,6 +555,18 @@ func currentNodeDefinitionEnteringEdge(
 		currentNode.Reference,
 		*currentNode.EnteredByEdgeID,
 		definition.ID,
+	)
+}
+
+func currentNodeEnteringEdgeTargetError(
+	currentNode workflow.CurrentNode,
+	edge workflow.Edge,
+) error {
+	return fmt.Errorf(
+		"current workflow node %v entering edge %q targets node %q",
+		currentNode.Reference,
+		edge.ID,
+		edge.TargetNodeID,
 	)
 }
 

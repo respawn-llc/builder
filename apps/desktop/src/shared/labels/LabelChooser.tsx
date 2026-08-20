@@ -8,6 +8,7 @@ import {
   useState,
   type Dispatch,
   type ReactElement,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -51,6 +52,7 @@ export type LabelChooserInvocation =
       onAction(action: LabelFilterAction): void;
     }>
   | Readonly<{
+      disabled?: boolean | undefined;
       kind: "assignment";
       selectedLabelIDs: readonly string[];
       onCreatePendingChange?(pending: boolean): void;
@@ -58,7 +60,11 @@ export type LabelChooserInvocation =
     }>;
 
 export type LabelChooserProps = Readonly<{
+  footer?: ReactNode;
   invocation: LabelChooserInvocation;
+  onOpenChange?: ((open: boolean) => void) | undefined;
+  open?: boolean | undefined;
+  preferredSide?: "bottom" | "top" | undefined;
   trigger: ReactElement;
 }>;
 
@@ -172,7 +178,14 @@ function renderLabelChooserSearch({
   );
 }
 
-export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
+export function LabelChooser({
+  footer,
+  invocation,
+  onOpenChange,
+  open: controlledOpen,
+  preferredSide,
+  trigger,
+}: LabelChooserProps) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const { push } = useStatusController();
@@ -180,7 +193,8 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const mutations = useProjectLabelCatalogMutations();
   const [search, setSearch] = useState("");
   const [keyboardHighlightedIndex, setKeyboardHighlightedIndex] = useState<number | null>(null);
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
   const [rename, setRename] = useState<RenameState | null>(null);
   const [deletion, setDeletion] = useState<DeleteState | null>(null);
   const outsideInteractionRef = useRef(false);
@@ -226,7 +240,10 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           return;
         }
         outsideInteractionRef.current = false;
-        setOpen(nextOpen);
+        if (controlledOpen === undefined) {
+          setUncontrolledOpen(nextOpen);
+        }
+        onOpenChange?.(nextOpen);
         if (!nextOpen) {
           setSearch("");
           setKeyboardHighlightedIndex(null);
@@ -242,7 +259,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[min(25.3rem,calc(100vw-24px))] gap-[var(--space-2)] p-[var(--space-2)]"
+        className="max-h-[var(--radix-popover-content-available-height)] w-[min(25.3rem,calc(100vw-24px))] gap-[var(--space-2)] overflow-y-auto overscroll-contain p-[var(--space-2)]"
         collisionPadding={12}
         level={3}
         onEscapeKeyDown={(event) => {
@@ -256,6 +273,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
         onPointerDownOutside={() => {
           outsideInteractionRef.current = true;
         }}
+        side={labelChooserPopoverSide(preferredSide)}
       >
         {renderLabelChooserSearch({
           canCreate,
@@ -323,9 +341,14 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           reorderEnabled,
           catalogMutationPending,
         })}
+        {footer}
       </PopoverContent>
     </Popover>
   );
+}
+
+function labelChooserPopoverSide(side: LabelChooserProps["preferredSide"]): "bottom" | "top" {
+  return side ?? "bottom";
 }
 
 function renderLabelChooserResults({
@@ -555,6 +578,7 @@ function renderLabelChooserChoiceRow({
       }}
       reorder={sortable}
       selection={selection}
+      selectionDisabled={invocation.kind === "assignment" && invocation.disabled === true}
     />
   );
   if (sortable === undefined) {

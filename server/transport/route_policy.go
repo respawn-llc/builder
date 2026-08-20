@@ -437,6 +437,8 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.TranscriptSubscribeRequest:
 		return p.SessionID, true
+	case serverapi.QuestionHistorySubscribeRequest:
+		return p.SessionID, true
 	case serverapi.AttentionSessionNotificationSubscribeRequest:
 		return p.SessionID, true
 	default:

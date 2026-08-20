@@ -257,7 +257,7 @@ func resolveRetainedTargetTransitionContext(
 				sourceReference,
 			)
 			if associationErr == nil {
-				activeSource, err = workflow.NewExactMaterializedContinuationSource(sourceAssociation.SessionID)
+				activeSource, err = workflow.NewExactMaterializedContinuationSource(sourceAssociation.SourceSessionID)
 				if err != nil {
 					return transitionContextResolution{}, err
 				}

@@ -69,7 +69,6 @@ func (m *uiModel) applyRuntimeActivityProjection(activity clientui.RuntimeActivi
 		m.currentRunID = ""
 		m.currentStepID = ""
 	}
-	m.bindPreActiveInterruptToken()
 	return nil
 }
 
@@ -143,7 +142,6 @@ func (m *uiModel) setPendingInterrupt(pending bool) {
 		m.interruptLifecycle = uiInterruptPending
 		m.interruptRunID = strings.TrimSpace(m.currentRunID)
 		m.interruptStepID = strings.TrimSpace(m.currentStepID)
-		m.interruptPreActive = false
 		m.completedRunID = ""
 		m.completedStepID = ""
 		return
@@ -155,21 +153,4 @@ func (m *uiModel) setPendingInterrupt(pending bool) {
 	m.interruptLifecycle = uiInterruptIdle
 	m.interruptRunID = ""
 	m.interruptStepID = ""
-	m.interruptPreActive = false
-}
-
-func (m *uiModel) bindPreActiveInterruptToken() {
-	if m == nil || !m.hasPendingInterrupt() || !m.interruptPreActive {
-		return
-	}
-	if strings.TrimSpace(m.interruptRunID) != "" || strings.TrimSpace(m.interruptStepID) != "" {
-		m.interruptPreActive = false
-		return
-	}
-	if strings.TrimSpace(m.currentRunID) == "" || strings.TrimSpace(m.currentStepID) == "" {
-		return
-	}
-	m.interruptRunID = strings.TrimSpace(m.currentRunID)
-	m.interruptStepID = strings.TrimSpace(m.currentStepID)
-	m.interruptPreActive = false
 }

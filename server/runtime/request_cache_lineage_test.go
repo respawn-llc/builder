@@ -223,6 +223,38 @@ func TestPromptCacheResponseAppliesLineageByCommitReceipt(t *testing.T) {
 	}
 }
 
+func TestHistoryReplacementPreservesReuseBaselineWhileSuppressingShapeWarning(t *testing.T) {
+	t.Parallel()
+	tracker := newRequestCacheTracker()
+	before := cacheLineageRequest("cache-key", transcript.CacheWarningScopeConversation, "before")
+	if _, err := tracker.Prepare(before); err != nil {
+		t.Fatalf("prepare pre-compaction request: %v", err)
+	}
+	tracker.RecordResponse(persistedCacheResponseObserved{
+		DigestVersion:     requestCacheDigestVersion,
+		CacheKey:          "cache-key",
+		Scope:             transcript.CacheWarningScopeConversation,
+		ChunkCount:        1,
+		TerminalHash:      "before",
+		CachedInputTokens: textutil.Value(7),
+	})
+	tracker.ResetAfterHistoryReplacement("cache-key")
+
+	after, err := tracker.Prepare(cacheLineageRequest("cache-key", transcript.CacheWarningScopeConversation, "after"))
+	if err != nil {
+		t.Fatalf("prepare post-compaction request: %v", err)
+	}
+	if after.exactWarning != nil {
+		t.Fatalf("post-compaction request emitted replacement-shape warning: %+v", after.exactWarning)
+	}
+	if !after.hasPreviousResponse || !after.previousHadReuse || after.previousCachedInputTokens != 7 {
+		t.Fatalf("post-compaction reuse baseline = %+v", after)
+	}
+	if !shouldWarnOnCacheReuseDrop(config.CacheWarningModeVerbose, after, llm.Usage{CachedInputTokens: textutil.Value(0)}) {
+		t.Fatal("post-compaction zero reuse did not retain the reuse-drop diagnostic")
+	}
+}
+
 type transportStaticAuth struct{}
 
 func (transportStaticAuth) AuthorizationHeader(context.Context) (string, error) {
@@ -315,7 +347,7 @@ func TestNew_RejectsInvalidCacheWarningMode(t *testing.T) {
 
 func TestGenerateWithRetryClient_OffModeSuppressesExactNonPostfixWarning(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10}}, {Usage: llm.Usage{InputTokens: 12}}}}
+	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(7)}}, {Usage: llm.Usage{InputTokens: 12}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeOff)
 
 	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
@@ -423,7 +455,7 @@ func TestBuildRequest_UsesBasePromptCacheKeyBeforeFirstCompactionWhenProviderSup
 	if req.SessionID != nil || req.CodexDispatch != nil {
 		t.Fatalf("context-free request carries dispatch identity: %+v", req)
 	}
-	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
+	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID()); got != want {
 		t.Fatalf("PromptCacheKey = %q, want %q", got, want)
 	}
 	if req.PromptCacheScope != transcript.CacheWarningScopeConversation {
@@ -431,7 +463,7 @@ func TestBuildRequest_UsesBasePromptCacheKeyBeforeFirstCompactionWhenProviderSup
 	}
 }
 
-func TestBuildRequest_RotatesPromptCacheKeyWithRequestSessionIDAfterCompaction(t *testing.T) {
+func TestBuildRequest_KeepsPromptCacheKeyWithRequestSessionIDAfterCompaction(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
@@ -444,12 +476,12 @@ func TestBuildRequest_RotatesPromptCacheKeyWithRequestSessionIDAfterCompaction(t
 	if req.SessionID != nil || req.CodexDispatch != nil {
 		t.Fatalf("context-free request carries dispatch identity: %+v", req)
 	}
-	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
+	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID()); got != want {
 		t.Fatalf("PromptCacheKey = %q, want %q", got, want)
 	}
 }
 
-func TestBuildRequest_RotatesPromptCacheKeyFromPersistedCompactionOnReopen(t *testing.T) {
+func TestBuildRequest_KeepsPromptCacheKeyFromPersistedCompactionOnReopen(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "legacy-compact", historyReplacementPayload{
@@ -473,7 +505,7 @@ func TestBuildRequest_RotatesPromptCacheKeyFromPersistedCompactionOnReopen(t *te
 	if req.SessionID != nil || req.CodexDispatch != nil {
 		t.Fatalf("context-free request carries dispatch identity: %+v", req)
 	}
-	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
+	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID()); got != want {
 		t.Fatalf("PromptCacheKey = %q, want %q", got, want)
 	}
 }
@@ -514,7 +546,7 @@ func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *
 	if got, want := req.SessionID, eng.SessionID(); got == nil || *got != want {
 		t.Fatalf("SessionID = %v, want %q", got, want)
 	}
-	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
+	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID()); got != want {
 		t.Fatalf("PromptCacheKey = %q, want %q", got, want)
 	}
 	if got, want := req.PromptCacheScope, transcript.CacheWarningScopeConversation; got != want {
@@ -579,6 +611,9 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	store := mustCreateTestSession(t)
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsPromptCacheKey: true, IsOpenAIFirstParty: true}}
 	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	if err := store.ResetLockedContractForCompactionBoundary(); err != nil {
+		t.Fatalf("seed persisted contract generation: %v", err)
+	}
 	send := func(req llm.Request) capturedRequest {
 		t.Helper()
 		before := len(capturedRequests)
@@ -602,7 +637,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	if got, want := mainBefore.sessionID, store.Meta().SessionID; got != want {
 		t.Fatalf("main before session-id header = %q, want %q", got, want)
 	}
-	if got, want := stringValue(mainBefore.payload["prompt_cache_key"]), conversationPromptCacheKey(store.Meta().SessionID, 0); got != want {
+	if got, want := stringValue(mainBefore.payload["prompt_cache_key"]), store.Meta().SessionID; got != want {
 		t.Fatalf("main before prompt_cache_key = %q, want %q", got, want)
 	}
 
@@ -611,7 +646,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	if got, want := reviewerBefore.sessionID, reviewerSessionID(store.Meta().SessionID); got != want {
 		t.Fatalf("reviewer before session-id header = %q, want %q", got, want)
 	}
-	if got, want := stringValue(reviewerBefore.payload["prompt_cache_key"]), conversationPromptCacheKey(reviewerSessionID(store.Meta().SessionID), 0); got != want {
+	if got, want := stringValue(reviewerBefore.payload["prompt_cache_key"]), reviewerSessionID(store.Meta().SessionID); got != want {
 		t.Fatalf("reviewer before prompt_cache_key = %q, want %q", got, want)
 	}
 
@@ -621,7 +656,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	if got, want := mainAfter.sessionID, store.Meta().SessionID; got != want {
 		t.Fatalf("main after session-id header = %q, want %q", got, want)
 	}
-	if got, want := stringValue(mainAfter.payload["prompt_cache_key"]), conversationPromptCacheKey(store.Meta().SessionID, 1); got != want {
+	if got, want := stringValue(mainAfter.payload["prompt_cache_key"]), store.Meta().SessionID; got != want {
 		t.Fatalf("main after prompt_cache_key = %q, want %q", got, want)
 	}
 
@@ -630,7 +665,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	if got, want := reviewerAfter.sessionID, reviewerSessionID(store.Meta().SessionID); got != want {
 		t.Fatalf("reviewer after session-id header = %q, want %q", got, want)
 	}
-	if got, want := stringValue(reviewerAfter.payload["prompt_cache_key"]), conversationPromptCacheKey(reviewerSessionID(store.Meta().SessionID), 1); got != want {
+	if got, want := stringValue(reviewerAfter.payload["prompt_cache_key"]), reviewerSessionID(store.Meta().SessionID); got != want {
 		t.Fatalf("reviewer after prompt_cache_key = %q, want %q", got, want)
 	}
 
@@ -651,7 +686,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	if got, want := reopenedMain.sessionID, reopened.Meta().SessionID; got != want {
 		t.Fatalf("reopened main session-id header = %q, want %q", got, want)
 	}
-	if got, want := stringValue(reopenedMain.payload["prompt_cache_key"]), conversationPromptCacheKey(reopened.Meta().SessionID, reopenedEng.compactionRuntimeState().Count()); got != want {
+	if got, want := stringValue(reopenedMain.payload["prompt_cache_key"]), reopened.Meta().SessionID; got != want {
 		t.Fatalf("reopened main prompt_cache_key = %q, want %q", got, want)
 	}
 
@@ -660,7 +695,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	if got, want := reopenedReviewer.sessionID, reviewerSessionID(reopened.Meta().SessionID); got != want {
 		t.Fatalf("reopened reviewer session-id header = %q, want %q", got, want)
 	}
-	if got, want := stringValue(reopenedReviewer.payload["prompt_cache_key"]), conversationPromptCacheKey(reviewerSessionID(reopened.Meta().SessionID), reopenedEng.compactionRuntimeState().Count()); got != want {
+	if got, want := stringValue(reopenedReviewer.payload["prompt_cache_key"]), reviewerSessionID(reopened.Meta().SessionID); got != want {
 		t.Fatalf("reopened reviewer prompt_cache_key = %q, want %q", got, want)
 	}
 }
@@ -707,7 +742,7 @@ func TestReviewerSuggestions_UsesReviewerClientPromptCacheCapability(t *testing.
 	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(store.Meta().SessionID); got == nil || *got != want {
 		t.Fatalf("reviewer SessionID = %v, want %q", got, want)
 	}
-	if got, want := reviewerClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reviewerSessionID(store.Meta().SessionID), eng.compactionRuntimeState().Count()); got != want {
+	if got, want := reviewerClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reviewerSessionID(store.Meta().SessionID)); got != want {
 		t.Fatalf("reviewer PromptCacheKey = %q, want %q", got, want)
 	}
 	if reviewerClient.calls[0].PromptCacheScope != transcript.CacheWarningScopeReviewer {
@@ -745,7 +780,7 @@ func TestReviewerSuggestions_PromptCacheKeyStaysOnReviewerSessionAfterConversati
 	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(reopened.Meta().SessionID); got == nil || *got != want {
 		t.Fatalf("reviewer SessionID = %v, want %q", got, want)
 	}
-	if got, want := reviewerClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reviewerSessionID(reopened.Meta().SessionID), eng.compactionRuntimeState().Count()); got != want {
+	if got, want := reviewerClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reviewerSessionID(reopened.Meta().SessionID)); got != want {
 		t.Fatalf("reviewer PromptCacheKey = %q, want %q", got, want)
 	}
 }
@@ -785,27 +820,112 @@ func TestGenerateWithRetryClient_KeepsReviewerLineageIndependent(t *testing.T) {
 	}
 }
 
-func TestGenerateWithRetryClient_CompactionRotatesConversationCacheKeyWithoutWarning(t *testing.T) {
+func TestGenerateWithRetryClient_CompactionKeepsConversationCacheKeyWithoutWarning(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10}}, {Usage: llm.Usage{InputTokens: 12}}}}
+	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(7)}}, {Usage: llm.Usage{InputTokens: 12}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
+	cacheKey := eng.SessionID()
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
 	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	if len(persistedCacheWarnings(t, store)) != 0 {
-		t.Fatal("expected compaction to avoid warnings before the next rotated-key request")
+		t.Fatal("expected compaction to avoid warnings before the next same-key request")
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testPromptCacheRequest("cache-key-1/compact-1", "beta"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
 		t.Fatalf("second generate: %v", err)
 	}
 
 	warnings := persistedCacheWarnings(t, store)
 	if len(warnings) != 0 {
 		t.Fatalf("warning count = %d, want 0", len(warnings))
+	}
+}
+
+func TestGenerateWithRetryClient_CompactionResetsConversationAndReviewerCacheBaselines(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{responses: []llm.Response{
+		{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(7)}},
+		{Usage: llm.Usage{InputTokens: 11, CachedInputTokens: textutil.Value(7)}},
+		{Usage: llm.Usage{InputTokens: 12}},
+		{Usage: llm.Usage{InputTokens: 13}},
+	}}
+	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
+	cacheKey := eng.SessionID()
+	reviewerKey := reviewerSessionID(cacheKey)
+
+	if _, err := eng.generateWithRetryClient(context.Background(), "main-before", client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
+		t.Fatalf("main baseline generate: %v", err)
+	}
+	if _, err := eng.generateWithRetryClient(context.Background(), "reviewer-before", client, testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
+		t.Fatalf("reviewer baseline generate: %v", err)
+	}
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
+		Role:        llm.RoleAssistant,
+		MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+		Content:     textutil.Value("summary"),
+	}})); err != nil {
+		t.Fatalf("replace history: %v", err)
+	}
+	if _, err := eng.generateWithRetryClient(context.Background(), "main-after", client, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
+		t.Fatalf("main post-compaction generate: %v", err)
+	}
+	if _, err := eng.generateWithRetryClient(context.Background(), "reviewer-after", client, testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
+		t.Fatalf("reviewer post-compaction generate: %v", err)
+	}
+	if warnings := persistedCacheWarnings(t, store); len(warnings) != 0 {
+		t.Fatalf("post-compaction cache warnings = %+v, want none from replacement boundary", warnings)
+	}
+}
+
+func TestGenerateWithRetryClient_ReplayedCompactionResetsConversationAndReviewerCacheBaselines(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{responses: []llm.Response{
+		{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(7)}},
+		{Usage: llm.Usage{InputTokens: 11, CachedInputTokens: textutil.Value(7)}},
+	}}
+	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
+	cacheKey := eng.SessionID()
+	reviewerKey := reviewerSessionID(cacheKey)
+
+	if _, err := eng.generateWithRetryClient(context.Background(), "main-before", client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
+		t.Fatalf("main baseline generate: %v", err)
+	}
+	if _, err := eng.generateWithRetryClient(context.Background(), "reviewer-before", client, testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
+		t.Fatalf("reviewer baseline generate: %v", err)
+	}
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
+		Role:        llm.RoleAssistant,
+		MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+		Content:     textutil.Value("summary"),
+	}})); err != nil {
+		t.Fatalf("replace history: %v", err)
+	}
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close pre-replay engine: %v", err)
+	}
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	replayClient := &fakeClient{responses: []llm.Response{
+		{Usage: llm.Usage{InputTokens: 12}},
+		{Usage: llm.Usage{InputTokens: 13}},
+	}}
+	replayed := mustNewTestEngine(t, reopened, replayClient, newTestToolRegistry(t), Config{
+		Model:            "gpt-5",
+		Reviewer:         ReviewerConfig{Model: "gpt-5"},
+		CacheWarningMode: config.CacheWarningModeDefault,
+	})
+	if _, err := replayed.generateWithRetryClient(context.Background(), "main-after", replayClient, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
+		t.Fatalf("main replay generate: %v", err)
+	}
+	if _, err := replayed.generateWithRetryClient(context.Background(), "reviewer-after", replayClient, testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
+		t.Fatalf("reviewer replay generate: %v", err)
+	}
+	if warnings := persistedCacheWarnings(t, reopened); len(warnings) != 0 {
+		t.Fatalf("replayed post-compaction cache warnings = %+v, want none from replacement boundary", warnings)
 	}
 }
 
@@ -870,7 +990,7 @@ func TestGenerateWithRetryClient_RestorePreservesRotatedCompactionKeyWithoutWarn
 	reopenedClient := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 12}}}}
 	reopenedEng := mustNewTestEngine(t, reopened, reopenedClient, newTestToolRegistry(t), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeVerbose})
 
-	if _, err := reopenedEng.generateWithRetryClient(context.Background(), "step-2", reopenedClient, testPromptCacheRequest("cache-key-1/compact-1", "beta"), nil, nil, nil); err != nil {
+	if _, err := reopenedEng.generateWithRetryClient(context.Background(), "step-2", reopenedClient, testPromptCacheRequest("cache-key-1", "beta"), nil, nil, nil); err != nil {
 		t.Fatalf("generate after reopen: %v", err)
 	}
 

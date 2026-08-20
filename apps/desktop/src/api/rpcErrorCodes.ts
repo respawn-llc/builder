@@ -16,6 +16,7 @@ export const rpcErrorCodes = {
   worktreeBlocked: -32048,
   worktreeCreate: -32058,
   workflowTaskNotFound: -32024,
+  workflowTaskCreateSelection: -32045,
   workflowTaskDependency: -32049,
   workflowTaskSearch: -32052,
 } as const;
