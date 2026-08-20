@@ -32,7 +32,7 @@ type backgroundNoticeScheduler interface {
 	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
 	RecordBackgroundShellUpdate(BackgroundShellEvent) error
 	QueueBackgroundShellContinuation(BackgroundShellEvent)
-	RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error
+	RunPendingBackgroundShellContinuation(context.Context) error
 	QueueDeveloperNotice(msg llm.Message)
 	flushPendingNotices(stepID *string) (int, error)
 	HasPendingNotices() bool

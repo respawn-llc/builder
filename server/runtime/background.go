@@ -42,20 +42,29 @@ func (e *Engine) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
 	e.backgroundFlow.QueueBackgroundShellContinuation(evt)
 }
 
-func (e *Engine) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
+func (e *Engine) HasPendingBackgroundShellContinuation() bool {
 	e.ensureOrchestrationCollaborators()
-	return e.backgroundFlow.RunBackgroundShellContinuation(ctx, evt)
+	return e.backgroundFlow.HasPendingNotices()
 }
 
-func (b *defaultBackgroundNoticeScheduler) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
-	if !evt.Type.IsTerminal() {
+func (e *Engine) FlushPendingBackgroundShellNotices() (int, error) {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.flushPendingNotices(nil)
+}
+
+func (e *Engine) RunPendingBackgroundShellContinuation(ctx context.Context) error {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.RunPendingBackgroundShellContinuation(ctx)
+}
+
+func (b *defaultBackgroundNoticeScheduler) RunPendingBackgroundShellContinuation(ctx context.Context) error {
+	if !b.HasPendingNotices() {
 		return nil
 	}
 	return b.engine.stepLifecycle.Run(
 		ctx,
 		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground},
 		func(stepCtx context.Context, stepID string) error {
-			b.QueueBackgroundShellContinuation(evt)
 			if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 				return err
 			}
@@ -161,11 +170,6 @@ func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message)
 	b.mu.Lock()
 	b.pending = append(b.pending, notice)
 	b.mu.Unlock()
-	if b.engine.stepLifecycle.Snapshot() == nil {
-		if _, err := b.flushPendingNotices(nil); err != nil {
-			b.engine.surfaceRunError(err)
-		}
-	}
 }
 
 func (b *defaultBackgroundNoticeScheduler) drainPendingNotices() []queuedBackgroundNotice {

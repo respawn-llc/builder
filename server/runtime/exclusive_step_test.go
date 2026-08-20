@@ -501,7 +501,7 @@ func (s *stubBackgroundNoticeScheduler) RecordBackgroundShellUpdate(BackgroundSh
 	return nil
 }
 func (s *stubBackgroundNoticeScheduler) QueueBackgroundShellContinuation(BackgroundShellEvent) {}
-func (s *stubBackgroundNoticeScheduler) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
+func (s *stubBackgroundNoticeScheduler) RunPendingBackgroundShellContinuation(context.Context) error {
 	return nil
 }
 func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message)           {}

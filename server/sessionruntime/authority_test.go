@@ -2107,6 +2107,75 @@ func TestIdleSessionStartsBackgroundContinuation(t *testing.T) {
 	}
 }
 
+func TestBackgroundCompletionAfterFinalStepStartsContinuationAfterExecutionRetires(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := make(lifecycleRequestCaptureClient, 2)
+	plan := authorityTestRuntimePlan(t, fixture, &client)
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "owner", &plan)
+	turnDone := make(chan struct{})
+	releaseExecution := make(chan struct{})
+	handle, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+			return bridge.WithEngine(ctx, func(engineCtx context.Context, engine *runtime.Engine) error {
+				_, runErr := engine.SubmitUserMessage(engineCtx, "start")
+				close(turnDone)
+				select {
+				case <-releaseExecution:
+				case <-engineCtx.Done():
+					return context.Cause(engineCtx)
+				}
+				return runErr
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("start initial execution: %v", err)
+	}
+	client.await(t)
+	select {
+	case <-turnDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial execution did not finish its final Agent Step")
+	}
+
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		attachment.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	event.Snapshot.ExecutionCorrelation = &correlation
+	if !fixture.authority.routeBackgroundEvent(event) {
+		t.Fatal("terminal background event was not delivered")
+	}
+	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		if !engine.HasPendingBackgroundShellContinuation() {
+			t.Fatal("terminal notice was not retained after the final Agent Step")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect pending background continuation: %v", err)
+	}
+
+	close(releaseExecution)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait initial execution: %v", err)
+	}
+	client.await(t)
+	deadline := time.Now().Add(5 * time.Second)
+	for fixture.authority.sessionExecution(sessionID) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("follow-up background Exact Execution Scope did not retire")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestCompletedWorkflowSessionDoesNotStartBackgroundContinuation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)

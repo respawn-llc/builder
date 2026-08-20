@@ -346,6 +346,9 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 			if recordErr := engine.RecordBackgroundShellUpdate(backgroundEvent); recordErr != nil {
 				return recordErr
 			}
+			if !resourceSessionHasWorkflowContract(resource) {
+				engine.QueueBackgroundShellContinuation(backgroundEvent)
+			}
 			delivered = true
 			return nil
 		})
@@ -355,7 +358,7 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 		if resourceSessionHasWorkflowContract(resource) {
 			return true, nil
 		}
-		a.startBackgroundContinuation(resource, backgroundEvent)
+		a.startPendingBackgroundContinuation(resource)
 		return true, nil
 	}
 	delivered := false
@@ -364,19 +367,68 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 		delivered = true
 		return nil
 	})
+	if err == nil && delivered && queueNotice {
+		a.settlePendingBackgroundAfterExecution(resource, current)
+	}
 	return delivered, err
 }
 
-func (a *Authority) startBackgroundContinuation(resource *agentResource, event runtime.BackgroundShellEvent) {
+func (a *Authority) startPendingBackgroundContinuation(resource *agentResource) {
 	a.launchLifecycleTask(func(ctx context.Context) {
-		descriptor, err := session.NewOpenSessionDescriptor(resource.ref.SessionID())
-		if err == nil {
+		a.runPendingBackgroundContinuation(ctx, resource)
+	})
+}
+
+func (a *Authority) settlePendingBackgroundAfterExecution(resource *agentResource, execution *execution) {
+	if execution == nil {
+		return
+	}
+	a.launchLifecycleTask(func(ctx context.Context) {
+		select {
+		case <-execution.done:
+		case <-ctx.Done():
+			return
+		}
+		if resourceSessionHasWorkflowContract(resource) {
+			err := resource.withEngine(ctx, resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+				_, err := engine.FlushPendingBackgroundShellNotices()
+				return err
+			})
+			if err != nil && !backgroundContinuationLifecycleStopped(err) && resource.logger != nil {
+				resource.logger.Logf("runtime.background.notice.flush.failed error=%q", err.Error())
+			}
+			return
+		}
+		a.runPendingBackgroundContinuation(ctx, resource)
+	})
+}
+
+func (a *Authority) runPendingBackgroundContinuation(ctx context.Context, resource *agentResource) {
+	for {
+		pending := false
+		err := resource.withEngine(ctx, resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+			pending = engine.HasPendingBackgroundShellContinuation()
+			return nil
+		})
+		if err != nil {
+			if !backgroundContinuationLifecycleStopped(err) && resource.logger != nil {
+				resource.logger.Logf("runtime.background.continuation.inspect.failed error=%q", err.Error())
+			}
+			return
+		}
+		if !pending {
+			return
+		}
+		descriptor, descriptorErr := session.NewOpenSessionDescriptor(resource.ref.SessionID())
+		if descriptorErr != nil {
+			err = descriptorErr
+		} else {
 			_, err = a.StartAgentExecution(ctx, AgentExecutionRequest{
 				Descriptor: descriptor,
 				Resource:   CurrentAgentResource{},
 				Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
 					return bridge.WithEngine(ctx, func(engineCtx context.Context, engine *runtime.Engine) error {
-						return engine.RunBackgroundShellContinuation(engineCtx, event)
+						return engine.RunPendingBackgroundShellContinuation(engineCtx)
 					})
 				},
 			})
@@ -385,17 +437,20 @@ func (a *Authority) startBackgroundContinuation(resource *agentResource, event r
 			return
 		}
 		if errors.Is(err, ErrSessionRunActive) {
-			err = a.WithCurrentRuntime(ctx, resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-				engine.QueueBackgroundShellContinuation(event)
-				return nil
-			})
-			if err == nil {
+			current := a.sessionExecution(resource.ref.SessionID())
+			if current == nil {
+				continue
+			}
+			select {
+			case <-current.done:
+				continue
+			case <-ctx.Done():
 				return
 			}
 		}
 		if backgroundContinuationLifecycleStopped(err) {
 			if resource.logger != nil {
-				resource.logger.Logf("runtime.background.continuation.start.skipped process_id=%s error=%q", event.ID, err.Error())
+				resource.logger.Logf("runtime.background.continuation.start.skipped error=%q", err.Error())
 			}
 			return
 		}
@@ -404,9 +459,10 @@ func (a *Authority) startBackgroundContinuation(resource *agentResource, event r
 		})
 		err = errors.Join(err, fallbackErr)
 		if resource.logger != nil {
-			resource.logger.Logf("runtime.background.continuation.start.failed process_id=%s error=%q", event.ID, err.Error())
+			resource.logger.Logf("runtime.background.continuation.start.failed error=%q", err.Error())
 		}
-	})
+		return
+	}
 }
 
 func backgroundContinuationLifecycleStopped(err error) bool {
