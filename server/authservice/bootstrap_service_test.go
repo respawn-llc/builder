@@ -156,6 +156,15 @@ func TestGetBootstrapStatusDoesNotReportEmptyStateAsNoAuthSelection(t *testing.T
 	}
 }
 
+func TestGetBootstrapStatusRejectsMissingService(t *testing.T) {
+	var service *BootstrapService
+
+	_, err := service.GetAuthBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	if !errors.Is(err, serverapi.ErrServerAuthRequired) {
+		t.Fatalf("GetBootstrapStatus error = %v, want ErrServerAuthRequired", err)
+	}
+}
+
 func TestAcknowledgeNoAuthIsNonMutating(t *testing.T) {
 	initial := auth.State{
 		Scope:               auth.ScopeGlobal,

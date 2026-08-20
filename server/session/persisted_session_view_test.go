@@ -89,6 +89,21 @@ func TestPersistedSessionViewFreezesExactNonzeroBoundary(t *testing.T) {
 	}
 }
 
+func TestPersistedSessionViewRejectsNonPositiveBackwardSegmentCursor(t *testing.T) {
+	dir := t.TempDir()
+	writeVersionedEventLog(t, filepath.Join(dir, eventsFile), EventLogVersionV2, []EventRecord{
+		mustVersionMatrixRecord(t, 1, MessageRoleUser, "first"),
+	})
+	meta := Meta{SessionID: persistedViewTestSessionID, LastSequence: 1}
+	view := mustPersistedView(OpenPersistedSessionView(meta.SessionID, PersistedSessionRecord{SessionDir: dir, Meta: &meta}))
+
+	for _, cursor := range []int64{0, -1} {
+		if _, err := view.ReadSegmentBackward(cursor, nil); err == nil {
+			t.Fatalf("ReadSegmentBackward(%d) accepted a non-positive cursor", cursor)
+		}
+	}
+}
+
 func TestPersistedSessionViewRejectsEveryMetadataLogMismatchWithoutReverseSearch(t *testing.T) {
 	for _, test := range []struct {
 		name        string

@@ -130,7 +130,10 @@ func (s *BootstrapService) CompleteAuthBootstrap(ctx context.Context, req server
 }
 
 func (s *BootstrapService) authReady(ctx context.Context) (bool, error) {
-	if s == nil || s.manager == nil {
+	if s == nil {
+		return false, serverapi.ErrServerAuthRequired
+	}
+	if s.manager == nil {
 		return !s.authRequired, nil
 	}
 	state, err := s.manager.Load(ctx)

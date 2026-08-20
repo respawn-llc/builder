@@ -205,8 +205,8 @@ func (v *PersistedSessionView) ReadSegmentBackward(endOffset int64, match func(E
 	if v == nil || v.eventLog == nil {
 		return EventRecordWindow{}, errors.New("persisted Session event log is required")
 	}
-	if endOffset <= 0 && v.eventLog.frozenEndOffset != nil {
-		endOffset = *v.eventLog.frozenEndOffset
+	if endOffset <= 0 {
+		return EventRecordWindow{}, fmt.Errorf("persisted Session event log end offset must be positive: %d", endOffset)
 	}
 	return v.eventLog.readSegmentBackward(endOffset, activeTailReverseChunkBytes, match)
 }

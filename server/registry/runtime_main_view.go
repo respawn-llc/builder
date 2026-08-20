@@ -7,6 +7,7 @@ import (
 	"core/server/runtimeview"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 )
 
 type runtimeMainViewCatalog struct {
@@ -168,12 +169,12 @@ func validateRuntimeMainView(sessionID string, view clientui.RuntimeMainView) er
 func cloneRuntimeMainView(view clientui.RuntimeMainView) clientui.RuntimeMainView {
 	cloned := view
 	cloned.Activity = cloneRuntimeActivity(view.Activity)
-	cloned.Session.AgentRole = cloneString(view.Session.AgentRole)
+	cloned.Session.AgentRole = textutil.Pointer(view.Session.AgentRole)
 	cloned.Session.ExecutionTarget = clientui.NormalizeSessionExecutionTarget(view.Session.ExecutionTarget)
-	cloned.Status.PreviousSessionID = cloneSessionID(view.Status.PreviousSessionID)
-	cloned.Status.ParentAgentSessionID = cloneSessionID(view.Status.ParentAgentSessionID)
-	cloned.Status.NavigationTargetSessionID = cloneSessionID(view.Status.NavigationTargetSessionID)
-	cloned.Status.LastCommittedAssistantFinalAnswer = cloneString(view.Status.LastCommittedAssistantFinalAnswer)
+	cloned.Status.PreviousSessionID = textutil.Pointer(view.Status.PreviousSessionID)
+	cloned.Status.ParentAgentSessionID = textutil.Pointer(view.Status.ParentAgentSessionID)
+	cloned.Status.NavigationTargetSessionID = textutil.Pointer(view.Status.NavigationTargetSessionID)
+	cloned.Status.LastCommittedAssistantFinalAnswer = textutil.Pointer(view.Status.LastCommittedAssistantFinalAnswer)
 	if view.Status.Goal != nil {
 		goal := *view.Status.Goal
 		if view.Status.Goal.Goal != nil {
@@ -206,20 +207,4 @@ func cloneRuntimeReadModelUpdate(update clientui.RuntimeReadModelUpdate) clientu
 	cloned := update
 	cloned.Activity = cloneRuntimeActivity(update.Activity)
 	return cloned
-}
-
-func cloneSessionID(id *runtimeids.SessionID) *runtimeids.SessionID {
-	if id == nil {
-		return nil
-	}
-	cloned := *id
-	return &cloned
-}
-
-func cloneString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
