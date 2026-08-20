@@ -3,6 +3,7 @@ syntax = "proto3";
 package kent.api.connection;
 
 import "buf/validate/validate.proto";
+import "kent/api/project/project.proto";
 import "kent/api/shared/foundation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/connection;connectionpb";
@@ -148,6 +149,13 @@ message SessionAttachment {
   string session_id = 4 [(buf.validate.field).string.min_len = 1];
 }
 
+message SessionAttachmentTargetDetails {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string project_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional string workspace_id = 3 [(buf.validate.field).string.min_len = 1];
+  optional string workspace_root = 4 [(buf.validate.field).string.min_len = 1];
+}
+
 message AttachmentSuccess {
   oneof attachment {
     option (buf.validate.oneof).required = true;
@@ -166,6 +174,24 @@ message AttachProjectError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    kent.api.project.ProjectNotFoundDetails project_not_found = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    kent.api.project.WorkspaceNotRegisteredDetails workspace_not_registered = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_not_registered"
+      }
+    ];
+    kent.api.project.ProjectUnavailableDetails project_unavailable = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_unavailable"
       }
     ];
   }
@@ -189,6 +215,24 @@ message AttachSessionError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    SessionAttachmentTargetDetails project_not_found = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    SessionAttachmentTargetDetails workspace_not_registered = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_not_registered"
+      }
+    ];
+    kent.api.project.ProjectUnavailableDetails project_unavailable = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_unavailable"
       }
     ];
   }

@@ -244,9 +244,35 @@ describe("JsonRpcWebSocketTransport", () => {
     await waitForSent(socket, 1);
     ack(socket, 0);
     await waitForSent(socket, 2);
-    errorAck(socket, 1, { code: -32602, message: "session unavailable" });
+    binaryAck(socket, 1, ConnectionService.method.attachSession, {
+      result: create(AttachSessionResultSchema, {
+        outcome: {
+          case: "error",
+          value: {
+            code: "workspace_not_registered",
+            detail: {
+              case: "workspaceNotRegistered",
+              value: {
+                sessionId: "session-1",
+                workspaceId: "workspace-missing",
+              },
+            },
+          },
+        },
+      }),
+    });
 
-    await expect(answer).rejects.toThrow();
+    const error = await answer.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(RpcError);
+    expect(error).toMatchObject({
+      code: -32013,
+      method: operationFromDescriptor(ConnectionService.method.attachSession).name,
+      data: {
+        reason: "workspace_not_registered",
+        session_id: "session-1",
+        workspace_id: "workspace-missing",
+      },
+    });
     expect(socket.sent).toHaveLength(2);
     expect(socket.readyState).toBe(MockWebSocket.CLOSED);
   });

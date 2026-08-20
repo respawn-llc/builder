@@ -1,4 +1,4 @@
-export { create } from "@bufbuild/protobuf";
+export { create, isMessage } from "@bufbuild/protobuf";
 export type { DescMethod, Message, MessageShape } from "@bufbuild/protobuf";
 export { decodeEnvelope, encodeEnvelope } from "./envelope.js";
 export { decode, encode, validate } from "./message.js";

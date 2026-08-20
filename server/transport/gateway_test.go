@@ -1738,7 +1738,7 @@ func TestGatewayProjectReattachClearsStaleSessionAttachment(t *testing.T) {
 	}
 }
 
-func TestGatewayRejectsAttachProjectWorkspaceOutsideProject(t *testing.T) {
+func TestGatewayPreservesAttachProjectWorkspaceNotRegistered(t *testing.T) {
 	home := t.TempDir()
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
@@ -1748,7 +1748,6 @@ func TestGatewayRejectsAttachProjectWorkspaceOutsideProject(t *testing.T) {
 	resolvedA := resolveGatewayTestConfig(t, workspaceA)
 	bindingA := registerGatewayTestBinding(t, resolvedA.Config)
 	resolvedB := resolveGatewayTestConfig(t, workspaceB)
-	registerGatewayTestBinding(t, resolvedB.Config)
 
 	_, server := newGatewayTestServerForConfig(t, resolvedA.Config)
 
@@ -1759,7 +1758,8 @@ func TestGatewayRejectsAttachProjectWorkspaceOutsideProject(t *testing.T) {
 		ProjectId: bindingA.ProjectID,
 		Workspace: &connectionpb.AttachProjectRequest_WorkspaceRoot{WorkspaceRoot: resolvedB.Config.WorkspaceRoot},
 	})
-	if result.GetError() == nil {
-		t.Fatalf("expected workspace/project mismatch error, got %+v", result)
+	failure := result.GetError()
+	if failure == nil || failure.Code != "workspace_not_registered" || failure.GetWorkspaceNotRegistered() == nil {
+		t.Fatalf("workspace-not-registered attachment result = %+v", result)
 	}
 }

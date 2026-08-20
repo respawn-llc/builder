@@ -1643,9 +1643,9 @@ func TestDialRemoteURLForProjectValidatesAttachProject(t *testing.T) {
 		correlation := receiveRemoteDescriptorCall(t, ws, method, request)
 		sendRemoteDescriptorResult(t, ws, method, correlation, &connectionpb.AttachProjectResult{
 			Outcome: &connectionpb.AttachProjectResult_Error{Error: &connectionpb.AttachProjectError{
-				Code: "internal_failure",
-				Detail: &connectionpb.AttachProjectError_InternalFailure{
-					InternalFailure: &sharedpb.InternalFailureDetails{Operation: proto.String("AttachProject")},
+				Code: "project_not_found",
+				Detail: &connectionpb.AttachProjectError_ProjectNotFound{
+					ProjectNotFound: &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId},
 				},
 			}},
 		})
@@ -1660,6 +1660,9 @@ func TestDialRemoteURLForProjectValidatesAttachProject(t *testing.T) {
 	}
 	if remote != nil {
 		t.Fatalf("expected nil remote on attach failure, got %v", remote)
+	}
+	if !errors.Is(err, serverapi.ErrProjectNotFound) {
+		t.Fatalf("attach error = %v, want ErrProjectNotFound", err)
 	}
 }
 

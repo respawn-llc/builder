@@ -11,8 +11,10 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -58,10 +60,17 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 		func() proto.Message { return &connectionpb.AttachProjectRequest{} },
 		nil,
 		invokeBinaryAttachProject,
-		binaryAttachProjectFailure,
+		binaryAttachProjectInternalFailure,
 	); err != nil {
 		return nil, err
 	}
+	attachProjectOperation, err := protoapi.OperationFromDescriptor(service.Methods().ByName("AttachProject"))
+	if err != nil {
+		return nil, err
+	}
+	attachProjectBinding := bindings[attachProjectOperation.Name]
+	attachProjectBinding.failure = binaryAttachProjectFailure
+	bindings[attachProjectOperation.Name] = attachProjectBinding
 	if err := registerGatewayBinaryBinding(
 		bindings,
 		service,
@@ -76,10 +85,17 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 			return routeScopeParams{sessionID: request.SessionId}, nil
 		},
 		invokeBinaryAttachSession,
-		binaryAttachSessionFailure,
+		binaryAttachSessionInternalFailure,
 	); err != nil {
 		return nil, err
 	}
+	attachSessionOperation, err := protoapi.OperationFromDescriptor(service.Methods().ByName("AttachSession"))
+	if err != nil {
+		return nil, err
+	}
+	attachSessionBinding := bindings[attachSessionOperation.Name]
+	attachSessionBinding.failure = binaryAttachSessionFailure
+	bindings[attachSessionOperation.Name] = attachSessionBinding
 	if err := registerBootstrapGatewayBinaryBindings(bindings); err != nil {
 		return nil, err
 	}
@@ -274,7 +290,53 @@ func binaryHandshakeFailure(err error) proto.Message {
 	}
 }
 
-func binaryAttachProjectFailure(err error) proto.Message {
+func binaryAttachProjectFailure(
+	_ *Gateway,
+	_ *connectionState,
+	message proto.Message,
+	err error,
+) proto.Message {
+	failure := &connectionpb.AttachProjectError{}
+	request, requestOK := message.(*connectionpb.AttachProjectRequest)
+	switch {
+	case errors.Is(err, serverapi.ErrProjectNotFound) && requestOK:
+		failure.Code = "project_not_found"
+		failure.Detail = &connectionpb.AttachProjectError_ProjectNotFound{
+			ProjectNotFound: &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId},
+		}
+	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && requestOK:
+		details := &projectpb.WorkspaceNotRegisteredDetails{ProjectId: proto.String(request.ProjectId)}
+		switch workspace := request.GetWorkspace().(type) {
+		case *connectionpb.AttachProjectRequest_WorkspaceId:
+			details.WorkspaceId = proto.String(workspace.WorkspaceId)
+		case *connectionpb.AttachProjectRequest_WorkspaceRoot:
+			details.WorkspaceRoot = proto.String(workspace.WorkspaceRoot)
+		}
+		failure.Code = "workspace_not_registered"
+		failure.Detail = &connectionpb.AttachProjectError_WorkspaceNotRegistered{
+			WorkspaceNotRegistered: details,
+		}
+	default:
+		if unavailable, ok := serverapi.AsProjectUnavailable(err); ok {
+			if details, conversionErr := protoapi.ProjectUnavailableToProto(unavailable); conversionErr == nil {
+				failure.Code = "project_unavailable"
+				failure.Detail = &connectionpb.AttachProjectError_ProjectUnavailable{
+					ProjectUnavailable: details,
+				}
+			}
+		}
+	}
+	if failure.Detail == nil {
+		return binaryAttachProjectInternalFailure(err)
+	}
+	return &connectionpb.AttachProjectResult{
+		Outcome: &connectionpb.AttachProjectResult_Error{
+			Error: failure,
+		},
+	}
+}
+
+func binaryAttachProjectInternalFailure(err error) proto.Message {
 	return &connectionpb.AttachProjectResult{
 		Outcome: &connectionpb.AttachProjectResult_Error{
 			Error: &connectionpb.AttachProjectError{
@@ -287,7 +349,55 @@ func binaryAttachProjectFailure(err error) proto.Message {
 	}
 }
 
-func binaryAttachSessionFailure(err error) proto.Message {
+func binaryAttachSessionFailure(
+	g *Gateway,
+	state *connectionState,
+	message proto.Message,
+	err error,
+) proto.Message {
+	failure := &connectionpb.AttachSessionError{}
+	request, requestOK := message.(*connectionpb.AttachSessionRequest)
+	switch {
+	case errors.Is(err, serverapi.ErrProjectNotFound) && requestOK:
+		details := &connectionpb.SessionAttachmentTargetDetails{SessionId: request.SessionId}
+		if projectID := connectionAttachmentProjectID(g, state); projectID != "" {
+			details.ProjectId = &projectID
+		}
+		failure.Code = "project_not_found"
+		failure.Detail = &connectionpb.AttachSessionError_ProjectNotFound{
+			ProjectNotFound: details,
+		}
+	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && requestOK:
+		failure.Code = "workspace_not_registered"
+		failure.Detail = &connectionpb.AttachSessionError_WorkspaceNotRegistered{
+			WorkspaceNotRegistered: connectionSessionWorkspaceNotRegisteredDetails(
+				g,
+				state,
+				request.SessionId,
+				err,
+			),
+		}
+	default:
+		if unavailable, ok := serverapi.AsProjectUnavailable(err); ok {
+			if details, conversionErr := protoapi.ProjectUnavailableToProto(unavailable); conversionErr == nil {
+				failure.Code = "project_unavailable"
+				failure.Detail = &connectionpb.AttachSessionError_ProjectUnavailable{
+					ProjectUnavailable: details,
+				}
+			}
+		}
+	}
+	if failure.Detail == nil {
+		return binaryAttachSessionInternalFailure(err)
+	}
+	return &connectionpb.AttachSessionResult{
+		Outcome: &connectionpb.AttachSessionResult_Error{
+			Error: failure,
+		},
+	}
+}
+
+func binaryAttachSessionInternalFailure(err error) proto.Message {
 	return &connectionpb.AttachSessionResult{
 		Outcome: &connectionpb.AttachSessionResult_Error{
 			Error: &connectionpb.AttachSessionError{
@@ -298,6 +408,42 @@ func binaryAttachSessionFailure(err error) proto.Message {
 			},
 		},
 	}
+}
+
+func connectionAttachmentProjectID(g *Gateway, state *connectionState) string {
+	if state != nil && state.attachedProject != "" {
+		return state.attachedProject
+	}
+	if g != nil && g.deps != nil {
+		return g.deps.ProjectID()
+	}
+	return ""
+}
+
+func connectionSessionWorkspaceNotRegisteredDetails(
+	g *Gateway,
+	state *connectionState,
+	sessionID string,
+	err error,
+) *connectionpb.SessionAttachmentTargetDetails {
+	details := &connectionpb.SessionAttachmentTargetDetails{SessionId: sessionID}
+	var attachmentErr sessionWorkspaceNotRegisteredError
+	if errors.As(err, &attachmentErr) {
+		if attachmentErr.projectID != "" {
+			details.ProjectId = &attachmentErr.projectID
+		}
+		if attachmentErr.workspaceID != "" {
+			details.WorkspaceId = &attachmentErr.workspaceID
+		}
+		if attachmentErr.workspaceRoot != "" {
+			details.WorkspaceRoot = &attachmentErr.workspaceRoot
+		}
+		return details
+	}
+	if projectID := connectionAttachmentProjectID(g, state); projectID != "" {
+		details.ProjectId = &projectID
+	}
+	return details
 }
 
 func binaryInternalFailure(err error) *sharedpb.InternalFailureDetails {

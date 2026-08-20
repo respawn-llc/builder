@@ -70,6 +70,14 @@ func (g *Gateway) resolveSessionAttachmentTarget(ctx context.Context, state *con
 	}
 	binding, err := metadataStore.LookupWorkspaceBindingByID(ctx, target.WorkspaceID)
 	if err != nil {
+		if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+			return clientui.SessionExecutionTarget{}, metadata.Binding{}, sessionWorkspaceNotRegisteredError{
+				projectID:     connectionAttachmentProjectID(g, state),
+				workspaceID:   target.WorkspaceID,
+				workspaceRoot: target.WorkspaceRoot,
+				cause:         err,
+			}
+		}
 		return clientui.SessionExecutionTarget{}, metadata.Binding{}, err
 	}
 	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
@@ -80,6 +88,21 @@ func (g *Gateway) resolveSessionAttachmentTarget(ctx context.Context, state *con
 		return clientui.SessionExecutionTarget{}, metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
 	}
 	return target, binding, nil
+}
+
+type sessionWorkspaceNotRegisteredError struct {
+	projectID     string
+	workspaceID   string
+	workspaceRoot string
+	cause         error
+}
+
+func (e sessionWorkspaceNotRegisteredError) Error() string {
+	return e.cause.Error()
+}
+
+func (e sessionWorkspaceNotRegisteredError) Unwrap() error {
+	return e.cause
 }
 
 func (g *Gateway) resolveSessionAttachment(ctx context.Context, state *connectionState, sessionID string) (metadata.Binding, error) {

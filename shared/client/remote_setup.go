@@ -8,8 +8,11 @@ import (
 	"core/shared/protoapi"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/serverapi"
 
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -127,8 +130,8 @@ func attachRemoteBinaryRPC(
 		); err != nil {
 			return nil, err
 		}
-		if err := requireGeneratedSuccess(result); err != nil {
-			return nil, fmt.Errorf("attach session: %w", err)
+		if failure := result.GetError(); failure != nil {
+			return nil, fmt.Errorf("attach session: %w", attachSessionGeneratedError(failure))
 		}
 		response, err := attachmentResponseFromGenerated(result.GetSuccess())
 		if err != nil {
@@ -159,8 +162,8 @@ func attachRemoteBinaryRPC(
 	if err := callBinaryRPC(ctx, conn, "attach-project", method, generatedRequest, result); err != nil {
 		return nil, err
 	}
-	if err := requireGeneratedSuccess(result); err != nil {
-		return nil, fmt.Errorf("attach project: %w", err)
+	if failure := result.GetError(); failure != nil {
+		return nil, fmt.Errorf("attach project: %w", attachProjectGeneratedError(failure))
 	}
 	response, err := attachmentResponseFromGenerated(result.GetSuccess())
 	if err != nil {
@@ -170,6 +173,68 @@ func attachRemoteBinaryRPC(
 		return nil, err
 	}
 	return &response, nil
+}
+
+func attachProjectGeneratedError(failure *connectionpb.AttachProjectError) error {
+	return connectionAttachmentGeneratedError(
+		failure.Code,
+		failure.GetProjectNotFound(),
+		failure.GetWorkspaceNotRegistered(),
+		failure.GetProjectUnavailable(),
+		failure.GetInternalFailure(),
+	)
+}
+
+func attachSessionGeneratedError(failure *connectionpb.AttachSessionError) error {
+	switch failure.Code {
+	case "project_not_found":
+		details := failure.GetProjectNotFound()
+		if err := protoapi.Validate(details); err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: session %q", serverapi.ErrProjectNotFound, details.SessionId)
+	case "workspace_not_registered":
+		details := failure.GetWorkspaceNotRegistered()
+		if err := protoapi.Validate(details); err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: session %q", serverapi.ErrWorkspaceNotRegistered, details.SessionId)
+	case "project_unavailable":
+		typed, err := protoapi.ProjectUnavailableFromProto(failure.GetProjectUnavailable())
+		if err != nil {
+			return err
+		}
+		return typed
+	case "internal_failure":
+		return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+	default:
+		return generatedOperationFailure(failure.Code)
+	}
+}
+
+func connectionAttachmentGeneratedError(
+	code string,
+	notFound *projectpb.ProjectNotFoundDetails,
+	notRegistered *projectpb.WorkspaceNotRegisteredDetails,
+	unavailable *projectpb.ProjectUnavailableDetails,
+	internal *sharedpb.InternalFailureDetails,
+) error {
+	switch code {
+	case "project_not_found":
+		return projectNotFoundError(notFound)
+	case "workspace_not_registered":
+		return protoapi.WorkspaceNotRegisteredFromProto(notRegistered)
+	case "project_unavailable":
+		typed, err := protoapi.ProjectUnavailableFromProto(unavailable)
+		if err != nil {
+			return err
+		}
+		return typed
+	case "internal_failure":
+		return protoapi.InternalFailureFromProto(internal)
+	default:
+		return generatedOperationFailure(code)
+	}
 }
 
 func attachmentResponseFromGenerated(success *connectionpb.AttachmentSuccess) (remoteAttachment, error) {

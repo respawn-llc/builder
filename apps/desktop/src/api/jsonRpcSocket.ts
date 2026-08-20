@@ -20,6 +20,7 @@ import {
 } from "./descriptorRpc";
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, TransportError } from "./errors";
 import { jsonValueSchema, type JsonValue } from "./json";
+import { projectRpcErrorFromClassifiedFailure } from "./projectRpcError";
 import type { RpcEventHandler } from "./transport";
 
 export const protocolVersion = __KENT_PROTOCOL_VERSION__;
@@ -298,6 +299,12 @@ function requireDescriptorSuccess(method: DescMethod, result: Message): void {
     classified.failure.code === "protocol_version_mismatch"
   ) {
     throw new ProtocolMismatchError("unsupported protocol version");
+  }
+  if (
+    method === ConnectionService.method.attachProject ||
+    method === ConnectionService.method.attachSession
+  ) {
+    throw projectRpcErrorFromClassifiedFailure(operation.name, classified.failure);
   }
   throw new TransportError(`${operation.name} failed with code ${classified.failure.code}.`);
 }
