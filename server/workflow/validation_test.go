@@ -710,7 +710,7 @@ func TestJoinOutgoingApprovalIsUnsupported(t *testing.T) {
 	assertHasCodes(t, result, workflow.CodeUnsupportedApprovalExecution)
 }
 
-func TestFanoutJoinRejectsDivergentSourceCarriedIntoScript(t *testing.T) {
+func TestFanoutJoinAllowsScriptTargetWithoutContinuationSource(t *testing.T) {
 	def := fanoutWorkflow(t)
 	script := testNode(
 		def.ID,
@@ -726,7 +726,7 @@ func TestFanoutJoinRejectsDivergentSourceCarriedIntoScript(t *testing.T) {
 	joinEdge.ContextMode = workflow.ContextModeNewSession
 	def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
 		WorkflowID: def.ID, ID: "group_script_done",
-		SourceNodeID: workflow.NodeIDOf(script), TransitionID: "done", DisplayName: "Done",
+		SourceNodeID: workflow.NodeIDOf(script), TransitionID: "script_done", DisplayName: "Done",
 	})
 	def.Edges = append(def.Edges, workflow.Edge{
 		WorkflowID: def.ID, ID: "edge_script_done", Key: "done",
@@ -737,7 +737,9 @@ func TestFanoutJoinRejectsDivergentSourceCarriedIntoScript(t *testing.T) {
 
 	result := validateForTask(def)
 
-	assertHasCodes(t, result, workflow.CodeInvalidContextSource)
+	if len(result.Errors) != 0 {
+		t.Fatalf("Join-to-Script workflow validation errors = %+v", result.Errors)
+	}
 }
 
 func TestContextSourceValidation(t *testing.T) {

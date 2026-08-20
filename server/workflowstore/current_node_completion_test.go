@@ -288,6 +288,65 @@ func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) 
 	}
 }
 
+func TestCompleteCurrentNodeJoinCreatesScriptWithAggregatedInput(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		script := nodeByKey(t, def, "synth")
+		record := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(script))
+		record.Kind = workflow.NodeKindScript
+		record.SubagentRole = ""
+		record.ScriptPath = "/usr/bin/true"
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			testEdgeID("edge-join-synth-"+workflowID.String()),
+		).PromptTemplate = ""
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode split: %v", err)
+	}
+	branches := make(map[workflow.TransitionBranchKey]workflow.CurrentNode)
+	for _, currentNode := range split.Mutation.Created {
+		branchKey, present := currentNode.Reference.TransitionBranchKey()
+		if !present {
+			t.Fatalf("fan-out Current Node = %+v, want branch scope", currentNode)
+		}
+		branches[branchKey] = currentNode
+		associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, currentNode.Reference)
+	}
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       branches["split_a"].Reference,
+		TransitionID: "join_a",
+		OutputValues: map[string]string{"joined": "branch aggregate"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode first join arrival: %v", err)
+	}
+	joined, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       branches["split_b"].Reference,
+		TransitionID: "join_b",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode second join arrival: %v", err)
+	}
+	if len(joined.Mutation.Created) != 1 ||
+		joined.Mutation.Created[0].CurrentInputValues["joined"] != "branch aggregate" {
+		t.Fatalf("join Script successor = %+v, want aggregated input", joined.Mutation.Created)
+	}
+	if len(joined.AutomaticIntents) != 1 ||
+		joined.AutomaticIntents[0].NodeKind != workflow.NodeKindScript {
+		t.Fatalf("join automatic intents = %+v, want one Script successor", joined.AutomaticIntents)
+	}
+}
+
 func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)

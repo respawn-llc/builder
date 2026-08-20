@@ -166,6 +166,8 @@ A previous-transition parameter is valid only when every path to the prompt pass
 
 Use a Script node when a workflow step should run a deterministic local executable instead of an agent. Script nodes can be used anywhere an agent node can be used in the workflow graph.
 
+In complete graph documents, transitions into Script nodes use `context_mode: "new_session"` and `context_source: {"kind":"immediate_source"}`. These required context fields do not create or select a Session for the Script node.
+
 Set the script path on the script node. **All paths are resolved on the server machine.** Relative paths resolve against the task's execution root.
 
 The node script receiver JSON as stdin:

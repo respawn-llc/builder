@@ -117,9 +117,9 @@ func completeCurrentNodeJoinArrival(
 	}
 	joinContinuationSource := workflow.AbsentMaterializedContinuationSource()
 	contextSource := workflow.CanonicalContextSource(target.Edge.ContextSource)
-	if target.Node.Kind() != workflow.NodeKindTerminal &&
-		contextSource.Kind != workflow.ContextSourceSelectedNode &&
-		(target.Edge.ContextMode != workflow.ContextModeNewSession || target.Node.Kind() != workflow.NodeKindAgent) {
+	if target.Node.Kind() == workflow.NodeKindAgent &&
+		target.Edge.ContextMode != workflow.ContextModeNewSession &&
+		contextSource.Kind != workflow.ContextSourceSelectedNode {
 		joinContinuationSource, err = mergeCurrentFanoutJoinContinuationSources(arrivals)
 		if err != nil {
 			return CurrentNodeCompletionResult{}, err
