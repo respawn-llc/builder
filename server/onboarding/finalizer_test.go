@@ -69,12 +69,12 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 	disabledSkill := "api result"
 	tests := []struct {
 		name string
-		req  onboardingpb.FinalizeRequest
+		req  *onboardingpb.FinalizeRequest
 		want want
 	}{
 		{
 			name: "known model large context level thinking verbosity true ask supervisor override native compaction",
-			req: onboardingpb.FinalizeRequest{
+			req: &onboardingpb.FinalizeRequest{
 				MainProvider:  &onboardingpb.ProviderChoice{ProviderOverride: &providerOverride, OpenaiBaseUrl: &openAIBaseURL},
 				Model:         &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_KNOWN, ModelId: ptr("gpt-5.4-mini")},
 				ContextWindow: &onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_LARGE},
@@ -113,7 +113,7 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 		},
 		{
 			name: "custom model custom context disabled thinking false ask supervisor inheritance none compaction",
-			req: onboardingpb.FinalizeRequest{
+			req: &onboardingpb.FinalizeRequest{
 				Model:         &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_CUSTOM, Alias: ptr("custom-openai-model")},
 				ContextWindow: &onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_CUSTOM, Tokens: ptr(uint32(123_456))},
 				Thinking:      &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DISABLED},
@@ -140,7 +140,7 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			home := t.TempDir()
-			if _, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &tc.req); err != nil {
+			if _, err := newTestFinalizer(t, root, home).Finalize(context.Background(), tc.req); err != nil {
 				t.Fatalf("Finalize: %v", err)
 			}
 			cfg := loadFinalizedConfig(t, root)

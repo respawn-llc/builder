@@ -5,6 +5,7 @@ package kent.api.project;
 import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
+import "kent/api/server/server.proto";
 import "kent/api/shared/foundation.proto";
 import "kent/api/shared/validation.proto";
 
@@ -418,6 +419,12 @@ message ProjectListError {
         error_code: "internal_failure"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -464,6 +471,12 @@ message ProjectHomeListError {
         error_code: "internal_failure"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -504,6 +517,12 @@ message ResolvePathError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
       }
     ];
   }
@@ -559,6 +578,12 @@ message PlanWorkspaceBindingError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
       }
     ];
   }
@@ -642,6 +667,12 @@ message CreateProjectError {
         error_code: "auth_required"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -707,6 +738,12 @@ message GetProjectEditError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
       }
     ];
   }
@@ -782,6 +819,12 @@ message UpdateProjectError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
       }
     ];
   }
@@ -868,6 +911,12 @@ message SetDefaultWorkspaceError {
         error_code: "auth_required"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 8 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -902,6 +951,12 @@ message ListProjectWorkspacesError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
       }
     ];
   }
@@ -983,6 +1038,12 @@ message GetProjectWorkspaceError {
         error_code: "internal_failure"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -1054,6 +1115,12 @@ message UnlinkWorkspaceError {
         error_code: "auth_required"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 9 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -1097,6 +1164,12 @@ message DeleteProjectError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
       }
     ];
   }
@@ -1165,6 +1238,12 @@ message AttachWorkspaceError {
         error_code: "auth_required"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -1227,6 +1306,12 @@ message RebindWorkspaceError {
         error_code: "auth_required"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 8 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -1268,6 +1353,12 @@ message GetOverviewError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
       }
     ];
   }

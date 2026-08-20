@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "kent/api/project/project.proto";
 import "kent/api/runtime/runtime.proto";
+import "kent/api/server/server.proto";
 import "kent/api/shared/foundation.proto";
 import "kent/api/shared/validation.proto";
 
@@ -446,6 +447,12 @@ message SessionPlanError {
         error_code: "auth_required"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 8 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -523,6 +530,12 @@ message WorkspaceChatDraftError {
         error_code: "workspace_not_registered"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -564,6 +577,12 @@ message MaterializeWorkspaceChatError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "workspace_not_registered"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
       }
     ];
   }

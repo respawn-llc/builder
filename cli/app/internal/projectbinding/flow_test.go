@@ -36,8 +36,8 @@ type testProjectViewClient struct {
 	create     projectpb.CreateProjectSuccess
 	attach     projectpb.AttachWorkspaceSuccess
 	overview   projectpb.GetOverviewSuccess
-	createReq  projectpb.CreateProjectRequest
-	attachReq  projectpb.AttachWorkspaceRequest
+	createReq  *projectpb.CreateProjectRequest
+	attachReq  *projectpb.AttachWorkspaceRequest
 	planCalled bool
 }
 
@@ -55,11 +55,11 @@ func (c *testProjectViewClient) PlanWorkspaceBinding(context.Context, *projectpb
 	return &c.plan, nil
 }
 func (c *testProjectViewClient) CreateProject(_ context.Context, req *projectpb.CreateProjectRequest) (*projectpb.CreateProjectSuccess, error) {
-	c.createReq = *req
+	c.createReq = req
 	return &c.create, nil
 }
 func (c *testProjectViewClient) AttachWorkspaceToProject(_ context.Context, req *projectpb.AttachWorkspaceRequest) (*projectpb.AttachWorkspaceSuccess, error) {
-	c.attachReq = *req
+	c.attachReq = req
 	return &c.attach, nil
 }
 func (c *testProjectViewClient) ListProjectWorkspaces(context.Context, *projectpb.ProjectWorkspaceListRequest) (*projectpb.ListProjectWorkspacesSuccess, error) {
@@ -128,7 +128,9 @@ func TestEnsureInteractiveCreatesProjectForLocalUnboundPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensure interactive: %v", err)
 	}
-	if projectClient.createReq.DisplayName != "Created Project" || projectClient.createReq.WorkspaceRoot != "/tmp/workspace" {
+	if projectClient.createReq == nil ||
+		projectClient.createReq.DisplayName != "Created Project" ||
+		projectClient.createReq.WorkspaceRoot != "/tmp/workspace" {
 		t.Fatalf("unexpected create request: %+v", projectClient.createReq)
 	}
 	if len(server.bindCalls) != 1 || server.bindCalls[0].ProjectID != "project-created" || server.bindCalls[0].WorkspaceID != "workspace-created" {

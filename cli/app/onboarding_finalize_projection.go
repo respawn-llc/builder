@@ -34,11 +34,11 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (*onboa
 		if err != nil {
 			return nil, err
 		}
-		req.Model = &model
+		req.Model = model
 		req.MainProvider = mainProvider
-		req.ContextWindow = &contextWindow
-		req.Thinking = &thinking
-		req.Supervisor = &supervisor
+		req.ContextWindow = contextWindow
+		req.Thinking = thinking
+		req.Supervisor = supervisor
 		req.Compaction = &compaction
 		req.SkillsImport = skillsImport
 		commandsImport, err := onboardingImportSelectionRequest(state.selections.commandImport)
@@ -96,53 +96,50 @@ func onboardingToolOverrides(enabledTools map[toolspec.ID]bool) []*onboardingpb.
 	return overrides
 }
 
-func onboardingModelChoice(selection onboardingModelSelection) onboardingpb.ModelChoice {
+func onboardingModelChoice(selection onboardingModelSelection) *onboardingpb.ModelChoice {
 	if selection.kind == onboardingModelKnown {
-		return onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_KNOWN, ModelId: &selection.value}
+		return &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_KNOWN, ModelId: &selection.value}
 	}
-	return onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_CUSTOM, Alias: &selection.value}
+	return &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_CUSTOM, Alias: &selection.value}
 }
 
-func onboardingContextWindowChoice(selection onboardingContextSelection) onboardingpb.ContextWindowChoice {
+func onboardingContextWindowChoice(selection onboardingContextSelection) *onboardingpb.ContextWindowChoice {
 	switch selection.kind {
 	case onboardingContextLarge:
-		return onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_LARGE}
+		return &onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_LARGE}
 	case onboardingContextCustom:
 		tokens := uint32(selection.tokens)
-		return onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_CUSTOM, Tokens: &tokens}
+		return &onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_CUSTOM, Tokens: &tokens}
 	default:
-		return onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_DEFAULT}
+		return &onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_DEFAULT}
 	}
 }
 
-func onboardingThinkingChoice(selection onboardingThinkingSelection) onboardingpb.ThinkingChoice {
+func onboardingThinkingChoice(selection onboardingThinkingSelection) *onboardingpb.ThinkingChoice {
 	switch selection.kind {
 	case onboardingThinkingDefault:
-		return onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DEFAULT}
+		return &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DEFAULT}
 	case onboardingThinkingDisabled:
-		return onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DISABLED}
+		return &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DISABLED}
 	case onboardingThinkingCustom:
-		return onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_CUSTOM, Value: &selection.value}
+		return &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_CUSTOM, Value: &selection.value}
 	default:
-		return onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_LEVEL, Level: &selection.value}
+		return &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_LEVEL, Level: &selection.value}
 	}
 }
 
-func onboardingSupervisorChoice(selection onboardingSupervisorSelection) onboardingpb.SupervisorChoice {
-	result := onboardingpb.SupervisorChoice{Frequency: onboardingSupervisorFrequencyToProto(selection.frequency)}
+func onboardingSupervisorChoice(selection onboardingSupervisorSelection) *onboardingpb.SupervisorChoice {
+	result := &onboardingpb.SupervisorChoice{Frequency: onboardingSupervisorFrequencyToProto(selection.frequency)}
 	if selection.frequency == onboardingSupervisorOff {
 		return result
 	}
 	if selection.model.kind == onboardingReviewerModelOverridden {
-		model := onboardingModelChoice(selection.model.override)
-		result.Model = &model
+		result.Model = onboardingModelChoice(selection.model.override)
 	}
 	if selection.thinking.kind == onboardingReviewerThinkingOverridden {
-		thinking := onboardingThinkingChoice(selection.thinking.override)
-		result.Thinking = &thinking
+		result.Thinking = onboardingThinkingChoice(selection.thinking.override)
 	} else if selection.thinking.kind == onboardingReviewerThinkingCapabilityDisabled {
-		thinking := onboardingThinkingChoice(onboardingThinkingSelection{kind: onboardingThinkingDisabled})
-		result.Thinking = &thinking
+		result.Thinking = onboardingThinkingChoice(onboardingThinkingSelection{kind: onboardingThinkingDisabled})
 	}
 	return result
 }

@@ -156,6 +156,9 @@ func registerGatewayBinaryUnary[
 			return protoapi.SuccessResult(method, response)
 		},
 		failure: func(g *Gateway, state *connectionState, message proto.Message, err error) proto.Message {
+			if details, ok := binaryServerNotReadyDetails(err); ok {
+				return gatewayBinaryFailureResult(method, details)
+			}
 			var request Request
 			if message != nil {
 				typed, ok := message.(Request)
@@ -316,9 +319,6 @@ func binaryAttachProjectFailure(
 	request *connectionpb.AttachProjectRequest,
 	err error,
 ) proto.Message {
-	if details, ok := connectionServerNotReadyDetails(err); ok {
-		return details
-	}
 	switch {
 	case errors.Is(err, serverapi.ErrProjectNotFound) && request != nil:
 		return &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId}
@@ -347,9 +347,6 @@ func binaryAttachSessionFailure(
 	request *connectionpb.AttachSessionRequest,
 	err error,
 ) proto.Message {
-	if details, ok := connectionServerNotReadyDetails(err); ok {
-		return details
-	}
 	switch {
 	case errors.Is(err, serverapi.ErrProjectNotFound) && request != nil:
 		details := &connectionpb.SessionAttachmentTargetDetails{SessionId: request.SessionId}
@@ -391,7 +388,7 @@ func connectionAttachmentProjectID(g *Gateway, state *connectionState) string {
 	return ""
 }
 
-func connectionServerNotReadyDetails(err error) (*serverpb.ServerNotReadyDetails, bool) {
+func binaryServerNotReadyDetails(err error) (*serverpb.ServerNotReadyDetails, bool) {
 	var notReady *serverapi.ServerNotReadyError
 	if !errors.As(err, &notReady) {
 		return nil, false

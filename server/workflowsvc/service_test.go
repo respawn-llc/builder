@@ -1425,11 +1425,10 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	taskID := workflow.TaskID(task.Task.ID)
-	if _, err := service.store.StartTask(ctx, taskID); err != nil {
+	if _, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID)); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	currentNodes, err := service.store.ListCurrentNodes(ctx, taskID)
+	currentNodes, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("ListCurrentNodes: %v", err)
 	}
@@ -1470,6 +1469,9 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 	request := serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
 	}
 
 	responses := make(chan serverapi.WorkflowTaskResumeResponse, 2)

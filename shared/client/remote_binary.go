@@ -7,6 +7,7 @@ import (
 	"core/shared/protoapi"
 	"core/shared/rpcwire"
 
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -32,6 +33,10 @@ type generatedUnaryResult[Success any, Failure comparableProtoMessage] interface
 	GetError() Failure
 }
 
+type generatedServerNotReadyFailure interface {
+	GetServerNotReady() *serverpb.ServerNotReadyDetails
+}
+
 func (e remoteTransportFailureError) Error() string {
 	return fmt.Sprintf("binary transport failure: %s", e.code)
 }
@@ -55,6 +60,11 @@ func callGeneratedBinary[
 	}
 	var zeroFailure Failure
 	if failure := result.GetError(); failure != zeroFailure {
+		if typed, ok := any(failure).(generatedServerNotReadyFailure); ok {
+			if details := typed.GetServerNotReady(); details != nil {
+				return zeroSuccess, protoapi.ServerNotReadyFromProto(details)
+			}
+		}
 		return zeroSuccess, decodeFailure(failure)
 	}
 	return result.GetSuccess(), nil
