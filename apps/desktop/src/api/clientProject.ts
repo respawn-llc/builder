@@ -11,7 +11,14 @@ import type {
   WorkspaceUnlinkResponse,
 } from "./models";
 import { workspaceCatalogPageSize } from "./models";
-import { create, operationFromDescriptor } from "@app/server-api-contract";
+import {
+  classifyResult,
+  create,
+  OperationOutcome,
+  operationFromDescriptor,
+  type DescMethod,
+  type Message,
+} from "@app/server-api-contract";
 import {
   ProjectAvailability,
   ProjectCatalogService,
@@ -19,23 +26,17 @@ import {
   ProjectWorkspaceGetResult,
   WorkspaceBindingPlanKind,
   WorkspaceBindingPlanMode,
-  type AttachWorkspaceSuccess,
-  type CreateProjectSuccess,
-  type DeleteProjectSuccess,
   type ProjectBinding as GeneratedProjectBinding,
   type ProjectHomeSummary,
   type ProjectMutationBinding,
   type ProjectWorkspaceCatalogSummary,
-  type SetDefaultWorkspaceSuccess,
-  type UnlinkWorkspaceSuccess,
-  type UpdateProjectSuccess,
 } from "@app/server-api-contract/gen/kent/api/project/project_pb";
 import { parseCatalogInput, requireCatalogProject } from "./clientCatalog";
 import { timestampMillis } from "./clientTime";
 import { canonicalProjectIDSchema, workspaceOffsetSchema } from "./schemas/catalog";
 import type { DescriptorRpcTransport } from "./transport";
 import { CatalogContractError, ContractError } from "./errors";
-import { projectRpcError, type GeneratedProjectError } from "./projectRpcError";
+import { projectRpcError } from "./projectRpcError";
 
 const listWorkspacesOperation = operationFromDescriptor(ProjectCatalogService.method.listWorkspaces).name;
 const getWorkspaceOperation = operationFromDescriptor(ProjectCatalogService.method.getWorkspace).name;
@@ -66,7 +67,7 @@ export async function listWorkspaces(
     }),
   );
   if (result.outcome.case !== "success") {
-    throw projectRpcError(operationFromDescriptor(method).name, result.outcome);
+    throw projectResultError(method, result);
   }
   const success = result.outcome.value;
   const response: WorkspaceCatalogPage = {
@@ -119,7 +120,7 @@ export async function getProjectWorkspace(
     create(method.input, { projectId: validatedProjectID, selector: selectorValue }),
   );
   if (result.outcome.case !== "success") {
-    throw projectRpcError(operationFromDescriptor(method).name, result.outcome);
+    throw projectResultError(method, result);
   }
   const success = result.outcome.value;
   requireCatalogProject(getWorkspaceOperation, validatedProjectID, success.projectId);
@@ -150,7 +151,7 @@ export async function getProjectEdit(
     create(method.input, { projectId: validatedProjectID }),
   );
   if (result.outcome.case !== "success") {
-    throw projectRpcError(operationFromDescriptor(method).name, result.outcome);
+    throw projectResultError(method, result);
   }
   requireCatalogProject(getEditOperation, validatedProjectID, result.outcome.value.projectId);
   return {
@@ -167,7 +168,7 @@ export async function planWorkspace(transport: DescriptorRpcTransport, path: str
     create(method.input, { path, mode: WorkspaceBindingPlanMode.INTERACTIVE }),
   );
   if (result.outcome.case !== "success") {
-    throw projectRpcError(operationFromDescriptor(method).name, result.outcome);
+    throw projectResultError(method, result);
   }
   return {
     kind: workspaceBindingPlanKind(result.outcome.value.kind),
@@ -186,7 +187,7 @@ export async function listProjectHome(
     create(method.input, { pageSize: 40, pageToken: pageToken === "" ? undefined : pageToken }),
   );
   if (result.outcome.case !== "success") {
-    throw projectRpcError(operationFromDescriptor(method).name, result.outcome);
+    throw projectResultError(method, result);
   }
   const success = result.outcome.value;
   if (success.generatedAt === undefined) {
@@ -214,10 +215,10 @@ export async function createProject(
       workspaceRoot,
     }),
   );
-  const success = projectMutationSuccess<CreateProjectSuccess>(
-    operationFromDescriptor(method).name,
-    result.outcome,
-  );
+  if (result.outcome.case !== "success") {
+    throw projectResultError(method, result);
+  }
+  const success = result.outcome.value;
   if (success.binding === undefined) {
     throw new ContractError("Project Create binding is required.");
   }
@@ -234,10 +235,10 @@ export async function attachWorkspace(
     method,
     create(method.input, { projectId: projectID, workspaceRoot }),
   );
-  const success = projectMutationSuccess<AttachWorkspaceSuccess>(
-    operationFromDescriptor(method).name,
-    result.outcome,
-  );
+  if (result.outcome.case !== "success") {
+    throw projectResultError(method, result);
+  }
+  const success = result.outcome.value;
   if (success.binding === undefined) {
     throw new ContractError("Project Workspace attach binding is required.");
   }
@@ -262,10 +263,10 @@ export async function updateProject(
       projectKey: projectKey === "" ? undefined : projectKey,
     }),
   );
-  const success = projectMutationSuccess<UpdateProjectSuccess>(
-    operationFromDescriptor(method).name,
-    result.outcome,
-  );
+  if (result.outcome.case !== "success") {
+    throw projectResultError(method, result);
+  }
+  const success = result.outcome.value;
   if (success.project === undefined) {
     throw new ContractError("Project Update summary is required.");
   }
@@ -285,10 +286,10 @@ export async function setDefaultWorkspace(
       workspace: { selector: { case: "workspaceId", value: workspaceID } },
     }),
   );
-  const success = projectMutationSuccess<SetDefaultWorkspaceSuccess>(
-    operationFromDescriptor(method).name,
-    result.outcome,
-  );
+  if (result.outcome.case !== "success") {
+    throw projectResultError(method, result);
+  }
+  const success = result.outcome.value;
   if (success.project === undefined) {
     throw new ContractError("Project default Workspace summary is required.");
   }
@@ -308,10 +309,10 @@ export async function unlinkWorkspace(
       workspace: { selector: { case: "workspaceId", value: workspaceID } },
     }),
   );
-  const success = projectMutationSuccess<UnlinkWorkspaceSuccess>(
-    operationFromDescriptor(method).name,
-    result.outcome,
-  );
+  if (result.outcome.case !== "success") {
+    throw projectResultError(method, result);
+  }
+  const success = result.outcome.value;
   return {
     projectID: success.projectId,
     workspaceID: success.workspaceId,
@@ -330,10 +331,10 @@ export async function deleteProject(
 ): Promise<ProjectDeleteResponse> {
   const method = ProjectCatalogService.method.delete;
   const result = await transport.callDescriptor(method, create(method.input, { projectId: projectID }));
-  const success = projectMutationSuccess<DeleteProjectSuccess>(
-    operationFromDescriptor(method).name,
-    result.outcome,
-  );
+  if (result.outcome.case !== "success") {
+    throw projectResultError(method, result);
+  }
+  const success = result.outcome.value;
   return {
     projectID: success.projectId,
     deleted: success.deleted,
@@ -378,17 +379,13 @@ function projectMutationBinding(binding: ProjectMutationBinding): ProjectBinding
   };
 }
 
-function projectMutationSuccess<Success>(
-  operation: string,
-  outcome:
-    | Readonly<{ case: "success"; value: Success }>
-    | Readonly<{ case: "error"; value: GeneratedProjectError }>
-    | Readonly<{ case: undefined }>,
-): Success {
-  if (outcome.case === "success") {
-    return outcome.value;
+function projectResultError(method: DescMethod, result: Message) {
+  const operation = operationFromDescriptor(method).name;
+  const classified = classifyResult(method.output, result);
+  if (classified.outcome === OperationOutcome.SUCCESS) {
+    return projectRpcError(operation);
   }
-  throw projectRpcError(operation, outcome.case === "error" ? outcome : { case: undefined });
+  return projectRpcError(operation, classified.failure);
 }
 
 function workspaceUnlinkBlockerMessage(code: string): string {
