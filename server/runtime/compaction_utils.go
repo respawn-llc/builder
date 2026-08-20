@@ -15,6 +15,7 @@ import (
 const (
 	estimatedInlineImagePayloadTokens = 256
 	estimatedInlineFilePayloadTokens  = 512
+	encryptedReasoningEnvelopeBytes   = 650
 )
 
 func (e *Engine) providerCapabilities(ctx context.Context) (llm.ProviderCapabilities, error) {
@@ -141,34 +142,58 @@ func estimateTokensFromBytes(byteLen int) int {
 func estimateItemsTokens(items []llm.ResponseItem) int {
 	totalTokens := 0
 	for _, item := range items {
-		for _, value := range []*string{
-			item.Content,
-			item.ID,
-			item.Name,
-			item.CallID,
-			item.EncryptedContent,
-		} {
-			if value != nil {
-				totalTokens += estimateTokensFromBytes(len(*value))
-			}
-		}
-		totalTokens += estimateTokensFromBytes(len(item.Arguments))
-		if outputTokens, ok := estimateStructuredOutputTokens(item.Output); ok {
-			totalTokens += outputTokens
-		} else {
-			totalTokens += estimateTokensFromBytes(len(item.Output))
-		}
-		for _, summary := range item.ReasoningSummary {
-			if summary.Role != nil {
-				totalTokens += estimateTokensFromBytes(len(*summary.Role))
-			}
-			totalTokens += estimateTokensFromBytes(len(summary.Text))
-		}
+		totalTokens += estimateItemTokens(item)
 	}
 	if totalTokens <= 0 {
 		return 0
 	}
 	return totalTokens
+}
+
+func estimateItemTokens(item llm.ResponseItem) int {
+	switch item.Type {
+	case llm.ResponseItemTypeReasoning, llm.ResponseItemTypeCompaction:
+		if item.EncryptedContent != nil {
+			return estimateEncryptedReasoningTokens(len(*item.EncryptedContent))
+		}
+	}
+
+	totalTokens := 0
+	for _, value := range []*string{
+		item.Content,
+		item.ID,
+		item.Name,
+		item.CallID,
+		item.EncryptedContent,
+	} {
+		if value != nil {
+			totalTokens += estimateTokensFromBytes(len(*value))
+		}
+	}
+	totalTokens += estimateTokensFromBytes(len(item.Arguments))
+	if outputTokens, ok := estimateStructuredOutputTokens(item.Output); ok {
+		totalTokens += outputTokens
+	} else {
+		totalTokens += estimateTokensFromBytes(len(item.Output))
+	}
+	for _, summary := range item.ReasoningSummary {
+		if summary.Role != nil {
+			totalTokens += estimateTokensFromBytes(len(*summary.Role))
+		}
+		totalTokens += estimateTokensFromBytes(len(summary.Text))
+	}
+	return totalTokens
+}
+
+func estimateEncryptedReasoningTokens(encodedBytes int) int {
+	if encodedBytes <= 0 {
+		return 0
+	}
+	// Encrypted reasoning is base64 with a fixed decoded envelope that is not
+	// model-visible. Match the provider client's context accounting.
+	decodedBytes := encodedBytes/4*3 + encodedBytes%4*3/4
+	modelVisibleBytes := decodedBytes - encryptedReasoningEnvelopeBytes
+	return estimateTokensFromBytes(modelVisibleBytes)
 }
 
 func estimateStructuredOutputTokens(raw json.RawMessage) (int, bool) {

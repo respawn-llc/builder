@@ -33,6 +33,48 @@ func TestShouldAutoCompactAccountsForMessagesAppendedAfterLastUsage(t *testing.T
 	}
 }
 
+func TestShouldAutoCompactUsesModelVisibleEncryptedReasoningEstimate(t *testing.T) {
+	t.Parallel()
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 1_500,
+	})
+	if err := engine.steer("reasoning-history", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{
+			{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("prior"),
+				ReasoningItems: []llm.ReasoningItem{{
+					ID:               "reasoning-1",
+					EncryptedContent: strings.Repeat("e", 4_000),
+				}},
+			},
+			{Role: llm.RoleUser, Content: textutil.Value("next")},
+		},
+	)); err != nil {
+		t.Fatalf("persist reasoning history: %v", err)
+	}
+
+	request := llm.Request{Items: engine.transcriptRuntimeState().SnapshotItems()}
+	candidate := newSuccessfulRequestCandidate(request, llm.Response{
+		Usage: llm.Usage{InputTokens: 900, WindowTokens: 2_000},
+	})
+	if _, err := engine.commitAcceptedResponseCandidate("accepted-response", candidate, false); err != nil {
+		t.Fatalf("commit accepted response: %v", err)
+	}
+
+	if usage := engine.ContextUsage(); usage.UsedTokens != 1_488 {
+		t.Fatalf("context usage = %+v, want provider checkpoint plus 588 estimated reasoning tokens", usage)
+	}
+	if engine.shouldAutoCompactWithContext(context.Background()) {
+		t.Fatal("encrypted reasoning ciphertext length triggered premature compaction")
+	}
+}
+
 func TestShouldCompactBeforeUserMessageUsesEstimatedPromptGrowth(t *testing.T) {
 	t.Parallel()
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
