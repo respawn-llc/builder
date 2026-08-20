@@ -82,6 +82,8 @@ func (s *Service) scheduleWorktreeTransition(
 		) error {
 			return sync(target, reminder)
 		})
+	}, func(err error) {
+		s.publishWorktreeTransitionOutcome(request, err)
 	})
 	if err != nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, err
@@ -96,6 +98,11 @@ func (s *Service) runWorktreeTransition(
 	sync transitionTargetSync,
 ) error {
 	err := execute(ctx, sync)
+	s.publishWorktreeTransitionOutcome(request, err)
+	return err
+}
+
+func (s *Service) publishWorktreeTransitionOutcome(request worktreeTransitionRequest, err error) {
 	if s.publisher != nil {
 		outcome := clientui.WorktreeTransitionOutcome{
 			OperationID: request.operationID,
@@ -113,7 +120,6 @@ func (s *Service) runWorktreeTransition(
 		}
 		s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
 	}
-	return err
 }
 
 func (s *Service) resolveScheduledEnterTarget(

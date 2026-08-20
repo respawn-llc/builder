@@ -595,16 +595,16 @@ CREATE INDEX session_workflow_node_associations_lookup_idx
         session_id DESC
     );
 
+CREATE UNIQUE INDEX session_workflow_node_associations_serial_unique_idx
+    ON session_workflow_node_associations(session_id, node_id)
+    WHERE transition_branch_key IS NULL;
+
 CREATE INDEX session_workflow_node_associations_session_recency_idx
     ON session_workflow_node_associations(
         session_id,
         associated_at_unix_ms DESC,
         node_id DESC
     );
-
-CREATE UNIQUE INDEX session_workflow_node_associations_serial_unique_idx
-    ON session_workflow_node_associations(session_id, node_id)
-    WHERE transition_branch_key IS NULL;
 
 CREATE UNIQUE INDEX sessions_artifact_relpath_idx ON sessions(artifact_relpath);
 

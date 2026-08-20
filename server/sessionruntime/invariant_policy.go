@@ -16,6 +16,5 @@ func (a *Authority) invariant(operation string, cause error) error {
 	if a == nil {
 		return sessionRuntimeInvariant(false, operation, cause)
 	}
-	a.invariantPolicy.Check(false, invariant.FailureDiagnostic(invariant.ScopeWorkflowExecution, operation, cause))
-	return errors.Join(ErrSessionRuntimeInvariant, errors.New(operation+": "+cause.Error()))
+	return a.invariantPolicy.OperationalError(ErrSessionRuntimeInvariant, operation, cause)
 }

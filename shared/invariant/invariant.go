@@ -31,10 +31,14 @@ type Policy struct {
 type Option func(*policyConfig)
 
 func OperationalError(sentinel error, debug bool, operation string, cause error) error {
+	return OperationalPolicy(debug).OperationalError(sentinel, operation, cause)
+}
+
+func (p Policy) OperationalError(sentinel error, operation string, cause error) error {
 	if sentinel == nil {
 		sentinel = errors.New("ownership invariant failed")
 	}
-	OperationalPolicy(debug).Check(false, FailureDiagnostic(
+	p.Check(false, FailureDiagnostic(
 		ScopeWorkflowExecution,
 		operation,
 		cause,

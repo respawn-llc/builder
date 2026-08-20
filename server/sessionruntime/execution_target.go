@@ -44,6 +44,7 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 func (a *Authority) SubmitWorktreeTransition(
 	sessionID string,
 	operation func(context.Context, func(clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+	admissionFailed func(error),
 ) error {
 	if operation == nil {
 		return nil
@@ -57,10 +58,14 @@ func (a *Authority) SubmitWorktreeTransition(
 	a.mu.Unlock()
 	if resource == nil {
 		go func() {
-			_ = a.withMaintenanceResource(context.Background(), id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
+			started := false
+			err := a.withMaintenanceResource(context.Background(), id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
 				if resource != nil {
-					return false, engine.SubmitWorktreeTransition(operation)
+					submitErr := engine.SubmitWorktreeTransition(operation)
+					started = submitErr == nil
+					return false, submitErr
 				}
+				started = true
 				return false, operation(runCtx, func(target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 					_, normalizedReminder, normalizeErr := normalizeTarget(target, reminder)
 					if normalizeErr != nil || normalizedReminder == nil {
@@ -69,6 +74,9 @@ func (a *Authority) SubmitWorktreeTransition(
 					return store.SetWorktreeReminderState(normalizedReminder)
 				})
 			})
+			if err != nil && !started && admissionFailed != nil {
+				admissionFailed(err)
+			}
 		}()
 		return nil
 	}
