@@ -137,7 +137,7 @@ func (s *BootstrapService) authReady(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return auth.EvaluateStartupGate(state).Ready, nil
+	return !s.authRequired || auth.EvaluateStartupGate(state).Ready, nil
 }
 
 func (s *BootstrapService) storedState(ctx context.Context) (auth.State, error) {
