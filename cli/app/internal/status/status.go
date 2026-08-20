@@ -13,8 +13,8 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 )
 
 const (
@@ -43,7 +43,7 @@ type Request struct {
 	Source                config.SourceReport
 	CacheKeys             CacheKeys
 	AuthStatus            apicontract.AuthStatusService
-	AuthSelection         *serverapi.AuthProviderSelection
+	AuthSelection         *authpb.ProviderSelection
 	SessionName           string
 	SessionID             string
 	AgentRole             *string
@@ -88,7 +88,7 @@ type AuthInfo struct {
 	Summary     string
 	Details     []string
 	Visible     bool
-	Method      serverapi.AuthStatusMethod
+	Method      authpb.AuthMethod
 	Provider    string
 	Unavailable bool
 }

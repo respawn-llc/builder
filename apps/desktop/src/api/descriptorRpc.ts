@@ -3,10 +3,9 @@ import {
   decodeEnvelope,
   encode,
   encodeEnvelope,
-  operationFromDescriptor,
+  operationName,
   type DescMethod,
   type MessageShape,
-  type Operation,
 } from "@app/server-api-contract";
 import type { Result, TransportFailure } from "@app/server-api-contract/gen/kent/api/shared/foundation_pb";
 
@@ -21,10 +20,10 @@ export function encodeDescriptorCall<Method extends DescMethod>(
   method: Method,
   request: MessageShape<Method["input"]>,
   correlation: string,
-): Readonly<{ operation: Operation; bytes: Uint8Array }> {
-  const operation = operationFromDescriptor(method);
+): Readonly<{ operation: string; bytes: Uint8Array }> {
+  const operation = operationName(method);
   if (method.methodKind !== "unary") {
-    throw new TransportError(`${operation.name} is not a unary operation.`);
+    throw new TransportError(`${operation} is not a unary operation.`);
   }
   const payload = encode(method.input, request);
   return {
@@ -33,7 +32,7 @@ export function encodeDescriptorCall<Method extends DescMethod>(
       frame: {
         case: "call",
         value: {
-          operation: operation.name,
+          operation,
           correlation,
           payload,
         },
@@ -71,20 +70,20 @@ export function completeDescriptorResponse<Method extends DescMethod>(
   expectedCorrelation: string,
   response: DescriptorResponse,
 ): MessageShape<Method["output"]> {
-  const operation = operationFromDescriptor(method);
+  const operation = operationName(method);
   if (response.correlation !== expectedCorrelation) {
-    throw new TransportError(`${operation.name} response correlation does not match its request.`);
+    throw new TransportError(`${operation} response correlation does not match its request.`);
   }
   if (response.kind === "transport_failure") {
     throw new TransportError(
-      `${operation.name} failed at the binary transport boundary with code ${response.failure.code.toString()}.`,
+      `${operation} failed at the binary transport boundary with code ${response.failure.code.toString()}.`,
     );
   }
-  if (response.result.operation !== operation.name) {
-    throw new TransportError(`${operation.name} received a result for ${response.result.operation}.`);
+  if (response.result.operation !== operation) {
+    throw new TransportError(`${operation} received a result for ${response.result.operation}.`);
   }
   if (response.result.payload === undefined) {
-    throw new TransportError(`${operation.name} result payload is required.`);
+    throw new TransportError(`${operation} result payload is required.`);
   }
   return decode<Method["output"]>(method.output, response.result.payload);
 }

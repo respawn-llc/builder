@@ -147,7 +147,7 @@ export type ProjectMutationResponse = Readonly<{
 export type WorkspaceUnlinkBlocker = Readonly<{
   code: string;
   message: string;
-  count: number;
+  count?: number;
 }>;
 
 export type WorkspaceUnlinkResponse = Readonly<{

@@ -20,7 +20,6 @@ import (
 	"core/shared/protoapi"
 	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/rpcwire"
-	"core/shared/serverapi"
 	"core/shared/theme"
 )
 
@@ -357,9 +356,9 @@ func TestOnboardingFinalizationRemoteDeadlineIsIndeterminateUntilCallerClosesRem
 	}
 	finalization := newOnboardingFinalization(remote, context.Background())
 	finalization.timeout = time.Second
-	if err := finalization.start(serverapi.OnboardingFinalizeRequest{
+	if err := finalization.start(&onboardingpb.FinalizeRequest{
 		Theme:          ptrOnboardingTheme(theme.Dark),
-		CommandsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeNone},
+		CommandsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_NONE},
 	}, true, theme.Dark); err != nil {
 		t.Fatalf("start finalization: %v", err)
 	}
@@ -385,8 +384,16 @@ func TestOnboardingFinalizationRemoteDeadlineIsIndeterminateUntilCallerClosesRem
 	waitForOnboardingGateClose(t, server.gate.closed)
 }
 
-func ptrOnboardingTheme(value string) *serverapi.OnboardingTheme {
-	themeValue := serverapi.OnboardingTheme(value)
+func ptrOnboardingTheme(value string) *onboardingpb.Theme {
+	themeValue := onboardingpb.Theme_THEME_UNSPECIFIED
+	switch value {
+	case theme.Dark:
+		themeValue = onboardingpb.Theme_THEME_DARK
+	case theme.Light:
+		themeValue = onboardingpb.Theme_THEME_LIGHT
+	default:
+		panic("unsupported onboarding theme fixture")
+	}
 	return &themeValue
 }
 

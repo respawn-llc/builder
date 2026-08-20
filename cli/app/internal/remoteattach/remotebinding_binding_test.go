@@ -16,9 +16,9 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
-	"core/shared/serverapi"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestBindProjectWorkspaceFailuresKeepCurrentUsableAndCloseCreatedSuccessor(t *testing.T) {
@@ -325,11 +325,11 @@ func (s *remoteBindingServer) requireClosed(t *testing.T) {
 
 func requireRemoteUsable(t *testing.T, remote *client.Remote) {
 	t.Helper()
-	response, err := remote.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	response, err := remote.GetReadiness(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("remote is not usable: %v", err)
 	}
-	if !response.Ready {
+	if !response.GetReadiness().GetReady() {
 		t.Fatal("remote readiness = false")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -17,18 +18,18 @@ import (
 func (g *Gateway) resolveAttachedProjectWorkspace(ctx context.Context, request *connectionpb.AttachProjectRequest) (string, string, error) {
 	switch workspace := request.GetWorkspace().(type) {
 	case nil:
-		overview, err := g.deps.ProjectViewClient().GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: request.ProjectId})
+		overview, err := g.deps.ProjectViewClient().GetProjectOverview(ctx, &projectpb.GetOverviewRequest{ProjectId: request.ProjectId})
 		if err != nil {
 			return "", "", err
 		}
-		if len(overview.Overview.Workspaces) == 0 {
+		if len(overview.GetOverview().GetWorkspaces()) == 0 {
 			return "", "", fmt.Errorf("project %q has no attached workspaces", request.ProjectId)
 		}
-		if len(overview.Overview.Workspaces) > 1 {
+		if len(overview.GetOverview().GetWorkspaces()) > 1 {
 			return "", "", fmt.Errorf("project %q requires explicit workspace selection", request.ProjectId)
 		}
-		summary := overview.Overview.Workspaces[0]
-		return strings.TrimSpace(summary.WorkspaceID), strings.TrimSpace(summary.RootPath), nil
+		summary := overview.GetOverview().GetWorkspaces()[0]
+		return strings.TrimSpace(summary.WorkspaceId), strings.TrimSpace(summary.RootPath), nil
 	case *connectionpb.AttachProjectRequest_WorkspaceId:
 		binding, err := g.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, workspace.WorkspaceId)
 		if err != nil {
@@ -39,17 +40,17 @@ func (g *Gateway) resolveAttachedProjectWorkspace(ctx context.Context, request *
 		}
 		return binding.WorkspaceID, strings.TrimSpace(binding.CanonicalRoot), nil
 	case *connectionpb.AttachProjectRequest_WorkspaceRoot:
-		resolved, err := g.deps.ProjectViewClient().ResolveProjectPath(ctx, serverapi.ProjectResolvePathRequest{Path: workspace.WorkspaceRoot})
+		resolved, err := g.deps.ProjectViewClient().ResolveProjectPath(ctx, &projectpb.ResolvePathRequest{Path: workspace.WorkspaceRoot})
 		if err != nil {
 			return "", "", err
 		}
 		if resolved.Binding == nil {
 			return "", "", errors.Join(serverapi.ErrWorkspaceNotRegistered, fmt.Errorf("workspace %q is not registered", resolved.CanonicalRoot))
 		}
-		if strings.TrimSpace(resolved.Binding.ProjectID) != request.ProjectId {
+		if strings.TrimSpace(resolved.Binding.ProjectId) != request.ProjectId {
 			return "", "", fmt.Errorf("workspace %q is not bound to project %q", resolved.Binding.CanonicalRoot, request.ProjectId)
 		}
-		return strings.TrimSpace(resolved.Binding.WorkspaceID), strings.TrimSpace(resolved.Binding.CanonicalRoot), nil
+		return strings.TrimSpace(resolved.Binding.WorkspaceId), strings.TrimSpace(resolved.Binding.CanonicalRoot), nil
 	default:
 		return "", "", errors.New("AttachProject workspace selection is invalid")
 	}

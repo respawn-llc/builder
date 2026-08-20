@@ -8,7 +8,10 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type testServer struct {
@@ -29,54 +32,58 @@ func (s *testServer) BindProjectWorkspace(_ context.Context, projectID string, w
 }
 
 type testProjectViewClient struct {
-	plan       serverapi.ProjectBindingPlanResponse
-	create     serverapi.ProjectCreateResponse
-	attach     serverapi.ProjectAttachWorkspaceResponse
-	overview   serverapi.ProjectGetOverviewResponse
-	createReq  serverapi.ProjectCreateRequest
-	attachReq  serverapi.ProjectAttachWorkspaceRequest
+	plan       projectpb.PlanWorkspaceBindingSuccess
+	create     projectpb.CreateProjectSuccess
+	attach     projectpb.AttachWorkspaceSuccess
+	overview   projectpb.GetOverviewSuccess
+	createReq  projectpb.CreateProjectRequest
+	attachReq  projectpb.AttachWorkspaceRequest
 	planCalled bool
 }
 
-func (c *testProjectViewClient) ListProjects(context.Context, serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
-	return serverapi.ProjectListResponse{}, nil
+func (c *testProjectViewClient) ListProjects(context.Context, *emptypb.Empty) (*projectpb.ProjectListSuccess, error) {
+	return &projectpb.ProjectListSuccess{}, nil
 }
-func (c *testProjectViewClient) ListProjectHome(context.Context, serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	return serverapi.ProjectHomeListResponse{}, nil
+func (c *testProjectViewClient) ListProjectHome(context.Context, *projectpb.ProjectHomeListRequest) (*projectpb.ProjectHomeListSuccess, error) {
+	return &projectpb.ProjectHomeListSuccess{}, nil
 }
-func (c *testProjectViewClient) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	return serverapi.ProjectResolvePathResponse{}, nil
+func (c *testProjectViewClient) ResolveProjectPath(context.Context, *projectpb.ResolvePathRequest) (*projectpb.ResolvePathSuccess, error) {
+	return &projectpb.ResolvePathSuccess{}, nil
 }
-func (c *testProjectViewClient) PlanWorkspaceBinding(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
+func (c *testProjectViewClient) PlanWorkspaceBinding(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
 	c.planCalled = true
-	return c.plan, nil
+	return &c.plan, nil
 }
-func (c *testProjectViewClient) CreateProject(_ context.Context, req serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	c.createReq = req
-	return c.create, nil
+func (c *testProjectViewClient) CreateProject(_ context.Context, req *projectpb.CreateProjectRequest) (*projectpb.CreateProjectSuccess, error) {
+	c.createReq = *req
+	return &c.create, nil
 }
-func (c *testProjectViewClient) AttachWorkspaceToProject(_ context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	c.attachReq = req
-	return c.attach, nil
+func (c *testProjectViewClient) AttachWorkspaceToProject(_ context.Context, req *projectpb.AttachWorkspaceRequest) (*projectpb.AttachWorkspaceSuccess, error) {
+	c.attachReq = *req
+	return &c.attach, nil
 }
-func (c *testProjectViewClient) ListProjectWorkspaces(context.Context, serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	return serverapi.ProjectWorkspaceListResponse{}, nil
+func (c *testProjectViewClient) ListProjectWorkspaces(context.Context, *projectpb.ProjectWorkspaceListRequest) (*projectpb.ListProjectWorkspacesSuccess, error) {
+	return &projectpb.ListProjectWorkspacesSuccess{}, nil
 }
-func (c *testProjectViewClient) RebindWorkspace(context.Context, serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	return serverapi.ProjectRebindWorkspaceResponse{}, nil
+func (c *testProjectViewClient) RebindWorkspace(context.Context, *projectpb.RebindWorkspaceRequest) (*projectpb.RebindWorkspaceSuccess, error) {
+	return &projectpb.RebindWorkspaceSuccess{}, nil
 }
-func (c *testProjectViewClient) GetProjectOverview(context.Context, serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	return c.overview, nil
+func (c *testProjectViewClient) GetProjectOverview(context.Context, *projectpb.GetOverviewRequest) (*projectpb.GetOverviewSuccess, error) {
+	return &c.overview, nil
 }
-func (c *testProjectViewClient) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	return serverapi.SessionPageResponse{}, nil
+func (c *testProjectViewClient) ListSessionPage(context.Context, *projectpb.SessionPageRequest) (*projectpb.SessionPageSuccess, error) {
+	return &projectpb.SessionPageSuccess{}, nil
 }
 
 func TestEnsureInteractiveBindsExistingPlan(t *testing.T) {
-	projectClient := &testProjectViewClient{plan: serverapi.ProjectBindingPlanResponse{
-		Kind:          serverapi.ProjectBindingPlanKindBound,
+	projectClient := &testProjectViewClient{plan: projectpb.PlanWorkspaceBindingSuccess{
+		Kind:          projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_BOUND,
 		CanonicalRoot: "/canonical",
-		Binding:       &serverapi.ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"},
+		Binding: &projectpb.ProjectBinding{
+			ProjectId:       "project-1",
+			WorkspaceId:     "workspace-1",
+			WorkspaceStatus: projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE,
+		},
 	}}
 	server := &testServer{cfg: config.App{WorkspaceRoot: "/workspace"}, client: projectClient}
 
@@ -97,10 +104,11 @@ func TestEnsureInteractiveBindsExistingPlan(t *testing.T) {
 
 func TestEnsureInteractiveCreatesProjectForLocalUnboundPath(t *testing.T) {
 	projectClient := &testProjectViewClient{
-		plan: serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindLocalUnbound},
-		create: serverapi.ProjectCreateResponse{Binding: serverapi.ProjectMutationBinding{
-			ProjectID:   "project-created",
-			WorkspaceID: "workspace-created",
+		plan: projectpb.PlanWorkspaceBindingSuccess{Kind: projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND},
+		create: projectpb.CreateProjectSuccess{Binding: &projectpb.ProjectMutationBinding{
+			ProjectId:       "project-created",
+			WorkspaceId:     "workspace-created",
+			WorkspaceStatus: projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE,
 		}},
 	}
 	server := &testServer{cfg: config.App{WorkspaceRoot: "/tmp/workspace"}, client: projectClient}
@@ -129,7 +137,7 @@ func TestEnsureInteractiveCreatesProjectForLocalUnboundPath(t *testing.T) {
 }
 
 func TestEnsureInteractivePropagatesCanceledPicker(t *testing.T) {
-	projectClient := &testProjectViewClient{plan: serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindLocalUnbound}}
+	projectClient := &testProjectViewClient{plan: projectpb.PlanWorkspaceBindingSuccess{Kind: projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND}}
 	server := &testServer{cfg: config.App{WorkspaceRoot: "/workspace"}, client: projectClient}
 
 	_, err := EnsureInteractive[*testServer](context.Background(), Request[*testServer]{

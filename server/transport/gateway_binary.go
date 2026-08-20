@@ -50,62 +50,44 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 		return nil, fmt.Errorf("generated ConnectionService descriptor is required")
 	}
 	bindings := make(map[string]gatewayBinaryBinding, 11)
-	if err := registerGatewayBinaryBinding(
+	if err := registerGatewayBinaryUnary(
 		bindings,
 		service,
 		"Handshake",
 		gatewayBinaryPreCoreExclusive,
-		func() proto.Message { return &connectionpb.HandshakeRequest{} },
+		func() *connectionpb.HandshakeRequest { return &connectionpb.HandshakeRequest{} },
 		nil,
 		invokeBinaryHandshake,
 		binaryHandshakeFailure,
 	); err != nil {
 		return nil, err
 	}
-	if err := registerGatewayBinaryBinding(
+	if err := registerGatewayBinaryUnary(
 		bindings,
 		service,
 		"AttachProject",
 		gatewayBinaryCoreActiveExclusive,
-		func() proto.Message { return &connectionpb.AttachProjectRequest{} },
+		func() *connectionpb.AttachProjectRequest { return &connectionpb.AttachProjectRequest{} },
 		nil,
 		invokeBinaryAttachProject,
-		binaryAttachProjectInternalFailure,
+		binaryAttachProjectFailure,
 	); err != nil {
 		return nil, err
 	}
-	attachProjectOperation, err := protoapi.OperationFromDescriptor(service.Methods().ByName("AttachProject"))
-	if err != nil {
-		return nil, err
-	}
-	attachProjectBinding := bindings[attachProjectOperation.Name]
-	attachProjectBinding.failure = binaryAttachProjectFailure
-	bindings[attachProjectOperation.Name] = attachProjectBinding
-	if err := registerGatewayBinaryBinding(
+	if err := registerGatewayBinaryUnary(
 		bindings,
 		service,
 		"AttachSession",
 		gatewayBinaryCoreActiveExclusive,
-		func() proto.Message { return &connectionpb.AttachSessionRequest{} },
-		func(message proto.Message) (routeScopeParams, error) {
-			request, ok := message.(*connectionpb.AttachSessionRequest)
-			if !ok {
-				return routeScopeParams{}, fmt.Errorf("AttachSession request type is invalid")
-			}
+		func() *connectionpb.AttachSessionRequest { return &connectionpb.AttachSessionRequest{} },
+		func(request *connectionpb.AttachSessionRequest) (routeScopeParams, error) {
 			return routeScopeParams{sessionID: request.SessionId}, nil
 		},
 		invokeBinaryAttachSession,
-		binaryAttachSessionInternalFailure,
+		binaryAttachSessionFailure,
 	); err != nil {
 		return nil, err
 	}
-	attachSessionOperation, err := protoapi.OperationFromDescriptor(service.Methods().ByName("AttachSession"))
-	if err != nil {
-		return nil, err
-	}
-	attachSessionBinding := bindings[attachSessionOperation.Name]
-	attachSessionBinding.failure = binaryAttachSessionFailure
-	bindings[attachSessionOperation.Name] = attachSessionBinding
 	if err := registerBootstrapGatewayBinaryBindings(bindings); err != nil {
 		return nil, err
 	}
@@ -124,18 +106,24 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 	return bindings, nil
 }
 
-func registerGatewayBinaryBinding(
+func registerGatewayBinaryUnary[
+	Request proto.Message,
+	Success proto.Message,
+](
 	bindings map[string]gatewayBinaryBinding,
 	service protoreflect.ServiceDescriptor,
 	methodName protoreflect.Name,
 	policy gatewayBinaryExecutionPolicy,
-	request func() proto.Message,
-	scope func(proto.Message) (routeScopeParams, error),
-	invoke func(*Gateway, context.Context, *connectionState, proto.Message) (proto.Message, error),
-	failure func(error) proto.Message,
+	newRequest func() Request,
+	scope func(Request) (routeScopeParams, error),
+	invoke func(*Gateway, context.Context, *connectionState, Request) (Success, error),
+	failureDetail func(*Gateway, *connectionState, Request, error) proto.Message,
 ) error {
 	if service == nil {
 		return fmt.Errorf("generated service descriptor is required")
+	}
+	if newRequest == nil || invoke == nil || failureDetail == nil {
+		return fmt.Errorf("generated %s.%s unary binding is incomplete", service.Name(), methodName)
 	}
 	method := service.Methods().ByName(methodName)
 	if method == nil {
@@ -148,14 +136,64 @@ func registerGatewayBinaryBinding(
 	bindings[operation.Name] = gatewayBinaryBinding{
 		operation: operation,
 		policy:    policy,
-		request:   request,
-		scope:     scope,
-		invoke:    invoke,
-		failure: func(_ *Gateway, _ *connectionState, _ proto.Message, err error) proto.Message {
-			return failure(err)
+		request: func() proto.Message {
+			return newRequest()
+		},
+		invoke: func(
+			g *Gateway,
+			ctx context.Context,
+			state *connectionState,
+			message proto.Message,
+		) (proto.Message, error) {
+			request, ok := message.(Request)
+			if !ok {
+				return nil, fmt.Errorf("%s request type is invalid", operation.Name)
+			}
+			response, err := invoke(g, ctx, state, request)
+			if err != nil {
+				return nil, err
+			}
+			return protoapi.SuccessResult(method, response)
+		},
+		failure: func(g *Gateway, state *connectionState, message proto.Message, err error) proto.Message {
+			var request Request
+			if message != nil {
+				typed, ok := message.(Request)
+				if !ok {
+					return gatewayBinaryFailureResult(
+						method,
+						failureDetail(g, state, request, fmt.Errorf("%s request type is invalid: %w", operation.Name, err)),
+					)
+				}
+				request = typed
+			}
+			return gatewayBinaryFailureResult(method, failureDetail(g, state, request, err))
 		},
 	}
+	if scope != nil {
+		binding := bindings[operation.Name]
+		binding.scope = func(message proto.Message) (routeScopeParams, error) {
+			request, ok := message.(Request)
+			if !ok {
+				return routeScopeParams{}, fmt.Errorf("%s request type is invalid", operation.Name)
+			}
+			return scope(request)
+		}
+		bindings[operation.Name] = binding
+	}
 	return nil
+}
+
+func gatewayBinaryFailureResult(method protoreflect.MethodDescriptor, detail proto.Message) proto.Message {
+	result, err := protoapi.FailureResult(method, detail)
+	if err == nil {
+		return result
+	}
+	result, _ = protoapi.FailureResult(
+		method,
+		binaryInternalFailure(fmt.Errorf("encode operation failure: %w", err)),
+	)
+	return result
 }
 
 type protocolVersionMismatchError struct {
@@ -170,9 +208,8 @@ func invokeBinaryHandshake(
 	g *Gateway,
 	_ context.Context,
 	state *connectionState,
-	message proto.Message,
-) (proto.Message, error) {
-	request := message.(*connectionpb.HandshakeRequest)
+	request *connectionpb.HandshakeRequest,
+) (*connectionpb.HandshakeSuccess, error) {
 	if request.ProtocolVersion != protocol.Version {
 		return nil, protocolVersionMismatchError{required: protocol.Version}
 	}
@@ -185,20 +222,15 @@ func invokeBinaryHandshake(
 	if g.identity.PersistenceRootID != "" {
 		identity.PersistenceRootId = &g.identity.PersistenceRootID
 	}
-	return &connectionpb.HandshakeResult{
-		Outcome: &connectionpb.HandshakeResult_Success{
-			Success: &connectionpb.HandshakeSuccess{Identity: identity},
-		},
-	}, nil
+	return &connectionpb.HandshakeSuccess{Identity: identity}, nil
 }
 
 func invokeBinaryAttachProject(
 	g *Gateway,
 	ctx context.Context,
 	state *connectionState,
-	message proto.Message,
-) (proto.Message, error) {
-	request := message.(*connectionpb.AttachProjectRequest)
+	request *connectionpb.AttachProjectRequest,
+) (*connectionpb.AttachmentSuccess, error) {
 	if err := g.deps.ProjectExists(ctx, request.ProjectId); err != nil {
 		return nil, err
 	}
@@ -228,12 +260,8 @@ func invokeBinaryAttachProject(
 			},
 		}
 	}
-	return &connectionpb.AttachProjectResult{
-		Outcome: &connectionpb.AttachProjectResult_Success{
-			Success: &connectionpb.AttachmentSuccess{
-				Attachment: &connectionpb.AttachmentSuccess_Project{Project: attachment},
-			},
-		},
+	return &connectionpb.AttachmentSuccess{
+		Attachment: &connectionpb.AttachmentSuccess_Project{Project: attachment},
 	}, nil
 }
 
@@ -241,9 +269,8 @@ func invokeBinaryAttachSession(
 	g *Gateway,
 	ctx context.Context,
 	state *connectionState,
-	message proto.Message,
-) (proto.Message, error) {
-	request := message.(*connectionpb.AttachSessionRequest)
+	request *connectionpb.AttachSessionRequest,
+) (*connectionpb.AttachmentSuccess, error) {
 	binding, err := g.resolveSessionAttachment(ctx, state, request.SessionId)
 	if err != nil {
 		return nil, err
@@ -256,70 +283,46 @@ func invokeBinaryAttachSession(
 	state.attachedWorkspaceID = binding.WorkspaceID
 	state.attachedWorkspaceRoot = binding.CanonicalRoot
 	state.attachedSession = &parsedSessionID
-	return &connectionpb.AttachSessionResult{
-		Outcome: &connectionpb.AttachSessionResult_Success{
-			Success: &connectionpb.AttachmentSuccess{
-				Attachment: &connectionpb.AttachmentSuccess_Session{
-					Session: &connectionpb.SessionAttachment{
-						ProjectId:     binding.ProjectID,
-						WorkspaceId:   binding.WorkspaceID,
-						WorkspaceRoot: binding.CanonicalRoot,
-						SessionId:     request.SessionId,
-					},
-				},
+	return &connectionpb.AttachmentSuccess{
+		Attachment: &connectionpb.AttachmentSuccess_Session{
+			Session: &connectionpb.SessionAttachment{
+				ProjectId:     binding.ProjectID,
+				WorkspaceId:   binding.WorkspaceID,
+				WorkspaceRoot: binding.CanonicalRoot,
+				SessionId:     request.SessionId,
 			},
 		},
 	}, nil
 }
 
-func binaryHandshakeFailure(err error) proto.Message {
+func binaryHandshakeFailure(
+	_ *Gateway,
+	_ *connectionState,
+	_ *connectionpb.HandshakeRequest,
+	err error,
+) proto.Message {
 	var mismatch protocolVersionMismatchError
 	if errors.As(err, &mismatch) {
-		return &connectionpb.HandshakeResult{
-			Outcome: &connectionpb.HandshakeResult_Error{
-				Error: &connectionpb.HandshakeError{
-					Code: "protocol_version_mismatch",
-					Detail: &connectionpb.HandshakeError_ProtocolVersionMismatch{
-						ProtocolVersionMismatch: &connectionpb.ProtocolVersionMismatchDetails{
-							RequiredProtocolVersion: mismatch.required,
-						},
-					},
-				},
-			},
+		return &connectionpb.ProtocolVersionMismatchDetails{
+			RequiredProtocolVersion: mismatch.required,
 		}
 	}
-	return &connectionpb.HandshakeResult{
-		Outcome: &connectionpb.HandshakeResult_Error{
-			Error: &connectionpb.HandshakeError{
-				Code: "internal_failure",
-				Detail: &connectionpb.HandshakeError_InternalFailure{
-					InternalFailure: binaryInternalFailure(err),
-				},
-			},
-		},
-	}
+	return binaryInternalFailure(err)
 }
 
 func binaryAttachProjectFailure(
 	_ *Gateway,
 	_ *connectionState,
-	message proto.Message,
+	request *connectionpb.AttachProjectRequest,
 	err error,
 ) proto.Message {
-	failure := &connectionpb.AttachProjectError{}
-	request, requestOK := message.(*connectionpb.AttachProjectRequest)
 	if details, ok := connectionServerNotReadyDetails(err); ok {
-		failure.Code = "server_not_ready"
-		failure.Detail = &connectionpb.AttachProjectError_ServerNotReady{ServerNotReady: details}
+		return details
 	}
 	switch {
-	case failure.Detail != nil:
-	case errors.Is(err, serverapi.ErrProjectNotFound) && requestOK:
-		failure.Code = "project_not_found"
-		failure.Detail = &connectionpb.AttachProjectError_ProjectNotFound{
-			ProjectNotFound: &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId},
-		}
-	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && requestOK:
+	case errors.Is(err, serverapi.ErrProjectNotFound) && request != nil:
+		return &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId}
+	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && request != nil:
 		details := &projectpb.WorkspaceNotRegisteredDetails{ProjectId: proto.String(request.ProjectId)}
 		switch workspace := request.GetWorkspace().(type) {
 		case *connectionpb.AttachProjectRequest_WorkspaceId:
@@ -327,106 +330,54 @@ func binaryAttachProjectFailure(
 		case *connectionpb.AttachProjectRequest_WorkspaceRoot:
 			details.WorkspaceRoot = proto.String(workspace.WorkspaceRoot)
 		}
-		failure.Code = "workspace_not_registered"
-		failure.Detail = &connectionpb.AttachProjectError_WorkspaceNotRegistered{
-			WorkspaceNotRegistered: details,
-		}
+		return details
 	default:
 		if unavailable, ok := serverapi.AsProjectUnavailable(err); ok {
 			if details, conversionErr := protoapi.ProjectUnavailableToProto(unavailable); conversionErr == nil {
-				failure.Code = "project_unavailable"
-				failure.Detail = &connectionpb.AttachProjectError_ProjectUnavailable{
-					ProjectUnavailable: details,
-				}
+				return details
 			}
 		}
-	}
-	if failure.Detail == nil {
-		return binaryAttachProjectInternalFailure(err)
-	}
-	return &connectionpb.AttachProjectResult{
-		Outcome: &connectionpb.AttachProjectResult_Error{
-			Error: failure,
-		},
-	}
-}
-
-func binaryAttachProjectInternalFailure(err error) proto.Message {
-	return &connectionpb.AttachProjectResult{
-		Outcome: &connectionpb.AttachProjectResult_Error{
-			Error: &connectionpb.AttachProjectError{
-				Code: "internal_failure",
-				Detail: &connectionpb.AttachProjectError_InternalFailure{
-					InternalFailure: binaryInternalFailure(err),
-				},
-			},
-		},
+		return binaryInternalFailure(err)
 	}
 }
 
 func binaryAttachSessionFailure(
 	g *Gateway,
 	state *connectionState,
-	message proto.Message,
+	request *connectionpb.AttachSessionRequest,
 	err error,
 ) proto.Message {
-	failure := &connectionpb.AttachSessionError{}
-	request, requestOK := message.(*connectionpb.AttachSessionRequest)
 	if details, ok := connectionServerNotReadyDetails(err); ok {
-		failure.Code = "server_not_ready"
-		failure.Detail = &connectionpb.AttachSessionError_ServerNotReady{ServerNotReady: details}
+		return details
 	}
 	switch {
-	case failure.Detail != nil:
-	case errors.Is(err, serverapi.ErrProjectNotFound) && requestOK:
+	case errors.Is(err, serverapi.ErrProjectNotFound) && request != nil:
 		details := &connectionpb.SessionAttachmentTargetDetails{SessionId: request.SessionId}
 		if projectID := connectionAttachmentProjectID(g, state); projectID != "" {
 			details.ProjectId = &projectID
 		}
-		failure.Code = "project_not_found"
-		failure.Detail = &connectionpb.AttachSessionError_ProjectNotFound{
-			ProjectNotFound: details,
+		return &connectionpb.AttachSessionError{
+			Code: "project_not_found",
+			Detail: &connectionpb.AttachSessionError_ProjectNotFound{
+				ProjectNotFound: details,
+			},
 		}
-	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && requestOK:
-		failure.Code = "workspace_not_registered"
-		failure.Detail = &connectionpb.AttachSessionError_WorkspaceNotRegistered{
-			WorkspaceNotRegistered: connectionSessionWorkspaceNotRegisteredDetails(
-				g,
-				state,
-				request.SessionId,
-				err,
-			),
+	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && request != nil:
+		return &connectionpb.AttachSessionError{
+			Code: "workspace_not_registered",
+			Detail: &connectionpb.AttachSessionError_WorkspaceNotRegistered{
+				WorkspaceNotRegistered: connectionSessionWorkspaceNotRegisteredDetails(
+					g, state, request.SessionId, err,
+				),
+			},
 		}
 	default:
 		if unavailable, ok := serverapi.AsProjectUnavailable(err); ok {
 			if details, conversionErr := protoapi.ProjectUnavailableToProto(unavailable); conversionErr == nil {
-				failure.Code = "project_unavailable"
-				failure.Detail = &connectionpb.AttachSessionError_ProjectUnavailable{
-					ProjectUnavailable: details,
-				}
+				return details
 			}
 		}
-	}
-	if failure.Detail == nil {
-		return binaryAttachSessionInternalFailure(err)
-	}
-	return &connectionpb.AttachSessionResult{
-		Outcome: &connectionpb.AttachSessionResult_Error{
-			Error: failure,
-		},
-	}
-}
-
-func binaryAttachSessionInternalFailure(err error) proto.Message {
-	return &connectionpb.AttachSessionResult{
-		Outcome: &connectionpb.AttachSessionResult_Error{
-			Error: &connectionpb.AttachSessionError{
-				Code: "internal_failure",
-				Detail: &connectionpb.AttachSessionError_InternalFailure{
-					InternalFailure: binaryInternalFailure(err),
-				},
-			},
-		},
+		return binaryInternalFailure(err)
 	}
 }
 

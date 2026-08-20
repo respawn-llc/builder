@@ -1,6 +1,6 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
-import { classifyResult, create, OperationOutcome, operationFromDescriptor } from "@app/server-api-contract";
+import { create, operationName } from "@app/server-api-contract";
 import {
   ReadinessSeverity,
   ServerService,
@@ -91,7 +91,8 @@ import type {
   TaskListPage,
 } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
-import { ContractError, TransportError } from "./errors";
+import { ContractError } from "./errors";
+import { requireUnarySuccess } from "./protobufRpc";
 import { workflowIDSchema } from "./schemas/workflowID";
 import {
   attentionPageSchema,
@@ -132,22 +133,14 @@ export class ApiClient implements ApiService {
 
   async getReadiness(): Promise<ServerReadiness> {
     const method = ServerService.method.getReadiness;
-    const result = await this.#transport.callDescriptor(method, create(method.input));
-    let classified: ReturnType<typeof classifyResult>;
-    try {
-      classified = classifyResult(method.output, result);
-    } catch {
-      throw new ContractError(`${operationFromDescriptor(method).name} response did not match GUI contract.`);
+    const success = requireUnarySuccess(
+      method,
+      await this.#transport.callDescriptor(method, create(method.input)),
+    );
+    if (success.readiness === undefined) {
+      throw new ContractError(`${operationName(method)} response did not match GUI contract.`);
     }
-    if (classified.outcome !== OperationOutcome.SUCCESS) {
-      throw new TransportError(
-        `${operationFromDescriptor(method).name} failed with code ${classified.failure.code}.`,
-      );
-    }
-    if (result.outcome.case !== "success" || result.outcome.value.readiness === undefined) {
-      throw new ContractError(`${operationFromDescriptor(method).name} response did not match GUI contract.`);
-    }
-    return projectReadiness(result.outcome.value.readiness);
+    return projectReadiness(success.readiness);
   }
 
   async listProjects(pageToken: string): Promise<ProjectPage> {

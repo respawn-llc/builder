@@ -2,7 +2,7 @@ package app
 
 import (
 	"core/shared/config"
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	"core/shared/theme"
 	"path/filepath"
 	"strings"
@@ -12,27 +12,27 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-func skillSymlinkChoiceFact(provider string, root string, count int) serverapi.ImportChoiceFact {
-	sourceKind := "external_provider"
-	return serverapi.ImportChoiceFact{
-		Ref: serverapi.ImportChoiceRef{
-			Mode:             string(onboardingImportModeSymlinkSource),
+func skillSymlinkChoiceFact(provider string, root string, count uint32) *capabilitypb.ImportChoiceFact {
+	sourceKind := capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_EXTERNAL_PROVIDER
+	return &capabilitypb.ImportChoiceFact{
+		Ref: &capabilitypb.ImportChoiceRef{
+			Mode:             capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_SYMLINK_SOURCE,
 			SourceKind:       &sourceKind,
-			ImportProviderID: &provider,
+			ImportProviderId: &provider,
 			SourceRootPath:   &root,
 		},
-		ImportProviderID: &provider,
+		ImportProviderId: &provider,
 		SourceRootPath:   &root,
 		ItemCount:        count,
 	}
 }
 
-func skillItemFact(provider string, root string, path string, target string, name string, conflicts []serverapi.ImportConflictFact, enabled bool) serverapi.ImportItemFact {
-	return serverapi.ImportItemFact{
-		Ref: serverapi.ImportItemRef{
-			ItemKind:         "skill",
-			SourceKind:       "external_provider",
-			ImportProviderID: &provider,
+func skillItemFact(provider string, root string, path string, target string, name string, conflicts []*capabilitypb.ImportConflictFact, enabled bool) *capabilitypb.ImportItemFact {
+	return &capabilitypb.ImportItemFact{
+		Ref: &capabilitypb.ImportItemRef{
+			ItemKind:         capabilitypb.ImportItemKind_IMPORT_ITEM_KIND_SKILL,
+			SourceKind:       capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_EXTERNAL_PROVIDER,
+			ImportProviderId: &provider,
 			SourceRootPath:   &root,
 			SourcePath:       &path,
 			TargetName:       target,
@@ -48,14 +48,14 @@ func testImportProviderPtr(provider onboardingImportProviderID) *onboardingImpor
 }
 
 func testImportSelection(provider onboardingImportProviderID, sourceRoot string) onboardingImportSelection {
-	sourceKind := "external_provider"
+	sourceKind := capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_EXTERNAL_PROVIDER
 	providerID := string(provider)
 	return onboardingImportSelection{
 		Mode: onboardingImportModeSymlinkSource,
-		ChoiceRef: serverapi.ImportChoiceRef{
-			Mode:             string(onboardingImportModeSymlinkSource),
+		ChoiceRef: &capabilitypb.ImportChoiceRef{
+			Mode:             capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_SYMLINK_SOURCE,
 			SourceKind:       &sourceKind,
-			ImportProviderID: &providerID,
+			ImportProviderId: &providerID,
 			SourceRootPath:   &sourceRoot,
 		},
 	}
@@ -65,16 +65,18 @@ func TestOnboardingImportDiscoveryUsesServerFactsForChoicesAndCandidates(t *test
 	root := filepath.Join(t.TempDir(), "skills")
 	itemPath := filepath.Join(root, "skill-creator")
 	otherPath := filepath.Join(root, "skill-creator-copy")
-	facts := serverapi.ImportCapabilityFacts{
-		Skills: serverapi.ImportItemGroupFact{Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 2)}},
-		SkillEnablement: []serverapi.SkillEnablementProjectionFact{{
-			ChoiceRef: skillSymlinkChoiceFact("codex", root, 2).Ref,
-			Candidates: []serverapi.ImportItemFact{
-				skillItemFact("codex", root, itemPath, "skill-creator", "skill-creator", []serverapi.ImportConflictFact{{SourceKind: "external_provider", Path: &otherPath}}, true),
-				skillItemFact("codex", root, otherPath, "skill-creator", "skill-creator", []serverapi.ImportConflictFact{{SourceKind: "external_provider", Path: &itemPath}}, true),
-			},
-		}},
-		Recommendations: serverapi.ImportRecommendationFacts{Skills: &serverapi.ImportModeRecommendationFact{ChoiceRef: skillSymlinkChoiceFact("codex", root, 2).Ref, ItemCount: 2}},
+	facts := emptyOnboardingImportFacts()
+	facts.Skills.Choices = []*capabilitypb.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 2)}
+	facts.SkillEnablement = []*capabilitypb.SkillEnablementProjectionFact{{
+		ChoiceRef: skillSymlinkChoiceFact("codex", root, 2).Ref,
+		Candidates: []*capabilitypb.ImportItemFact{
+			skillItemFact("codex", root, itemPath, "skill-creator", "skill-creator", []*capabilitypb.ImportConflictFact{{SourceKind: capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_EXTERNAL_PROVIDER, Path: &otherPath}}, true),
+			skillItemFact("codex", root, otherPath, "skill-creator", "skill-creator", []*capabilitypb.ImportConflictFact{{SourceKind: capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_EXTERNAL_PROVIDER, Path: &itemPath}}, true),
+		},
+	}}
+	facts.Recommendations.Skills = &capabilitypb.ImportModeRecommendationFact{
+		ChoiceRef: skillSymlinkChoiceFact("codex", root, 2).Ref,
+		ItemCount: 2,
 	}
 	discovery := onboardingImportDiscoveryFromFacts(facts)
 	choiceID := discovery.skillRecommendationID
@@ -102,13 +104,10 @@ func TestOnboardingImportDiscoveryUsesServerFactsForChoicesAndCandidates(t *test
 
 func TestOnboardingImportErrorsDoNotHideValidServerChoices(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "skills")
-	facts := serverapi.ImportCapabilityFacts{
-		Skills: serverapi.ImportItemGroupFact{Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)}},
-		Errors: []serverapi.ImportErrorFact{{Code: "provider_discovery_failed", Scope: "provider", Operation: "discover_skills", Message: "unreadable source"}},
-		Recommendations: serverapi.ImportRecommendationFacts{
-			Skills: &serverapi.ImportModeRecommendationFact{ChoiceRef: skillSymlinkChoiceFact("codex", root, 1).Ref, ItemCount: 1},
-		},
-	}
+	facts := emptyOnboardingImportFacts()
+	facts.Skills.Choices = []*capabilitypb.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)}
+	facts.Errors = []*capabilitypb.ImportErrorFact{{Code: "provider_discovery_failed", Scope: "provider", Operation: "discover_skills", Message: "unreadable source"}}
+	facts.Recommendations.Skills = &capabilitypb.ImportModeRecommendationFact{ChoiceRef: skillSymlinkChoiceFact("codex", root, 1).Ref, ItemCount: 1}
 	state := testOnboardingFlowStatePtr(t, nil)
 	state.imports = onboardingImportDiscoveryFromFacts(facts)
 
@@ -127,16 +126,15 @@ func TestOnboardingImportErrorsDoNotHideValidServerChoices(t *testing.T) {
 }
 
 func TestOnboardingCommandImportErrorsDoNotSurfaceInSkillsFlow(t *testing.T) {
-	commandKind := serverapi.ImportErrorItemKindCommand
-	facts := serverapi.ImportCapabilityFacts{
-		Errors: []serverapi.ImportErrorFact{{
-			Code:      "provider_discovery_failed",
-			Scope:     "provider",
-			ItemKind:  &commandKind,
-			Operation: "discover_commands",
-			Message:   "unreadable commands",
-		}},
-	}
+	commandKind := capabilitypb.ImportItemKind_IMPORT_ITEM_KIND_COMMAND
+	facts := emptyOnboardingImportFacts()
+	facts.Errors = []*capabilitypb.ImportErrorFact{{
+		Code:      "provider_discovery_failed",
+		Scope:     "provider",
+		ItemKind:  &commandKind,
+		Operation: "discover_commands",
+		Message:   "unreadable commands",
+	}}
 	discovery := onboardingImportDiscoveryFromFacts(facts)
 	if discovery.err != nil {
 		t.Fatalf("command-only import error must not become a skill error: %v", discovery.err)
@@ -166,11 +164,13 @@ func TestOnboardingCommandImportErrorsDoNotSurfaceInSkillsFlow(t *testing.T) {
 
 func TestOnboardingImportTargetSkipFactsHideImportSteps(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "skills")
-	facts := serverapi.ImportCapabilityFacts{
-		Skills: serverapi.ImportItemGroupFact{
-			Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)},
-			Target:  serverapi.ImportTargetFact{Skip: true, Conflicts: []serverapi.ImportConflictFact{{SourceKind: "global"}}},
-		},
+	facts := emptyOnboardingImportFacts()
+	facts.Skills.Choices = []*capabilitypb.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)}
+	facts.Skills.Target = &capabilitypb.ImportTargetFact{
+		Skip: true,
+		Conflicts: []*capabilitypb.ImportConflictFact{{
+			SourceKind: capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_GLOBAL,
+		}},
 	}
 	state := testOnboardingFlowStatePtr(t, nil)
 	state.imports = onboardingImportDiscoveryFromFacts(facts)
@@ -183,13 +183,15 @@ func TestOnboardingImportTargetSkipFactsHideImportSteps(t *testing.T) {
 
 func TestOnboardingSkippedImportErrorScreenCanContinueWithNoneChoice(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "skills")
-	facts := serverapi.ImportCapabilityFacts{
-		Skills: serverapi.ImportItemGroupFact{
-			Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)},
-			Target:  serverapi.ImportTargetFact{Skip: true, Conflicts: []serverapi.ImportConflictFact{{SourceKind: "global"}}},
-		},
-		Errors: []serverapi.ImportErrorFact{{Code: "target_read_failed", Scope: "target", Operation: "read_import_target", Message: "permission denied"}},
+	facts := emptyOnboardingImportFacts()
+	facts.Skills.Choices = []*capabilitypb.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)}
+	facts.Skills.Target = &capabilitypb.ImportTargetFact{
+		Skip: true,
+		Conflicts: []*capabilitypb.ImportConflictFact{{
+			SourceKind: capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_GLOBAL,
+		}},
 	}
+	facts.Errors = []*capabilitypb.ImportErrorFact{{Code: "target_read_failed", Scope: "target", Operation: "read_import_target", Message: "permission denied"}}
 	state := testOnboardingFlowStatePtr(t, nil)
 	state.imports = onboardingImportDiscoveryFromFacts(facts)
 	screen := buildSkillImportScreen(state)
@@ -206,20 +208,22 @@ func TestOnboardingSkippedImportErrorScreenCanContinueWithNoneChoice(t *testing.
 
 func TestOnboardingCommandTargetSkipOffersOnlyNoneAfterImportError(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "commands")
-	commandKind := serverapi.ImportErrorItemKindCommand
-	facts := serverapi.ImportCapabilityFacts{
-		Commands: serverapi.ImportItemGroupFact{
-			Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)},
-			Target:  serverapi.ImportTargetFact{Skip: true, Conflicts: []serverapi.ImportConflictFact{{SourceKind: "global"}}},
-		},
-		Errors: []serverapi.ImportErrorFact{{
-			Code:      "target_read_failed",
-			Scope:     "target",
-			ItemKind:  &commandKind,
-			Operation: "read_import_target",
-			Message:   "permission denied",
+	commandKind := capabilitypb.ImportItemKind_IMPORT_ITEM_KIND_COMMAND
+	facts := emptyOnboardingImportFacts()
+	facts.Commands.Choices = []*capabilitypb.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)}
+	facts.Commands.Target = &capabilitypb.ImportTargetFact{
+		Skip: true,
+		Conflicts: []*capabilitypb.ImportConflictFact{{
+			SourceKind: capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_GLOBAL,
 		}},
 	}
+	facts.Errors = []*capabilitypb.ImportErrorFact{{
+		Code:      "target_read_failed",
+		Scope:     "target",
+		ItemKind:  &commandKind,
+		Operation: "read_import_target",
+		Message:   "permission denied",
+	}}
 	state := testOnboardingFlowStatePtr(t, nil)
 	state.imports = onboardingImportDiscoveryFromFacts(facts)
 	screen := buildCommandImportScreen(state)

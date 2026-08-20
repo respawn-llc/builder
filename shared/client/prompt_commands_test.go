@@ -11,6 +11,7 @@ import (
 	"core/server/onboarding"
 	"core/server/promptcommands"
 	"core/shared/clientui"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -123,13 +124,14 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 	if err != nil {
 		t.Fatalf("NewFinalizer: %v", err)
 	}
-	if _, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		CommandsImport: &serverapi.OnboardingImportSelection{
-			Mode:         serverapi.OnboardingImportModeSymlinkSource,
-			ProviderUUID: &providerUUID,
+	providerUUIDText := providerUUID.String()
+	if _, err := finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		CommandsImport: &onboardingpb.ImportSelection{
+			Mode:         onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE,
+			ProviderUuid: &providerUUIDText,
 		},
 	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 	service := promptcommands.New(serverRoot, serverWorkspace)
 	resolvedContent := make(chan string, 1)

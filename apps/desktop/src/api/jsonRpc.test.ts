@@ -1,13 +1,7 @@
 import { createJsonRpcTransport } from "./jsonRpc";
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, decodeWorkflowLabelError } from "./errors";
 import { subscriptionCompleteMethod } from "./jsonRpcSocket";
-import {
-  create,
-  decodeEnvelope,
-  encode,
-  encodeEnvelope,
-  operationFromDescriptor,
-} from "@app/server-api-contract";
+import { create, decodeEnvelope, encode, encodeEnvelope, operationName } from "@app/server-api-contract";
 import {
   AttachSessionResultSchema,
   ConnectionService,
@@ -20,6 +14,7 @@ import {
   ServerService,
 } from "@app/server-api-contract/gen/kent/api/server/server_pb";
 import { z } from "zod";
+import type { RpcEventHandler } from "./transport";
 
 type SentFrame = Readonly<{
   id: string;
@@ -73,6 +68,13 @@ class MockWebSocket extends EventTarget {
     this.dispatchEvent(new Event("open"));
   }
 
+  async setup(): Promise<void> {
+    this.open();
+    await waitForSent(this, 1);
+    ack(this, 0);
+    await waitForSent(this, 2);
+  }
+
   receive(data: string | ArrayBuffer): void {
     this.dispatchEvent(new MessageEvent("message", { data }));
   }
@@ -96,10 +98,7 @@ describe("JsonRpcWebSocketTransport", () => {
     const mutation = transport.call("workflow.task.start", { task_id: "task-1" });
     const firstSocket = sockets[0] ?? failTest("first socket missing");
 
-    firstSocket.open();
-    await waitForSent(firstSocket, 1);
-    ack(firstSocket, 0);
-    await waitForSent(firstSocket, 2);
+    await firstSocket.setup();
     expect(frame(firstSocket, 1)).toMatchObject({ method: "workflow.task.start" });
 
     firstSocket.close();
@@ -108,10 +107,7 @@ describe("JsonRpcWebSocketTransport", () => {
 
     const retry = transport.call("workflow.task.start", { task_id: "task-1" });
     const secondSocket = sockets[1] ?? failTest("second socket missing");
-    secondSocket.open();
-    await waitForSent(secondSocket, 1);
-    ack(secondSocket, 0);
-    await waitForSent(secondSocket, 2);
+    await secondSocket.setup();
     expect(secondSocket.sent).toHaveLength(2);
     ack(secondSocket, 1);
 
@@ -119,31 +115,12 @@ describe("JsonRpcWebSocketTransport", () => {
     expect(firstSocket.sent).toHaveLength(2);
   });
 
-  it("rejects control calls on handshake protocol mismatch before sending the requested method", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const readiness = callReadiness(transport);
-    const socket = sockets[0] ?? failTest("control socket missing");
-
-    socket.open();
-    await waitForSent(socket, 1);
-    handshakeProtocolMismatchAck(socket, 0);
-
-    await expect(readiness).rejects.toBeInstanceOf(ProtocolMismatchError);
-    expect(socket.sent).toHaveLength(1);
-    expect(descriptorOperation(socket, 0)).toBe(
-      operationFromDescriptor(ConnectionService.method.handshake).name,
-    );
-  });
-
   it("multiplexes generated binary calls with structured JSON-RPC errors on one control socket", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const readiness = callReadiness(transport);
     const socket = sockets[0] ?? failTest("control socket missing");
 
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-    await waitForSent(socket, 2);
+    await socket.setup();
     binaryAck(socket, 1, ServerService.method.getReadiness, { result: readinessResult() });
     await expect(readiness).resolves.toMatchObject({
       outcome: { case: "success", value: { readiness: { serverId: "server-1" } } },
@@ -191,19 +168,13 @@ describe("JsonRpcWebSocketTransport", () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const readiness = callReadiness(transport);
     const controlSocket = sockets[0] ?? failTest("control socket missing");
-    controlSocket.open();
-    await waitForSent(controlSocket, 1);
-    ack(controlSocket, 0);
-    await waitForSent(controlSocket, 2);
+    await controlSocket.setup();
     ack(controlSocket, 1);
     await expect(readiness).resolves.toMatchObject({ outcome: { case: "success" } });
 
     const search = transport.callDedicated("workflow.task.search", { query: "needle" });
     const dedicatedSocket = sockets[1] ?? failTest("dedicated socket missing");
-    dedicatedSocket.open();
-    await waitForSent(dedicatedSocket, 1);
-    ack(dedicatedSocket, 0);
-    await waitForSent(dedicatedSocket, 2);
+    await dedicatedSocket.setup();
     expect(frame(dedicatedSocket, 1)).toMatchObject({ method: "workflow.task.search" });
     ack(dedicatedSocket, 1);
 
@@ -219,13 +190,8 @@ describe("JsonRpcWebSocketTransport", () => {
     });
     const socket = sockets[0] ?? failTest("attached Session socket missing");
 
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-    await waitForSent(socket, 2);
-    expect(descriptorOperation(socket, 1)).toBe(
-      operationFromDescriptor(ConnectionService.method.attachSession).name,
-    );
+    await socket.setup();
+    expect(descriptorOperation(socket, 1)).toBe(operationName(ConnectionService.method.attachSession));
     ack(socket, 1);
     await waitForSent(socket, 3);
     expect(frame(socket, 2)).toMatchObject({ method: "prompt.answerBatch" });
@@ -242,10 +208,7 @@ describe("JsonRpcWebSocketTransport", () => {
     });
     const socket = sockets[0] ?? failTest("attached Session socket missing");
 
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-    await waitForSent(socket, 2);
+    await socket.setup();
     binaryAck(socket, 1, ConnectionService.method.attachSession, {
       result: create(AttachSessionResultSchema, {
         outcome: {
@@ -267,12 +230,14 @@ describe("JsonRpcWebSocketTransport", () => {
     expect(error).toBeInstanceOf(RpcError);
     expect(error).toMatchObject({
       code: -32032,
-      method: operationFromDescriptor(ConnectionService.method.attachSession).name,
+      method: operationName(ConnectionService.method.attachSession),
       data: {
-        type: "server_not_ready",
-        reason: "onboarding_required",
-        details: {
-          onboarding_completed: false,
+        code: "server_not_ready",
+        detail: {
+          case: "serverNotReady",
+          value: {
+            reason: ServerNotReadyReason.ONBOARDING_REQUIRED,
+          },
         },
       },
     });
@@ -289,38 +254,12 @@ describe("JsonRpcWebSocketTransport", () => {
       { signal: controller.signal },
     );
     const socket = sockets[0] ?? failTest("dedicated socket missing");
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-    await waitForSent(socket, 2);
+    await socket.setup();
 
     controller.abort();
 
     await expect(search).rejects.toThrow("canceled");
     expect(socket.readyState).toBe(MockWebSocket.CLOSED);
-  });
-
-  it("falls back to a generic RPC error when error data is missing", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const request = transport.call("workflow.project.label.create", {
-      project_id: "project-1",
-      name: "Priority",
-    });
-    const socket = sockets[0] ?? failTest("control socket missing");
-
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-    await waitForSent(socket, 2);
-    errorAck(socket, 1, { code: -32031, message: "label request failed" });
-
-    const error = await request.catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(RpcError);
-    expect(error).toMatchObject({
-      code: -32031,
-      method: "workflow.project.label.create",
-      data: undefined,
-    });
   });
 
   it("falls back to a generic RPC error when error data is not valid JSON", async () => {
@@ -331,10 +270,7 @@ describe("JsonRpcWebSocketTransport", () => {
     });
     const socket = sockets[0] ?? failTest("control socket missing");
 
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-    await waitForSent(socket, 2);
+    await socket.setup();
     const sent = frame(socket, 1);
     socket.receive(
       `{"jsonrpc":"2.0","id":${JSON.stringify(sent.id)},"error":{"code":-32031,"message":"label request failed","data":{"limit":1e400}}}`,
@@ -360,22 +296,7 @@ describe("JsonRpcWebSocketTransport", () => {
 
     await expect(readiness).rejects.toBeInstanceOf(ServerRootMismatchError);
     expect(socket.sent).toHaveLength(1);
-    expect(descriptorOperation(socket, 0)).toBe(
-      operationFromDescriptor(ConnectionService.method.handshake).name,
-    );
-  });
-
-  it("rejects control calls when the server reports no persistence root id", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc", "expected-root");
-    const readiness = callReadiness(transport);
-    const socket = sockets[0] ?? failTest("control socket missing");
-
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-
-    await expect(readiness).rejects.toBeInstanceOf(ServerRootMismatchError);
-    expect(socket.sent).toHaveLength(1);
+    expect(descriptorOperation(socket, 0)).toBe(operationName(ConnectionService.method.handshake));
   });
 
   it("accepts control calls when the server serves the expected persistence root", async () => {
@@ -387,9 +308,7 @@ describe("JsonRpcWebSocketTransport", () => {
     await waitForSent(socket, 1);
     ackHandshakeRoot(socket, 0, "expected-root");
     await waitForSent(socket, 2);
-    expect(descriptorOperation(socket, 1)).toBe(
-      operationFromDescriptor(ServerService.method.getReadiness).name,
-    );
+    expect(descriptorOperation(socket, 1)).toBe(operationName(ServerService.method.getReadiness));
     ack(socket, 1);
 
     await expect(readiness).resolves.toMatchObject({ outcome: { case: "success" } });
@@ -410,10 +329,7 @@ describe("JsonRpcWebSocketTransport", () => {
     );
     const socket = sockets[0] ?? failTest("control socket missing");
 
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-    await waitForSent(socket, 2);
+    await socket.setup();
     expect(frame(socket, 1)).toMatchObject({ method: "workflow.task.start" });
 
     await vi.advanceTimersByTimeAsync(31_000);
@@ -424,30 +340,16 @@ describe("JsonRpcWebSocketTransport", () => {
   });
 
   it("installs subscription event listener before subscribe ack can race with first event", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const events: string[] = [];
     const opens: string[] = [];
-
-    transport.subscribe(
-      "workflow.subscribeProject",
-      { project_id: "project-1" },
-      {
-        onOpen() {
-          opens.push("open");
-        },
-        onEvent(method) {
-          events.push(method);
-        },
-        onComplete() {
-          return;
-        },
-        onError(error) {
-          throw error;
-        },
+    const { socket } = subscribeProject({
+      onOpen() {
+        opens.push("open");
       },
-    );
-
-    const socket = sockets[0] ?? failTest("subscription socket missing");
+      onEvent(method) {
+        events.push(method);
+      },
+    });
     socket.open();
     await waitForSent(socket, 1);
     ack(socket, 0);
@@ -469,24 +371,12 @@ describe("JsonRpcWebSocketTransport", () => {
   });
 
   it("rejects subscriptions on handshake protocol mismatch before sending the subscribe method", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const errors: Error[] = [];
-    const subscription = transport.subscribe(
-      "workflow.subscribeProject",
-      { project_id: "project-1" },
-      {
-        onEvent() {
-          return;
-        },
-        onComplete() {
-          return;
-        },
-        onError(error) {
-          errors.push(error);
-        },
+    const { subscription, socket } = subscribeProject({
+      onError(error) {
+        errors.push(error);
       },
-    );
-    const socket = sockets[0] ?? failTest("subscription socket missing");
+    });
 
     socket.open();
     await waitForSent(socket, 1);
@@ -496,9 +386,7 @@ describe("JsonRpcWebSocketTransport", () => {
       expect(errors[0]).toBeInstanceOf(ProtocolMismatchError);
     });
     expect(socket.sent).toHaveLength(1);
-    expect(descriptorOperation(socket, 0)).toBe(
-      operationFromDescriptor(ConnectionService.method.handshake).name,
-    );
+    expect(descriptorOperation(socket, 0)).toBe(operationName(ConnectionService.method.handshake));
     // A rejected handshake must close the socket; otherwise the reconnect loop
     // leaks a socket connected to the wrong server on every backoff.
     expect(socket.readyState).toBe(MockWebSocket.CLOSED);
@@ -506,29 +394,13 @@ describe("JsonRpcWebSocketTransport", () => {
   });
 
   it("reopens subscription socket after unexpected close", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const errors: string[] = [];
-    const subscription = transport.subscribe(
-      "workflow.subscribeProject",
-      { project_id: "project-1" },
-      {
-        onEvent() {
-          return;
-        },
-        onComplete() {
-          return;
-        },
-        onError(error) {
-          errors.push(error.message);
-        },
+    const { subscription, socket: firstSocket } = subscribeProject({
+      onError(error) {
+        errors.push(error.message);
       },
-    );
-
-    const firstSocket = sockets[0] ?? failTest("subscription socket missing");
-    firstSocket.open();
-    await waitForSent(firstSocket, 1);
-    ack(firstSocket, 0);
-    await waitForSent(firstSocket, 2);
+    });
+    await firstSocket.setup();
     ack(firstSocket, 1);
     await flushPromises();
 
@@ -537,10 +409,7 @@ describe("JsonRpcWebSocketTransport", () => {
       expect(sockets.length).toBeGreaterThanOrEqual(2);
     });
     const secondSocket = sockets[1] ?? failTest("resubscription socket missing");
-    secondSocket.open();
-    await waitForSent(secondSocket, 1);
-    ack(secondSocket, 0);
-    await waitForSent(secondSocket, 2);
+    await secondSocket.setup();
 
     expect(frame(secondSocket, 1)).toMatchObject({ method: "workflow.subscribeProject" });
     expect(errors).toEqual(["Subscription socket closed."]);
@@ -548,30 +417,17 @@ describe("JsonRpcWebSocketTransport", () => {
   });
 
   it("reopens subscription socket after server complete notification", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const completions: number[] = [];
     const errors: Error[] = [];
-    const subscription = transport.subscribe(
-      "workflow.subscribeProject",
-      { project_id: "project-1" },
-      {
-        onEvent() {
-          return;
-        },
-        onComplete(code) {
-          completions.push(code);
-        },
-        onError(error) {
-          errors.push(error);
-        },
+    const { subscription, socket: firstSocket } = subscribeProject({
+      onComplete(code) {
+        completions.push(code);
       },
-    );
-
-    const firstSocket = sockets[0] ?? failTest("subscription socket missing");
-    firstSocket.open();
-    await waitForSent(firstSocket, 1);
-    ack(firstSocket, 0);
-    await waitForSent(firstSocket, 2);
+      onError(error) {
+        errors.push(error);
+      },
+    });
+    await firstSocket.setup();
     ack(firstSocket, 1);
     await flushPromises();
 
@@ -587,10 +443,7 @@ describe("JsonRpcWebSocketTransport", () => {
       expect(sockets.length).toBeGreaterThanOrEqual(2);
     });
     const secondSocket = sockets[1] ?? failTest("resubscription socket missing");
-    secondSocket.open();
-    await waitForSent(secondSocket, 1);
-    ack(secondSocket, 0);
-    await waitForSent(secondSocket, 2);
+    await secondSocket.setup();
 
     expect(frame(secondSocket, 1)).toMatchObject({ method: "workflow.subscribeProject" });
     expect(completions).toEqual([409]);
@@ -598,82 +451,18 @@ describe("JsonRpcWebSocketTransport", () => {
     subscription.close();
   });
 
-  it("reopens attention notification subscriptions after non-zero complete frames", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const completions: number[] = [];
-    const errors: Error[] = [];
-    const subscription = transport.subscribe(
-      "attention.notification.subscribe",
-      {},
-      {
-        onEvent() {
-          return;
-        },
-        onComplete(code) {
-          completions.push(code);
-        },
-        onError(error) {
-          errors.push(error);
-        },
-      },
-    );
-
-    const firstSocket = sockets[0] ?? failTest("attention subscription socket missing");
-    firstSocket.open();
-    await waitForSent(firstSocket, 1);
-    ack(firstSocket, 0);
-    await waitForSent(firstSocket, 2);
-    ack(firstSocket, 1);
-    await flushPromises();
-
-    firstSocket.receive(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "attention.notification.complete",
-        params: { code: 409, message: "stream gap" },
-      }),
-    );
-
-    await vi.waitFor(() => {
-      expect(sockets.length).toBeGreaterThanOrEqual(2);
-    });
-    const secondSocket = sockets[1] ?? failTest("attention resubscription socket missing");
-    secondSocket.open();
-    await waitForSent(secondSocket, 1);
-    ack(secondSocket, 0);
-    await waitForSent(secondSocket, 2);
-
-    expect(frame(secondSocket, 1)).toMatchObject({ method: "attention.notification.subscribe" });
-    expect(completions).toEqual([409]);
-    expect(errors).toHaveLength(1);
-    subscription.close();
-  });
-
   it("does not reconnect after normal server complete notification", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const completions: string[] = [];
     const errors: string[] = [];
-    const subscription = transport.subscribe(
-      "workflow.subscribeProject",
-      { project_id: "project-1" },
-      {
-        onEvent() {
-          return;
-        },
-        onComplete(code, message) {
-          completions.push(`${code.toString()}:${message}`);
-        },
-        onError(error) {
-          errors.push(error.message);
-        },
+    const { subscription, socket } = subscribeProject({
+      onComplete(code, message) {
+        completions.push(`${code.toString()}:${message}`);
       },
-    );
-
-    const socket = sockets[0] ?? failTest("subscription socket missing");
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-    await waitForSent(socket, 2);
+      onError(error) {
+        errors.push(error.message);
+      },
+    });
+    await socket.setup();
     ack(socket, 1);
     await flushPromises();
 
@@ -693,30 +482,17 @@ describe("JsonRpcWebSocketTransport", () => {
   });
 
   it("keeps subscriptions active for non-terminal events ending with complete", async () => {
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const events: string[] = [];
     const completions: string[] = [];
-    const subscription = transport.subscribe(
-      "workflow.subscribeProject",
-      { project_id: "project-1" },
-      {
-        onEvent(method) {
-          events.push(method);
-        },
-        onComplete(code, message) {
-          completions.push(`${code.toString()}:${message}`);
-        },
-        onError(error) {
-          throw error;
-        },
+    const { subscription, socket } = subscribeProject({
+      onEvent(method) {
+        events.push(method);
       },
-    );
-
-    const socket = sockets[0] ?? failTest("subscription socket missing");
-    socket.open();
-    await waitForSent(socket, 1);
-    ack(socket, 0);
-    await waitForSent(socket, 2);
+      onComplete(code, message) {
+        completions.push(`${code.toString()}:${message}`);
+      },
+    });
+    await socket.setup();
     ack(socket, 1);
     await flushPromises();
 
@@ -742,6 +518,27 @@ describe("JsonRpcWebSocketTransport", () => {
   });
 });
 
+function subscribeProject(handler: Partial<RpcEventHandler>) {
+  const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+  const subscription = transport.subscribe(
+    "workflow.subscribeProject",
+    { project_id: "project-1" },
+    {
+      onEvent() {
+        return;
+      },
+      onComplete() {
+        return;
+      },
+      onError(error) {
+        throw error;
+      },
+      ...handler,
+    },
+  );
+  return { subscription, socket: sockets[0] ?? failTest("subscription socket missing") };
+}
+
 function ack(socket: MockWebSocket, sentIndex: number): void {
   const raw = socket.sent[sentIndex] ?? failTest(`sent frame ${sentIndex.toString()} missing`);
   if (z.string().safeParse(raw).success) {
@@ -750,24 +547,13 @@ function ack(socket: MockWebSocket, sentIndex: number): void {
     return;
   }
   const call = descriptorCall(socket, sentIndex);
-  if (call.operation === operationFromDescriptor(ConnectionService.method.handshake).name) {
+  if (call.operation === operationName(ConnectionService.method.handshake)) {
     binaryAck(socket, sentIndex, ConnectionService.method.handshake, {
-      result: create(HandshakeResultSchema, {
-        outcome: {
-          case: "success",
-          value: {
-            identity: {
-              protocolVersion: "126",
-              serverId: "server-1",
-              pid: 1,
-            },
-          },
-        },
-      }),
+      result: handshakeResult(),
     });
     return;
   }
-  if (call.operation === operationFromDescriptor(ConnectionService.method.attachSession).name) {
+  if (call.operation === operationName(ConnectionService.method.attachSession)) {
     binaryAck(socket, sentIndex, ConnectionService.method.attachSession, {
       result: create(AttachSessionResultSchema, {
         outcome: {
@@ -788,7 +574,7 @@ function ack(socket: MockWebSocket, sentIndex: number): void {
     });
     return;
   }
-  if (call.operation === operationFromDescriptor(ServerService.method.getReadiness).name) {
+  if (call.operation === operationName(ServerService.method.getReadiness)) {
     binaryAck(socket, sentIndex, ServerService.method.getReadiness, {
       result: readinessResult(),
     });
@@ -815,11 +601,7 @@ function readinessResult() {
           serverVersion: "test",
           serverBuild: "test",
           protocolVersion: "126",
-          authReady: false,
-          authRequired: false,
-          endpoint: "",
-          subagentRoles: [],
-          causes: [],
+          endpoint: "ws://127.0.0.1:53082/rpc",
         },
       },
     },
@@ -834,7 +616,7 @@ function errorAck(
   const raw = socket.sent[sentIndex] ?? failTest(`sent frame ${sentIndex.toString()} missing`);
   if (!z.string().safeParse(raw).success) {
     const call = descriptorCall(socket, sentIndex);
-    if (call.operation === operationFromDescriptor(ConnectionService.method.attachSession).name) {
+    if (call.operation === operationName(ConnectionService.method.attachSession)) {
       binaryAck(socket, sentIndex, ConnectionService.method.attachSession, {
         result: create(AttachSessionResultSchema, {
           outcome: {
@@ -875,33 +657,25 @@ function handshakeProtocolMismatchAck(socket: MockWebSocket, sentIndex: number):
 }
 
 function ackHandshakeRoot(socket: MockWebSocket, sentIndex: number, rootId: string): void {
-  const raw = socket.sent[sentIndex] ?? failTest(`sent frame ${sentIndex.toString()} missing`);
-  if (!z.string().safeParse(raw).success) {
-    binaryAck(socket, sentIndex, ConnectionService.method.handshake, {
-      result: create(HandshakeResultSchema, {
-        outcome: {
-          case: "success",
-          value: {
-            identity: {
-              protocolVersion: "126",
-              serverId: "server-1",
-              pid: 1,
-              persistenceRootId: rootId,
-            },
-          },
+  binaryAck(socket, sentIndex, ConnectionService.method.handshake, {
+    result: handshakeResult(rootId),
+  });
+}
+
+function handshakeResult(persistenceRootId?: string) {
+  return create(HandshakeResultSchema, {
+    outcome: {
+      case: "success",
+      value: {
+        identity: {
+          protocolVersion: "126",
+          serverId: "server-1",
+          pid: 1,
+          ...(persistenceRootId === undefined ? {} : { persistenceRootId }),
         },
-      }),
-    });
-    return;
-  }
-  const sent = frame(socket, sentIndex);
-  socket.receive(
-    JSON.stringify({
-      jsonrpc: "2.0",
-      id: sent.id,
-      result: { identity: { persistence_root_id: rootId } },
-    }),
-  );
+      },
+    },
+  });
 }
 
 function descriptorCall(
@@ -959,8 +733,8 @@ function binaryAck<
   if (call.case !== "call") {
     throw new Error("Mock WebSocket binary frame is not a call.");
   }
-  const operation = operationFromDescriptor(method);
-  if (call.value.operation !== operation.name || call.value.correlation === undefined) {
+  const operation = operationName(method);
+  if (call.value.operation !== operation || call.value.correlation === undefined) {
     throw new Error("Mock WebSocket binary call has the wrong operation or correlation.");
   }
   const payload = encode(method.output, response.result);
@@ -968,7 +742,7 @@ function binaryAck<
     frame: {
       case: "result",
       value: {
-        operation: response.operation ?? operation.name,
+        operation: response.operation ?? operation,
         correlation: call.value.correlation,
         payload,
       },

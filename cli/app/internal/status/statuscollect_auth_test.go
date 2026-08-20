@@ -7,26 +7,41 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/serverapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestAuthStageFromResponseProjectsTypedMethods(t *testing.T) {
-	shortKey := serverapi.AuthStatusResponse{
-		Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
-			Method:        serverapi.AuthStatusMethodAPIKey,
-			Provider:      serverapi.OpenAIAuthProviderFacts(),
-			EnvPreference: serverapi.AuthStatusEnvPreferencePreferEnv,
-			APIKey:        &serverapi.AuthAPIKeyFacts{},
-		}, nil),
+	shortKey := &authpb.Status{
+		Resolution: &authpb.StatusResolution{
+			Resolution: &authpb.StatusResolution_Known{Known: &authpb.StatusFacts{
+				Method: authpb.AuthMethod_AUTH_METHOD_API_KEY,
+				Provider: &authpb.ProviderFacts{
+					Kind:       authpb.ProviderKind_PROVIDER_KIND_OPENAI,
+					Identifier: "openai",
+				},
+				EnvPreference: authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_PREFER_ENV_API_KEY,
+				MethodFacts:   &authpb.StatusFacts_ApiKey{ApiKey: &authpb.APIKeyFacts{}},
+			}},
+		},
+		Subscription: &authpb.SubscriptionFacts{},
 	}
 	longSuffix := "1234"
-	longKey := shortKey
-	longKey.Resolution = serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
-		Method:        serverapi.AuthStatusMethodAPIKey,
-		Provider:      serverapi.OpenAIAuthProviderFacts(),
-		EnvPreference: serverapi.AuthStatusEnvPreferencePreferSaved,
-		APIKey:        &serverapi.AuthAPIKeyFacts{Suffix: &longSuffix},
-	}, nil)
+	longKey := &authpb.Status{
+		Resolution: &authpb.StatusResolution{
+			Resolution: &authpb.StatusResolution_Known{Known: &authpb.StatusFacts{
+				Method: authpb.AuthMethod_AUTH_METHOD_API_KEY,
+				Provider: &authpb.ProviderFacts{
+					Kind:       authpb.ProviderKind_PROVIDER_KIND_OPENAI,
+					Identifier: "openai",
+				},
+				EnvPreference: authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_PREFER_SAVED_AUTH,
+				MethodFacts:   &authpb.StatusFacts_ApiKey{ApiKey: &authpb.APIKeyFacts{Suffix: &longSuffix}},
+			}},
+		},
+		Subscription: &authpb.SubscriptionFacts{},
+	}
 
 	short := AuthStageFromResponse(shortKey)
 	if short.Auth.Summary != "API Key" ||
@@ -42,8 +57,13 @@ func TestAuthStageFromResponseProjectsTypedMethods(t *testing.T) {
 }
 
 func TestAuthStageFromResponseProjectsUnavailableAndRetainedOAuth(t *testing.T) {
-	unavailable := AuthStageFromResponse(serverapi.AuthStatusResponse{
-		Resolution: serverapi.UnavailableAuthStatusResolution(serverapi.AuthStatusFailure{Cause: "permission denied"}),
+	unavailable := AuthStageFromResponse(&authpb.Status{
+		Resolution: &authpb.StatusResolution{
+			Resolution: &authpb.StatusResolution_Unavailable{
+				Unavailable: &authpb.StatusFailure{Cause: "permission denied"},
+			},
+		},
+		Subscription: &authpb.SubscriptionFacts{},
 	})
 	if unavailable.Auth.Summary != "Auth unavailable" ||
 		!unavailable.Auth.Unavailable ||
@@ -52,17 +72,23 @@ func TestAuthStageFromResponseProjectsUnavailableAndRetainedOAuth(t *testing.T) 
 	}
 
 	email := "user@example.com"
-	refreshFailure := serverapi.AuthStatusFailure{Cause: "refresh failed"}
-	retained := AuthStageFromResponse(serverapi.AuthStatusResponse{
-		Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
-			Method:        serverapi.AuthStatusMethodOAuth,
-			Provider:      serverapi.OpenAIAuthProviderFacts(),
-			EnvPreference: serverapi.AuthStatusEnvPreferencePreferSaved,
-			OAuth:         &serverapi.AuthOAuthFacts{Email: &email},
-		}, &refreshFailure),
-		Subscription: serverapi.AuthSubscriptionFacts{
+	refreshFailure := &authpb.StatusFailure{Cause: "refresh failed"}
+	retained := AuthStageFromResponse(&authpb.Status{
+		Resolution: &authpb.StatusResolution{
+			Resolution: &authpb.StatusResolution_Known{Known: &authpb.StatusFacts{
+				Method: authpb.AuthMethod_AUTH_METHOD_OAUTH,
+				Provider: &authpb.ProviderFacts{
+					Kind:       authpb.ProviderKind_PROVIDER_KIND_OPENAI,
+					Identifier: "openai",
+				},
+				EnvPreference: authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_PREFER_SAVED_AUTH,
+				MethodFacts:   &authpb.StatusFacts_Oauth{Oauth: &authpb.OAuthFacts{Email: &email}},
+			}},
+			PartialFailure: refreshFailure,
+		},
+		Subscription: &authpb.SubscriptionFacts{
 			Applicable: true,
-			Failure:    &refreshFailure,
+			Failure:    refreshFailure,
 		},
 	})
 	if retained.Auth.Summary != email ||
@@ -76,21 +102,24 @@ func TestAuthStageFromResponseProjectsUnavailableAndRetainedOAuth(t *testing.T) 
 
 func TestAuthStageFromResponseProjectsCredentialFreeProviderOrigin(t *testing.T) {
 	port := "8443"
-	response := serverapi.AuthStatusResponse{
-		Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
-			Method: serverapi.AuthStatusMethodAPIKey,
-			Provider: serverapi.AuthProviderFacts{
-				Kind:       serverapi.AuthProviderKindOpenAICompatible,
-				Identifier: "openai-compatible",
-				DisplayOrigin: &serverapi.AuthProviderDisplayOrigin{
-					Scheme:   "https",
-					Hostname: "example.com",
-					Port:     &port,
+	response := &authpb.Status{
+		Resolution: &authpb.StatusResolution{
+			Resolution: &authpb.StatusResolution_Known{Known: &authpb.StatusFacts{
+				Method: authpb.AuthMethod_AUTH_METHOD_API_KEY,
+				Provider: &authpb.ProviderFacts{
+					Kind:       authpb.ProviderKind_PROVIDER_KIND_OPENAI_COMPATIBLE,
+					Identifier: "openai-compatible",
+					DisplayOrigin: &authpb.ProviderDisplayOrigin{
+						Scheme:   "https",
+						Hostname: "example.com",
+						Port:     &port,
+					},
 				},
-			},
-			EnvPreference: serverapi.AuthStatusEnvPreferenceUnspecified,
-			APIKey:        &serverapi.AuthAPIKeyFacts{},
-		}, nil),
+				EnvPreference: authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_UNSPECIFIED,
+				MethodFacts:   &authpb.StatusFacts_ApiKey{ApiKey: &authpb.APIKeyFacts{}},
+			}},
+		},
+		Subscription: &authpb.SubscriptionFacts{},
 	}
 	projected := AuthStageFromResponse(response)
 	origin := "https://example.com:8443"
@@ -103,7 +132,7 @@ func TestAuthStageFromResponseProjectsCredentialFreeProviderOrigin(t *testing.T)
 
 func TestAuthProviderDisplayOriginFormatsScopedIPv6(t *testing.T) {
 	hostname := "fe80::1%en0"
-	rendered := authProviderDisplayOrigin(&serverapi.AuthProviderDisplayOrigin{
+	rendered := authProviderDisplayOrigin(&authpb.ProviderDisplayOrigin{
 		Scheme:   "https",
 		Hostname: hostname,
 	})
@@ -121,21 +150,26 @@ func TestSubscriptionProjectionPreservesDurationAndDuplicateBuckets(t *testing.T
 	vision := "vision"
 	images := "images"
 	plan := "pro"
-	response := serverapi.AuthStatusResponse{
-		Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
-			Method:        serverapi.AuthStatusMethodOAuth,
-			Provider:      serverapi.OpenAIAuthProviderFacts(),
-			EnvPreference: serverapi.AuthStatusEnvPreferencePreferSaved,
-			OAuth:         &serverapi.AuthOAuthFacts{},
-		}, nil),
-		Subscription: serverapi.AuthSubscriptionFacts{
+	response := &authpb.Status{
+		Resolution: &authpb.StatusResolution{
+			Resolution: &authpb.StatusResolution_Known{Known: &authpb.StatusFacts{
+				Method: authpb.AuthMethod_AUTH_METHOD_OAUTH,
+				Provider: &authpb.ProviderFacts{
+					Kind:       authpb.ProviderKind_PROVIDER_KIND_OPENAI,
+					Identifier: "openai",
+				},
+				EnvPreference: authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_PREFER_SAVED_AUTH,
+				MethodFacts:   &authpb.StatusFacts_Oauth{Oauth: &authpb.OAuthFacts{}},
+			}},
+		},
+		Subscription: &authpb.SubscriptionFacts{
 			Applicable: true,
 			Plan:       &plan,
-			Windows: []serverapi.AuthSubscriptionWindowFacts{
-				{Bucket: serverapi.AuthSubscriptionWindowBucketDefault, DurationSecs: 5 * 3600, UsedPercent: 10, ResetAt: &reset},
-				{Bucket: serverapi.AuthSubscriptionWindowBucketAdditional, DurationSecs: 5 * 3600, UsedPercent: 20, LimitName: &vision, MeteredFeature: &images},
-				{Bucket: serverapi.AuthSubscriptionWindowBucketAdditional, DurationSecs: 5 * 3600, UsedPercent: 30, LimitName: &vision, MeteredFeature: &images},
-				{Bucket: serverapi.AuthSubscriptionWindowBucketDefault, DurationSecs: 90 * 24 * 3600, UsedPercent: 40},
+			Windows: []*authpb.SubscriptionWindowFacts{
+				{Bucket: authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_DEFAULT, DurationSeconds: 5 * 3600, UsedPercent: 10, ResetAt: timestamppb.New(reset)},
+				{Bucket: authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_ADDITIONAL, DurationSeconds: 5 * 3600, UsedPercent: 20, LimitName: &vision, MeteredFeature: &images},
+				{Bucket: authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_ADDITIONAL, DurationSeconds: 5 * 3600, UsedPercent: 30, LimitName: &vision, MeteredFeature: &images},
+				{Bucket: authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_DEFAULT, DurationSeconds: 90 * 24 * 3600, UsedPercent: 40},
 			},
 		},
 	}

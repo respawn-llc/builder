@@ -10,6 +10,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/clientui"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -78,11 +79,15 @@ func resolveSessionWorkspaceRetargetContext(
 	if trimmedWorkspaceID == "" {
 		return nil, errors.New("workspace id is required for workspace retarget context")
 	}
-	overview, err := projectViews.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: trimmedProjectID})
+	overview, err := projectViews.GetProjectOverview(ctx, &projectpb.GetOverviewRequest{ProjectId: trimmedProjectID})
 	if err != nil {
 		return nil, err
 	}
-	for _, workspace := range overview.Overview.Workspaces {
+	workspaces, err := client.ProjectWorkspaceSummariesFromProto(overview.Overview.Workspaces)
+	if err != nil {
+		return nil, err
+	}
+	for _, workspace := range workspaces {
 		if workspace.WorkspaceID == trimmedWorkspaceID {
 			return newSessionWorkspaceRetargetContext(workspace.RootPath, theme)
 		}

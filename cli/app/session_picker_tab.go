@@ -3,7 +3,6 @@ package app
 import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
 
@@ -168,7 +167,7 @@ func (t *sessionPickerTab) resetForFreshLoad() {
 	}
 }
 
-func (t *sessionPickerTab) replaceSegments(requestedOffset int, response serverapi.SessionPageResponse) {
+func (t *sessionPickerTab) replaceSegments(requestedOffset int, response sessionPageResponse) {
 	t.segments = []sessionPickerPageSegment{newSessionPickerPageSegment(requestedOffset, response)}
 	if len(response.Sessions) == 0 {
 		t.segments = nil
@@ -183,7 +182,7 @@ func (t *sessionPickerTab) replaceSegments(requestedOffset int, response servera
 	t.bodyPhase = sessionPickerBodyReady
 }
 
-func newSessionPickerPageSegment(requestedOffset int, response serverapi.SessionPageResponse) sessionPickerPageSegment {
+func newSessionPickerPageSegment(requestedOffset int, response sessionPageResponse) sessionPickerPageSegment {
 	return sessionPickerPageSegment{
 		requestedOffset: requestedOffset,
 		sessions:        append([]clientui.SessionSummary(nil), response.Sessions...),

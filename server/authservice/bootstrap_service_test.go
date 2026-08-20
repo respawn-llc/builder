@@ -8,15 +8,18 @@ import (
 
 	"core/server/auth"
 	"core/shared/config"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestCompleteBootstrapConfiguresAPIKeyWhenAuthNotReady(t *testing.T) {
 	service, store := newTestAuthBootstrapService(auth.EmptyState())
 
-	resp, err := service.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
-		Mode:   serverapi.AuthBootstrapModeAPIKey,
-		APIKey: "server-key",
+	resp, err := service.CompleteBootstrap(context.Background(), &authpb.CompleteBootstrapRequest{
+		Mode:   authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY,
+		ApiKey: bootstrapTestString("server-key"),
 	})
 
 	if err != nil {
@@ -25,8 +28,8 @@ func TestCompleteBootstrapConfiguresAPIKeyWhenAuthNotReady(t *testing.T) {
 	if !resp.AuthReady {
 		t.Fatal("expected auth ready after bootstrap completion")
 	}
-	if resp.MethodType != string(auth.MethodAPIKey) {
-		t.Fatalf("method type = %q, want %q", resp.MethodType, auth.MethodAPIKey)
+	if resp.GetMethodType() != string(auth.MethodAPIKey) {
+		t.Fatalf("method type = %q, want %q", resp.GetMethodType(), auth.MethodAPIKey)
 	}
 	state, err := store.Load(context.Background())
 	if err != nil {
@@ -46,9 +49,9 @@ func TestCompleteBootstrapReturnsSuccessWithoutOverwriteWhenAuthAlreadyReady(t *
 		},
 	})
 
-	resp, err := service.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
-		Mode:   serverapi.AuthBootstrapModeAPIKey,
-		APIKey: "server-key-2",
+	resp, err := service.CompleteBootstrap(context.Background(), &authpb.CompleteBootstrapRequest{
+		Mode:   authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY,
+		ApiKey: bootstrapTestString("server-key-2"),
 	})
 
 	if err != nil {
@@ -57,8 +60,8 @@ func TestCompleteBootstrapReturnsSuccessWithoutOverwriteWhenAuthAlreadyReady(t *
 	if !resp.AuthReady {
 		t.Fatal("expected ready auth to return successful no-op")
 	}
-	if resp.MethodType != string(auth.MethodAPIKey) {
-		t.Fatalf("method type = %q, want %q", resp.MethodType, auth.MethodAPIKey)
+	if resp.GetMethodType() != string(auth.MethodAPIKey) {
+		t.Fatalf("method type = %q, want %q", resp.GetMethodType(), auth.MethodAPIKey)
 	}
 	state, err := store.Load(context.Background())
 	if err != nil {
@@ -78,7 +81,7 @@ func TestCompleteBootstrapNoneClearsAuthWhenAuthOptional(t *testing.T) {
 		},
 	}, config.Settings{OpenAIBaseURL: "http://127.0.0.1:8080/v1"})
 
-	resp, err := service.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone})
+	resp, err := service.CompleteBootstrap(context.Background(), &authpb.CompleteBootstrapRequest{Mode: authpb.BootstrapMode_BOOTSTRAP_MODE_NONE})
 	if err != nil {
 		t.Fatalf("CompleteBootstrap none: %v", err)
 	}
@@ -106,7 +109,7 @@ func TestCompleteBootstrapNoneSavesNoAuthPreferenceWhenAuthRequired(t *testing.T
 		},
 	})
 
-	resp, err := service.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone})
+	resp, err := service.CompleteBootstrap(context.Background(), &authpb.CompleteBootstrapRequest{Mode: authpb.BootstrapMode_BOOTSTRAP_MODE_NONE})
 	if err != nil {
 		t.Fatalf("CompleteBootstrap none: %v", err)
 	}
@@ -132,7 +135,7 @@ func TestGetBootstrapStatusReportsPersistedNoAuthSelection(t *testing.T) {
 		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
 	})
 
-	resp, err := service.GetAuthBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	resp, err := service.GetBootstrapStatus(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("GetBootstrapStatus: %v", err)
 	}
@@ -147,7 +150,7 @@ func TestGetBootstrapStatusReportsPersistedNoAuthSelection(t *testing.T) {
 func TestGetBootstrapStatusDoesNotReportEmptyStateAsNoAuthSelection(t *testing.T) {
 	service, _ := newTestAuthBootstrapService(auth.EmptyState())
 
-	resp, err := service.GetAuthBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	resp, err := service.GetBootstrapStatus(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("GetBootstrapStatus: %v", err)
 	}
@@ -164,7 +167,7 @@ func TestAcknowledgeNoAuthIsNonMutating(t *testing.T) {
 	}
 	service, store := newTestAuthBootstrapService(initial)
 
-	resp, err := service.AcknowledgeNoAuth(context.Background(), serverapi.AuthAcknowledgeNoAuthRequest{})
+	resp, err := service.AcknowledgeNoAuth(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("AcknowledgeNoAuth: %v", err)
 	}
@@ -192,7 +195,7 @@ func TestAcknowledgeNoAuthReportsReadyRealAuthWithoutNoAuthSelection(t *testing.
 		},
 	})
 
-	resp, err := service.AcknowledgeNoAuth(context.Background(), serverapi.AuthAcknowledgeNoAuthRequest{})
+	resp, err := service.AcknowledgeNoAuth(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("AcknowledgeNoAuth: %v", err)
 	}
@@ -204,7 +207,7 @@ func TestAcknowledgeNoAuthReportsReadyRealAuthWithoutNoAuthSelection(t *testing.
 func TestAcknowledgeNoAuthRejectsMissingAuthAndNoAuthSelection(t *testing.T) {
 	service, _ := newTestAuthBootstrapService(auth.EmptyState())
 
-	_, err := service.AcknowledgeNoAuth(context.Background(), serverapi.AuthAcknowledgeNoAuthRequest{})
+	_, err := service.AcknowledgeNoAuth(context.Background(), &emptypb.Empty{})
 	if !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("AcknowledgeNoAuth error = %v, want ErrServerAuthRequired", err)
 	}
@@ -220,4 +223,8 @@ func newTestAuthBootstrapServiceWithSettings(initial auth.State, settings config
 		return time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	})
 	return NewBootstrapService(manager, auth.OpenAIOAuthOptions{}, settings), store
+}
+
+func bootstrapTestString(value string) *string {
+	return &value
 }

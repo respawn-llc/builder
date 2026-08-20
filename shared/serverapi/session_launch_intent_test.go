@@ -148,20 +148,6 @@ func TestSessionLaunchIntentRejectsMalformedUnknownMixedAndLegacyShapes(t *testi
 	}
 }
 
-func TestSessionPlanRequestOwnsExactlyOneTypedLaunchIntent(t *testing.T) {
-	target := mustSessionLaunchIntentID(t, "target-session")
-	request := SessionPlanRequest{
-		Mode:   SessionLaunchModeInteractive,
-		Intent: OpenExistingSessionLaunchIntent(target),
-	}
-	if err := request.Validate(); err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	if request.Intent.Kind() != SessionLaunchIntentOpenExisting {
-		t.Fatalf("intent kind = %q, want open_existing", request.Intent.Kind())
-	}
-}
-
 func jsonObjectsEqual(left map[string]any, right map[string]any) bool {
 	leftJSON, leftErr := json.Marshal(left)
 	rightJSON, rightErr := json.Marshal(right)

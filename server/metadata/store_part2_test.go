@@ -7,7 +7,6 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"database/sql"
 	"errors"
@@ -622,11 +621,7 @@ func assertProjectSessionListingCount(t *testing.T, ctx context.Context, store *
 	if projects[0].SessionCount != want {
 		t.Fatalf("project session count = %d, want %d", projects[0].SessionCount, want)
 	}
-	page, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: projectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     sessionPageInt(20),
-	})
+	page, err := store.ListSessionPage(ctx, projectID, sessioncontract.SessionCategoryMain, 0, 20)
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}

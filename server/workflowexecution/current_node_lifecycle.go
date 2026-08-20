@@ -304,24 +304,6 @@ func (c *CurrentNodeController) classifyTaskResume(
 		}
 		return taskResumeClassification{}, &TaskResumeConflictError{TaskID: taskID}
 	}
-	c.mu.Lock()
-	alreadyResumed := make([]workflow.CurrentNode, 0, len(classifications))
-	for _, classification := range classifications {
-		key, keyErr := classification.CurrentNode.Reference.Key()
-		if keyErr != nil {
-			c.mu.Unlock()
-			return taskResumeClassification{}, keyErr
-		}
-		if !c.currentNodeOwnedLocked(key) {
-			alreadyResumed = nil
-			break
-		}
-		alreadyResumed = append(alreadyResumed, classification.CurrentNode)
-	}
-	c.mu.Unlock()
-	if len(alreadyResumed) != 0 {
-		return taskResumeClassification{alreadyResumed: alreadyResumed}, nil
-	}
 	result := taskResumeClassification{
 		resumable: make([]workflow.CurrentNode, 0, len(classifications)),
 	}

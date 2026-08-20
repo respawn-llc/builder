@@ -21,8 +21,43 @@ type remoteTransportFailureError struct {
 	code sharedpb.TransportFailureCode
 }
 
+type comparableProtoMessage interface {
+	proto.Message
+	comparable
+}
+
+type generatedUnaryResult[Success any, Failure comparableProtoMessage] interface {
+	proto.Message
+	GetSuccess() Success
+	GetError() Failure
+}
+
 func (e remoteTransportFailureError) Error() string {
 	return fmt.Sprintf("binary transport failure: %s", e.code)
+}
+
+func callGeneratedBinary[
+	Request proto.Message,
+	Success any,
+	Failure comparableProtoMessage,
+	Result generatedUnaryResult[Success, Failure],
+](
+	c *Remote,
+	ctx context.Context,
+	method protoreflect.MethodDescriptor,
+	request Request,
+	result Result,
+	decodeFailure func(Failure) error,
+) (Success, error) {
+	var zeroSuccess Success
+	if err := c.callBinary(ctx, method, request, result); err != nil {
+		return zeroSuccess, err
+	}
+	var zeroFailure Failure
+	if failure := result.GetError(); failure != zeroFailure {
+		return zeroSuccess, decodeFailure(failure)
+	}
+	return result.GetSuccess(), nil
 }
 
 func (c *Remote) callBinaryControl(

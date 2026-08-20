@@ -9,7 +9,7 @@ import (
 	"core/shared/toolspec"
 )
 
-func sessionSettingsToProto(settings config.Settings) (*sessionlaunchpb.Settings, error) {
+func SessionSettingsToProto(settings config.Settings) (*sessionlaunchpb.Settings, error) {
 	modelVerbosity, err := modelVerbosityToProto(settings.ModelVerbosity)
 	if err != nil {
 		return nil, err
@@ -159,7 +159,7 @@ func sessionSettingsToProto(settings config.Settings) (*sessionlaunchpb.Settings
 	return message, Validate(message)
 }
 
-func sessionSettingsFromProto(message *sessionlaunchpb.Settings) (config.Settings, error) {
+func SessionSettingsFromProto(message *sessionlaunchpb.Settings) (config.Settings, error) {
 	if err := Validate(message); err != nil {
 		return config.Settings{}, err
 	}
@@ -376,7 +376,7 @@ func enabledToolFactsToProto(values map[toolspec.ID]bool) ([]*sessionlaunchpb.To
 	sort.Strings(keys)
 	result := make([]*sessionlaunchpb.ToolEnabledFact, 0, len(keys))
 	for _, key := range keys {
-		toolID, err := sessionToolIDToProto(toolspec.ID(key))
+		toolID, err := SessionToolIDToProto(toolspec.ID(key))
 		if err != nil {
 			return nil, err
 		}
@@ -388,7 +388,7 @@ func enabledToolFactsToProto(values map[toolspec.ID]bool) ([]*sessionlaunchpb.To
 func enabledToolFactsFromProto(values []*sessionlaunchpb.ToolEnabledFact) (map[toolspec.ID]bool, error) {
 	result := make(map[toolspec.ID]bool, len(values))
 	for _, value := range values {
-		toolID, err := sessionToolIDFromProto(value.ToolId)
+		toolID, err := SessionToolIDFromProto(value.ToolId)
 		if err != nil {
 			return nil, err
 		}
@@ -448,7 +448,7 @@ func subagentRolesToProto(base config.Settings) ([]*sessionlaunchpb.NamedSubagen
 		value := values[key]
 		effective := config.OverlaySubagentRoleSettings(base, value, true)
 		effective.Subagents = nil
-		settings, err := sessionSettingsToProto(effective)
+		settings, err := SessionSettingsToProto(effective)
 		if err != nil {
 			return nil, fmt.Errorf("subagent %q settings: %w", key, err)
 		}
@@ -470,7 +470,7 @@ func subagentRolesFromProto(values []*sessionlaunchpb.NamedSubagentRole) (map[st
 		if _, exists := result[value.Name]; exists {
 			return nil, fmt.Errorf("duplicate subagent role %q", value.Name)
 		}
-		settings, err := sessionSettingsFromProto(value.Role.Settings)
+		settings, err := SessionSettingsFromProto(value.Role.Settings)
 		if err != nil {
 			return nil, fmt.Errorf("subagent %q settings: %w", value.Name, err)
 		}
@@ -487,7 +487,7 @@ func subagentRolesFromProto(values []*sessionlaunchpb.NamedSubagentRole) (map[st
 	return result, nil
 }
 
-func sessionSourceReportToProto(source config.SourceReport) (*sessionlaunchpb.SourceReport, error) {
+func SessionSourceReportToProto(source config.SourceReport) (*sessionlaunchpb.SourceReport, error) {
 	message := &sessionlaunchpb.SourceReport{
 		SettingsPath: source.SettingsPath, SettingsFileExists: source.SettingsFileExists,
 		CreatedDefaultConfig: source.CreatedDefaultConfig, HomeSettingsPath: source.HomeSettingsPath,
@@ -499,7 +499,7 @@ func sessionSourceReportToProto(source config.SourceReport) (*sessionlaunchpb.So
 	return message, Validate(message)
 }
 
-func sessionSourceReportFromProto(message *sessionlaunchpb.SourceReport) (config.SourceReport, error) {
+func SessionSourceReportFromProto(message *sessionlaunchpb.SourceReport) (config.SourceReport, error) {
 	if err := Validate(message); err != nil {
 		return config.SourceReport{}, err
 	}

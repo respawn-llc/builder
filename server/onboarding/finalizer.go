@@ -14,6 +14,7 @@ import (
 	"core/server/llm"
 	"core/server/onboardingimports"
 	"core/shared/config"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/serverapi"
 	"core/shared/theme"
 	"core/shared/toolspec"
@@ -57,71 +58,71 @@ func NewFinalizer(options Options) (*Finalizer, error) {
 	}, nil
 }
 
-func (f *Finalizer) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+func (f *Finalizer) Finalize(ctx context.Context, req *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if req == nil {
+		return nil, invalidRequest("request", "required")
+	}
 	settingsPath := strings.TrimSpace(f.settingsPath)
 	if exists, err := pathExists(settingsPath); err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, configWriteFailed(settingsPath, "validate", err)
+		return nil, configWriteFailed(settingsPath, "validate", err)
 	} else if exists {
-		return serverapi.OnboardingFinalizeResponse{}, configAlreadyExists(settingsPath)
+		return nil, configAlreadyExists(settingsPath)
 	}
 	release, err := globalRootLocks.acquire(ctx, f.persistenceRoot)
 	if err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelWaitingForLock)
+		return nil, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelWaitingForLock)
 	}
 	defer release()
 	if exists, err := pathExists(settingsPath); err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, configWriteFailed(settingsPath, "validate", err)
+		return nil, configWriteFailed(settingsPath, "validate", err)
 	} else if exists {
-		return serverapi.OnboardingFinalizeResponse{}, configAlreadyExists(settingsPath)
+		return nil, configAlreadyExists(settingsPath)
 	}
 	if err := ctx.Err(); err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelValidating)
-	}
-	if err := serverapi.ValidateOnboardingFinalizeRequest(req); err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, err
+		return nil, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelValidating)
 	}
 	settings, preserved, err := projectSettings(req)
 	if err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, err
+		return nil, err
 	}
 	if _, err := config.RenderSettingsTOMLForOnboarding(settings, config.OnboardingWriteOptions{PreservedDefaults: preserved}); err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, invalidRequest("settings", "invalid")
+		return nil, invalidRequest("settings", "invalid")
 	}
 	ledger := &mutationLedger{}
 	if err := f.executeImports(ctx, req, ledger); err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, err
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		if rollbackErr := ledger.rollback(); rollbackErr != nil {
-			return serverapi.OnboardingFinalizeResponse{}, rollbackFailed(serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelImporting), rollbackErr)
+			return nil, rollbackFailed(serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelImporting), rollbackErr)
 		}
-		return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelImporting)
+		return nil, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelImporting)
 	}
 	path, err := config.WriteSettingsFileForOnboardingWithOptionsAt(settingsPath, settings, config.OnboardingWriteOptions{PreservedDefaults: preserved})
 	if err != nil {
 		if rollbackErr := ledger.rollback(); rollbackErr != nil {
-			return serverapi.OnboardingFinalizeResponse{}, rollbackFailed(configWriteFailed(settingsPath, "write", err), rollbackErr)
+			return nil, rollbackFailed(configWriteFailed(settingsPath, "write", err), rollbackErr)
 		}
 		if config.IsSettingsFileAlreadyExists(err) {
-			return serverapi.OnboardingFinalizeResponse{}, configAlreadyExists(settingsPath)
+			return nil, configAlreadyExists(settingsPath)
 		}
-		return serverapi.OnboardingFinalizeResponse{}, configWriteFailed(settingsPath, "write", err)
+		return nil, configWriteFailed(settingsPath, "write", err)
 	}
-	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: path}, nil
+	return &onboardingpb.FinalizeSuccess{Completed: true, SettingsPath: path}, nil
 }
 
-func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, map[string]bool, error) {
+func projectSettings(req *onboardingpb.FinalizeRequest) (config.Settings, map[string]bool, error) {
 	settings := config.DefaultOnboardingSettings()
 	preserved := map[string]bool{}
 	if req.MainProvider != nil {
-		applyMainProvider(&settings, *req.MainProvider)
+		applyMainProvider(&settings, req.MainProvider)
 	}
 	effectiveModel := settings.Model
 	if req.Model != nil {
-		model, err := modelChoiceValue(*req.Model)
+		model, err := modelChoiceValue(req.Model)
 		if err != nil {
 			return config.Settings{}, nil, err
 		}
@@ -132,20 +133,24 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 		}
 	}
 	if req.Theme != nil {
-		settings.Theme = theme.Normalize(string(*req.Theme))
+		themeValue, err := onboardingTheme(*req.Theme)
+		if err != nil {
+			return config.Settings{}, nil, err
+		}
+		settings.Theme = theme.Normalize(themeValue)
 	}
 	if req.ContextWindow != nil {
-		if err := applyContextWindow(&settings, effectiveModel, *req.ContextWindow); err != nil {
+		if err := applyContextWindow(&settings, effectiveModel, req.ContextWindow); err != nil {
 			return config.Settings{}, nil, err
 		}
 	}
 	if req.Thinking != nil {
-		value, err := thinkingChoiceValue(*req.Thinking, effectiveModel, "thinking")
+		value, err := thinkingChoiceValue(req.Thinking, effectiveModel, "thinking")
 		if err != nil {
 			return config.Settings{}, nil, err
 		}
 		settings.ThinkingLevel = value
-		if req.Thinking.Kind == serverapi.OnboardingThinkingDisabled {
+		if req.Thinking.Kind == onboardingpb.ThinkingKind_THINKING_KIND_DISABLED {
 			preserved["thinking_level"] = true
 		}
 	}
@@ -153,10 +158,14 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 		if !supportsVerbosity(settings, effectiveModel) {
 			return config.Settings{}, nil, invalidRequest("verbosity", "unsupported_for_model")
 		}
-		settings.ModelVerbosity = config.ModelVerbosity(*req.Verbosity)
+		value, err := onboardingVerbosity(*req.Verbosity)
+		if err != nil {
+			return config.Settings{}, nil, err
+		}
+		settings.ModelVerbosity = config.ModelVerbosity(value)
 	}
 	if req.ModelTimeoutSeconds != nil {
-		settings.Timeouts.ModelRequestSeconds = *req.ModelTimeoutSeconds
+		settings.Timeouts.ModelRequestSeconds = int(*req.ModelTimeoutSeconds)
 	}
 	if req.AskQuestion != nil {
 		if settings.EnabledTools == nil {
@@ -165,18 +174,26 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 		settings.EnabledTools[toolspec.ToolAskQuestion] = *req.AskQuestion
 	}
 	for _, override := range req.ToolOverrides {
-		settings.EnabledTools[override.ID] = override.Enabled
+		id, err := onboardingToolID(override.GetId())
+		if err != nil {
+			return config.Settings{}, nil, err
+		}
+		settings.EnabledTools[id] = override.Enabled
 	}
 	if req.Supervisor != nil {
-		if err := applySupervisor(&settings, preserved, *req.Supervisor); err != nil {
+		if err := applySupervisor(&settings, preserved, req.Supervisor); err != nil {
 			return config.Settings{}, nil, err
 		}
 	}
 	if req.Compaction != nil {
-		if *req.Compaction == serverapi.OnboardingCompactionNative && !supportsNativeCompaction(settings, effectiveModel) {
+		if *req.Compaction == onboardingpb.CompactionMode_COMPACTION_MODE_NATIVE && !supportsNativeCompaction(settings, effectiveModel) {
 			return config.Settings{}, nil, invalidRequest("compaction", "unsupported_for_provider")
 		}
-		settings.CompactionMode = config.CompactionMode(*req.Compaction)
+		value, err := onboardingCompaction(*req.Compaction)
+		if err != nil {
+			return config.Settings{}, nil, err
+		}
+		settings.CompactionMode = config.CompactionMode(value)
 	}
 	if len(req.DisabledSkillNames) > 0 {
 		settings.SkillToggles = map[string]bool{}
@@ -197,42 +214,42 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 	return settings, preserved, nil
 }
 
-func applyMainProvider(settings *config.Settings, choice serverapi.OnboardingProviderChoice) {
+func applyMainProvider(settings *config.Settings, choice *onboardingpb.ProviderChoice) {
 	if choice.ProviderOverride != nil {
 		settings.ProviderOverride = strings.ToLower(strings.TrimSpace(*choice.ProviderOverride))
 	}
-	if choice.OpenAIBaseURL != nil {
-		settings.OpenAIBaseURL = strings.TrimSpace(*choice.OpenAIBaseURL)
+	if choice.OpenaiBaseUrl != nil {
+		settings.OpenAIBaseURL = strings.TrimSpace(*choice.OpenaiBaseUrl)
 	}
 }
 
-func modelChoiceValue(choice serverapi.OnboardingModelChoice) (string, error) {
+func modelChoiceValue(choice *onboardingpb.ModelChoice) (string, error) {
 	switch choice.Kind {
-	case serverapi.OnboardingModelKnown:
-		model := strings.TrimSpace(choice.ModelID)
+	case onboardingpb.ModelKind_MODEL_KIND_KNOWN:
+		model := strings.TrimSpace(choice.GetModelId())
 		if _, ok := llm.LookupModelCapabilityContract(model); !ok {
 			return "", invalidRequest("model.model_id", "unknown_model")
 		}
 		return model, nil
-	case serverapi.OnboardingModelCustom:
-		return strings.TrimSpace(choice.Alias), nil
+	case onboardingpb.ModelKind_MODEL_KIND_CUSTOM:
+		return strings.TrimSpace(choice.GetAlias()), nil
 	default:
 		return "", invalidRequest("model.kind", "unsupported_value")
 	}
 }
 
-func applyContextWindow(settings *config.Settings, model string, choice serverapi.OnboardingContextWindowChoice) error {
+func applyContextWindow(settings *config.Settings, model string, choice *onboardingpb.ContextWindowChoice) error {
 	switch choice.Kind {
-	case serverapi.OnboardingContextWindowDefault:
+	case onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_DEFAULT:
 		return nil
-	case serverapi.OnboardingContextWindowLarge:
+	case onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_LARGE:
 		meta, ok := llm.LookupModelMetadata(model)
 		if !ok || meta.LargeContextWindowTokens <= 0 {
 			return invalidRequest("context_window.kind", "unsupported_for_model")
 		}
 		settings.ModelContextWindow = meta.LargeContextWindowTokens
-	case serverapi.OnboardingContextWindowCustom:
-		settings.ModelContextWindow = choice.Tokens
+	case onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_CUSTOM:
+		settings.ModelContextWindow = int(choice.GetTokens())
 	default:
 		return invalidRequest("context_window.kind", "unsupported_value")
 	}
@@ -252,29 +269,33 @@ func clampedPreSubmitRunway(thresholdTokens int, windowTokens int, configuredRun
 	return configuredRunway
 }
 
-func thinkingChoiceValue(choice serverapi.OnboardingThinkingChoice, model, field string) (string, error) {
+func thinkingChoiceValue(choice *onboardingpb.ThinkingChoice, model, field string) (string, error) {
 	switch choice.Kind {
-	case serverapi.OnboardingThinkingDefault:
+	case onboardingpb.ThinkingKind_THINKING_KIND_DEFAULT:
 		return config.DefaultOnboardingSettings().ThinkingLevel, nil
-	case serverapi.OnboardingThinkingDisabled:
+	case onboardingpb.ThinkingKind_THINKING_KIND_DISABLED:
 		return "", nil
-	case serverapi.OnboardingThinkingLevel:
-		level := strings.TrimSpace(choice.Level)
+	case onboardingpb.ThinkingKind_THINKING_KIND_LEVEL:
+		level := strings.TrimSpace(choice.GetLevel())
 		if !contains(llm.SupportedThinkingLevelsModel(model), level) {
 			return "", invalidRequest(field+".level", "unsupported_for_model")
 		}
 		return level, nil
-	case serverapi.OnboardingThinkingCustom:
-		return strings.TrimSpace(choice.Value), nil
+	case onboardingpb.ThinkingKind_THINKING_KIND_CUSTOM:
+		return strings.TrimSpace(choice.GetValue()), nil
 	default:
 		return "", invalidRequest(field+".kind", "unsupported_value")
 	}
 }
 
-func applySupervisor(settings *config.Settings, preserved map[string]bool, choice serverapi.OnboardingSupervisorChoice) error {
-	settings.Reviewer.Frequency = string(choice.Frequency)
+func applySupervisor(settings *config.Settings, preserved map[string]bool, choice *onboardingpb.SupervisorChoice) error {
+	frequency, err := onboardingSupervisorFrequency(choice.Frequency)
+	if err != nil {
+		return err
+	}
+	settings.Reviewer.Frequency = frequency
 	if choice.Model != nil {
-		model, err := modelChoiceValue(*choice.Model)
+		model, err := modelChoiceValue(choice.Model)
 		if err != nil {
 			return err
 		}
@@ -288,19 +309,96 @@ func applySupervisor(settings *config.Settings, preserved map[string]bool, choic
 		reviewerModel = settings.Model
 	}
 	if choice.Thinking != nil {
-		if choice.Thinking.Kind == serverapi.OnboardingThinkingDefault {
+		if choice.Thinking.Kind == onboardingpb.ThinkingKind_THINKING_KIND_DEFAULT {
 			return nil
 		}
-		thinking, err := thinkingChoiceValue(*choice.Thinking, reviewerModel, "supervisor.thinking")
+		thinking, err := thinkingChoiceValue(choice.Thinking, reviewerModel, "supervisor.thinking")
 		if err != nil {
 			return err
 		}
-		if choice.Thinking.Kind == serverapi.OnboardingThinkingDisabled || thinking != settings.ThinkingLevel {
+		if choice.Thinking.Kind == onboardingpb.ThinkingKind_THINKING_KIND_DISABLED || thinking != settings.ThinkingLevel {
 			settings.Reviewer.ThinkingLevel = thinking
 			preserved["reviewer.thinking_level"] = true
 		}
 	}
 	return nil
+}
+
+func onboardingTheme(value onboardingpb.Theme) (string, error) {
+	switch value {
+	case onboardingpb.Theme_THEME_AUTO:
+		return "auto", nil
+	case onboardingpb.Theme_THEME_LIGHT:
+		return "light", nil
+	case onboardingpb.Theme_THEME_DARK:
+		return "dark", nil
+	default:
+		return "", invalidRequest("theme", "unsupported_value")
+	}
+}
+
+func onboardingVerbosity(value onboardingpb.Verbosity) (string, error) {
+	switch value {
+	case onboardingpb.Verbosity_VERBOSITY_LOW:
+		return "low", nil
+	case onboardingpb.Verbosity_VERBOSITY_MEDIUM:
+		return "medium", nil
+	case onboardingpb.Verbosity_VERBOSITY_HIGH:
+		return "high", nil
+	default:
+		return "", invalidRequest("verbosity", "unsupported_value")
+	}
+}
+
+func onboardingSupervisorFrequency(value onboardingpb.SupervisorFrequency) (string, error) {
+	switch value {
+	case onboardingpb.SupervisorFrequency_SUPERVISOR_FREQUENCY_OFF:
+		return "off", nil
+	case onboardingpb.SupervisorFrequency_SUPERVISOR_FREQUENCY_EDITS:
+		return "edits", nil
+	case onboardingpb.SupervisorFrequency_SUPERVISOR_FREQUENCY_ALL:
+		return "all", nil
+	default:
+		return "", invalidRequest("supervisor.frequency", "unsupported_value")
+	}
+}
+
+func onboardingCompaction(value onboardingpb.CompactionMode) (string, error) {
+	switch value {
+	case onboardingpb.CompactionMode_COMPACTION_MODE_NATIVE:
+		return "native", nil
+	case onboardingpb.CompactionMode_COMPACTION_MODE_LOCAL:
+		return "local", nil
+	case onboardingpb.CompactionMode_COMPACTION_MODE_NONE:
+		return "none", nil
+	default:
+		return "", invalidRequest("compaction", "unsupported_value")
+	}
+}
+
+func onboardingToolID(value onboardingpb.ToolID) (toolspec.ID, error) {
+	switch value {
+	case onboardingpb.ToolID_TOOL_ID_EXEC_COMMAND:
+		return toolspec.ToolExecCommand, nil
+	case onboardingpb.ToolID_TOOL_ID_WRITE_STDIN:
+		return toolspec.ToolWriteStdin, nil
+	case onboardingpb.ToolID_TOOL_ID_VIEW_IMAGE:
+		return toolspec.ToolViewImage, nil
+	case onboardingpb.ToolID_TOOL_ID_PATCH:
+		return toolspec.ToolPatch, nil
+	case onboardingpb.ToolID_TOOL_ID_EDIT:
+		return toolspec.ToolEdit, nil
+	case onboardingpb.ToolID_TOOL_ID_ASK_QUESTION:
+		return toolspec.ToolAskQuestion, nil
+	case onboardingpb.ToolID_TOOL_ID_COMPLETE_NODE:
+		return toolspec.ToolCompleteNode, nil
+	case onboardingpb.ToolID_TOOL_ID_TRIGGER_HANDOFF:
+		return toolspec.ToolTriggerHandoff, nil
+	case onboardingpb.ToolID_TOOL_ID_WEB_SEARCH:
+		return toolspec.ToolWebSearch, nil
+	default:
+		return "", invalidRequest("tool_overrides.id", "unsupported_value")
+	}
 }
 
 func supportsNativeCompaction(settings config.Settings, model string) bool {
@@ -319,7 +417,7 @@ func supportsVerbosity(settings config.Settings, model string) bool {
 	return llm.VerbositySupportForModelAndProvider(model, caps).Supported
 }
 
-func (f *Finalizer) executeImports(ctx context.Context, req serverapi.OnboardingFinalizeRequest, ledger *mutationLedger) error {
+func (f *Finalizer) executeImports(ctx context.Context, req *onboardingpb.FinalizeRequest, ledger *mutationLedger) error {
 	skillsRequested := importRequested(req.SkillsImport)
 	commandsRequested := importRequested(req.CommandsImport)
 	if !skillsRequested && !commandsRequested {
@@ -373,15 +471,15 @@ func rollbackAfterImportError(primary error, ledger *mutationLedger) error {
 	return primary
 }
 
-func importRequested(selection *serverapi.OnboardingImportSelection) bool {
-	return selection != nil && selection.Mode == serverapi.OnboardingImportModeSymlinkSource
+func importRequested(selection *onboardingpb.ImportSelection) bool {
+	return selection != nil && selection.Mode == onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE
 }
 
-func executeSelection(ctx context.Context, ledger *mutationLedger, choices []onboardingimports.Choice, discoveryErrors []onboardingimports.Error, selection *serverapi.OnboardingImportSelection, target string, kind serverapi.OnboardingImportKind) error {
-	if selection == nil || selection.Mode == "" || selection.Mode == serverapi.OnboardingImportModeNone {
+func executeSelection(ctx context.Context, ledger *mutationLedger, choices []onboardingimports.Choice, discoveryErrors []onboardingimports.Error, selection *onboardingpb.ImportSelection, target string, kind serverapi.OnboardingImportKind) error {
+	if selection == nil || selection.Mode == onboardingpb.ImportMode_IMPORT_MODE_NONE {
 		return nil
 	}
-	if selection.Mode != serverapi.OnboardingImportModeSymlinkSource {
+	if selection.Mode != onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE {
 		return invalidRequest(string(kind)+"_import.mode", "unsupported_value")
 	}
 	choice, err := selectedImportChoice(choices, discoveryErrors, selection, kind)
@@ -396,19 +494,21 @@ func executeSelection(ctx context.Context, ledger *mutationLedger, choices []onb
 		return serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelImporting)
 	}
 	if err := executeSymlink(ledger, target, sourceRoot); err != nil {
+		providerUUID, _ := selectionProviderUUID(selection)
 		return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeImportFailed, serverapi.OnboardingImportFailedDetails{
-			ImportKind: kind, ProviderUUID: selection.ProviderUUID, ImportProviderID: selection.ImportProviderID, SourceRootPath: selection.SourceRootPath, Operation: serverapi.OnboardingImportOperationCreateSymlink, Cause: err.Error(),
+			ImportKind: kind, ProviderUUID: providerUUID, ImportProviderID: selection.ImportProviderId, SourceRootPath: selection.SourceRootPath, Operation: serverapi.OnboardingImportOperationCreateSymlink, Cause: err.Error(),
 		}, err)
 	}
 	return nil
 }
 
-func selectedImportChoice(choices []onboardingimports.Choice, discoveryErrors []onboardingimports.Error, selection *serverapi.OnboardingImportSelection, kind serverapi.OnboardingImportKind) (onboardingimports.Choice, error) {
-	if selection.ProviderUUID != nil {
-		if selection.ProviderUUID.Version() != 4 {
+func selectedImportChoice(choices []onboardingimports.Choice, discoveryErrors []onboardingimports.Error, selection *onboardingpb.ImportSelection, kind serverapi.OnboardingImportKind) (onboardingimports.Choice, error) {
+	if selection.ProviderUuid != nil {
+		providerUUID, err := uuid.Parse(*selection.ProviderUuid)
+		if err != nil || providerUUID.Version() != 4 {
 			return onboardingimports.Choice{}, invalidRequest(string(kind)+"_import.provider_uuid", "uuid_v4_required")
 		}
-		providerID, ok := importProviderIDForUUID(*selection.ProviderUUID)
+		providerID, ok := importProviderIDForUUID(providerUUID)
 		if !ok {
 			return onboardingimports.Choice{}, importUnavailable(selection, kind, serverapi.OnboardingImportReasonNotDiscovered)
 		}
@@ -422,7 +522,7 @@ func selectedImportChoice(choices []onboardingimports.Choice, discoveryErrors []
 		}
 		return onboardingimports.Choice{}, importUnavailable(selection, kind, serverapi.OnboardingImportReasonNotDiscovered)
 	}
-	providerID := onboardingimports.ProviderID(strings.TrimSpace(derefString(selection.ImportProviderID)))
+	providerID := onboardingimports.ProviderID(strings.TrimSpace(derefString(selection.ImportProviderId)))
 	root := filepath.Clean(strings.TrimSpace(derefString(selection.SourceRootPath)))
 	for _, choice := range choices {
 		if choiceMatchesRef(choice, providerID, root) {
@@ -512,21 +612,35 @@ func discoveryError(discoveryErr onboardingimports.Error) error {
 	return fmt.Errorf("%s: %s", discoveryErr.Operation, discoveryErr.Message)
 }
 
-func importDiscoveryFailed(selection *serverapi.OnboardingImportSelection, kind serverapi.OnboardingImportKind, err error) error {
+func importDiscoveryFailed(selection *onboardingpb.ImportSelection, kind serverapi.OnboardingImportKind, err error) error {
+	providerUUID, _ := selectionProviderUUID(selection)
 	return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeImportFailed, serverapi.OnboardingImportFailedDetails{
-		ImportKind: kind, ProviderUUID: selection.ProviderUUID, ImportProviderID: selection.ImportProviderID, SourceRootPath: selection.SourceRootPath, Operation: serverapi.OnboardingImportOperationDiscover, Cause: err.Error(),
+		ImportKind: kind, ProviderUUID: providerUUID, ImportProviderID: selection.ImportProviderId, SourceRootPath: selection.SourceRootPath, Operation: serverapi.OnboardingImportOperationDiscover, Cause: err.Error(),
 	}, err)
 }
 
-func importUnavailable(selection *serverapi.OnboardingImportSelection, kind serverapi.OnboardingImportKind, reason serverapi.OnboardingImportUnavailableReason) error {
+func importUnavailable(selection *onboardingpb.ImportSelection, kind serverapi.OnboardingImportKind, reason serverapi.OnboardingImportUnavailableReason) error {
 	details := serverapi.OnboardingImportUnavailableDetails{ImportKind: kind, Mode: serverapi.OnboardingImportModeSymlinkSource, ReasonCode: reason}
 	if selection != nil {
-		details.Mode = selection.Mode
-		details.ProviderUUID = selection.ProviderUUID
-		details.ImportProviderID = selection.ImportProviderID
+		if selection.Mode == onboardingpb.ImportMode_IMPORT_MODE_NONE {
+			details.Mode = serverapi.OnboardingImportModeNone
+		}
+		details.ProviderUUID, _ = selectionProviderUUID(selection)
+		details.ImportProviderID = selection.ImportProviderId
 		details.SourceRootPath = selection.SourceRootPath
 	}
 	return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeImportUnavailable, details, nil)
+}
+
+func selectionProviderUUID(selection *onboardingpb.ImportSelection) (*uuid.UUID, error) {
+	if selection == nil || selection.ProviderUuid == nil {
+		return nil, nil
+	}
+	value, err := uuid.Parse(*selection.ProviderUuid)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
 }
 
 func invalidRequest(field, code string) error {

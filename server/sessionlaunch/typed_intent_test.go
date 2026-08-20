@@ -54,33 +54,33 @@ func TestServiceMapsTypedLaunchIntents(t *testing.T) {
 		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: "/tmp/workspace-a"},
 	}).WithRuntimeAuthority(authority)
 
-	createRequest := serverapi.SessionPlanRequest{
-		Mode:   serverapi.SessionLaunchModeInteractive,
+	createRequest := PlanRequest{
+		Mode:   launch.ModeInteractive,
 		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}
-	created, err := service.PlanSession(context.Background(), createRequest)
+	created, err := service.PlanLaunchSession(context.Background(), createRequest)
 	if err != nil {
 		t.Fatalf("plan create-new session: %v", err)
 	}
 
-	secondCreated, err := service.PlanSession(context.Background(), createRequest)
+	secondCreated, err := service.PlanLaunchSession(context.Background(), createRequest)
 	if err != nil {
 		t.Fatalf("plan second create-new session: %v", err)
 	}
-	if secondCreated.Plan.SessionID == created.Plan.SessionID {
-		t.Fatalf("second create-new session reused session ID %q", created.Plan.SessionID)
+	if secondCreated.Plan.Descriptor.SessionID() == created.Plan.Descriptor.SessionID() {
+		t.Fatalf("second create-new session reused session ID %q", created.Plan.Descriptor.SessionID())
 	}
 
-	openRequest := serverapi.SessionPlanRequest{
-		Mode:   serverapi.SessionLaunchModeInteractive,
+	openRequest := PlanRequest{
+		Mode:   launch.ModeInteractive,
 		Intent: serverapi.OpenExistingSessionLaunchIntent(targetID),
 	}
-	opened, err := service.PlanSession(context.Background(), openRequest)
+	opened, err := service.PlanLaunchSession(context.Background(), openRequest)
 	if err != nil {
 		t.Fatalf("plan open-existing session: %v", err)
 	}
-	if opened.Plan.SessionID != targetID.String() {
-		t.Fatalf("open-existing session ID = %q, want %q", opened.Plan.SessionID, targetID)
+	if opened.Plan.Descriptor.SessionID() != targetID {
+		t.Fatalf("open-existing session ID = %q, want %q", opened.Plan.Descriptor.SessionID(), targetID)
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"core/shared/apicontract"
-	"core/shared/serverapi"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,7 +41,7 @@ func newOnboardingFinalization(finalizer apicontract.OnboardingFinalizeService, 
 	}
 }
 
-func (f *onboardingFinalization) submit(request serverapi.OnboardingFinalizeRequest, writeDefaults bool, selectedTheme string) tea.Cmd {
+func (f *onboardingFinalization) submit(request *onboardingpb.FinalizeRequest, writeDefaults bool, selectedTheme string) tea.Cmd {
 	return func() tea.Msg {
 		if err := f.start(request, writeDefaults, selectedTheme); err != nil {
 			return onboardingFinalizeDoneMsg{err: err}
@@ -50,7 +50,7 @@ func (f *onboardingFinalization) submit(request serverapi.OnboardingFinalizeRequ
 	}
 }
 
-func (f *onboardingFinalization) start(request serverapi.OnboardingFinalizeRequest, writeDefaults bool, selectedTheme string) error {
+func (f *onboardingFinalization) start(request *onboardingpb.FinalizeRequest, writeDefaults bool, selectedTheme string) error {
 	if f == nil || f.finalizer == nil {
 		return errors.New("onboarding finalization client is required")
 	}
@@ -68,7 +68,7 @@ func (f *onboardingFinalization) start(request serverapi.OnboardingFinalizeReque
 	return nil
 }
 
-func (f *onboardingFinalization) run(attempt *onboardingFinalizationAttempt, request serverapi.OnboardingFinalizeRequest, writeDefaults bool, selectedTheme string) {
+func (f *onboardingFinalization) run(attempt *onboardingFinalizationAttempt, request *onboardingpb.FinalizeRequest, writeDefaults bool, selectedTheme string) {
 	timeout := f.timeout
 	if timeout <= 0 {
 		timeout = onboardingFinalizationTimeout
@@ -76,7 +76,7 @@ func (f *onboardingFinalization) run(attempt *onboardingFinalizationAttempt, req
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(f.flowCtx), timeout)
 	defer cancel()
 
-	response, err := f.finalizer.FinalizeOnboarding(ctx, request)
+	response, err := f.finalizer.Finalize(ctx, request)
 	outcome := onboardingFinalizeDoneMsg{submitted: true}
 	switch {
 	case err == nil && !response.Completed:

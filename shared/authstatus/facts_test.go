@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"core/shared/config"
-	"core/shared/serverapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 )
 
 func TestProviderSelectionRoundTripsCanonicalInputs(t *testing.T) {
@@ -33,12 +33,12 @@ func TestProviderFactsDropsCredentialBearingURLComponents(t *testing.T) {
 	facts := ProviderFacts("openai-compatible", false, config.Settings{
 		OpenAIBaseURL: "https://user:secret@example.com:8443/v1/key?token=secret#fragment",
 	})
-	want := &serverapi.AuthProviderDisplayOrigin{
+	want := &authpb.ProviderDisplayOrigin{
 		Scheme:   "https",
 		Hostname: "example.com",
 		Port:     testString("8443"),
 	}
-	if facts.Kind != serverapi.AuthProviderKindOpenAICompatible ||
+	if facts.Kind != authpb.ProviderKind_PROVIDER_KIND_OPENAI_COMPATIBLE ||
 		!reflect.DeepEqual(facts.DisplayOrigin, want) {
 		t.Fatalf("provider facts = %+v, want origin %+v", facts, want)
 	}
@@ -60,13 +60,13 @@ func TestProviderFactsProjectsCanonicalRuntimeCapabilities(t *testing.T) {
 		name               string
 		providerID         string
 		isOpenAIFirstParty bool
-		wantKind           serverapi.AuthProviderKind
+		wantKind           authpb.ProviderKind
 		wantIdentifier     string
 	}{
-		{name: "OpenAI", providerID: "openai", isOpenAIFirstParty: true, wantKind: serverapi.AuthProviderKindOpenAI, wantIdentifier: "openai"},
-		{name: "ChatGPT", providerID: "chatgpt-codex", isOpenAIFirstParty: true, wantKind: serverapi.AuthProviderKindOpenAI, wantIdentifier: "openai"},
-		{name: "configured provider", providerID: "anthropic", wantKind: serverapi.AuthProviderKindConfiguredProvider, wantIdentifier: "anthropic"},
-		{name: "compatible endpoint", providerID: "openai-compatible", wantKind: serverapi.AuthProviderKindOpenAICompatible, wantIdentifier: "openai-compatible"},
+		{name: "OpenAI", providerID: "openai", isOpenAIFirstParty: true, wantKind: authpb.ProviderKind_PROVIDER_KIND_OPENAI, wantIdentifier: "openai"},
+		{name: "ChatGPT", providerID: "chatgpt-codex", isOpenAIFirstParty: true, wantKind: authpb.ProviderKind_PROVIDER_KIND_OPENAI, wantIdentifier: "openai"},
+		{name: "configured provider", providerID: "anthropic", wantKind: authpb.ProviderKind_PROVIDER_KIND_CONFIGURED_PROVIDER, wantIdentifier: "anthropic"},
+		{name: "compatible endpoint", providerID: "openai-compatible", wantKind: authpb.ProviderKind_PROVIDER_KIND_OPENAI_COMPATIBLE, wantIdentifier: "openai-compatible"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

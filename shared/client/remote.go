@@ -170,7 +170,7 @@ func (c *Remote) EnableNoAuthBootstrapAcknowledgement(ctx context.Context) error
 	if c == nil {
 		return errors.New("remote client is required")
 	}
-	resp, err := c.AcknowledgeNoAuth(ctx, serverapi.AuthAcknowledgeNoAuthRequest{})
+	resp, err := c.AcknowledgeNoAuth(ctx, &emptypb.Empty{})
 	if err != nil {
 		c.noAuthAck.Store(false)
 		return err
@@ -221,10 +221,7 @@ func (c *Remote) acknowledgeNoAuthOnConn(ctx context.Context, conn rpcwire.Conn)
 		}
 		return err
 	}
-	resp, err := protoapi.AuthNoAuthAcknowledgementFromProto(result.GetSuccess())
-	if err != nil {
-		return err
-	}
+	resp := result.GetSuccess()
 	if resp.NoAuthSelected {
 		return nil
 	}
@@ -235,43 +232,31 @@ func (c *Remote) acknowledgeNoAuthOnConn(ctx context.Context, conn rpcwire.Conn)
 	return serverapi.ErrServerAuthRequired
 }
 
-func (c *Remote) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
-	result := &serverpb.GetReadinessResult{}
-	if err := c.callBinary(
-		ctx,
+func (c *Remote) GetReadiness(ctx context.Context, req *emptypb.Empty) (*serverpb.GetReadinessSuccess, error) {
+	return callGeneratedBinary(c, ctx,
 		bootstrapMethod(serverpb.File_kent_api_server_server_proto, "ServerService", "GetReadiness"),
-		&emptypb.Empty{},
-		result,
-	); err != nil {
-		return serverapi.ServerReadinessResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ServerReadinessResponse{}, protoapi.InternalFailureFromProto(failure.GetInternalFailure())
-	}
-	return protoapi.ServerReadinessFromProto(result.GetSuccess())
+		req,
+		&serverpb.GetReadinessResult{},
+		func(failure *serverpb.GetReadinessError) error {
+			return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+		})
 }
 
-func (c *Remote) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	result := &serverpb.GetUpdateStatusResult{}
-	if err := c.callBinary(
-		ctx,
+func (c *Remote) GetUpdateStatus(ctx context.Context, req *emptypb.Empty) (*serverpb.GetUpdateStatusSuccess, error) {
+	return callGeneratedBinary(c, ctx,
 		bootstrapMethod(serverpb.File_kent_api_server_server_proto, "ServerService", "GetUpdateStatus"),
-		&emptypb.Empty{},
-		result,
-	); err != nil {
-		return serverapi.UpdateStatusResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		switch failure.Code {
-		case "server_not_ready":
-			return serverapi.UpdateStatusResponse{}, protoapi.ServerNotReadyFromProto(failure.GetServerNotReady())
-		case "internal_failure":
-			return serverapi.UpdateStatusResponse{}, protoapi.InternalFailureFromProto(failure.GetInternalFailure())
-		default:
-			return serverapi.UpdateStatusResponse{}, generatedOperationFailure(failure.Code)
-		}
-	}
-	return protoapi.UpdateStatusFromProto(result.GetSuccess())
+		req,
+		&serverpb.GetUpdateStatusResult{},
+		func(failure *serverpb.GetUpdateStatusError) error {
+			switch failure.Code {
+			case "server_not_ready":
+				return protoapi.ServerNotReadyFromProto(failure.GetServerNotReady())
+			case "internal_failure":
+				return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+			default:
+				return generatedOperationFailure(failure.Code)
+			}
+		})
 }
 
 func (c *Remote) ProjectID() string {
@@ -321,91 +306,53 @@ func callDedicatedRPC[Req any, Resp any](c *Remote, ctx context.Context, request
 	return resp, c.callDedicated(ctx, requestID, method, req, &resp)
 }
 
-func (c *Remote) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	result := &authpb.GetBootstrapStatusResult{}
-	if err := c.callBinary(
-		ctx,
+func (c *Remote) GetBootstrapStatus(ctx context.Context, req *emptypb.Empty) (*authpb.BootstrapStatus, error) {
+	return callGeneratedBinary(c, ctx,
 		bootstrapMethod(authpb.File_kent_api_auth_auth_proto, "AuthService", "GetBootstrapStatus"),
-		&emptypb.Empty{},
-		result,
-	); err != nil {
-		return serverapi.AuthGetBootstrapStatusResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.AuthGetBootstrapStatusResponse{}, authGeneratedError(failure.Code, failure.GetInternalFailure())
-	}
-	return protoapi.AuthBootstrapStatusFromProto(result.GetSuccess())
+		req,
+		&authpb.GetBootstrapStatusResult{},
+		func(failure *authpb.GetBootstrapStatusError) error {
+			return authGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 }
 
-func (c *Remote) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	request, err := protoapi.AuthCompleteBootstrapRequestToProto(req)
-	if err != nil {
-		return serverapi.AuthCompleteBootstrapResponse{}, err
-	}
-	result := &authpb.CompleteBootstrapResult{}
-	if err := c.callBinary(
-		ctx,
+func (c *Remote) CompleteBootstrap(ctx context.Context, req *authpb.CompleteBootstrapRequest) (*authpb.BootstrapCompletion, error) {
+	resp, err := callGeneratedBinary(c, ctx,
 		bootstrapMethod(authpb.File_kent_api_auth_auth_proto, "AuthService", "CompleteBootstrap"),
-		request,
-		result,
-	); err != nil {
-		return serverapi.AuthCompleteBootstrapResponse{}, err
+		req,
+		&authpb.CompleteBootstrapResult{},
+		func(failure *authpb.CompleteBootstrapError) error {
+			return authGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
+	if err != nil {
+		return nil, err
 	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.AuthCompleteBootstrapResponse{}, authGeneratedError(failure.Code, failure.GetInternalFailure())
+	if resp.GetNoAuthSelected() {
+		c.noAuthAck.Store(true)
+	} else if resp.GetAuthReady() {
+		c.noAuthAck.Store(false)
 	}
-	resp, err := protoapi.AuthBootstrapCompletionFromProto(result.GetSuccess())
-	if err == nil {
-		if resp.NoAuthSelected {
-			c.noAuthAck.Store(true)
-		} else if resp.AuthReady {
-			c.noAuthAck.Store(false)
-		}
-	}
-	return resp, err
+	return resp, nil
 }
 
-func (c *Remote) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-	result := &authpb.AcknowledgeNoAuthResult{}
-	if err := c.callBinary(
-		ctx,
+func (c *Remote) AcknowledgeNoAuth(ctx context.Context, req *emptypb.Empty) (*authpb.NoAuthAcknowledgement, error) {
+	return callGeneratedBinary(c, ctx,
 		bootstrapMethod(authpb.File_kent_api_auth_auth_proto, "AuthService", "AcknowledgeNoAuth"),
-		&emptypb.Empty{},
-		result,
-	); err != nil {
-		return serverapi.AuthAcknowledgeNoAuthResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.AuthAcknowledgeNoAuthResponse{}, authGeneratedError(failure.Code, failure.GetInternalFailure())
-	}
-	return protoapi.AuthNoAuthAcknowledgementFromProto(result.GetSuccess())
+		req,
+		&authpb.AcknowledgeNoAuthResult{},
+		func(failure *authpb.AcknowledgeNoAuthError) error {
+			return authGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 }
 
-func (c *Remote) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	request, err := protoapi.AuthStatusRequestToProto(req)
-	if err != nil {
-		return serverapi.AuthStatusResponse{}, err
-	}
-	result := &authpb.GetStatusResult{}
-	if err := c.callBinary(
-		ctx,
+func (c *Remote) GetStatus(ctx context.Context, req *authpb.GetStatusRequest) (*authpb.Status, error) {
+	return callGeneratedBinary(c, ctx,
 		bootstrapMethod(authpb.File_kent_api_auth_auth_proto, "AuthService", "GetStatus"),
-		request,
-		result,
-	); err != nil {
-		return serverapi.AuthStatusResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.AuthStatusResponse{}, authGeneratedError(failure.Code, failure.GetInternalFailure())
-	}
-	response, err := protoapi.AuthStatusFromProto(result.GetSuccess())
-	if err != nil {
-		return serverapi.AuthStatusResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.AuthStatusResponse{}, fmt.Errorf("validate auth status response: %w", err)
-	}
-	return response, nil
+		req,
+		&authpb.GetStatusResult{},
+		func(failure *authpb.GetStatusError) error {
+			return authGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 }
 
 func (c *Remote) GetChatContext(ctx context.Context, req serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {

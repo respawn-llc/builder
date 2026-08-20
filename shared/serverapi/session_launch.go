@@ -4,21 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
-	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 )
 
-type SessionLaunchMode string
-
 const SessionPromptHistoryMaxEntries = 100
-
-const (
-	SessionLaunchModeInteractive SessionLaunchMode = "interactive"
-	SessionLaunchModeHeadless    SessionLaunchMode = "headless"
-)
 
 type SessionLaunchIntentKind string
 type SessionCreateOriginKind string
@@ -228,54 +219,4 @@ func (i *SessionLaunchIntent) UnmarshalJSON(data []byte) error {
 	}
 	*i = decoded
 	return nil
-}
-
-type SessionPlanRequest struct {
-	Mode            SessionLaunchMode
-	Intent          SessionLaunchIntent
-	CallerSessionID *string
-	Overrides       RunPromptOverrides
-}
-
-type SessionPlan struct {
-	SessionID                string
-	ActiveSettings           config.Settings
-	EnabledToolIDs           []string
-	ConfiguredModelName      string
-	SessionName              *string
-	PromptHistory            []string
-	ModelContractLocked      bool
-	QuestionsEnabled         bool
-	AutoCompactionEnabled    bool
-	ThinkingOverrideExplicit bool
-	Source                   config.SourceReport
-}
-
-func (p SessionPlan) Validate() error {
-	if p.SessionName != nil && strings.TrimSpace(*p.SessionName) == "" {
-		return errors.New("session plan name cannot be empty or blank")
-	}
-	return nil
-}
-
-type SessionPlanResponse struct {
-	Plan     SessionPlan
-	Warnings []string
-}
-
-func (r SessionPlanRequest) Validate() error {
-	mode := strings.TrimSpace(string(r.Mode))
-	if mode == "" {
-		return errors.New("mode is required")
-	}
-	if mode != string(SessionLaunchModeInteractive) && mode != string(SessionLaunchModeHeadless) {
-		return errors.New("mode must be interactive or headless")
-	}
-	if err := r.Intent.Validate(); err != nil {
-		return fmt.Errorf("intent: %w", err)
-	}
-	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
-		return err
-	}
-	return r.Overrides.ValidateAgentRoleOverride()
 }

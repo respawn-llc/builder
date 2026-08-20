@@ -6,33 +6,33 @@ import (
 	"sort"
 
 	"core/shared/config"
-	"core/shared/serverapi"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/toolspec"
 )
 
-func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (serverapi.OnboardingFinalizeRequest, error) {
+func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (*onboardingpb.FinalizeRequest, error) {
 	if err := state.validateInvariant("finalize_projection", "review"); err != nil {
-		return serverapi.OnboardingFinalizeRequest{}, err
+		return nil, err
 	}
-	theme := serverapi.OnboardingTheme(state.selections.theme.kind)
-	req := serverapi.OnboardingFinalizeRequest{
+	theme := onboardingThemeToProto(state.selections.theme.kind)
+	req := &onboardingpb.FinalizeRequest{
 		Theme:          &theme,
 		CommandsImport: onboardingNoneImportSelection(),
 	}
 	if !defaults {
 		if state.selections.pendingPrimaryThinking.pending() ||
 			state.selections.pendingReviewerThinking.pending() {
-			return serverapi.OnboardingFinalizeRequest{}, errors.New("custom thinking input must be committed before finishing setup")
+			return nil, errors.New("custom thinking input must be committed before finishing setup")
 		}
 		mainProvider := onboardingMainProviderChoice(state.selections.preserved)
 		model := onboardingModelChoice(state.selections.model)
 		contextWindow := onboardingContextWindowChoice(state.selections.contextWindow)
 		thinking := onboardingThinkingChoice(state.selections.thinking)
 		supervisor := onboardingSupervisorChoice(state.selections.supervisor)
-		compaction := serverapi.OnboardingCompactionMode(state.selections.compactionValue())
+		compaction := onboardingCompactionToProto(state.selections.compactionValue())
 		skillsImport, err := onboardingImportSelectionRequest(state.selections.skillImport)
 		if err != nil {
-			return serverapi.OnboardingFinalizeRequest{}, err
+			return nil, err
 		}
 		req.Model = &model
 		req.MainProvider = mainProvider
@@ -43,51 +43,51 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (server
 		req.SkillsImport = skillsImport
 		commandsImport, err := onboardingImportSelectionRequest(state.selections.commandImport)
 		if err != nil {
-			return serverapi.OnboardingFinalizeRequest{}, err
+			return nil, err
 		}
 		req.CommandsImport = commandsImport
 		askQuestion := state.selections.askQuestion
 		req.AskQuestion = &askQuestion
 		req.ToolOverrides = onboardingToolOverrides(state.selections.preserved.enabledTools)
-		req.ModelTimeoutSeconds = state.selections.preserved.modelTimeoutSeconds
+		if state.selections.preserved.modelTimeoutSeconds != nil {
+			timeout := uint32(*state.selections.preserved.modelTimeoutSeconds)
+			req.ModelTimeoutSeconds = &timeout
+		}
 		if state.selections.verbosity.kind == onboardingVerbosityLevel {
-			verbosity := serverapi.OnboardingVerbosity(state.selections.verbosity.value)
+			verbosity := onboardingVerbosityToProto(state.selections.verbosity.value)
 			req.Verbosity = &verbosity
 		}
 		req.DisabledSkillNames = disabledOnboardingSkillNames(state)
 	}
-	if err := serverapi.ValidateOnboardingFinalizeRequest(req); err != nil {
-		return serverapi.OnboardingFinalizeRequest{}, err
-	}
 	return req, nil
 }
 
-func onboardingMainProviderChoice(preserved onboardingPreservedInputs) *serverapi.OnboardingProviderChoice {
+func onboardingMainProviderChoice(preserved onboardingPreservedInputs) *onboardingpb.ProviderChoice {
 	if preserved.providerOverride == nil && preserved.openAIBaseURL == nil {
 		return nil
 	}
-	choice := serverapi.OnboardingProviderChoice{}
+	choice := onboardingpb.ProviderChoice{}
 	if preserved.providerOverride != nil {
 		providerOverride := *preserved.providerOverride
 		choice.ProviderOverride = &providerOverride
 	}
 	if preserved.openAIBaseURL != nil {
 		openAIBaseURL := *preserved.openAIBaseURL
-		choice.OpenAIBaseURL = &openAIBaseURL
+		choice.OpenaiBaseUrl = &openAIBaseURL
 	}
 	return &choice
 }
 
-func onboardingToolOverrides(enabledTools map[toolspec.ID]bool) []serverapi.OnboardingToolOverride {
+func onboardingToolOverrides(enabledTools map[toolspec.ID]bool) []*onboardingpb.ToolOverride {
 	defaults := config.DefaultOnboardingSettings().EnabledTools
-	overrides := make([]serverapi.OnboardingToolOverride, 0)
+	overrides := make([]*onboardingpb.ToolOverride, 0)
 	for _, id := range toolspec.CatalogIDs() {
 		if id == toolspec.ToolAskQuestion {
 			continue
 		}
 		enabled := enabledTools[id]
 		if enabled != defaults[id] {
-			overrides = append(overrides, serverapi.OnboardingToolOverride{ID: id, Enabled: enabled})
+			overrides = append(overrides, &onboardingpb.ToolOverride{Id: onboardingToolIDToProto(id), Enabled: enabled})
 		}
 	}
 	if len(overrides) == 0 {
@@ -96,39 +96,40 @@ func onboardingToolOverrides(enabledTools map[toolspec.ID]bool) []serverapi.Onbo
 	return overrides
 }
 
-func onboardingModelChoice(selection onboardingModelSelection) serverapi.OnboardingModelChoice {
+func onboardingModelChoice(selection onboardingModelSelection) onboardingpb.ModelChoice {
 	if selection.kind == onboardingModelKnown {
-		return serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: selection.value}
+		return onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_KNOWN, ModelId: &selection.value}
 	}
-	return serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: selection.value}
+	return onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_CUSTOM, Alias: &selection.value}
 }
 
-func onboardingContextWindowChoice(selection onboardingContextSelection) serverapi.OnboardingContextWindowChoice {
+func onboardingContextWindowChoice(selection onboardingContextSelection) onboardingpb.ContextWindowChoice {
 	switch selection.kind {
 	case onboardingContextLarge:
-		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowLarge}
+		return onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_LARGE}
 	case onboardingContextCustom:
-		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowCustom, Tokens: selection.tokens}
+		tokens := uint32(selection.tokens)
+		return onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_CUSTOM, Tokens: &tokens}
 	default:
-		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowDefault}
+		return onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_DEFAULT}
 	}
 }
 
-func onboardingThinkingChoice(selection onboardingThinkingSelection) serverapi.OnboardingThinkingChoice {
+func onboardingThinkingChoice(selection onboardingThinkingSelection) onboardingpb.ThinkingChoice {
 	switch selection.kind {
 	case onboardingThinkingDefault:
-		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDefault}
+		return onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DEFAULT}
 	case onboardingThinkingDisabled:
-		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDisabled}
+		return onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DISABLED}
 	case onboardingThinkingCustom:
-		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingCustom, Value: selection.value}
+		return onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_CUSTOM, Value: &selection.value}
 	default:
-		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: selection.value}
+		return onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_LEVEL, Level: &selection.value}
 	}
 }
 
-func onboardingSupervisorChoice(selection onboardingSupervisorSelection) serverapi.OnboardingSupervisorChoice {
-	result := serverapi.OnboardingSupervisorChoice{Frequency: serverapi.OnboardingSupervisorFrequency(selection.frequency)}
+func onboardingSupervisorChoice(selection onboardingSupervisorSelection) onboardingpb.SupervisorChoice {
+	result := onboardingpb.SupervisorChoice{Frequency: onboardingSupervisorFrequencyToProto(selection.frequency)}
 	if selection.frequency == onboardingSupervisorOff {
 		return result
 	}
@@ -146,26 +147,93 @@ func onboardingSupervisorChoice(selection onboardingSupervisorSelection) servera
 	return result
 }
 
-func onboardingNoneImportSelection() *serverapi.OnboardingImportSelection {
-	return &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeNone}
+func onboardingNoneImportSelection() *onboardingpb.ImportSelection {
+	return &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_NONE}
 }
 
-func onboardingImportSelectionRequest(selection onboardingImportSelection) (*serverapi.OnboardingImportSelection, error) {
+func onboardingImportSelectionRequest(selection onboardingImportSelection) (*onboardingpb.ImportSelection, error) {
 	switch selection.Mode {
 	case onboardingImportModeNone:
 		return onboardingNoneImportSelection(), nil
 	case onboardingImportModeSymlinkSource:
 		ref := selection.ChoiceRef
-		if ref.ImportProviderID == nil || ref.SourceRootPath == nil {
+		if ref.ImportProviderId == nil || ref.SourceRootPath == nil {
 			return nil, errors.New("selected import is missing its server choice reference")
 		}
-		return &serverapi.OnboardingImportSelection{
-			Mode:             serverapi.OnboardingImportModeSymlinkSource,
-			ImportProviderID: ref.ImportProviderID,
+		return &onboardingpb.ImportSelection{
+			Mode:             onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE,
+			ImportProviderId: ref.ImportProviderId,
 			SourceRootPath:   ref.SourceRootPath,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported skill import mode %q", selection.Mode)
+	}
+}
+
+func onboardingThemeToProto(theme onboardingThemeKind) onboardingpb.Theme {
+	switch theme {
+	case onboardingThemeAuto:
+		return onboardingpb.Theme_THEME_AUTO
+	case onboardingThemeLight:
+		return onboardingpb.Theme_THEME_LIGHT
+	default:
+		return onboardingpb.Theme_THEME_DARK
+	}
+}
+
+func onboardingCompactionToProto(mode config.CompactionMode) onboardingpb.CompactionMode {
+	switch mode {
+	case config.CompactionModeNative:
+		return onboardingpb.CompactionMode_COMPACTION_MODE_NATIVE
+	case config.CompactionModeNone:
+		return onboardingpb.CompactionMode_COMPACTION_MODE_NONE
+	default:
+		return onboardingpb.CompactionMode_COMPACTION_MODE_LOCAL
+	}
+}
+
+func onboardingVerbosityToProto(value string) onboardingpb.Verbosity {
+	switch value {
+	case string(config.ModelVerbosityLow):
+		return onboardingpb.Verbosity_VERBOSITY_LOW
+	case string(config.ModelVerbosityHigh):
+		return onboardingpb.Verbosity_VERBOSITY_HIGH
+	default:
+		return onboardingpb.Verbosity_VERBOSITY_MEDIUM
+	}
+}
+
+func onboardingSupervisorFrequencyToProto(value onboardingSupervisorFrequency) onboardingpb.SupervisorFrequency {
+	switch value {
+	case onboardingSupervisorOff:
+		return onboardingpb.SupervisorFrequency_SUPERVISOR_FREQUENCY_OFF
+	case onboardingSupervisorAll:
+		return onboardingpb.SupervisorFrequency_SUPERVISOR_FREQUENCY_ALL
+	default:
+		return onboardingpb.SupervisorFrequency_SUPERVISOR_FREQUENCY_EDITS
+	}
+}
+
+func onboardingToolIDToProto(id toolspec.ID) onboardingpb.ToolID {
+	switch id {
+	case toolspec.ToolExecCommand:
+		return onboardingpb.ToolID_TOOL_ID_EXEC_COMMAND
+	case toolspec.ToolWriteStdin:
+		return onboardingpb.ToolID_TOOL_ID_WRITE_STDIN
+	case toolspec.ToolViewImage:
+		return onboardingpb.ToolID_TOOL_ID_VIEW_IMAGE
+	case toolspec.ToolPatch:
+		return onboardingpb.ToolID_TOOL_ID_PATCH
+	case toolspec.ToolEdit:
+		return onboardingpb.ToolID_TOOL_ID_EDIT
+	case toolspec.ToolCompleteNode:
+		return onboardingpb.ToolID_TOOL_ID_COMPLETE_NODE
+	case toolspec.ToolTriggerHandoff:
+		return onboardingpb.ToolID_TOOL_ID_TRIGGER_HANDOFF
+	case toolspec.ToolWebSearch:
+		return onboardingpb.ToolID_TOOL_ID_WEB_SEARCH
+	default:
+		return onboardingpb.ToolID_TOOL_ID_UNSPECIFIED
 	}
 }
 

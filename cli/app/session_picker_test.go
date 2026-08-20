@@ -9,40 +9,48 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/config"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type staticAuthStatusClient struct {
-	response serverapi.AuthStatusResponse
+	response *authpb.Status
 	err      error
 	calls    int
-	request  serverapi.AuthStatusRequest
+	request  *authpb.GetStatusRequest
 }
 
-func (c *staticAuthStatusClient) GetAuthStatus(_ context.Context, request serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+func (c *staticAuthStatusClient) GetStatus(_ context.Context, request *authpb.GetStatusRequest) (*authpb.Status, error) {
 	c.calls++
 	c.request = request
 	return c.response, c.err
 }
 
-func authStatusResponse(method serverapi.AuthStatusMethod) serverapi.AuthStatusResponse {
-	facts := serverapi.AuthStatusFacts{
+func authStatusResponse(method authpb.AuthMethod) *authpb.Status {
+	facts := &authpb.StatusFacts{
 		Method:        method,
-		Provider:      serverapi.OpenAIAuthProviderFacts(),
-		EnvPreference: serverapi.AuthStatusEnvPreferenceUnspecified,
+		Provider:      &authpb.ProviderFacts{Kind: authpb.ProviderKind_PROVIDER_KIND_OPENAI, Identifier: "openai"},
+		EnvPreference: authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_UNSPECIFIED,
 	}
 	switch method {
-	case serverapi.AuthStatusMethodAPIKey:
-		facts.APIKey = &serverapi.AuthAPIKeyFacts{}
-	case serverapi.AuthStatusMethodOAuth:
-		facts.OAuth = &serverapi.AuthOAuthFacts{}
+	case authpb.AuthMethod_AUTH_METHOD_NONE:
+		facts.MethodFacts = &authpb.StatusFacts_NoAuth{NoAuth: &emptypb.Empty{}}
+	case authpb.AuthMethod_AUTH_METHOD_API_KEY:
+		facts.MethodFacts = &authpb.StatusFacts_ApiKey{ApiKey: &authpb.APIKeyFacts{}}
+	case authpb.AuthMethod_AUTH_METHOD_OAUTH:
+		facts.MethodFacts = &authpb.StatusFacts_Oauth{Oauth: &authpb.OAuthFacts{}}
 	}
-	return serverapi.AuthStatusResponse{Resolution: serverapi.KnownAuthStatusResolution(facts, nil)}
+	return &authpb.Status{
+		Resolution: &authpb.StatusResolution{
+			Resolution: &authpb.StatusResolution_Known{Known: facts},
+		},
+		Subscription: &authpb.SubscriptionFacts{},
+	}
 }
 
 func newTestSessionPickerModel(t *testing.T, summaries []clientui.SessionSummary, header sessionPickerHeaderInfo) *sessionPickerModel {
@@ -57,7 +65,7 @@ func newUninitializedTestSessionPickerModel(t *testing.T, summaries []clientui.S
 	if summaries == nil {
 		summaries = []clientui.SessionSummary{pickerTestSummary(t, "test-session", time.Now().UTC())}
 	}
-	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+	loader := &recordingSessionPageLoader{responses: func(request sessionPageRequest) sessionPageLoadResult {
 		response := pickerPageResponse(t, request)
 		if request.Category == sessioncontract.SessionCategoryMain {
 			response.Sessions = append([]clientui.SessionSummary(nil), summaries...)
@@ -197,7 +205,7 @@ func TestSessionPickerHeaderLoadsGitBranchAsync(t *testing.T) {
 		StatusRequest: uiStatusRequest{
 			WorkspaceRoot: repoRoot,
 			Settings:      config.Settings{Model: "gpt-5", ThinkingLevel: "high"},
-			AuthStatus:    &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)},
+			AuthStatus:    &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_NONE)},
 		},
 	})
 	cmd := collectSessionPickerStatusCmd(m.header)
@@ -224,7 +232,7 @@ func TestSessionPickerHeaderInitialAsyncPaintUsesOnlyStaticShell(t *testing.T) {
 		StatusRequest: uiStatusRequest{
 			WorkspaceRoot: repoRoot,
 			Settings:      config.Settings{Model: "gpt-5", ThinkingLevel: "high"},
-			AuthStatus:    &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)},
+			AuthStatus:    &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_NONE)},
 		},
 	})
 	m.width = 80
@@ -248,7 +256,7 @@ func TestSessionPickerHeaderLoadsRemoteAuthStatus(t *testing.T) {
 	m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version: "1.2.3",
 		StatusRequest: uiStatusRequest{
-			AuthStatus: &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)},
+			AuthStatus: &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_OAUTH)},
 		},
 	})
 	cmd := collectSessionPickerStatusCmd(m.header)
@@ -272,7 +280,7 @@ func TestSessionPickerStatusOmitsAbsentModel(t *testing.T) {
 				ThinkingLevel:  "high",
 				ModelVerbosity: config.ModelVerbosity("high"),
 			},
-			AuthStatus: &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)},
+			AuthStatus: &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_OAUTH)},
 		},
 	}
 	cmd := collectSessionPickerStatusCmd(header)
@@ -294,12 +302,12 @@ func TestSessionPickerStatusOmitsAbsentModel(t *testing.T) {
 func TestSessionPickerHeaderLoadsAuthStatusVariants(t *testing.T) {
 	tests := []struct {
 		name   string
-		method serverapi.AuthStatusMethod
+		method authpb.AuthMethod
 		want   string
 	}{
-		{name: "no auth", method: serverapi.AuthStatusMethodNone, want: "No auth"},
-		{name: "api key", method: serverapi.AuthStatusMethodAPIKey, want: "OpenAI API Key"},
-		{name: "oauth", method: serverapi.AuthStatusMethodOAuth, want: "OpenAI Subscription"},
+		{name: "no auth", method: authpb.AuthMethod_AUTH_METHOD_NONE, want: "No auth"},
+		{name: "api key", method: authpb.AuthMethod_AUTH_METHOD_API_KEY, want: "OpenAI API Key"},
+		{name: "oauth", method: authpb.AuthMethod_AUTH_METHOD_OAUTH, want: "OpenAI Subscription"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

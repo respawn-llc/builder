@@ -12,154 +12,124 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (c *Remote) CreateProject(ctx context.Context, req serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	request, err := protoapi.ProjectCreateRequestToProto(req)
-	if err != nil {
-		return serverapi.ProjectCreateResponse{}, err
-	}
-	result := &projectpb.CreateProjectResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("Create"), request, result); err != nil {
-		return serverapi.ProjectCreateResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectCreateResponse{}, projectCreateGeneratedError(failure)
-	}
-	return protoapi.ProjectCreateFromProto(result.GetSuccess())
+func (c *Remote) CreateProject(ctx context.Context, request *projectpb.CreateProjectRequest) (*projectpb.CreateProjectSuccess, error) {
+	return callGeneratedBinary(c, ctx, projectCatalogMethod("Create"), request,
+		&projectpb.CreateProjectResult{},
+		projectCreateGeneratedError)
 }
 
-func (c *Remote) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
-	request, err := protoapi.ProjectUpdateRequestToProto(req)
-	if err != nil {
-		return serverapi.ProjectUpdateResponse{}, err
-	}
-	result := &projectpb.UpdateProjectResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("Update"), request, result); err != nil {
-		return serverapi.ProjectUpdateResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectUpdateResponse{}, projectUpdateGeneratedError(failure)
-	}
-	return protoapi.ProjectUpdateFromProto(result.GetSuccess())
+func (c *Remote) UpdateProject(ctx context.Context, request *projectpb.UpdateProjectRequest) (*projectpb.UpdateProjectSuccess, error) {
+	return callGeneratedBinary(c, ctx, projectCatalogMethod("Update"), request,
+		&projectpb.UpdateProjectResult{},
+		projectUpdateGeneratedError)
 }
 
-func (c *Remote) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	request, err := protoapi.ProjectDefaultWorkspaceRequestToProto(req)
-	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	result := &projectpb.SetDefaultWorkspaceResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("SetDefaultWorkspace"), request, result); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, projectWorkspaceMutationGeneratedError(
-			failure.Code,
-			failure.GetProjectNotFound(),
-			failure.GetWorkspaceNotRegistered(),
-			failure.GetWorkspacePathIdentity(),
-			nil,
-			failure.GetWorkspaceMutationFailed(),
-			failure.GetInternalFailure(),
-		)
-	}
-	return protoapi.ProjectDefaultWorkspaceFromProto(result.GetSuccess())
+func (c *Remote) SetDefaultWorkspace(ctx context.Context, request *projectpb.SetDefaultWorkspaceRequest) (*projectpb.SetDefaultWorkspaceSuccess, error) {
+	return callGeneratedBinary(c, ctx, projectCatalogMethod("SetDefaultWorkspace"), request,
+		&projectpb.SetDefaultWorkspaceResult{},
+		func(failure *projectpb.SetDefaultWorkspaceError) error {
+			return projectWorkspaceMutationGeneratedError(
+				failure.Code,
+				failure.GetProjectNotFound(),
+				failure.GetWorkspaceNotRegistered(),
+				failure.GetWorkspacePathIdentity(),
+				nil,
+				failure.GetWorkspaceMutationFailed(),
+				failure.GetInternalFailure(),
+			)
+		})
 }
 
-func (c *Remote) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	request, err := protoapi.ProjectWorkspaceUnlinkRequestToProto(req)
+func (c *Remote) UnlinkWorkspaceFromProject(ctx context.Context, request *projectpb.UnlinkWorkspaceRequest) (*projectpb.UnlinkWorkspaceSuccess, error) {
+	response, err := callGeneratedBinary(c, ctx, projectCatalogMethod("UnlinkWorkspace"), request,
+		&projectpb.UnlinkWorkspaceResult{},
+		func(failure *projectpb.UnlinkWorkspaceError) error {
+			return projectWorkspaceMutationGeneratedError(
+				failure.Code,
+				failure.GetProjectNotFound(),
+				failure.GetWorkspaceNotRegistered(),
+				failure.GetWorkspacePathIdentity(),
+				failure.GetWorkspaceDetachConflict(),
+				failure.GetWorkspaceMutationFailed(),
+				failure.GetInternalFailure(),
+			)
+		})
 	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+		return nil, err
 	}
-	result := &projectpb.UnlinkWorkspaceResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("UnlinkWorkspace"), request, result); err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, projectWorkspaceMutationGeneratedError(
-			failure.Code,
-			failure.GetProjectNotFound(),
-			failure.GetWorkspaceNotRegistered(),
-			failure.GetWorkspacePathIdentity(),
-			failure.GetWorkspaceDetachConflict(),
-			failure.GetWorkspaceMutationFailed(),
-			failure.GetInternalFailure(),
-		)
-	}
-	return protoapi.ProjectWorkspaceUnlinkFromProto(result.GetSuccess())
-}
-
-func (c *Remote) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
-	request, err := protoapi.ProjectDeleteRequestToProto(req)
-	if err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
-	}
-	result := &projectpb.DeleteProjectResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("Delete"), request, result); err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		if failure.Code == "auth_required" {
-			return serverapi.ProjectDeleteResponse{}, serverapi.ErrServerAuthRequired
-		}
-		return serverapi.ProjectDeleteResponse{}, projectNotFoundGeneratedError(failure.Code, failure.GetProjectNotFound(), failure.GetInternalFailure())
-	}
-	return protoapi.ProjectDeleteFromProto(result.GetSuccess())
-}
-
-func (c *Remote) AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	request, err := protoapi.ProjectAttachWorkspaceRequestToProto(req)
-	if err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
-	}
-	result := &projectpb.AttachWorkspaceResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("AttachWorkspace"), request, result); err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, projectAttachGeneratedError(failure)
-	}
-	response, err := protoapi.ProjectAttachWorkspaceFromProto(result.GetSuccess())
-	if err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf("Project Workspace attach response is invalid: %w", err)
-	}
-	if response.Binding.ProjectID != req.ProjectID {
-		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf(
-			"Project Workspace attach response project %q does not match request project %q",
-			response.Binding.ProjectID,
-			req.ProjectID,
+	if response.ProjectId != request.ProjectId {
+		return nil, fmt.Errorf(
+			"Project Workspace unlink response project %q does not match request project %q",
+			response.ProjectId,
+			request.ProjectId,
 		)
 	}
 	return response, nil
 }
 
-func (c *Remote) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	request, err := protoapi.ProjectRebindWorkspaceRequestToProto(req)
+func (c *Remote) DeleteProject(ctx context.Context, request *projectpb.DeleteProjectRequest) (*projectpb.DeleteProjectSuccess, error) {
+	response, err := callGeneratedBinary(c, ctx, projectCatalogMethod("Delete"), request,
+		&projectpb.DeleteProjectResult{},
+		func(failure *projectpb.DeleteProjectError) error {
+			if failure.Code == "auth_required" {
+				return serverapi.ErrServerAuthRequired
+			}
+			return projectNotFoundGeneratedError(
+				failure.Code, failure.GetProjectNotFound(), failure.GetInternalFailure())
+		})
 	if err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, err
+		return nil, err
 	}
-	result := &projectpb.RebindWorkspaceResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("RebindWorkspace"), request, result); err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	if response.ProjectId != request.ProjectId {
+		return nil, fmt.Errorf(
+			"Project delete response project %q does not match request project %q",
+			response.ProjectId,
+			request.ProjectId,
+		)
 	}
-	if failure := result.GetError(); failure != nil {
-		switch failure.Code {
-		case "auth_required":
-			return serverapi.ProjectRebindWorkspaceResponse{}, serverapi.ErrServerAuthRequired
-		case "workspace_not_registered":
-			return serverapi.ProjectRebindWorkspaceResponse{}, protoapi.WorkspaceNotRegisteredFromProto(failure.GetWorkspaceNotRegistered())
-		case "workspace_binding_ambiguous":
-			return serverapi.ProjectRebindWorkspaceResponse{}, protoapi.WorkspaceBindingAmbiguousMutationFromProto(failure.GetWorkspaceBindingAmbiguous())
-		case "workspace_already_bound":
-			return serverapi.ProjectRebindWorkspaceResponse{}, validateEmptyProjectMutationDetail(failure.GetWorkspaceAlreadyBound(), serverapi.ErrWorkspaceAlreadyBound)
-		case "workspace_path_missing":
-			return serverapi.ProjectRebindWorkspaceResponse{}, validateEmptyProjectMutationDetail(failure.GetWorkspacePathMissing(), serverapi.ErrWorkspacePathMissing)
-		case "internal_failure":
-			return serverapi.ProjectRebindWorkspaceResponse{}, protoapi.InternalFailureFromProto(failure.GetInternalFailure())
-		default:
-			return serverapi.ProjectRebindWorkspaceResponse{}, generatedOperationFailure(failure.Code)
-		}
+	return response, nil
+}
+
+func (c *Remote) AttachWorkspaceToProject(ctx context.Context, request *projectpb.AttachWorkspaceRequest) (*projectpb.AttachWorkspaceSuccess, error) {
+	response, err := callGeneratedBinary(c, ctx, projectCatalogMethod("AttachWorkspace"), request,
+		&projectpb.AttachWorkspaceResult{},
+		projectAttachGeneratedError)
+	if err != nil {
+		return nil, err
 	}
-	return protoapi.ProjectRebindWorkspaceFromProto(result.GetSuccess())
+	if response.Binding.ProjectId != request.ProjectId {
+		return nil, fmt.Errorf(
+			"Project Workspace attach response project %q does not match request project %q",
+			response.Binding.ProjectId,
+			request.ProjectId,
+		)
+	}
+	return response, nil
+}
+
+func (c *Remote) RebindWorkspace(ctx context.Context, request *projectpb.RebindWorkspaceRequest) (*projectpb.RebindWorkspaceSuccess, error) {
+	return callGeneratedBinary(c, ctx, projectCatalogMethod("RebindWorkspace"), request,
+		&projectpb.RebindWorkspaceResult{},
+		func(failure *projectpb.RebindWorkspaceError) error {
+			switch failure.Code {
+			case "auth_required":
+				return serverapi.ErrServerAuthRequired
+			case "workspace_not_registered":
+				return workspaceNotRegisteredError(failure.GetWorkspaceNotRegistered())
+			case "workspace_binding_ambiguous":
+				return workspaceBindingAmbiguousMutationError(failure.GetWorkspaceBindingAmbiguous())
+			case "workspace_already_bound":
+				return validateEmptyProjectMutationDetail(
+					failure.GetWorkspaceAlreadyBound(), serverapi.ErrWorkspaceAlreadyBound)
+			case "workspace_path_missing":
+				return validateEmptyProjectMutationDetail(
+					failure.GetWorkspacePathMissing(), serverapi.ErrWorkspacePathMissing)
+			case "internal_failure":
+				return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+			default:
+				return generatedOperationFailure(failure.Code)
+			}
+		})
 }
 
 func projectCreateGeneratedError(failure *projectpb.CreateProjectError) error {
@@ -226,18 +196,78 @@ func projectWorkspaceMutationGeneratedError(
 	case "project_not_found":
 		return projectNotFoundError(notFound)
 	case "workspace_not_registered":
-		return protoapi.WorkspaceNotRegisteredFromProto(notRegistered)
+		return workspaceNotRegisteredError(notRegistered)
 	case "workspace_path_identity":
-		return protoapi.WorkspacePathIdentityFromProto(pathIdentity)
+		return workspacePathIdentityError(pathIdentity)
 	case "workspace_detach_conflict":
-		return protoapi.WorkspaceDetachConflictFromProto(detachConflict)
+		return workspaceDetachConflictError(detachConflict)
 	case "workspace_mutation_failed":
-		return protoapi.WorkspaceMutationFromProto(mutation)
+		return workspaceMutationError(mutation)
 	case "internal_failure":
 		return protoapi.InternalFailureFromProto(internal)
 	default:
 		return generatedOperationFailure(code)
 	}
+}
+
+func workspaceNotRegisteredError(details *projectpb.WorkspaceNotRegisteredDetails) error {
+	if err := protoapi.Validate(details); err != nil {
+		return err
+	}
+	return serverapi.ErrWorkspaceNotRegistered
+}
+
+func workspaceBindingAmbiguousMutationError(details *projectpb.WorkspaceBindingAmbiguousMutationDetails) error {
+	if err := protoapi.Validate(details); err != nil {
+		return err
+	}
+	return serverapi.WorkspaceBindingAmbiguousError{ProjectIDs: append([]string(nil), details.ProjectIds...)}
+}
+
+func workspaceBindingAmbiguousError(details *projectpb.WorkspaceBindingAmbiguousDetails) error {
+	if err := protoapi.Validate(details); err != nil {
+		return err
+	}
+	return serverapi.WorkspaceBindingAmbiguousError{
+		CanonicalRoot: details.CanonicalRoot,
+		ProjectIDs:    append([]string(nil), details.ProjectIds...),
+	}
+}
+
+func projectUnavailableError(details *projectpb.ProjectUnavailableDetails) error {
+	if err := protoapi.Validate(details); err != nil {
+		return err
+	}
+	availability, err := ProjectAvailabilityFromProto(details.Availability)
+	if err != nil {
+		return err
+	}
+	return serverapi.ProjectUnavailableError{
+		ProjectID:    details.ProjectId,
+		RootPath:     details.RootPath,
+		Availability: availability,
+	}
+}
+
+func workspacePathIdentityError(details *projectpb.WorkspacePathIdentityDetails) error {
+	if err := protoapi.Validate(details); err != nil {
+		return err
+	}
+	return serverapi.WorkspacePathIdentityError{WorkspaceRoot: details.WorkspaceRoot}
+}
+
+func workspaceDetachConflictError(details *projectpb.WorkspaceDetachConflictDetails) error {
+	if err := protoapi.Validate(details); err != nil {
+		return err
+	}
+	return &serverapi.WorkspaceDetachConflictError{ProjectID: details.ProjectId, WorkspaceID: details.WorkspaceId}
+}
+
+func workspaceMutationError(details *projectpb.WorkspaceMutationDetails) error {
+	if err := protoapi.Validate(details); err != nil {
+		return err
+	}
+	return &serverapi.WorkspaceMutationError{ProjectID: details.ProjectId, WorkspaceID: details.WorkspaceId}
 }
 
 func projectKeyConflictError(details *projectpb.ProjectKeyConflictDetails) error {

@@ -11,6 +11,7 @@ import (
 	"core/server/auth"
 	"core/server/onboardingimports"
 	"core/shared/config"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	"core/shared/serverapi"
 )
 
@@ -23,7 +24,7 @@ func TestImportErrorFactsPreserveItemKind(t *testing.T) {
 	if len(facts) != 1 || facts[0].ItemKind == nil {
 		t.Fatalf("import error facts = %+v, want command item kind", facts)
 	}
-	if *facts[0].ItemKind != serverapi.ImportErrorItemKindCommand {
+	if *facts[0].ItemKind != capabilitypb.ImportItemKind_IMPORT_ITEM_KIND_COMMAND {
 		t.Fatalf("item kind = %q, want command", *facts[0].ItemKind)
 	}
 }
@@ -31,7 +32,7 @@ func TestImportErrorFactsPreserveItemKind(t *testing.T) {
 func TestServiceProjectsModelCatalogAndUnknownFallback(t *testing.T) {
 	service := NewService(Options{Config: testConfig(t, config.Settings{Model: "gpt-5.6-sol"})})
 
-	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	resp, err := service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
@@ -52,7 +53,7 @@ func TestServiceProjectsModelCatalogAndUnknownFallback(t *testing.T) {
 	}
 
 	fallback := resp.Models.UnknownFallback
-	if fallback.Known || fallback.ModelID != nil || !fallback.SupportsThinking ||
+	if fallback.Known || fallback.ModelId != nil || !fallback.SupportsThinking ||
 		fallback.SupportsReasoningSummary || fallback.SupportsVisionInputs ||
 		fallback.Verbosity.Source != "provider_default" || !fallback.Verbosity.Supported || len(fallback.Verbosity.Levels) == 0 {
 		t.Fatalf("unknown fallback = %+v, want provider-default thinking and verbosity without catalog-only capabilities", fallback)
@@ -67,7 +68,7 @@ func TestServiceProjectsProviderFactsAndExplicitProviders(t *testing.T) {
 	}
 	service := NewService(Options{Config: testConfig(t, settings)})
 
-	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{ExplicitLLMProviderIDs: []string{"openai", "OPENAI"}})
+	resp, err := service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{ExplicitLlmProviderIds: []string{"openai", "OPENAI"}})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestServiceProjectsProviderFactsAndExplicitProviders(t *testing.T) {
 	if resp.Providers.CurrentEffective == nil {
 		t.Fatal("expected current effective provider facts")
 	}
-	if got := resp.Providers.CurrentEffective.LLMProviderID; got != "openai-compatible" {
+	if got := resp.Providers.CurrentEffective.LlmProviderId; got != "openai-compatible" {
 		t.Fatalf("current provider id = %q, want openai-compatible", got)
 	}
 	if resp.Providers.CurrentEffective.Role != "current_effective" {
@@ -87,7 +88,7 @@ func TestServiceProjectsProviderFactsAndExplicitProviders(t *testing.T) {
 	if len(resp.Providers.Explicit) != 1 {
 		t.Fatalf("explicit providers = %d, want deduplicated one", len(resp.Providers.Explicit))
 	}
-	if got := resp.Providers.Explicit[0].LLMProviderID; got != "openai" {
+	if got := resp.Providers.Explicit[0].LlmProviderId; got != "openai" {
 		t.Fatalf("explicit provider id = %q, want openai", got)
 	}
 	if resp.Providers.Explicit[0].Role != "explicit_catalog" {
@@ -119,7 +120,7 @@ func TestServiceProjectsProviderVerbosityIndependentlyOfFirstPartyClassification
 				},
 			})})
 
-			resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+			resp, err := service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{})
 			if err != nil {
 				t.Fatalf("GetCapabilityFacts: %v", err)
 			}
@@ -133,7 +134,7 @@ func TestServiceProjectsProviderVerbosityIndependentlyOfFirstPartyClassification
 func TestServiceRejectsUnsupportedExplicitProvider(t *testing.T) {
 	service := NewService(Options{Config: testConfig(t, config.Settings{Model: "gpt-5.6-sol"})})
 
-	_, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{ExplicitLLMProviderIDs: []string{"missing-provider"}})
+	_, err := service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{ExplicitLlmProviderIds: []string{"missing-provider"}})
 	if !errors.Is(err, serverapi.ErrUnsupportedProvider) {
 		t.Fatalf("GetCapabilityFacts error = %v, want ErrUnsupportedProvider", err)
 	}
@@ -148,13 +149,13 @@ func TestServiceProjectsDefaults(t *testing.T) {
 		CompactionMode:   config.CompactionModeNative,
 	})})
 
-	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	resp, err := service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
 
-	if resp.Defaults.PrimaryModelID != "custom-model" {
-		t.Fatalf("primary model = %q", resp.Defaults.PrimaryModelID)
+	if resp.Defaults.PrimaryModelId != "custom-model" {
+		t.Fatalf("primary model = %q", resp.Defaults.PrimaryModelId)
 	}
 	if resp.Defaults.Thinking.Mode != "level" || resp.Defaults.Thinking.Level == nil || *resp.Defaults.Thinking.Level != "ultra" {
 		t.Fatalf("thinking default = %+v, want level ultra", resp.Defaults.Thinking)
@@ -169,7 +170,7 @@ func TestServiceProjectsDefaults(t *testing.T) {
 		Model:            "custom-model",
 		ProviderOverride: "openai",
 	})})
-	resp, err = service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	resp, err = service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
@@ -187,7 +188,7 @@ func TestServiceProjectsImportDomainFacts(t *testing.T) {
 		HomeDir: home,
 	})
 
-	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	resp, err := service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestServiceProjectsImportDomainFacts(t *testing.T) {
 	}
 	var found bool
 	for _, item := range resp.Imports.Skills.Items {
-		if item.Ref.ImportProviderID != nil && *item.Ref.ImportProviderID == "claude_code" && item.Ref.TargetName == "helper" {
+		if item.Ref.ImportProviderId != nil && *item.Ref.ImportProviderId == "claude_code" && item.Ref.TargetName == "helper" {
 			found = true
 		}
 	}
@@ -213,7 +214,7 @@ func TestServiceProjectsImportDomainFacts(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(configRoot, "skills", "existing"), 0o755); err != nil {
 		t.Fatalf("mkdir existing skills target: %v", err)
 	}
-	resp, err = service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	resp, err = service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestServiceProjectsHomeResolutionFailureAsImportErrorFact(t *testing.T) {
 	t.Setenv("HOME", "")
 	service := NewService(Options{Config: testConfigAt(t.TempDir(), config.Settings{Model: "gpt-5.6-sol"})})
 
-	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	resp, err := service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
@@ -266,12 +267,12 @@ func TestServiceUsesSavedAuthWithoutRefreshingPreAuthFacts(t *testing.T) {
 		AuthManager: auth.NewManager(auth.NewMemoryStore(state), refresher, time.Now),
 	})
 
-	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	resp, err := service.GetFacts(context.Background(), &capabilitypb.GetFactsRequest{})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
 
-	if resp.Providers.CurrentEffective == nil || resp.Providers.CurrentEffective.LLMProviderID != "chatgpt-codex" {
+	if resp.Providers.CurrentEffective == nil || resp.Providers.CurrentEffective.LlmProviderId != "chatgpt-codex" {
 		t.Fatalf("current provider = %+v, want chatgpt-codex", resp.Providers.CurrentEffective)
 	}
 }
@@ -281,10 +282,10 @@ func testConfig(t *testing.T, settings config.Settings) config.App {
 	return testConfigAt(t.TempDir(), settings)
 }
 
-func knownModelFact(facts []serverapi.ModelCapabilityFact, modelID string) *serverapi.ModelCapabilityFact {
-	for idx := range facts {
-		if facts[idx].ModelID != nil && *facts[idx].ModelID == modelID {
-			return &facts[idx]
+func knownModelFact(facts []*capabilitypb.ModelFact, modelID string) *capabilitypb.ModelFact {
+	for _, fact := range facts {
+		if fact.ModelId != nil && *fact.ModelId == modelID {
+			return fact
 		}
 	}
 	return nil

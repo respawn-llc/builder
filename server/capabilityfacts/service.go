@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"core/server/auth"
@@ -11,6 +12,7 @@ import (
 	"core/server/onboardingimports"
 	"core/shared/clientui"
 	"core/shared/config"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -37,28 +39,25 @@ type Service struct {
 }
 
 func NewService(opts Options) *Service {
-	return &Service{
-		cfg:         opts.Config,
-		authManager: opts.AuthManager,
-		homeDir:     opts.HomeDir,
-	}
+	return &Service{cfg: opts.Config, authManager: opts.AuthManager, homeDir: opts.HomeDir}
 }
 
-func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.CapabilityFactsResponse{}, err
+func (s *Service) GetFacts(ctx context.Context, req *capabilitypb.GetFactsRequest) (*capabilitypb.Facts, error) {
+	if req == nil {
+		return nil, errors.New("capability facts request is required")
 	}
+	providerIDs := normalizedProviderIDs(req.ExplicitLlmProviderIds)
 	currentProvider, err := s.currentProviderFacts(ctx)
 	if err != nil {
-		return serverapi.CapabilityFactsResponse{}, err
+		return nil, err
 	}
-	explicitProviders, err := explicitProviderFacts(req.NormalizedExplicitLLMProviderIDs())
+	explicitProviders, err := explicitProviderFacts(providerIDs)
 	if err != nil {
-		return serverapi.CapabilityFactsResponse{}, err
+		return nil, err
 	}
 	defaults, err := defaultFacts(s.cfg.Settings)
 	if err != nil {
-		return serverapi.CapabilityFactsResponse{}, err
+		return nil, err
 	}
 	imports, err := onboardingimports.Discover(onboardingimports.Options{
 		ConfigRoot:    s.cfg.PersistenceRoot,
@@ -67,21 +66,37 @@ func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.Capabili
 		SkillPolicy:   config.ResolveSkillPolicy(s.cfg.Settings),
 	})
 	if err != nil {
-		return serverapi.CapabilityFactsResponse{}, err
+		return nil, err
 	}
 	models, err := modelFacts(currentProvider)
 	if err != nil {
-		return serverapi.CapabilityFactsResponse{}, err
+		return nil, err
 	}
-	return serverapi.CapabilityFactsResponse{
+	return &capabilitypb.Facts{
 		Models: models,
-		Providers: serverapi.ProviderCapabilityFacts{
-			CurrentEffective: ptr(providerFact(currentProvider, providerRoleCurrentEffective)),
+		Providers: &capabilitypb.ProviderFacts{
+			CurrentEffective: providerFact(currentProvider, providerRoleCurrentEffective),
 			Explicit:         explicitProviders,
 		},
-		Imports:  importFacts(imports),
-		Defaults: defaults,
+		Imports:         importFacts(imports),
+		Defaults:        defaults,
+		Recommendations: &capabilitypb.RecommendationFacts{},
 	}, nil
+}
+
+func normalizedProviderIDs(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		key := strings.ToLower(trimmed)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func (s *Service) currentProviderFacts(ctx context.Context) (llm.ProviderCapabilities, error) {
@@ -96,8 +111,8 @@ func (s *Service) currentProviderFacts(ctx context.Context) (llm.ProviderCapabil
 	return llm.ResolveRuntimeProviderCapabilities(authState, s.cfg.Settings)
 }
 
-func explicitProviderFacts(providerIDs []string) ([]serverapi.LLMProviderCapabilityFact, error) {
-	facts := make([]serverapi.LLMProviderCapabilityFact, 0, len(providerIDs))
+func explicitProviderFacts(providerIDs []string) ([]*capabilitypb.ProviderFact, error) {
+	facts := make([]*capabilitypb.ProviderFact, 0, len(providerIDs))
 	for _, providerID := range providerIDs {
 		caps, err := llm.InferProviderCapabilities(providerID)
 		if err != nil {
@@ -111,114 +126,116 @@ func explicitProviderFacts(providerIDs []string) ([]serverapi.LLMProviderCapabil
 	return facts, nil
 }
 
-func modelFacts(providerCaps llm.ProviderCapabilities) (serverapi.ModelCapabilityFacts, error) {
+func modelFacts(providerCaps llm.ProviderCapabilities) (*capabilitypb.ModelFacts, error) {
 	contracts := llm.KnownModelCapabilityContracts()
-	known := make([]serverapi.ModelCapabilityFact, 0, len(contracts))
+	known := make([]*capabilitypb.ModelFact, 0, len(contracts))
 	for _, contract := range contracts {
 		fact, err := modelFact(contract, providerCaps)
 		if err != nil {
-			return serverapi.ModelCapabilityFacts{}, err
+			return nil, err
 		}
 		known = append(known, fact)
 	}
-	return serverapi.ModelCapabilityFacts{
-		KnownModels:     known,
-		UnknownFallback: unknownModelFallback(providerCaps),
-	}, nil
+	return &capabilitypb.ModelFacts{KnownModels: known, UnknownFallback: unknownModelFallback(providerCaps)}, nil
 }
 
-func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCapabilities) (serverapi.ModelCapabilityFact, error) {
+func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCapabilities) (*capabilitypb.ModelFact, error) {
 	modelID := strings.TrimSpace(contract.Model)
 	if modelID == "" {
-		return serverapi.ModelCapabilityFact{}, errBlankModelCatalogEntry
+		return nil, errBlankModelCatalogEntry
 	}
-	verbosity := llm.VerbositySupportForModelAndProvider(modelID, providerCaps)
-	fact := serverapi.ModelCapabilityFact{
-		ModelID:                  &modelID,
+	contextWindow, err := positiveUint32Ptr(contract.ContextWindowTokens, "model context window")
+	if err != nil {
+		return nil, err
+	}
+	fact := &capabilitypb.ModelFact{
+		ModelId:                  &modelID,
 		Known:                    true,
-		ContextWindowTokens:      positiveIntPtr(contract.ContextWindowTokens),
+		ContextWindowTokens:      contextWindow,
 		SupportsThinking:         contract.SupportsReasoningEffort,
 		SupportedThinkingLevels:  cloneStrings(llm.SupportedThinkingLevelsModel(modelID)),
 		SupportsReasoningSummary: contract.SupportsReasoningSummary,
 		SupportsVisionInputs:     contract.SupportsVisionInputs,
-		Verbosity:                verbosityFact(verbosity),
+		Verbosity:                verbosityFact(llm.VerbositySupportForModelAndProvider(modelID, providerCaps)),
 	}
 	if contract.LargeContextWindowTokens > contract.ContextWindowTokens {
-		fact.LargeWindow = &serverapi.ModelLargeWindowFact{Tokens: contract.LargeContextWindowTokens}
+		tokens, err := uint32Value(contract.LargeContextWindowTokens, "model large context window")
+		if err != nil {
+			return nil, err
+		}
+		fact.LargeWindow = &capabilitypb.ModelLargeWindowFact{Tokens: tokens}
 		fact.DefaultContextWindowMode = ptr(contextWindowModeStandard)
 	}
 	return fact, nil
 }
 
-func unknownModelFallback(providerCaps llm.ProviderCapabilities) serverapi.ModelCapabilityFact {
-	verbosity := llm.VerbositySupportForModelAndProvider("unknown-model", providerCaps)
-	return serverapi.ModelCapabilityFact{
-		Known:                   false,
+func unknownModelFallback(providerCaps llm.ProviderCapabilities) *capabilitypb.ModelFact {
+	return &capabilitypb.ModelFact{
 		SupportsThinking:        true,
 		SupportedThinkingLevels: cloneStrings(llm.SupportedThinkingLevelsModel("unknown-model")),
-		Verbosity:               verbosityFact(verbosity),
+		Verbosity:               verbosityFact(llm.VerbositySupportForModelAndProvider("unknown-model", providerCaps)),
 	}
 }
 
-func verbosityFact(verbosity llm.ModelVerbositySupport) serverapi.ModelVerbosityFact {
-	return serverapi.ModelVerbosityFact{
+func verbosityFact(verbosity llm.ModelVerbositySupport) *capabilitypb.ModelVerbosityFact {
+	return &capabilitypb.ModelVerbosityFact{
 		Supported: verbosity.Supported,
 		Source:    string(verbosity.Source),
 		Levels:    cloneStrings(verbosity.Levels),
 	}
 }
 
-func providerFact(caps llm.ProviderCapabilities, role string) serverapi.LLMProviderCapabilityFact {
-	return serverapi.LLMProviderCapabilityFact{
-		LLMProviderID:                 strings.TrimSpace(caps.ProviderID),
+func providerFact(caps llm.ProviderCapabilities, role string) *capabilitypb.ProviderFact {
+	return &capabilitypb.ProviderFact{
+		LlmProviderId:                 strings.TrimSpace(caps.ProviderID),
 		Role:                          role,
-		SupportsResponsesAPI:          caps.SupportsResponsesAPI,
+		SupportsResponsesApi:          caps.SupportsResponsesAPI,
 		SupportsNativeCompaction:      caps.SupportsResponsesCompact,
 		SupportsPromptCacheKey:        caps.SupportsPromptCacheKey,
 		SupportsNativeWebSearch:       caps.SupportsNativeWebSearch,
 		SupportsReasoningEncryption:   caps.SupportsReasoningEncrypted,
 		SupportsServerSideContextEdit: caps.SupportsServerSideContextEdit,
-		IsOpenAIFirstParty:            caps.IsOpenAIFirstParty,
+		IsOpenaiFirstParty:            caps.IsOpenAIFirstParty,
 		SupportsProviderVerbosity:     caps.SupportsProviderVerbosity,
 	}
 }
 
-func defaultFacts(settings config.Settings) (serverapi.CapabilityDefaultFacts, error) {
+func defaultFacts(settings config.Settings) (*capabilitypb.DefaultFacts, error) {
 	modelID := strings.TrimSpace(settings.Model)
 	if modelID == "" {
-		return serverapi.CapabilityDefaultFacts{}, errors.New("capability facts require a non-blank primary model")
+		return nil, errors.New("capability facts require a non-blank primary model")
 	}
-	return serverapi.CapabilityDefaultFacts{
-		PrimaryModelID: modelID,
+	return &capabilitypb.DefaultFacts{
+		PrimaryModelId: modelID,
 		Thinking:       thinkingDefaultFact(settings.ThinkingLevel),
 		Verbosity:      verbosityDefaultFact(settings.ModelVerbosity),
 		CompactionMode: strings.TrimSpace(string(settings.CompactionMode)),
 	}, nil
 }
 
-func verbosityDefaultFact(raw config.ModelVerbosity) *serverapi.VerbosityDefaultFact {
+func verbosityDefaultFact(raw config.ModelVerbosity) *capabilitypb.VerbosityDefaultFact {
 	level := strings.TrimSpace(string(raw))
 	if level == "" {
 		return nil
 	}
-	return &serverapi.VerbosityDefaultFact{Level: level}
+	return &capabilitypb.VerbosityDefaultFact{Level: level}
 }
 
-func thinkingDefaultFact(raw string) serverapi.ThinkingDefaultFact {
+func thinkingDefaultFact(raw string) *capabilitypb.ThinkingDefaultFact {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return serverapi.ThinkingDefaultFact{Mode: thinkingModeDisabled}
+		return &capabilitypb.ThinkingDefaultFact{Mode: thinkingModeDisabled}
 	}
 	normalized, ok := clientui.NormalizeThinkingLevel(trimmed)
 	if ok {
-		return serverapi.ThinkingDefaultFact{Mode: thinkingModeLevel, Level: &normalized}
+		return &capabilitypb.ThinkingDefaultFact{Mode: thinkingModeLevel, Level: &normalized}
 	}
-	return serverapi.ThinkingDefaultFact{Mode: thinkingModeCustom, Value: &trimmed}
+	return &capabilitypb.ThinkingDefaultFact{Mode: thinkingModeCustom, Value: &trimmed}
 }
 
-func importFacts(result onboardingimports.Result) serverapi.ImportCapabilityFacts {
-	return serverapi.ImportCapabilityFacts{
-		Workspace:       serverapi.ImportWorkspaceFact{Root: textutil.Pointer(result.Workspace.Root)},
+func importFacts(result onboardingimports.Result) *capabilitypb.ImportFacts {
+	return &capabilitypb.ImportFacts{
+		Workspace:       &capabilitypb.ImportWorkspaceFact{Root: textutil.Pointer(result.Workspace.Root)},
 		Skills:          itemGroupFact(result.Skills),
 		Commands:        itemGroupFact(result.Commands),
 		SkillEnablement: skillEnablementFacts(result.SkillEnablement),
@@ -227,41 +244,37 @@ func importFacts(result onboardingimports.Result) serverapi.ImportCapabilityFact
 	}
 }
 
-func itemGroupFact(group onboardingimports.ItemGroup) serverapi.ImportItemGroupFact {
-	return serverapi.ImportItemGroupFact{
+func itemGroupFact(group onboardingimports.ItemGroup) *capabilitypb.ImportItemGroupFact {
+	return &capabilitypb.ImportItemGroupFact{
 		Choices: importChoiceFacts(group.Choices),
 		Roots:   importRootFacts(group.Roots),
 		Items:   importItemFacts(group.Items),
-		Target:  importTargetFact(group.Target),
+		Target: &capabilitypb.ImportTargetFact{
+			Skip:      group.Target.Skip,
+			Conflicts: conflictFacts(group.Target.Conflicts),
+		},
 	}
 }
 
-func importTargetFact(target onboardingimports.Target) serverapi.ImportTargetFact {
-	return serverapi.ImportTargetFact{
-		Skip:      target.Skip,
-		Conflicts: conflictFacts(target.Conflicts),
-	}
-}
-
-func importChoiceFacts(choices []onboardingimports.Choice) []serverapi.ImportChoiceFact {
-	out := make([]serverapi.ImportChoiceFact, 0, len(choices))
+func importChoiceFacts(choices []onboardingimports.Choice) []*capabilitypb.ImportChoiceFact {
+	out := make([]*capabilitypb.ImportChoiceFact, 0, len(choices))
 	for _, choice := range choices {
-		out = append(out, serverapi.ImportChoiceFact{
+		out = append(out, &capabilitypb.ImportChoiceFact{
 			Ref:              choiceRefFact(choice.Ref),
-			ImportProviderID: providerIDPtr(choice.ProviderID),
+			ImportProviderId: providerIDPtr(choice.ProviderID),
 			SourceRootPath:   textutil.Pointer(choice.SourceRoot),
-			ItemCount:        choice.ItemCount,
+			ItemCount:        uint32(choice.ItemCount),
 		})
 	}
 	return out
 }
 
-func importRootFacts(roots []onboardingimports.Root) []serverapi.ImportRootFact {
-	out := make([]serverapi.ImportRootFact, 0, len(roots))
+func importRootFacts(roots []onboardingimports.Root) []*capabilitypb.ImportRootFact {
+	out := make([]*capabilitypb.ImportRootFact, 0, len(roots))
 	for _, root := range roots {
-		out = append(out, serverapi.ImportRootFact{
-			SourceKind:       string(root.SourceKind),
-			ImportProviderID: providerIDPtr(root.ProviderID),
+		out = append(out, &capabilitypb.ImportRootFact{
+			SourceKind:       sourceKind(root.SourceKind),
+			ImportProviderId: providerIDPtr(root.ProviderID),
 			Path:             root.Path,
 			Exists:           root.Exists,
 		})
@@ -269,27 +282,23 @@ func importRootFacts(roots []onboardingimports.Root) []serverapi.ImportRootFact 
 	return out
 }
 
-func importItemFacts(items []onboardingimports.Item) []serverapi.ImportItemFact {
-	out := make([]serverapi.ImportItemFact, 0, len(items))
+func importItemFacts(items []onboardingimports.Item) []*capabilitypb.ImportItemFact {
+	out := make([]*capabilitypb.ImportItemFact, 0, len(items))
 	for _, item := range items {
-		out = append(out, importItemFact(item))
+		out = append(out, &capabilitypb.ImportItemFact{
+			Ref:            itemRefFact(item.Ref),
+			Conflicts:      conflictFacts(item.Conflicts),
+			DefaultEnabled: textutil.Pointer(item.DefaultEnabled),
+		})
 	}
 	return out
 }
 
-func importItemFact(item onboardingimports.Item) serverapi.ImportItemFact {
-	return serverapi.ImportItemFact{
-		Ref:            itemRefFact(item.Ref),
-		Conflicts:      conflictFacts(item.Conflicts),
-		DefaultEnabled: textutil.Pointer(item.DefaultEnabled),
-	}
-}
-
-func itemRefFact(ref onboardingimports.ItemRef) serverapi.ImportItemRef {
-	return serverapi.ImportItemRef{
-		ItemKind:         string(ref.ItemKind),
-		SourceKind:       string(ref.SourceKind),
-		ImportProviderID: providerIDPtr(ref.ProviderID),
+func itemRefFact(ref onboardingimports.ItemRef) *capabilitypb.ImportItemRef {
+	return &capabilitypb.ImportItemRef{
+		ItemKind:         itemKind(ref.ItemKind),
+		SourceKind:       sourceKind(ref.SourceKind),
+		ImportProviderId: providerIDPtr(ref.ProviderID),
 		SourceRootPath:   textutil.Pointer(ref.SourceRoot),
 		SourcePath:       textutil.Pointer(ref.SourcePath),
 		TargetName:       ref.TargetName,
@@ -298,31 +307,35 @@ func itemRefFact(ref onboardingimports.ItemRef) serverapi.ImportItemRef {
 	}
 }
 
-func choiceRefFact(ref onboardingimports.ChoiceRef) serverapi.ImportChoiceRef {
-	return serverapi.ImportChoiceRef{
-		Mode:             string(ref.Mode),
-		SourceKind:       sourceKindPtr(ref.SourceKind),
-		ImportProviderID: providerIDPtr(ref.ProviderID),
+func choiceRefFact(ref onboardingimports.ChoiceRef) *capabilitypb.ImportChoiceRef {
+	fact := &capabilitypb.ImportChoiceRef{
+		Mode:             choiceMode(ref.Mode),
+		ImportProviderId: providerIDPtr(ref.ProviderID),
 		SourceRootPath:   textutil.Pointer(ref.SourceRoot),
 	}
+	if ref.SourceKind != nil {
+		value := sourceKind(*ref.SourceKind)
+		fact.SourceKind = &value
+	}
+	return fact
 }
 
-func conflictFacts(conflicts []onboardingimports.Conflict) []serverapi.ImportConflictFact {
-	out := make([]serverapi.ImportConflictFact, 0, len(conflicts))
+func conflictFacts(conflicts []onboardingimports.Conflict) []*capabilitypb.ImportConflictFact {
+	out := make([]*capabilitypb.ImportConflictFact, 0, len(conflicts))
 	for _, conflict := range conflicts {
-		out = append(out, serverapi.ImportConflictFact{
-			SourceKind:       string(conflict.SourceKind),
-			ImportProviderID: providerIDPtr(conflict.ProviderID),
+		out = append(out, &capabilitypb.ImportConflictFact{
+			SourceKind:       sourceKind(conflict.SourceKind),
+			ImportProviderId: providerIDPtr(conflict.ProviderID),
 			Path:             textutil.Pointer(conflict.Path),
 		})
 	}
 	return out
 }
 
-func skillEnablementFacts(projections []onboardingimports.SkillEnablementProjection) []serverapi.SkillEnablementProjectionFact {
-	out := make([]serverapi.SkillEnablementProjectionFact, 0, len(projections))
+func skillEnablementFacts(projections []onboardingimports.SkillEnablementProjection) []*capabilitypb.SkillEnablementProjectionFact {
+	out := make([]*capabilitypb.SkillEnablementProjectionFact, 0, len(projections))
 	for _, projection := range projections {
-		out = append(out, serverapi.SkillEnablementProjectionFact{
+		out = append(out, &capabilitypb.SkillEnablementProjectionFact{
 			ChoiceRef:  choiceRefFact(projection.ChoiceRef),
 			Candidates: importItemFacts(projection.Candidates),
 		})
@@ -330,53 +343,97 @@ func skillEnablementFacts(projections []onboardingimports.SkillEnablementProject
 	return out
 }
 
-func importErrorFacts(errs []onboardingimports.Error) []serverapi.ImportErrorFact {
-	out := make([]serverapi.ImportErrorFact, 0, len(errs))
-	for _, err := range errs {
-		out = append(out, serverapi.ImportErrorFact{
-			Code:             err.Code,
-			Scope:            string(err.Scope),
-			ItemKind:         importErrorItemKind(err.ItemKind),
-			ImportProviderID: providerIDPtr(err.ProviderID),
-			Path:             textutil.Pointer(err.Path),
-			Operation:        err.Operation,
-			Message:          err.Message,
-		})
+func importErrorFacts(errs []onboardingimports.Error) []*capabilitypb.ImportErrorFact {
+	out := make([]*capabilitypb.ImportErrorFact, 0, len(errs))
+	for _, item := range errs {
+		fact := &capabilitypb.ImportErrorFact{
+			Code:             item.Code,
+			Scope:            string(item.Scope),
+			ImportProviderId: providerIDPtr(item.ProviderID),
+			Path:             textutil.Pointer(item.Path),
+			Operation:        item.Operation,
+			Message:          item.Message,
+		}
+		if item.ItemKind != nil {
+			value := itemKind(*item.ItemKind)
+			fact.ItemKind = &value
+		}
+		out = append(out, fact)
 	}
 	return out
 }
 
-func importErrorItemKind(value *onboardingimports.ItemKind) *serverapi.ImportErrorItemKind {
-	if value == nil {
-		return nil
-	}
-	raw := serverapi.ImportErrorItemKind(*value)
-	return &raw
-}
-
-func importRecommendationFacts(recommendations onboardingimports.Recommendations) serverapi.ImportRecommendationFacts {
-	return serverapi.ImportRecommendationFacts{
+func importRecommendationFacts(recommendations onboardingimports.Recommendations) *capabilitypb.ImportRecommendationFacts {
+	return &capabilitypb.ImportRecommendationFacts{
 		Skills:   modeRecommendationFact(recommendations.Skills),
 		Commands: modeRecommendationFact(recommendations.Commands),
 	}
 }
 
-func modeRecommendationFact(recommendation *onboardingimports.ModeRecommendation) *serverapi.ImportModeRecommendationFact {
+func modeRecommendationFact(recommendation *onboardingimports.ModeRecommendation) *capabilitypb.ImportModeRecommendationFact {
 	if recommendation == nil {
 		return nil
 	}
-	return &serverapi.ImportModeRecommendationFact{
+	return &capabilitypb.ImportModeRecommendationFact{
 		ChoiceRef:   choiceRefFact(recommendation.ChoiceRef),
-		ItemCount:   recommendation.ItemCount,
+		ItemCount:   uint32(recommendation.ItemCount),
 		SourcePaths: cloneStrings(recommendation.SourcePaths),
 	}
 }
 
-func positiveIntPtr(value int) *int {
-	if value <= 0 {
-		return nil
+func choiceMode(value onboardingimports.ChoiceMode) capabilitypb.ImportChoiceMode {
+	switch value {
+	case onboardingimports.ChoiceModeNone:
+		return capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_NONE
+	case onboardingimports.ChoiceModeSymlinkSource:
+		return capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_SYMLINK_SOURCE
+	default:
+		return capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_UNSPECIFIED
 	}
-	return &value
+}
+
+func sourceKind(value onboardingimports.SourceKind) capabilitypb.ImportSourceKind {
+	switch value {
+	case onboardingimports.SourceKindExternalProvider:
+		return capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_EXTERNAL_PROVIDER
+	case onboardingimports.SourceKindGenerated:
+		return capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_GENERATED
+	case onboardingimports.SourceKindGlobal:
+		return capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_GLOBAL
+	case onboardingimports.SourceKindWorkspace:
+		return capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_WORKSPACE
+	default:
+		return capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_UNSPECIFIED
+	}
+}
+
+func itemKind(value onboardingimports.ItemKind) capabilitypb.ImportItemKind {
+	switch value {
+	case onboardingimports.ItemKindSkill:
+		return capabilitypb.ImportItemKind_IMPORT_ITEM_KIND_SKILL
+	case onboardingimports.ItemKindCommand:
+		return capabilitypb.ImportItemKind_IMPORT_ITEM_KIND_COMMAND
+	default:
+		return capabilitypb.ImportItemKind_IMPORT_ITEM_KIND_UNSPECIFIED
+	}
+}
+
+func positiveUint32Ptr(value int, field string) (*uint32, error) {
+	if value <= 0 {
+		return nil, nil
+	}
+	converted, err := uint32Value(value, field)
+	if err != nil {
+		return nil, err
+	}
+	return &converted, nil
+}
+
+func uint32Value(value int, field string) (uint32, error) {
+	if value < 0 || uint64(value) > math.MaxUint32 {
+		return 0, fmt.Errorf("%s is outside uint32 range: %d", field, value)
+	}
+	return uint32(value), nil
 }
 
 func cloneStrings(values []string) []string {
@@ -384,14 +441,6 @@ func cloneStrings(values []string) []string {
 }
 
 func providerIDPtr(value *onboardingimports.ProviderID) *string {
-	if value == nil {
-		return nil
-	}
-	out := string(*value)
-	return &out
-}
-
-func sourceKindPtr(value *onboardingimports.SourceKind) *string {
 	if value == nil {
 		return nil
 	}

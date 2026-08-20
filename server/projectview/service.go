@@ -17,7 +17,11 @@ import (
 	"core/server/workflowstore"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Service struct {
@@ -38,8 +42,6 @@ var ErrSessionArtifactEscapesRoot = errors.New("session artifact path escapes pr
 const (
 	defaultProjectHomePageSize = 50
 	maxProjectHomePageSize     = 100
-	defaultWorkspacePageSize   = 100
-	maxWorkspacePageSize       = 100
 )
 
 func NewMetadataService(metadataStore *metadata.Store) (*Service, error) {
@@ -69,206 +71,244 @@ func (s *Service) WithWorkflowExecution(taskMutations *workflowexecution.TaskMut
 	return s
 }
 
-func (s *Service) ListProjects(ctx context.Context, _ serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
+func (s *Service) ListProjects(ctx context.Context, req *emptypb.Empty) (*projectpb.ProjectListSuccess, error) {
+	if req == nil {
+		return nil, errors.New("project list request is required")
+	}
 	if s == nil {
-		return serverapi.ProjectListResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
 	projects, err := s.metadata.ListProjects(ctx)
 	if err != nil {
-		return serverapi.ProjectListResponse{}, err
+		return nil, err
 	}
-	return serverapi.ProjectListResponse{Projects: projects}, nil
+	success := &projectpb.ProjectListSuccess{Projects: make([]*projectpb.ProjectSummary, 0, len(projects))}
+	for _, project := range projects {
+		generated, err := projectSummaryToGenerated(project)
+		if err != nil {
+			return nil, err
+		}
+		success.Projects = append(success.Projects, generated)
+	}
+	return success, nil
 }
 
-func (s *Service) ListProjectHome(ctx context.Context, req serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectHomeListResponse{}, err
+func (s *Service) ListProjectHome(ctx context.Context, req *projectpb.ProjectHomeListRequest) (*projectpb.ProjectHomeListSuccess, error) {
+	if req == nil {
+		return nil, errors.New("project home list request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectHomeListResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	pageSize := req.PageSize
+	pageSize := int(req.GetPageSize())
 	if pageSize == 0 {
 		pageSize = defaultProjectHomePageSize
 	}
 	if pageSize > maxProjectHomePageSize {
 		pageSize = maxProjectHomePageSize
 	}
-	offset, err := parseProjectHomePageToken(req.PageToken)
+	offset, err := parseProjectHomePageToken(req.GetPageToken())
 	if err != nil {
-		return serverapi.ProjectHomeListResponse{}, err
+		return nil, err
 	}
 	summaries, err := s.metadata.ListProjectHomeSummaries(ctx, pageSize+1, offset)
 	if err != nil {
-		return serverapi.ProjectHomeListResponse{}, err
+		return nil, err
 	}
-	nextPageToken := ""
+	var nextPageToken *string
 	if len(summaries) > pageSize {
 		summaries = summaries[:pageSize]
-		nextPageToken = strconv.Itoa(offset + pageSize)
+		value := strconv.Itoa(offset + pageSize)
+		nextPageToken = &value
 	}
-	return serverapi.ProjectHomeListResponse{
-		Projects:          summaries,
-		NextPageToken:     nextPageToken,
-		GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
-	}, nil
+	success := &projectpb.ProjectHomeListSuccess{
+		Projects:      make([]*projectpb.ProjectHomeSummary, 0, len(summaries)),
+		NextPageToken: nextPageToken,
+		GeneratedAt:   timestamppb.New(time.Now().UTC()),
+	}
+	for _, summary := range summaries {
+		project, err := projectHomeSummaryToGenerated(summary)
+		if err != nil {
+			return nil, err
+		}
+		success.Projects = append(success.Projects, project)
+	}
+	return success, nil
 }
 
-func (s *Service) ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectResolvePathResponse{}, err
+func (s *Service) ResolveProjectPath(ctx context.Context, req *projectpb.ResolvePathRequest) (*projectpb.ResolvePathSuccess, error) {
+	if req == nil {
+		return nil, errors.New("project path request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectResolvePathResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
 	canonicalRoot, binding, err := s.metadata.ResolveWorkspacePath(ctx, req.Path)
 	if err != nil {
-		return serverapi.ProjectResolvePathResponse{}, err
+		return nil, err
 	}
-	resp := serverapi.ProjectResolvePathResponse{CanonicalRoot: canonicalRoot}
-	resp.PathAvailability = clientui.ProjectAvailability(availabilityForProjectPath(canonicalRoot))
+	availability, err := projectAvailabilityToGenerated(clientui.ProjectAvailability(availabilityForProjectPath(canonicalRoot)))
+	if err != nil {
+		return nil, err
+	}
+	resp := &projectpb.ResolvePathSuccess{CanonicalRoot: canonicalRoot, PathAvailability: availability}
 	if binding != nil {
-		mapped := projectBindingFromMetadata(*binding)
-		resp.Binding = &mapped
+		resp.Binding, err = projectBindingToGenerated(*binding)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return resp, nil
 }
 
-func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectBindingPlanResponse{}, err
+func (s *Service) PlanWorkspaceBinding(ctx context.Context, req *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
+	if req == nil {
+		return nil, errors.New("workspace binding plan request is required")
 	}
-	resolved, err := s.ResolveProjectPath(ctx, serverapi.ProjectResolvePathRequest{Path: req.Path})
+	resolved, err := s.ResolveProjectPath(ctx, &projectpb.ResolvePathRequest{Path: req.Path})
 	if err != nil {
 		if ambiguous, ok := serverapi.AsWorkspaceBindingAmbiguous(err); ok {
-			resp := serverapi.ProjectBindingPlanResponse{
+			availability, availabilityErr := projectAvailabilityToGenerated(clientui.ProjectAvailability(availabilityForProjectPath(ambiguous.CanonicalRoot)))
+			if availabilityErr != nil {
+				return nil, availabilityErr
+			}
+			resp := &projectpb.PlanWorkspaceBindingSuccess{
 				CanonicalRoot:    ambiguous.CanonicalRoot,
-				PathAvailability: clientui.ProjectAvailability(availabilityForProjectPath(ambiguous.CanonicalRoot)),
+				PathAvailability: availability,
 			}
 			switch req.Mode {
-			case serverapi.ProjectBindingPlanModeInteractive:
-				projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
+			case projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_INTERACTIVE:
+				projects, err := s.ListProjects(ctx, &emptypb.Empty{})
 				if err != nil {
-					return serverapi.ProjectBindingPlanResponse{}, err
+					return nil, err
 				}
-				resp.Kind = serverapi.ProjectBindingPlanKindServerWorkspaceSelection
+				resp.Kind = projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_SERVER_WORKSPACE_SELECTION
 				resp.Projects = projects.Projects
 				return resp, nil
-			case serverapi.ProjectBindingPlanModeHeadless:
-				resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous
+			case projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_HEADLESS:
+				resp.Kind = projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_AMBIGUOUS
 				return resp, nil
 			default:
-				return serverapi.ProjectBindingPlanResponse{}, errors.New("mode must be interactive or headless")
+				return nil, errors.New("mode must be interactive or headless")
 			}
 		}
-		return serverapi.ProjectBindingPlanResponse{}, err
+		return nil, err
 	}
-	resp := serverapi.ProjectBindingPlanResponse{
+	resp := &projectpb.PlanWorkspaceBindingSuccess{
 		CanonicalRoot:    resolved.CanonicalRoot,
 		PathAvailability: resolved.PathAvailability,
 		Binding:          resolved.Binding,
 	}
 	if resolved.Binding != nil {
-		resp.Kind = serverapi.ProjectBindingPlanKindBound
+		resp.Kind = projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_BOUND
 		return resp, nil
 	}
 	switch req.Mode {
-	case serverapi.ProjectBindingPlanModeInteractive:
-		projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
+	case projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_INTERACTIVE:
+		projects, err := s.ListProjects(ctx, &emptypb.Empty{})
 		if err != nil {
-			return serverapi.ProjectBindingPlanResponse{}, err
+			return nil, err
 		}
 		resp.Projects = projects.Projects
-		if resolved.PathAvailability == clientui.ProjectAvailabilityMissing || resolved.PathAvailability == clientui.ProjectAvailabilityInaccessible {
-			resp.Kind = serverapi.ProjectBindingPlanKindServerWorkspaceSelection
+		if resolved.PathAvailability == projectpb.ProjectAvailability_PROJECT_AVAILABILITY_MISSING ||
+			resolved.PathAvailability == projectpb.ProjectAvailability_PROJECT_AVAILABILITY_INACCESSIBLE {
+			resp.Kind = projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_SERVER_WORKSPACE_SELECTION
 			return resp, nil
 		}
-		resp.Kind = serverapi.ProjectBindingPlanKindLocalUnbound
+		resp.Kind = projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND
 		return resp, nil
-	case serverapi.ProjectBindingPlanModeHeadless:
-		if resolved.PathAvailability == clientui.ProjectAvailabilityAvailable {
-			resp.Kind = serverapi.ProjectBindingPlanKindLocalUnbound
+	case projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_HEADLESS:
+		if resolved.PathAvailability == projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE {
+			resp.Kind = projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND
 			return resp, nil
 		}
 		workspace, found, err := s.selectSingleAvailableWorkspace(ctx)
 		if err != nil {
-			return serverapi.ProjectBindingPlanResponse{}, err
+			return nil, err
 		}
 		if !found {
-			resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous
+			resp.Kind = projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_AMBIGUOUS
 			return resp, nil
 		}
-		resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteSelected
-		resp.Workspace = &workspace
+		resp.Kind = projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_SELECTED
+		resp.Workspace = workspace
 		return resp, nil
 	default:
-		return serverapi.ProjectBindingPlanResponse{}, errors.New("mode must be interactive or headless")
+		return nil, errors.New("mode must be interactive or headless")
 	}
 }
 
-func (s *Service) CreateProject(ctx context.Context, req serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectCreateResponse{}, err
+func (s *Service) CreateProject(ctx context.Context, req *projectpb.CreateProjectRequest) (*projectpb.CreateProjectSuccess, error) {
+	if req == nil {
+		return nil, errors.New("create project request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectCreateResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	binding, err := s.metadata.CreateProjectForWorkspaceWithKey(ctx, req.WorkspaceRoot, req.DisplayName, req.ProjectKey)
+	binding, err := s.metadata.CreateProjectForWorkspaceWithKey(ctx, req.WorkspaceRoot, req.DisplayName, req.GetProjectKey())
 	if err != nil {
-		return serverapi.ProjectCreateResponse{}, projectMutationStorageError(err, req.ProjectKey)
+		return nil, projectMutationStorageError(err, req.GetProjectKey())
 	}
-	return serverapi.ProjectCreateResponse{Binding: projectMutationBindingFromMetadata(binding)}, nil
+	generated, err := projectMutationBindingToGenerated(binding)
+	if err != nil {
+		return nil, err
+	}
+	return &projectpb.CreateProjectSuccess{Binding: generated}, nil
 }
 
-func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectUpdateResponse{}, err
+func (s *Service) UpdateProject(ctx context.Context, req *projectpb.UpdateProjectRequest) (*projectpb.UpdateProjectSuccess, error) {
+	if req == nil {
+		return nil, errors.New("update project request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectUpdateResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, req.ProjectKey); err != nil {
-		return serverapi.ProjectUpdateResponse{}, projectMutationStorageError(err, req.ProjectKey)
+	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectId, req.DisplayName, req.GetProjectKey()); err != nil {
+		return nil, projectMutationStorageError(err, req.GetProjectKey())
 	}
-	project, err := s.projectHomeSummary(ctx, req.ProjectID)
+	project, err := s.metadata.GetProjectHomeSummary(ctx, req.ProjectId)
 	if err != nil {
-		return serverapi.ProjectUpdateResponse{}, err
+		return nil, err
 	}
-	return serverapi.ProjectUpdateResponse{Project: project}, nil
+	generated, err := projectHomeSummaryToGenerated(project)
+	if err != nil {
+		return nil, err
+	}
+	return &projectpb.UpdateProjectSuccess{Project: generated}, nil
 }
 
-func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditGetRequest) (serverapi.ProjectEditGetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
+func (s *Service) GetProjectEdit(ctx context.Context, req *projectpb.ProjectEditGetRequest) (*projectpb.GetProjectEditSuccess, error) {
+	if req == nil {
+		return nil, errors.New("get project edit request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectEditGetResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	project, err := s.metadata.GetProjectEditMetadata(ctx, req.ProjectID)
+	project, err := s.metadata.GetProjectEditMetadata(ctx, req.ProjectId)
 	if err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
+		return nil, err
 	}
-	return serverapi.ProjectEditGetResponse{
-		ProjectID:   project.ProjectID,
+	return &projectpb.GetProjectEditSuccess{
+		ProjectId:   project.ProjectID,
 		ProjectKey:  project.ProjectKey,
 		DisplayName: project.DisplayName,
 	}, nil
 }
 
-func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
+func (s *Service) DeleteProject(ctx context.Context, req *projectpb.DeleteProjectRequest) (*projectpb.DeleteProjectSuccess, error) {
+	if req == nil {
+		return nil, errors.New("delete project request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectDeleteResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	projectID := strings.TrimSpace(req.ProjectID)
+	projectID := strings.TrimSpace(req.ProjectId)
 	if s.taskMutations == nil || s.workflowExecution == nil {
-		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
+		return nil, errors.New("workflow execution is required for project deletion")
 	}
 	taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
 	if err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
+		return nil, err
 	}
 
 	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
@@ -326,12 +366,20 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return runErr
 	})
 	if err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
+		return nil, err
+	}
+	generatedBlockers := make([]*projectpb.ProjectDeleteBlocker, 0, len(blockers))
+	for _, blocker := range blockers {
+		count, conversionErr := nonNegativeInt32(blocker.Count, "project delete blocker count")
+		if conversionErr != nil {
+			return nil, conversionErr
+		}
+		generatedBlockers = append(generatedBlockers, &projectpb.ProjectDeleteBlocker{Code: blocker.Code, Count: count})
 	}
 	if len(blockers) > 0 {
-		return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: false, Blockers: blockers}, nil
+		return &projectpb.DeleteProjectSuccess{ProjectId: projectID, Blockers: generatedBlockers}, nil
 	}
-	return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: true}, nil
+	return &projectpb.DeleteProjectSuccess{ProjectId: projectID, Deleted: true}, nil
 }
 
 func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
@@ -480,131 +528,125 @@ func rejectSymlinkComponents(root string, target string) error {
 	return nil
 }
 
-func (s *Service) selectSingleAvailableWorkspace(ctx context.Context) (serverapi.ProjectWorkspacePlanSelected, bool, error) {
-	projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
+func (s *Service) selectSingleAvailableWorkspace(ctx context.Context) (*projectpb.SelectedProjectWorkspace, bool, error) {
+	projects, err := s.metadata.ListProjects(ctx)
 	if err != nil {
-		return serverapi.ProjectWorkspacePlanSelected{}, false, err
+		return nil, false, err
 	}
-	selection := serverapi.ProjectWorkspacePlanSelected{}
+	var selection *projectpb.SelectedProjectWorkspace
 	count := 0
-	for _, project := range projects.Projects {
-		overview, err := s.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: project.ProjectID})
+	for _, project := range projects {
+		overview, err := s.metadata.GetProjectOverview(ctx, project.ProjectID)
 		if err != nil {
-			return serverapi.ProjectWorkspacePlanSelected{}, false, err
+			return nil, false, err
 		}
-		for _, workspace := range overview.Overview.Workspaces {
+		for _, workspace := range overview.Workspaces {
 			availability := strings.TrimSpace(string(workspace.Availability))
 			if availability != "" && workspace.Availability != clientui.ProjectAvailabilityAvailable {
 				continue
 			}
 			count++
-			selection = serverapi.ProjectWorkspacePlanSelected{ProjectID: project.ProjectID, WorkspaceID: workspace.WorkspaceID}
+			selection = &projectpb.SelectedProjectWorkspace{ProjectId: project.ProjectID, WorkspaceId: workspace.WorkspaceID}
 			if count > 1 {
-				return serverapi.ProjectWorkspacePlanSelected{}, false, nil
+				return nil, false, nil
 			}
 		}
 	}
 	if count == 0 {
-		return serverapi.ProjectWorkspacePlanSelected{}, false, nil
+		return nil, false, nil
 	}
 	return selection, true, nil
 }
 
-func (s *Service) ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
+func (s *Service) ListProjectWorkspaces(ctx context.Context, req *projectpb.ProjectWorkspaceListRequest) (*projectpb.ListProjectWorkspacesSuccess, error) {
+	if req == nil {
+		return nil, errors.New("project workspace list request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectWorkspaceListResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	page, err := s.metadata.ListProjectWorkspaceCatalogPage(ctx, req.ProjectID, req.Offset, req.Limit)
+	page, err := s.metadata.ListProjectWorkspaceCatalogPage(ctx, req.ProjectId, int(req.Offset), int(req.Limit))
 	if err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
+		return nil, err
 	}
-	response := serverapi.ProjectWorkspaceListResponse{
-		ProjectID:  req.ProjectID,
+	response := &projectpb.ListProjectWorkspacesSuccess{
+		ProjectId:  req.ProjectId,
 		Offset:     req.Offset,
-		Workspaces: make([]serverapi.ProjectWorkspaceCatalogRow, 0, len(page.Workspaces)),
-		NextOffset: page.NextOffset,
+		Workspaces: make([]*projectpb.ProjectWorkspaceCatalogSummary, 0, len(page.Workspaces)),
 	}
 	for _, workspace := range page.Workspaces {
-		response.Workspaces = append(response.Workspaces, serverapi.ProjectWorkspaceCatalogRow{
-			WorkspaceID: workspace.WorkspaceID,
-			DisplayName: workspace.DisplayName,
-			RootPath:    workspace.CanonicalRoot,
-			IsDefault:   workspace.IsDefault,
-		})
+		response.Workspaces = append(response.Workspaces, projectWorkspaceCatalogRowToGenerated(workspace))
 	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf("project workspace catalog response: %w", err)
+	if page.NextOffset != nil {
+		nextOffset, err := nonNegativeInt32(*page.NextOffset, "project workspace next offset")
+		if err != nil {
+			return nil, err
+		}
+		response.NextOffset = &nextOffset
 	}
 	return response, nil
 }
 
-func (s *Service) GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, err
+func (s *Service) GetProjectWorkspace(ctx context.Context, req *projectpb.GetProjectWorkspaceRequest) (*projectpb.GetProjectWorkspaceSuccess, error) {
+	if req == nil {
+		return nil, errors.New("get project workspace request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	workspace, err := s.metadata.GetProjectWorkspaceCatalogRow(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+	selector, err := projectWorkspaceGetSelectorFromGenerated(req)
+	if err != nil {
+		return nil, err
+	}
+	workspace, err := s.metadata.GetProjectWorkspaceCatalogRow(ctx, req.ProjectId, selector)
 	if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
-		return serverapi.ProjectWorkspaceGetResponse{
-			ProjectID: req.ProjectID,
-			Result:    serverapi.ProjectWorkspaceGetResultNotAttached,
+		return &projectpb.GetProjectWorkspaceSuccess{
+			ProjectId: req.ProjectId,
+			Result:    projectpb.ProjectWorkspaceGetResult_PROJECT_WORKSPACE_GET_RESULT_NOT_ATTACHED,
 		}, nil
 	}
 	if err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, err
+		return nil, err
 	}
-	projected := projectWorkspaceCatalogRowFromMetadata(workspace)
-	response := serverapi.ProjectWorkspaceGetResponse{
-		ProjectID: req.ProjectID,
-		Result:    serverapi.ProjectWorkspaceGetResultAttached,
-		Workspace: &projected,
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf("exact Project Workspace response: %w", err)
-	}
-	return response, nil
+	return &projectpb.GetProjectWorkspaceSuccess{
+		ProjectId: req.ProjectId,
+		Result:    projectpb.ProjectWorkspaceGetResult_PROJECT_WORKSPACE_GET_RESULT_ATTACHED,
+		Workspace: projectWorkspaceCatalogRowToGenerated(workspace),
+	}, nil
 }
 
-func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
+func (s *Service) AttachWorkspaceToProject(ctx context.Context, req *projectpb.AttachWorkspaceRequest) (*projectpb.AttachWorkspaceSuccess, error) {
+	if req == nil {
+		return nil, errors.New("attach workspace request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	result, err := s.metadata.AttachWorkspaceToProjectWithResult(ctx, req.ProjectID, req.WorkspaceRoot)
+	result, err := s.metadata.AttachWorkspaceToProjectWithResult(ctx, req.ProjectId, req.WorkspaceRoot)
 	if err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, projectMutationStorageError(err, "")
+		return nil, projectMutationStorageError(err, "")
 	}
-	outcome := serverapi.ProjectWorkspaceAttachOutcomeAlreadyAttached
+	outcome := projectpb.ProjectWorkspaceAttachOutcome_PROJECT_WORKSPACE_ATTACH_OUTCOME_ALREADY_ATTACHED
 	if result.Attached {
-		outcome = serverapi.ProjectWorkspaceAttachOutcomeAttached
+		outcome = projectpb.ProjectWorkspaceAttachOutcome_PROJECT_WORKSPACE_ATTACH_OUTCOME_ATTACHED
 	}
-	response := serverapi.ProjectAttachWorkspaceResponse{
-		Binding: projectMutationBindingFromMetadata(result.Binding),
-		Outcome: outcome,
+	binding, err := projectMutationBindingToGenerated(result.Binding)
+	if err != nil {
+		return nil, err
 	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf("Project Workspace attach response: %w", err)
-	}
-	return response, nil
+	return &projectpb.AttachWorkspaceSuccess{Binding: binding, Outcome: outcome}, nil
 }
 
-func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, err
+func (s *Service) RebindWorkspace(ctx context.Context, req *projectpb.RebindWorkspaceRequest) (*projectpb.RebindWorkspaceSuccess, error) {
+	if req == nil {
+		return nil, errors.New("rebind workspace request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
 	prepared, err := s.metadata.PrepareWorkspaceRebind(ctx, req.OldWorkspaceRoot)
 	if err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, projectMutationStorageError(err, "")
+		return nil, projectMutationStorageError(err, "")
 	}
 	binding, err := s.metadata.RebindWorkspaceWithExpectedBinding(
 		ctx,
@@ -614,9 +656,13 @@ func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebi
 		prepared.WorkspaceID,
 	)
 	if err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, projectMutationStorageError(err, "")
+		return nil, projectMutationStorageError(err, "")
 	}
-	return serverapi.ProjectRebindWorkspaceResponse{Binding: projectMutationBindingFromMetadata(binding)}, nil
+	generated, err := projectMutationBindingToGenerated(binding)
+	if err != nil {
+		return nil, err
+	}
+	return &projectpb.RebindWorkspaceSuccess{Binding: generated}, nil
 }
 
 func projectMutationStorageError(err error, projectKey string) error {
@@ -632,32 +678,58 @@ func projectMutationStorageError(err error, projectKey string) error {
 	}
 }
 
-func (s *Service) GetProjectOverview(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectGetOverviewResponse{}, err
+func (s *Service) GetProjectOverview(ctx context.Context, req *projectpb.GetOverviewRequest) (*projectpb.GetOverviewSuccess, error) {
+	if req == nil {
+		return nil, errors.New("get project overview request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectGetOverviewResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	overview, err := s.metadata.GetProjectOverview(ctx, req.ProjectID)
+	overview, err := s.metadata.GetProjectOverview(ctx, req.ProjectId)
 	if err != nil {
-		return serverapi.ProjectGetOverviewResponse{}, err
+		return nil, err
 	}
-	return serverapi.ProjectGetOverviewResponse{Overview: overview}, nil
+	project, err := projectSummaryToGenerated(overview.Project)
+	if err != nil {
+		return nil, err
+	}
+	workspaces := make([]*projectpb.ProjectWorkspaceSummary, 0, len(overview.Workspaces))
+	for _, workspace := range overview.Workspaces {
+		generated, err := projectWorkspaceSummaryToGenerated(workspace)
+		if err != nil {
+			return nil, err
+		}
+		workspaces = append(workspaces, generated)
+	}
+	return &projectpb.GetOverviewSuccess{
+		Overview: &projectpb.ProjectOverview{Project: project, Workspaces: workspaces},
+	}, nil
 }
 
-func (s *Service) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionPageResponse{}, err
+func (s *Service) ListSessionPage(ctx context.Context, req *projectpb.SessionPageRequest) (*projectpb.SessionPageSuccess, error) {
+	if req == nil {
+		return nil, errors.New("session page request is required")
 	}
 	if s == nil {
-		return serverapi.SessionPageResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	return s.metadata.ListSessionPage(ctx, req)
-}
-
-func (s *Service) projectHomeSummary(ctx context.Context, projectID string) (serverapi.ProjectHomeSummary, error) {
-	return s.metadata.GetProjectHomeSummary(ctx, projectID)
+	category, err := sessionCategoryFromGenerated(req.Category)
+	if err != nil {
+		return nil, err
+	}
+	offset := 0
+	if req.Offset != nil {
+		offset = int(*req.Offset)
+	}
+	limit := metadata.MaxSessionPageSize
+	if req.Limit != nil {
+		limit = int(*req.Limit)
+	}
+	page, err := s.metadata.ListSessionPage(ctx, req.ProjectId, category, offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	return sessionPageToGenerated(page)
 }
 
 func parseProjectHomePageToken(token string) (int, error) {
@@ -680,38 +752,6 @@ func availabilityForProjectPath(path string) string {
 		return string(clientui.ProjectAvailabilityInaccessible)
 	}
 	return string(clientui.ProjectAvailabilityAvailable)
-}
-
-func projectWorkspaceCatalogRowFromMetadata(workspace metadata.ProjectWorkspaceCatalogRow) serverapi.ProjectWorkspaceCatalogRow {
-	return serverapi.ProjectWorkspaceCatalogRow{
-		WorkspaceID: workspace.WorkspaceID,
-		DisplayName: workspace.DisplayName,
-		RootPath:    workspace.CanonicalRoot,
-		IsDefault:   workspace.IsDefault,
-	}
-}
-
-func projectBindingFromMetadata(binding metadata.Binding) serverapi.ProjectBinding {
-	return serverapi.ProjectBinding{
-		ProjectID:       binding.ProjectID,
-		ProjectKey:      binding.ProjectKey,
-		ProjectName:     binding.ProjectName,
-		WorkspaceID:     binding.WorkspaceID,
-		CanonicalRoot:   binding.CanonicalRoot,
-		WorkspaceName:   binding.WorkspaceName,
-		WorkspaceStatus: binding.WorkspaceStatus,
-	}
-}
-
-func projectMutationBindingFromMetadata(binding metadata.Binding) serverapi.ProjectMutationBinding {
-	return serverapi.ProjectMutationBinding{
-		ProjectID:       binding.ProjectID,
-		ProjectKey:      binding.ProjectKey,
-		ProjectName:     binding.ProjectName,
-		WorkspaceID:     binding.WorkspaceID,
-		WorkspaceName:   binding.WorkspaceName,
-		WorkspaceStatus: binding.WorkspaceStatus,
-	}
 }
 
 var _ servicecontract.ProjectViewService = (*Service)(nil)

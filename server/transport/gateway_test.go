@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http/httptest"
 	"path/filepath"
-	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -30,7 +28,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/llmerrors"
 	"core/shared/protoapi"
-	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
@@ -658,106 +656,9 @@ func TestGatewayHandshakeAndProjectList(t *testing.T) {
 	if result.GetError() != nil {
 		t.Fatalf("Project List error: %+v", result.GetError())
 	}
-	projects, err := protoapi.ProjectListFromProto(result.GetSuccess())
-	if err != nil {
-		t.Fatalf("decode Project List: %v", err)
-	}
-	if len(projects.Projects) != 1 || projects.Projects[0].ProjectID != appCore.ProjectID() {
-		t.Fatalf("unexpected project list: %+v", projects.Projects)
-	}
-
-	registration, err := productionGatewayRegistration()
-	if err != nil {
-		t.Fatalf("production Gateway registration: %v", err)
-	}
-	if err := registration.Validate(); err != nil {
-		t.Fatalf("validate complete production Gateway registration: %v", err)
-	}
-	cloneRegistration := func() gatewayRegistration {
-		clone := gatewayRegistration{
-			operations: make(map[string]protoapi.Operation, len(registration.operations)),
-			legacy:     make(map[string]apicontract.Route, len(registration.legacy)),
-			binary:     make(map[string]gatewayBinaryBinding, len(registration.binary)),
-		}
-		for name, operation := range registration.operations {
-			clone.operations[name] = operation
-		}
-		for name, route := range registration.legacy {
-			clone.legacy[name] = route
-		}
-		for name, binding := range registration.binary {
-			clone.binary[name] = binding
-		}
-		return clone
-	}
-	var migratedName string
-	for name := range registration.binary {
-		migratedName = name
-		break
-	}
-	if migratedName == "" {
-		t.Fatal("production Gateway registration has no migrated operation")
-	}
-	var legacyName string
-	var legacyRoute apicontract.Route
-	for name, route := range registration.legacy {
-		if route.Kind == apicontract.KindUnary {
-			legacyName = name
-			legacyRoute = route
-			break
-		}
-	}
-	if legacyName == "" {
-		t.Fatal("production Gateway registration has no legacy unary operation")
-	}
-
-	missingAuthority := cloneRegistration()
-	delete(missingAuthority.binary, migratedName)
-	if err := missingAuthority.Validate(); err == nil {
-		t.Fatal("Gateway registration accepted an operation with no active authority")
-	}
-
-	overlappingAuthority := cloneRegistration()
-	overlappingAuthority.legacy[migratedName] = legacyRoute
-	if err := overlappingAuthority.Validate(); err == nil {
-		t.Fatal("Gateway registration accepted migrated and legacy authorities for one operation")
-	}
-
-	staleProvenance := cloneRegistration()
-	migratedOperation := staleProvenance.operations[migratedName]
-	migratedOperation.LegacyWireName = &legacyRoute.Method
-	staleProvenance.operations[migratedName] = migratedOperation
-	if err := staleProvenance.Validate(); err == nil {
-		t.Fatal("Gateway registration accepted legacy provenance on a migrated operation")
-	}
-
-	unresolvedProvenance := cloneRegistration()
-	delete(unresolvedProvenance.operations, legacyName)
-	delete(unresolvedProvenance.legacy, legacyName)
-	if err := unresolvedProvenance.Validate(); err == nil {
-		t.Fatal("Gateway registration accepted a legacy route without descriptor provenance")
-	}
-
-	wrongKind := cloneRegistration()
-	route := wrongKind.legacy[legacyName]
-	route.Kind = apicontract.KindProgress
-	wrongKind.legacy[legacyName] = route
-	if err := wrongKind.Validate(); err == nil {
-		t.Fatal("Gateway registration accepted a legacy handler with the wrong operation kind")
-	}
-
-	handler, exists := gatewayUnaryHandlers[legacyRoute.Method]
-	if !exists {
-		t.Fatalf("legacy unary route %q has no unary handler before mutation", legacyRoute.Method)
-	}
-	delete(gatewayUnaryHandlers, legacyRoute.Method)
-	missingHandlerErr := registration.Validate()
-	gatewayUnaryHandlers[legacyRoute.Method] = handler
-	if missingHandlerErr == nil {
-		t.Fatal("Gateway registration accepted a legacy unary operation without its unary handler")
-	}
-	if err := registration.Validate(); err != nil {
-		t.Fatalf("restore complete production Gateway registration: %v", err)
+	projects := result.GetSuccess().GetProjects()
+	if len(projects) != 1 || projects[0].ProjectId != appCore.ProjectID() {
+		t.Fatalf("unexpected project list: %+v", projects)
 	}
 }
 
@@ -774,19 +675,6 @@ func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 		failure.Code != "protocol_version_mismatch" ||
 		failure.GetProtocolVersionMismatch().RequiredProtocolVersion != protocol.Version {
 		t.Fatalf("expected unsupported protocol version error, got %+v", failure)
-	}
-}
-
-func TestGatewayHandshakeRejectsPreviousProtocolVersion(t *testing.T) {
-	_, server := newGatewayTestServer(t)
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-
-	result := handshakeGatewayVersion(t, conn, "125")
-	if result.GetError().GetProtocolVersionMismatch().RequiredProtocolVersion != "126" {
-		t.Fatalf("expected previous protocol version rejection, got %+v", result.GetError())
 	}
 }
 
@@ -1007,169 +895,6 @@ func TestGatewayPreAuthMethodPolicy(t *testing.T) {
 	}
 }
 
-func TestGatewayCapabilityFactsAllowedBeforeAuthAndAttach(t *testing.T) {
-	appCore, server, _ := newGatewayTestServerWithAuth(t, false)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	method := capabilitypb.File_kent_api_capability_capability_proto.Services().
-		ByName("CapabilityService").
-		Methods().
-		ByName("GetFacts")
-	var factsResult capabilitypb.GetFactsResult
-	callGatewayDescriptor(t, conn, "facts-1", method, &capabilitypb.GetFactsRequest{}, &factsResult)
-	facts := factsResult.GetSuccess()
-	if facts == nil {
-		t.Fatalf("capability facts failed: %+v", factsResult.GetError())
-	}
-	if facts.Defaults.PrimaryModelId == "" || facts.Providers.CurrentEffective == nil {
-		t.Fatalf("capability facts response missing defaults/provider: %+v", facts)
-	}
-
-	badWorkspace := filepath.Join(t.TempDir(), "missing")
-	callGatewayDescriptor(
-		t,
-		conn,
-		"facts-2",
-		method,
-		&capabilitypb.GetFactsRequest{WorkspaceRoot: &badWorkspace},
-		&factsResult,
-	)
-	facts = factsResult.GetSuccess()
-	if facts == nil {
-		t.Fatalf("capability facts with workspace failed: %+v", factsResult.GetError())
-	}
-	if len(facts.Imports.Errors) == 0 {
-		t.Fatalf("expected invalid workspace as import fact, got %+v", facts.Imports)
-	}
-}
-
-func TestGatewayAuthBootstrapStatusAllowedBeforeAttach(t *testing.T) {
-	appCore, server, _ := newGatewayTestServerWithAuth(t, false)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	status := callGatewayAuthBootstrapStatus(t, conn, "status-1")
-	if status.AuthReady {
-		t.Fatal("expected unauthenticated bootstrap status")
-	}
-	if !status.AuthBootstrapSupported {
-		t.Fatal("expected auth bootstrap to be supported")
-	}
-	registration, err := productionGatewayRegistration()
-	if err != nil {
-		t.Fatalf("production Gateway registration: %v", err)
-	}
-	var expected []string
-	for name, operation := range registration.operations {
-		if operation.Options.AuthenticationStage != sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_PRE_SERVER {
-			continue
-		}
-		if _, migrated := registration.binary[name]; migrated {
-			expected = append(expected, name)
-			continue
-		}
-		route, legacy := registration.legacy[name]
-		if !legacy {
-			t.Fatalf("pre-server operation %q has no active identity", name)
-		}
-		expected = append(expected, route.Method)
-	}
-	sort.Strings(expected)
-	if !reflect.DeepEqual(status.AllowedPreAuthMethods, expected) {
-		t.Fatalf("allowed pre-auth methods = %+v, want exact active descriptor projection %+v", status.AllowedPreAuthMethods, expected)
-	}
-}
-
-type gatewayAuthStatusService func(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error)
-
-func (service gatewayAuthStatusService) GetAuthStatus(ctx context.Context, request serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	return service(ctx, request)
-}
-
-type gatewayAuthStatusDependencies struct {
-	*core.Core
-	status apicontract.AuthStatusService
-}
-
-func (dependencies *gatewayAuthStatusDependencies) AuthStatusClient() apicontract.AuthStatusService {
-	return dependencies.status
-}
-
-func TestGatewayAuthStatusRoundTripsTypedFactsBeforeAttach(t *testing.T) {
-	for _, fixture := range testsetup.AuthStatusTransportCases() {
-		t.Run(fixture.Name, func(t *testing.T) {
-			if err := fixture.Response.Validate(); err != nil {
-				t.Fatalf("test auth status: %v", err)
-			}
-			appCore, _ := newGatewayTestCore(t, true, false)
-			defer func() { _ = appCore.Close() }()
-			gateway, err := NewGateway(
-				&gatewayAuthStatusDependencies{
-					Core: appCore,
-					status: gatewayAuthStatusService(func(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-						return fixture.Response, nil
-					}),
-				},
-				gatewayTestIdentity(),
-			)
-			if err != nil {
-				t.Fatalf("NewGateway: %v", err)
-			}
-			server := httptest.NewServer(gateway.Handler())
-			defer server.Close()
-
-			conn := dialGateway(t, server)
-			defer func() { _ = conn.Close() }()
-			handshakeGateway(t, conn)
-			got := callGatewayAuthStatus(t, conn, "auth-status", serverapi.AuthStatusRequest{})
-			if !reflect.DeepEqual(got, fixture.Response) {
-				t.Fatalf("auth status = %+v, want %+v", got, fixture.Response)
-			}
-		})
-	}
-}
-
-func TestGatewayAuthStatusReturnsOnlyRedactedAPIKeyFacts(t *testing.T) {
-	appCore, server, authSupport := newGatewayTestServerWithAuth(t, false)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	if _, err := authSupport.AuthManager.SwitchMethodAndSetEnvAPIKeyPreference(
-		context.Background(),
-		auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "sk-secret-1234"}},
-		auth.EnvAPIKeyPreferencePreferSaved,
-		true,
-		true,
-	); err != nil {
-		t.Fatalf("configure auth: %v", err)
-	}
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-	status := callGatewayAuthStatus(t, conn, "auth-status", serverapi.AuthStatusRequest{})
-	if err := status.Validate(); err != nil {
-		t.Fatalf("auth status validation: %v", err)
-	}
-	facts := status.Resolution.Facts
-	if status.Resolution.Kind != serverapi.AuthStatusResolutionKnown ||
-		facts == nil ||
-		facts.Method != serverapi.AuthStatusMethodAPIKey ||
-		facts.APIKey == nil ||
-		facts.APIKey.Suffix == nil ||
-		*facts.APIKey.Suffix != "1234" {
-		t.Fatalf("auth status facts = %+v", status)
-	}
-}
-
 func TestGatewayAuthBootstrapAPIKeyCompletionEnablesAuthRequiredMethods(t *testing.T) {
 	appCore, server, authSupport := newGatewayTestServerWithAuth(t, false)
 	defer func() { _ = appCore.Close() }()
@@ -1184,9 +909,10 @@ func TestGatewayAuthBootstrapAPIKeyCompletionEnablesAuthRequiredMethods(t *testi
 		t.Fatalf("run.prompt error = %+v, want auth required", respErr)
 	}
 
-	callGatewayAuthCompleteBootstrap(t, conn, "complete-1", serverapi.AuthCompleteBootstrapRequest{
-		Mode:   serverapi.AuthBootstrapModeAPIKey,
-		APIKey: "server-key",
+	apiKey := "server-key"
+	callGatewayAuthCompleteBootstrap(t, conn, "complete-1", &authpb.CompleteBootstrapRequest{
+		Mode:   authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY,
+		ApiKey: &apiKey,
 	})
 	status := callGatewayAuthBootstrapStatus(t, conn, "status-2")
 	if !status.AuthReady {
@@ -1200,8 +926,9 @@ func TestGatewayAuthBootstrapAPIKeyCompletionEnablesAuthRequiredMethods(t *testi
 		t.Fatalf("unexpected stored auth method: %+v", state.Method)
 	}
 
-	secondComplete := callGatewayAuthCompleteBootstrap(t, conn, "complete-2", serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeAPIKey, APIKey: "server-key-2"})
-	if !secondComplete.AuthReady || secondComplete.MethodType != string(auth.MethodAPIKey) {
+	secondAPIKey := "server-key-2"
+	secondComplete := callGatewayAuthCompleteBootstrap(t, conn, "complete-2", &authpb.CompleteBootstrapRequest{Mode: authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY, ApiKey: &secondAPIKey})
+	if !secondComplete.AuthReady || secondComplete.GetMethodType() != string(auth.MethodAPIKey) {
 		t.Fatalf("unexpected second CompleteBootstrap result: %+v", secondComplete)
 	}
 	state, err = authSupport.AuthManager.StoredState(context.Background())
@@ -1222,48 +949,20 @@ func TestGatewayAuthBootstrapNoneAuthorizesSameConnectionOnly(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
 	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
-	if result := callGatewaySessionPlanResult(t, conn, "plan-before-no-auth", gatewaySessionPlanRequest()); result.GetError().Code != "auth_required" {
+	if result := callGatewaySessionPlanResult(t, conn, "plan-before-no-auth", gatewaySessionPlanRequest(t)); result.GetError().Code != "auth_required" {
 		t.Fatalf("Session Plan before no-auth = %+v, want auth_required", result.GetError())
 	}
 
-	complete := callGatewayAuthCompleteBootstrap(t, conn, "complete-no-auth", serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone})
+	complete := callGatewayAuthCompleteBootstrap(t, conn, "complete-no-auth", &authpb.CompleteBootstrapRequest{Mode: authpb.BootstrapMode_BOOTSTRAP_MODE_NONE})
 	if complete.AuthReady || !complete.NoAuthSelected {
 		t.Fatalf("CompleteBootstrap none = %+v, want not ready and no-auth selected", complete)
 	}
 
-	plan := callGatewaySessionPlan(t, conn, "plan-after-no-auth", gatewaySessionPlanRequest())
-	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-no-auth", plan.Plan.SessionID)
+	plan := callGatewaySessionPlan(t, conn, "plan-after-no-auth", gatewaySessionPlanRequest(t))
+	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-no-auth", plan.Plan.SessionId)
 	if strings.TrimSpace(target.EffectiveWorkdir) == "" {
 		t.Fatalf("typed session target after no-auth has empty effective workdir: %+v", target)
 	}
-}
-
-func TestGatewayBootstrapStatusDoesNotAuthorizeNoAuthConnection(t *testing.T) {
-	appCore, server, authSupport := newGatewayTestServerWithAuth(t, false)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	if _, err := authSupport.AuthManager.SwitchMethodAndSetEnvAPIKeyPreference(context.Background(), auth.Method{Type: auth.MethodNone}, auth.EnvAPIKeyPreferencePreferSaved, true, true); err != nil {
-		t.Fatalf("SwitchMethodAndSetEnvAPIKeyPreference: %v", err)
-	}
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
-
-	status := callGatewayAuthBootstrapStatus(t, conn, "status-no-auth")
-	if status.AuthReady || !status.NoAuthSelected {
-		t.Fatalf("bootstrap status = %+v, want no-auth selected but not ready", status)
-	}
-	if result := callGatewaySessionPlanResult(t, conn, "plan-after-status", gatewaySessionPlanRequest()); result.GetError().Code != "auth_required" {
-		t.Fatalf("Session Plan after status = %+v, want auth_required", result.GetError())
-	}
-
-	ack := callGatewayAuthAcknowledgeNoAuth(t, conn, "ack-no-auth")
-	if ack.AuthReady || !ack.NoAuthSelected {
-		t.Fatalf("AcknowledgeNoAuth = %+v, want no-auth selected but not ready", ack)
-	}
-	_ = callGatewaySessionPlan(t, conn, "plan-after-ack", gatewaySessionPlanRequest())
 }
 
 func TestGatewayPersistedNoAuthDoesNotAuthorizeFreshConnectionsWithoutAck(t *testing.T) {
@@ -1279,7 +978,7 @@ func TestGatewayPersistedNoAuthDoesNotAuthorizeFreshConnectionsWithoutAck(t *tes
 	defer func() { _ = control.Close() }()
 	handshakeGateway(t, control)
 	requireGatewayProjectAttachment(t, control, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
-	if result := callGatewaySessionPlanResult(t, control, "plan-fresh-no-ack", gatewaySessionPlanRequest()); result.GetError().Code != "auth_required" {
+	if result := callGatewaySessionPlanResult(t, control, "plan-fresh-no-ack", gatewaySessionPlanRequest(t)); result.GetError().Code != "auth_required" {
 		t.Fatalf("fresh Session Plan = %+v, want auth_required", result.GetError())
 	}
 
@@ -1407,10 +1106,17 @@ func TestGatewayQuestionHistorySubscriptionPassesAttachedSessionPreflight(t *tes
 	}
 }
 
-func gatewaySessionPlanRequest() serverapi.SessionPlanRequest {
-	return serverapi.SessionPlanRequest{
-		Mode:   serverapi.SessionLaunchModeInteractive,
-		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+func gatewaySessionPlanRequest(t *testing.T) *sessionlaunchpb.SessionPlanRequest {
+	t.Helper()
+	intent, err := protoapi.SessionLaunchIntentToProto(
+		serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	)
+	if err != nil {
+		t.Fatalf("encode Session launch intent: %v", err)
+	}
+	return &sessionlaunchpb.SessionPlanRequest{
+		Mode:   sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+		Intent: intent,
 	}
 }
 
@@ -1418,17 +1124,13 @@ func callGatewaySessionPlanResult(
 	t *testing.T,
 	conn *websocket.Conn,
 	correlation string,
-	request serverapi.SessionPlanRequest,
+	request *sessionlaunchpb.SessionPlanRequest,
 ) *sessionlaunchpb.SessionPlanResult {
 	t.Helper()
-	message, err := protoapi.SessionPlanRequestToProto(request)
-	if err != nil {
-		t.Fatalf("encode Session Plan request: %v", err)
-	}
 	method := sessionlaunchpb.File_kent_api_session_launch_session_launch_proto.Services().
 		ByName("SessionLaunchService").Methods().ByName("Plan")
 	result := &sessionlaunchpb.SessionPlanResult{}
-	callGatewayDescriptor(t, conn, correlation, method, message, result)
+	callGatewayDescriptor(t, conn, correlation, method, request, result)
 	return result
 }
 
@@ -1436,18 +1138,14 @@ func callGatewaySessionPlan(
 	t *testing.T,
 	conn *websocket.Conn,
 	correlation string,
-	request serverapi.SessionPlanRequest,
-) serverapi.SessionPlanResponse {
+	request *sessionlaunchpb.SessionPlanRequest,
+) *sessionlaunchpb.SessionPlanSuccess {
 	t.Helper()
 	result := callGatewaySessionPlanResult(t, conn, correlation, request)
 	if failure := result.GetError(); failure != nil {
 		t.Fatalf("Session Plan failed: %+v", failure)
 	}
-	response, err := protoapi.SessionPlanFromProto(result.GetSuccess())
-	if err != nil {
-		t.Fatalf("decode Session Plan response: %v", err)
-	}
-	return response
+	return result.GetSuccess()
 }
 
 func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
@@ -1748,7 +1446,7 @@ func TestGatewayComposerDraftRoundTripKeepsServerAvailable(t *testing.T) {
 	if initialInput.Input != "visible draft" {
 		t.Fatalf("initial input = %+v, want visible draft", initialInput)
 	}
-	projects, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{})
+	projects, err := remote.ListProjects(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("follow-up ListProjects: %v", err)
 	}

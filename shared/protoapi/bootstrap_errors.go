@@ -26,8 +26,8 @@ func ServerNotReadyToProto(err *serverapi.ServerNotReadyError) (*serverpb.Server
 	case nil:
 	case serverapi.ServerNotReadyDetails:
 		details.OnboardingCompleted = value.OnboardingCompleted
-		details.SettingsPath = clonePointer(value.SettingsPath)
-		details.Diagnostic = clonePointer(value.Diagnostic)
+		details.SettingsPath = cloneBootstrapErrorPointer(value.SettingsPath)
+		details.Diagnostic = cloneBootstrapErrorPointer(value.Diagnostic)
 	default:
 		return nil, fmt.Errorf("server-not-ready details type %T is unsupported", err.Details)
 	}
@@ -47,8 +47,8 @@ func ServerNotReadyFromProto(details *serverpb.ServerNotReadyDetails) error {
 	}
 	return serverapi.NewServerNotReadyError(reason, serverapi.ServerNotReadyDetails{
 		OnboardingCompleted: details.OnboardingCompleted,
-		SettingsPath:        clonePointer(details.SettingsPath),
-		Diagnostic:          clonePointer(details.Diagnostic),
+		SettingsPath:        cloneBootstrapErrorPointer(details.SettingsPath),
+		Diagnostic:          cloneBootstrapErrorPointer(details.Diagnostic),
 	}, nil)
 }
 
@@ -202,7 +202,7 @@ func InternalFailureFromProto(details *sharedpb.InternalFailureDetails) error {
 
 func invalidRequestDetailsToProto(details serverapi.OnboardingInvalidRequestDetails) *onboardingpb.InvalidRequestDetails {
 	return &onboardingpb.InvalidRequestDetails{
-		FieldErrors: mapSlice(details.FieldErrors, func(field serverapi.OnboardingFinalizeFieldError) *onboardingpb.FieldError {
+		FieldErrors: mapBootstrapErrorSlice(details.FieldErrors, func(field serverapi.OnboardingFinalizeFieldError) *onboardingpb.FieldError {
 			return &onboardingpb.FieldError{Field: field.Field, Code: field.Code}
 		}),
 	}
@@ -210,7 +210,7 @@ func invalidRequestDetailsToProto(details serverapi.OnboardingInvalidRequestDeta
 
 func invalidRequestDetailsFromProto(details *onboardingpb.InvalidRequestDetails) serverapi.OnboardingInvalidRequestDetails {
 	return serverapi.OnboardingInvalidRequestDetails{
-		FieldErrors: mapSlice(details.FieldErrors, func(field *onboardingpb.FieldError) serverapi.OnboardingFinalizeFieldError {
+		FieldErrors: mapBootstrapErrorSlice(details.FieldErrors, func(field *onboardingpb.FieldError) serverapi.OnboardingFinalizeFieldError {
 			return serverapi.OnboardingFinalizeFieldError{Field: field.Field, Code: field.Code}
 		}),
 	}
@@ -233,8 +233,8 @@ func importUnavailableDetailsToProto(details serverapi.OnboardingImportUnavailab
 		ImportKind:       kind,
 		Mode:             mode,
 		ProviderUuid:     uuidToString(details.ProviderUUID),
-		ImportProviderId: clonePointer(details.ImportProviderID),
-		SourceRootPath:   clonePointer(details.SourceRootPath),
+		ImportProviderId: cloneBootstrapErrorPointer(details.ImportProviderID),
+		SourceRootPath:   cloneBootstrapErrorPointer(details.SourceRootPath),
 		Reason:           reason,
 	}, nil
 }
@@ -260,8 +260,8 @@ func importUnavailableDetailsFromProto(details *onboardingpb.ImportUnavailableDe
 		ImportKind:       kind,
 		Mode:             mode,
 		ProviderUUID:     provider,
-		ImportProviderID: clonePointer(details.ImportProviderId),
-		SourceRootPath:   clonePointer(details.SourceRootPath),
+		ImportProviderID: cloneBootstrapErrorPointer(details.ImportProviderId),
+		SourceRootPath:   cloneBootstrapErrorPointer(details.SourceRootPath),
 		ReasonCode:       reason,
 	}, nil
 }
@@ -282,8 +282,8 @@ func importFailedDetailsToProto(details serverapi.OnboardingImportFailedDetails)
 	return &onboardingpb.ImportFailedDetails{
 		ImportKind:       kind,
 		ProviderUuid:     uuidToString(details.ProviderUUID),
-		ImportProviderId: clonePointer(details.ImportProviderID),
-		SourceRootPath:   clonePointer(details.SourceRootPath),
+		ImportProviderId: cloneBootstrapErrorPointer(details.ImportProviderID),
+		SourceRootPath:   cloneBootstrapErrorPointer(details.SourceRootPath),
 		Operation:        operation,
 		Cause:            details.Cause,
 	}, nil
@@ -309,8 +309,8 @@ func importFailedDetailsFromProto(details *onboardingpb.ImportFailedDetails) (se
 	return serverapi.OnboardingImportFailedDetails{
 		ImportKind:       kind,
 		ProviderUUID:     provider,
-		ImportProviderID: clonePointer(details.ImportProviderId),
-		SourceRootPath:   clonePointer(details.SourceRootPath),
+		ImportProviderID: cloneBootstrapErrorPointer(details.ImportProviderId),
+		SourceRootPath:   cloneBootstrapErrorPointer(details.SourceRootPath),
 		Operation:        operation,
 		Cause:            details.Cause,
 	}, nil
@@ -369,7 +369,7 @@ func rollbackPrimaryToProto(primary serverapi.OnboardingRollbackPrimaryFailure) 
 		}
 	case primary.InternalFailure != nil:
 		message.Failure = &onboardingpb.RollbackPrimaryFailure_InternalFailure{
-			InternalFailure: &sharedpb.InternalFailureDetails{Cause: clonePointer(primary.InternalFailure.Cause)},
+			InternalFailure: &sharedpb.InternalFailureDetails{Cause: cloneBootstrapErrorPointer(primary.InternalFailure.Cause)},
 		}
 	default:
 		return nil, errors.New("onboarding rollback primary failure is required")
@@ -417,7 +417,7 @@ func rollbackPrimaryFromProto(message *onboardingpb.RollbackPrimaryFailure) (ser
 		details := serverapi.OnboardingCanceledDetails{Phase: phase}
 		return serverapi.OnboardingRollbackPrimaryFailure{Canceled: &details}, err
 	case *onboardingpb.RollbackPrimaryFailure_InternalFailure:
-		details := serverapi.OnboardingInternalFailureDetails{Cause: clonePointer(failure.InternalFailure.Cause)}
+		details := serverapi.OnboardingInternalFailureDetails{Cause: cloneBootstrapErrorPointer(failure.InternalFailure.Cause)}
 		return serverapi.OnboardingRollbackPrimaryFailure{InternalFailure: &details}, nil
 	default:
 		return serverapi.OnboardingRollbackPrimaryFailure{}, fmt.Errorf("onboarding rollback primary failure %T is unsupported", failure)
@@ -469,6 +469,28 @@ func importKindFromProto(kind onboardingpb.ImportKind) (serverapi.OnboardingImpo
 		return serverapi.OnboardingImportKindCommands, nil
 	default:
 		return "", fmt.Errorf("protobuf onboarding import kind %v is unsupported", kind)
+	}
+}
+
+func onboardingImportModeToProto(mode serverapi.OnboardingImportMode) (onboardingpb.ImportMode, error) {
+	switch mode {
+	case serverapi.OnboardingImportModeNone:
+		return onboardingpb.ImportMode_IMPORT_MODE_NONE, nil
+	case serverapi.OnboardingImportModeSymlinkSource:
+		return onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, nil
+	default:
+		return 0, fmt.Errorf("onboarding import mode %q is unsupported", mode)
+	}
+}
+
+func onboardingImportModeFromProto(mode onboardingpb.ImportMode) (serverapi.OnboardingImportMode, error) {
+	switch mode {
+	case onboardingpb.ImportMode_IMPORT_MODE_NONE:
+		return serverapi.OnboardingImportModeNone, nil
+	case onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE:
+		return serverapi.OnboardingImportModeSymlinkSource, nil
+	default:
+		return "", fmt.Errorf("protobuf onboarding import mode %v is unsupported", mode)
 	}
 }
 
@@ -571,4 +593,23 @@ func uuidFromString(value *string) (*uuid.UUID, error) {
 		return nil, err
 	}
 	return &parsed, nil
+}
+
+func cloneBootstrapErrorPointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func mapBootstrapErrorSlice[A, B any](values []A, convert func(A) B) []B {
+	if values == nil {
+		return nil
+	}
+	result := make([]B, len(values))
+	for index, value := range values {
+		result[index] = convert(value)
+	}
+	return result
 }

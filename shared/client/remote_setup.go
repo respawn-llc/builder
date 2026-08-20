@@ -50,7 +50,7 @@ func (s remoteConnectionSetup) run(ctx context.Context, conn rpcwire.Conn) (remo
 			return remoteConnectionState{}, err
 		}
 	}
-	attachment, err := s.attach(ctx, conn)
+	attachment, err := attachRemoteBinaryRPC(ctx, conn, s.attachmentIntent)
 	if err != nil {
 		return remoteConnectionState{}, err
 	}
@@ -60,23 +60,11 @@ func (s remoteConnectionSetup) run(ctx context.Context, conn rpcwire.Conn) (remo
 		}
 	}
 	if s.additionalAttachmentIntent != nil {
-		if _, err := s.attachIntent(ctx, conn, s.additionalAttachmentIntent); err != nil {
+		if _, err := attachRemoteBinaryRPC(ctx, conn, s.additionalAttachmentIntent); err != nil {
 			return remoteConnectionState{}, err
 		}
 	}
 	return remoteConnectionState{identity: identity, attachment: attachment}, nil
-}
-
-func (s remoteConnectionSetup) attach(ctx context.Context, conn rpcwire.Conn) (*remoteAttachment, error) {
-	return s.attachIntent(ctx, conn, s.attachmentIntent)
-}
-
-func (s remoteConnectionSetup) attachIntent(
-	ctx context.Context,
-	conn rpcwire.Conn,
-	intent *remoteAttachmentIntent,
-) (*remoteAttachment, error) {
-	return attachRemoteBinaryRPC(ctx, conn, intent)
 }
 
 func handshakeBinaryRPC(ctx context.Context, conn rpcwire.Conn) (protocol.ServerIdentity, error) {
@@ -202,11 +190,7 @@ func attachSessionGeneratedError(failure *connectionpb.AttachSessionError) error
 		}
 		return fmt.Errorf("%w: session %q", serverapi.ErrWorkspaceNotRegistered, details.SessionId)
 	case "project_unavailable":
-		typed, err := protoapi.ProjectUnavailableFromProto(failure.GetProjectUnavailable())
-		if err != nil {
-			return err
-		}
-		return typed
+		return projectUnavailableError(failure.GetProjectUnavailable())
 	case "server_not_ready":
 		return protoapi.ServerNotReadyFromProto(failure.GetServerNotReady())
 	case "internal_failure":
@@ -228,13 +212,9 @@ func connectionAttachmentGeneratedError(
 	case "project_not_found":
 		return projectNotFoundError(notFound)
 	case "workspace_not_registered":
-		return protoapi.WorkspaceNotRegisteredFromProto(notRegistered)
+		return workspaceNotRegisteredError(notRegistered)
 	case "project_unavailable":
-		typed, err := protoapi.ProjectUnavailableFromProto(unavailable)
-		if err != nil {
-			return err
-		}
-		return typed
+		return projectUnavailableError(unavailable)
 	case "server_not_ready":
 		return protoapi.ServerNotReadyFromProto(notReady)
 	case "internal_failure":

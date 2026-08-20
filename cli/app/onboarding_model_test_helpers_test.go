@@ -4,14 +4,14 @@ import (
 	"testing"
 
 	"core/shared/config"
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 )
 
 func newOnboardingModelForWorkspace(_ string, _ string, state onboardingFlowState) *onboardingModel {
 	return newOnboardingModel(nil, state)
 }
 
-func testOnboardingFlowState(t *testing.T, mutate func(*config.App), suppliedFacts ...serverapi.CapabilityFactsResponse) onboardingFlowState {
+func testOnboardingFlowState(t *testing.T, mutate func(*config.App), suppliedFacts ...*capabilitypb.Facts) onboardingFlowState {
 	t.Helper()
 	cfg := onboardingSeedConfig()
 	if mutate != nil {
@@ -29,10 +29,37 @@ func testOnboardingFlowState(t *testing.T, mutate func(*config.App), suppliedFac
 	return state
 }
 
-func testOnboardingFlowStatePtr(t *testing.T, mutate func(*config.App), suppliedFacts ...serverapi.CapabilityFactsResponse) *onboardingFlowState {
+func testOnboardingFlowStatePtr(t *testing.T, mutate func(*config.App), suppliedFacts ...*capabilitypb.Facts) *onboardingFlowState {
 	t.Helper()
 	state := testOnboardingFlowState(t, mutate, suppliedFacts...)
 	return &state
+}
+
+func emptyOnboardingCapabilityFacts() *capabilitypb.Facts {
+	return &capabilitypb.Facts{
+		Models: &capabilitypb.ModelFacts{
+			UnknownFallback: &capabilitypb.ModelFact{
+				Verbosity: &capabilitypb.ModelVerbosityFact{Source: "test"},
+			},
+		},
+		Providers: &capabilitypb.ProviderFacts{},
+		Imports: &capabilitypb.ImportFacts{
+			Workspace:       &capabilitypb.ImportWorkspaceFact{},
+			Skills:          &capabilitypb.ImportItemGroupFact{Target: &capabilitypb.ImportTargetFact{}},
+			Commands:        &capabilitypb.ImportItemGroupFact{Target: &capabilitypb.ImportTargetFact{}},
+			Recommendations: &capabilitypb.ImportRecommendationFacts{},
+		},
+		Defaults: &capabilitypb.DefaultFacts{
+			PrimaryModelId: "test-model",
+			Thinking:       &capabilitypb.ThinkingDefaultFact{Mode: "default"},
+			CompactionMode: "native",
+		},
+		Recommendations: &capabilitypb.RecommendationFacts{},
+	}
+}
+
+func emptyOnboardingImportFacts() *capabilitypb.ImportFacts {
+	return emptyOnboardingCapabilityFacts().Imports
 }
 
 func normalizeOnboardingReviewerSeedInheritance(cfg *config.App) {

@@ -11,6 +11,8 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
 	"core/shared/config"
+	"core/shared/protoapi"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/serverapi"
 )
 
@@ -70,16 +72,22 @@ func TestCoreWorkspaceChatContextAndFollowingPlanReloadPrimaryAndSecondaryFromSt
 			if err != nil {
 				t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 			}
-			plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-				Mode:   serverapi.SessionLaunchModeHeadless,
-				Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			intent, err := protoapi.SessionLaunchIntentToProto(
+				serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			)
+			if err != nil {
+				t.Fatalf("convert Session launch intent: %v", err)
+			}
+			plan, err := client.PlanSession(context.Background(), &sessionlaunchpb.SessionPlanRequest{
+				Mode:   sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_HEADLESS,
+				Intent: intent,
 			})
 			if err != nil {
 				t.Fatalf("PlanSession: %v", err)
 			}
-			if plan.Plan.ActiveSettings.ModelContextWindow != test.window ||
-				plan.Plan.ActiveSettings.ContextCompactionThresholdTokens != test.threshold ||
-				plan.Plan.ActiveSettings.CompactionMode != config.CompactionModeNone {
+			if plan.Plan.ActiveSettings.ModelContextWindow != int32(test.window) ||
+				plan.Plan.ActiveSettings.ContextCompactionThresholdTokens != int32(test.threshold) ||
+				plan.Plan.ActiveSettings.CompactionMode != sessionlaunchpb.CompactionMode_COMPACTION_MODE_NONE {
 				t.Fatalf("following plan settings = %+v", plan.Plan.ActiveSettings)
 			}
 		})

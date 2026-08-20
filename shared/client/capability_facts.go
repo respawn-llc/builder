@@ -8,35 +8,21 @@ import (
 	"core/shared/serverapi"
 )
 
-func (c *Remote) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	request, err := protoapi.CapabilityFactsRequestToProto(req)
-	if err != nil {
-		return serverapi.CapabilityFactsResponse{}, err
-	}
-	result := &capabilitypb.GetFactsResult{}
-	if err := c.callBinary(
-		ctx,
+func (c *Remote) GetFacts(ctx context.Context, req *capabilitypb.GetFactsRequest) (*capabilitypb.Facts, error) {
+	return callGeneratedBinary(c, ctx,
 		bootstrapMethod(capabilitypb.File_kent_api_capability_capability_proto, "CapabilityService", "GetFacts"),
-		request,
-		result,
-	); err != nil {
-		return serverapi.CapabilityFactsResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		switch failure.Code {
-		case "unsupported_provider":
-			return serverapi.CapabilityFactsResponse{}, &serverapi.UnsupportedProviderError{
-				ProviderID: failure.GetUnsupportedProvider().ProviderId,
+		req,
+		&capabilitypb.GetFactsResult{},
+		func(failure *capabilitypb.GetFactsError) error {
+			switch failure.Code {
+			case "unsupported_provider":
+				return &serverapi.UnsupportedProviderError{
+					ProviderID: failure.GetUnsupportedProvider().ProviderId,
+				}
+			case "internal_failure":
+				return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+			default:
+				return generatedOperationFailure(failure.Code)
 			}
-		case "internal_failure":
-			return serverapi.CapabilityFactsResponse{}, protoapi.InternalFailureFromProto(failure.GetInternalFailure())
-		default:
-			return serverapi.CapabilityFactsResponse{}, generatedOperationFailure(failure.Code)
-		}
-	}
-	response, err := protoapi.CapabilityFactsFromProto(result.GetSuccess())
-	if err != nil {
-		return serverapi.CapabilityFactsResponse{}, err
-	}
-	return response, nil
+		})
 }

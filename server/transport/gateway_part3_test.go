@@ -13,7 +13,6 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"encoding/json"
@@ -23,7 +22,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -73,58 +71,6 @@ func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 	}
 	if status.Target.WorkspaceID != binding.WorkspaceID {
 		t.Fatalf("target workspace id = %q, want %q", status.Target.WorkspaceID, binding.WorkspaceID)
-	}
-}
-
-func TestCompactContextWithoutReadyRuntimePreservesJoinedErrorLoopbackAndRemote(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	store := createGatewayAuthoritativeSession(t, appCore)
-
-	request := serverapi.RuntimeCompactContextRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
-		Args:            "compact without a Ready runtime",
-	}
-	loopbackErr := appCore.RuntimeControlClient().CompactContext(context.Background(), request)
-	requireCompactRuntimeUnavailableNotAccepted(t, loopbackErr)
-	if err := appCore.RuntimeControlClient().SetSessionName(context.Background(), serverapi.RuntimeSetSessionNameRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
-		Name:            "must remain unavailable",
-	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("loopback compact created a runtime: SetSessionName error = %v", err)
-	}
-
-	remote, err := remoteclient.DialRemoteURLForSession(
-		context.Background(),
-		"ws"+server.URL[len("http"):],
-		store.Meta().SessionID,
-	)
-	if err != nil {
-		t.Fatalf("DialRemoteURLForSession: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	request.ClientRequestID = runtimeids.NewRuntimeClientRequestID().String()
-	remoteErr := remote.CompactContext(context.Background(), request)
-	requireCompactRuntimeUnavailableNotAccepted(t, remoteErr)
-	if err := appCore.RuntimeControlClient().SetSessionName(context.Background(), serverapi.RuntimeSetSessionNameRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
-		Name:            "must still remain unavailable",
-	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("remote compact created a runtime: SetSessionName error = %v", err)
-	}
-}
-
-func requireCompactRuntimeUnavailableNotAccepted(t *testing.T, err error) {
-	t.Helper()
-	if !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
-		t.Fatalf("CompactContext error = %v, want runtime command not accepted", err)
-	}
-	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("CompactContext error = %v, want runtime unavailable", err)
 	}
 }
 
@@ -468,82 +414,58 @@ func callGatewayAuthBootstrapStatus(
 	t *testing.T,
 	conn *websocket.Conn,
 	correlation string,
-) serverapi.AuthGetBootstrapStatusResponse {
+) *authpb.BootstrapStatus {
 	t.Helper()
 	var result authpb.GetBootstrapStatusResult
 	callGatewayDescriptor(t, conn, correlation, gatewayAuthMethod(t, "GetBootstrapStatus"), &emptypb.Empty{}, &result)
 	if result.GetSuccess() == nil {
 		t.Fatalf("GetBootstrapStatus failed: %+v", result.GetError())
 	}
-	status, err := protoapi.AuthBootstrapStatusFromProto(result.GetSuccess())
-	if err != nil {
-		t.Fatalf("decode GetBootstrapStatus success: %v", err)
-	}
-	return status
+	return result.GetSuccess()
 }
 
 func callGatewayAuthCompleteBootstrap(
 	t *testing.T,
 	conn *websocket.Conn,
 	correlation string,
-	request serverapi.AuthCompleteBootstrapRequest,
-) serverapi.AuthCompleteBootstrapResponse {
+	request *authpb.CompleteBootstrapRequest,
+) *authpb.BootstrapCompletion {
 	t.Helper()
-	message, err := protoapi.AuthCompleteBootstrapRequestToProto(request)
-	if err != nil {
-		t.Fatalf("encode CompleteBootstrap request: %v", err)
-	}
 	var result authpb.CompleteBootstrapResult
-	callGatewayDescriptor(t, conn, correlation, gatewayAuthMethod(t, "CompleteBootstrap"), message, &result)
+	callGatewayDescriptor(t, conn, correlation, gatewayAuthMethod(t, "CompleteBootstrap"), request, &result)
 	if result.GetSuccess() == nil {
 		t.Fatalf("CompleteBootstrap failed: %+v", result.GetError())
 	}
-	response, err := protoapi.AuthBootstrapCompletionFromProto(result.GetSuccess())
-	if err != nil {
-		t.Fatalf("decode CompleteBootstrap success: %v", err)
-	}
-	return response
+	return result.GetSuccess()
 }
 
 func callGatewayAuthAcknowledgeNoAuth(
 	t *testing.T,
 	conn *websocket.Conn,
 	correlation string,
-) serverapi.AuthAcknowledgeNoAuthResponse {
+) *authpb.NoAuthAcknowledgement {
 	t.Helper()
 	var result authpb.AcknowledgeNoAuthResult
 	callGatewayDescriptor(t, conn, correlation, gatewayAuthMethod(t, "AcknowledgeNoAuth"), &emptypb.Empty{}, &result)
 	if result.GetSuccess() == nil {
 		t.Fatalf("AcknowledgeNoAuth failed: %+v", result.GetError())
 	}
-	response, err := protoapi.AuthNoAuthAcknowledgementFromProto(result.GetSuccess())
-	if err != nil {
-		t.Fatalf("decode AcknowledgeNoAuth success: %v", err)
-	}
-	return response
+	return result.GetSuccess()
 }
 
 func callGatewayAuthStatus(
 	t *testing.T,
 	conn *websocket.Conn,
 	correlation string,
-	request serverapi.AuthStatusRequest,
-) serverapi.AuthStatusResponse {
+	request *authpb.GetStatusRequest,
+) *authpb.Status {
 	t.Helper()
-	message, err := protoapi.AuthStatusRequestToProto(request)
-	if err != nil {
-		t.Fatalf("encode GetStatus request: %v", err)
-	}
 	var result authpb.GetStatusResult
-	callGatewayDescriptor(t, conn, correlation, gatewayAuthMethod(t, "GetStatus"), message, &result)
+	callGatewayDescriptor(t, conn, correlation, gatewayAuthMethod(t, "GetStatus"), request, &result)
 	if result.GetSuccess() == nil {
 		t.Fatalf("GetStatus failed: %+v", result.GetError())
 	}
-	response, err := protoapi.AuthStatusFromProto(result.GetSuccess())
-	if err != nil {
-		t.Fatalf("decode GetStatus success: %v", err)
-	}
-	return response
+	return result.GetSuccess()
 }
 
 func callGateway(t *testing.T, conn *websocket.Conn, id string, method string, params any, out any) {
@@ -578,105 +500,6 @@ func callGatewayExpectError(t *testing.T, conn *websocket.Conn, id string, metho
 		t.Fatalf("%s unexpectedly succeeded", method)
 	}
 	return resp.Error
-}
-
-func callGatewayRaw(t *testing.T, conn *websocket.Conn, id string, method string, params json.RawMessage) protocol.Response {
-	t.Helper()
-	if err := websocket.JSON.Send(conn, protocol.Request{JSONRPC: protocol.JSONRPCVersion, ID: id, Method: method, Params: params}); err != nil {
-		t.Fatalf("send raw %s: %v", method, err)
-	}
-	var resp protocol.Response
-	if err := websocket.JSON.Receive(conn, &resp); err != nil {
-		t.Fatalf("receive raw %s: %v", method, err)
-	}
-	return resp
-}
-
-func TestGatewayRunPromptValidatesTypedIntentCallerAndSelector(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
-
-	valid := map[string]json.RawMessage{
-		"omitted caller": []byte(`{"client_request_id":"raw-omitted","intent":{"kind":"open_existing","session_id":"missing-session"},"prompt":"hello"}`),
-		"null caller":    []byte(`{"client_request_id":"raw-null","intent":{"kind":"open_existing","session_id":"missing-session"},"caller_session_id":null,"prompt":"hello","overrides":{"agent_role":null}}`),
-	}
-	var validCode int
-	for name, params := range valid {
-		t.Run(name, func(t *testing.T) {
-			resp := callGatewayRaw(t, conn, "raw-valid-"+name, protocol.MethodRunPrompt, params)
-			if resp.Error == nil {
-				t.Fatal("raw request unexpectedly succeeded")
-			}
-			if resp.Error.Code == protocol.ErrCodeInvalidParams {
-				t.Fatalf("raw %s request rejected as invalid params: %+v", name, resp.Error)
-			}
-			if validCode == 0 {
-				validCode = resp.Error.Code
-			} else if resp.Error.Code != validCode {
-				t.Fatalf("raw %s code = %d, want omitted/null equivalence code %d", name, resp.Error.Code, validCode)
-			}
-		})
-	}
-
-	for name, params := range map[string]json.RawMessage{
-		"empty caller":        []byte(`{"client_request_id":"raw-empty-caller","caller_session_id":"","prompt":"hello"}`),
-		"whitespace caller":   []byte(`{"client_request_id":"raw-space-caller","caller_session_id":" \t ","prompt":"hello"}`),
-		"legacy selected":     []byte(`{"client_request_id":"raw-legacy-selected","selected_session_id":"missing-session","prompt":"hello"}`),
-		"legacy parent":       []byte(`{"client_request_id":"raw-legacy-parent","parent_session_id":"parent-session","prompt":"hello"}`),
-		"empty selector":      []byte(`{"client_request_id":"raw-empty-selector","prompt":"hello","overrides":{"agent_role":""}}`),
-		"whitespace selector": []byte(`{"client_request_id":"raw-space-selector","prompt":"hello","overrides":{"agent_role":" \t "}}`),
-	} {
-		t.Run(name, func(t *testing.T) {
-			resp := callGatewayRaw(t, conn, "raw-invalid-"+name, protocol.MethodRunPrompt, params)
-			if resp.Error == nil || resp.Error.Code != protocol.ErrCodeInvalidParams {
-				t.Fatalf("raw %s response = %+v, want invalid params", name, resp)
-			}
-		})
-	}
-}
-
-func TestGatewaySessionExecutionEnvironmentRejectsExtraRequestField(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	response := callGatewayRaw(
-		t,
-		conn,
-		"session-execution-extra",
-		protocol.MethodSessionGetExecutionEnvironment,
-		json.RawMessage(`{"session_id":"environment-session","extra":true}`),
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeInvalidParams {
-		t.Fatalf("Session execution response = %+v, want invalid params", response)
-	}
-}
-
-func TestGatewayRunPromptRejectsMixedTypedAndLegacyLaunchFields(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
-
-	raw := json.RawMessage(`{"client_request_id":"mixed-launch","intent":{"kind":"open_existing","session_id":"target"},"selected_session_id":"legacy","prompt":"hello"}`)
-	resp := callGatewayRaw(t, conn, "mixed-launch", protocol.MethodRunPrompt, raw)
-	if resp.Error == nil || resp.Error.Code != protocol.ErrCodeInvalidParams {
-		t.Fatalf("mixed launch response = %+v, want invalid params", resp)
-	}
 }
 
 func TestGatewayWorkflowProjectLabelsRoundTrip(t *testing.T) {
@@ -737,61 +560,6 @@ func TestGatewayWorkflowProjectLabelsRoundTrip(t *testing.T) {
 	assertWorkflowLabelGatewayError(t, invalidDelete, serverapi.WorkflowLabelErrorReasonInvalidMutation, "label_id")
 }
 
-func TestDecodeAndHandleMapsMalformedWorkflowLabelFilters(t *testing.T) {
-	projectID := "project-1"
-	limit := 25
-	requests := []struct {
-		name     string
-		response protocol.Response
-	}{
-		{
-			name: "board",
-			response: decodeAndHandle[serverapi.WorkflowBoardRequest, struct{}](
-				protocol.Request{ID: "invalid-board-filter", Params: mustJSON(t, serverapi.WorkflowBoardRequest{ProjectID: projectID})},
-				func(serverapi.WorkflowBoardRequest) (struct{}, error) {
-					t.Fatal("invalid board filter reached handler")
-					return struct{}{}, nil
-				},
-			),
-		},
-		{
-			name: "board cards",
-			response: decodeAndHandle[serverapi.WorkflowBoardNodeCardsListRequest, struct{}](
-				protocol.Request{ID: "invalid-board-card-filter", Params: mustJSON(t, serverapi.WorkflowBoardNodeCardsListRequest{
-					ProjectID:  projectID,
-					WorkflowID: runtimeids.NewWorkflowID(),
-					NodeID:     runtimeids.NewGraphEntityID(),
-				})},
-				func(serverapi.WorkflowBoardNodeCardsListRequest) (struct{}, error) {
-					t.Fatal("invalid board-card filter reached handler")
-					return struct{}{}, nil
-				},
-			),
-		},
-		{
-			name: "task list",
-			response: decodeAndHandle[serverapi.WorkflowTaskListRequest, struct{}](
-				protocol.Request{ID: "invalid-task-list-filter", Params: mustJSON(t, serverapi.WorkflowTaskListRequest{
-					ProjectID: &projectID,
-					Limit:     &limit,
-				})},
-				func(serverapi.WorkflowTaskListRequest) (struct{}, error) {
-					t.Fatal("invalid task-list filter reached handler")
-					return struct{}{}, nil
-				},
-			),
-		},
-	}
-	for _, tt := range requests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.response.Error == nil {
-				t.Fatal("malformed label filter returned success")
-			}
-			assertWorkflowLabelGatewayError(t, tt.response.Error, serverapi.WorkflowLabelErrorReasonInvalidFilter, "label_filter.kind")
-		})
-	}
-}
-
 func assertWorkflowLabelGatewayError(t *testing.T, response *protocol.ResponseError, reason serverapi.WorkflowLabelErrorReason, field string) {
 	t.Helper()
 	if response == nil {
@@ -803,215 +571,6 @@ func assertWorkflowLabelGatewayError(t *testing.T, response *protocol.ResponseEr
 	decoded, ok := serverapi.DecodeWorkflowLabelError(response.Data, response.Message).(*serverapi.WorkflowLabelError)
 	if !ok || decoded.Reason != reason || decoded.Field == nil || *decoded.Field != field {
 		t.Fatalf("decoded workflow label error = %+v, want reason %q field %q", decoded, reason, field)
-	}
-}
-
-func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
-	projectID := "project-1"
-	workflowID := runtimeids.NewWorkflowID()
-	source := &serverapi.WorkflowTaskListScopeError{
-		Reason:     serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked,
-		ProjectID:  &projectID,
-		WorkflowID: &workflowID,
-	}
-	response := decodeAndHandle[serverapi.WorkflowTaskListRequest, struct{}](
-		protocol.Request{ID: "scope-error", Params: mustJSON(t, serverapi.WorkflowTaskListRequest{
-			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &projectID})},
-		func(serverapi.WorkflowTaskListRequest) (struct{}, error) {
-			return struct{}{}, source
-		},
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowTaskListScope {
-		t.Fatalf("response error = %+v, want task-list scope code", response.Error)
-	}
-	decoded, ok := serverapi.DecodeWorkflowTaskListScopeError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskListScopeError)
-	if !ok || decoded.Reason != source.Reason || decoded.ProjectID == nil || *decoded.ProjectID != projectID || decoded.WorkflowID == nil || *decoded.WorkflowID != workflowID {
-		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
-	}
-}
-
-func TestDecodeAndHandlePreservesWorkflowTaskCreateSelectionError(t *testing.T) {
-	workflowID := runtimeids.NewWorkflowID()
-	source := &serverapi.WorkflowTaskCreateSelectionError{
-		Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
-		ProjectID:  "project-1",
-		WorkflowID: &workflowID,
-	}
-	response := decodeAndHandle[serverapi.WorkflowTaskCreateRequest, struct{}](
-		protocol.Request{ID: "selection-error", Params: mustJSON(t, serverapi.WorkflowTaskCreateRequest{ProjectID: "project-1", Title: "Task"})},
-		func(serverapi.WorkflowTaskCreateRequest) (struct{}, error) {
-			return struct{}{}, source
-		},
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowTaskCreateSelection {
-		t.Fatalf("response error = %+v, want task-create selection code", response.Error)
-	}
-	decoded, ok := serverapi.DecodeWorkflowTaskCreateSelectionError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskCreateSelectionError)
-	if !ok ||
-		decoded.Reason != source.Reason ||
-		decoded.ProjectID != source.ProjectID ||
-		decoded.WorkflowID == nil ||
-		*decoded.WorkflowID != *source.WorkflowID {
-		t.Fatalf("decoded selection error = %+v, want %+v", decoded, source)
-	}
-}
-
-func TestDecodeAndHandlePreservesWorkflowTaskCreateConflictError(t *testing.T) {
-	source := &serverapi.WorkflowTaskCreateConflictError{
-		Reason: serverapi.WorkflowTaskCreateConflictReasonSerialization,
-	}
-	response := decodeAndHandle[serverapi.WorkflowTaskCreateRequest, struct{}](
-		protocol.Request{ID: "create-conflict", Params: mustJSON(t, serverapi.WorkflowTaskCreateRequest{ProjectID: "project-1", Title: "Task"})},
-		func(serverapi.WorkflowTaskCreateRequest) (struct{}, error) {
-			return struct{}{}, source
-		},
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowTaskCreateConflict {
-		t.Fatalf("response error = %+v, want task-create conflict code", response.Error)
-	}
-	decoded, ok := serverapi.DecodeWorkflowTaskCreateConflictError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskCreateConflictError)
-	if !ok || decoded.Reason != source.Reason {
-		t.Fatalf("decoded conflict error = %+v, want %+v", decoded, source)
-	}
-}
-
-func TestDecodeAndHandlePreservesWorkflowLabelError(t *testing.T) {
-	projectID := "project-1"
-	source := &serverapi.WorkflowLabelError{
-		Reason:    serverapi.WorkflowLabelErrorReasonNameConflict,
-		ProjectID: &projectID,
-	}
-	response := decodeAndHandle[serverapi.WorkflowProjectLabelCreateRequest, struct{}](
-		protocol.Request{ID: "label-conflict", Params: mustJSON(t, serverapi.WorkflowProjectLabelCreateRequest{
-			ProjectID: "project-1",
-			Name:      "Priority",
-		})},
-		func(serverapi.WorkflowProjectLabelCreateRequest) (struct{}, error) {
-			return struct{}{}, source
-		},
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowLabel {
-		t.Fatalf("response error = %+v, want workflow label code", response.Error)
-	}
-	decoded, ok := serverapi.DecodeWorkflowLabelError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowLabelError)
-	if !ok || !reflect.DeepEqual(decoded, source) {
-		t.Fatalf("decoded label error = %+v, want %+v", decoded, source)
-	}
-}
-
-func TestDecodeAndHandleMapsMalformedTaskLabelMutationToTypedError(t *testing.T) {
-	raw101 := make([]string, serverapi.WorkflowLabelMaxIDs+1)
-	for index := range raw101 {
-		raw101[index] = "not-a-uuid"
-	}
-	response := decodeAndHandle[serverapi.WorkflowTaskLabelsUpdateRequest, struct{}](
-		protocol.Request{ID: "invalid-label-mutation", Params: mustJSON(t, serverapi.WorkflowTaskLabelsUpdateRequest{
-			TaskID:      "task-1",
-			AddLabelIDs: raw101,
-		})},
-		func(serverapi.WorkflowTaskLabelsUpdateRequest) (struct{}, error) {
-			t.Fatal("handler called for malformed task label mutation")
-			return struct{}{}, nil
-		},
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowLabel {
-		t.Fatalf("response error = %+v, want workflow label code", response.Error)
-	}
-	decoded, ok := serverapi.DecodeWorkflowLabelError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowLabelError)
-	if !ok ||
-		decoded.Reason != serverapi.WorkflowLabelErrorReasonInvalidMutation ||
-		decoded.Field == nil ||
-		*decoded.Field != "add_label_ids" {
-		t.Fatalf("decoded mutation error = %+v", decoded)
-	}
-}
-
-func TestDecodeAndHandlePreservesWorktreeStructuredErrors(t *testing.T) {
-	source := &serverapi.WorktreeSelectorError{
-		Kind:  serverapi.WorktreeSelectorErrorKindAmbiguous,
-		Input: "feature",
-		Candidates: []serverapi.WorktreeSelectorCandidate{{
-			Variant:          serverapi.WorktreeTopologyVariantRegistered,
-			Selector:         "feature-a",
-			FallbackIdentity: "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
-		}},
-	}
-	response := decodeAndHandle[serverapi.WorktreeSelectorPreviewRequest, struct{}](
-		protocol.Request{
-			ID:     "worktree-selector-error",
-			Params: mustJSON(t, serverapi.WorktreeSelectorPreviewRequest{SessionID: "session", Selector: "feature"}),
-		},
-		func(serverapi.WorktreeSelectorPreviewRequest) (struct{}, error) {
-			return struct{}{}, source
-		},
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorktreeSelector {
-		t.Fatalf("response error = %+v, want structured worktree selector error", response.Error)
-	}
-	decoded := serverapi.DecodeWorktreeRPCError(response.Error.Data, response.Error.Message)
-	var selector *serverapi.WorktreeSelectorError
-	if !errors.As(decoded, &selector) || selector.Kind != source.Kind || selector.Input != source.Input || len(selector.Candidates) != 1 || selector.Candidates[0].FallbackIdentity != source.Candidates[0].FallbackIdentity {
-		t.Fatalf("decoded selector error = %+v (%v), want %+v", selector, decoded, source)
-	}
-}
-
-func TestDecodeAndHandlePreservesWorktreeCreateOwnership(t *testing.T) {
-	source := &serverapi.WorktreeCreateError{
-		Owner: serverapi.WorktreeCreateErrorOwnerBaseRef,
-		Diagnostic: errors.Join(
-			errors.New("base ref object disappeared"),
-			errors.New("cleanup removed no worktree"),
-		).Error(),
-	}
-	response := decodeAndHandle[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](
-		protocol.Request{
-			ID: "worktree-create-error",
-			Params: mustJSON(t, serverapi.WorktreeCreateRequest{
-				SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-				SessionID:        "session",
-				BaseRef:          "HEAD",
-				CreateBranch:     true,
-				BranchName:       "feature",
-			}),
-		},
-		func(serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
-			return serverapi.WorktreeCreateResponse{}, source
-		},
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorktreeCreate {
-		t.Fatalf("response error = %+v, want worktree create code", response.Error)
-	}
-	if !reflect.DeepEqual(response.Error.Data, source.RPCErrorData()) {
-		t.Fatalf("response data = %s, want %s", response.Error.Data, source.RPCErrorData())
-	}
-}
-
-func TestDecodeAndHandleRejectsInvalidWorkflowActionResponse(t *testing.T) {
-	response := decodeAndHandle[struct{}, serverapi.WorkflowTaskStartResponse](
-		protocol.Request{ID: "invalid-workflow-action-response", Params: mustJSON(t, struct{}{})},
-		func(struct{}) (serverapi.WorkflowTaskStartResponse, error) {
-			return serverapi.WorkflowTaskStartResponse{}, nil
-		},
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeInternalError || len(response.Result) != 0 {
-		t.Fatalf("response = %+v, want internal error without result", response)
-	}
-}
-
-func TestDecodeAndHandleRejectsInvalidWorkflowTaskDetailResponse(t *testing.T) {
-	response := decodeAndHandle[struct{}, serverapi.WorkflowTaskGetResponse](
-		protocol.Request{ID: "invalid-workflow-task-detail-response", Params: mustJSON(t, struct{}{})},
-		func(struct{}) (serverapi.WorkflowTaskGetResponse, error) {
-			return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
-				ExecutionTarget: &serverapi.WorkflowExecutionTarget{
-					Mode:       serverapi.WorkflowExecutionTargetModeNone,
-					Provenance: serverapi.WorkflowExecutionTargetProvenanceLegacyObserved,
-				},
-			}}, nil
-		},
-	)
-	if response.Error == nil || response.Error.Code != protocol.ErrCodeInternalError || len(response.Result) != 0 {
-		t.Fatalf("response = %+v, want internal error without result", response)
 	}
 }
 
@@ -1027,33 +586,6 @@ func receiveGatewayNotification(t *testing.T, conn *websocket.Conn, method strin
 	if out != nil {
 		if err := json.Unmarshal(notif.Params, out); err != nil {
 			t.Fatalf("decode %s params: %v", label, err)
-		}
-	}
-}
-
-func TestGatewayGoalRPCWithoutProjectAttachmentReturnsServiceErrors(t *testing.T) {
-	_, server := newUnboundGatewayTestServer(t)
-	defer server.Close()
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	for _, tc := range []struct {
-		name   string
-		method string
-		params any
-		code   int
-	}{
-		{name: "show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: "missing-session"}, code: protocol.ErrCodeInternalError},
-		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{ClientRequestID: "goal-set", SessionID: "missing-session", Objective: "ship", Actor: "user"}, code: protocol.ErrCodeInternalError},
-		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-pause", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
-		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-resume", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
-		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-complete", SessionID: "missing-session", Actor: "agent"}, code: protocol.ErrCodeInternalError},
-		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{ClientRequestID: "goal-clear", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
-	} {
-		err := callGatewayExpectError(t, conn, "goal-"+tc.name, tc.method, tc.params)
-		if err.Code != tc.code {
-			t.Fatalf("%s error code = %d, want %d", tc.name, err.Code, tc.code)
 		}
 	}
 }

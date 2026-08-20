@@ -97,11 +97,8 @@ func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *te
 	if attachResult.GetSuccess() == nil {
 		t.Fatalf("explicit Project attachment failed: %+v", attachResult.GetError())
 	}
-	planResp := callGatewaySessionPlan(t, conn, "session-plan", serverapi.SessionPlanRequest{
-		Mode:   serverapi.SessionLaunchModeInteractive,
-		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-	})
-	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-explicit-workspace", planResp.Plan.SessionID)
+	planResp := callGatewaySessionPlan(t, conn, "session-plan", gatewaySessionPlanRequest(t))
+	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-explicit-workspace", planResp.Plan.SessionId)
 	if got, want := target.EffectiveWorkdir, bindingB.CanonicalRoot; got != want {
 		t.Fatalf("planned execution workdir = %q, want %q", got, want)
 	}
@@ -154,15 +151,12 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 		t.Fatalf("Session attachment failed: %+v", result.GetError())
 	}
 
-	planResp := callGatewaySessionPlan(t, conn, "session-plan", serverapi.SessionPlanRequest{
-		Mode:   serverapi.SessionLaunchModeInteractive,
-		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-	})
+	planResp := callGatewaySessionPlan(t, conn, "session-plan", gatewaySessionPlanRequest(t))
 	wantWorkspaceRoot, err := config.CanonicalWorkspaceRoot(resolvedB.Config.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot B: %v", err)
 	}
-	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-attach-session", planResp.Plan.SessionID)
+	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-attach-session", planResp.Plan.SessionId)
 	if got, want := target.EffectiveWorkdir, wantWorkspaceRoot; got != want {
 		t.Fatalf("planned execution workdir = %q, want %q", got, want)
 	}

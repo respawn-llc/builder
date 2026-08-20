@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Message } from "@app/server-api-contract";
 
 import type { JsonValue } from "./json";
 import { workflowIDSchema } from "./schemas/workflowID";
@@ -10,13 +11,13 @@ export type RpcErrorInfo = Readonly<{
   code: number;
   message: string;
   method: string;
-  data?: JsonValue | undefined;
+  data?: JsonValue | Message | undefined;
 }>;
 
 export class RpcError extends Error {
   readonly code: number;
   readonly method: string;
-  readonly data: JsonValue | undefined;
+  readonly data: JsonValue | Message | undefined;
 
   constructor(info: RpcErrorInfo) {
     super(info.message);
@@ -31,12 +32,8 @@ export function isTaskMissingError(error: unknown): boolean {
   return error instanceof RpcError && error.code === rpcErrorCodes.workflowTaskNotFound;
 }
 
-const projectMissingDataSchema = z.looseObject({ reason: z.literal("project_not_found") });
 export function isProjectMissingError(error: unknown): boolean {
-  return (
-    error instanceof RpcError &&
-    (error.code === rpcErrorCodes.projectNotFound || projectMissingDataSchema.safeParse(error.data).success)
-  );
+  return error instanceof RpcError && error.code === rpcErrorCodes.projectNotFound;
 }
 
 export const workflowTaskCreateSelectionErrorReasons = [

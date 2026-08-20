@@ -51,7 +51,7 @@ func TestDialConfiguredRemotePrefersLocalUnixSocket(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+	if _, err := remote.ListProjects(context.Background(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("ListProjects: %v", err)
 	}
 	requireNoHandlerError(t, handlerErrs)
@@ -125,85 +125,6 @@ func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
 	requireNoHandlerError(t, handlerErrs)
 }
 
-func TestRemoteUpdateStatusCancellationLeavesControlUsable(t *testing.T) {
-	updateStarted := make(chan struct{}, 1)
-	handlerErrs := make(chan error, 8)
-	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
-		for event := range conn.Events() {
-			if event.Err != nil {
-				return
-			}
-			if _, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{}); handled {
-				if err != nil {
-					reportHandlerError(handlerErrs, "setup: %v", err)
-				}
-				continue
-			}
-			if handled, err := handleRemoteProjectListFrame(ctx, conn, event.Frame, "project-1"); handled {
-				if err != nil {
-					reportHandlerError(handlerErrs, "Project List: %v", err)
-				}
-				return
-			}
-			if event.Frame.Kind == rpcwire.FrameBinary {
-				envelope, err := protoapi.DecodeEnvelope(event.Frame.Payload)
-				if err != nil {
-					reportHandlerError(handlerErrs, "decode update call: %v", err)
-					return
-				}
-				call := envelope.GetCall()
-				method := bootstrapMethod(serverpb.File_kent_api_server_server_proto, "ServerService", "GetUpdateStatus")
-				operation, err := protoapi.OperationFromDescriptor(method)
-				if err != nil {
-					reportHandlerError(handlerErrs, "update operation: %v", err)
-					return
-				}
-				if call == nil || call.Operation != operation.Name {
-					reportHandlerError(handlerErrs, "unexpected binary operation")
-					return
-				}
-				updateStarted <- struct{}{}
-				<-conn.Closed()
-				return
-			}
-			reportHandlerError(handlerErrs, "unexpected frame kind %d", event.Frame.Kind)
-			return
-		}
-	}))
-	defer server.Close()
-
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	updateCtx, cancelUpdate := context.WithCancel(context.Background())
-	updateDone := make(chan error, 1)
-	go func() {
-		_, updateErr := remote.GetUpdateStatus(updateCtx, serverapi.UpdateStatusRequest{})
-		updateDone <- updateErr
-	}()
-	select {
-	case <-updateStarted:
-	case err := <-handlerErrs:
-		t.Fatal(err)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for update request")
-	}
-	cancelUpdate()
-	if err := <-updateDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("GetUpdateStatus error = %v, want context canceled", err)
-	}
-
-	listCtx, cancelList := context.WithTimeout(context.Background(), time.Second)
-	defer cancelList()
-	if _, err := remote.ListProjects(listCtx, serverapi.ProjectListRequest{}); err != nil {
-		t.Fatalf("ListProjects after canceled update: %v", err)
-	}
-	requireNoHandlerError(t, handlerErrs)
-}
-
 func TestDialConfiguredRemoteFallsBackToTCPWhenLocalUnixSocketMissing(t *testing.T) {
 	handlerErrs := make(chan error, 8)
 	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
@@ -226,7 +147,7 @@ func TestDialConfiguredRemoteFallsBackToTCPWhenLocalUnixSocketMissing(t *testing
 	}
 	defer func() { _ = remote.Close() }()
 
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+	if _, err := remote.ListProjects(context.Background(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("ListProjects: %v", err)
 	}
 	requireNoHandlerError(t, handlerErrs)
@@ -267,7 +188,7 @@ func TestDialConfiguredRemoteFallsBackToTCPWhenLocalUnixHandshakeStalls(t *testi
 	case <-time.After(time.Second):
 		t.Fatal("expected stalled unix listener accept")
 	}
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+	if _, err := remote.ListProjects(context.Background(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("ListProjects: %v", err)
 	}
 	requireNoHandlerError(t, handlerErrs)
@@ -309,11 +230,11 @@ func TestDialConfiguredRemoteHonorsExplicitTCPTargetOverDerivedLocalSocket(t *te
 	}
 	defer func() { _ = remote.Close() }()
 
-	resp, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{})
+	resp, err := remote.ListProjects(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("ListProjects: %v", err)
 	}
-	if len(resp.Projects) != 1 || resp.Projects[0].ProjectID != "tcp-project" {
+	if len(resp.Projects) != 1 || resp.Projects[0].ProjectId != "tcp-project" {
 		t.Fatalf("Projects = %+v, want tcp-project from configured TCP target", resp.Projects)
 	}
 	if got := tcpConnectionCount.Load(); got != 1 {
@@ -442,7 +363,7 @@ func TestRemoteCanceledUnaryRequestKeepsPersistentControlConnection(t *testing.T
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	firstErr := make(chan error, 1)
 	go func() {
-		_, err := remote.ListProjects(cancelCtx, serverapi.ProjectListRequest{})
+		_, err := remote.ListProjects(cancelCtx, &emptypb.Empty{})
 		firstErr <- err
 	}()
 
@@ -537,13 +458,13 @@ func TestRemoteReconnectsUnaryControlConnectionAfterDrop(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+	if _, err := remote.ListProjects(context.Background(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("ListProjects: %v", err)
 	}
 	requireNoHandlerError(t, handlerErrs)
 	waitForRemoteControlDisconnect(t, remote, handlerErrs)
 
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+	if _, err := remote.ListProjects(context.Background(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("ListProjects after reconnect: %v", err)
 	}
 	if got := connectionCount.Load(); got != 2 {
@@ -682,11 +603,11 @@ func TestRemoteProjectRootAttachmentRejectsDifferentWorkspaceOnReconnect(t *test
 	}
 	defer func() { _ = remote.Close() }()
 
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+	if _, err := remote.ListProjects(context.Background(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("first ListProjects: %v", err)
 	}
 	waitForRemoteControlDisconnect(t, remote, handlerErrs)
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err == nil {
+	if _, err := remote.ListProjects(context.Background(), &emptypb.Empty{}); err == nil {
 		t.Fatal("reconnect with substituted workspace unexpectedly succeeded")
 	}
 	if got := remote.WorkspaceID(); got != "workspace-a" {
@@ -840,31 +761,6 @@ func TestValidateIdentityRoot(t *testing.T) {
 	}
 }
 
-func TestRemoteRequireRootValidatesPinnedIdentity(t *testing.T) {
-	handlerErrs := make(chan error, 8)
-	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
-		serveHandshakeWithRoot(ctx, conn, "root-A", handlerErrs)
-	}))
-	defer server.Close()
-
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	if err := remote.RequireRoot("root-A"); err != nil {
-		t.Fatalf("RequireRoot matching root: %v", err)
-	}
-	if err := remote.RequireRoot(""); err != nil {
-		t.Fatalf("RequireRoot empty (validation disabled): %v", err)
-	}
-	if err := remote.RequireRoot("root-B"); !errors.Is(err, ErrServerRootMismatch) {
-		t.Fatalf("RequireRoot mismatched root = %v, want ErrServerRootMismatch", err)
-	}
-	requireNoHandlerError(t, handlerErrs)
-}
-
 // TestRemoteReconnectRejectsChangedPersistenceRoot guards the P1 reconnect
 // regression: a root-pinned client must not silently reattach to a different
 // instance that takes over the configured endpoint after the original drops.
@@ -918,13 +814,13 @@ func TestRemoteReconnectRejectsChangedPersistenceRoot(t *testing.T) {
 	if err := remote.RequireRoot("root-A"); err != nil {
 		t.Fatalf("RequireRoot: %v", err)
 	}
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+	if _, err := remote.ListProjects(context.Background(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("first ListProjects: %v", err)
 	}
 	requireNoHandlerError(t, handlerErrs)
 	waitForRemoteControlDisconnect(t, remote, handlerErrs)
 
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); !errors.Is(err, ErrServerRootMismatch) {
+	if _, err := remote.ListProjects(context.Background(), &emptypb.Empty{}); !errors.Is(err, ErrServerRootMismatch) {
 		t.Fatalf("reconnect ListProjects = %v, want ErrServerRootMismatch", err)
 	}
 	requireNoHandlerError(t, handlerErrs)

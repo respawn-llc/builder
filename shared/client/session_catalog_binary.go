@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"core/shared/protoapi"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
-	"core/shared/serverapi"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -19,34 +17,27 @@ func sessionCatalogMethod(name string) protoreflect.MethodDescriptor {
 	)
 }
 
-func (c *Remote) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	request, err := protoapi.SessionPageRequestToProto(req)
+func (c *Remote) ListSessionPage(ctx context.Context, request *projectpb.SessionPageRequest) (*projectpb.SessionPageSuccess, error) {
+	response, err := callGeneratedBinary(c, ctx, sessionCatalogMethod("Page"), request,
+		&projectpb.SessionPageResult{},
+		func(failure *projectpb.SessionPageError) error {
+			return projectInternalGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 	if err != nil {
-		return serverapi.SessionPageResponse{}, err
+		return nil, err
 	}
-	result := &projectpb.SessionPageResult{}
-	if err := c.callBinary(ctx, sessionCatalogMethod("Page"), request, result); err != nil {
-		return serverapi.SessionPageResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.SessionPageResponse{}, projectInternalGeneratedError(failure.Code, failure.GetInternalFailure())
-	}
-	response, err := protoapi.SessionPageFromProto(result.GetSuccess())
-	if err != nil {
-		return serverapi.SessionPageResponse{}, err
-	}
-	if response.ProjectID != req.ProjectID {
-		return serverapi.SessionPageResponse{}, fmt.Errorf(
+	if response.ProjectId != request.ProjectId {
+		return nil, fmt.Errorf(
 			"session page response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
+			response.ProjectId,
+			request.ProjectId,
 		)
 	}
-	if response.Category != req.Category {
-		return serverapi.SessionPageResponse{}, fmt.Errorf(
-			"session page response category %q does not match request category %q",
+	if response.Category != request.Category {
+		return nil, fmt.Errorf(
+			"session page response category %s does not match request category %s",
 			response.Category,
-			req.Category,
+			request.Category,
 		)
 	}
 	return response, nil

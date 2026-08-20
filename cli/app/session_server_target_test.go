@@ -21,9 +21,13 @@ import (
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type configuredDaemonFixture struct {
@@ -297,8 +301,8 @@ func TestStartupReadinessAllowsActivatedNoAuthOnboarding(t *testing.T) {
 		t.Fatalf("attach configured startup remote: %v", attachErr)
 	}
 	defer func() { _ = remote.Close() }()
-	bootstrap, err := remote.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
-		Mode: serverapi.AuthBootstrapModeNone,
+	bootstrap, err := remote.CompleteBootstrap(context.Background(), &authpb.CompleteBootstrapRequest{
+		Mode: authpb.BootstrapMode_BOOTSTRAP_MODE_NONE,
 	})
 	if err != nil {
 		t.Fatalf("CompleteAuthBootstrap: %v", err)
@@ -310,21 +314,22 @@ func TestStartupReadinessAllowsActivatedNoAuthOnboarding(t *testing.T) {
 		t.Fatalf("EnableNoAuthBootstrapAcknowledgement: %v", err)
 	}
 
-	selectedTheme := serverapi.OnboardingThemeDark
-	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+	selectedTheme := onboardingpb.Theme_THEME_DARK
+	_, err = remote.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
 		Theme: &selectedTheme,
-		CommandsImport: &serverapi.OnboardingImportSelection{
-			Mode: serverapi.OnboardingImportModeNone,
+		CommandsImport: &onboardingpb.ImportSelection{
+			Mode: onboardingpb.ImportMode_IMPORT_MODE_NONE,
 		},
 	})
 	if err != nil {
 		t.Fatalf("FinalizeOnboarding: %v", err)
 	}
-	readiness, err := remote.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	readinessResponse, err := remote.GetReadiness(context.Background(), &emptypb.Empty{})
 	if err != nil {
-		t.Fatalf("GetServerReadiness: %v", err)
+		t.Fatalf("GetReadiness: %v", err)
 	}
-	if readiness.Ready {
+	readiness := readinessResponse.GetReadiness()
+	if readiness.GetReady() {
 		t.Fatal("no-auth startup readiness must remain false while server-managed auth is absent")
 	}
 	if !startupReadinessAllowsSession(remote, readiness) {

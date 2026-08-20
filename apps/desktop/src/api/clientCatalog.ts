@@ -1,7 +1,5 @@
-import type { z } from "zod";
-
 import { CatalogContractError, ContractError } from "./errors";
-import { create, operationFromDescriptor } from "@app/server-api-contract";
+import { create, operationName } from "@app/server-api-contract";
 import {
   SessionCatalogService,
   SessionCategory as GeneratedSessionCategory,
@@ -13,21 +11,9 @@ import {
   type SessionCatalogSummary,
   type SessionCategory,
 } from "./models";
-import { canonicalProjectIDSchema, sessionCategorySchema, sessionPageOffsetSchema } from "./schemas/catalog";
+import { requireUnarySuccess } from "./protobufRpc";
 import type { DescriptorRpcTransport } from "./transport";
 import { timestampMillis } from "./clientTime";
-
-export function parseCatalogInput<T>(operation: string, schema: z.ZodType<T>, value: unknown): T {
-  const result = schema.safeParse(value);
-  if (result.success) return result.data;
-  throw new ContractError(
-    `${operation} did not match the catalog contract.`,
-    result.error.issues.map((issue) => ({
-      code: issue.code,
-      path: issue.path.map(String),
-    })),
-  );
-}
 
 export function requireCatalogProject(method: string, expected: string, actual: string): void {
   if (actual !== expected) throw CatalogContractError.projectMismatch(method, expected, actual);
@@ -40,25 +26,19 @@ export async function listSessionPage(
   offset: number,
 ): Promise<SessionCatalogPage> {
   const method = SessionCatalogService.method.page;
-  const operation = operationFromDescriptor(method).name;
-  const expectedProjectID = parseCatalogInput(`${operation} project ID`, canonicalProjectIDSchema, projectID);
-  const expectedCategory = parseCatalogInput(`${operation} category`, sessionCategorySchema, category);
-  const expectedOffset = parseCatalogInput(`${operation} offset`, sessionPageOffsetSchema, offset);
-  const result = await transport.callDescriptor(
+  const operation = operationName(method);
+  const success = requireUnarySuccess(
     method,
-    create(method.input, {
-      projectId: expectedProjectID,
-      category: sessionCategoryToGenerated(expectedCategory),
-      offset: expectedOffset,
-      limit: sessionCatalogPageSize,
-    }),
+    await transport.callDescriptor(
+      method,
+      create(method.input, {
+        projectId: projectID,
+        category: sessionCategoryToGenerated(category),
+        offset,
+        limit: sessionCatalogPageSize,
+      }),
+    ),
   );
-  if (result.outcome.case !== "success") {
-    throw new ContractError(
-      `${operation} failed with code ${result.outcome.case === "error" ? result.outcome.value.code : "missing_outcome"}.`,
-    );
-  }
-  const success = result.outcome.value;
   if (success.sessions.length > sessionCatalogPageSize) {
     throw CatalogContractError.malformedResponse(
       operation,
@@ -71,9 +51,9 @@ export async function listSessionPage(
     sessions: success.sessions.map(sessionSummary),
     nextOffset: success.nextOffset ?? null,
   };
-  requireCatalogProject(operation, expectedProjectID, response.projectID);
-  if (response.category !== expectedCategory) {
-    throw CatalogContractError.sessionCategoryMismatch(operation, expectedCategory, response.category);
+  requireCatalogProject(operation, projectID, response.projectID);
+  if (response.category !== category) {
+    throw CatalogContractError.sessionCategoryMismatch(operation, category, response.category);
   }
   return response;
 }

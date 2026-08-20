@@ -8,12 +8,7 @@ import {
 } from "./descriptorRpc";
 import { TransportError } from "./errors";
 import type { JsonValue } from "./json";
-import {
-  operationFromDescriptor,
-  unaryConnectionPolicy,
-  type DescMethod,
-  type MessageShape,
-} from "@app/server-api-contract";
+import { unaryConnectionPolicy, type DescMethod, type MessageShape } from "@app/server-api-contract";
 import { z } from "zod";
 import {
   delay,
@@ -87,8 +82,7 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     request: MessageShape<Method["input"]>,
     options?: RpcCallOptions,
   ): Promise<MessageShape<Method["output"]>> {
-    const operation = operationFromDescriptor(method);
-    switch (unaryConnectionPolicy(operation)) {
+    switch (unaryConnectionPolicy(method)) {
       case "multiplexed": {
         const socket = await this.#open();
         return this.#sendDescriptor(socket, method, request, options);
@@ -262,11 +256,11 @@ class JsonRpcWebSocketTransport implements RpcTransport {
               if (!this.#pending.delete(id)) {
                 return;
               }
-              reject(new TransportError(`${operation.name} request timed out.`));
+              reject(new TransportError(`${operation} request timed out.`));
             }, timeoutMs);
       this.#pending.set(id, {
         kind: "descriptor",
-        label: operation.name,
+        label: operation,
         timeout,
         complete: (response) => {
           resolve(completeDescriptorResponse(method, id, response));
@@ -280,9 +274,7 @@ class JsonRpcWebSocketTransport implements RpcTransport {
           clearTimeout(timeout);
         }
         this.#pending.delete(id);
-        reject(
-          error instanceof Error ? error : new TransportError(`${operation.name} request failed to send.`),
-        );
+        reject(error instanceof Error ? error : new TransportError(`${operation} request failed to send.`));
       }
     });
   }

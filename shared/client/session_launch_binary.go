@@ -4,7 +4,9 @@ import (
 	"context"
 
 	"core/shared/protoapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/serverapi"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -21,70 +23,43 @@ func sessionLaunchMethod(name string) protoreflect.MethodDescriptor {
 
 func (c *Remote) PlanSession(
 	ctx context.Context,
-	request serverapi.SessionPlanRequest,
-) (serverapi.SessionPlanResponse, error) {
-	message, err := protoapi.SessionPlanRequestToProto(request)
-	if err != nil {
-		return serverapi.SessionPlanResponse{}, err
-	}
-	result := &sessionlaunchpb.SessionPlanResult{}
-	if err := c.callBinary(ctx, sessionLaunchMethod("Plan"), message, result); err != nil {
-		return serverapi.SessionPlanResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.SessionPlanResponse{}, protoapi.SessionPlanErrorFromProto(failure)
-	}
-	return protoapi.SessionPlanFromProto(result.GetSuccess())
+	request *sessionlaunchpb.SessionPlanRequest,
+) (*sessionlaunchpb.SessionPlanSuccess, error) {
+	return callGeneratedBinary(c, ctx, sessionLaunchMethod("Plan"), request,
+		&sessionlaunchpb.SessionPlanResult{},
+		protoapi.SessionPlanErrorFromProto)
 }
 
 func (c *Remote) WorkspaceChatDraft(
 	ctx context.Context,
-	request serverapi.WorkspaceChatDraftRequest,
-) (serverapi.WorkspaceChatDraftResponse, error) {
-	message, err := protoapi.WorkspaceChatDraftRequestToProto(request)
-	if err != nil {
-		return serverapi.WorkspaceChatDraftResponse{}, err
-	}
-	result := &sessionlaunchpb.WorkspaceChatDraftResult{}
-	if err := c.callBinary(ctx, sessionLaunchMethod("WorkspaceChatDraft"), message, result); err != nil {
-		return serverapi.WorkspaceChatDraftResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		if failure.GetAuthRequired() != nil {
-			return serverapi.WorkspaceChatDraftResponse{}, serverapi.ErrServerAuthRequired
-		}
-		if failure.GetWorkspaceNotRegistered() != nil {
-			return serverapi.WorkspaceChatDraftResponse{}, serverapi.ErrWorkspaceNotRegistered
-		}
-		return serverapi.WorkspaceChatDraftResponse{}, protoapi.InternalFailureFromProto(failure.GetInternalFailure())
-	}
-	return protoapi.WorkspaceChatDraftFromProto(result.GetSuccess())
+	request *sessionlaunchpb.WorkspaceChatDraftRequest,
+) (*sessionlaunchpb.WorkspaceChatDraftSuccess, error) {
+	return callGeneratedBinary(c, ctx, sessionLaunchMethod("WorkspaceChatDraft"), request,
+		&sessionlaunchpb.WorkspaceChatDraftResult{},
+		workspaceChatGeneratedError[*sessionlaunchpb.WorkspaceChatDraftError])
 }
 
 func (c *Remote) MaterializeWorkspaceChat(
 	ctx context.Context,
-	request serverapi.WorkspaceChatMaterializeRequest,
-) (serverapi.WorkspaceChatMaterializeResponse, error) {
-	if err := request.Validate(); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	request *emptypb.Empty,
+) (*sessionlaunchpb.MaterializeWorkspaceChatSuccess, error) {
+	return callGeneratedBinary(c, ctx, sessionLaunchMethod("MaterializeWorkspaceChat"), request,
+		&sessionlaunchpb.MaterializeWorkspaceChatResult{},
+		workspaceChatGeneratedError[*sessionlaunchpb.MaterializeWorkspaceChatError])
+}
+
+type workspaceChatFailure interface {
+	GetAuthRequired() *sessionlaunchpb.AuthRequiredDetails
+	GetWorkspaceNotRegistered() *projectpb.WorkspaceNotRegisteredDetails
+	GetInternalFailure() *sharedpb.InternalFailureDetails
+}
+
+func workspaceChatGeneratedError[Failure workspaceChatFailure](failure Failure) error {
+	if failure.GetAuthRequired() != nil {
+		return serverapi.ErrServerAuthRequired
 	}
-	result := &sessionlaunchpb.MaterializeWorkspaceChatResult{}
-	if err := c.callBinary(
-		ctx,
-		sessionLaunchMethod("MaterializeWorkspaceChat"),
-		&emptypb.Empty{},
-		result,
-	); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	if failure.GetWorkspaceNotRegistered() != nil {
+		return serverapi.ErrWorkspaceNotRegistered
 	}
-	if failure := result.GetError(); failure != nil {
-		if failure.GetAuthRequired() != nil {
-			return serverapi.WorkspaceChatMaterializeResponse{}, serverapi.ErrServerAuthRequired
-		}
-		if failure.GetWorkspaceNotRegistered() != nil {
-			return serverapi.WorkspaceChatMaterializeResponse{}, serverapi.ErrWorkspaceNotRegistered
-		}
-		return serverapi.WorkspaceChatMaterializeResponse{}, protoapi.InternalFailureFromProto(failure.GetInternalFailure())
-	}
-	return protoapi.WorkspaceChatMaterializationFromProto(result.GetSuccess())
+	return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
 }

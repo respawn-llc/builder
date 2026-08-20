@@ -21,214 +21,156 @@ func projectCatalogMethod(name string) protoreflect.MethodDescriptor {
 	)
 }
 
-func (c *Remote) ListProjects(ctx context.Context, _ serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
-	result := &projectpb.ProjectListResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("List"), &emptypb.Empty{}, result); err != nil {
-		return serverapi.ProjectListResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectListResponse{}, projectInternalGeneratedError(failure.Code, failure.GetInternalFailure())
-	}
-	return protoapi.ProjectListFromProto(result.GetSuccess())
+func (c *Remote) ListProjects(ctx context.Context, request *emptypb.Empty) (*projectpb.ProjectListSuccess, error) {
+	return callGeneratedBinary(c, ctx, projectCatalogMethod("List"), request,
+		&projectpb.ProjectListResult{},
+		func(failure *projectpb.ProjectListError) error {
+			return projectInternalGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 }
 
-func (c *Remote) ListProjectHome(ctx context.Context, req serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	request, err := protoapi.ProjectHomeListRequestToProto(req)
-	if err != nil {
-		return serverapi.ProjectHomeListResponse{}, err
-	}
-	result := &projectpb.ProjectHomeListResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("ListHome"), request, result); err != nil {
-		return serverapi.ProjectHomeListResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectHomeListResponse{}, projectInternalGeneratedError(failure.Code, failure.GetInternalFailure())
-	}
-	return protoapi.ProjectHomeListFromProto(result.GetSuccess())
+func (c *Remote) ListProjectHome(ctx context.Context, request *projectpb.ProjectHomeListRequest) (*projectpb.ProjectHomeListSuccess, error) {
+	return callGeneratedBinary(c, ctx, projectCatalogMethod("ListHome"), request,
+		&projectpb.ProjectHomeListResult{},
+		func(failure *projectpb.ProjectHomeListError) error {
+			return projectInternalGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 }
 
-func (c *Remote) ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	request, err := protoapi.ProjectResolvePathRequestToProto(req)
-	if err != nil {
-		return serverapi.ProjectResolvePathResponse{}, err
-	}
-	result := &projectpb.ResolvePathResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("ResolvePath"), request, result); err != nil {
-		return serverapi.ProjectResolvePathResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		switch failure.Code {
-		case "workspace_binding_ambiguous":
-			ambiguous, conversionErr := protoapi.WorkspaceBindingAmbiguousFromProto(failure.GetWorkspaceBindingAmbiguous())
-			if conversionErr != nil {
-				return serverapi.ProjectResolvePathResponse{}, conversionErr
+func (c *Remote) ResolveProjectPath(ctx context.Context, request *projectpb.ResolvePathRequest) (*projectpb.ResolvePathSuccess, error) {
+	return callGeneratedBinary(c, ctx, projectCatalogMethod("ResolvePath"), request,
+		&projectpb.ResolvePathResult{},
+		func(failure *projectpb.ResolvePathError) error {
+			switch failure.Code {
+			case "workspace_binding_ambiguous":
+				return workspaceBindingAmbiguousError(failure.GetWorkspaceBindingAmbiguous())
+			case "internal_failure":
+				return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+			default:
+				return generatedOperationFailure(failure.Code)
 			}
-			return serverapi.ProjectResolvePathResponse{}, ambiguous
-		case "internal_failure":
-			return serverapi.ProjectResolvePathResponse{}, protoapi.InternalFailureFromProto(failure.GetInternalFailure())
-		default:
-			return serverapi.ProjectResolvePathResponse{}, generatedOperationFailure(failure.Code)
-		}
-	}
-	return protoapi.ProjectResolvePathFromProto(result.GetSuccess())
+		})
 }
 
-func (c *Remote) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	request, err := protoapi.ProjectBindingPlanRequestToProto(req)
-	if err != nil {
-		return serverapi.ProjectBindingPlanResponse{}, err
-	}
-	result := &projectpb.PlanWorkspaceBindingResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("PlanWorkspaceBinding"), request, result); err != nil {
-		return serverapi.ProjectBindingPlanResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectBindingPlanResponse{}, projectInternalGeneratedError(failure.Code, failure.GetInternalFailure())
-	}
-	return protoapi.ProjectBindingPlanFromProto(result.GetSuccess())
+func (c *Remote) PlanWorkspaceBinding(ctx context.Context, request *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
+	return callGeneratedBinary(c, ctx, projectCatalogMethod("PlanWorkspaceBinding"), request,
+		&projectpb.PlanWorkspaceBindingResult{},
+		func(failure *projectpb.PlanWorkspaceBindingError) error {
+			return projectInternalGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 }
 
-func (c *Remote) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditGetRequest) (serverapi.ProjectEditGetResponse, error) {
-	request, err := protoapi.ProjectEditRequestToProto(req)
+func (c *Remote) GetProjectEdit(ctx context.Context, request *projectpb.ProjectEditGetRequest) (*projectpb.GetProjectEditSuccess, error) {
+	response, err := callGeneratedBinary(c, ctx, projectCatalogMethod("GetEdit"), request,
+		&projectpb.GetProjectEditResult{},
+		func(failure *projectpb.GetProjectEditError) error {
+			return projectNotFoundGeneratedError(
+				failure.Code, failure.GetProjectNotFound(), failure.GetInternalFailure())
+		})
 	if err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
+		return nil, err
 	}
-	result := &projectpb.GetProjectEditResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("GetEdit"), request, result); err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectEditGetResponse{}, projectNotFoundGeneratedError(
-			failure.Code,
-			failure.GetProjectNotFound(),
-			failure.GetInternalFailure(),
-		)
-	}
-	response, err := protoapi.ProjectEditFromProto(result.GetSuccess())
-	if err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
-	}
-	if response.ProjectID != req.ProjectID {
-		return serverapi.ProjectEditGetResponse{}, fmt.Errorf(
+	if response.ProjectId != request.ProjectId {
+		return nil, fmt.Errorf(
 			"Project Settings response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
+			response.ProjectId,
+			request.ProjectId,
 		)
 	}
 	return response, nil
 }
 
-func (c *Remote) ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	request, err := protoapi.ProjectWorkspaceListRequestToProto(req)
+func (c *Remote) ListProjectWorkspaces(ctx context.Context, request *projectpb.ProjectWorkspaceListRequest) (*projectpb.ListProjectWorkspacesSuccess, error) {
+	response, err := callGeneratedBinary(c, ctx, projectCatalogMethod("ListWorkspaces"), request,
+		&projectpb.ListProjectWorkspacesResult{},
+		func(failure *projectpb.ListProjectWorkspacesError) error {
+			return projectNotFoundGeneratedError(
+				failure.Code, failure.GetProjectNotFound(), failure.GetInternalFailure())
+		})
 	if err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
+		return nil, err
 	}
-	result := &projectpb.ListProjectWorkspacesResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("ListWorkspaces"), request, result); err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, projectNotFoundGeneratedError(
-			failure.Code,
-			failure.GetProjectNotFound(),
-			failure.GetInternalFailure(),
-		)
-	}
-	response, err := protoapi.ProjectWorkspaceListFromProto(result.GetSuccess())
-	if err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf("project workspace catalog response is invalid: %w", err)
-	}
-	if response.ProjectID != req.ProjectID {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
+	if response.ProjectId != request.ProjectId {
+		return nil, fmt.Errorf(
 			"project workspace catalog response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
+			response.ProjectId,
+			request.ProjectId,
 		)
 	}
-	if response.Offset != req.Offset {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
+	if response.Offset != request.Offset {
+		return nil, fmt.Errorf(
 			"project workspace catalog response offset %d does not match request offset %d",
 			response.Offset,
-			req.Offset,
+			request.Offset,
 		)
 	}
-	if len(response.Workspaces) > req.Limit {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
+	if len(response.Workspaces) > int(request.Limit) {
+		return nil, fmt.Errorf(
 			"project workspace catalog response returned %d rows for limit %d",
 			len(response.Workspaces),
-			req.Limit,
+			request.Limit,
 		)
 	}
 	if response.NextOffset != nil {
-		expected := req.Offset + req.Limit
-		if len(response.Workspaces) != req.Limit || *response.NextOffset != expected {
-			return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
+		expected := request.Offset + request.Limit
+		if len(response.Workspaces) != int(request.Limit) || *response.NextOffset != expected {
+			return nil, fmt.Errorf(
 				"project workspace catalog response next_offset %d does not continue request offset %d with limit %d",
 				*response.NextOffset,
-				req.Offset,
-				req.Limit,
+				request.Offset,
+				request.Limit,
 			)
 		}
 	}
 	return response, nil
 }
 
-func (c *Remote) GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
-	request, err := protoapi.ProjectWorkspaceGetRequestToProto(req)
+func (c *Remote) GetProjectWorkspace(ctx context.Context, request *projectpb.GetProjectWorkspaceRequest) (*projectpb.GetProjectWorkspaceSuccess, error) {
+	response, err := callGeneratedBinary(c, ctx, projectCatalogMethod("GetWorkspace"), request,
+		&projectpb.GetProjectWorkspaceResult{},
+		func(failure *projectpb.GetProjectWorkspaceError) error {
+			return projectNotFoundGeneratedError(
+				failure.Code, failure.GetProjectNotFound(), failure.GetInternalFailure())
+		})
 	if err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, err
+		return nil, err
 	}
-	result := &projectpb.GetProjectWorkspaceResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("GetWorkspace"), request, result); err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, projectNotFoundGeneratedError(
-			failure.Code,
-			failure.GetProjectNotFound(),
-			failure.GetInternalFailure(),
-		)
-	}
-	response, err := protoapi.ProjectWorkspaceGetFromProto(result.GetSuccess())
-	if err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf("exact Project Workspace response is invalid: %w", err)
-	}
-	if response.ProjectID != req.ProjectID {
-		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf(
+	if response.ProjectId != request.ProjectId {
+		return nil, fmt.Errorf(
 			"exact Project Workspace response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
+			response.ProjectId,
+			request.ProjectId,
 		)
 	}
 	return response, nil
 }
 
-func (c *Remote) GetProjectOverview(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	request, err := protoapi.ProjectOverviewRequestToProto(req)
-	if err != nil {
-		return serverapi.ProjectGetOverviewResponse{}, err
-	}
-	result := &projectpb.GetOverviewResult{}
-	if err := c.callBinary(ctx, projectCatalogMethod("GetOverview"), request, result); err != nil {
-		return serverapi.ProjectGetOverviewResponse{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		switch failure.Code {
-		case "project_not_found":
-			return serverapi.ProjectGetOverviewResponse{}, projectNotFoundError(failure.GetProjectNotFound())
-		case "project_unavailable":
-			unavailable, conversionErr := protoapi.ProjectUnavailableFromProto(failure.GetProjectUnavailable())
-			if conversionErr != nil {
-				return serverapi.ProjectGetOverviewResponse{}, conversionErr
+func (c *Remote) GetProjectOverview(ctx context.Context, request *projectpb.GetOverviewRequest) (*projectpb.GetOverviewSuccess, error) {
+	response, err := callGeneratedBinary(c, ctx, projectCatalogMethod("GetOverview"), request,
+		&projectpb.GetOverviewResult{},
+		func(failure *projectpb.GetOverviewError) error {
+			switch failure.Code {
+			case "project_not_found":
+				return projectNotFoundError(failure.GetProjectNotFound())
+			case "project_unavailable":
+				return projectUnavailableError(failure.GetProjectUnavailable())
+			case "internal_failure":
+				return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+			default:
+				return generatedOperationFailure(failure.Code)
 			}
-			return serverapi.ProjectGetOverviewResponse{}, unavailable
-		case "internal_failure":
-			return serverapi.ProjectGetOverviewResponse{}, protoapi.InternalFailureFromProto(failure.GetInternalFailure())
-		default:
-			return serverapi.ProjectGetOverviewResponse{}, generatedOperationFailure(failure.Code)
-		}
+		})
+	if err != nil {
+		return nil, err
 	}
-	return protoapi.ProjectOverviewFromProto(result.GetSuccess())
+	if response.Overview.Project.ProjectId != request.ProjectId {
+		return nil, fmt.Errorf(
+			"project overview response project %q does not match request project %q",
+			response.Overview.Project.ProjectId,
+			request.ProjectId,
+		)
+	}
+	return response, nil
 }
 
 func projectInternalGeneratedError(code string, internal *sharedpb.InternalFailureDetails) error {

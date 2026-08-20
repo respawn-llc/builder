@@ -1,10 +1,10 @@
 import {
   decode,
   encode,
+  operationName,
   type DescMethod,
   type Message,
   type MessageShape,
-  operationFromDescriptor,
 } from "@app/server-api-contract";
 import {
   ConnectionStore,
@@ -59,7 +59,7 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
   constructor(routes: readonly FakeRoute[]) {
     for (const route of routes) {
       if ("descriptor" in route) {
-        this.#descriptorRoutes.set(operationFromDescriptor(route.descriptor).name, route);
+        this.#descriptorRoutes.set(operationName(route.descriptor), route);
       } else {
         this.#routes.set(route.method, route);
       }
@@ -80,16 +80,16 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     this.descriptorCalls.push(
       options === undefined ? { descriptor, request } : { descriptor, request, options },
     );
-    const operation = operationFromDescriptor(descriptor);
-    const route = this.#descriptorRoutes.get(operation.name);
+    const operation = operationName(descriptor);
+    const route = this.#descriptorRoutes.get(operation);
     if (route === undefined) {
-      throw new Error(`Missing fake descriptor route: ${operation.name}`);
+      throw new Error(`Missing fake descriptor route: ${operation}`);
     }
     if (route.error !== undefined) {
       throw route.error;
     }
     if (route.result === undefined) {
-      throw new Error(`Missing fake descriptor result: ${operation.name}`);
+      throw new Error(`Missing fake descriptor result: ${operation}`);
     }
     const payload = encode(route.descriptor.output, route.result);
     return decode<Method["output"]>(descriptor.output, payload);

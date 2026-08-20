@@ -11,9 +11,13 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/authstatus"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/lifecyclecontract"
+	"core/shared/protoapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
@@ -130,8 +134,42 @@ func (l projectScopedSessionPageLoader) ProjectID() string {
 	return l.projectID
 }
 
-func (l projectScopedSessionPageLoader) ListSessionPage(ctx context.Context, request serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	return l.client.ListSessionPage(ctx, request)
+func (l projectScopedSessionPageLoader) ListSessionPage(ctx context.Context, request sessionPageRequest) (sessionPageResponse, error) {
+	category, err := client.SessionCategoryToProto(request.Category)
+	if err != nil {
+		return sessionPageResponse{}, err
+	}
+	generatedRequest := &projectpb.SessionPageRequest{ProjectId: request.ProjectID, Category: category}
+	if request.Offset != nil {
+		offset := int32(*request.Offset)
+		generatedRequest.Offset = &offset
+	}
+	if request.Limit != nil {
+		limit := int32(*request.Limit)
+		generatedRequest.Limit = &limit
+	}
+	response, err := l.client.ListSessionPage(ctx, generatedRequest)
+	if err != nil {
+		return sessionPageResponse{}, err
+	}
+	responseCategory, err := client.SessionCategoryFromProto(response.Category)
+	if err != nil {
+		return sessionPageResponse{}, err
+	}
+	sessions, err := client.SessionSummariesFromProto(response.Sessions)
+	if err != nil {
+		return sessionPageResponse{}, err
+	}
+	page := sessionPageResponse{
+		ProjectID: response.ProjectId,
+		Category:  responseCategory,
+		Sessions:  sessions,
+	}
+	if response.NextOffset != nil {
+		nextOffset := int(*response.NextOffset)
+		page.NextOffset = &nextOffset
+	}
+	return page, nil
 }
 
 func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchRequest) (sessionLaunchPlan, error) {
@@ -141,37 +179,71 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	if err := req.Intent.Validate(); err != nil {
 		return sessionLaunchPlan{}, err
 	}
-	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, serverapi.SessionPlanRequest{
-		Mode:      serverapi.SessionLaunchMode(req.Mode),
-		Intent:    req.Intent,
-		Overrides: mergeSessionPlanOverrides(sessionPlanOverridesFromConfig(p.server.Config()), req.Overrides),
-	})
+	var mode sessionlaunchpb.SessionLaunchMode
+	switch req.Mode {
+	case launchModeInteractive:
+		mode = sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE
+	case launchModeHeadless:
+		mode = sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_HEADLESS
+	default:
+		return sessionLaunchPlan{}, errors.New("Session launch mode is invalid")
+	}
+	intent, err := protoapi.SessionLaunchIntentToProto(req.Intent)
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
-	executionTarget, err := loadSelectedSessionExecutionTarget(ctx, p.server.SessionViewClient(), resp.Plan.SessionID)
-	if err != nil {
-		return sessionLaunchPlan{}, err
-	}
-	enabledTools := make([]toolspec.ID, 0, len(resp.Plan.EnabledToolIDs))
-	for _, raw := range resp.Plan.EnabledToolIDs {
-		if id, ok := toolspec.ParseID(raw); ok {
-			enabledTools = append(enabledTools, id)
+	overrides := mergeSessionPlanOverrides(sessionPlanOverridesFromConfig(p.server.Config()), req.Overrides)
+	generatedRequest := &sessionlaunchpb.SessionPlanRequest{Mode: mode, Intent: intent}
+	if overrides.HasAny() {
+		generatedRequest.Overrides, err = protoapi.RunPromptOverridesToProto(overrides)
+		if err != nil {
+			return sessionLaunchPlan{}, err
 		}
 	}
+	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, generatedRequest)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
+	if resp == nil || resp.Plan == nil {
+		return sessionLaunchPlan{}, errors.New("Session launch plan is required")
+	}
+	settings, err := protoapi.SessionSettingsFromProto(resp.Plan.ActiveSettings)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
+	source, err := protoapi.SessionSourceReportFromProto(resp.Plan.Source)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
+	executionTarget, err := loadSelectedSessionExecutionTarget(ctx, p.server.SessionViewClient(), resp.Plan.SessionId)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
+	enabledTools := make([]toolspec.ID, 0, len(resp.Plan.EnabledToolIds))
+	for _, generated := range resp.Plan.EnabledToolIds {
+		id, err := protoapi.SessionToolIDFromProto(generated)
+		if err != nil {
+			return sessionLaunchPlan{}, err
+		}
+		enabledTools = append(enabledTools, id)
+	}
 	cfg := p.server.Config()
-	activeSettings := resp.Plan.ActiveSettings
+	activeSettings := settings
 	authSelection := authstatus.ProviderSelection(activeSettings)
 	sessionTitle, err := validateLaunchSessionTitle(resp.Plan.SessionName)
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
+	configuredModelName := ""
+	if resp.Plan.ConfiguredModelName != nil {
+		configuredModelName = *resp.Plan.ConfiguredModelName
+	}
 	return sessionLaunchPlan{
 		Mode:                     req.Mode,
-		SessionID:                resp.Plan.SessionID,
+		SessionID:                resp.Plan.SessionId,
 		ActiveSettings:           activeSettings,
 		EnabledTools:             enabledTools,
-		ConfiguredModelName:      resp.Plan.ConfiguredModelName,
+		ConfiguredModelName:      configuredModelName,
 		SessionTitle:             sessionTitle,
 		PromptHistory:            append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked:      resp.Plan.ModelContractLocked,
@@ -184,12 +256,12 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 			PersistenceRoot: cfg.PersistenceRoot,
 			SessionViews:    p.server.SessionViewClient(),
 			Settings:        activeSettings,
-			AuthSelection:   &authSelection,
-			Source:          resp.Plan.Source,
+			AuthSelection:   authSelection,
+			Source:          source,
 			AuthStatus:      p.server.AuthStatusClient(),
 		},
 		ExecutionTarget: executionTarget,
-		Source:          resp.Plan.Source,
+		Source:          source,
 	}, nil
 }
 

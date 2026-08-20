@@ -6,7 +6,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
-	"core/shared/serverapi"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
@@ -101,32 +101,30 @@ func (m *sessionPickerModel) projectUpdateHeaderRow(maxWidth int) *sessionPicker
 	if m.updateStatus == nil {
 		return nil
 	}
-	switch m.updateStatus.Kind() {
-	case serverapi.UpdateStatusCurrent, serverapi.UpdateStatusCheckUnavailable:
+	switch status := m.updateStatus.GetStatus().(type) {
+	case *serverpb.UpdateStatus_Current, *serverpb.UpdateStatus_CheckUnavailable:
 		return nil
-	case serverapi.UpdateStatusAvailable:
-		versions := m.updateStatus.Versions()
-		if versions == nil {
+	case *serverpb.UpdateStatus_Available:
+		if status.Available == nil {
 			return m.projectInvalidUpdateHeaderRow("available result is missing versions", maxWidth)
 		}
 		return m.renderUpdateHeaderRow(
 			sessionPickerHeaderRowUpdateAvailable,
-			"Update available: v"+versions.Latest,
+			"Update available: v"+status.Available.GetLatestVersion(),
 			maxWidth,
 		)
-	case serverapi.UpdateStatusCheckFailed:
-		failure := m.updateStatus.Failure()
-		if failure == nil {
+	case *serverpb.UpdateStatus_CheckFailed:
+		if status.CheckFailed == nil {
 			return m.projectInvalidUpdateHeaderRow("failed result is missing a cause", maxWidth)
 		}
 		return m.renderUpdateHeaderRow(
 			sessionPickerHeaderRowUpdateFailed,
-			"Update check failed: "+failure.Cause,
+			"Update check failed: "+status.CheckFailed.GetCause(),
 			maxWidth,
 		)
 	default:
 		return m.projectInvalidUpdateHeaderRow(
-			fmt.Sprintf("unknown validated result kind %q", m.updateStatus.Kind()),
+			fmt.Sprintf("unknown validated update status %T", status),
 			maxWidth,
 		)
 	}
@@ -135,8 +133,8 @@ func (m *sessionPickerModel) projectUpdateHeaderRow(maxWidth int) *sessionPicker
 func (m *sessionPickerModel) projectInvalidUpdateHeaderRow(cause string, maxWidth int) *sessionPickerHeaderLine {
 	if m.header.StatusRequest.Settings.Debug {
 		panic(fmt.Sprintf(
-			"session picker update header invariant violated: kind=%q cause=%q",
-			m.updateStatus.Kind(),
+			"session picker update header invariant violated: kind=%T cause=%q",
+			m.updateStatus.GetStatus(),
 			cause,
 		))
 	}

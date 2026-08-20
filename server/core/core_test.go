@@ -19,11 +19,18 @@ import (
 	"core/server/sessionlaunch"
 	"core/shared/clientui"
 	brand "core/shared/config"
+	"core/shared/protoapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	runtimepb "core/shared/protoapi/gen/kent/api/runtime"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestNewBuildsReusableServerCore(t *testing.T) {
@@ -58,14 +65,14 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	if appCore.CapabilityFactsClient() == nil {
 		t.Fatal("expected capability facts client to be wired")
 	}
-	if _, err := appCore.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+	if _, err := appCore.ProjectViewClient().ListProjects(context.Background(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("ListProjects via core client: %v", err)
 	}
-	facts, err := appCore.CapabilityFactsClient().GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	facts, err := appCore.CapabilityFactsClient().GetFacts(context.Background(), &capabilitypb.GetFactsRequest{})
 	if err != nil {
-		t.Fatalf("GetCapabilityFacts via core client: %v", err)
+		t.Fatalf("GetFacts via core client: %v", err)
 	}
-	if facts.Defaults.PrimaryModelID == "" {
+	if facts.Defaults.PrimaryModelId == "" {
 		t.Fatalf("capability facts missing defaults: %+v", facts)
 	}
 }
@@ -250,7 +257,7 @@ func TestNewProvidesRegistrationSafeClientsForUnregisteredWorkspace(t *testing.T
 	if appCore.RunPromptClient() == nil {
 		t.Fatal("expected run prompt client stub")
 	}
-	_, err = appCore.SessionLaunchClient().PlanSession(context.Background(), serverapi.SessionPlanRequest{})
+	_, err = appCore.SessionLaunchClient().PlanSession(context.Background(), &sessionlaunchpb.SessionPlanRequest{})
 	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		t.Fatalf("PlanSession error = %v, want ErrWorkspaceNotRegistered", err)
 	}
@@ -258,7 +265,7 @@ func TestNewProvidesRegistrationSafeClientsForUnregisteredWorkspace(t *testing.T
 	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		t.Fatalf("RunPrompt error = %v, want ErrWorkspaceNotRegistered", err)
 	}
-	if _, err := appCore.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+	if _, err := appCore.ProjectViewClient().ListProjects(context.Background(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("ListProjects via core client: %v", err)
 	}
 }
@@ -381,7 +388,16 @@ func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testi
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{Mode: serverapi.SessionLaunchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
+	intent, err := protoapi.SessionLaunchIntentToProto(
+		serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	)
+	if err != nil {
+		t.Fatalf("convert Session launch intent: %v", err)
+	}
+	plan, err := client.PlanSession(context.Background(), &sessionlaunchpb.SessionPlanRequest{
+		Mode:   sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+		Intent: intent,
+	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -443,10 +459,29 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	operations := []serverapi.WorkspaceChatDraftOperation{{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &message}, {Kind: serverapi.WorkspaceChatDraftClear}}
-	for i, operation := range operations {
-		if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: operation}); err != nil || response.GoalAvailability != []clientui.GoalAvailability{clientui.GoalAvailabilityAvailable, clientui.GoalAvailabilityAgentCapabilityMissing}[i] {
-			t.Fatalf("%s response=%+v err=%v", operation.Kind, response, err)
+	operations := []struct {
+		name         string
+		request      *sessionlaunchpb.WorkspaceChatDraftRequest
+		availability runtimepb.GoalAvailability
+	}{
+		{
+			name: "update message",
+			request: &sessionlaunchpb.WorkspaceChatDraftRequest{
+				Operation: &sessionlaunchpb.WorkspaceChatDraftRequest_UpdateMessage{UpdateMessage: message},
+			},
+			availability: runtimepb.GoalAvailability_GOAL_AVAILABILITY_AVAILABLE,
+		},
+		{
+			name: "clear",
+			request: &sessionlaunchpb.WorkspaceChatDraftRequest{
+				Operation: &sessionlaunchpb.WorkspaceChatDraftRequest_Clear{Clear: &emptypb.Empty{}},
+			},
+			availability: runtimepb.GoalAvailability_GOAL_AVAILABILITY_AGENT_CAPABILITY_MISSING,
+		},
+	}
+	for _, operation := range operations {
+		if response, err := second.WorkspaceChatDraft(t.Context(), operation.request); err != nil || response.GoalAvailability != operation.availability {
+			t.Fatalf("%s response=%+v err=%v", operation.name, response, err)
 		}
 	}
 	got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context())
@@ -481,11 +516,11 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	list := func() serverapi.SessionPageResponse {
-		limit := 20
-		page, listErr := appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
-			ProjectID: binding.ProjectID,
-			Category:  sessioncontract.SessionCategoryMain,
+	list := func() *projectpb.SessionPageSuccess {
+		limit := int32(20)
+		page, listErr := appCore.ProjectViewClient().ListSessionPage(t.Context(), &projectpb.SessionPageRequest{
+			ProjectId: binding.ProjectID,
+			Category:  projectpb.SessionCategory_SESSION_CATEGORY_MAIN,
 			Limit:     &limit,
 		})
 		if listErr != nil {
@@ -497,8 +532,8 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 	if page := list(); len(page.Sessions) != 0 {
 		t.Fatalf("untouched lazy Chat exposed Sessions: %+v", page.Sessions)
 	}
-	if _, err := client.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{
-		Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftClear},
+	if _, err := client.WorkspaceChatDraft(t.Context(), &sessionlaunchpb.WorkspaceChatDraftRequest{
+		Operation: &sessionlaunchpb.WorkspaceChatDraftRequest_Clear{Clear: &emptypb.Empty{}},
 	}); err != nil {
 		t.Fatalf("clear workspace Chat draft: %v", err)
 	}
@@ -518,11 +553,11 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 	if err := appCore.MetadataStore().ReplaceWorkspaceChatDraft(t.Context(), binding.WorkspaceID, &draft); err != nil {
 		t.Fatalf("ReplaceWorkspaceChatDraft: %v", err)
 	}
-	materialized, err := client.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
+	materialized, err := client.MaterializeWorkspaceChat(t.Context(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("MaterializeWorkspaceChat: %v", err)
 	}
-	record, err := appCore.MetadataStore().ResolvePersistedSession(t.Context(), materialized.SessionID.String())
+	record, err := appCore.MetadataStore().ResolvePersistedSession(t.Context(), materialized.SessionId)
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
@@ -568,16 +603,30 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 	}
 
 	worker := "worker"
-	if _, err := client.PlanSession(t.Context(), serverapi.SessionPlanRequest{
-		Mode:      serverapi.SessionLaunchModeInteractive,
-		Intent:    serverapi.OpenExistingSessionLaunchIntent(materialized.SessionID),
-		Overrides: serverapi.RunPromptOverrides{AgentRole: &worker},
+	materializedSessionID, err := runtimeids.ParseSessionID(materialized.SessionId)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	intent, err := protoapi.SessionLaunchIntentToProto(
+		serverapi.OpenExistingSessionLaunchIntent(materializedSessionID),
+	)
+	if err != nil {
+		t.Fatalf("convert Session launch intent: %v", err)
+	}
+	overrides, err := protoapi.RunPromptOverridesToProto(serverapi.RunPromptOverrides{AgentRole: &worker})
+	if err != nil {
+		t.Fatalf("convert Run Prompt overrides: %v", err)
+	}
+	if _, err := client.PlanSession(t.Context(), &sessionlaunchpb.SessionPlanRequest{
+		Mode:      sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+		Intent:    intent,
+		Overrides: overrides,
 	}); err != nil {
 		t.Fatalf("materialized Agent was not editable: %v", err)
 	}
 	if _, err := appCore.RuntimeControlClient().SubmitUserTurn(t.Context(), serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: "separate-failing-turn",
-		SessionID:       materialized.SessionID.String(),
+		SessionID:       materialized.SessionId,
 		Input:           runtimeinput.Text("ordinary operation fails without an active runtime"),
 	}); err == nil {
 		t.Fatal("ordinary text operation unexpectedly succeeded without a runtime")
@@ -586,11 +635,11 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 		t.Fatalf("failed ordinary operation rolled back Session: %+v", page.Sessions)
 	}
 
-	if _, err := client.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{}); err != nil {
+	if _, err := client.MaterializeWorkspaceChat(t.Context(), &emptypb.Empty{}); err != nil {
 		t.Fatalf("ignored blank materialization response: %v", err)
 	}
-	message, err := client.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{
-		Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftReadMessage},
+	message, err := client.WorkspaceChatDraft(t.Context(), &sessionlaunchpb.WorkspaceChatDraftRequest{
+		Operation: &sessionlaunchpb.WorkspaceChatDraftRequest_ReadMessage{ReadMessage: &emptypb.Empty{}},
 	})
 	if err != nil {
 		t.Fatalf("read fresh workspace Chat: %v", err)
@@ -630,13 +679,13 @@ func TestSessionChatSettingsPreparationUsesAuthoritativePersistenceRoot(t *testi
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	materialized, err := client.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
+	materialized, err := client.MaterializeWorkspaceChat(t.Context(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("MaterializeWorkspaceChat: %v", err)
 	}
 	store, err := session.OpenByID(
 		persistenceRoot,
-		materialized.SessionID.String(),
+		materialized.SessionId,
 		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
@@ -740,13 +789,13 @@ func TestSessionChatSettingsPreparationUsesPersistedPromptFacingEndpoint(t *test
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	materialized, err := client.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
+	materialized, err := client.MaterializeWorkspaceChat(t.Context(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("MaterializeWorkspaceChat: %v", err)
 	}
 	store, err := session.OpenByID(
 		persistenceRoot,
-		materialized.SessionID.String(),
+		materialized.SessionId,
 		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
@@ -791,13 +840,13 @@ func TestSessionChatSettingsPreparationUsesLockedPromptFacingModelCapabilities(t
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	materialized, err := client.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
+	materialized, err := client.MaterializeWorkspaceChat(t.Context(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("MaterializeWorkspaceChat: %v", err)
 	}
 	store, err := session.OpenByID(
 		persistenceRoot,
-		materialized.SessionID.String(),
+		materialized.SessionId,
 		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
@@ -877,11 +926,11 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	if firstRun.Result != "ok" || secondRun.Result != "ok" {
 		t.Fatalf("results = (%q, %q), want both ok", firstRun.Result, secondRun.Result)
 	}
-	offset := 0
-	limit := 20
-	page, err := appCore.ProjectViewClient().ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategorySubagent,
+	offset := int32(0)
+	limit := int32(20)
+	page, err := appCore.ProjectViewClient().ListSessionPage(context.Background(), &projectpb.SessionPageRequest{
+		ProjectId: binding.ProjectID,
+		Category:  projectpb.SessionCategory_SESSION_CATEGORY_SUBAGENT,
 		Offset:    &offset,
 		Limit:     &limit,
 	})
@@ -891,8 +940,8 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	if len(page.Sessions) != 1 {
 		t.Fatalf("session count = %d, want 1", len(page.Sessions))
 	}
-	if page.Sessions[0].SessionID.String() != firstRun.SessionID {
-		t.Fatalf("persisted session id = %q, want %q", page.Sessions[0].SessionID, firstRun.SessionID)
+	if page.Sessions[0].SessionId != firstRun.SessionID {
+		t.Fatalf("persisted session id = %q, want %q", page.Sessions[0].SessionId, firstRun.SessionID)
 	}
 }
 

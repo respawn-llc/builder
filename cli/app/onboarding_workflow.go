@@ -110,7 +110,7 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 			build: func(state *onboardingFlowState) onboardingScreen {
 				modelFact := modelFactFor(state, state.selections.model.value)
 				body := fmt.Sprintf("%s supports larger context windows. The larger window costs about 50%% more. Quality degrades as the model gets closer to its limit. If automatic compaction is off, Kent can still go above the limit anyway, so the smaller default is recommended.", state.selections.model.value)
-				return onboardingScreen{ID: "context_window", Kind: onboardingScreenChoice, Title: "Choose a context window", Body: body, DefaultOptionID: string(state.selections.contextWindow.kind), Options: []onboardingOption{{ID: "default", Title: fmt.Sprintf("Default window: %s", formatTokenWindow(*modelFact.ContextWindowTokens))}, {ID: "large", Title: fmt.Sprintf("Higher window: %s", formatTokenWindow(modelFact.LargeWindow.Tokens))}}}
+				return onboardingScreen{ID: "context_window", Kind: onboardingScreenChoice, Title: "Choose a context window", Body: body, DefaultOptionID: string(state.selections.contextWindow.kind), Options: []onboardingOption{{ID: "default", Title: fmt.Sprintf("Default window: %s", formatTokenWindow(int(*modelFact.ContextWindowTokens)))}, {ID: "large", Title: fmt.Sprintf("Higher window: %s", formatTokenWindow(int(modelFact.LargeWindow.Tokens)))}}}
 			},
 			apply: func(state *onboardingFlowState, choiceID string) error {
 				return state.chooseContextWindow(choiceID)

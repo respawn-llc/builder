@@ -18,7 +18,11 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type Core struct {
@@ -29,16 +33,16 @@ type Core struct {
 
 type unregisteredSessionLaunchClient struct{}
 
-func (unregisteredSessionLaunchClient) PlanSession(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-	return serverapi.SessionPlanResponse{}, serverapi.ErrWorkspaceNotRegistered
+func (unregisteredSessionLaunchClient) PlanSession(context.Context, *sessionlaunchpb.SessionPlanRequest) (*sessionlaunchpb.SessionPlanSuccess, error) {
+	return nil, serverapi.ErrWorkspaceNotRegistered
 }
 
-func (unregisteredSessionLaunchClient) WorkspaceChatDraft(context.Context, serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
-	return serverapi.WorkspaceChatDraftResponse{}, serverapi.ErrWorkspaceNotRegistered
+func (unregisteredSessionLaunchClient) WorkspaceChatDraft(context.Context, *sessionlaunchpb.WorkspaceChatDraftRequest) (*sessionlaunchpb.WorkspaceChatDraftSuccess, error) {
+	return nil, serverapi.ErrWorkspaceNotRegistered
 }
 
-func (unregisteredSessionLaunchClient) MaterializeWorkspaceChat(context.Context, serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
-	return serverapi.WorkspaceChatMaterializeResponse{}, serverapi.ErrWorkspaceNotRegistered
+func (unregisteredSessionLaunchClient) MaterializeWorkspaceChat(context.Context, *emptypb.Empty) (*sessionlaunchpb.MaterializeWorkspaceChatSuccess, error) {
+	return nil, serverapi.ErrWorkspaceNotRegistered
 }
 
 type unregisteredRunPromptClient struct{}
@@ -472,8 +476,8 @@ type configuredCoreOnboardingFinalizeService struct {
 	settingsPath string
 }
 
-func (s configuredCoreOnboardingFinalizeService) FinalizeOnboarding(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
-	return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: s.settingsPath}, nil)
+func (s configuredCoreOnboardingFinalizeService) Finalize(context.Context, *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
+	return nil, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: s.settingsPath}, nil)
 }
 
 func configuredCoreSettingsPath(cfg config.App) string {

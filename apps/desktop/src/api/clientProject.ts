@@ -12,14 +12,7 @@ import type {
   WorkspaceUnlinkResponse,
 } from "./models";
 import { workspaceCatalogPageSize } from "./models";
-import {
-  classifyResult,
-  create,
-  OperationOutcome,
-  operationFromDescriptor,
-  type DescMethod,
-  type Message,
-} from "@app/server-api-contract";
+import { create, operationName } from "@app/server-api-contract";
 import {
   ProjectAvailability,
   ProjectCatalogService,
@@ -32,69 +25,55 @@ import {
   type ProjectMutationBinding,
   type ProjectWorkspaceCatalogSummary,
 } from "@app/server-api-contract/gen/kent/api/project/project_pb";
-import { parseCatalogInput, requireCatalogProject } from "./clientCatalog";
+import { requireCatalogProject } from "./clientCatalog";
 import { timestampMillis } from "./clientTime";
-import { canonicalProjectIDSchema, workspaceOffsetSchema } from "./schemas/catalog";
+import { requireUnarySuccess } from "./protobufRpc";
 import type { DescriptorRpcTransport } from "./transport";
 import { CatalogContractError, ContractError } from "./errors";
-import { projectRpcError } from "./projectRpcError";
 
-const listWorkspacesOperation = operationFromDescriptor(ProjectCatalogService.method.listWorkspaces).name;
-const getWorkspaceOperation = operationFromDescriptor(ProjectCatalogService.method.getWorkspace).name;
-const getEditOperation = operationFromDescriptor(ProjectCatalogService.method.getEdit).name;
+const listWorkspacesOperation = operationName(ProjectCatalogService.method.listWorkspaces);
+const getWorkspaceOperation = operationName(ProjectCatalogService.method.getWorkspace);
+const getEditOperation = operationName(ProjectCatalogService.method.getEdit);
 
 export async function listWorkspaces(
   transport: DescriptorRpcTransport,
   projectID: string,
   offset: number,
 ): Promise<WorkspaceCatalogPage> {
-  const validatedProjectID = parseCatalogInput(
-    `${listWorkspacesOperation} project ID`,
-    canonicalProjectIDSchema,
-    projectID,
-  );
-  const validatedOffset = parseCatalogInput(
-    `${listWorkspacesOperation} offset`,
-    workspaceOffsetSchema,
-    offset,
-  );
   const method = ProjectCatalogService.method.listWorkspaces;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, {
-      projectId: validatedProjectID,
-      offset: validatedOffset,
-      limit: workspaceCatalogPageSize,
-    }),
+    await transport.callDescriptor(
+      method,
+      create(method.input, {
+        projectId: projectID,
+        offset,
+        limit: workspaceCatalogPageSize,
+      }),
+    ),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  const success = result.outcome.value;
   const response: WorkspaceCatalogPage = {
     projectID: success.projectId,
     offset: success.offset,
     workspaces: success.workspaces.map(projectWorkspaceCatalog),
     nextOffset: success.nextOffset ?? null,
   };
-  requireCatalogProject(listWorkspacesOperation, validatedProjectID, response.projectID);
-  if (response.offset !== validatedOffset) {
+  requireCatalogProject(listWorkspacesOperation, projectID, response.projectID);
+  if (response.offset !== offset) {
     throw CatalogContractError.malformedResponse(
       listWorkspacesOperation,
-      new ContractError(
-        `Response offset ${String(response.offset)} does not match ${String(validatedOffset)}.`,
-      ),
+      new ContractError(`Response offset ${String(response.offset)} does not match ${String(offset)}.`),
     );
   }
   if (
     response.nextOffset !== null &&
     (response.workspaces.length !== workspaceCatalogPageSize ||
-      response.nextOffset !== validatedOffset + workspaceCatalogPageSize)
+      response.nextOffset !== offset + workspaceCatalogPageSize)
   ) {
     throw CatalogContractError.malformedResponse(
       listWorkspacesOperation,
       new ContractError(
-        `Response next offset ${String(response.nextOffset)} does not continue offset ${String(validatedOffset)} with limit ${String(workspaceCatalogPageSize)}.`,
+        `Response next offset ${String(response.nextOffset)} does not continue offset ${String(offset)} with limit ${String(workspaceCatalogPageSize)}.`,
       ),
     );
   }
@@ -106,25 +85,19 @@ export async function getProjectWorkspace(
   projectID: string,
   selector: Readonly<{ workspaceID: string } | { workspaceRoot: string }>,
 ): Promise<ProjectWorkspaceResult> {
-  const validatedProjectID = parseCatalogInput(
-    `${getWorkspaceOperation} project ID`,
-    canonicalProjectIDSchema,
-    projectID,
-  );
   const selectorValue =
     "workspaceID" in selector
       ? { case: "workspaceId" as const, value: selector.workspaceID }
       : { case: "workspaceRoot" as const, value: selector.workspaceRoot };
   const method = ProjectCatalogService.method.getWorkspace;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, { projectId: validatedProjectID, selector: selectorValue }),
+    await transport.callDescriptor(
+      method,
+      create(method.input, { projectId: projectID, selector: selectorValue }),
+    ),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  const success = result.outcome.value;
-  requireCatalogProject(getWorkspaceOperation, validatedProjectID, success.projectId);
+  requireCatalogProject(getWorkspaceOperation, projectID, success.projectId);
   if (success.result === ProjectWorkspaceGetResult.ATTACHED && success.workspace !== undefined) {
     return { kind: "attached", workspace: projectWorkspaceCatalog(success.workspace) };
   }
@@ -141,40 +114,32 @@ export async function getProjectEdit(
   transport: DescriptorRpcTransport,
   projectID: string,
 ): Promise<ProjectEdit> {
-  const validatedProjectID = parseCatalogInput(
-    `${getEditOperation} project ID`,
-    canonicalProjectIDSchema,
-    projectID,
-  );
   const method = ProjectCatalogService.method.getEdit;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, { projectId: validatedProjectID }),
+    await transport.callDescriptor(method, create(method.input, { projectId: projectID })),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  requireCatalogProject(getEditOperation, validatedProjectID, result.outcome.value.projectId);
+  requireCatalogProject(getEditOperation, projectID, success.projectId);
   return {
-    projectID: result.outcome.value.projectId,
-    projectKey: result.outcome.value.projectKey,
-    displayName: result.outcome.value.displayName,
+    projectID: success.projectId,
+    projectKey: success.projectKey,
+    displayName: success.displayName,
   };
 }
 
 export async function planWorkspace(transport: DescriptorRpcTransport, path: string): Promise<BindingPlan> {
   const method = ProjectCatalogService.method.planWorkspaceBinding;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, { path, mode: WorkspaceBindingPlanMode.INTERACTIVE }),
+    await transport.callDescriptor(
+      method,
+      create(method.input, { path, mode: WorkspaceBindingPlanMode.INTERACTIVE }),
+    ),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
   return {
-    kind: workspaceBindingPlanKind(result.outcome.value.kind),
-    canonicalRoot: result.outcome.value.canonicalRoot,
-    binding: result.outcome.value.binding === undefined ? null : projectBinding(result.outcome.value.binding),
+    kind: workspaceBindingPlanKind(success.kind),
+    canonicalRoot: success.canonicalRoot,
+    binding: success.binding === undefined ? null : projectBinding(success.binding),
   };
 }
 
@@ -183,14 +148,16 @@ export async function listProjectHome(
   pageToken: string,
 ): Promise<ProjectPage> {
   const method = ProjectCatalogService.method.listHome;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, { pageSize: 40, pageToken: pageToken === "" ? undefined : pageToken }),
+    await transport.callDescriptor(
+      method,
+      create(method.input, {
+        pageSize: 40,
+        pageToken: pageToken === "" ? undefined : pageToken,
+      }),
+    ),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  const success = result.outcome.value;
   if (success.generatedAt === undefined) {
     throw new ContractError("Project Home generated timestamp is required.");
   }
@@ -208,18 +175,17 @@ export async function createProject(
   workspaceRoot: string,
 ): Promise<ProjectMutationBindingModel> {
   const method = ProjectCatalogService.method.create;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, {
-      displayName,
-      projectKey: projectKey === "" ? undefined : projectKey,
-      workspaceRoot,
-    }),
+    await transport.callDescriptor(
+      method,
+      create(method.input, {
+        displayName,
+        projectKey: projectKey === "" ? undefined : projectKey,
+        workspaceRoot,
+      }),
+    ),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  const success = result.outcome.value;
   if (success.binding === undefined) {
     throw new ContractError("Project Create binding is required.");
   }
@@ -232,14 +198,10 @@ export async function attachWorkspace(
   workspaceRoot: string,
 ): Promise<ProjectWorkspaceAttachResponse> {
   const method = ProjectCatalogService.method.attachWorkspace;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, { projectId: projectID, workspaceRoot }),
+    await transport.callDescriptor(method, create(method.input, { projectId: projectID, workspaceRoot })),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  const success = result.outcome.value;
   if (success.binding === undefined) {
     throw new ContractError("Project Workspace attach binding is required.");
   }
@@ -256,18 +218,17 @@ export async function updateProject(
   projectKey = "",
 ): Promise<ProjectMutationResponse> {
   const method = ProjectCatalogService.method.update;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, {
-      projectId: projectID,
-      displayName,
-      projectKey: projectKey === "" ? undefined : projectKey,
-    }),
+    await transport.callDescriptor(
+      method,
+      create(method.input, {
+        projectId: projectID,
+        displayName,
+        projectKey: projectKey === "" ? undefined : projectKey,
+      }),
+    ),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  const success = result.outcome.value;
   if (success.project === undefined) {
     throw new ContractError("Project Update summary is required.");
   }
@@ -280,17 +241,16 @@ export async function setDefaultWorkspace(
   workspaceID: string,
 ): Promise<ProjectMutationResponse> {
   const method = ProjectCatalogService.method.setDefaultWorkspace;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, {
-      projectId: projectID,
-      workspace: { selector: { case: "workspaceId", value: workspaceID } },
-    }),
+    await transport.callDescriptor(
+      method,
+      create(method.input, {
+        projectId: projectID,
+        workspace: { selector: { case: "workspaceId", value: workspaceID } },
+      }),
+    ),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  const success = result.outcome.value;
   if (success.project === undefined) {
     throw new ContractError("Project default Workspace summary is required.");
   }
@@ -303,24 +263,23 @@ export async function unlinkWorkspace(
   workspaceID: string,
 ): Promise<WorkspaceUnlinkResponse> {
   const method = ProjectCatalogService.method.unlinkWorkspace;
-  const result = await transport.callDescriptor(
+  const success = requireUnarySuccess(
     method,
-    create(method.input, {
-      projectId: projectID,
-      workspace: { selector: { case: "workspaceId", value: workspaceID } },
-    }),
+    await transport.callDescriptor(
+      method,
+      create(method.input, {
+        projectId: projectID,
+        workspace: { selector: { case: "workspaceId", value: workspaceID } },
+      }),
+    ),
   );
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  const success = result.outcome.value;
   return {
     projectID: success.projectId,
     workspaceID: success.workspaceId,
     blockers: success.blockers.map((blocker) => ({
       code: blocker.code,
       message: workspaceUnlinkBlockerMessage(blocker.code),
-      count: blocker.count ?? 0,
+      ...(blocker.count === undefined ? {} : { count: blocker.count }),
     })),
     project: success.project === undefined ? null : projectHomeSummary(success.project),
   };
@@ -331,11 +290,10 @@ export async function deleteProject(
   projectID: string,
 ): Promise<ProjectDeleteResponse> {
   const method = ProjectCatalogService.method.delete;
-  const result = await transport.callDescriptor(method, create(method.input, { projectId: projectID }));
-  if (result.outcome.case !== "success") {
-    throw projectResultError(method, result);
-  }
-  const success = result.outcome.value;
+  const success = requireUnarySuccess(
+    method,
+    await transport.callDescriptor(method, create(method.input, { projectId: projectID })),
+  );
   return {
     projectID: success.projectId,
     deleted: success.deleted,
@@ -377,15 +335,6 @@ function projectMutationBinding(binding: ProjectMutationBinding): ProjectMutatio
     workspaceName: binding.workspaceName,
     workspaceStatus: projectAvailability(binding.workspaceStatus),
   };
-}
-
-function projectResultError(method: DescMethod, result: Message) {
-  const operation = operationFromDescriptor(method).name;
-  const classified = classifyResult(method.output, result);
-  if (classified.outcome === OperationOutcome.SUCCESS) {
-    return projectRpcError(operation);
-  }
-  return projectRpcError(operation, classified.failure);
 }
 
 function workspaceUnlinkBlockerMessage(code: string): string {

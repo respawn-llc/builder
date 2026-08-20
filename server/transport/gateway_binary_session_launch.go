@@ -6,108 +6,71 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/apicontract"
 	"core/shared/protoapi"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/serverapi"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func registerSessionLaunchGatewayBinaryBindings(bindings map[string]gatewayBinaryBinding) error {
 	service := sessionlaunchpb.File_kent_api_session_launch_session_launch_proto.Services().ByName("SessionLaunchService")
-	if err := registerGatewayBinaryBinding(
-		bindings,
-		service,
-		"Plan",
-		gatewayBinaryCoreActiveOrdinary,
-		func() proto.Message { return &sessionlaunchpb.SessionPlanRequest{} },
-		nil,
-		invokeBinarySessionPlan,
-		binarySessionPlanInternalFailure,
+	if err := registerSessionLaunchUnary(bindings, service, "Plan",
+		func() *sessionlaunchpb.SessionPlanRequest { return &sessionlaunchpb.SessionPlanRequest{} },
+		apicontract.SessionLaunchService.PlanSession,
+		binarySessionPlanFailure,
 	); err != nil {
 		return err
 	}
-	operation, err := protoapi.OperationFromDescriptor(service.Methods().ByName("Plan"))
-	if err != nil {
-		return err
-	}
-	binding := bindings[operation.Name]
-	binding.failure = binarySessionPlanFailure
-	bindings[operation.Name] = binding
-	if err := registerGatewayBinaryBinding(
-		bindings,
-		service,
-		"WorkspaceChatDraft",
-		gatewayBinaryCoreActiveOrdinary,
-		func() proto.Message { return &sessionlaunchpb.WorkspaceChatDraftRequest{} },
-		nil,
-		invokeBinaryWorkspaceChatDraft,
-		binaryWorkspaceChatDraftInternalFailure,
+	if err := registerSessionLaunchUnary(bindings, service, "WorkspaceChatDraft",
+		func() *sessionlaunchpb.WorkspaceChatDraftRequest {
+			return &sessionlaunchpb.WorkspaceChatDraftRequest{}
+		},
+		apicontract.SessionLaunchService.WorkspaceChatDraft,
+		binaryWorkspaceChatDraftFailure,
 	); err != nil {
 		return err
 	}
-	operation, err = protoapi.OperationFromDescriptor(service.Methods().ByName("WorkspaceChatDraft"))
-	if err != nil {
-		return err
-	}
-	binding = bindings[operation.Name]
-	binding.failure = binaryWorkspaceChatDraftFailure
-	bindings[operation.Name] = binding
-	if err := registerGatewayBinaryBinding(
-		bindings,
-		service,
-		"MaterializeWorkspaceChat",
-		gatewayBinaryCoreActiveOrdinary,
-		func() proto.Message { return &emptypb.Empty{} },
-		nil,
-		invokeBinaryMaterializeWorkspaceChat,
-		binaryMaterializeWorkspaceChatInternalFailure,
-	); err != nil {
-		return err
-	}
-	operation, err = protoapi.OperationFromDescriptor(service.Methods().ByName("MaterializeWorkspaceChat"))
-	if err != nil {
-		return err
-	}
-	binding = bindings[operation.Name]
-	binding.failure = binaryMaterializeWorkspaceChatFailure
-	bindings[operation.Name] = binding
-	return nil
+	return registerSessionLaunchUnary(bindings, service, "MaterializeWorkspaceChat",
+		func() *emptypb.Empty { return &emptypb.Empty{} },
+		apicontract.SessionLaunchService.MaterializeWorkspaceChat,
+		binaryMaterializeWorkspaceChatFailure,
+	)
 }
 
-func invokeBinarySessionPlan(
-	g *Gateway,
-	ctx context.Context,
-	state *connectionState,
-	message proto.Message,
-) (proto.Message, error) {
-	request, err := protoapi.SessionPlanRequestFromProto(message.(*sessionlaunchpb.SessionPlanRequest))
-	if err != nil {
-		return nil, err
-	}
-	client, err := g.sessionLaunchClientForState(ctx, state)
-	if err != nil {
-		return nil, err
-	}
-	response, err := client.PlanSession(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	success, err := protoapi.SessionPlanToProto(response)
-	if err != nil {
-		return nil, err
-	}
-	return &sessionlaunchpb.SessionPlanResult{
-		Outcome: &sessionlaunchpb.SessionPlanResult_Success{Success: success},
-	}, nil
+func registerSessionLaunchUnary[
+	Request proto.Message,
+	Success proto.Message,
+](
+	bindings map[string]gatewayBinaryBinding,
+	service protoreflect.ServiceDescriptor,
+	method protoreflect.Name,
+	newRequest func() Request,
+	invoke func(apicontract.SessionLaunchService, context.Context, Request) (Success, error),
+	failureDetail func(*Gateway, *connectionState, Request, error) proto.Message,
+) error {
+	return registerGatewayBinaryUnary(
+		bindings, service, method, gatewayBinaryCoreActiveOrdinary, newRequest, nil,
+		func(g *Gateway, ctx context.Context, state *connectionState, request Request) (Success, error) {
+			client, err := g.sessionLaunchClientForState(ctx, state)
+			if err != nil {
+				var zero Success
+				return zero, err
+			}
+			return invoke(client, ctx, request)
+		},
+		failureDetail,
+	)
 }
 
 func binarySessionPlanFailure(
 	g *Gateway,
 	state *connectionState,
-	_ proto.Message,
+	_ *sessionlaunchpb.SessionPlanRequest,
 	err error,
 ) proto.Message {
 	failure, known, conversionErr := protoapi.SessionPlanErrorToProto(
@@ -115,154 +78,43 @@ func binarySessionPlanFailure(
 		sessionLaunchWorkspaceNotRegisteredDetails(g, state),
 	)
 	if conversionErr != nil {
-		return binarySessionPlanInternalFailure(fmt.Errorf("encode session plan failure: %w", conversionErr))
+		return binaryInternalFailure(fmt.Errorf("encode session plan failure: %w", conversionErr))
 	}
 	if !known {
-		return binarySessionPlanInternalFailure(err)
+		return binaryInternalFailure(err)
 	}
-	return &sessionlaunchpb.SessionPlanResult{
-		Outcome: &sessionlaunchpb.SessionPlanResult_Error{Error: failure},
-	}
-}
-
-func binarySessionPlanInternalFailure(err error) proto.Message {
-	return &sessionlaunchpb.SessionPlanResult{
-		Outcome: &sessionlaunchpb.SessionPlanResult_Error{Error: &sessionlaunchpb.SessionPlanError{
-			Code: "internal_failure",
-			Detail: &sessionlaunchpb.SessionPlanError_InternalFailure{
-				InternalFailure: binaryInternalFailure(err),
-			},
-		}},
-	}
-}
-
-func invokeBinaryWorkspaceChatDraft(
-	g *Gateway,
-	ctx context.Context,
-	state *connectionState,
-	message proto.Message,
-) (proto.Message, error) {
-	request, err := protoapi.WorkspaceChatDraftRequestFromProto(message.(*sessionlaunchpb.WorkspaceChatDraftRequest))
-	if err != nil {
-		return nil, err
-	}
-	client, err := g.sessionLaunchClientForState(ctx, state)
-	if err != nil {
-		return nil, err
-	}
-	response, err := client.WorkspaceChatDraft(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	success, err := protoapi.WorkspaceChatDraftToProto(response)
-	if err != nil {
-		return nil, err
-	}
-	return &sessionlaunchpb.WorkspaceChatDraftResult{
-		Outcome: &sessionlaunchpb.WorkspaceChatDraftResult_Success{Success: success},
-	}, nil
+	return failure
 }
 
 func binaryWorkspaceChatDraftFailure(
 	g *Gateway,
 	state *connectionState,
-	_ proto.Message,
+	_ *sessionlaunchpb.WorkspaceChatDraftRequest,
 	err error,
 ) proto.Message {
-	failure := &sessionlaunchpb.WorkspaceChatDraftError{}
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		failure.Code = "auth_required"
-		failure.Detail = &sessionlaunchpb.WorkspaceChatDraftError_AuthRequired{
-			AuthRequired: &sessionlaunchpb.AuthRequiredDetails{},
-		}
+		return &sessionlaunchpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered):
-		failure.Code = "workspace_not_registered"
-		failure.Detail = &sessionlaunchpb.WorkspaceChatDraftError_WorkspaceNotRegistered{
-			WorkspaceNotRegistered: sessionLaunchWorkspaceNotRegisteredDetails(g, state),
-		}
+		return sessionLaunchWorkspaceNotRegisteredDetails(g, state)
 	default:
-		failure.Code = "internal_failure"
-		failure.Detail = &sessionlaunchpb.WorkspaceChatDraftError_InternalFailure{
-			InternalFailure: binaryInternalFailure(err),
-		}
+		return binaryInternalFailure(err)
 	}
-	return &sessionlaunchpb.WorkspaceChatDraftResult{
-		Outcome: &sessionlaunchpb.WorkspaceChatDraftResult_Error{Error: failure},
-	}
-}
-
-func binaryWorkspaceChatDraftInternalFailure(err error) proto.Message {
-	return &sessionlaunchpb.WorkspaceChatDraftResult{
-		Outcome: &sessionlaunchpb.WorkspaceChatDraftResult_Error{Error: &sessionlaunchpb.WorkspaceChatDraftError{
-			Code: "internal_failure",
-			Detail: &sessionlaunchpb.WorkspaceChatDraftError_InternalFailure{
-				InternalFailure: binaryInternalFailure(err),
-			},
-		}},
-	}
-}
-
-func invokeBinaryMaterializeWorkspaceChat(
-	g *Gateway,
-	ctx context.Context,
-	state *connectionState,
-	_ proto.Message,
-) (proto.Message, error) {
-	client, err := g.sessionLaunchClientForState(ctx, state)
-	if err != nil {
-		return nil, err
-	}
-	response, err := client.MaterializeWorkspaceChat(ctx, serverapi.WorkspaceChatMaterializeRequest{})
-	if err != nil {
-		return nil, err
-	}
-	success, err := protoapi.WorkspaceChatMaterializationToProto(response)
-	if err != nil {
-		return nil, err
-	}
-	return &sessionlaunchpb.MaterializeWorkspaceChatResult{
-		Outcome: &sessionlaunchpb.MaterializeWorkspaceChatResult_Success{Success: success},
-	}, nil
 }
 
 func binaryMaterializeWorkspaceChatFailure(
 	g *Gateway,
 	state *connectionState,
-	_ proto.Message,
+	_ *emptypb.Empty,
 	err error,
 ) proto.Message {
-	failure := &sessionlaunchpb.MaterializeWorkspaceChatError{}
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		failure.Code = "auth_required"
-		failure.Detail = &sessionlaunchpb.MaterializeWorkspaceChatError_AuthRequired{
-			AuthRequired: &sessionlaunchpb.AuthRequiredDetails{},
-		}
+		return &sessionlaunchpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered):
-		failure.Code = "workspace_not_registered"
-		failure.Detail = &sessionlaunchpb.MaterializeWorkspaceChatError_WorkspaceNotRegistered{
-			WorkspaceNotRegistered: sessionLaunchWorkspaceNotRegisteredDetails(g, state),
-		}
+		return sessionLaunchWorkspaceNotRegisteredDetails(g, state)
 	default:
-		failure.Code = "internal_failure"
-		failure.Detail = &sessionlaunchpb.MaterializeWorkspaceChatError_InternalFailure{
-			InternalFailure: binaryInternalFailure(err),
-		}
-	}
-	return &sessionlaunchpb.MaterializeWorkspaceChatResult{
-		Outcome: &sessionlaunchpb.MaterializeWorkspaceChatResult_Error{Error: failure},
-	}
-}
-
-func binaryMaterializeWorkspaceChatInternalFailure(err error) proto.Message {
-	return &sessionlaunchpb.MaterializeWorkspaceChatResult{
-		Outcome: &sessionlaunchpb.MaterializeWorkspaceChatResult_Error{Error: &sessionlaunchpb.MaterializeWorkspaceChatError{
-			Code: "internal_failure",
-			Detail: &sessionlaunchpb.MaterializeWorkspaceChatError_InternalFailure{
-				InternalFailure: binaryInternalFailure(err),
-			},
-		}},
+		return binaryInternalFailure(err)
 	}
 }
 

@@ -10,25 +10,24 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type sessionPageLoadResult struct {
-	response serverapi.SessionPageResponse
+	response sessionPageResponse
 	err      error
 }
 
 type sessionPageLoadCall struct {
 	context  context.Context
-	request  serverapi.SessionPageRequest
+	request  sessionPageRequest
 	complete chan sessionPageLoadResult
 }
 
 type recordingSessionPageLoader struct {
-	responses func(serverapi.SessionPageRequest) sessionPageLoadResult
+	responses func(sessionPageRequest) sessionPageLoadResult
 	started   chan sessionPageLoadCall
 }
 
@@ -36,7 +35,7 @@ func (*recordingSessionPageLoader) ProjectID() string {
 	return "picker-test-project"
 }
 
-func (l *recordingSessionPageLoader) ListSessionPage(ctx context.Context, request serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+func (l *recordingSessionPageLoader) ListSessionPage(ctx context.Context, request sessionPageRequest) (sessionPageResponse, error) {
 	if l.started != nil {
 		call := sessionPageLoadCall{context: ctx, request: request, complete: make(chan sessionPageLoadResult, 1)}
 		l.started <- call
@@ -44,11 +43,11 @@ func (l *recordingSessionPageLoader) ListSessionPage(ctx context.Context, reques
 		case result := <-call.complete:
 			return result.response, result.err
 		case <-ctx.Done():
-			return serverapi.SessionPageResponse{}, ctx.Err()
+			return sessionPageResponse{}, ctx.Err()
 		}
 	}
 	if l.responses == nil {
-		return serverapi.SessionPageResponse{}, nil
+		return sessionPageResponse{}, nil
 	}
 	result := l.responses(request)
 	return result.response, result.err
@@ -75,12 +74,12 @@ func TestSessionPickerLifecycleInitialJourneys(t *testing.T) {
 	lifecycle.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	requireSessionPickerResult(t, lifecycle.Result(), sessionPickerCreateResult{})
 
-	empty := newTestSessionPickerLifecycle(t, &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+	empty := newTestSessionPickerLifecycle(t, &recordingSessionPageLoader{responses: func(request sessionPageRequest) sessionPageLoadResult {
 		return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 	}})
 	runSessionPickerTestCommands(empty.Init(), empty)
 	requireSessionPickerResult(t, empty.Result(), sessionPickerCreateResult{})
-	selectionLoader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+	selectionLoader := &recordingSessionPageLoader{responses: func(request sessionPageRequest) sessionPageLoadResult {
 		return sessionPageLoadResult{response: pickerPageResponse(t, request, string(request.Category)+"-1")}
 	}}
 	for _, test := range []struct {
@@ -99,7 +98,7 @@ func TestSessionPickerLifecycleInitialJourneys(t *testing.T) {
 
 func TestSessionPickerLifecyclePageFailuresAndRetry(t *testing.T) {
 	diagnostic := errors.New("page unavailable")
-	request := serverapi.SessionPageRequest{ProjectID: (&recordingSessionPageLoader{}).ProjectID(), Category: sessioncontract.SessionCategoryMain}
+	request := sessionPageRequest{ProjectID: (&recordingSessionPageLoader{}).ProjectID(), Category: sessioncontract.SessionCategoryMain}
 	project, category := pickerPageResponse(t, request), pickerPageResponse(t, request)
 	project.ProjectID = "other-project"
 	category.Category = sessioncontract.SessionCategorySubagent
@@ -117,7 +116,7 @@ func TestSessionPickerLifecyclePageFailuresAndRetry(t *testing.T) {
 		{sessionPageLoadResult{err: diagnostic}, sessionPickerFailurePageRequest},
 	}
 	for _, test := range tests {
-		loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+		loader := &recordingSessionPageLoader{responses: func(request sessionPageRequest) sessionPageLoadResult {
 			if len(test.result.response.Sessions) > sessionPickerPageSize {
 				return sessionPageLoadResult{response: pickerPageResponse(t, request, ids...)}
 			}
@@ -139,7 +138,7 @@ func TestSessionPickerLifecyclePageFailuresAndRetry(t *testing.T) {
 			"request failure discarded its diagnostic")
 	}
 
-	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+	loader := &recordingSessionPageLoader{responses: func(request sessionPageRequest) sessionPageLoadResult {
 		if request.Category == sessioncontract.SessionCategorySubagent {
 			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 		}
@@ -173,7 +172,7 @@ func TestSessionPickerLifecycleDirectionalTraversal(t *testing.T) {
 		newest[index] = fmt.Sprintf("newest-%02d", index)
 	}
 	requests := make([]int, 0, 4)
-	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+	loader := &recordingSessionPageLoader{responses: func(request sessionPageRequest) sessionPageLoadResult {
 		if request.Category == sessioncontract.SessionCategorySubagent {
 			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 		}
@@ -216,7 +215,7 @@ func TestSessionPickerLifecycleDirectionalTraversal(t *testing.T) {
 }
 
 func TestSessionPickerLifecyclePreservesRepeatedLiveRows(t *testing.T) {
-	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+	loader := &recordingSessionPageLoader{responses: func(request sessionPageRequest) sessionPageLoadResult {
 		if request.Category == sessioncontract.SessionCategorySubagent {
 			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 		}
@@ -250,7 +249,7 @@ func TestSessionPickerPageResultRequiresRequestedOffset(t *testing.T) {
 		category:        sessioncontract.SessionCategoryMain,
 		generation:      request.generation,
 		requestedOffset: sessionPickerPageSize,
-		response: serverapi.SessionPageResponse{
+		response: sessionPageResponse{
 			ProjectID: (&recordingSessionPageLoader{}).ProjectID(),
 			Category:  sessioncontract.SessionCategoryMain,
 		},
@@ -283,7 +282,7 @@ func TestSessionPickerZeroMovementDirectionalResultUsesDebugPolicy(t *testing.T)
 				category:        sessioncontract.SessionCategoryMain,
 				generation:      1,
 				requestedOffset: sessionPickerPageSize,
-				response: serverapi.SessionPageResponse{
+				response: sessionPageResponse{
 					ProjectID: model.loader.ProjectID(),
 					Category:  sessioncontract.SessionCategoryMain,
 				},
@@ -327,7 +326,7 @@ func TestSessionPickerLifecycleGeometryAndResults(t *testing.T) {
 	lifecycle.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 	requireSessionPicker(t, lifecycle.View() != "", "exact 40x10 geometry remained blank")
 
-	open := newTestSessionPickerLifecycle(t, &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+	open := newTestSessionPickerLifecycle(t, &recordingSessionPageLoader{responses: func(request sessionPageRequest) sessionPageLoadResult {
 		return sessionPageLoadResult{response: pickerPageResponse(t, request, "result-1")}
 	}})
 	runSessionPickerTestCommands(open.Init(), open)
@@ -396,8 +395,8 @@ func TestSessionPickerLifecycleCloseCancelsOutstandingPageRequests(t *testing.T)
 	}
 }
 
-func pickerPageResponse(t *testing.T, request serverapi.SessionPageRequest, ids ...string) serverapi.SessionPageResponse {
-	response := serverapi.SessionPageResponse{ProjectID: request.ProjectID, Category: request.Category}
+func pickerPageResponse(t *testing.T, request sessionPageRequest, ids ...string) sessionPageResponse {
+	response := sessionPageResponse{ProjectID: request.ProjectID, Category: request.Category}
 	for index, raw := range ids {
 		response.Sessions = append(response.Sessions, clientui.SessionSummary{
 			SessionID: mustPickerValue(t, raw, runtimeids.ParseSessionID),
@@ -408,7 +407,7 @@ func pickerPageResponse(t *testing.T, request serverapi.SessionPageRequest, ids 
 	return response
 }
 
-func sessionPickerRequestOffset(t *testing.T, request serverapi.SessionPageRequest) int {
+func sessionPickerRequestOffset(t *testing.T, request sessionPageRequest) int {
 	t.Helper()
 	if request.Offset == nil {
 		t.Fatal("Session page request omitted offset")
@@ -416,7 +415,7 @@ func sessionPickerRequestOffset(t *testing.T, request serverapi.SessionPageReque
 	return *request.Offset
 }
 
-func sessionPickerRequestLimit(t *testing.T, request serverapi.SessionPageRequest) int {
+func sessionPickerRequestLimit(t *testing.T, request sessionPageRequest) int {
 	t.Helper()
 	if request.Limit == nil {
 		t.Fatal("Session page request omitted limit")

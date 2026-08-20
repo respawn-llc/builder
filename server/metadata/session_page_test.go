@@ -9,7 +9,6 @@ import (
 
 	"core/server/session"
 	"core/shared/config"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
 
@@ -22,21 +21,13 @@ func TestSessionPageSeparatesCategoriesAndMapsLegacyToMain(t *testing.T) {
 	importSessionPageFixture(t, store, cfg, binding, "main-session", sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), updatedAt.Add(time.Minute))
 	importSessionPageFixture(t, store, cfg, binding, "subagent-session", sessionCategoryForPageTest(sessioncontract.SessionCategorySubagent), updatedAt)
 
-	mainPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     sessionPageInt(10),
-	})
+	mainPage, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategoryMain, 0, 10)
 	if err != nil {
 		t.Fatalf("ListSessionPage main: %v", err)
 	}
 	requireSessionPageIDs(t, mainPage, "legacy-session", "main-session")
 
-	subagentPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategorySubagent,
-		Limit:     sessionPageInt(10),
-	})
+	subagentPage, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategorySubagent, 0, 10)
 	if err != nil {
 		t.Fatalf("ListSessionPage subagent: %v", err)
 	}
@@ -65,21 +56,13 @@ func TestSessionPageReflectsPersistedCategoryPromotion(t *testing.T) {
 		t.Fatalf("ImportSessionSnapshot promotion: %v", err)
 	}
 
-	mainPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     sessionPageInt(10),
-	})
+	mainPage, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategoryMain, 0, 10)
 	if err != nil {
 		t.Fatalf("ListSessionPage main: %v", err)
 	}
 	requireSessionPageIDs(t, mainPage, "promoted-session")
 
-	subagentPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategorySubagent,
-		Limit:     sessionPageInt(10),
-	})
+	subagentPage, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategorySubagent, 0, 10)
 	if err != nil {
 		t.Fatalf("ListSessionPage subagent: %v", err)
 	}
@@ -95,12 +78,7 @@ func TestSessionPageUsesStableRecencyOrderAcrossAdjacentOffsets(t *testing.T) {
 		importSessionPageFixture(t, store, cfg, binding, id, sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), updatedAt)
 	}
 
-	first, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Offset:    sessionPageInt(0),
-		Limit:     sessionPageInt(2),
-	})
+	first, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategoryMain, 0, 2)
 	if err != nil {
 		t.Fatalf("ListSessionPage first: %v", err)
 	}
@@ -109,12 +87,7 @@ func TestSessionPageUsesStableRecencyOrderAcrossAdjacentOffsets(t *testing.T) {
 		t.Fatalf("first next offset = %v, want 2", first.NextOffset)
 	}
 
-	second, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Offset:    first.NextOffset,
-		Limit:     sessionPageInt(2),
-	})
+	second, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategoryMain, *first.NextOffset, 2)
 	if err != nil {
 		t.Fatalf("ListSessionPage second: %v", err)
 	}
@@ -123,12 +96,7 @@ func TestSessionPageUsesStableRecencyOrderAcrossAdjacentOffsets(t *testing.T) {
 		t.Fatalf("second next offset = %v, want nil", second.NextOffset)
 	}
 
-	beyond, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Offset:    sessionPageInt(10),
-		Limit:     sessionPageInt(2),
-	})
+	beyond, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategoryMain, 10, 2)
 	if err != nil {
 		t.Fatalf("ListSessionPage beyond end: %v", err)
 	}
@@ -146,12 +114,7 @@ func TestSessionPageAcceptsLiveRepeatAndSkipAfterRecencyChange(t *testing.T) {
 	for index, id := range []string{"session-c", "session-b", "session-a"} {
 		importSessionPageFixture(t, store, cfg, binding, id, sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), base.Add(-time.Duration(index)*time.Minute))
 	}
-	first, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Offset:    sessionPageInt(0),
-		Limit:     sessionPageInt(2),
-	})
+	first, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategoryMain, 0, 2)
 	if err != nil {
 		t.Fatalf("ListSessionPage first: %v", err)
 	}
@@ -161,23 +124,13 @@ func TestSessionPageAcceptsLiveRepeatAndSkipAfterRecencyChange(t *testing.T) {
 	}
 
 	importSessionPageFixture(t, store, cfg, binding, "session-a", sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), base.Add(time.Minute))
-	second, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Offset:    first.NextOffset,
-		Limit:     sessionPageInt(2),
-	})
+	second, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategoryMain, *first.NextOffset, 2)
 	if err != nil {
 		t.Fatalf("ListSessionPage second: %v", err)
 	}
 	requireSessionPageIDs(t, second, "session-b")
 
-	refreshed, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Offset:    sessionPageInt(0),
-		Limit:     sessionPageInt(2),
-	})
+	refreshed, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategoryMain, 0, 2)
 	if err != nil {
 		t.Fatalf("ListSessionPage refreshed: %v", err)
 	}
@@ -189,23 +142,20 @@ func TestSessionPageDefaultWindowTrimsOneHundredAndOneRowLookahead(t *testing.T)
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	base := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
-	for index := range serverapi.MaxSessionPageSize + 1 {
+	for index := range MaxSessionPageSize + 1 {
 		id := fmt.Sprintf("session-%03d", index)
 		importSessionPageFixture(t, store, cfg, binding, id, sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), base.Add(time.Duration(index)*time.Second))
 	}
 
-	page, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-	})
+	page, err := store.ListSessionPage(ctx, binding.ProjectID, sessioncontract.SessionCategoryMain, 0, MaxSessionPageSize)
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}
-	if len(page.Sessions) != serverapi.MaxSessionPageSize {
-		t.Fatalf("session count = %d, want %d", len(page.Sessions), serverapi.MaxSessionPageSize)
+	if len(page.Sessions) != MaxSessionPageSize {
+		t.Fatalf("session count = %d, want %d", len(page.Sessions), MaxSessionPageSize)
 	}
-	if page.NextOffset == nil || *page.NextOffset != serverapi.MaxSessionPageSize {
-		t.Fatalf("next offset = %v, want %d", page.NextOffset, serverapi.MaxSessionPageSize)
+	if page.NextOffset == nil || *page.NextOffset != MaxSessionPageSize {
+		t.Fatalf("next offset = %v, want %d", page.NextOffset, MaxSessionPageSize)
 	}
 }
 
@@ -240,11 +190,7 @@ func sessionCategoryForPageTest(category sessioncontract.SessionCategory) *sessi
 	return &category
 }
 
-func sessionPageInt(value int) *int {
-	return &value
-}
-
-func requireSessionPageIDs(t *testing.T, page serverapi.SessionPageResponse, want ...string) {
+func requireSessionPageIDs(t *testing.T, page SessionPage, want ...string) {
 	t.Helper()
 	if len(page.Sessions) != len(want) {
 		t.Fatalf("session count = %d, want %d: %+v", len(page.Sessions), len(want), page.Sessions)

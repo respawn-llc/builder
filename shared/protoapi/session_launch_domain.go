@@ -15,136 +15,6 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-func SessionPlanRequestToProto(request serverapi.SessionPlanRequest) (*sessionlaunchpb.SessionPlanRequest, error) {
-	if err := request.Validate(); err != nil {
-		return nil, err
-	}
-	mode, err := sessionLaunchModeToProto(request.Mode)
-	if err != nil {
-		return nil, err
-	}
-	intent, err := sessionLaunchIntentToProto(request.Intent)
-	if err != nil {
-		return nil, err
-	}
-	message := &sessionlaunchpb.SessionPlanRequest{
-		Mode:            mode,
-		Intent:          intent,
-		CallerSessionId: clonePointer(request.CallerSessionID),
-	}
-	if request.Overrides.HasAny() {
-		message.Overrides, err = runPromptOverridesToProto(request.Overrides)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return message, Validate(message)
-}
-
-func SessionPlanRequestFromProto(message *sessionlaunchpb.SessionPlanRequest) (serverapi.SessionPlanRequest, error) {
-	mode, err := sessionLaunchModeFromProto(message.Mode)
-	if err != nil {
-		return serverapi.SessionPlanRequest{}, err
-	}
-	intent, err := sessionLaunchIntentFromProto(message.Intent)
-	if err != nil {
-		return serverapi.SessionPlanRequest{}, err
-	}
-	request := serverapi.SessionPlanRequest{
-		Mode:            mode,
-		Intent:          intent,
-		CallerSessionID: clonePointer(message.CallerSessionId),
-	}
-	if message.Overrides != nil {
-		request.Overrides, err = runPromptOverridesFromProto(message.Overrides)
-		if err != nil {
-			return serverapi.SessionPlanRequest{}, err
-		}
-	}
-	return request, nil
-}
-
-func SessionPlanToProto(response serverapi.SessionPlanResponse) (*sessionlaunchpb.SessionPlanSuccess, error) {
-	if err := response.Plan.Validate(); err != nil {
-		return nil, err
-	}
-	settings, err := sessionSettingsToProto(response.Plan.ActiveSettings)
-	if err != nil {
-		return nil, err
-	}
-	source, err := sessionSourceReportToProto(response.Plan.Source)
-	if err != nil {
-		return nil, err
-	}
-	enabledTools := make([]sessionlaunchpb.ToolID, 0, len(response.Plan.EnabledToolIDs))
-	for _, raw := range response.Plan.EnabledToolIDs {
-		toolID, conversionErr := sessionToolIDToProto(toolspec.ID(raw))
-		if conversionErr != nil {
-			return nil, conversionErr
-		}
-		enabledTools = append(enabledTools, toolID)
-	}
-	plan := &sessionlaunchpb.SessionPlan{
-		SessionId:                response.Plan.SessionID,
-		ActiveSettings:           settings,
-		EnabledToolIds:           enabledTools,
-		SessionName:              clonePointer(response.Plan.SessionName),
-		PromptHistory:            append([]string(nil), response.Plan.PromptHistory...),
-		ModelContractLocked:      response.Plan.ModelContractLocked,
-		QuestionsEnabled:         response.Plan.QuestionsEnabled,
-		AutoCompactionEnabled:    response.Plan.AutoCompactionEnabled,
-		ThinkingOverrideExplicit: response.Plan.ThinkingOverrideExplicit,
-		Source:                   source,
-	}
-	if response.Plan.ConfiguredModelName != "" {
-		plan.ConfiguredModelName = &response.Plan.ConfiguredModelName
-	}
-	success := &sessionlaunchpb.SessionPlanSuccess{
-		Plan:     plan,
-		Warnings: append([]string(nil), response.Warnings...),
-	}
-	return success, Validate(success)
-}
-
-func SessionPlanFromProto(success *sessionlaunchpb.SessionPlanSuccess) (serverapi.SessionPlanResponse, error) {
-	if err := Validate(success); err != nil {
-		return serverapi.SessionPlanResponse{}, err
-	}
-	settings, err := sessionSettingsFromProto(success.Plan.ActiveSettings)
-	if err != nil {
-		return serverapi.SessionPlanResponse{}, err
-	}
-	source, err := sessionSourceReportFromProto(success.Plan.Source)
-	if err != nil {
-		return serverapi.SessionPlanResponse{}, err
-	}
-	enabledTools := make([]string, 0, len(success.Plan.EnabledToolIds))
-	for _, value := range success.Plan.EnabledToolIds {
-		toolID, conversionErr := sessionToolIDFromProto(value)
-		if conversionErr != nil {
-			return serverapi.SessionPlanResponse{}, conversionErr
-		}
-		enabledTools = append(enabledTools, string(toolID))
-	}
-	response := serverapi.SessionPlanResponse{
-		Plan: serverapi.SessionPlan{
-			SessionID:                success.Plan.SessionId,
-			ActiveSettings:           settings,
-			EnabledToolIDs:           enabledTools,
-			ConfiguredModelName:      dereference(success.Plan.ConfiguredModelName),
-			SessionName:              clonePointer(success.Plan.SessionName),
-			PromptHistory:            append([]string(nil), success.Plan.PromptHistory...),
-			ModelContractLocked:      success.Plan.ModelContractLocked,
-			QuestionsEnabled:         success.Plan.QuestionsEnabled,
-			AutoCompactionEnabled:    success.Plan.AutoCompactionEnabled,
-			ThinkingOverrideExplicit: success.Plan.ThinkingOverrideExplicit,
-			Source:                   source,
-		},
-		Warnings: append([]string(nil), success.Warnings...),
-	}
-	return response, response.Plan.Validate()
-}
-
 func SessionPlanErrorFromProto(failure *sessionlaunchpb.SessionPlanError) error {
 	if err := Validate(failure); err != nil {
 		return err
@@ -267,29 +137,7 @@ func SessionPlanErrorToProto(
 	return failure, true, nil
 }
 
-func sessionLaunchModeToProto(mode serverapi.SessionLaunchMode) (sessionlaunchpb.SessionLaunchMode, error) {
-	switch mode {
-	case serverapi.SessionLaunchModeInteractive:
-		return sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE, nil
-	case serverapi.SessionLaunchModeHeadless:
-		return sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_HEADLESS, nil
-	default:
-		return 0, fmt.Errorf("session launch mode %q is unsupported", mode)
-	}
-}
-
-func sessionLaunchModeFromProto(mode sessionlaunchpb.SessionLaunchMode) (serverapi.SessionLaunchMode, error) {
-	switch mode {
-	case sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE:
-		return serverapi.SessionLaunchModeInteractive, nil
-	case sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_HEADLESS:
-		return serverapi.SessionLaunchModeHeadless, nil
-	default:
-		return "", fmt.Errorf("protobuf session launch mode %v is unsupported", mode)
-	}
-}
-
-func sessionLaunchIntentToProto(intent serverapi.SessionLaunchIntent) (*sessionlaunchpb.SessionLaunchIntent, error) {
+func SessionLaunchIntentToProto(intent serverapi.SessionLaunchIntent) (*sessionlaunchpb.SessionLaunchIntent, error) {
 	if err := intent.Validate(); err != nil {
 		return nil, err
 	}
@@ -319,7 +167,10 @@ func sessionLaunchIntentToProto(intent serverapi.SessionLaunchIntent) (*sessionl
 	return message, Validate(message)
 }
 
-func sessionLaunchIntentFromProto(message *sessionlaunchpb.SessionLaunchIntent) (serverapi.SessionLaunchIntent, error) {
+func SessionLaunchIntentFromProto(message *sessionlaunchpb.SessionLaunchIntent) (serverapi.SessionLaunchIntent, error) {
+	if message == nil {
+		return serverapi.SessionLaunchIntent{}, errors.New("generated Session launch intent is required")
+	}
 	switch intent := message.Intent.(type) {
 	case *sessionlaunchpb.SessionLaunchIntent_CreateNew:
 		origin, err := sessionCreateOriginFromProto(intent.CreateNew)
@@ -383,7 +234,7 @@ func sessionCreateOriginFromProto(message *sessionlaunchpb.SessionCreateOrigin) 
 	}
 }
 
-func runPromptOverridesToProto(overrides serverapi.RunPromptOverrides) (*sessionlaunchpb.RunPromptOverrides, error) {
+func RunPromptOverridesToProto(overrides serverapi.RunPromptOverrides) (*sessionlaunchpb.RunPromptOverrides, error) {
 	if err := overrides.ValidateAgentRoleOverride(); err != nil {
 		return nil, err
 	}
@@ -404,7 +255,10 @@ func runPromptOverridesToProto(overrides serverapi.RunPromptOverrides) (*session
 	return message, Validate(message)
 }
 
-func runPromptOverridesFromProto(message *sessionlaunchpb.RunPromptOverrides) (serverapi.RunPromptOverrides, error) {
+func RunPromptOverridesFromProto(message *sessionlaunchpb.RunPromptOverrides) (serverapi.RunPromptOverrides, error) {
+	if message == nil {
+		return serverapi.RunPromptOverrides{}, errors.New("generated Run Prompt overrides are required")
+	}
 	overrides := serverapi.RunPromptOverrides{
 		AgentRole:        clonePointer(message.AgentRole),
 		Model:            dereference(message.Model),
@@ -428,7 +282,7 @@ func setOptionalNonblank(target **string, value string) {
 	*target = &copied
 }
 
-func sessionToolIDToProto(toolID toolspec.ID) (sessionlaunchpb.ToolID, error) {
+func SessionToolIDToProto(toolID toolspec.ID) (sessionlaunchpb.ToolID, error) {
 	switch toolID {
 	case toolspec.ToolExecCommand:
 		return sessionlaunchpb.ToolID_TOOL_ID_EXEC_COMMAND, nil
@@ -453,7 +307,7 @@ func sessionToolIDToProto(toolID toolspec.ID) (sessionlaunchpb.ToolID, error) {
 	}
 }
 
-func sessionToolIDFromProto(toolID sessionlaunchpb.ToolID) (toolspec.ID, error) {
+func SessionToolIDFromProto(toolID sessionlaunchpb.ToolID) (toolspec.ID, error) {
 	switch toolID {
 	case sessionlaunchpb.ToolID_TOOL_ID_EXEC_COMMAND:
 		return toolspec.ToolExecCommand, nil

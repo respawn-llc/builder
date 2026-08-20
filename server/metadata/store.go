@@ -2004,52 +2004,66 @@ func (s *Store) ListProjectWorkspacesPage(ctx context.Context, projectID string,
 	return out, nil
 }
 
-func (s *Store) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+func (s *Store) ListSessionPage(
+	ctx context.Context,
+	projectID string,
+	category sessioncontract.SessionCategory,
+	offset int,
+	limit int,
+) (SessionPage, error) {
 	if s == nil || s.queries == nil {
-		return serverapi.SessionPageResponse{}, errors.New("metadata store is required")
+		return SessionPage{}, errors.New("metadata store is required")
 	}
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionPageResponse{}, err
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if trimmedProjectID == "" || trimmedProjectID != projectID {
+		return SessionPage{}, errors.New("project_id is invalid")
 	}
-	window, err := req.ResolveWindow()
-	if err != nil {
-		return serverapi.SessionPageResponse{}, err
+	if _, err := sessioncontract.ParseSessionCategory(string(category)); err != nil {
+		return SessionPage{}, err
+	}
+	if offset < 0 {
+		return SessionPage{}, errors.New("offset must be non-negative")
+	}
+	if limit < 1 || limit > MaxSessionPageSize {
+		return SessionPage{}, fmt.Errorf("limit must be between 1 and %d", MaxSessionPageSize)
 	}
 	rows, err := s.queries.ListSessionPage(ctx, sqlitegen.ListSessionPageParams{
-		ProjectID:  strings.TrimSpace(req.ProjectID),
-		Category:   sql.NullString{String: string(req.Category), Valid: true},
-		PageLimit:  int64(window.Limit + 1),
-		PageOffset: int64(window.Offset),
+		ProjectID:  trimmedProjectID,
+		Category:   sql.NullString{String: string(category), Valid: true},
+		PageLimit:  int64(limit + 1),
+		PageOffset: int64(offset),
 	})
 	if err != nil {
-		return serverapi.SessionPageResponse{}, fmt.Errorf("list session page: %w", err)
+		return SessionPage{}, fmt.Errorf("list session page: %w", err)
 	}
-	rows, nextOffset := serverapi.TrimOffsetLookahead(window, rows)
-	out := serverapi.SessionPageResponse{
-		ProjectID:  strings.TrimSpace(req.ProjectID),
-		Category:   req.Category,
+	var nextOffset *int
+	if len(rows) > limit {
+		value := offset + limit
+		nextOffset = &value
+		rows = rows[:limit]
+	}
+	out := SessionPage{
+		ProjectID:  trimmedProjectID,
+		Category:   category,
 		Sessions:   make([]clientui.SessionSummary, 0, len(rows)),
 		NextOffset: nextOffset,
 	}
 	for _, row := range rows {
 		sessionID, err := runtimeids.ParseSessionID(row.ID)
 		if err != nil {
-			return serverapi.SessionPageResponse{}, fmt.Errorf("validate listed session id %q: %w", row.ID, err)
+			return SessionPage{}, fmt.Errorf("validate listed session id %q: %w", row.ID, err)
 		}
-		category, err := sessioncontract.ParseSessionCategory(row.Category)
+		rowCategory, err := sessioncontract.ParseSessionCategory(row.Category)
 		if err != nil {
-			return serverapi.SessionPageResponse{}, fmt.Errorf("validate listed session category for %q: %w", row.ID, err)
+			return SessionPage{}, fmt.Errorf("validate listed session category for %q: %w", row.ID, err)
 		}
 		out.Sessions = append(out.Sessions, clientui.SessionSummary{
 			SessionID:          sessionID,
-			Category:           category,
+			Category:           rowCategory,
 			Name:               row.Name,
 			FirstPromptPreview: row.FirstPromptPreview,
 			UpdatedAt:          timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		})
-	}
-	if err := out.Validate(); err != nil {
-		return serverapi.SessionPageResponse{}, err
 	}
 	return out, nil
 }

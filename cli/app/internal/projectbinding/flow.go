@@ -9,8 +9,10 @@ import (
 
 	"core/cli/app/internal/remoteattach"
 	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 )
 
@@ -54,7 +56,10 @@ func EnsureInteractive[T any](ctx context.Context, req Request[T]) (T, error) {
 	if workspaceRoot == "" {
 		return zero, errors.New("workspace root is required")
 	}
-	plan, err := req.Server.ProjectViewClient().PlanWorkspaceBinding(ctx, serverapi.ProjectBindingPlanRequest{Path: workspaceRoot, Mode: serverapi.ProjectBindingPlanModeInteractive})
+	plan, err := req.Server.ProjectViewClient().PlanWorkspaceBinding(ctx, &projectpb.PlanWorkspaceBindingRequest{
+		Path: workspaceRoot,
+		Mode: projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_INTERACTIVE,
+	})
 	if err != nil {
 		return zero, err
 	}
@@ -62,23 +67,31 @@ func EnsureInteractive[T any](ctx context.Context, req Request[T]) (T, error) {
 		workspaceRoot = canonicalRoot
 	}
 	switch plan.Kind {
-	case serverapi.ProjectBindingPlanKindBound:
+	case projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_BOUND:
 		if plan.Binding == nil {
 			return zero, errors.New("resolved project binding is required")
 		}
-		projectID := strings.TrimSpace(plan.Binding.ProjectID)
+		projectID := strings.TrimSpace(plan.Binding.ProjectId)
 		if projectID == "" {
 			return zero, errors.New("resolved project id is required")
 		}
-		bound, bindErr := req.Server.BindProjectWorkspace(ctx, projectID, strings.TrimSpace(plan.Binding.WorkspaceID))
+		bound, bindErr := req.Server.BindProjectWorkspace(ctx, projectID, strings.TrimSpace(plan.Binding.WorkspaceId))
 		if bindErr != nil {
 			return zero, FormatStartupError(workspaceRoot, projectID, bindErr)
 		}
 		return bound, nil
-	case serverapi.ProjectBindingPlanKindServerWorkspaceSelection:
-		return ensureServerBrowsingBinding(ctx, req, plan.Projects)
-	case serverapi.ProjectBindingPlanKindLocalUnbound:
-		return ensureLocalPathBinding(ctx, req, workspaceRoot, plan.Projects)
+	case projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_SERVER_WORKSPACE_SELECTION:
+		projects, err := client.ProjectSummariesFromProto(plan.Projects)
+		if err != nil {
+			return zero, err
+		}
+		return ensureServerBrowsingBinding(ctx, req, projects)
+	case projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND:
+		projects, err := client.ProjectSummariesFromProto(plan.Projects)
+		if err != nil {
+			return zero, err
+		}
+		return ensureLocalPathBinding(ctx, req, workspaceRoot, projects)
 	default:
 		return zero, fmt.Errorf("unsupported interactive project binding plan %q", plan.Kind)
 	}
@@ -105,26 +118,26 @@ func ensureLocalPathBinding[T any](ctx context.Context, req Request[T], workspac
 		if err != nil {
 			return zero, err
 		}
-		created, err := req.Server.ProjectViewClient().CreateProject(ctx, serverapi.ProjectCreateRequest{DisplayName: projectName, WorkspaceRoot: workspaceRoot})
+		created, err := req.Server.ProjectViewClient().CreateProject(ctx, &projectpb.CreateProjectRequest{DisplayName: projectName, WorkspaceRoot: workspaceRoot})
 		if err != nil {
 			return zero, FormatMutationError(workspaceRoot, "", err)
 		}
-		bound, bindErr := req.Server.BindProjectWorkspace(ctx, created.Binding.ProjectID, created.Binding.WorkspaceID)
+		bound, bindErr := req.Server.BindProjectWorkspace(ctx, created.Binding.ProjectId, created.Binding.WorkspaceId)
 		if bindErr != nil {
-			return zero, FormatStartupError(workspaceRoot, created.Binding.ProjectID, bindErr)
+			return zero, FormatStartupError(workspaceRoot, created.Binding.ProjectId, bindErr)
 		}
 		return bound, nil
 	}
 	if picked.Project == nil {
 		return zero, errors.New("no project selected")
 	}
-	attached, err := req.Server.ProjectViewClient().AttachWorkspaceToProject(ctx, serverapi.ProjectAttachWorkspaceRequest{ProjectID: picked.Project.ProjectID, WorkspaceRoot: workspaceRoot})
+	attached, err := req.Server.ProjectViewClient().AttachWorkspaceToProject(ctx, &projectpb.AttachWorkspaceRequest{ProjectId: picked.Project.ProjectID, WorkspaceRoot: workspaceRoot})
 	if err != nil {
 		return zero, FormatMutationError(workspaceRoot, picked.Project.ProjectID, err)
 	}
-	bound, bindErr := req.Server.BindProjectWorkspace(ctx, attached.Binding.ProjectID, attached.Binding.WorkspaceID)
+	bound, bindErr := req.Server.BindProjectWorkspace(ctx, attached.Binding.ProjectId, attached.Binding.WorkspaceId)
 	if bindErr != nil {
-		return zero, FormatStartupError(workspaceRoot, attached.Binding.ProjectID, bindErr)
+		return zero, FormatStartupError(workspaceRoot, attached.Binding.ProjectId, bindErr)
 	}
 	return bound, nil
 }
@@ -176,20 +189,24 @@ func SelectWorkspaceForStartup(ctx context.Context, req WorkspaceSelectionReques
 	if req.Server == nil || req.Server.ProjectViewClient() == nil {
 		return clientui.ProjectWorkspaceSummary{}, errors.New("project view client is required")
 	}
-	overview, err := req.Server.ProjectViewClient().GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: req.ProjectID})
+	overview, err := req.Server.ProjectViewClient().GetProjectOverview(ctx, &projectpb.GetOverviewRequest{ProjectId: req.ProjectID})
 	if err != nil {
 		return clientui.ProjectWorkspaceSummary{}, err
 	}
-	if len(overview.Overview.Workspaces) == 0 {
+	workspaces, err := client.ProjectWorkspaceSummariesFromProto(overview.Overview.Workspaces)
+	if err != nil {
+		return clientui.ProjectWorkspaceSummary{}, err
+	}
+	if len(workspaces) == 0 {
 		return clientui.ProjectWorkspaceSummary{}, fmt.Errorf("project %q has no attached workspaces", strings.TrimSpace(req.ProjectID))
 	}
-	if len(overview.Overview.Workspaces) == 1 {
-		return overview.Overview.Workspaces[0], nil
+	if len(workspaces) == 1 {
+		return workspaces[0], nil
 	}
 	if req.PickWorkspace == nil {
 		return clientui.ProjectWorkspaceSummary{}, errors.New("workspace picker is required")
 	}
-	picked, err := req.PickWorkspace(overview.Overview.Workspaces, req.Server.PresentationTheme())
+	picked, err := req.PickWorkspace(workspaces, req.Server.PresentationTheme())
 	if err != nil {
 		return clientui.ProjectWorkspaceSummary{}, err
 	}

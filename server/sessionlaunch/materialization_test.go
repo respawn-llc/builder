@@ -11,7 +11,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/config"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
@@ -149,11 +148,13 @@ func TestServiceMaterializationFailurePreservesDraftAndCleansFilesystemArtifact(
 	if len(entries) != 0 {
 		t.Fatalf("failed materialization left Session artifacts: %+v", entries)
 	}
-	page, err := metadataStore.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     materializationInt(10),
-	})
+	page, err := metadataStore.ListSessionPage(
+		ctx,
+		binding.ProjectID,
+		sessioncontract.SessionCategoryMain,
+		0,
+		10,
+	)
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}
@@ -182,11 +183,13 @@ func TestServiceTreatsSeparatelyReceivedMaterializationRequestsIndependently(t *
 	if first == second {
 		t.Fatalf("separate materialization requests returned one Session identity %q", first.String())
 	}
-	page, err := metadataStore.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     materializationInt(10),
-	})
+	page, err := metadataStore.ListSessionPage(
+		ctx,
+		binding.ProjectID,
+		sessioncontract.SessionCategoryMain,
+		0,
+		10,
+	)
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}
@@ -205,21 +208,19 @@ func TestServiceResolutionFailureCreatesNoSession(t *testing.T) {
 	if _, err := service.materializeWorkspaceChatSession(ctx); !errors.Is(err, wantErr) {
 		t.Fatalf("MaterializeWorkspaceChatSession error = %v, want %v", err, wantErr)
 	}
-	page, err := metadataStore.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     materializationInt(10),
-	})
+	page, err := metadataStore.ListSessionPage(
+		ctx,
+		binding.ProjectID,
+		sessioncontract.SessionCategoryMain,
+		0,
+		10,
+	)
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}
 	if len(page.Sessions) != 0 {
 		t.Fatalf("resolution failure exposed Sessions: %+v", page.Sessions)
 	}
-}
-
-func materializationInt(value int) *int {
-	return &value
 }
 
 func newWorkspaceChatMaterializationService(t *testing.T) (*Service, *metadata.Store, config.App, metadata.Binding) {
