@@ -5,8 +5,12 @@ import {
   ProjectUnavailableDetailsSchema,
   WorkspaceNotRegisteredDetailsSchema,
 } from "@app/server-api-contract/gen/kent/api/project/project_pb";
+import {
+  ServerNotReadyDetailsSchema,
+  ServerNotReadyReason,
+} from "@app/server-api-contract/gen/kent/api/server/server_pb";
 import { InternalFailureDetailsSchema } from "@app/server-api-contract/gen/kent/api/shared/foundation_pb";
-import { RpcError } from "./errors";
+import { ContractError, RpcError } from "./errors";
 import type { JsonValue } from "./json";
 import { rpcErrorCodes } from "./rpcErrorCodes";
 
@@ -38,6 +42,15 @@ type GeneratedProjectReadErrorDetail =
   | Readonly<{
       case: "workspacePathIdentity";
       value: Readonly<{ workspaceRoot?: string | undefined }>;
+    }>
+  | Readonly<{
+      case: "serverNotReady";
+      value: Readonly<{
+        reason: ServerNotReadyReason;
+        onboardingCompleted: boolean;
+        settingsPath?: string | undefined;
+        diagnostic?: string | undefined;
+      }>;
     }>;
 
 type GeneratedProjectMutationErrorDetail =
@@ -100,6 +113,8 @@ export function projectRpcErrorFromClassifiedFailure(
     generatedDetail = { case: "workspaceNotRegistered", value: detail };
   } else if (isMessage(detail, ProjectUnavailableDetailsSchema)) {
     generatedDetail = { case: "projectUnavailable", value: detail };
+  } else if (isMessage(detail, ServerNotReadyDetailsSchema)) {
+    generatedDetail = { case: "serverNotReady", value: detail };
   } else if (isMessage(detail, SessionAttachmentTargetDetailsSchema)) {
     const value = {
       sessionId: detail.sessionId,
@@ -131,6 +146,8 @@ function projectRpcErrorCode(code: string): number {
       return rpcErrorCodes.projectUnavailable;
     case "auth_required":
       return rpcErrorCodes.authRequired;
+    case "server_not_ready":
+      return rpcErrorCodes.serverNotReady;
     case "workspace_path_identity":
       return rpcErrorCodes.workspacePathIdentity;
     case "workspace_detach_conflict":
@@ -158,7 +175,8 @@ function isProjectReadErrorDetail(
     detail.case === "projectUnavailable" ||
     detail.case === "workspaceNotRegistered" ||
     detail.case === "workspaceBindingAmbiguous" ||
-    detail.case === "workspacePathIdentity"
+    detail.case === "workspacePathIdentity" ||
+    detail.case === "serverNotReady"
   );
 }
 
@@ -190,6 +208,16 @@ function projectReadErrorData(reason: string, detail: GeneratedProjectReadErrorD
       });
     case "workspacePathIdentity":
       return compactProjectErrorData(reason, { workspace_root: detail.value.workspaceRoot });
+    case "serverNotReady":
+      return {
+        type: "server_not_ready",
+        reason: serverNotReadyReason(detail.value.reason),
+        details: compactJsonObject({
+          onboarding_completed: detail.value.onboardingCompleted,
+          settings_path: detail.value.settingsPath,
+          diagnostic: detail.value.diagnostic,
+        }),
+      };
   }
 }
 
@@ -231,4 +259,21 @@ function compactProjectErrorData(
     ["reason", reason],
     ...Object.entries(values).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
   ]);
+}
+
+function compactJsonObject(values: Readonly<Record<string, JsonValue | undefined>>): JsonValue {
+  return Object.fromEntries(
+    Object.entries(values).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
+  );
+}
+
+function serverNotReadyReason(reason: ServerNotReadyReason): string {
+  switch (reason) {
+    case ServerNotReadyReason.ONBOARDING_REQUIRED:
+      return "onboarding_required";
+    case ServerNotReadyReason.ACTIVATION_FAILED:
+      return "activation_failed";
+    case ServerNotReadyReason.UNSPECIFIED:
+      throw new ContractError(`Unsupported server-not-ready reason ${reason.toString()}.`);
+  }
 }

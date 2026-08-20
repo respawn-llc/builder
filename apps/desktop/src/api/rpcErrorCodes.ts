@@ -4,6 +4,7 @@ export const rpcErrorCodes = {
   projectNotFound: -32014,
   projectUnavailable: -32015,
   authRequired: -32018,
+  serverNotReady: -32032,
   workspacePathIdentity: -32049,
   workspaceDetachConflict: -32050,
   workspaceMutationFailed: -32051,

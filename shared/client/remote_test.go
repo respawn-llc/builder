@@ -1643,9 +1643,11 @@ func TestDialRemoteURLForProjectValidatesAttachProject(t *testing.T) {
 		correlation := receiveRemoteDescriptorCall(t, ws, method, request)
 		sendRemoteDescriptorResult(t, ws, method, correlation, &connectionpb.AttachProjectResult{
 			Outcome: &connectionpb.AttachProjectResult_Error{Error: &connectionpb.AttachProjectError{
-				Code: "project_not_found",
-				Detail: &connectionpb.AttachProjectError_ProjectNotFound{
-					ProjectNotFound: &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId},
+				Code: "server_not_ready",
+				Detail: &connectionpb.AttachProjectError_ServerNotReady{
+					ServerNotReady: &serverpb.ServerNotReadyDetails{
+						Reason: serverpb.ServerNotReadyReason_SERVER_NOT_READY_REASON_ONBOARDING_REQUIRED,
+					},
 				},
 			}},
 		})
@@ -1661,8 +1663,8 @@ func TestDialRemoteURLForProjectValidatesAttachProject(t *testing.T) {
 	if remote != nil {
 		t.Fatalf("expected nil remote on attach failure, got %v", remote)
 	}
-	if !errors.Is(err, serverapi.ErrProjectNotFound) {
-		t.Fatalf("attach error = %v, want ErrProjectNotFound", err)
+	if !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("attach error = %v, want ErrServerNotReadyOnboardingRequired", err)
 	}
 }
 

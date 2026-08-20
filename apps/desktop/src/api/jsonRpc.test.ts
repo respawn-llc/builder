@@ -15,6 +15,8 @@ import {
 } from "@app/server-api-contract/gen/kent/api/connection/connection_pb";
 import {
   GetReadinessResultSchema,
+  ServerNotReadyDetailsSchema,
+  ServerNotReadyReason,
   ServerService,
 } from "@app/server-api-contract/gen/kent/api/server/server_pb";
 import { z } from "zod";
@@ -249,13 +251,12 @@ describe("JsonRpcWebSocketTransport", () => {
         outcome: {
           case: "error",
           value: {
-            code: "workspace_not_registered",
+            code: "server_not_ready",
             detail: {
-              case: "workspaceNotRegistered",
-              value: {
-                sessionId: "session-1",
-                workspaceId: "workspace-missing",
-              },
+              case: "serverNotReady",
+              value: create(ServerNotReadyDetailsSchema, {
+                reason: ServerNotReadyReason.ONBOARDING_REQUIRED,
+              }),
             },
           },
         },
@@ -265,12 +266,14 @@ describe("JsonRpcWebSocketTransport", () => {
     const error = await answer.catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(RpcError);
     expect(error).toMatchObject({
-      code: -32013,
+      code: -32032,
       method: operationFromDescriptor(ConnectionService.method.attachSession).name,
       data: {
-        reason: "workspace_not_registered",
-        session_id: "session-1",
-        workspace_id: "workspace-missing",
+        type: "server_not_ready",
+        reason: "onboarding_required",
+        details: {
+          onboarding_completed: false,
+        },
       },
     });
     expect(socket.sent).toHaveLength(2);

@@ -12,6 +12,7 @@ import (
 
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -181,6 +182,7 @@ func attachProjectGeneratedError(failure *connectionpb.AttachProjectError) error
 		failure.GetProjectNotFound(),
 		failure.GetWorkspaceNotRegistered(),
 		failure.GetProjectUnavailable(),
+		failure.GetServerNotReady(),
 		failure.GetInternalFailure(),
 	)
 }
@@ -205,6 +207,8 @@ func attachSessionGeneratedError(failure *connectionpb.AttachSessionError) error
 			return err
 		}
 		return typed
+	case "server_not_ready":
+		return protoapi.ServerNotReadyFromProto(failure.GetServerNotReady())
 	case "internal_failure":
 		return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
 	default:
@@ -217,6 +221,7 @@ func connectionAttachmentGeneratedError(
 	notFound *projectpb.ProjectNotFoundDetails,
 	notRegistered *projectpb.WorkspaceNotRegisteredDetails,
 	unavailable *projectpb.ProjectUnavailableDetails,
+	notReady *serverpb.ServerNotReadyDetails,
 	internal *sharedpb.InternalFailureDetails,
 ) error {
 	switch code {
@@ -230,6 +235,8 @@ func connectionAttachmentGeneratedError(
 			return err
 		}
 		return typed
+	case "server_not_ready":
+		return protoapi.ServerNotReadyFromProto(notReady)
 	case "internal_failure":
 		return protoapi.InternalFailureFromProto(internal)
 	default:

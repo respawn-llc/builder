@@ -4,6 +4,7 @@ package kent.api.connection;
 
 import "buf/validate/validate.proto";
 import "kent/api/project/project.proto";
+import "kent/api/server/server.proto";
 import "kent/api/shared/foundation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/connection;connectionpb";
@@ -194,6 +195,12 @@ message AttachProjectError {
         error_code: "project_unavailable"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -233,6 +240,12 @@ message AttachSessionError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "project_unavailable"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
       }
     ];
   }

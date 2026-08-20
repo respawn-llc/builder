@@ -12,6 +12,7 @@ import (
 	"core/shared/protoapi"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -166,8 +167,11 @@ func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T
 					"dependency-unavailable",
 					tt.params(appCore).(*connectionpb.AttachProjectRequest),
 				)
-				if result.GetError() == nil {
-					t.Fatalf("unavailable attachment dependency unexpectedly succeeded: %+v", result)
+				failure := result.GetError()
+				if failure == nil ||
+					failure.Code != "server_not_ready" ||
+					failure.GetServerNotReady().Reason != serverpb.ServerNotReadyReason_SERVER_NOT_READY_REASON_ONBOARDING_REQUIRED {
+					t.Fatalf("unavailable attachment dependency result = %+v, want onboarding-required server_not_ready", result)
 				}
 				return
 			}

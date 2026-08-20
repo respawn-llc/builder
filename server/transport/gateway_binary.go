@@ -15,6 +15,7 @@ import (
 
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -298,7 +299,12 @@ func binaryAttachProjectFailure(
 ) proto.Message {
 	failure := &connectionpb.AttachProjectError{}
 	request, requestOK := message.(*connectionpb.AttachProjectRequest)
+	if details, ok := connectionServerNotReadyDetails(err); ok {
+		failure.Code = "server_not_ready"
+		failure.Detail = &connectionpb.AttachProjectError_ServerNotReady{ServerNotReady: details}
+	}
 	switch {
+	case failure.Detail != nil:
 	case errors.Is(err, serverapi.ErrProjectNotFound) && requestOK:
 		failure.Code = "project_not_found"
 		failure.Detail = &connectionpb.AttachProjectError_ProjectNotFound{
@@ -357,7 +363,12 @@ func binaryAttachSessionFailure(
 ) proto.Message {
 	failure := &connectionpb.AttachSessionError{}
 	request, requestOK := message.(*connectionpb.AttachSessionRequest)
+	if details, ok := connectionServerNotReadyDetails(err); ok {
+		failure.Code = "server_not_ready"
+		failure.Detail = &connectionpb.AttachSessionError_ServerNotReady{ServerNotReady: details}
+	}
 	switch {
+	case failure.Detail != nil:
 	case errors.Is(err, serverapi.ErrProjectNotFound) && requestOK:
 		details := &connectionpb.SessionAttachmentTargetDetails{SessionId: request.SessionId}
 		if projectID := connectionAttachmentProjectID(g, state); projectID != "" {
@@ -418,6 +429,15 @@ func connectionAttachmentProjectID(g *Gateway, state *connectionState) string {
 		return g.deps.ProjectID()
 	}
 	return ""
+}
+
+func connectionServerNotReadyDetails(err error) (*serverpb.ServerNotReadyDetails, bool) {
+	var notReady *serverapi.ServerNotReadyError
+	if !errors.As(err, &notReady) {
+		return nil, false
+	}
+	details, conversionErr := protoapi.ServerNotReadyToProto(notReady)
+	return details, conversionErr == nil
 }
 
 func connectionSessionWorkspaceNotRegisteredDetails(
