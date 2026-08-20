@@ -98,7 +98,7 @@ func TestEnsureInteractiveBindsExistingPlan(t *testing.T) {
 func TestEnsureInteractiveCreatesProjectForLocalUnboundPath(t *testing.T) {
 	projectClient := &testProjectViewClient{
 		plan: serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindLocalUnbound},
-		create: serverapi.ProjectCreateResponse{Binding: serverapi.ProjectBinding{
+		create: serverapi.ProjectCreateResponse{Binding: serverapi.ProjectMutationBinding{
 			ProjectID:   "project-created",
 			WorkspaceID: "workspace-created",
 		}},

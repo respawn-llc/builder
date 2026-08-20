@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 
-	"core/shared/apicontract"
 	"core/shared/protoapi"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 
@@ -16,7 +15,7 @@ func registerSessionCatalogGatewayBinaryBindings(bindings map[string]gatewayBina
 		bindings,
 		service,
 		"Page",
-		apicontract.DependencyProjectView,
+		gatewayBinaryCoreActiveOrdinary,
 		func() proto.Message { return &projectpb.SessionPageRequest{} },
 		nil,
 		invokeBinarySessionPage,

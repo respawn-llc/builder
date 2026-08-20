@@ -137,12 +137,7 @@ export const startupRoutes: readonly FakeRoute[] = [
             authReady: true,
             authRequired: true,
             endpoint: "ws://127.0.0.1:53082/rpc",
-            subagentRoles: [
-              { name: "default" },
-              { name: "fast" },
-              { name: "coder" },
-              { name: "reviewer" },
-            ],
+            subagentRoles: [{ name: "default" }, { name: "fast" }, { name: "coder" }, { name: "reviewer" }],
             causes: [],
           },
         },

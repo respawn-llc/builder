@@ -26,10 +26,8 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 	if !state.handshakeDone {
 		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-			return sendResponse(ctx, conn, responseForError(req.ID, err))
-		}
+	if err := g.requireCoreActive(); err != nil {
+		return sendResponse(ctx, conn, responseForError(req.ID, err))
 	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return sendResponse(ctx, conn, responseForError(req.ID, err))
@@ -88,11 +86,9 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
 		return
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-			_ = sendResponse(ctx, conn, responseForError(req.ID, err))
-			return
-		}
+	if err := g.requireCoreActive(); err != nil {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
+		return
 	}
 	if err := newRoutePolicyExecutor(g).requireAuthenticationStage(
 		ctx,

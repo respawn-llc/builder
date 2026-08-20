@@ -1,11 +1,6 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
-import {
-  classifyResult,
-  create,
-  OperationOutcome,
-  operationFromDescriptor,
-} from "@app/server-api-contract";
+import { classifyResult, create, OperationOutcome, operationFromDescriptor } from "@app/server-api-contract";
 import {
   ReadinessSeverity,
   ServerService,

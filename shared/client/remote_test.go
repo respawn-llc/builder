@@ -1912,9 +1912,9 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 
 		createMethod := projectService.Methods().ByName("Create")
 		createCorrelation := receiveRemoteDescriptorCall(t, ws, createMethod, &projectpb.CreateProjectRequest{})
-		createSuccess, err := protoapi.ProjectCreateToProto(serverapi.ProjectCreateResponse{Binding: serverapi.ProjectBinding{
+		createSuccess, err := protoapi.ProjectCreateToProto(serverapi.ProjectCreateResponse{Binding: serverapi.ProjectMutationBinding{
 			ProjectID: "project-1", ProjectKey: "TST", ProjectName: "Test Project",
-			WorkspaceID: "workspace-1", CanonicalRoot: "/tmp/workspace-a",
+			WorkspaceID:   "workspace-1",
 			WorkspaceName: "Workspace A", WorkspaceStatus: string(clientui.ProjectAvailabilityAvailable),
 		}})
 		if err != nil {
@@ -1927,9 +1927,9 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 		attachMethod := projectService.Methods().ByName("AttachWorkspace")
 		attachCorrelation := receiveRemoteDescriptorCall(t, ws, attachMethod, &projectpb.AttachWorkspaceRequest{})
 		attachSuccess, err := protoapi.ProjectAttachWorkspaceToProto(serverapi.ProjectAttachWorkspaceResponse{
-			Binding: serverapi.ProjectBinding{
+			Binding: serverapi.ProjectMutationBinding{
 				ProjectID: "project-1", ProjectKey: "TST", ProjectName: "Test Project",
-				WorkspaceID: "workspace-2", CanonicalRoot: "/tmp/workspace-b",
+				WorkspaceID:   "workspace-2",
 				WorkspaceName: "Workspace B", WorkspaceStatus: string(clientui.ProjectAvailabilityAvailable),
 			},
 			Outcome: serverapi.ProjectWorkspaceAttachOutcomeAttached,
@@ -1944,9 +1944,9 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 		rebindMethod := projectService.Methods().ByName("RebindWorkspace")
 		rebindCorrelation := receiveRemoteDescriptorCall(t, ws, rebindMethod, &projectpb.RebindWorkspaceRequest{})
 		rebindSuccess, err := protoapi.ProjectRebindWorkspaceToProto(serverapi.ProjectRebindWorkspaceResponse{
-			Binding: serverapi.ProjectBinding{
+			Binding: serverapi.ProjectMutationBinding{
 				ProjectID: "project-1", ProjectKey: "TST", ProjectName: "Test Project",
-				WorkspaceID: "workspace-1", CanonicalRoot: "/tmp/workspace-b",
+				WorkspaceID:   "workspace-1",
 				WorkspaceName: "Workspace B", WorkspaceStatus: string(clientui.ProjectAvailabilityAvailable),
 			},
 		})

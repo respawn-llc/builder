@@ -25,6 +25,15 @@ type ProjectBinding struct {
 	WorkspaceStatus string `json:"workspace_status"`
 }
 
+type ProjectMutationBinding struct {
+	ProjectID       string `json:"project_id"`
+	ProjectKey      string `json:"project_key"`
+	ProjectName     string `json:"project_name"`
+	WorkspaceID     string `json:"workspace_id"`
+	WorkspaceName   string `json:"workspace_name"`
+	WorkspaceStatus string `json:"workspace_status"`
+}
+
 type ProjectResolvePathRequest struct {
 	Path string `json:"path"`
 }
@@ -78,7 +87,7 @@ type ProjectCreateRequest struct {
 }
 
 type ProjectCreateResponse struct {
-	Binding ProjectBinding `json:"binding"`
+	Binding ProjectMutationBinding `json:"binding"`
 }
 
 type ProjectHomeListRequest struct {
@@ -469,7 +478,7 @@ const (
 )
 
 type ProjectAttachWorkspaceResponse struct {
-	Binding ProjectBinding                `json:"binding"`
+	Binding ProjectMutationBinding        `json:"binding"`
 	Outcome ProjectWorkspaceAttachOutcome `json:"outcome"`
 }
 
@@ -485,9 +494,6 @@ func (r ProjectAttachWorkspaceResponse) Validate() error {
 	if strings.TrimSpace(r.Binding.WorkspaceID) == "" {
 		return errors.New("binding.workspace_id is required")
 	}
-	if strings.TrimSpace(r.Binding.CanonicalRoot) == "" {
-		return errors.New("binding.canonical_root is required")
-	}
 	return nil
 }
 
@@ -497,7 +503,7 @@ type ProjectRebindWorkspaceRequest struct {
 }
 
 type ProjectRebindWorkspaceResponse struct {
-	Binding ProjectBinding `json:"binding"`
+	Binding ProjectMutationBinding `json:"binding"`
 }
 
 type ProjectGetOverviewRequest struct {

@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"core/server/auth"
-	"core/shared/apicontract"
 	"core/shared/protoapi"
 	authpb "core/shared/protoapi/gen/kent/api/auth"
 	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
@@ -27,35 +26,35 @@ func registerBootstrapGatewayBinaryBindings(bindings map[string]gatewayBinaryBin
 		register func() error
 	}{
 		{register: func() error {
-			return registerGatewayBinaryBinding(bindings, serverService, "GetReadiness", apicontract.DependencyServerStatus,
+			return registerGatewayBinaryBinding(bindings, serverService, "GetReadiness", gatewayBinaryPreCoreOrdinary,
 				func() proto.Message { return &emptypb.Empty{} }, nil, invokeBinaryServerReadiness, binaryServerReadinessFailure)
 		}},
 		{register: func() error {
-			return registerGatewayBinaryBinding(bindings, serverService, "GetUpdateStatus", apicontract.DependencyServerStatus,
+			return registerGatewayBinaryBinding(bindings, serverService, "GetUpdateStatus", gatewayBinaryPreCoreOrdinary,
 				func() proto.Message { return &emptypb.Empty{} }, nil, invokeBinaryUpdateStatus, binaryUpdateStatusFailure)
 		}},
 		{register: func() error {
-			return registerGatewayBinaryBinding(bindings, authService, "GetBootstrapStatus", apicontract.DependencyAuthBootstrap,
+			return registerGatewayBinaryBinding(bindings, authService, "GetBootstrapStatus", gatewayBinaryPreCoreExclusive,
 				func() proto.Message { return &emptypb.Empty{} }, nil, invokeBinaryAuthBootstrapStatus, binaryAuthBootstrapStatusFailure)
 		}},
 		{register: func() error {
-			return registerGatewayBinaryBinding(bindings, authService, "CompleteBootstrap", apicontract.DependencyAuthBootstrap,
+			return registerGatewayBinaryBinding(bindings, authService, "CompleteBootstrap", gatewayBinaryPreCoreExclusive,
 				func() proto.Message { return &authpb.CompleteBootstrapRequest{} }, nil, invokeBinaryAuthCompleteBootstrap, binaryAuthCompleteBootstrapFailure)
 		}},
 		{register: func() error {
-			return registerGatewayBinaryBinding(bindings, authService, "AcknowledgeNoAuth", apicontract.DependencyAuthBootstrap,
+			return registerGatewayBinaryBinding(bindings, authService, "AcknowledgeNoAuth", gatewayBinaryPreCoreExclusive,
 				func() proto.Message { return &emptypb.Empty{} }, nil, invokeBinaryAuthAcknowledgeNoAuth, binaryAuthAcknowledgeNoAuthFailure)
 		}},
 		{register: func() error {
-			return registerGatewayBinaryBinding(bindings, authService, "GetStatus", apicontract.DependencyAuthStatus,
+			return registerGatewayBinaryBinding(bindings, authService, "GetStatus", gatewayBinaryPreCoreExclusive,
 				func() proto.Message { return &authpb.GetStatusRequest{} }, nil, invokeBinaryAuthStatus, binaryAuthStatusFailure)
 		}},
 		{register: func() error {
-			return registerGatewayBinaryBinding(bindings, onboardingService, "Finalize", apicontract.DependencyOnboardingFinalize,
+			return registerGatewayBinaryBinding(bindings, onboardingService, "Finalize", gatewayBinaryPreCoreOrdinary,
 				func() proto.Message { return &onboardingpb.FinalizeRequest{} }, nil, invokeBinaryOnboardingFinalize, binaryOnboardingFinalizeFailure)
 		}},
 		{register: func() error {
-			return registerGatewayBinaryBinding(bindings, capabilityService, "GetFacts", apicontract.DependencyCapabilityFacts,
+			return registerGatewayBinaryBinding(bindings, capabilityService, "GetFacts", gatewayBinaryPreCoreOrdinary,
 				func() proto.Message { return &capabilitypb.GetFactsRequest{} }, nil, invokeBinaryCapabilityFacts, binaryCapabilityFactsFailure)
 		}},
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"core/shared/apicontract"
 	"core/shared/protoapi"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
@@ -34,7 +33,7 @@ func registerProjectMutationGatewayBinaryBindings(bindings map[string]gatewayBin
 			bindings,
 			service,
 			registration.name,
-			apicontract.DependencyProjectView,
+			gatewayBinaryCoreActiveOrdinary,
 			registration.request,
 			nil,
 			registration.invoke,

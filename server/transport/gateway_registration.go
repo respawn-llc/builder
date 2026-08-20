@@ -152,8 +152,13 @@ func validateBinaryBinding(operation protoapi.Operation, binding gatewayBinaryBi
 	if binding.request == nil {
 		return fmt.Errorf("binary binding %q has no request constructor", operation.Name)
 	}
-	if binding.dependency == "" {
-		return fmt.Errorf("binary binding %q has no dependency", operation.Name)
+	switch binding.policy {
+	case gatewayBinaryPreCoreOrdinary,
+		gatewayBinaryPreCoreExclusive,
+		gatewayBinaryCoreActiveOrdinary,
+		gatewayBinaryCoreActiveExclusive:
+	default:
+		return fmt.Errorf("binary binding %q has no execution policy", operation.Name)
 	}
 	request := binding.request()
 	if request == nil || request.ProtoReflect().Descriptor().FullName() != operation.Descriptor.Input().FullName() {

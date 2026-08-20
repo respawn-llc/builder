@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"core/shared/apicontract"
 	"core/shared/invariant"
 	"core/shared/protoapi"
 	"core/shared/protocol"
@@ -22,13 +21,23 @@ import (
 )
 
 type gatewayBinaryBinding struct {
-	operation  protoapi.Operation
-	dependency apicontract.Dependency
-	request    func() proto.Message
-	scope      func(proto.Message) (routeScopeParams, error)
-	invoke     func(*Gateway, context.Context, *connectionState, proto.Message) (proto.Message, error)
-	failure    func(*Gateway, *connectionState, proto.Message, error) proto.Message
+	operation protoapi.Operation
+	policy    gatewayBinaryExecutionPolicy
+	request   func() proto.Message
+	scope     func(proto.Message) (routeScopeParams, error)
+	invoke    func(*Gateway, context.Context, *connectionState, proto.Message) (proto.Message, error)
+	failure   func(*Gateway, *connectionState, proto.Message, error) proto.Message
 }
+
+type gatewayBinaryExecutionPolicy uint8
+
+const (
+	gatewayBinaryExecutionPolicyUnspecified gatewayBinaryExecutionPolicy = iota
+	gatewayBinaryPreCoreOrdinary
+	gatewayBinaryPreCoreExclusive
+	gatewayBinaryCoreActiveOrdinary
+	gatewayBinaryCoreActiveExclusive
+)
 
 type gatewayBinaryRequest struct {
 	binding gatewayBinaryBinding
@@ -45,7 +54,7 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 		bindings,
 		service,
 		"Handshake",
-		apicontract.DependencyProtocol,
+		gatewayBinaryPreCoreExclusive,
 		func() proto.Message { return &connectionpb.HandshakeRequest{} },
 		nil,
 		invokeBinaryHandshake,
@@ -57,7 +66,7 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 		bindings,
 		service,
 		"AttachProject",
-		apicontract.DependencyProtocolAttach,
+		gatewayBinaryCoreActiveExclusive,
 		func() proto.Message { return &connectionpb.AttachProjectRequest{} },
 		nil,
 		invokeBinaryAttachProject,
@@ -76,7 +85,7 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 		bindings,
 		service,
 		"AttachSession",
-		apicontract.DependencyProtocolAttach,
+		gatewayBinaryCoreActiveExclusive,
 		func() proto.Message { return &connectionpb.AttachSessionRequest{} },
 		func(message proto.Message) (routeScopeParams, error) {
 			request, ok := message.(*connectionpb.AttachSessionRequest)
@@ -119,7 +128,7 @@ func registerGatewayBinaryBinding(
 	bindings map[string]gatewayBinaryBinding,
 	service protoreflect.ServiceDescriptor,
 	methodName protoreflect.Name,
-	dependency apicontract.Dependency,
+	policy gatewayBinaryExecutionPolicy,
 	request func() proto.Message,
 	scope func(proto.Message) (routeScopeParams, error),
 	invoke func(*Gateway, context.Context, *connectionState, proto.Message) (proto.Message, error),
@@ -137,11 +146,11 @@ func registerGatewayBinaryBinding(
 		return err
 	}
 	bindings[operation.Name] = gatewayBinaryBinding{
-		operation:  operation,
-		dependency: dependency,
-		request:    request,
-		scope:      scope,
-		invoke:     invoke,
+		operation: operation,
+		policy:    policy,
+		request:   request,
+		scope:     scope,
+		invoke:    invoke,
 		failure: func(_ *Gateway, _ *connectionState, _ proto.Message, err error) proto.Message {
 			return failure(err)
 		},
@@ -525,13 +534,8 @@ func sendTransportFailure(ctx context.Context, conn rpcwire.Conn, failure *share
 }
 
 func isGatewayExclusiveBinaryBinding(binding gatewayBinaryBinding) bool {
-	switch binding.dependency {
-	case apicontract.DependencyAuthBootstrap, apicontract.DependencyAuthStatus:
-		return true
-	}
-	switch binding.operation.Options.ScopePolicy {
-	case sharedpb.ScopePolicy_SCOPE_POLICY_ATTACH_PROJECT,
-		sharedpb.ScopePolicy_SCOPE_POLICY_ATTACH_SESSION:
+	switch binding.policy {
+	case gatewayBinaryPreCoreExclusive, gatewayBinaryCoreActiveExclusive:
 		return true
 	default:
 		return false
@@ -574,8 +578,9 @@ func (g *Gateway) dispatchBinary(
 	fail := func(err error) (proto.Message, *sharedpb.TransportFailure) {
 		return binding.failure(g, state, decoded, err), nil
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(binding.dependency); err != nil {
+	switch binding.policy {
+	case gatewayBinaryCoreActiveOrdinary, gatewayBinaryCoreActiveExclusive:
+		if err := g.requireCoreActive(); err != nil {
 			return fail(err)
 		}
 	}

@@ -1,6 +1,7 @@
 import type {
   BindingPlan,
   ProjectBinding,
+  ProjectMutationBinding as ProjectMutationBindingModel,
   ProjectDeleteResponse,
   ProjectEdit,
   ProjectMutationResponse,
@@ -205,7 +206,7 @@ export async function createProject(
   displayName: string,
   projectKey: string,
   workspaceRoot: string,
-): Promise<ProjectBinding> {
+): Promise<ProjectMutationBindingModel> {
   const method = ProjectCatalogService.method.create;
   const result = await transport.callDescriptor(
     method,
@@ -367,13 +368,12 @@ function projectBinding(binding: GeneratedProjectBinding): ProjectBinding {
   };
 }
 
-function projectMutationBinding(binding: ProjectMutationBinding): ProjectBinding {
+function projectMutationBinding(binding: ProjectMutationBinding): ProjectMutationBindingModel {
   return {
     projectID: binding.projectId,
     projectKey: binding.projectKey,
     projectName: binding.projectName,
     workspaceID: binding.workspaceId,
-    canonicalRoot: binding.canonicalRoot,
     workspaceName: binding.workspaceName,
     workspaceStatus: projectAvailability(binding.workspaceStatus),
   };

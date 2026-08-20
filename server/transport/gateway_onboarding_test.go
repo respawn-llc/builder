@@ -10,11 +10,8 @@ import (
 	"core/shared/apicontract"
 	remoteclient "core/shared/client"
 	"core/shared/protoapi"
-	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
-	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
-	"core/shared/protocol"
 	"core/shared/serverapi"
 
 	"google.golang.org/protobuf/proto"
@@ -27,18 +24,6 @@ type gatewayOnboardingOverride struct {
 
 func (d *gatewayOnboardingOverride) OnboardingFinalizeClient() apicontract.OnboardingFinalizeService {
 	return d.finalize
-}
-
-type gatewayOnboardingUnavailableOverride struct {
-	*core.Core
-	unavailable apicontract.Dependency
-}
-
-func (d *gatewayOnboardingUnavailableOverride) RouteDependencyAvailable(dep apicontract.Dependency) error {
-	if dep == d.unavailable {
-		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
-	}
-	return nil
 }
 
 type gatewayOnboardingService struct {
@@ -121,70 +106,6 @@ func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 	}
 }
 
-func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T) {
-	authReadyCore, _ := newGatewayTestCore(t, true, true)
-	t.Cleanup(func() { _ = authReadyCore.Close() })
-	authBlockedCore, _ := newGatewayTestCore(t, true, false)
-	t.Cleanup(func() { _ = authBlockedCore.Close() })
-
-	tests := []struct {
-		name       string
-		authReady  bool
-		dependency apicontract.Dependency
-		method     string
-		params     func(*core.Core) any
-	}{
-		{name: "subscription client lookup", authReady: true, dependency: apicontract.DependencyAttentionNotification, method: protocol.MethodAttentionNotificationSubscribe, params: func(*core.Core) any {
-			return serverapi.AttentionNotificationSubscribeRequest{}
-		}},
-		{name: "progress auth and preflight", dependency: apicontract.DependencyRunPrompt, method: protocol.MethodRunPrompt, params: func(*core.Core) any {
-			return serverapi.RunPromptRequest{ClientRequestID: "run-prompt", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "test"}
-		}},
-		{name: "attach after handshake", dependency: apicontract.DependencyProtocolAttach, params: func(appCore *core.Core) any {
-			return &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()}
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			appCore := authBlockedCore
-			if tt.authReady {
-				appCore = authReadyCore
-			}
-			gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{Core: appCore, unavailable: tt.dependency}, gatewayTestIdentity())
-			if err != nil {
-				t.Fatalf("NewGateway: %v", err)
-			}
-			server := httptestServerForGateway(t, gateway)
-			defer server.Close()
-			conn := dialGateway(t, server)
-			defer func() { _ = conn.Close() }()
-			handshakeGateway(t, conn)
-
-			if tt.dependency == apicontract.DependencyProtocolAttach {
-				result := attachGatewayProject(
-					t,
-					conn,
-					"dependency-unavailable",
-					tt.params(appCore).(*connectionpb.AttachProjectRequest),
-				)
-				failure := result.GetError()
-				if failure == nil ||
-					failure.Code != "server_not_ready" ||
-					failure.GetServerNotReady().Reason != serverpb.ServerNotReadyReason_SERVER_NOT_READY_REASON_ONBOARDING_REQUIRED {
-					t.Fatalf("unavailable attachment dependency result = %+v, want onboarding-required server_not_ready", result)
-				}
-				return
-			}
-			errResp := callGatewayExpectError(t, conn, "dependency-unavailable", tt.method, tt.params(appCore))
-			if errResp.Code != protocol.ErrCodeServerNotReady {
-				t.Fatalf("error code = %d, want server not ready", errResp.Code)
-			}
-			if decoded := serverapi.DecodeServerNotReadyError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrServerNotReadyOnboardingRequired) {
-				t.Fatalf("decoded error = %v, want onboarding_required", decoded)
-			}
-		})
-	}
-}
 func TestRemoteOnboardingFinalizePreservesStructuredSentinels(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	defer func() { _ = appCore.Close() }()

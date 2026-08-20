@@ -217,7 +217,7 @@ func (s *Service) CreateProject(ctx context.Context, req serverapi.ProjectCreate
 	if err != nil {
 		return serverapi.ProjectCreateResponse{}, projectMutationStorageError(err, req.ProjectKey)
 	}
-	return serverapi.ProjectCreateResponse{Binding: projectBindingFromMetadata(binding)}, nil
+	return serverapi.ProjectCreateResponse{Binding: projectMutationBindingFromMetadata(binding)}, nil
 }
 
 func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
@@ -586,7 +586,7 @@ func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.Pr
 		outcome = serverapi.ProjectWorkspaceAttachOutcomeAttached
 	}
 	response := serverapi.ProjectAttachWorkspaceResponse{
-		Binding: projectBindingFromMetadata(result.Binding),
+		Binding: projectMutationBindingFromMetadata(result.Binding),
 		Outcome: outcome,
 	}
 	if err := response.Validate(); err != nil {
@@ -616,7 +616,7 @@ func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebi
 	if err != nil {
 		return serverapi.ProjectRebindWorkspaceResponse{}, projectMutationStorageError(err, "")
 	}
-	return serverapi.ProjectRebindWorkspaceResponse{Binding: projectBindingFromMetadata(binding)}, nil
+	return serverapi.ProjectRebindWorkspaceResponse{Binding: projectMutationBindingFromMetadata(binding)}, nil
 }
 
 func projectMutationStorageError(err error, projectKey string) error {
@@ -698,6 +698,17 @@ func projectBindingFromMetadata(binding metadata.Binding) serverapi.ProjectBindi
 		ProjectName:     binding.ProjectName,
 		WorkspaceID:     binding.WorkspaceID,
 		CanonicalRoot:   binding.CanonicalRoot,
+		WorkspaceName:   binding.WorkspaceName,
+		WorkspaceStatus: binding.WorkspaceStatus,
+	}
+}
+
+func projectMutationBindingFromMetadata(binding metadata.Binding) serverapi.ProjectMutationBinding {
+	return serverapi.ProjectMutationBinding{
+		ProjectID:       binding.ProjectID,
+		ProjectKey:      binding.ProjectKey,
+		ProjectName:     binding.ProjectName,
+		WorkspaceID:     binding.WorkspaceID,
 		WorkspaceName:   binding.WorkspaceName,
 		WorkspaceStatus: binding.WorkspaceStatus,
 	}

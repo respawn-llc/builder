@@ -159,7 +159,6 @@ message ProjectMutationBinding {
     defined_only: true
     not_in: [0]
   }];
-  string canonical_root = 7 [(buf.validate.field).string.min_len = 1];
 }
 
 message SelectedProjectWorkspace {

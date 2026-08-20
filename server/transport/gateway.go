@@ -60,8 +60,8 @@ type GatewayDependencies interface {
 	GatewayWorktreeDependencies
 }
 
-type GatewayDependencyAvailability interface {
-	RouteDependencyAvailable(apicontract.Dependency) error
+type GatewayStartupLifecycle interface {
+	RequireCoreActive() error
 }
 
 type GatewayServerStatusDependencies interface {
@@ -164,20 +164,6 @@ type gatewayEstablishedRequest struct {
 }
 
 var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
-
-func RuntimeLiveControlRoutesExecutable() bool {
-	for _, method := range []string{
-		protocol.MethodRuntimeLiveSteer,
-		protocol.MethodRuntimeLiveStop,
-		protocol.MethodRuntimeLiveWait,
-		protocol.MethodRuntimeLiveWatch,
-	} {
-		if _, ok := gatewayUnaryHandlers[method]; !ok {
-			return false
-		}
-	}
-	return true
-}
 
 type connectionState struct {
 	handshakeDone         bool
@@ -472,17 +458,21 @@ func (g *Gateway) serveOrdinaryEstablishedRequest(
 	}
 }
 
-func isGatewayExclusiveOperation(operation protoapi.Operation, route apicontract.Route) bool {
-	switch route.Dependency {
-	case apicontract.DependencyProtocol, apicontract.DependencyAuthBootstrap, apicontract.DependencyAuthStatus:
-		return true
-	}
+func isGatewayExclusiveOperation(operation protoapi.Operation, _ apicontract.Route) bool {
 	switch operation.Options.ScopePolicy {
 	case sharedpb.ScopePolicy_SCOPE_POLICY_ATTACH_PROJECT,
 		sharedpb.ScopePolicy_SCOPE_POLICY_ATTACH_SESSION:
 		return true
 	}
 	return false
+}
+
+func (g *Gateway) requireCoreActive() error {
+	lifecycle, ok := g.deps.(GatewayStartupLifecycle)
+	if !ok {
+		return nil
+	}
+	return lifecycle.RequireCoreActive()
 }
 
 const gatewayRuntimeCleanupTimeout = 3 * time.Second
@@ -521,10 +511,8 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-			return responseForError(req.ID, err)
-		}
+	if err := g.requireCoreActive(); err != nil {
+		return responseForError(req.ID, err)
 	}
 	if err := newRoutePolicyExecutor(g).requireAuthenticationStage(
 		ctx,

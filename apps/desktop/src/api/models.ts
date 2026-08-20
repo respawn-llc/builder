@@ -112,7 +112,7 @@ export type ProjectWorkspaceResult =
 export type ProjectWorkspaceAttachOutcome = "attached" | "already_attached";
 
 export type ProjectWorkspaceAttachResponse = Readonly<{
-  binding: ProjectBinding;
+  binding: ProjectMutationBinding;
   outcome: ProjectWorkspaceAttachOutcome;
 }>;
 
@@ -178,6 +178,8 @@ export type ProjectBinding = Readonly<{
   workspaceName: string;
   workspaceStatus: string;
 }>;
+
+export type ProjectMutationBinding = Readonly<Omit<ProjectBinding, "canonicalRoot">>;
 
 export type BindingPlan = Readonly<{
   kind: string;

@@ -394,7 +394,7 @@ func projectWorkspaceSelectorFromProto(message *projectpb.ProjectWorkspaceSelect
 	}
 }
 
-func projectMutationBindingToProto(binding serverapi.ProjectBinding) (*projectpb.ProjectMutationBinding, error) {
+func projectMutationBindingToProto(binding serverapi.ProjectMutationBinding) (*projectpb.ProjectMutationBinding, error) {
 	availability, err := projectAvailabilityToProto(clientui.ProjectAvailability(binding.WorkspaceStatus))
 	if err != nil {
 		return nil, err
@@ -406,22 +406,21 @@ func projectMutationBindingToProto(binding serverapi.ProjectBinding) (*projectpb
 		WorkspaceId:     binding.WorkspaceID,
 		WorkspaceName:   binding.WorkspaceName,
 		WorkspaceStatus: availability,
-		CanonicalRoot:   binding.CanonicalRoot,
 	}
 	return message, Validate(message)
 }
 
-func projectMutationBindingFromProto(binding *projectpb.ProjectMutationBinding) (serverapi.ProjectBinding, error) {
+func projectMutationBindingFromProto(binding *projectpb.ProjectMutationBinding) (serverapi.ProjectMutationBinding, error) {
 	if err := Validate(binding); err != nil {
-		return serverapi.ProjectBinding{}, err
+		return serverapi.ProjectMutationBinding{}, err
 	}
 	availability, err := projectAvailabilityFromProto(binding.WorkspaceStatus)
 	if err != nil {
-		return serverapi.ProjectBinding{}, err
+		return serverapi.ProjectMutationBinding{}, err
 	}
-	return serverapi.ProjectBinding{
+	return serverapi.ProjectMutationBinding{
 		ProjectID: binding.ProjectId, ProjectKey: binding.ProjectKey, ProjectName: binding.ProjectName,
-		WorkspaceID: binding.WorkspaceId, CanonicalRoot: binding.CanonicalRoot,
+		WorkspaceID:   binding.WorkspaceId,
 		WorkspaceName: binding.WorkspaceName, WorkspaceStatus: string(availability),
 	}, nil
 }

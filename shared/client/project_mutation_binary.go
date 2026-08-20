@@ -98,11 +98,10 @@ func (c *Remote) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteR
 		return serverapi.ProjectDeleteResponse{}, err
 	}
 	if failure := result.GetError(); failure != nil {
-		return serverapi.ProjectDeleteResponse{}, projectNotFoundGeneratedError(
-			failure.Code,
-			failure.GetProjectNotFound(),
-			failure.GetInternalFailure(),
-		)
+		if failure.Code == "auth_required" {
+			return serverapi.ProjectDeleteResponse{}, serverapi.ErrServerAuthRequired
+		}
+		return serverapi.ProjectDeleteResponse{}, projectNotFoundGeneratedError(failure.Code, failure.GetProjectNotFound(), failure.GetInternalFailure())
 	}
 	return protoapi.ProjectDeleteFromProto(result.GetSuccess())
 }
@@ -144,6 +143,8 @@ func (c *Remote) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebin
 	}
 	if failure := result.GetError(); failure != nil {
 		switch failure.Code {
+		case "auth_required":
+			return serverapi.ProjectRebindWorkspaceResponse{}, serverapi.ErrServerAuthRequired
 		case "workspace_not_registered":
 			return serverapi.ProjectRebindWorkspaceResponse{}, protoapi.WorkspaceNotRegisteredFromProto(failure.GetWorkspaceNotRegistered())
 		case "workspace_binding_ambiguous":

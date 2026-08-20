@@ -37,7 +37,7 @@ func registerProjectReadGatewayBinaryBindings(bindings map[string]gatewayBinaryB
 			bindings,
 			service,
 			protoreflect.Name(registration.name),
-			apicontract.DependencyProjectView,
+			gatewayBinaryCoreActiveOrdinary,
 			registration.request,
 			nil,
 			registration.invoke,

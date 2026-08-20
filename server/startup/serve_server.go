@@ -469,22 +469,17 @@ func (d *startupGatewayDependencies) activeCore() *core.Core {
 	return d.core
 }
 
-func (d *startupGatewayDependencies) RouteDependencyAvailable(dep apicontract.Dependency) error {
-	switch dep {
-	case apicontract.DependencyProtocol, apicontract.DependencyServerStatus, apicontract.DependencyAuthBootstrap, apicontract.DependencyAuthStatus, apicontract.DependencyCapabilityFacts, apicontract.DependencyOnboardingFinalize:
+func (d *startupGatewayDependencies) RequireCoreActive() error {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.core != nil {
 		return nil
-	default:
-		d.mu.RLock()
-		defer d.mu.RUnlock()
-		if d.core != nil {
-			return nil
-		}
-		if d.activation != nil {
-			diagnostic := d.activation.Error()
-			return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{Diagnostic: &diagnostic}, d.activation)
-		}
-		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 	}
+	if d.activation != nil {
+		diagnostic := d.activation.Error()
+		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{Diagnostic: &diagnostic}, d.activation)
+	}
+	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }
 
 type startupReadinessState struct {

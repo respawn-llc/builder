@@ -247,23 +247,23 @@ func listProjects(ctx context.Context) ([]clientui.ProjectSummary, error) {
 	return resp.Projects, nil
 }
 
-func createProject(ctx context.Context, displayName string, workspaceRoot string) (serverapi.ProjectBinding, error) {
+func createProject(ctx context.Context, displayName string, workspaceRoot string) (serverapi.ProjectMutationBinding, error) {
 	trimmedDisplayName := strings.TrimSpace(displayName)
 	if trimmedDisplayName == "" {
-		return serverapi.ProjectBinding{}, errors.New("project name is required")
+		return serverapi.ProjectMutationBinding{}, errors.New("project name is required")
 	}
 	normalizedWorkspaceRoot, err := normalizeBindingCommandPath(workspaceRoot)
 	if err != nil {
-		return serverapi.ProjectBinding{}, err
+		return serverapi.ProjectMutationBinding{}, err
 	}
 	_, remote, err := openBindingCommandRemote(ctx, ".")
 	if err != nil {
-		return serverapi.ProjectBinding{}, err
+		return serverapi.ProjectMutationBinding{}, err
 	}
 	defer func() { _ = remote.Close() }()
 	resp, err := createProjectWithTimeout(ctx, remote, trimmedDisplayName, normalizedWorkspaceRoot)
 	if err != nil {
-		return serverapi.ProjectBinding{}, err
+		return serverapi.ProjectMutationBinding{}, err
 	}
 	return resp.Binding, nil
 }

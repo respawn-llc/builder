@@ -41,21 +41,9 @@ export async function listSessionPage(
 ): Promise<SessionCatalogPage> {
   const method = SessionCatalogService.method.page;
   const operation = operationFromDescriptor(method).name;
-  const expectedProjectID = parseCatalogInput(
-    `${operation} project ID`,
-    canonicalProjectIDSchema,
-    projectID,
-  );
-  const expectedCategory = parseCatalogInput(
-    `${operation} category`,
-    sessionCategorySchema,
-    category,
-  );
-  const expectedOffset = parseCatalogInput(
-    `${operation} offset`,
-    sessionPageOffsetSchema,
-    offset,
-  );
+  const expectedProjectID = parseCatalogInput(`${operation} project ID`, canonicalProjectIDSchema, projectID);
+  const expectedCategory = parseCatalogInput(`${operation} category`, sessionCategorySchema, category);
+  const expectedOffset = parseCatalogInput(`${operation} offset`, sessionPageOffsetSchema, offset);
   const result = await transport.callDescriptor(
     method,
     create(method.input, {

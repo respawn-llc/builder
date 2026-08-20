@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/shared/apicontract"
 	"core/shared/protoapi"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
@@ -22,7 +21,7 @@ func registerSessionLaunchGatewayBinaryBindings(bindings map[string]gatewayBinar
 		bindings,
 		service,
 		"Plan",
-		apicontract.DependencySessionLaunch,
+		gatewayBinaryCoreActiveOrdinary,
 		func() proto.Message { return &sessionlaunchpb.SessionPlanRequest{} },
 		nil,
 		invokeBinarySessionPlan,
@@ -41,7 +40,7 @@ func registerSessionLaunchGatewayBinaryBindings(bindings map[string]gatewayBinar
 		bindings,
 		service,
 		"WorkspaceChatDraft",
-		apicontract.DependencySessionLaunch,
+		gatewayBinaryCoreActiveOrdinary,
 		func() proto.Message { return &sessionlaunchpb.WorkspaceChatDraftRequest{} },
 		nil,
 		invokeBinaryWorkspaceChatDraft,
@@ -60,7 +59,7 @@ func registerSessionLaunchGatewayBinaryBindings(bindings map[string]gatewayBinar
 		bindings,
 		service,
 		"MaterializeWorkspaceChat",
-		apicontract.DependencySessionLaunch,
+		gatewayBinaryCoreActiveOrdinary,
 		func() proto.Message { return &emptypb.Empty{} },
 		nil,
 		invokeBinaryMaterializeWorkspaceChat,

@@ -100,6 +100,7 @@ func validateStartupRemoteIdentity(identity protocol.ServerIdentity) error {
 	}
 	return nil
 }
+
 type configuredServerPreflightError struct {
 	endpoint  string
 	operation string

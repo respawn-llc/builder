@@ -39,7 +39,7 @@ func TestProjectWorkspaceCatalogHardCutoverContract(t *testing.T) {
 
 func TestProjectWorkspaceAttachResponseRequiresTypedOutcomeAndBinding(t *testing.T) {
 	valid := ProjectAttachWorkspaceResponse{
-		Binding: ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1", CanonicalRoot: "/workspace"},
+		Binding: ProjectMutationBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"},
 		Outcome: ProjectWorkspaceAttachOutcomeAlreadyAttached,
 	}
 	if err := valid.Validate(); err != nil {
@@ -47,8 +47,8 @@ func TestProjectWorkspaceAttachResponseRequiresTypedOutcomeAndBinding(t *testing
 	}
 	for _, response := range []ProjectAttachWorkspaceResponse{
 		{Binding: valid.Binding},
-		{Binding: ProjectBinding{WorkspaceID: "workspace-1", CanonicalRoot: "/workspace"}, Outcome: ProjectWorkspaceAttachOutcomeAttached},
-		{Binding: ProjectBinding{ProjectID: "project-1", CanonicalRoot: "/workspace"}, Outcome: ProjectWorkspaceAttachOutcomeAttached},
+		{Binding: ProjectMutationBinding{WorkspaceID: "workspace-1"}, Outcome: ProjectWorkspaceAttachOutcomeAttached},
+		{Binding: ProjectMutationBinding{ProjectID: "project-1"}, Outcome: ProjectWorkspaceAttachOutcomeAttached},
 	} {
 		if err := response.Validate(); err == nil {
 			t.Fatalf("invalid attach response accepted: %+v", response)
