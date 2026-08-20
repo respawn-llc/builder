@@ -41,19 +41,6 @@ func TestLifecycleConstructorsRejectImpossibleCombinations(t *testing.T) {
 }
 
 func TestRuntimeSubLifecycleTransitionTables(t *testing.T) {
-	compaction := NewCompactionLifecycle(false)
-	if compaction.IsRunning() {
-		t.Fatal("expected compaction idle")
-	}
-	compaction = NewCompactionLifecycle(true)
-	if !compaction.IsRunning() {
-		t.Fatal("expected compaction running after start")
-	}
-	compaction = NewCompactionLifecycle(false)
-	if compaction.IsRunning() {
-		t.Fatal("expected compaction idle after complete or fail")
-	}
-
 	reviewer, err := NewReviewerLifecycle(true, true)
 	if err != nil {
 		t.Fatalf("reviewer start rejected: %v", err)

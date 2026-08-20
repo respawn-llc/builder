@@ -81,24 +81,6 @@ func (s RunLifecycle) IsGoalLoopRunning() bool {
 	return s.Phase == RunLifecycleRunning && s.Mode == RunModeGoalLoop
 }
 
-type CompactionLifecycle string
-
-const (
-	CompactionLifecycleIdle    CompactionLifecycle = "idle"
-	CompactionLifecycleRunning CompactionLifecycle = "running"
-)
-
-func NewCompactionLifecycle(running bool) CompactionLifecycle {
-	if running {
-		return CompactionLifecycleRunning
-	}
-	return CompactionLifecycleIdle
-}
-
-func (s CompactionLifecycle) IsRunning() bool {
-	return s == CompactionLifecycleRunning
-}
-
 type ReviewerLifecycle string
 
 const (

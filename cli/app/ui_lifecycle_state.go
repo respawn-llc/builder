@@ -7,9 +7,8 @@ import (
 )
 
 type uiRuntimeLifecycle struct {
-	Run        clientui.RunLifecycle
-	Compaction clientui.CompactionLifecycle
-	Reviewer   clientui.ReviewerLifecycle
+	Run      clientui.RunLifecycle
+	Reviewer clientui.ReviewerLifecycle
 }
 
 type uiInterruptLifecycle string
@@ -20,7 +19,7 @@ const (
 )
 
 func (m *uiModel) isBusy() bool {
-	return m != nil && (m.runtimeLifecycle.Run.IsRunning() || m.runtimeLifecycle.Compaction.IsRunning() || m.hasLocalDispatchPending())
+	return m != nil && (m.runtimeLifecycle.Run.IsRunning() || m.hasLocalDispatchPending())
 }
 
 func (m *uiModel) runtimeActivityBusy() bool {
@@ -80,14 +79,18 @@ func runtimeRunModeFromActivityKind(kind clientui.RuntimeActivityActiveKind) cli
 }
 
 func (m *uiModel) isCompacting() bool {
-	return m != nil && m.runtimeLifecycle.Compaction.IsRunning()
-}
-
-func (m *uiModel) setCompacting(compacting bool) {
-	if m == nil {
-		return
+	if m == nil ||
+		m.runtimeActivityProjection.State != clientui.RuntimeActivityRunning ||
+		m.runtimeActivityProjection.ActiveStep == nil {
+		return false
 	}
-	m.runtimeLifecycle.Compaction = clientui.NewCompactionLifecycle(compacting)
+	switch m.runtimeActivityProjection.ActiveStep.ActiveKind {
+	case clientui.RuntimeActivityActiveKindCompaction,
+		clientui.RuntimeActivityActiveKindPreSubmitCompaction:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *uiModel) isReviewerRunning() bool {

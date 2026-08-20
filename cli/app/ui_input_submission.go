@@ -69,7 +69,7 @@ func (c uiInputController) startTypedSubmissionWithPreSubmitQueuePositionAndOrde
 	if blocked, blockCmd := c.blockInjectedQueueSubmission(); blocked {
 		return blockCmd
 	}
-	c.startRuntimeOperationAffordance(false)
+	c.startRuntimeOperationAffordance()
 	command, isUserShell := parseUserShellCommand(text)
 	if isUserShell {
 		m.logf("step.user_shell.start command_chars=%d", len(command))
@@ -226,24 +226,18 @@ func (c uiInputController) compactCmd(submittedText, args string, origin uiCompa
 	}
 }
 
-func (c uiInputController) startRuntimeOperationAffordance(compacting bool) {
+func (c uiInputController) startRuntimeOperationAffordance() {
 	m := c.model
 	m.clearReviewerState()
 	m.clearActiveAssistantStreamSource()
-	if compacting {
-		m.setCompacting(true)
-	}
 }
 
-func (c uiInputController) finishRuntimeOperationAffordance(compacting bool) {
+func (c uiInputController) finishRuntimeOperationAffordance() {
 	m := c.model
 	m.clearReviewerState()
 	m.spinnerFrame = 0
 	if !m.shouldAnimateSpinner() {
 		m.stopSpinnerTicking()
-	}
-	if compacting {
-		m.setCompacting(false)
 	}
 }
 
@@ -277,7 +271,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		m.registerSteeredQueuedUserMessage(msg.queued)
 	}
 	m.activeSubmit = activeSubmitState{}
-	c.finishRuntimeOperationAffordance(false)
+	c.finishRuntimeOperationAffordance()
 	if msg.token == 0 || !m.hasRuntimeClient() {
 		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle})
 	}
