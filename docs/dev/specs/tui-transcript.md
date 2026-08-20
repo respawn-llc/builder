@@ -28,7 +28,7 @@
 - Transcript failures never become fake empty or idle state.
 - A sequence gap, connection loss, or buffered-event overflow starts Scratch Rehydration. Terminal resize repaints only the Mutable Band and leaves Immutable Area reflow to the terminal.
 - Scratch rehydration never restarts the TUI process, clears immutable scrollback, compares against emitted lines, or suppresses duplicate-looking output.
-- Scratch rehydration emits committed assistant final answers from their full saved Markdown through the same stable projection as ordinary final answers. The compact ongoing assistant preview rule does not apply to rehydrated final answers.
+- Scratch rehydration emits committed assistant commentary and final answers from their full saved Markdown through the same stable projection as ordinary assistant messages. The compact ongoing assistant preview rule does not apply to rehydrated assistant messages.
 - Assistant finalization matches the committed entry to its Streaming Message identity and compares only with the active stream source. If committed text extends the streamed source, Ongoing Mode emits only the missing suffix. Any other mismatch without a real connection gap is a developer error.
 - **Pending tool activity lives only in the Mutable Band. It shows a loading spinner until Kent commits the completed tool row to Scrollback.**
 - Messages in TUI use icon-like, single-symbol glyphs: `@` for web search, `§` for Reviewer feedback, `⇄` for file edits (edit/patch tools), `$` for shell tool calls including failed shell exits, `⚠` for warnings, `!` for Reviewer errors, other error notices, and default tool errors, `ℹ` for ongoing-visible neutral notices (such as goal and worktree messages), and `?` for questions.
@@ -134,13 +134,13 @@
 - Thinking-level feedback from `/thinking` is not rendered as a transcript row in ongoing or detail. The TUI surfaces thinking level through the status-line model label/reasoning segment instead of neutral transcript notices.
 - Locked non-message roles:
 - user turns: `O`
+- assistant commentary turns: `O`
 - final assistant turns: `O`
-- assistant commentary/thinking turns: `D`
 - tool calls: `OC`
 - Reviewer feedback: `OC` or `O` as defined above.
 - Reviewer outcome: `OC`.
 - Reviewer errors: `O`.
-- Reasoning Trace progress updates: `D`; their live first bold span is projected into Thinking Status while the model is reasoning. Detail keeps persisted Reasoning Traces faint and treats them as plain text. The server presentation projection removes only outer literal `**` delimiters; the TUI does not repeat that cleanup. A Reasoning Trace is not expandable unless expansion exposes additional content. Ongoing scrollback contains neither Reasoning Trace rows nor assistant commentary/thinking rows.
+- Reasoning Trace progress updates: `D`; their live first bold span is projected into Thinking Status while the model is reasoning. Detail keeps persisted Reasoning Traces faint and treats them as plain text. The server presentation projection removes only outer literal `**` delimiters; the TUI does not repeat that cleanup. A Reasoning Trace is not expandable unless expansion exposes additional content. Ongoing scrollback does not contain Reasoning Trace rows.
 - Kent decides which messages become transcript entries and which role they use.
 - The TUI decides how each role appears in Ongoing Mode and Detail Mode.
 - When a concept already has a dedicated transcript role, do not also render its raw developer/request artifact.
@@ -155,7 +155,7 @@
 - Syntax-highlighted output must not emit backgrounds unless explicitly intended, such as diff add/remove decoration.
 - Formatted text uses app foreground as base text color.
 - Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
-- User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Final assistant turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
+- User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Assistant commentary and final turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
 - A transcript message with type `agent_steer` uses the `❯` symbol and full-strength foreground Markdown styling. Ongoing renders the complete model-visible message. Collapsed Detail uses the ordinary compact preview, and expanded Detail renders the complete model-visible message.
 - `agents.md`, `skills`, `subagents`, `environment`, `compaction_summary`, `headless_mode`, `headless_mode_exit`, `active_goal_continuation`, and `workflow_mode` render selected content as Markdown. `handoff_future_message` and Compaction-Preserved User Messages remain plaintext.
 - Stable ongoing user and final/streamed assistant Markdown emits width-independent logical lines so the terminal owns prose wrapping and copied prose contains no width-generated line breaks. Markdown soft line breaks flow as spaces; hard breaks and preformatted source boundaries remain explicit. GFM tables render through the Markdown library at the terminal width in effect when they enter scrollback, using continuous Unicode `│`, `─`, and `┼` separators without an outer frame.
@@ -206,7 +206,7 @@
 - Each queued human Steering message remains a separate FIFO user message. Each queued steer issued from another Session remains a separate message.
 - Pending queues are lost on process exit. The backend overload invariant is owned by the Runtime Steering specification.
 - A mid-turn message becomes durable only when Kent delivers it.
-- Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
+- The server-published Run lifecycle is the TUI liveness authority for `Ctrl+C`: while the Run lifecycle is Running, the TUI sends Interrupt; otherwise it exits. A second `Ctrl+C` while Interrupt is still pending for that same Run exits locally. A later Running lifecycle with a different Run or Step identity sends a new Interrupt. The server revalidates that Interrupt targets an active Agent Turn. A submission already sent to the server may start or continue after the client detaches.
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
 - Resume after interrupt requires explicit user text.

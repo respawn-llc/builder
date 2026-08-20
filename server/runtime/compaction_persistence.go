@@ -19,11 +19,7 @@ func newCompactionPersistence(engine *Engine) compactionPersistence {
 
 func (p compactionPersistence) replaceHistory(stepID, engine string, mode compactionMode, items []llm.ResponseItem) (session.CommitReceipt, error) {
 	e := p.engine
-	pendingHandoffFutureMessage := ""
-	if req := e.handoffRuntimeState().RequestSnapshot(); req != nil {
-		pendingHandoffFutureMessage = strings.TrimSpace(req.futureAgentMessage)
-	}
-	return e.steerWithCommitReceipt(stepID, steerHistoryReplacementIntent(engine, mode, e.compactionRuntimeState().Count()+1, pendingHandoffFutureMessage, e.LastCommittedAssistantFinalAnswer(), items))
+	return e.steerWithCommitReceipt(stepID, steerHistoryReplacementIntent(engine, mode, e.compactionRuntimeState().Count()+1, e.LastCommittedAssistantFinalAnswer(), items))
 }
 
 func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode compactionMode, engine, provider string, trimmed *int, count int, errText string) error {

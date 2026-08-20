@@ -659,20 +659,10 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 	if generation := fixture.engine.compactionRuntimeState().Count(); generation != 1 {
 		t.Fatalf("cache-key compaction generation = %d, want 1", generation)
 	}
-	expectedCacheKey := conversationPromptCacheKeyForLineage(
-		fixture.store.Meta().SessionID,
-		fixture.store.Meta().PromptCacheLineageGeneration,
-		1,
-	)
-	preCompactionCacheKey := conversationPromptCacheKeyForLineage(
-		fixture.store.Meta().SessionID,
-		fixture.store.Meta().PromptCacheLineageGeneration,
-		0,
-	)
+	expectedCacheKey := conversationPromptCacheKey(fixture.store.Meta().SessionID)
 	if request.SessionID == nil ||
 		*request.SessionID != fixture.store.Meta().SessionID ||
 		request.PromptCacheKey != expectedCacheKey ||
-		request.PromptCacheKey == preCompactionCacheKey ||
 		request.PromptCacheScope != transcript.CacheWarningScopeConversation {
 		t.Fatalf(
 			"post-compaction request identity = session:%v cache-key:%q scope:%q",

@@ -217,6 +217,13 @@ func (e *Engine) executePendingCompaction(
 	lifecycle *defaultExclusiveStepLifecycle,
 	request *pendingCompaction,
 ) (session.CommitReceipt, error) {
+	if request.mode == compactionModeAuto {
+		planningSnapshot := e.compactionPlanningSnapshot()
+		planner := e.compactionPlannerState()
+		if !planner.autoCompactionAvailable(planningSnapshot) || !planner.eagerCompactionEligible(planningSnapshot) {
+			return session.CommitReceipt{}, nil
+		}
+	}
 	var receipt session.CommitReceipt
 	err := lifecycle.runCompactionAtBoundary(ctx, func(stepCtx context.Context, stepID string) error {
 		if request.requireEligibility {
@@ -376,6 +383,33 @@ func (e *Engine) autoCompactIfNeeded(ctx context.Context, stepID string, mode co
 	return e.compactionFlow.AutoCompactIfNeeded(ctx, stepID, mode)
 }
 
+func (e *Engine) maybeQueueEagerCompaction(activeKind ActiveKind, resultKind LiveRunResultKind, assistant llm.Message) {
+	if e == nil || e.isWorkflowAgent() || resultKind != LiveRunResultAssistantFinalAnswer || isBlankFinalAnswer(assistant) {
+		return
+	}
+	switch activeKind {
+	case ActiveKindUserTurn, ActiveKindGoalLoop:
+	default:
+		return
+	}
+	planningSnapshot := e.compactionPlanningSnapshot()
+	planner := e.compactionPlannerState()
+	if !planner.autoCompactionAvailable(planningSnapshot) || !planner.eagerCompactionEligible(planningSnapshot) {
+		return
+	}
+	request := &pendingCompaction{
+		mode:  compactionModeAuto,
+		reply: make(chan compactionReply, 1),
+	}
+	wake, err := e.steering.append(newCompactionQueueEntry(request))
+	if err != nil {
+		e.surfaceRunError(err)
+		return
+	}
+	if wake {
+		e.wakeSteeringBoundaryDrain()
+	}
+}
 func (c *defaultContextCompactor) AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error {
 	e := c.engine
 	if mode == compactionModeAuto && !e.shouldAutoCompactWithContext(ctx) {
@@ -859,20 +893,24 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	}
 
 	compactionNumber := e.compactionRuntimeState().Count() + 1
-	postReplacementMeta, err := e.compactionReinjectedMetaMessagesForMode(ctx, mode)
+	postReplacementMeta, err := e.compactionReinjectedMetaContextProjection(ctx, mode)
 	if err != nil {
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
-	// Reinject canonical generation context as part of the single
-	// history_replaced commit. The rebuilt active list is born with all runtime
-	// context atomically, and the summary precedes it in both provider and
-	// transcript order.
-	replacementItems := append(llm.CloneResponseItems(result.items), llm.ItemsFromMessages(postReplacementMeta)...)
+	replacementItems := append(llm.ItemsFromMessages(postReplacementMeta.StablePrefix), llm.CloneResponseItems(result.items)...)
+	if mode == compactionModeHandoff {
+		if req := e.handoffRuntimeState().RequestSnapshot(); req != nil {
+			if futureMessage, ok := handoffFutureAgentMessage(req.futureAgentMessage); ok {
+				replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{futureMessage})...)
+			}
+		}
+	}
 	if mode == compactionModeManual {
 		if preservedMessage, ok := compactionPreservedUserMessage(preservedUserMessageText); ok {
 			replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{preservedMessage})...)
 		}
 	}
+	replacementItems = append(replacementItems, llm.ItemsFromMessages(postReplacementMeta.Environment)...)
 	var replacementReceipt session.CommitReceipt
 	committed, replacementErr := runCommandAcceptance(accept, func() (bool, error) {
 		var err error
@@ -897,11 +935,6 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 			result.overflowRepair.PatchInputsCollapsed,
 			result.overflowRepair.EstimatedSavedTokens,
 		)})); err != nil {
-			finalizationErr = errors.Join(finalizationErr, err)
-		}
-	}
-	if mode == compactionModeHandoff {
-		if err := newCompactionPreservedContextCoordinator(e).appendHandoffFutureMessage(stepID); err != nil {
 			finalizationErr = errors.Join(finalizationErr, err)
 		}
 	}

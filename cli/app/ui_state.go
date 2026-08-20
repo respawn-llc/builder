@@ -82,7 +82,6 @@ type uiInputFeatureState struct {
 	currentStepID               string
 	interruptRunID              string
 	interruptStepID             string
-	interruptPreActive          bool
 	completedRunID              string
 	completedStepID             string
 

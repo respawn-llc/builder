@@ -1,9 +1,9 @@
 ---
-import ThemeProvider from '../components/ThemeProvider.astro';
+import ThemeProvider from "../components/ThemeProvider.astro";
 
-import '../styles/custom.css';
+import "../styles/custom.css";
 
-const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
+const releasePageUrl = "https://github.com/respawn-llc/kent/releases/latest";
 ---
 
 <!doctype html>
@@ -21,23 +21,26 @@ const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
       <a href={releasePageUrl}>Open the latest release</a>
     </main>
     <script>
-      const confirmationElement = document.getElementById('download-confirmation');
-      const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
+      const confirmationElement = document.getElementById(
+        "download-confirmation",
+      );
+      const releasePageUrl =
+        "https://github.com/respawn-llc/kent/releases/latest";
       const desktopAssets = [
         {
-          name: 'Windows x64 NSIS installer',
+          name: "Windows x64 NSIS installer",
           pattern: /^Kent_\d+\.\d+\.\d+_x64-setup\.exe$/,
-          platform: 'windows-x64',
+          platform: "windows-x64",
         },
         {
-          name: 'macOS Apple Silicon',
+          name: "macOS Apple Silicon",
           pattern: /^Kent_\d+\.\d+\.\d+_aarch64\.dmg$/,
-          platform: 'macos-arm64',
+          platform: "macos-arm64",
         },
         {
-          name: 'Linux x86_64 AppImage',
+          name: "Linux x86_64 AppImage",
           pattern: /^Kent_\d+\.\d+\.\d+_amd64\.AppImage$/,
-          platform: 'linux',
+          platform: "linux",
         },
       ];
 
@@ -48,10 +51,13 @@ const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
         ].filter(Boolean);
         if (
           structuredPlatforms.some(
-            (platform) => platform === 'Windows' || platform === 'Win32' || platform === 'Win64',
+            (platform) =>
+              platform === "Windows" ||
+              platform === "Win32" ||
+              platform === "Win64",
           )
         ) {
-          return 'windows-x64';
+          return "windows-x64";
         }
 
         const platform = [
@@ -60,57 +66,84 @@ const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
           navigator.userAgent,
         ]
           .filter(Boolean)
-          .join(' ')
+          .join(" ")
           .toLowerCase();
 
-        if (platform.includes('mac')) {
+        if (platform.includes("mac")) {
           const architecture = await detectArchitecture();
-          return architecture === 'arm64' ? 'macos-arm64' : 'unsupported';
+          return architecture === "arm64" ? "macos-arm64" : "unsupported";
         }
-        if (platform.includes('linux') || platform.includes('x11')) {
-          return 'linux';
+        if (platform.includes("linux") || platform.includes("x11")) {
+          return "linux";
         }
-        return 'unsupported';
+        return "unsupported";
       }
 
       async function detectArchitecture() {
         if (!navigator.userAgentData?.getHighEntropyValues) {
-          return 'unknown';
+          return "unknown";
         }
 
-        const values = await navigator.userAgentData.getHighEntropyValues(['architecture']);
+        const values = await navigator.userAgentData.getHighEntropyValues([
+          "architecture",
+        ]);
         const architecture = values.architecture?.toLowerCase();
-        if (architecture === 'arm' || architecture === 'arm64' || architecture === 'aarch64') {
-          return 'arm64';
+        if (
+          architecture === "arm" ||
+          architecture === "arm64" ||
+          architecture === "aarch64"
+        ) {
+          return "arm64";
         }
-        if (architecture === 'x86' || architecture === 'x86_64' || architecture === 'amd64') {
-          return 'x64';
+        if (
+          architecture === "x86" ||
+          architecture === "x86_64" ||
+          architecture === "amd64"
+        ) {
+          return "x64";
         }
-        return 'unknown';
+        return "unknown";
       }
 
       async function redirectToLatestDesktopDownload() {
         const desktopPlatform = await detectDesktopPlatform();
-        const assetRule = desktopAssets.find((candidate) => candidate.platform === desktopPlatform);
+        const assetRule = desktopAssets.find(
+          (candidate) => candidate.platform === desktopPlatform,
+        );
         if (!assetRule) {
-          throw new Error(`Kent Desktop does not publish an automatic download for ${desktopPlatform}`);
+          throw new Error(
+            `Kent Desktop does not publish an automatic download for ${desktopPlatform}`,
+          );
         }
 
-        const response = await fetch('https://api.github.com/repos/respawn-llc/kent/releases/latest', {
-          headers: { Accept: 'application/vnd.github+json' },
-        });
+        const response = await fetch(
+          "https://api.github.com/repos/respawn-llc/kent/releases/latest",
+          {
+            headers: { Accept: "application/vnd.github+json" },
+          },
+        );
         if (!response.ok) {
-          throw new Error(`GitHub release lookup failed with HTTP ${response.status}`);
+          throw new Error(
+            `GitHub release lookup failed with HTTP ${response.status}`,
+          );
         }
 
-        const release = await response.json();
-        const asset = release.assets?.find((candidate) => assetRule.pattern.test(candidate.name ?? ''));
+        const release: {
+          assets?: Array<{ name?: string; browser_download_url?: string }>;
+        } = await response.json();
+        const asset = release.assets?.find((candidate) =>
+          assetRule.pattern.test(candidate.name ?? ""),
+        );
         if (!asset?.browser_download_url) {
-          throw new Error(`Latest Kent release does not contain ${assetRule.name}`);
+          throw new Error(
+            `Latest Kent release does not contain ${assetRule.name}`,
+          );
         }
 
         if (!(confirmationElement instanceof HTMLElement)) {
-          throw new Error('Kent Desktop download confirmation surface is unavailable');
+          throw new Error(
+            "Kent Desktop download confirmation surface is unavailable",
+          );
         }
         confirmationElement.hidden = false;
         window.location.replace(asset.browser_download_url);

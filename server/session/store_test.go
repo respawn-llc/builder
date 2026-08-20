@@ -275,15 +275,9 @@ func TestResetLockedContractForCompactionBoundaryPersistsFreshContractBoundary(t
 	if locked := store.Meta().Locked; locked != nil {
 		t.Fatalf("in-memory locked contract = %+v, want absent", locked)
 	}
-	if got := store.Meta().PromptCacheLineageGeneration; got != 1 {
-		t.Fatalf("prompt cache lineage generation = %d, want 1", got)
-	}
 	opened := mustOpenSessionTestStore(t, store)
 	if locked := opened.Meta().Locked; locked != nil {
 		t.Fatalf("persisted locked contract = %+v, want absent", locked)
-	}
-	if got := opened.Meta().PromptCacheLineageGeneration; got != 1 {
-		t.Fatalf("persisted prompt cache lineage generation = %d, want 1", got)
 	}
 }
 

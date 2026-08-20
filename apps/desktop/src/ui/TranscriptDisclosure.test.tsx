@@ -24,13 +24,11 @@ function DisclosureFixture({
   typeLabel = "Context",
   ...props
 }: FixtureProps) {
-  const actions = Object.prototype.hasOwnProperty.call(props, "actions")
-    ? props.actions
-    : (
-        <button type="button">
-          Copy
-        </button>
-      );
+  const actions = Object.prototype.hasOwnProperty.call(props, "actions") ? (
+    props.actions
+  ) : (
+    <button type="button">Copy</button>
+  );
   return (
     <TranscriptDisclosure
       actions={actions}
@@ -74,7 +72,10 @@ describe("TranscriptDisclosure", () => {
   it("mounts collapsed by default and exposes no body or durable actions", () => {
     renderDisclosure();
 
-    expect(screen.getByRole("button", { name: "Expand transcript item" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Expand transcript item" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
     expect(screen.queryByText("Full transcript content")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
   });
@@ -82,7 +83,10 @@ describe("TranscriptDisclosure", () => {
   it("mounts expanded when the row type supplies an expanded default", () => {
     renderDisclosure({ defaultExpanded: true });
 
-    expect(screen.getByRole("button", { name: "Collapse transcript item" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Collapse transcript item" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
     expect(screen.getByText("Full transcript content")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
   });
@@ -96,7 +100,10 @@ describe("TranscriptDisclosure", () => {
     expect(header).toHaveAttribute("aria-expanded", "true");
 
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("button", { name: "Expand transcript item" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Expand transcript item" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
 
   it("keeps status and actions independent from disclosure activation", async () => {
@@ -205,7 +212,10 @@ describe("TranscriptDisclosure", () => {
     });
 
     expect(screen.getByText("Full transcript content")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Collapse transcript item" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Collapse transcript item" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
   it("does not treat content updates as a new expansion command", async () => {
@@ -215,7 +225,10 @@ describe("TranscriptDisclosure", () => {
     await user.click(screen.getByRole("button", { name: "Expand transcript item" }));
     rerender(<DisclosureFixture body="Updated transcript content" summary="Updated compact summary" />);
 
-    expect(screen.getByRole("button", { name: "Collapse transcript item" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Collapse transcript item" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
     expect(screen.getByText("Updated transcript content")).toBeInTheDocument();
   });
 
@@ -229,7 +242,10 @@ describe("TranscriptDisclosure", () => {
     rerender(<RemountFixture mounted={false} />);
     rerender(<RemountFixture mounted />);
 
-    expect(screen.getByRole("button", { name: "Expand transcript item" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Expand transcript item" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
     expect(screen.queryByText("Full transcript content")).not.toBeInTheDocument();
   });
 

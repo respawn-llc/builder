@@ -567,7 +567,6 @@ func (s *Store) PromptFacingMetadataSnapshot() PromptFacingMetadataSnapshot {
 		FirstPromptPreview:            meta.FirstPromptPreview,
 		Continuation:                  cloneContinuationContext(meta.Continuation),
 		ChatSettings:                  cloneChatSettingsOverrides(meta.ChatSettings),
-		PromptCacheLineageGeneration:  meta.PromptCacheLineageGeneration,
 		Locked:                        cloneLockedContract(meta.Locked),
 		ActiveWorkflowAssignment:      cloneMessageRecord(meta.ActiveWorkflowAssignment),
 		ActiveWorkflowAssignmentState: cloneActiveWorkflowAssignmentState(meta.ActiveWorkflowAssignmentState),
@@ -580,7 +579,6 @@ func (s *Store) RestorePromptFacingMetadata(snapshot PromptFacingMetadataSnapsho
 		s.meta.FirstPromptPreview = snapshot.FirstPromptPreview
 		s.meta.Continuation = cloneContinuationContext(snapshot.Continuation)
 		s.meta.ChatSettings = cloneChatSettingsOverrides(snapshot.ChatSettings)
-		s.meta.PromptCacheLineageGeneration = snapshot.PromptCacheLineageGeneration
 		s.meta.Locked = cloneLockedContract(snapshot.Locked)
 		s.meta.ActiveWorkflowAssignment = cloneMessageRecord(snapshot.ActiveWorkflowAssignment)
 		s.meta.ActiveWorkflowAssignmentState = cloneActiveWorkflowAssignmentState(snapshot.ActiveWorkflowAssignmentState)
@@ -799,6 +797,8 @@ func (s *Store) SetHeadlessActive(active bool) error {
 }
 
 func (s *Store) PromoteSubagentToMain() (bool, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	s.mu.Lock()
 	if s.meta.Category == nil || *s.meta.Category == sessioncontract.SessionCategoryMain {
 		s.mu.Unlock()
@@ -814,10 +814,14 @@ func (s *Store) PromoteSubagentToMain() (bool, error) {
 		}
 		return false, InvalidSessionCategoryError{SessionID: sessionID, Category: category, Err: err}
 	}
+	if err := s.requireMetadataPersistenceLocked(); err != nil {
+		s.mu.Unlock()
+		return false, err
+	}
 	mainCategory := sessioncontract.SessionCategoryMain
 	s.meta.Category = &mainCategory
 	s.meta.UpdatedAt = storeTimestamp(s.options)
-	return true, s.unlockAndObservePersistence(s.persistMetaLocked())
+	return true, s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func sessionCategoryPointer(category sessioncontract.SessionCategory) *sessioncontract.SessionCategory {
@@ -1147,8 +1151,7 @@ func (s *Store) MarkModelDispatchLocked(contract LockedContract) error {
 }
 
 func (s *Store) ResetLockedContractForCompactionBoundary() error {
-	_, err := s.mutateMetaAndReplaceLockedContractWithCommitStatus(func(meta *Meta) {
-		meta.PromptCacheLineageGeneration++
+	_, err := s.mutateMetaAndReplaceLockedContractWithCommitStatus(func(*Meta) {
 	}, func(*LockedContract) *LockedContract {
 		return nil
 	}, false)

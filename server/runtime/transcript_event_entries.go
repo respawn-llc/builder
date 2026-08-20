@@ -62,9 +62,7 @@ func synthesizedToolResultForCall(call llm.ToolCall, completions map[string]tool
 
 func assistantTranscriptVisibility(phase llm.MessagePhase) transcript.EntryVisibility {
 	switch transcript.ClassifyAssistantPhase(string(phase)) {
-	case transcript.AssistantPhaseCommentary:
-		return transcript.EntryVisibilityDetail
-	case transcript.AssistantPhaseFinal:
+	case transcript.AssistantPhaseCommentary, transcript.AssistantPhaseFinal:
 		return transcript.EntryVisibilityOngoing
 	default:
 		panic(fmt.Sprintf("unsupported assistant transcript phase %q", phase))

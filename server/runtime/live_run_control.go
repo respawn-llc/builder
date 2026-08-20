@@ -81,6 +81,10 @@ type liveRunGroup struct {
 	done             chan struct{}
 	goalLoopHolding  bool
 	waiters          int
+	stepResultKind   LiveRunResultKind
+	stepResultSet    bool
+	stepAssistant    llm.Message
+	stepResultTaken  bool
 }
 
 func newLiveRunCoordinator(onCompleted ...func(LiveRunResult)) *liveRunCoordinator {
@@ -247,6 +251,14 @@ func (e *Engine) recordLiveRunAssistantFinalAnswer(stepID string, message llm.Me
 	e.liveRun.recordAssistantFinalAnswer(stepID, message)
 }
 
+func (e *Engine) takeLiveRunStepResult(stepID string) (LiveRunResultKind, llm.Message, bool) {
+	if e == nil {
+		return "", llm.Message{}, false
+	}
+	e.ensureOrchestrationCollaborators()
+	return e.liveRun.takeStepResult(stepID)
+}
+
 func (c *liveRunCoordinator) hasActive() bool {
 	if c == nil {
 		return false
@@ -280,6 +292,10 @@ func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {
 		c.current.assistantMessage = llm.Message{}
 		c.current.err = nil
 		c.current.finishedAt = time.Time{}
+		c.current.stepResultKind = ""
+		c.current.stepResultSet = false
+		c.current.stepAssistant = llm.Message{}
+		c.current.stepResultTaken = false
 		return
 	}
 	c.current = &liveRunGroup{
@@ -375,6 +391,9 @@ func (c *liveRunCoordinator) recordAssistantFinalAnswer(stepID string, message l
 	if c.current == nil || c.current.stepID != mustStepID(stepID) {
 		return
 	}
+	c.current.stepResultKind = LiveRunResultAssistantFinalAnswer
+	c.current.stepResultSet = true
+	c.current.stepAssistant = message
 	if c.current.goalLoop {
 		return
 	}
@@ -382,6 +401,19 @@ func (c *liveRunCoordinator) recordAssistantFinalAnswer(stepID string, message l
 	c.current.resultKindSet = true
 	c.current.err = nil
 	c.current.assistantMessage = message
+}
+
+func (c *liveRunCoordinator) takeStepResult(stepID string) (LiveRunResultKind, llm.Message, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current == nil || c.current.stepID != mustStepID(stepID) || c.current.stepResultTaken {
+		return "", llm.Message{}, false
+	}
+	c.current.stepResultTaken = true
+	if !c.current.stepResultSet {
+		return "", llm.Message{}, false
+	}
+	return c.current.stepResultKind, c.current.stepAssistant, true
 }
 
 func (c *liveRunCoordinator) interrupt() (bool, bool) {

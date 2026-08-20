@@ -67,10 +67,7 @@ function renderEdgeInspector(
   };
   render(
     <I18nextProvider i18n={appI18n}>
-      <WorkflowDraftInspectorContent
-        controller={controller}
-        selection={{ kind: "edge", edgeID }}
-      />
+      <WorkflowDraftInspectorContent controller={controller} selection={{ kind: "edge", edgeID }} />
     </I18nextProvider>,
   );
   return { dispatch, edgeID };
@@ -89,9 +86,15 @@ describe("WorkflowDraftInspector edge selectors", () => {
     const thinking = screen.getByRole("checkbox", {
       name: appI18n.t("workflowEditor.previousNodeThinking"),
     });
-    const sectionNames = screen.getAllByRole("region").map((region) => region.getAttribute("aria-labelledby"));
+    const sectionNames = screen
+      .getAllByRole("region")
+      .map((region) => region.getAttribute("aria-labelledby"));
     expect(sectionNames.indexOf(selectionRegion.getAttribute("aria-labelledby"))).toBeLessThan(
-      sectionNames.indexOf(screen.getByRole("region", { name: appI18n.t("workflowEditor.prompt") }).getAttribute("aria-labelledby")),
+      sectionNames.indexOf(
+        screen
+          .getByRole("region", { name: appI18n.t("workflowEditor.prompt") })
+          .getAttribute("aria-labelledby"),
+      ),
     );
     await user.click(assignee);
     await user.click(
@@ -143,7 +146,9 @@ describe("WorkflowDraftInspector edge selectors", () => {
     expect(thinking).not.toBeDisabled();
 
     await user.click(assignee);
-    await user.click(screen.getByRole("menuitemradio", { name: appI18n.t("workflowEditor.edgeAssigneeConfigured") }));
+    await user.click(
+      screen.getByRole("menuitemradio", { name: appI18n.t("workflowEditor.edgeAssigneeConfigured") }),
+    );
     await user.click(thinking);
 
     expect(dispatch).toHaveBeenNthCalledWith(1, {

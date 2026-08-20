@@ -164,8 +164,8 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 	if summaryIndex < 0 || environmentIndex < 0 || goalIndex < 0 || worktreeIndex < 0 || carryoverIndex < 0 || goalCount != 1 {
 		t.Fatalf("replacement payload must embed summary, base meta, one active-goal continuation, worktree context, and compaction-preserved user message: %+v", replacement.Items)
 	}
-	if !(summaryIndex < environmentIndex && environmentIndex < goalIndex && goalIndex < worktreeIndex && worktreeIndex < carryoverIndex) || carryoverIndex != len(replacement.Items)-1 {
-		t.Fatalf("replacement payload order must be summary, base, active goal, worktree, then compaction-preserved user message: %+v", replacement.Items)
+	if !(worktreeIndex < goalIndex && goalIndex < summaryIndex && summaryIndex < carryoverIndex && carryoverIndex < environmentIndex) || environmentIndex != len(replacement.Items)-1 {
+		t.Fatalf("replacement payload order must be stable meta, summary, carryover, then environment: %+v", replacement.Items)
 	}
 	for _, evt := range events[historyIndex+1:] {
 		if evt.Kind != "message" {

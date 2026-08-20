@@ -5,10 +5,7 @@ import { createElement, type ReactNode } from "react";
 
 import { isProjectMissingError, RpcError } from "@/api";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
-import {
-  invalidateProjectDeleteQueries,
-  useProjectDeletedEvents,
-} from "./projectDeletionEvents";
+import { invalidateProjectDeleteQueries, useProjectDeletedEvents } from "./projectDeletionEvents";
 import { queryKeys } from "./queryKeys";
 
 describe("Project deletion owner refresh", () => {
@@ -44,9 +41,12 @@ describe("Project deletion owner refresh", () => {
     });
     const wrapper = ({ children }: Readonly<{ children: ReactNode }>) =>
       createElement(TestAppProviders, { children, services });
-    const view = renderHook(() => {
-      useProjectDeletedEvents(bridge, handler);
-    }, { wrapper });
+    const view = renderHook(
+      () => {
+        useProjectDeletedEvents(bridge, handler);
+      },
+      { wrapper },
+    );
     await Promise.resolve();
 
     await bridge.projectDeletion.notifyDeleted({ projectID: "project-1" });
@@ -59,5 +59,4 @@ describe("Project deletion owner refresh", () => {
     unsubscribe();
     queryClient.clear();
   });
-
 });

@@ -21,6 +21,11 @@ type ActiveRuntimeMaintenance struct {
 	Replace                   func(tools.FilesystemContext) error
 }
 
+type worktreeTransitionSubmission struct {
+	operation       func(context.Context, func(clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error
+	admissionFailed func(error)
+}
+
 func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
@@ -57,32 +62,100 @@ func (a *Authority) SubmitWorktreeTransition(
 	resource := a.resources[id]
 	a.mu.Unlock()
 	if resource == nil {
-		go func() {
-			started := false
-			err := a.withMaintenanceResource(context.Background(), id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
-				if resource != nil {
-					submitErr := engine.SubmitWorktreeTransition(operation)
-					started = submitErr == nil
-					return false, submitErr
-				}
-				started = true
-				return false, operation(runCtx, func(target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-					_, normalizedReminder, normalizeErr := normalizeTarget(target, reminder)
-					if normalizeErr != nil || normalizedReminder == nil {
-						return normalizeErr
-					}
-					return store.SetWorktreeReminderState(normalizedReminder)
-				})
-			})
-			if err != nil && !started && admissionFailed != nil {
-				admissionFailed(err)
-			}
-		}()
-		return nil
+		return a.submitDormantWorktreeTransition(id, worktreeTransitionSubmission{
+			operation:       operation,
+			admissionFailed: admissionFailed,
+		})
 	}
 	return resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
 		return engine.SubmitWorktreeTransition(operation)
 	})
+}
+
+func (a *Authority) submitDormantWorktreeTransition(
+	sessionID runtimeids.SessionID,
+	submission worktreeTransitionSubmission,
+) error {
+	gate := a.gateFor(sessionID)
+	gate.worktreeMu.Lock()
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		gate.worktreeMu.Unlock()
+		return ErrAuthorityClosed
+	}
+	gate.worktreePending = append(gate.worktreePending, submission)
+	if gate.worktreeWorkerAlive {
+		a.mu.Unlock()
+		gate.worktreeMu.Unlock()
+		return nil
+	}
+	gate.worktreeWorkerAlive = true
+	a.lifecycleWG.Add(1)
+	lifecycleCtx := a.lifecycleCtx
+	a.mu.Unlock()
+	gate.worktreeMu.Unlock()
+	go a.runLifecycleTask(lifecycleCtx, func(ctx context.Context) {
+		a.runDormantWorktreeTransitions(ctx, sessionID, gate)
+	})
+	return nil
+}
+
+func (a *Authority) runDormantWorktreeTransitions(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	gate *sessionAdmissionGate,
+) {
+	for {
+		gate.worktreeMu.Lock()
+		if len(gate.worktreePending) == 0 {
+			gate.worktreeWorkerAlive = false
+			gate.worktreeMu.Unlock()
+			return
+		}
+		submission := gate.worktreePending[0]
+		gate.worktreePending[0] = worktreeTransitionSubmission{}
+		gate.worktreePending = gate.worktreePending[1:]
+		if len(gate.worktreePending) == 0 {
+			gate.worktreePending = nil
+		}
+		gate.worktreeMu.Unlock()
+		a.runDormantWorktreeTransition(ctx, sessionID, submission)
+	}
+}
+
+func (a *Authority) runDormantWorktreeTransition(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	submission worktreeTransitionSubmission,
+) {
+	started := false
+	err := a.withMaintenanceResource(ctx, sessionID, func(
+		runCtx context.Context,
+		store *session.Store,
+		resource *agentResource,
+		engine *runtime.Engine,
+	) (bool, error) {
+		if resource != nil {
+			submitErr := engine.SubmitWorktreeTransition(submission.operation)
+			started = submitErr == nil
+			return false, submitErr
+		}
+		started = true
+		return false, submission.operation(runCtx, func(
+			target clientui.SessionExecutionTarget,
+			reminder *session.WorktreeReminderState,
+		) error {
+			_, normalizedReminder, normalizeErr := normalizeTarget(target, reminder)
+			if normalizeErr != nil || normalizedReminder == nil {
+				return normalizeErr
+			}
+			return store.SetWorktreeReminderState(normalizedReminder)
+		})
+	})
+	if err != nil && !started && submission.admissionFailed != nil {
+		submission.admissionFailed(err)
+	}
 }
 
 func (a *Authority) RunSessionMaintenance(
@@ -367,7 +440,9 @@ func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runti
 		return err
 	}
 	gate := a.gateFor(sessionID)
-	gate.lock.Lock()
+	if err := gate.lock.LockContext(ctx); err != nil {
+		return err
+	}
 	defer gate.lock.Unlock()
 	if block := gate.unauthorizedMaintenanceBlock(ctx); block != nil {
 		return errors.Join(

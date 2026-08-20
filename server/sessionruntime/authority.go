@@ -114,11 +114,13 @@ func (a *Authority) launchLifecycleTask(task func(context.Context)) bool {
 	a.lifecycleWG.Add(1)
 	ctx := a.lifecycleCtx
 	a.mu.Unlock()
-	go func() {
-		defer a.lifecycleWG.Done()
-		task(ctx)
-	}()
+	go a.runLifecycleTask(ctx, task)
 	return true
+}
+
+func (a *Authority) runLifecycleTask(ctx context.Context, task func(context.Context)) {
+	defer a.lifecycleWG.Done()
+	task(ctx)
 }
 
 func (a *Authority) nextGenerationsLocked() (ExecutionGeneration, runtimeids.ResourceGeneration) {

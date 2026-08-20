@@ -8,8 +8,11 @@ export function TaskPropertyLine({
   valueClassName,
 }: Readonly<{ label: string; value: ReactNode; valueClassName?: string | undefined }>) {
   return (
-    <div className="m-0 flex min-w-0 flex-wrap items-start gap-[var(--space-1)] text-sm">
-      <dt aria-label={label} className="after:content-[':']">
+    <div className="m-0 flex min-w-0 flex-wrap items-start gap-[var(--space-1)] text-sm leading-5">
+      <dt
+        aria-label={label}
+        className="shrink-0 font-medium text-[var(--color-on-island)] after:content-[':']"
+      >
         {label}
       </dt>
       <dd

@@ -6,17 +6,19 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/textutil"
 )
 
 func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMessage(t *testing.T) {
 	t.Parallel()
-	store := mustCreateTestSession(t)
+	store, globalConfigDir := mustCreateBaseMetaContextTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+		Model:           "gpt-5",
+		GlobalConfigDir: globalConfigDir,
+	})
 	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set active goal: %v", err)
 	}
@@ -67,11 +69,13 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 		messageTypes = append(messageTypes, llm.MessageType(*item.MessageType))
 	}
 	assertOrderedReplacementMessageTypes(t, messageTypes, []llm.MessageType{
-		llm.MessageTypeCompactionSummary,
-		llm.MessageTypeEnvironment,
-		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeSkills,
 		llm.MessageTypeWorktreeMode,
+		llm.MessageTypeAgentsMD,
+		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeCompactionSummary,
 		llm.MessageTypeCompactionPreservedUserMessage,
+		llm.MessageTypeEnvironment,
 	})
 
 	for _, event := range window.Records[replacementIndex+1:] {
@@ -98,7 +102,7 @@ func assertOrderedReplacementMessageTypes(
 	if next != len(want) {
 		t.Fatalf("replacement message types = %+v, want ordered subsequence %+v", messageTypes, want)
 	}
-	if len(messageTypes) == 0 || messageTypes[len(messageTypes)-1] != llm.MessageTypeCompactionPreservedUserMessage {
-		t.Fatalf("replacement message types = %+v, want compaction-preserved user message last", messageTypes)
+	if len(messageTypes) == 0 || messageTypes[len(messageTypes)-1] != llm.MessageTypeEnvironment {
+		t.Fatalf("replacement message types = %+v, want environment last", messageTypes)
 	}
 }

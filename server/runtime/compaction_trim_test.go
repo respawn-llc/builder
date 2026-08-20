@@ -76,7 +76,7 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 	if string(gotJSON) != string(wantJSON) {
 		t.Fatalf("observed compaction cache request mismatch\nwant=%s\n got=%s", wantJSON, gotJSON)
 	}
-	if got, want := request.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
+	if got, want := request.PromptCacheKey, conversationPromptCacheKey(eng.SessionID()); got != want {
 		t.Fatalf("prompt cache key = %q, want %q", got, want)
 	}
 	if got, want := request.PromptCacheScope, transcript.CacheWarningScopeConversation; got != want {
@@ -207,7 +207,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	if got, want := warning.Reason, session.CacheWarningReason(transcript.CacheWarningReasonNonPostfix); got != want {
 		t.Fatalf("cache warning reason = %q, want %q", got, want)
 	}
-	if warning.CacheKey == nil || *warning.CacheKey != conversationPromptCacheKey(store.Meta().SessionID, 0) {
+	if warning.CacheKey == nil || *warning.CacheKey != conversationPromptCacheKey(store.Meta().SessionID) {
 		t.Fatalf("cache warning key = %v, want conversation cache key", warning.CacheKey)
 	}
 }

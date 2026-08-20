@@ -2641,8 +2641,8 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		mutationCalled = true
 		return nil
 	})
-	if !errors.Is(err, ErrExecutionPromptPending) || mutationCalled {
-		t.Fatalf("pending-prompt mutation error/called = %v/%t, want pending rejection before mutation", err, mutationCalled)
+	if err != nil || !mutationCalled {
+		t.Fatalf("pending-prompt mutation error/called = %v/%t, want admitted exact mutation", err, mutationCalled)
 	}
 
 	stepID := expectedStepID

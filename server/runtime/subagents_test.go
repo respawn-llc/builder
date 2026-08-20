@@ -292,10 +292,11 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 			if got := hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()); got != tt.workerVisible {
 				t.Fatalf("base worker visibility = %t, want %t", got, tt.workerVisible)
 			}
-			compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
+			projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 			if err != nil {
 				t.Fatalf("compaction reinjection: %v", err)
 			}
+			compacted := projection.Messages()
 			if got := hasSubagentMetaMessage(compacted); got != tt.workerVisible {
 				t.Fatalf("compaction worker visibility = %t, want %t", got, tt.workerVisible)
 			}
@@ -345,10 +346,11 @@ func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits
 			if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
 				t.Fatal("base context hid the subagent catalog")
 			}
-			compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
+			projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 			if err != nil {
 				t.Fatalf("compaction reinjection: %v", err)
 			}
+			compacted := projection.Messages()
 			if !hasSubagentMetaMessage(compacted) {
 				t.Fatal("compaction reconstruction hid the subagent catalog")
 			}
@@ -395,10 +397,11 @@ func TestSubagentCatalogIgnoresPersistedCallerTargetPolicyInBaseAndCompaction(t 
 	if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
 		t.Fatal("base catalog must advertise eligible targets regardless of persisted caller callability")
 	}
-	compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
+	projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 	if err != nil {
 		t.Fatalf("compaction reinjection: %v", err)
 	}
+	compacted := projection.Messages()
 	if !hasSubagentMetaMessage(compacted) {
 		t.Fatal("compaction catalog must advertise eligible targets regardless of persisted caller callability")
 	}
@@ -489,10 +492,11 @@ func TestCompactionReinjectsSubagentsMetaContext(t *testing.T) {
 		SubagentCatalogSettings: settings,
 	})
 
-	messages, err := eng.compactionReinjectedMetaMessages(context.Background())
+	projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 	if err != nil {
-		t.Fatalf("compactionReinjectedMetaMessages: %v", err)
+		t.Fatalf("compaction reinjection: %v", err)
 	}
+	messages := projection.Messages()
 	if !hasSubagentMetaMessage(messages) {
 		t.Fatalf("expected compaction-reinjected subagent catalog, got %+v", messages)
 	}
@@ -531,10 +535,11 @@ func TestCompactionReinjectedSkillsFollowCurrentPolicy(t *testing.T) {
 				Model:       "gpt-5",
 				SkillPolicy: tt.policy,
 			})
-			messages, err := eng.compactionReinjectedMetaMessages(context.Background())
+			projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 			if err != nil {
 				t.Fatalf("compaction reinjection: %v", err)
 			}
+			messages := projection.Messages()
 			_, found := skillMessageContent(messages)
 			if found != tt.wantSkills {
 				t.Fatalf("skills message present = %t, want %t; messages=%+v", found, tt.wantSkills, messages)
@@ -664,7 +669,7 @@ func renderableSubagentRolesContain(roles []renderedSubagentRole, name string) b
 	return false
 }
 
-func TestReviewerPromptFiltersSubagentsMetaContext(t *testing.T) {
+func TestReviewerPromptIncludesSubagentsMetaContext(t *testing.T) {
 	t.Parallel()
 	messages := []llm.Message{
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSubagents), Content: textutil.Value("Available subagent roles:\n- worker: specialist")},
@@ -674,9 +679,7 @@ func TestReviewerPromptFiltersSubagentsMetaContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildReviewerRequestMessagesWithBuilder: %v", err)
 	}
-	for _, message := range got {
-		if (message.MessageType != nil && *message.MessageType == llm.MessageTypeSubagents) || strings.Contains(messageContent(message), "Available subagent roles") {
-			t.Fatalf("reviewer messages leaked subagent context: %+v", got)
-		}
+	if !hasSubagentMetaMessage(got) {
+		t.Fatalf("reviewer messages omitted shared subagent context: %+v", got)
 	}
 }

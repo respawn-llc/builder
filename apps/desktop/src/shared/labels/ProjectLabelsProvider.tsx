@@ -2,12 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { errorMessage } from "@/api";
-import {
-  queryKeys,
-  reportNonCancelledError,
-  useAppServices,
-  useConnectionSnapshot,
-} from "@/app-facade";
+import { queryKeys, reportNonCancelledError, useAppServices, useConnectionSnapshot } from "@/app-facade";
 import { useStableCallback } from "@/ui";
 import { createProjectLabelEffects } from "./labelEventEffects";
 import { ProjectLabelDataContext } from "./projectLabelContext";

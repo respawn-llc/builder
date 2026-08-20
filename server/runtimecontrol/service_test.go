@@ -42,6 +42,26 @@ type sequenceRuntimeActivityResolver struct {
 	calls     int
 }
 
+type runtimeControlPromptFeed struct {
+	pending chan struct{}
+}
+
+func (f *runtimeControlPromptFeed) PromptPendingScope(
+	sessionruntime.ExecutionScope,
+	tools.AskQuestionRequest,
+	time.Time,
+) error {
+	select {
+	case f.pending <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (*runtimeControlPromptFeed) PromptResolvedScope(sessionruntime.ExecutionScope, string) error {
+	return nil
+}
+
 func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
 	if r.calls >= len(r.snapshots) {
 		return r.snapshots[len(r.snapshots)-1], nil
@@ -457,7 +477,7 @@ func runtimeControlExactExecution(t *testing.T) *workflowruntime.CurrentNodeExec
 }
 
 func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *tools.Registry, cfg runtime.Config, opts ...session.StoreOption) (*session.Store, *runtime.Engine, *Service) {
-	return newRuntimeControlTestServiceWithEventFeed(t, client, registry, cfg, nil, opts...)
+	return newRuntimeControlTestServiceWithFeeds(t, client, registry, cfg, nil, nil, opts...)
 }
 
 func newRuntimeControlTestServiceWithEventFeed(
@@ -466,6 +486,18 @@ func newRuntimeControlTestServiceWithEventFeed(
 	registry *tools.Registry,
 	cfg runtime.Config,
 	eventFeed sessionruntime.AgentResourceEventFeed,
+	opts ...session.StoreOption,
+) (*session.Store, *runtime.Engine, *Service) {
+	return newRuntimeControlTestServiceWithFeeds(t, client, registry, cfg, eventFeed, nil, opts...)
+}
+
+func newRuntimeControlTestServiceWithFeeds(
+	t *testing.T,
+	client llm.Client,
+	registry *tools.Registry,
+	cfg runtime.Config,
+	eventFeed sessionruntime.AgentResourceEventFeed,
+	promptFeed sessionruntime.ExecutionPromptFeed,
 	opts ...session.StoreOption,
 ) (*session.Store, *runtime.Engine, *Service) {
 	t.Helper()
@@ -522,6 +554,7 @@ func newRuntimeControlTestServiceWithEventFeed(
 		PersistenceRoot: t.TempDir(),
 		StoreOptions:    append(runtimeControlTestSessionPersistence.Options(), opts...),
 		EventFeed:       eventFeed,
+		PromptFeed:      promptFeed,
 	})
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
@@ -704,7 +737,8 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+	promptFeed := &runtimeControlPromptFeed{pending: make(chan struct{}, 1)}
+	store, engine, service := newRuntimeControlTestServiceWithFeeds(t, client, nil, runtime.Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 		OnEvent: func(event runtime.Event) {
 			if event.Kind != runtime.EventToolCallStarted || event.ToolCall == nil || event.ToolCall.ID != "ask-cancel" {
@@ -718,7 +752,7 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 			default:
 			}
 		},
-	})
+	}, nil, promptFeed)
 
 	firstRequest := runtimeControlUserTurnRequest(store, "ask-cancel", "ask then cancel")
 	firstDone := make(chan error, 1)
@@ -739,30 +773,19 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for ask_question to start")
 	}
+	select {
+	case <-promptFeed.pending:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for pending Question publication")
+	}
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
-	promptNotPending := errors.New("prompt not pending")
-	for deadline := time.Now().Add(3 * time.Second); ; {
-		err = service.authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
-			return promptNotPending
-		})
-		if errors.Is(err, sessionruntime.ErrExecutionPromptPending) {
-			break
-		}
-		if !errors.Is(err, promptNotPending) {
-			t.Fatalf("wait for pending question: %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for pending question")
-		}
-		time.Sleep(time.Millisecond)
-	}
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		SessionID: store.Meta().SessionID,
-	}); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) || !errors.Is(err, sessionruntime.ErrExecutionPromptPending) {
-		t.Fatalf("pending-question Interrupt error = %v, want typed pending-prompt rejection", err)
+	}); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("pending-question Interrupt error = %v, want typed rejection", err)
 	}
 	results, err := service.authority.ResolvePromptBatch(
 		context.Background(),

@@ -63,6 +63,132 @@ func TestRuntimeCtrlCInterruptsRestartedAgentLoopInsteadOfQuitting(t *testing.T)
 	}
 }
 
+func TestRuntimeCtrlCExitsWhenInterruptIsPendingForCurrentRun(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	model := newProjectedClosedUIModel(client)
+	model.setRuntimeActivityBusyForTest(true)
+
+	_, firstInterrupt := model.inputController().handleRuntimeCtrlC(nil)
+	_ = collectCmdMessages(t, firstInterrupt)
+	if client.interruptCalls != 1 || !model.hasPendingInterrupt() {
+		t.Fatalf(
+			"first Ctrl+C = interrupt calls %d, pending %t; want one pending interrupt",
+			client.interruptCalls,
+			model.hasPendingInterrupt(),
+		)
+	}
+
+	_, secondInterrupt := model.inputController().handleRuntimeCtrlC(nil)
+	messages := collectCmdMessages(t, secondInterrupt)
+	if len(messages) != 1 {
+		t.Fatalf("second Ctrl+C messages = %d, want one Quit message", len(messages))
+	}
+	if _, quits := messages[0].(tea.QuitMsg); !quits {
+		t.Fatalf("second Ctrl+C message = %T, want tea.QuitMsg", messages[0])
+	}
+	if !model.forcedLocalExit {
+		t.Fatal("second Ctrl+C did not mark the exit as forced")
+	}
+	if client.interruptCalls != 1 {
+		t.Fatalf("second Ctrl+C interrupt calls = %d, want no duplicate", client.interruptCalls)
+	}
+}
+
+func TestRuntimeCtrlCUsesServerRunningLifecycleWithoutActiveKindPolicy(t *testing.T) {
+	for _, kind := range []clientui.RuntimeActivityActiveKind{
+		clientui.RuntimeActivityActiveKindUserTurn,
+		clientui.RuntimeActivityActiveKindWorkflowTurn,
+		clientui.RuntimeActivityActiveKindGoalLoop,
+		clientui.RuntimeActivityActiveKindCompaction,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			client := &runtimeControlFakeClient{}
+			model := newProjectedClosedUIModel(client)
+			if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
+				State: clientui.RuntimeActivityRunning,
+				ActiveStep: &clientui.RuntimeActiveStep{
+					ActiveKind: kind,
+					RunID:      ongoingTestRunID(),
+					StepID:     ongoingTestStepID(),
+				},
+			}); err != nil {
+				t.Fatalf("apply running %s activity: %v", kind, err)
+			}
+			if !model.runtimeLifecycle.Run.IsRunning() {
+				t.Fatalf("server running lifecycle for %s was not running", kind)
+			}
+
+			_, command := model.inputController().handleRuntimeCtrlC(nil)
+			for _, message := range collectCmdMessages(t, command) {
+				if _, quits := message.(tea.QuitMsg); quits {
+					t.Fatalf("Ctrl+C exited during server running lifecycle %s", kind)
+				}
+			}
+			if client.interruptCalls != 1 {
+				t.Fatalf("%s interrupt calls = %d, want one", kind, client.interruptCalls)
+			}
+		})
+	}
+}
+
+func TestRuntimeCtrlCExitsWheneverServerRuntimeIsNotRunning(t *testing.T) {
+	for _, state := range []clientui.RuntimeActivityState{
+		clientui.RuntimeActivityRegisteredIdle,
+		clientui.RuntimeActivityStarting,
+		clientui.RuntimeActivityDraining,
+		clientui.RuntimeActivityClosing,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+			if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: state}); err != nil {
+				t.Fatalf("apply %s activity: %v", state, err)
+			}
+
+			_, command := model.inputController().handleRuntimeCtrlC(nil)
+			messages := collectCmdMessages(t, command)
+			if len(messages) != 1 {
+				t.Fatalf("%s Ctrl+C messages = %d, want one Quit message", state, len(messages))
+			}
+			if _, quits := messages[0].(tea.QuitMsg); !quits {
+				t.Fatalf("%s Ctrl+C message = %T, want tea.QuitMsg", state, messages[0])
+			}
+		})
+	}
+}
+
+func TestRuntimeCtrlCInterruptsAwaitingQuestionInsteadOfQuitting(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	model := newProjectedClosedUIModel(client)
+	runID, err := runtimeids.ParseRunID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("parse Run id: %v", err)
+	}
+	stepID, err := runtimeids.ParseStepID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+	if err != nil {
+		t.Fatalf("parse Step id: %v", err)
+	}
+	if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
+		State: clientui.RuntimeActivityAwaitingPrompt,
+		ActiveStep: &clientui.RuntimeActiveStep{
+			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+			RunID:      runID,
+			StepID:     stepID,
+		},
+	}); err != nil {
+		t.Fatalf("apply awaiting-Question activity: %v", err)
+	}
+
+	_, command := model.inputController().handleRuntimeCtrlC(nil)
+	for _, message := range collectCmdMessages(t, command) {
+		if _, quits := message.(tea.QuitMsg); quits {
+			t.Fatal("Ctrl+C exited the TUI while an Agent Turn awaited a Question")
+		}
+	}
+	if client.interruptCalls != 1 {
+		t.Fatalf("interrupt calls = %d, want 1", client.interruptCalls)
+	}
+}
+
 func TestRuntimeCtrlCExitsWhenNoAgentLoopIsRunning(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
 

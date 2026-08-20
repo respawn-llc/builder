@@ -515,8 +515,6 @@ func (s *Service) interrupt(ctx context.Context, sessionID string) (serverapi.Ru
 		return nil
 	})
 	switch {
-	case errors.Is(err, sessionruntime.ErrExecutionPromptPending):
-		err = serverapi.NewRuntimeCommandNotAcceptedError(err)
 	case errors.Is(err, sessionruntime.ErrExecutionNoLongerLive):
 		err = serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn"))
 	case errors.Is(err, serverapi.ErrRuntimeUnavailable):

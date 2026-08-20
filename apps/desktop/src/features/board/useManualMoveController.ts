@@ -1,10 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 
 import type { ApiService, TaskMovePreviewResponse } from "@/api";
-import {
-  moveTaskInitiatingAction,
-  type TaskInitiatingAction,
-} from "@/shared/execution-target";
+import { moveTaskInitiatingAction, type TaskInitiatingAction } from "@/shared/execution-target";
 import type { ManualMoveDialogSubmit } from "./ManualMoveDialog";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 

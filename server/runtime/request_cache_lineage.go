@@ -45,11 +45,12 @@ type persistedCacheResponseObserved struct {
 }
 
 type requestCacheLineage struct {
-	request               persistedCacheRequestObserved
-	lastResponseHadReuse  bool
-	lastCachedInputTokens int
-	hasResponse           bool
-	pendingCause          transcript.CacheWarningReason
+	request                persistedCacheRequestObserved
+	lastResponseHadReuse   bool
+	lastCachedInputTokens  int
+	hasResponse            bool
+	pendingCause           transcript.CacheWarningReason
+	suppressNextNonPostfix bool
 }
 
 type preparedCacheRequestObservation struct {
@@ -103,7 +104,7 @@ func (t *requestCacheTracker) Prepare(req llm.Request) (preparedCacheRequestObse
 	observation.previousHadReuse = previous.lastResponseHadReuse
 	observation.previousCachedInputTokens = previous.lastCachedInputTokens
 	observation.hasPreviousResponse = previous.hasResponse
-	if !shape.HasPrefix(previous.request.ChunkCount, previous.request.TerminalHash) {
+	if !previous.suppressNextNonPostfix && !shape.HasPrefix(previous.request.ChunkCount, previous.request.TerminalHash) {
 		reason := transcript.CacheWarningReasonNonPostfix
 		if strings.TrimSpace(string(previous.pendingCause)) != "" {
 			reason = previous.pendingCause
@@ -142,6 +143,38 @@ func (t *requestCacheTracker) Clear(cacheKey string) {
 	delete(t.lineage, cacheKey)
 }
 
+func (t *requestCacheTracker) ResetAfterHistoryReplacement(cacheKey string) {
+	cacheKey = strings.TrimSpace(cacheKey)
+	if cacheKey == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state, ok := t.lineage[cacheKey]
+	if !ok {
+		return
+	}
+	state.request = persistedCacheRequestObserved{
+		DigestVersion: requestCacheDigestVersion,
+		CacheKey:      cacheKey,
+		Scope:         state.request.Scope,
+	}
+	state.pendingCause = ""
+	state.suppressNextNonPostfix = true
+	t.lineage[cacheKey] = state
+}
+
+func (e *Engine) resetPromptCacheObservationBaselines() {
+	if e == nil {
+		return
+	}
+	cache := e.modelRequests().RequestCache()
+	if cache == nil {
+		return
+	}
+	cache.ResetAfterHistoryReplacement(e.conversationPromptCacheKey(e.SessionID()))
+	cache.ResetAfterHistoryReplacement(e.conversationPromptCacheKey(reviewerSessionID(e.SessionID())))
+}
 func (t *requestCacheTracker) RecordResponse(response persistedCacheResponseObserved) {
 	cacheKey := strings.TrimSpace(response.CacheKey)
 	if cacheKey == "" {
@@ -169,6 +202,7 @@ func (t *requestCacheTracker) RecordResponse(response persistedCacheResponseObse
 	state.lastCachedInputTokens = cachedInputTokens
 	state.hasResponse = true
 	state.pendingCause = ""
+	state.suppressNextNonPostfix = false
 	t.lineage[cacheKey] = state
 }
 

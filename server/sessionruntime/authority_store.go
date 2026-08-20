@@ -37,6 +37,10 @@ type sessionAdmissionLock struct {
 type sessionAdmissionGate struct {
 	lock   sessionAdmissionLock
 	blocks map[*sessionAdmissionBlock]struct{}
+
+	worktreeMu          sync.Mutex
+	worktreePending     []worktreeTransitionSubmission
+	worktreeWorkerAlive bool
 }
 
 type sessionStartBlockRelease struct {

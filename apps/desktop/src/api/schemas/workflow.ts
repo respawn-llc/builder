@@ -53,14 +53,20 @@ const workflowRecordSchema: z.ZodType<WorkflowRecord> = z
     description: emptyString,
     version: z.number(),
     execution_target_policy: workflowExecutionTargetPolicySchema,
+    project_link: z.object({ default: z.boolean() }).optional(),
   })
-  .transform((value) => ({
-    id: value.id,
-    name: value.name,
-    description: value.description,
-    version: value.version,
-    executionTargetPolicy: value.execution_target_policy,
-  }));
+  .transform((value) => {
+    const record: WorkflowRecord = {
+      id: value.id,
+      name: value.name,
+      description: value.description,
+      version: value.version,
+      executionTargetPolicy: value.execution_target_policy,
+    };
+    return value.project_link === undefined
+      ? record
+      : { ...record, projectLink: { isDefault: value.project_link.default } };
+  });
 
 export const workflowListSchema: z.ZodType<WorkflowPage> = z
   .object({

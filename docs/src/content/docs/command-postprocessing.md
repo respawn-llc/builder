@@ -27,6 +27,7 @@ Allowed values:
 - `all`: run Kent's output cleanup, built-in processing, then your configured hook.
 
 In `builtin`, `user`, and `all`, Kent's final model-visible command-output pass limits each line to 1,000 Unicode code points; oversized lines keep only their prefix and end with `… [N characters omitted]`, where `N` is exact. This runs after user-hook replacement; `none` bypasses the limit, and Kent operational warnings are not command-output lines.
+
 ## Protocol
 
 ### Input

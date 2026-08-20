@@ -935,6 +935,121 @@ WHERE task_id = ?
 	}
 }
 
+func TestManualMoveRetainedTargetUsesSourceAssociationProvenance(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	plan := nodeByKey(t, definition, "plan")
+	review := nodeByKey(t, definition, "review")
+	audit := nodeByKey(t, definition, "audit")
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		appendManualMoveRetainedReviewEdge(
+			req,
+			workflowID,
+			audit,
+			review,
+			"source-provenance",
+			workflow.ContextSourcePreviousTarget,
+		)
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	current := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	lineageSessionID := associateAndBindCurrentNodeSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		current.Reference,
+	)
+	lineageSource, err := workflow.NewExactMaterializedContinuationSource(lineageSessionID)
+	if err != nil {
+		t.Fatalf("NewExactMaterializedContinuationSource: %v", err)
+	}
+	reviewReference := replaceSerialCurrentNodeBindingFixture(
+		t,
+		ctx,
+		store,
+		current,
+		workflow.NodeIDOf(review),
+		nil,
+		lineageSource,
+	)
+	retainedReviewSessionID := associateAndBindCurrentNodeSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		reviewReference,
+	)
+	auditReference := replaceSerialCurrentNodeBindingFixture(
+		t,
+		ctx,
+		store,
+		current,
+		workflow.NodeIDOf(audit),
+		nil,
+		lineageSource,
+	)
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, auditReference)
+	replaceSerialCurrentNodeBindingFixture(
+		t,
+		ctx,
+		store,
+		current,
+		workflow.NodeIDOf(plan),
+		&lineageSessionID,
+		lineageSource,
+	)
+
+	transitionKey := workflow.TransitionID("rework")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(review),
+		TransitionKey: &transitionKey,
+		Values: map[workflow.ModelKey]map[string]string{
+			"plan":  {"summary": "initial plan"},
+			"audit": {"summary": "review the revised plan"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	moved, err := applyManualMoveForStoreTest(
+		t,
+		ctx,
+		store,
+		prepared,
+		noneManualMoveExecutionTargetCandidate(binding),
+	)
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].SessionID == nil ||
+		*moved.Mutation.Created[0].SessionID != retainedReviewSessionID {
+		t.Fatalf(
+			"manual move = %+v, want retained Review Session %q",
+			moved.Mutation.Created,
+			retainedReviewSessionID,
+		)
+	}
+	sourceSessionID, exact := moved.Mutation.Created[0].ContinuationSource.ExactSessionID()
+	if !exact || sourceSessionID != lineageSessionID {
+		t.Fatalf(
+			"manual move source = %q, %v; want lineage Session %q",
+			sourceSessionID,
+			exact,
+			lineageSessionID,
+		)
+	}
+}
+
 func TestManualMoveRetainedTargetStartsFreshWhenUnboundSourceHasNoHistory(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)

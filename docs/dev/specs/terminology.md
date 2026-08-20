@@ -174,6 +174,10 @@ Per-Transition-Branch policy deciding which retained Session supplies context fo
 
 Post-completion compaction of a retained Workflow Session before it becomes dormant. Kent performs Workflow Pre-Compaction when future Workflow execution can reuse that Session and its context usage reaches the configured threshold. Guaranteed future `compact_and_continue_session` reuse also uses this boundary regardless of context usage.
 
+### Eager Compaction
+
+Automatic post-turn compaction of an eligible non-Workflow Session at 88% of its actual model context window. Eager Compaction runs after a successfully completed user turn, Goal loop step, or background step that produced a nonblank final answer. It follows the Session's ordinary automatic-compaction setting. User shell, compaction, and runtime-maintenance steps are not eligible.
+
 ### Exact Execution Scope
 
 The immutable identity of one live agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
@@ -370,7 +374,7 @@ The increasing Session value that orders live status, prompts, main-view updates
 
 ### Forced Local Detach
 
-The second-`Ctrl+C` exit path while an interrupt is pending. The TUI exits and detaches without force-closing the shared Active Session Runtime.
+The second-`Ctrl+C` exit path while an Interrupt is pending for the same Run and Step. The TUI exits and detaches without force-closing the shared Active Session Runtime. A different Running Run or Step sends its own Interrupt instead.
 
 ### Run
 

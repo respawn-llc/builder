@@ -1,11 +1,7 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
-import {
-  parseCatalogResponse,
-  requireCatalogProject,
-  sessionPageCall,
-} from "./clientCatalog";
+import { parseCatalogResponse, requireCatalogProject, sessionPageCall } from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import * as taskDependencies from "./clientTaskDependencies";
@@ -41,6 +37,7 @@ import type {
   WorkflowListInput,
   WorkflowProjectLinkInput,
 } from "./clientInputs";
+import { workflowPageSize } from "./clientInputs";
 import { compactJsonObject, emptyJsonObject } from "./json";
 import type { SetupOperationID } from "./setupOperationID";
 import type * as worktreeModels from "./schemas/worktree";
@@ -88,9 +85,7 @@ import type {
   TaskListPage,
 } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
-import {
-  projectPageSchema,
-} from "./schemas/project";
+import { projectPageSchema } from "./schemas/project";
 import { sessionPageResponseSchema } from "./schemas/catalog";
 import { CatalogContractError } from "./errors";
 import { readinessSchema } from "./schemas/status";
@@ -242,7 +237,8 @@ export class ApiClient implements ApiService {
         "workflow.list",
         compactJsonObject({
           offset: input.offset ?? 0,
-          limit: input.limit ?? 40,
+          limit: input.limit ?? workflowPageSize,
+          project_id: input.projectID,
           query: input.query ?? "",
         }),
       ),
@@ -478,9 +474,7 @@ export class ApiClient implements ApiService {
     return workflowLabels.listTasks(this.#transport, input);
   }
 
-  async getProjectTaskGroupCounts(
-    input: ProjectTaskGroupCountsInput,
-  ): Promise<ProjectTaskGroupCounts> {
+  async getProjectTaskGroupCounts(input: ProjectTaskGroupCountsInput): Promise<ProjectTaskGroupCounts> {
     return workflowLabels.getProjectTaskGroupCounts(this.#transport, input);
   }
 

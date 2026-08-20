@@ -84,32 +84,40 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	}
 	if items[0].Type != llm.ResponseItemTypeMessage ||
 		items[0].MessageType == nil ||
-		*items[0].MessageType != llm.MessageTypeCompactionSummary {
-		t.Fatalf("canonical replacement first item = %+v, want compaction summary", items[0])
-	}
-	if items[1].Type != llm.ResponseItemTypeCompaction ||
-		items[1].ID == nil ||
-		*items[1].ID != checkpointID {
-		t.Fatalf("canonical replacement checkpoint = %+v, want identity %q", items[1], checkpointID)
+		*items[0].MessageType != llm.MessageTypeHeadlessMode {
+		t.Fatalf("canonical replacement first item = %+v, want headless stable context", items[0])
 	}
 	want := []llm.MessageType{
-		llm.MessageTypeEnvironment,
 		llm.MessageTypeSkills,
 		llm.MessageTypeAgentsMD,
 		llm.MessageTypeAgentsMD,
-		llm.MessageTypeHeadlessMode,
 	}
 	for index, messageType := range want {
-		item := items[index+2]
+		item := items[index+1]
 		if item.Type != llm.ResponseItemTypeMessage ||
 			item.MessageType == nil ||
 			*item.MessageType != messageType {
 			t.Fatalf(
 				"canonical replacement item[%d] = %+v, want message type %q",
-				index+2,
+				index+1,
 				item,
 				messageType,
 			)
 		}
+	}
+	if items[4].Type != llm.ResponseItemTypeMessage ||
+		items[4].MessageType == nil ||
+		*items[4].MessageType != llm.MessageTypeCompactionSummary {
+		t.Fatalf("canonical replacement summary = %+v, want provider output after stable context", items[4])
+	}
+	if items[5].Type != llm.ResponseItemTypeCompaction ||
+		items[5].ID == nil ||
+		*items[5].ID != checkpointID {
+		t.Fatalf("canonical replacement checkpoint = %+v, want identity %q", items[5], checkpointID)
+	}
+	if items[6].Type != llm.ResponseItemTypeMessage ||
+		items[6].MessageType == nil ||
+		*items[6].MessageType != llm.MessageTypeEnvironment {
+		t.Fatalf("canonical replacement environment = %+v, want volatile suffix", items[6])
 	}
 }

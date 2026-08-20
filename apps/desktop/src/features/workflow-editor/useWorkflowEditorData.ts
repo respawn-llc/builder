@@ -174,10 +174,6 @@ export function shouldRefreshWorkflowLink(
   );
 }
 
-const workflowDefinitionActions = new Set([
-  "updated",
-  "deleted",
-  "graph_saved",
-]);
+const workflowDefinitionActions = new Set(["updated", "deleted", "graph_saved"]);
 
 const workflowLinkActions = new Set(["linked", "default_changed", "unlinked"]);

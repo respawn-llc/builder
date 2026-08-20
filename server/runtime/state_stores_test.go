@@ -69,6 +69,43 @@ func TestCompactionPlannerDerivesThresholdsAndRunway(t *testing.T) {
 	}
 }
 
+func TestCompactionPlannerEagerCompactionUsesConsumedContextOnly(t *testing.T) {
+	t.Parallel()
+	planner := newCompactionPlanner()
+	for _, test := range []struct {
+		name   string
+		window int
+	}{
+		{name: "272k", window: 272_000},
+		{name: "372k", window: 372_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			threshold := test.window * 88 / 100
+			tests := []struct {
+				name         string
+				consumed     int
+				reserved     int
+				wantEligible bool
+			}{
+				{name: "exact threshold", consumed: threshold, wantEligible: true},
+				{name: "one token below", consumed: threshold - 1, wantEligible: false},
+				{name: "reserved output does not qualify", consumed: threshold - 1, reserved: 1, wantEligible: false},
+			}
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					if got := planner.eagerCompactionEligible(compactionPlanningSnapshot{
+						contextWindowTokens:   test.window,
+						currentUsedTokens:     tt.consumed,
+						lockedMaxOutputTokens: tt.reserved,
+					}); got != tt.wantEligible {
+						t.Fatalf("eagerCompactionEligible() = %t, want %t", got, tt.wantEligible)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestCompactionPlannerPanicsAtForcedLimit(t *testing.T) {
 	t.Parallel()
 	planner := newCompactionPlanner()

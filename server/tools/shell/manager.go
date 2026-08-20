@@ -182,6 +182,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		stdinOpen:            req.KeepStdinOpen,
 		notify:               make(chan struct{}, 1),
 		done:                 make(chan struct{}),
+		outputFinalized:      make(chan struct{}),
 	}
 	entry.log = newAsyncLogWriter(logFile, entry.signal)
 	if entry.command == "" {
@@ -428,12 +429,13 @@ func (m *Manager) Kill(id string) error {
 		return err
 	}
 	entry.mu.Lock()
-	entry.killRequested = true
 	process := entry.cmd.Process
-	entry.mu.Unlock()
-	if process == nil {
+	if process == nil || !entry.running {
+		entry.mu.Unlock()
 		return fmt.Errorf("unknown session_id %s", id)
 	}
+	entry.killRequested = true
+	entry.mu.Unlock()
 	return killManagedProcess(process)
 }
 

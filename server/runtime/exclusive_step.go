@@ -343,6 +343,12 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 	if beforeLiveRun != nil {
 		err = errors.Join(err, beforeLiveRun())
 	}
+	if status == RunStatusCompleted && err == nil && snapshot != nil {
+		resultKind, assistant, observed := s.engine.takeLiveRunStepResult(stepID)
+		if observed {
+			s.engine.maybeQueueEagerCompaction(snapshot.ActiveKind, resultKind, assistant)
+		}
+	}
 	var publishLiveRunFinished func()
 	if options.EmitRunState {
 		publishLiveRunFinished = s.engine.finishLiveRunStep(snapshot, status, err)

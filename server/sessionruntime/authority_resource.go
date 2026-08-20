@@ -27,7 +27,6 @@ type agentResourceOwnerlessDisposition uint8
 var ErrSessionRunActive = errors.New("session has an active run")
 var ErrSessionStartsBlocked = errors.New("session starts are blocked")
 var ErrSessionWorkflowActivationActive = errors.New("session has a retained workflow activation")
-var ErrExecutionPromptPending = errors.New("exact execution has a pending prompt")
 
 const (
 	AgentResourceBuilding AgentResourceState = iota + 1
@@ -1417,9 +1416,6 @@ func (a *Authority) WithInterruptibleAgentTurn(
 	}
 	if resource.rejectsNewUseLocked() || resource.engine == nil {
 		return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %s has no active runtime available", sessionID))
-	}
-	if len(execution.prompts.pending) != 0 {
-		return ErrExecutionPromptPending
 	}
 	if err := context.Cause(ctx); err != nil {
 		return err

@@ -1,22 +1,23 @@
 @font-face {
-  font-family: 'Monaspace Neon';
-  src: url('https://cdn.jsdelivr.net/gh/githubnext/monaspace@v1.000/fonts/webfonts/MonaspaceNeon-Regular.woff')
-    format('woff');
+  font-family: "Monaspace Neon";
+  src: url("https://cdn.jsdelivr.net/gh/githubnext/monaspace@v1.000/fonts/webfonts/MonaspaceNeon-Regular.woff")
+    format("woff");
   font-display: swap;
-  font-feature-settings: 'calt', 'liga', 'ss01', 'ss02', 'ss03', 'ss04', 'ss05', 'ss06',
-    'ss07', 'ss08', 'ss09';
+  font-feature-settings:
+    "calt", "liga", "ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07",
+    "ss08", "ss09";
 }
 
 :root {
   --sl-font:
-    'Comfortaa', 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
-    Helvetica, Arial, sans-serif;
+    "Comfortaa", "Montserrat", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Helvetica, Arial, sans-serif;
   --sl-font-mono:
-    'Monaspace Neon', 'JetBrains Mono', SFMono-Regular, Menlo, Monaco, Consolas,
-    'Liberation Mono', 'Courier New', monospace;
+    "Monaspace Neon", "JetBrains Mono", SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
   --kent-font-heading:
-    'Montserrat Alternates', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica,
-    Arial, sans-serif;
+    "Montserrat Alternates", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Helvetica, Arial, sans-serif;
 
   --sl-content-width: 75rem;
   --sl-text-base: 1rem;
@@ -49,17 +50,37 @@
   --kent-radius-l: 16px;
   --kent-radius-x: 18px;
   --kent-radius-xl: 24px;
-  --kent-outline-subtle: color-mix(in srgb, var(--sl-color-text) 12%, transparent);
-  --kent-outline-accent: color-mix(in srgb, var(--sl-color-accent) 35%, transparent);
-  --kent-surface-0: color-mix(in srgb, var(--sl-color-bg) 92%, var(--sl-color-white) 8%);
-  --kent-surface-1: color-mix(in srgb, var(--sl-color-bg) 86%, var(--sl-color-white) 14%);
-  --kent-surface-accent: color-mix(in srgb, var(--sl-color-accent) 12%, transparent);
+  --kent-outline-subtle: color-mix(
+    in srgb,
+    var(--sl-color-text) 12%,
+    transparent
+  );
+  --kent-outline-accent: color-mix(
+    in srgb,
+    var(--sl-color-accent) 35%,
+    transparent
+  );
+  --kent-surface-0: color-mix(
+    in srgb,
+    var(--sl-color-bg) 92%,
+    var(--sl-color-white) 8%
+  );
+  --kent-surface-1: color-mix(
+    in srgb,
+    var(--sl-color-bg) 86%,
+    var(--sl-color-white) 14%
+  );
+  --kent-surface-accent: color-mix(
+    in srgb,
+    var(--sl-color-accent) 12%,
+    transparent
+  );
   --kent-shadow-island-0: 0 4px 4px rgb(0 0 0 / 10%);
   --kent-shadow-island-1: 0 4px 4px rgb(0 0 0 / 24%);
   --kent-shadow-island-2: 0 8px 8px rgb(0 0 0 / 32%);
 }
 
-:root[data-header-state='hidden'] {
+:root[data-header-state="hidden"] {
   --kent-header-offset: 0rem;
 }
 
@@ -126,7 +147,7 @@
   }
 }
 
-:root[data-theme='dark'] {
+:root[data-theme="dark"] {
   --sl-color-white: #ffffff;
   --sl-color-gray-1: #e0e0e0;
   --sl-color-gray-2: #c8c8c8;
@@ -137,20 +158,60 @@
   --sl-color-black: #12100e;
 
   --kent-color-primary: #3185fc;
-  --kent-color-primary-low: color-mix(in srgb, var(--kent-color-primary) 18%, transparent);
-  --kent-color-primary-high: color-mix(in srgb, var(--kent-color-primary) 85%, white);
+  --kent-color-primary-low: color-mix(
+    in srgb,
+    var(--kent-color-primary) 18%,
+    transparent
+  );
+  --kent-color-primary-high: color-mix(
+    in srgb,
+    var(--kent-color-primary) 85%,
+    white
+  );
   --kent-color-secondary: #f96824;
-  --kent-color-secondary-low: color-mix(in srgb, var(--kent-color-secondary) 18%, transparent);
-  --kent-color-secondary-high: color-mix(in srgb, var(--kent-color-secondary) 85%, white);
+  --kent-color-secondary-low: color-mix(
+    in srgb,
+    var(--kent-color-secondary) 18%,
+    transparent
+  );
+  --kent-color-secondary-high: color-mix(
+    in srgb,
+    var(--kent-color-secondary) 85%,
+    white
+  );
   --kent-color-success: #12ba85;
-  --kent-color-success-low: color-mix(in srgb, var(--kent-color-success) 18%, transparent);
-  --kent-color-success-high: color-mix(in srgb, var(--kent-color-success) 85%, white);
+  --kent-color-success-low: color-mix(
+    in srgb,
+    var(--kent-color-success) 18%,
+    transparent
+  );
+  --kent-color-success-high: color-mix(
+    in srgb,
+    var(--kent-color-success) 85%,
+    white
+  );
   --kent-color-warning: #ffe74c;
-  --kent-color-warning-low: color-mix(in srgb, var(--kent-color-warning) 18%, transparent);
-  --kent-color-warning-high: color-mix(in srgb, var(--kent-color-warning) 70%, black);
+  --kent-color-warning-low: color-mix(
+    in srgb,
+    var(--kent-color-warning) 18%,
+    transparent
+  );
+  --kent-color-warning-high: color-mix(
+    in srgb,
+    var(--kent-color-warning) 70%,
+    black
+  );
   --kent-color-error: #dc2e3c;
-  --kent-color-error-low: color-mix(in srgb, var(--kent-color-error) 18%, transparent);
-  --kent-color-error-high: color-mix(in srgb, var(--kent-color-error) 85%, white);
+  --kent-color-error-low: color-mix(
+    in srgb,
+    var(--kent-color-error) 18%,
+    transparent
+  );
+  --kent-color-error-high: color-mix(
+    in srgb,
+    var(--kent-color-error) 85%,
+    white
+  );
 
   --sl-color-accent-low: var(--kent-color-primary-low);
   --sl-color-accent: var(--kent-color-primary);
@@ -185,7 +246,7 @@
   --sl-color-backdrop-overlay: rgba(18, 16, 14, 0.72);
 }
 
-:root[data-theme='light'] {
+:root[data-theme="light"] {
   --sl-color-white: #12100e;
   --sl-color-gray-1: #2a2825;
   --sl-color-gray-2: #5a5651;
@@ -197,20 +258,60 @@
   --sl-color-black: #faf9f7;
 
   --kent-color-primary: #3185fc;
-  --kent-color-primary-low: color-mix(in srgb, var(--kent-color-primary) 14%, transparent);
-  --kent-color-primary-high: color-mix(in srgb, var(--kent-color-primary) 90%, black);
+  --kent-color-primary-low: color-mix(
+    in srgb,
+    var(--kent-color-primary) 14%,
+    transparent
+  );
+  --kent-color-primary-high: color-mix(
+    in srgb,
+    var(--kent-color-primary) 90%,
+    black
+  );
   --kent-color-secondary: #f96824;
-  --kent-color-secondary-low: color-mix(in srgb, var(--kent-color-secondary) 14%, transparent);
-  --kent-color-secondary-high: color-mix(in srgb, var(--kent-color-secondary) 90%, black);
+  --kent-color-secondary-low: color-mix(
+    in srgb,
+    var(--kent-color-secondary) 14%,
+    transparent
+  );
+  --kent-color-secondary-high: color-mix(
+    in srgb,
+    var(--kent-color-secondary) 90%,
+    black
+  );
   --kent-color-success: #12ba85;
-  --kent-color-success-low: color-mix(in srgb, var(--kent-color-success) 14%, transparent);
-  --kent-color-success-high: color-mix(in srgb, var(--kent-color-success) 90%, black);
+  --kent-color-success-low: color-mix(
+    in srgb,
+    var(--kent-color-success) 14%,
+    transparent
+  );
+  --kent-color-success-high: color-mix(
+    in srgb,
+    var(--kent-color-success) 90%,
+    black
+  );
   --kent-color-warning: #ffe74c;
-  --kent-color-warning-low: color-mix(in srgb, var(--kent-color-warning) 30%, transparent);
-  --kent-color-warning-high: color-mix(in srgb, var(--kent-color-warning) 60%, black);
+  --kent-color-warning-low: color-mix(
+    in srgb,
+    var(--kent-color-warning) 30%,
+    transparent
+  );
+  --kent-color-warning-high: color-mix(
+    in srgb,
+    var(--kent-color-warning) 60%,
+    black
+  );
   --kent-color-error: #dc2e3c;
-  --kent-color-error-low: color-mix(in srgb, var(--kent-color-error) 14%, transparent);
-  --kent-color-error-high: color-mix(in srgb, var(--kent-color-error) 90%, black);
+  --kent-color-error-low: color-mix(
+    in srgb,
+    var(--kent-color-error) 14%,
+    transparent
+  );
+  --kent-color-error-high: color-mix(
+    in srgb,
+    var(--kent-color-error) 90%,
+    black
+  );
 
   --sl-color-accent-low: var(--kent-color-primary-low);
   --sl-color-accent: var(--kent-color-primary);
@@ -324,14 +425,14 @@ mobile-starlight-toc a:hover,
   text-underline-offset: 0.2em;
 }
 
-.sidebar-pane a[aria-current='page'] {
+.sidebar-pane a[aria-current="page"] {
   color: var(--sl-color-text);
   background-color: var(--kent-surface-accent);
   box-shadow: inset 2px 0 0 var(--sl-color-accent);
 }
 
-starlight-toc a[aria-current='true'],
-mobile-starlight-toc a[aria-current='true'] {
+starlight-toc a[aria-current="true"],
+mobile-starlight-toc a[aria-current="true"] {
   color: var(--sl-color-text-accent);
   background-color: var(--kent-surface-accent);
 }
@@ -402,7 +503,7 @@ sl-doc-search {
   border-radius: var(--kent-radius-l);
 }
 
-.sl-markdown-content li.task-list-item > input[type='checkbox'] {
+.sl-markdown-content li.task-list-item > input[type="checkbox"] {
   transition:
     background-color var(--kent-motion-fast),
     border-color var(--kent-motion-fast),
@@ -435,7 +536,6 @@ sl-doc-search {
   .pagination-links a:active {
     transform: translateY(0) scale(0.99);
   }
-
 }
 
 body,
@@ -476,8 +576,9 @@ pre,
 .expressive-code,
 .sl-markdown-content pre {
   font-family: var(--__sl-font-mono);
-  font-feature-settings: 'calt', 'liga', 'ss01', 'ss02', 'ss03', 'ss04', 'ss05', 'ss06',
-    'ss07', 'ss08', 'ss09';
+  font-feature-settings:
+    "calt", "liga", "ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07",
+    "ss08", "ss09";
 }
 
 .sl-markdown-content {
@@ -514,7 +615,7 @@ pre,
   gap: 0.75rem;
 }
 
-.sl-markdown-content li.task-list-item > input[type='checkbox'] {
+.sl-markdown-content li.task-list-item > input[type="checkbox"] {
   appearance: none;
   margin: 0.2rem 0 0;
   width: 1.05rem;
@@ -526,13 +627,17 @@ pre,
   position: relative;
 }
 
-.sl-markdown-content li.task-list-item > input[type='checkbox']:checked {
+.sl-markdown-content li.task-list-item > input[type="checkbox"]:checked {
   border-color: var(--sl-color-accent);
-  background-color: color-mix(in srgb, var(--sl-color-accent) 18%, var(--sl-color-bg-inline-code));
+  background-color: color-mix(
+    in srgb,
+    var(--sl-color-accent) 18%,
+    var(--sl-color-bg-inline-code)
+  );
 }
 
-.sl-markdown-content li.task-list-item > input[type='checkbox']:checked::after {
-  content: '';
+.sl-markdown-content li.task-list-item > input[type="checkbox"]:checked::after {
+  content: "";
   position: absolute;
   inset: 0.12rem 0.28rem 0.22rem 0.22rem;
   border-right: 2px solid var(--sl-color-accent);

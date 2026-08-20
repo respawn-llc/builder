@@ -101,6 +101,7 @@ func (m *uiModel) applyTranscriptHydration(
 
 	m.reconcileTranscriptQueuedMessages(hydration.QueuedMessages)
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
+	cmds = append(cmds, m.releasePendingPromptCtrlCContinuation())
 	currentSessionID := strings.TrimSpace(m.sessionID)
 	preserved := m.processList.entries[:0]
 	for _, entry := range m.processList.entries {
@@ -143,14 +144,15 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 			"",
 		)
 	}
+	promptCtrlCCmd := m.releasePendingPromptCtrlCContinuation()
 	if view.Activity.ActiveForControl() {
-		return nil
+		return promptCtrlCCmd
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
 		cmd = m.acknowledgePendingInterrupt()
 	}
-	return tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
+	return tea.Batch(promptCtrlCCmd, cmd, m.releaseDeferredRuntimeSyncs())
 }
 
 func (m *uiModel) applyTranscriptStepState(state clientui.TranscriptStepState) {
@@ -214,6 +216,8 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	if previousSessionID == "" || previousSessionID == nextSessionID {
 		return titleCmd
 	}
+	m.askController().cancelActiveDelivery()
+	m.ask.pendingCtrlCContinuation = nil
 	promptCmd := m.reconcileTranscriptPrompts(nil)
 	rollbackCmd := m.discardRollbackStateForSessionReplacement()
 	cancelCmd := m.cancelPendingDetailTranscriptRequest()

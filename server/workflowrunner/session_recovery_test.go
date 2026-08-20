@@ -284,8 +284,8 @@ func TestPlanCurrentNodeSessionPreservesRetainedRoleAcrossContextSources(t *test
 	if record.Meta == nil || record.Meta.Continuation == nil || record.Meta.Continuation.AgentRole == nil || *record.Meta.Continuation.AgentRole != "reviewer" {
 		t.Fatalf("compacted workflow Session continuation = %+v, want reviewer", record.Meta)
 	}
-	if record.Meta.Locked != nil || record.Meta.PromptCacheLineageGeneration != 1 {
-		t.Fatalf("compacted workflow Session contract = locked %+v lineage %d, want unlocked lineage 1", record.Meta.Locked, record.Meta.PromptCacheLineageGeneration)
+	if record.Meta.Locked != nil {
+		t.Fatalf("compacted workflow Session contract = locked %+v, want unlocked", record.Meta.Locked)
 	}
 
 	continuedStore, err := session.Create(

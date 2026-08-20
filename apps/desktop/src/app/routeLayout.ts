@@ -1,16 +1,12 @@
 import { chromeContentPaddingClassName } from "@/ui";
-import { desktopChatEnabled } from "@/shared/feature-flags";
 
-const edgeToEdgeRoutePatterns = new Set(["/projects/$projectId", "/workflows/$workflowId/editor"]);
+const edgeToEdgeRoutePatterns = new Set(["/", "/projects/$projectId", "/workflows/$workflowId/editor"]);
 
 export function routeUsesEdgeToEdgeLayout(pathname: string): boolean {
   return edgeToEdgeRoutePatterns.has(routePattern(pathname));
 }
 
 export function routeFramePaddingClassName(pathname: string): string | undefined {
-  if (pathname === "/" && desktopChatEnabled) {
-    return undefined;
-  }
   if (routeUsesEdgeToEdgeLayout(pathname)) {
     return undefined;
   }

@@ -1,8 +1,6 @@
 package app
 
 import (
-	"core/shared/clientui"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -12,30 +10,18 @@ func (c uiInputController) handleRuntimeCtrlC(closeSurface func() tea.Cmd) (tea.
 	if closeSurface != nil {
 		closeCmd = closeSurface()
 	}
-	if runtimeActivityAllowsOrdinaryInterrupt(m.runtimeActivityProjection) {
+	if m.runtimeLifecycle.Run.IsRunning() {
+		if m.hasPendingInterrupt() &&
+			m.interruptRunID == m.currentRunID &&
+			m.interruptStepID == m.currentStepID {
+			m.exitAction = UIActionExit
+			m.forcedLocalExit = true
+			return m, sequenceCmds(closeCmd, tea.Quit)
+		}
 		return m, sequenceCmds(closeCmd, c.interruptBusyRuntime())
-	}
-	if m.hasPendingInterrupt() {
-		m.exitAction = UIActionExit
-		m.forcedLocalExit = true
-		return m, sequenceCmds(closeCmd, tea.Quit)
 	}
 	m.exitAction = UIActionExit
 	return m, sequenceCmds(closeCmd, tea.Quit)
-}
-
-func runtimeActivityAllowsOrdinaryInterrupt(activity clientui.RuntimeActivity) bool {
-	if activity.State != clientui.RuntimeActivityRunning || activity.ActiveStep == nil {
-		return false
-	}
-	switch activity.ActiveStep.ActiveKind {
-	case clientui.RuntimeActivityActiveKindUserTurn,
-		clientui.RuntimeActivityActiveKindWorkflowTurn,
-		clientui.RuntimeActivityActiveKindGoalLoop:
-		return true
-	default:
-		return false
-	}
 }
 
 func (c uiInputController) closeTranscriptSurfaceForRuntimeCtrlC(close func()) func() tea.Cmd {

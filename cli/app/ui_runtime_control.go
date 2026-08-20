@@ -242,7 +242,6 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 		m.clearRuntimeControlPending(msg.operation)
 		if msg.operation == runtimeControlInterrupt {
 			m.setPendingInterrupt(false)
-			m.interruptPreActive = false
 		}
 		errText := runtimeattach.FormatSubmissionError(msg.err)
 		return sequenceCmds(

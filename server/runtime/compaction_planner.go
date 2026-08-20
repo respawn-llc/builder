@@ -39,6 +39,8 @@ type compactionEnginePlan struct {
 
 type compactionPlanner struct{}
 
+const eagerCompactionContextPercent = 88
+
 func newCompactionPlanner() *compactionPlanner {
 	return &compactionPlanner{}
 }
@@ -88,6 +90,14 @@ func (p *compactionPlanner) effectiveContextTokenLimit(snapshot compactionPlanni
 		percent = 95
 	}
 	return (p.contextWindowTokens(snapshot) * percent) / 100
+}
+
+func (p *compactionPlanner) eagerCompactionEligible(snapshot compactionPlanningSnapshot) bool {
+	window := p.contextWindowTokens(snapshot)
+	if window <= 0 || snapshot.currentUsedTokens < 0 {
+		return false
+	}
+	return snapshot.currentUsedTokens >= window*eagerCompactionContextPercent/100
 }
 
 func (p *compactionPlanner) autoCompactTokenLimit(snapshot compactionPlanningSnapshot) int {

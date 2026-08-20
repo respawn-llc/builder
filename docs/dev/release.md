@@ -141,13 +141,13 @@ The `release` workflow in `/.github/workflows/release.yml`:
 1. Reads `VERSION`.
 2. Normalizes it to a git tag `vX.Y.Z`.
 3. Creates and pushes the tag if it does not already exist.
-4. Builds static release binaries through `scripts/build.sh` with the shared release profile.
-5. Packages the release archives and writes `checksums.txt` through `scripts/release-artifacts.sh`.
+4. Builds static release binaries through `just release cli`.
+5. Packages the release archives and writes `checksums.txt` through the Just release recipes.
 6. Verifies the checksum manifest and smoke-tests packaged binaries on Linux, macOS, and Windows before publishing.
 7. Smoke-tests the Windows installer against staged release assets before publishing.
 8. Publishes the GitHub release.
 9. Checks out `respawn-llc/homebrew-tap`.
-10. Runs `scripts/update-brew-tap.sh` for formula `kent` (and, once `--desktop-url`
+10. Runs `just release brew` for formula `kent` (and, once `--desktop-url`
     is passed with the published macOS `.dmg`, regenerates the `kent-desktop` cask).
 11. Opens a PR in the tap repo with label `pr-pull`.
 
@@ -164,8 +164,8 @@ The tap repo automation is part of the release, not an optional follow-up.
 
 If the app release workflow publishes `vX.Y.Z` successfully but fails in `update_brew_tap`, do not cut a second app release.
 
-1. Fix the workflow or tap updater script on `main` first if the failure is in release plumbing.
-2. Create the tap change manually from this repo using `scripts/update-brew-tap.sh` against a fresh clone of `respawn-llc/homebrew-tap` on a branch like `chore/kent-vX.Y.Z`.
+1. Fix the workflow or release command on `main` first if the failure is in release plumbing.
+2. Create the tap change manually with `just release brew` against a fresh clone of `respawn-llc/homebrew-tap` on a branch like `chore/kent-vX.Y.Z`.
 3. Open the tap PR with label `pr-pull`.
 4. Wait for `brew test-bot`, then `brew pr-pull`, and only then consider the release complete.
 
@@ -220,7 +220,7 @@ which kent # should point to your local development bin directory, e.g. ./bin/ke
 - The smoke-test workflow uses `*-latest` where GitHub provides it; ARM still requires the pinned hosted-runner labels `ubuntu-24.04-arm` and `windows-11-arm` because GitHub does not publish `ubuntu-latest-arm` or `windows-latest-arm` aliases.
 - Do not create the git tag manually unless you are intentionally bypassing the workflow behavior.
 - Linux release binaries must stay statically linked; do not switch the release pipeline to PIE or other dynamic-linking modes.
-- Keep archive packaging and release verification logic in `scripts/release-artifacts.sh`; `release.yml` should stay orchestration-focused.
+- Keep archive packaging and release verification logic behind Just; `release.yml` stays orchestration-focused.
 - When polling workflows, use long poll times (10-20 minutes). Avoid short polls or waits.
 
 ## Alternate Path

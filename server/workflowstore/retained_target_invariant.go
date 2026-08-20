@@ -1,10 +1,14 @@
 package workflowstore
 
 import (
-	"core/server/workflow"
-	"core/shared/invariant"
+	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
+
+	"core/server/metadata/sqlitegen"
+	"core/server/workflow"
+	"core/shared/invariant"
 )
 
 const retainedTargetInvariantOperation = "workflow.retained_target.resolve"
@@ -56,6 +60,51 @@ func retainedTargetInvariantDiagnostic(detail workflow.RetainedTargetInvariantDe
 		Fields: fields,
 	}
 }
+
+func (s *Store) validateRetainedTargetSessionCreationAuthorization(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	enteringEdge workflow.Edge,
+	sourceNodeID workflow.NodeID,
+	currentNode workflow.CurrentNode,
+) error {
+	contextSource := workflow.CanonicalContextSource(enteringEdge.ContextSource).Kind
+	if currentNode.SessionID != nil ||
+		enteringEdge.ContextMode == workflow.ContextModeNewSession ||
+		(contextSource != workflow.ContextSourcePreviousTarget &&
+			contextSource != workflow.ContextSourcePreviousTargetOrNew) {
+		return nil
+	}
+	activeSourceSessionID, exact := currentNode.ContinuationSource.ExactSessionID()
+	if !exact {
+		return nil
+	}
+	association, err := currentTaskSessionForNode(
+		sqlitegen.WithExpectedNoRows(ctx),
+		q,
+		currentNode.Reference,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if association.SourceSessionID != activeSourceSessionID {
+		return nil
+	}
+	detail := workflow.RetainedTargetInvariantDetail{
+		TaskID:                    currentNode.Reference.TaskID,
+		SourceNodeID:              sourceNodeID,
+		TargetNodeID:              currentNode.Reference.NodeID,
+		ActiveSourceSessionID:     &activeSourceSessionID,
+		RejectedRetainedSessionID: &association.SessionID,
+		Reason:                    workflow.RetainedTargetInvariantUnauthorizedSessionCreation,
+	}
+	checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, detail)
+	return workflow.RetainedTargetInvariantError{Detail: detail}
+}
+
 func reportRetainedTargetInvariantError(policy invariant.Policy, err error) {
 	var invariantErr workflow.RetainedTargetInvariantError
 	if errors.As(err, &invariantErr) {

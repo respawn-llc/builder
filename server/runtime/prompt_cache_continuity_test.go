@@ -189,7 +189,7 @@ func TestSkillsPolicyChangesOnlyAtMainContextReconstruction(t *testing.T) {
 		t.Fatalf("reopened active list must retain persisted skills until compaction: %+v", requestMessages(reopenedRequest))
 	}
 	if reopenedRequest.PromptCacheKey != firstRequest.PromptCacheKey {
-		t.Fatalf("policy-only reopen rotated cache key: got %q want %q", reopenedRequest.PromptCacheKey, firstRequest.PromptCacheKey)
+		t.Fatalf("policy-only reopen changed cache key: got %q want %q", reopenedRequest.PromptCacheKey, firstRequest.PromptCacheKey)
 	}
 
 	mainBeforeReviewer := disabled.transcriptRuntimeState().SnapshotMessages()
@@ -214,8 +214,8 @@ func TestSkillsPolicyChangesOnlyAtMainContextReconstruction(t *testing.T) {
 	if _, found := skillMessageContent(requestMessages(postCompactionRequest)); found {
 		t.Fatalf("post-compaction context retained disabled skills: %+v", requestMessages(postCompactionRequest))
 	}
-	if postCompactionRequest.PromptCacheKey == reopenedRequest.PromptCacheKey {
-		t.Fatalf("compaction did not rotate cache key %q", postCompactionRequest.PromptCacheKey)
+	if postCompactionRequest.PromptCacheKey != reopenedRequest.PromptCacheKey {
+		t.Fatalf("compaction changed cache key: before=%q after=%q", reopenedRequest.PromptCacheKey, postCompactionRequest.PromptCacheKey)
 	}
 }
 
