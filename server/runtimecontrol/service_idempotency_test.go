@@ -239,12 +239,12 @@ func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 	}
 }
 
-func TestServiceRejectedCompactionHasNoVisibleStatus(t *testing.T) {
-	store, engine, _, _ := newRuntimeControlCompactionFixture(t)
-	if _, err := engine.CompactContextWithAcceptance(context.Background(), "", func(func() (bool, error)) (bool, error) {
+func TestRejectedPreSubmitCompactionHasNoVisibleStatus(t *testing.T) {
+	store, engine, _, _ := newRuntimeControlCompactionFixtureWithAutoCompaction(t, false)
+	if _, err := engine.CompactContextForPreSubmitWithAcceptance(context.Background(), func(func() (bool, error)) (bool, error) {
 		return false, nil
 	}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("CompactContextWithAcceptance error = %v, want context canceled", err)
+		t.Fatalf("CompactContextForPreSubmitWithAcceptance error = %v, want context canceled", err)
 	}
 	if got := len(localEntryEvents(t, store)); got != 0 {
 		t.Fatalf("rejected compaction visible failure entries = %d, want 0", got)
@@ -352,6 +352,11 @@ func TestServiceSubmitUserTurnContinuesAfterAcceptedPreSubmitCompactionError(t *
 
 func newRuntimeControlCompactionFixture(t *testing.T, options ...session.StoreOption) (*session.Store, *runtime.Engine, *runtimeControlFakeClient, *Service) {
 	t.Helper()
+	return newRuntimeControlCompactionFixtureWithAutoCompaction(t, true, options...)
+}
+
+func newRuntimeControlCompactionFixtureWithAutoCompaction(t *testing.T, autoCompactionEnabled bool, options ...session.StoreOption) (*session.Store, *runtime.Engine, *runtimeControlFakeClient, *Service) {
+	t.Helper()
 	trimmed := 1
 	client := &runtimeControlFakeClient{
 		responses: []llm.Response{
@@ -370,6 +375,7 @@ func newRuntimeControlCompactionFixture(t *testing.T, options ...session.StoreOp
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
 		Model:                        "gpt-5",
 		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+		AutoCompactionEnabled:        &autoCompactionEnabled,
 	}, options...)
 	if _, err := engine.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("seed runtime transcript: %v", err)
