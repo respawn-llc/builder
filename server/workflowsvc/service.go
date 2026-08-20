@@ -922,16 +922,9 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		target,
 		observation,
 		func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
-			decision, preparationErr := s.initiatingActionTarget(
-				preparationCtx,
-				workflow.TaskID(req.TaskID),
-				&req.SetupOperationID,
-				target,
+			return s.prepareInitiatingActionTarget(
+				preparationCtx, workflow.TaskID(req.TaskID), &req.SetupOperationID, target,
 			)
-			if decision.prepared == nil {
-				return preparedInitiatingActionTarget{}, preparationErr
-			}
-			return *decision.prepared, preparationErr
 		},
 	)
 	started, err := s.currentNodeExecution.StartTask(
@@ -965,12 +958,18 @@ func (s *Service) initiatingActionPreparation(
 	materialize func(context.Context) (preparedInitiatingActionTarget, error),
 ) workflowexecution.TaskStartPreparation {
 	var preparedTarget preparedInitiatingActionTarget
+	targetAlreadyLocked := target.context.Task.ExecutionTarget != nil
 	return workflowexecution.TaskStartPreparation{
 		Prepare: func(ctx context.Context) error {
 			var preparationErr error
 			preparedTarget, preparationErr = materialize(ctx)
-			if preparationErr == nil && preparedTarget.candidate == nil {
-				preparationErr = errors.New("Task target preparation produced no lock candidate")
+			if preparationErr == nil {
+				switch {
+				case targetAlreadyLocked && preparedTarget.candidate != nil:
+					preparationErr = errors.New("locked Task target preparation produced a lock candidate")
+				case !targetAlreadyLocked && preparedTarget.candidate == nil:
+					preparationErr = errors.New("Task target preparation produced no lock candidate")
+				}
 			}
 			if preparationErr != nil {
 				preparationErr = taskPreparationError(
@@ -982,6 +981,9 @@ func (s *Service) initiatingActionPreparation(
 			return preparationErr
 		},
 		Commit: func(ctx context.Context) error {
+			if targetAlreadyLocked {
+				return nil
+			}
 			lockErr := s.store.LockTaskExecutionTarget(ctx, taskID, preparedTarget.candidate)
 			lockErr = taskPreparationError(
 				setupOperationID, target, preparedTarget.setupResult, preparedTarget.retainedWorktree,
@@ -991,6 +993,25 @@ func (s *Service) initiatingActionPreparation(
 			return lockErr
 		},
 	}
+}
+
+func (s *Service) prepareInitiatingActionTarget(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	setupOperationID *serverapi.WorktreeSetupOperationID,
+	target initiatingActionTargetPreflight,
+) (preparedInitiatingActionTarget, error) {
+	decision, preparationErr := s.initiatingActionTarget(ctx, taskID, setupOperationID, target)
+	if target.context.Task.ExecutionTarget != nil {
+		if preparationErr == nil && (decision.prepared != nil || decision.selectionRequired != nil) {
+			preparationErr = errors.New("locked Task target returned an initial target decision")
+		}
+		return preparedInitiatingActionTarget{}, preparationErr
+	}
+	if decision.prepared == nil {
+		return preparedInitiatingActionTarget{}, preparationErr
+	}
+	return *decision.prepared, preparationErr
 }
 
 func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (*T, error)) (initiatingActionResult[T], error) {
@@ -1596,25 +1617,17 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 		)
 		preparation = &prepared
 	} else if target.context.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
-		prepared := workflowexecution.TaskStartPreparation{
-			Prepare: func(preparationCtx context.Context) error {
-				decision, preparationErr := s.initiatingActionTarget(
-					preparationCtx,
-					taskID,
-					&req.SetupOperationID,
-					target,
+		prepared := s.initiatingActionPreparation(
+			taskID,
+			req.SetupOperationID,
+			target,
+			observation,
+			func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
+				return s.prepareInitiatingActionTarget(
+					preparationCtx, taskID, &req.SetupOperationID, target,
 				)
-				if preparationErr == nil && (decision.prepared != nil || decision.selectionRequired != nil) {
-					preparationErr = errors.New("locked Resume target returned an initial target decision")
-				}
-				preparationErr = taskPreparationError(
-					req.SetupOperationID, target, nil, nil, nil, preparationErr,
-				)
-				observation.record(preparedInitiatingActionTarget{}, preparationErr)
-				return preparationErr
 			},
-			Commit: func(context.Context) error { return nil },
-		}
+		)
 		preparation = &prepared
 	}
 	var resumeResult workflowexecution.TaskResumeResult
