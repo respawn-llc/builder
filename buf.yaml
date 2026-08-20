@@ -1,8 +1,8 @@
 version: v2
 modules:
   - path: api/proto
-deps:
-  - buf.build/bufbuild/protovalidate:v1.2.0
+  - path: third_party/protovalidate/proto
+    name: buf.build/bufbuild/protovalidate
 lint:
   use:
     - BASIC

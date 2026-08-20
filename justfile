@@ -88,15 +88,15 @@ _area-command *args:
 
 [private]
 _lint-protobuf:
-    GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 lint
+    GOOS= GOARCH= go tool -modfile=tools.mod buf lint
 
 [private]
 _gen-go:
-    GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.go.yaml
+    GOOS= GOARCH= go tool -modfile=tools.mod buf generate --template buf.gen.go.yaml
 
 [private]
 _gen-typescript:
-    GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.ts.yaml
+    GOOS= GOARCH= go tool -modfile=tools.mod buf generate --template buf.gen.ts.yaml
 
 [parallel]
 [private]

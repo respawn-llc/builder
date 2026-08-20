@@ -17,6 +17,7 @@ _docs-dependencies:
 [private]
 _go-dependencies:
     go mod download
+    go mod download -modfile=tools.mod
 
 [private]
 _desktop-dependencies:
