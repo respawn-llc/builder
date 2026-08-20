@@ -381,7 +381,6 @@ describe("Task description checklist", () => {
           draft: { body: taskDetailResponse.task.body, title: taskDetailResponse.task.summary.title },
           editingComment: null,
           newCommentBody: "",
-          scrollOffsetPx: 0,
           selectedTab: "comments",
         },
       });

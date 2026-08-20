@@ -15,7 +15,6 @@ import {
   LoadingState,
   VirtualizedInfiniteList,
   type VirtualizedInfiniteListBoundaryState,
-  type VirtualizedPixelOffsetRequest,
 } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
@@ -28,7 +27,7 @@ import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import { promptAnswerKey, type PromptAnswerKey, type PromptAnswerState } from "./PromptAnswerState";
 import type { PromptPrimaryFocusRequest } from "./PromptPrimaryControlRegistry";
 import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
-import { feedPixelOffsetRequest, selectedFeed, taskDetailPaging } from "./taskDetailPaging";
+import { selectedFeed, taskDetailPaging } from "./taskDetailPaging";
 import type {
   TaskDetailFeedPage,
   useTaskActivity,
@@ -80,9 +79,7 @@ export function TaskDetailList({
   onNewCommentBodyChange,
   onEditingCommentChange,
   onQuestionSelectionChange,
-  onScrollElementChange,
   onSaveDraft,
-  pixelOffsetRequest,
   primaryFocusRequest,
   promptAnswerState,
   relationshipNavigationAvailable,
@@ -112,9 +109,7 @@ export function TaskDetailList({
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (key: PromptAnswerKey, selection: QuestionSelectionState) => void;
-  onScrollElementChange: (element: HTMLDivElement | null) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
-  pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
   primaryFocusRequest?: PromptPrimaryFocusRequest | undefined;
   promptAnswerState: PromptAnswerState;
   relationshipNavigationAvailable: boolean;
@@ -175,7 +170,7 @@ export function TaskDetailList({
     ],
   );
   const initialScrollKey =
-    initialFocus?.kind === "dependencies" ? "dependencies" : initialFocus === undefined ? "header" : "inbox";
+    initialFocus?.kind === "dependencies" ? "dependencies" : initialFocus === undefined ? undefined : "inbox";
   const pinnedItemKeys = useMemo(() => {
     const keys = new Set<string>();
     if (attention.isPending || (initialFocus !== undefined && initialFocus.kind !== "dependencies")) {
@@ -204,41 +199,31 @@ export function TaskDetailList({
     retryLabel: t("app.retry"),
   });
   const firstFeedItemKey = selectedFeed(selectedTab, commentItems, activityItems)[0]?.presentationKey;
-  const feedOffsetRequest = feedPixelOffsetRequest(
-    attention.isPending,
-    selectedFeed(selectedTab, comments.isPending, activity.isPending),
-    pixelOffsetRequest,
-  );
 
   return (
     <VirtualizedInfiniteList
       ariaLabel={t("task.title")}
       className="task-detail-island-stack h-full min-h-0 overflow-auto hide-scrollbar p-[var(--space-3)]"
       estimateSize={() => 160}
-      getItemAnchorKey={taskDetailListItemAnchorKey}
       getItemKey={taskDetailListItemKey}
-      getItemOccurrenceKey={taskDetailListItemKey}
       hasNextPage={autoLoadAvailable(paging.hasNextPage, nextBoundary)}
       hasPreviousPage={autoLoadAvailable(paging.hasPreviousPage, previousBoundary)}
       initialScrollKey={initialScrollKey}
       initialScrollRequestKey={
         focusRequestKey ??
-        (initialFocus === undefined
-          ? `${detail.id}:top`
-          : taskDetailInitialFocusRequestKey(detail.id, initialFocus))
+        (initialFocus === undefined ? undefined : taskDetailInitialFocusRequestKey(detail.id, initialFocus))
       }
       isFetchingNextPage={paging.isFetchingNextPage}
       isFetchingPreviousPage={paging.isFetchingPreviousPage}
       items={listItems}
+      layoutChangeScrollBehavior="natural"
       loadingLabel={t("app.loadingMore")}
       loadMoreKey={paging.nextLoadKey}
       nonAdjustingResizeItemKey="body"
       onLoadMore={paging.loadNext}
       onLoadPrevious={paging.loadPrevious}
-      onScrollElementChange={onScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
-      pixelOffsetRequest={feedOffsetRequest}
       rowSpacing="compact"
       nextBoundary={nextBoundary}
       previousLoadItemKey={firstFeedItemKey}
@@ -659,16 +644,6 @@ function taskDetailListItemKey(item: TaskDetailListItem): string {
     return item.presentationKey;
   }
   return item.kind;
-}
-
-function taskDetailListItemAnchorKey(item: TaskDetailListItem): string {
-  if (item.kind === "comment") {
-    return `comment:${item.comment.id}`;
-  }
-  if (item.kind === "activity") {
-    return `activity:${item.item.id}`;
-  }
-  return taskDetailListItemKey(item);
 }
 
 function isFeedItem(item: TaskDetailListItem): boolean {
