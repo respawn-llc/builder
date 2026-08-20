@@ -30,7 +30,6 @@ import type {
   CommentPage,
   CreatedTaskSummary,
   PendingAsk,
-  ProjectBinding,
   ProjectMutationBinding,
   ProjectDeleteResponse,
   ProjectEdit,

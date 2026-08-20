@@ -8,7 +8,7 @@ import {
 } from "@tanstack/react-query";
 
 import { ContractError, errorMessage } from "@/api";
-import type { ProjectBinding, WorkflowProjectEvent } from "@/api";
+import type { WorkflowProjectEvent } from "@/api";
 import type { AppServices } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
