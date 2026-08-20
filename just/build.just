@@ -1,34 +1,54 @@
 set working-directory := ".."
 
 [parallel]
-default: go docs desktop
+[private]
+_default: go docs desktop
+
+default:
+    @bash scripts/quiet-on-success.sh --success done just build _default
 
 go *args:
-    just build _go {{args}}
+    @bash scripts/quiet-on-success.sh --success done just build _go {{args}}
 
 tui *args:
-    just build go {{args}}
+    @bash scripts/quiet-on-success.sh --success done just build go {{args}}
 
 # Frozen Rust is explicit-only while tui-rs/ remains frozen.
 rust *args:
-    cargo build --manifest-path tui-rs/Cargo.toml --workspace --locked {{args}}
+    @bash scripts/quiet-on-success.sh --success done cargo build --manifest-path tui-rs/Cargo.toml --workspace --locked {{args}}
 
 desktop *args:
+    @bash scripts/quiet-on-success.sh --success done just build _desktop {{args}}
+
+[private]
+_desktop *args:
     just _node
     bash scripts/build-desktop.sh --skip-install {{args}}
 
 docs *args:
+    @bash scripts/quiet-on-success.sh --success done just build _docs {{args}}
+
+[private]
+_docs *args:
     just _node
     pnpm --dir docs exec astro build {{args}}
     node docs/scripts/emit-deployment-files.mjs
 
 [private]
 _go *args:
+    @bash scripts/quiet-on-success.sh --success done just build _go-implementation {{args}}
+
+[private]
+_go-implementation *args:
     just _gen-go
     bash scripts/build.sh server {{args}}
 
 [private]
 _desktop-web:
+    @bash scripts/quiet-on-success.sh --success done just build _desktop-web-implementation
+
+[private]
+_desktop-web-implementation:
     just _node
     just _gen-typescript
     node apps/desktop/node_modules/typescript7/bin/tsc -b apps/desktop/tsconfig.json --pretty false
@@ -37,6 +57,10 @@ _desktop-web:
 
 [private]
 _desktop-smoke-macos bundle_dir:
+    @bash scripts/quiet-on-success.sh --success done just build _desktop-smoke-macos-implementation {{bundle_dir}}
+
+[private]
+_desktop-smoke-macos-implementation bundle_dir:
     #!/usr/bin/env bash
     set -euo pipefail
     shopt -s nullglob
@@ -58,6 +82,10 @@ _desktop-smoke-macos bundle_dir:
 
 [private]
 _desktop-ci-debug key:
+    @bash scripts/quiet-on-success.sh --success done just build _desktop-ci-debug-implementation {{key}}
+
+[private]
+_desktop-ci-debug-implementation key:
     just _node
     pnpm --dir apps/desktop exec tauri signer generate -f -w {{key}} -p ""
     TAURI_SIGNING_PRIVATE_KEY="$(cat {{key}})" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" bash scripts/build-desktop.sh --skip-install -- --debug
