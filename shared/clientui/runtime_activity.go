@@ -61,6 +61,7 @@ const (
 	RuntimeActivityActiveKindWorkflowTurn RuntimeActivityActiveKind = "workflow_turn"
 	RuntimeActivityActiveKindGoalLoop     RuntimeActivityActiveKind = "goal_loop"
 	RuntimeActivityActiveKindCompaction   RuntimeActivityActiveKind = "compaction"
+	RuntimeActivityActiveKindBackground   RuntimeActivityActiveKind = "background"
 )
 
 func (k RuntimeActivityActiveKind) Validate() error {
@@ -68,7 +69,8 @@ func (k RuntimeActivityActiveKind) Validate() error {
 	case RuntimeActivityActiveKindUserTurn,
 		RuntimeActivityActiveKindWorkflowTurn,
 		RuntimeActivityActiveKindGoalLoop,
-		RuntimeActivityActiveKindCompaction:
+		RuntimeActivityActiveKindCompaction,
+		RuntimeActivityActiveKindBackground:
 		return nil
 	default:
 		return fmt.Errorf("unknown runtime activity active kind %q", k)

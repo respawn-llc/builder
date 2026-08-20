@@ -352,6 +352,10 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 		if err != nil || !delivered {
 			return delivered, err
 		}
+		if resourceSessionHasWorkflowContract(resource) {
+			return true, nil
+		}
+		a.startBackgroundContinuation(resource, backgroundEvent)
 		return true, nil
 	}
 	delivered := false
@@ -361,6 +365,62 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 		return nil
 	})
 	return delivered, err
+}
+
+func (a *Authority) startBackgroundContinuation(resource *agentResource, event runtime.BackgroundShellEvent) {
+	a.launchLifecycleTask(func(ctx context.Context) {
+		descriptor, err := session.NewOpenSessionDescriptor(resource.ref.SessionID())
+		if err == nil {
+			_, err = a.StartAgentExecution(ctx, AgentExecutionRequest{
+				Descriptor: descriptor,
+				Resource:   CurrentAgentResource{},
+				Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+					return bridge.WithEngine(ctx, func(engineCtx context.Context, engine *runtime.Engine) error {
+						return engine.RunBackgroundShellContinuation(engineCtx, event)
+					})
+				},
+			})
+		}
+		if err == nil {
+			return
+		}
+		if errors.Is(err, ErrSessionRunActive) {
+			err = a.WithCurrentRuntime(ctx, resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+				engine.QueueBackgroundShellContinuation(event)
+				return nil
+			})
+			if err == nil {
+				return
+			}
+		}
+		if backgroundContinuationLifecycleStopped(err) {
+			if resource.logger != nil {
+				resource.logger.Logf("runtime.background.continuation.start.skipped process_id=%s error=%q", event.ID, err.Error())
+			}
+			return
+		}
+		fallbackErr := a.WithCurrentRuntime(ctx, resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+			return engine.SteerBackgroundContinuationFailure(err)
+		})
+		err = errors.Join(err, fallbackErr)
+		if resource.logger != nil {
+			resource.logger.Logf("runtime.background.continuation.start.failed process_id=%s error=%q", event.ID, err.Error())
+		}
+	})
+}
+
+func backgroundContinuationLifecycleStopped(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, ErrAuthorityClosed) ||
+		errors.Is(err, serverapi.ErrRuntimeUnavailable)
+}
+
+func resourceSessionHasWorkflowContract(resource *agentResource) bool {
+	if resource == nil || resource.store == nil {
+		return false
+	}
+	locked := resource.store.Meta().Locked
+	return locked != nil && locked.WorkflowCompletionMode != nil
 }
 
 func runtimeBackgroundShellEvent(resource *agentResource, event shelltool.Event) runtime.BackgroundShellEvent {

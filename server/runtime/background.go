@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,33 @@ func (e *Engine) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
 func (e *Engine) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
 	e.ensureOrchestrationCollaborators()
 	e.backgroundFlow.QueueBackgroundShellContinuation(evt)
+}
+
+func (e *Engine) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.RunBackgroundShellContinuation(ctx, evt)
+}
+
+func (b *defaultBackgroundNoticeScheduler) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
+	if !evt.Type.IsTerminal() {
+		return nil
+	}
+	return b.engine.stepLifecycle.Run(
+		ctx,
+		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground},
+		func(stepCtx context.Context, stepID string) error {
+			b.QueueBackgroundShellContinuation(evt)
+			if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
+				return err
+			}
+			flushed, err := b.flushPendingNotices(textutil.Value(stepID))
+			if err != nil || flushed == 0 {
+				return err
+			}
+			_, err = b.engine.runStepLoop(stepCtx, stepID)
+			return err
+		},
+	)
 }
 
 func (e *Engine) SteerBackgroundContinuationFailure(err error) error {

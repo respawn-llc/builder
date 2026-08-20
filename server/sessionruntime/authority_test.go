@@ -2077,6 +2077,36 @@ func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(
 	}
 }
 
+func TestIdleSessionStartsBackgroundContinuation(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := make(lifecycleRequestCaptureClient, 1)
+	plan := authorityTestRuntimePlan(t, fixture, &client)
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "owner", &plan)
+
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		attachment.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	event.Snapshot.ExecutionCorrelation = &correlation
+	if !fixture.authority.routeBackgroundEvent(event) {
+		t.Fatal("terminal background event was not delivered")
+	}
+
+	client.await(t)
+	deadline := time.Now().Add(5 * time.Second)
+	for fixture.authority.sessionExecution(sessionID) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("background continuation Exact Execution Scope did not retire")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestCompletedWorkflowSessionDoesNotStartBackgroundContinuation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)

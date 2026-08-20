@@ -312,7 +312,7 @@ func (c *defaultContextCompactor) CompactContextForPreSubmitWithAcceptance(ctx c
 
 func isAgentStepCapable(kind ActiveKind) bool {
 	switch kind {
-	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop:
+	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop, ActiveKindBackground:
 		return true
 	default:
 		return false
@@ -388,7 +388,7 @@ func (e *Engine) maybeQueueEagerCompaction(activeKind ActiveKind, resultKind Liv
 		return
 	}
 	switch activeKind {
-	case ActiveKindUserTurn, ActiveKindGoalLoop:
+	case ActiveKindUserTurn, ActiveKindGoalLoop, ActiveKindBackground:
 	default:
 		return
 	}

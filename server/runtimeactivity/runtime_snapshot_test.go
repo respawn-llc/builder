@@ -13,6 +13,7 @@ func TestClientActiveKindFromRuntimeMapsEveryRuntimeKind(t *testing.T) {
 		runtime.ActiveKindWorkflowTurn: clientui.RuntimeActivityActiveKindWorkflowTurn,
 		runtime.ActiveKindGoalLoop:     clientui.RuntimeActivityActiveKindGoalLoop,
 		runtime.ActiveKindCompaction:   clientui.RuntimeActivityActiveKindCompaction,
+		runtime.ActiveKindBackground:   clientui.RuntimeActivityActiveKindBackground,
 	}
 	for kind, want := range tests {
 		got, err := ClientActiveKindFromRuntime(kind)

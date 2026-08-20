@@ -984,16 +984,14 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	}
 	completion, completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, stepID, parsed)
 	if completeErr != nil {
-		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
+		return true, true, completeErr
+	}
+	if completion.Kind == workflowruntime.CompletionOutcomeRejected && completion.Rejection != nil {
+		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completion.Rejection)
 		return true, terminal, nudgeErr
 	}
 	if completion.Kind != workflowruntime.CompletionOutcomeAccepted || completion.Accepted == nil {
-		rejection := completion.Rejection
-		if rejection == nil {
-			rejection = errors.New("workflow completion returned no accepted outcome")
-		}
-		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, rejection)
-		return true, terminal, nudgeErr
+		return true, true, errors.New("workflow completion returned no accepted outcome")
 	}
 	return true, true, nil
 }

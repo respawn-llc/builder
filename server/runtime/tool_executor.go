@@ -242,7 +242,8 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 		return tools.Result{CallID: call.ID, Name: toolspec.ID(call.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}, true, nil
 	}
 	if toolID == toolspec.ToolCompleteNode {
-		return t.executeCompleteNodeTool(ctx, stepID, call), true, nil
+		result, err := t.executeCompleteNodeTool(ctx, stepID, call)
+		return result, true, err
 	}
 	if inputErr != nil {
 		return tools.ErrorResult(tools.Call{
@@ -415,7 +416,7 @@ func serialToolExecutionRequired(toolID toolspec.ID, workflowActive bool) bool {
 	}
 }
 
-func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepID string, call llm.ToolCall) tools.Result {
+func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepID string, call llm.ToolCall) (tools.Result, error) {
 	e := t.engine
 	result := tools.Result{CallID: call.ID, Name: toolspec.ToolCompleteNode}
 	execution, active := e.currentNodeExecutionConfig()
@@ -423,11 +424,11 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 		result.IsError = true
 		result.Output = mustJSON(map[string]any{"error": "complete_node is only available during current-node execution"})
 		result.Summary = textutil.Value("not in current-node execution")
-		return result
+		return result, nil
 	}
 	parsed, err := workflowruntime.DecodeCompletion(call.Input, execution.Contract)
 	if err != nil {
-		return e.workflowCompletionRejectedResult(ctx, result, err)
+		return e.workflowCompletionRejectedResult(ctx, result, err), nil
 	}
 	if barrier, ok := tools.EffectBarrierFromContext(ctx); ok {
 		if err := barrier(tools.EffectBarrierCompleteNode); err != nil {
@@ -435,25 +436,33 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 				ID:    call.ID,
 				Name:  toolspec.ToolCompleteNode,
 				Input: call.Input,
-			}, err.Error())
+			}, err.Error()), nil
 		}
 	}
 	outcome, err := e.completeWorkflowCurrentNode(ctx, stepID, parsed)
 	if err != nil {
-		return e.workflowCompletionRejectedResult(ctx, result, err)
+		result.IsError = true
+		result.Output = workflowruntime.ToolErrorPayload(err)
+		result.Summary = textutil.Value("workflow completion failed")
+		result.Terminal = true
+		return result, err
+	}
+	if outcome.Kind == workflowruntime.CompletionOutcomeRejected && outcome.Rejection != nil {
+		return e.workflowCompletionRejectedResult(ctx, result, outcome.Rejection), nil
 	}
 	if outcome.Kind != workflowruntime.CompletionOutcomeAccepted || outcome.Accepted == nil {
-		rejection := outcome.Rejection
-		if rejection == nil {
-			rejection = errors.New("workflow completion returned no accepted outcome")
-		}
-		return e.workflowCompletionRejectedResult(ctx, result, rejection)
+		err := errors.New("workflow completion returned no accepted outcome")
+		result.IsError = true
+		result.Output = workflowruntime.ToolErrorPayload(err)
+		result.Summary = textutil.Value("workflow completion failed")
+		result.Terminal = true
+		return result, err
 	}
 	terminal := e.WorkflowTerminalState()
 	result.Output = workflowruntime.ToolSuccessPayload(terminal.Completion.Result)
 	result.Summary = textutil.Value("workflow node completed")
 	result.Terminal = true
-	return result
+	return result, nil
 }
 
 func executorInputForCustomTool(toolID toolspec.ID, input string) json.RawMessage {

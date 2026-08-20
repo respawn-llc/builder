@@ -44,6 +44,8 @@ func ClientActiveKindFromRuntime(kind runtime.ActiveKind) (clientui.RuntimeActiv
 		return clientui.RuntimeActivityActiveKindWorkflowTurn, nil
 	case runtime.ActiveKindCompaction:
 		return clientui.RuntimeActivityActiveKindCompaction, nil
+	case runtime.ActiveKindBackground:
+		return clientui.RuntimeActivityActiveKindBackground, nil
 	default:
 		return "", fmt.Errorf("unmapped runtime active kind %q", kind)
 	}

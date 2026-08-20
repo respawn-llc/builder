@@ -74,6 +74,7 @@ func TestResolveRuntimeActivityCopiesEveryRuntimeOwnedActiveKind(t *testing.T) {
 		clientui.RuntimeActivityActiveKindWorkflowTurn,
 		clientui.RuntimeActivityActiveKindGoalLoop,
 		clientui.RuntimeActivityActiveKindCompaction,
+		clientui.RuntimeActivityActiveKindBackground,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			activity, err := ResolveRuntimeActivity(ResolverSnapshot{

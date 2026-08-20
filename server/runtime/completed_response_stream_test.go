@@ -745,7 +745,7 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 	}
 }
 
-func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTerminalState(t *testing.T) {
+func TestWorkflowCompletionControllerFailureEndsTurnWithoutProtocolViolation(t *testing.T) {
 	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &failingWorkflowCompletionController{}
@@ -757,11 +757,7 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 	engine := mustNewWorkflowTestEngine(
 		t,
 		mustCreateTestSession(t),
-		&fakeClient{responses: []llm.Response{
-			completionResponse,
-			completionResponse,
-			completionResponse,
-		}},
+		&fakeClient{responses: []llm.Response{completionResponse}},
 		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: scopeID,
 			Contract: workflowruntime.CompletionContract{
@@ -779,27 +775,15 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 		},
 	)
 
-	if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
-		t.Fatalf("submit workflow turn: %v", err)
+	if _, err := engine.SubmitWorkflowTurn(context.Background()); err == nil {
+		t.Fatal("workflow completion operational failure did not end the turn")
 	}
-	if len(controller.violationRequests) != 2 || len(controller.violationResults) != 2 {
+	if len(controller.violationRequests) != 0 || len(controller.violationResults) != 0 {
 		t.Fatalf(
-			"workflow protocol violations = requests:%+v results:%+v",
+			"operational failure consumed workflow protocol budget: requests=%+v results=%+v",
 			controller.violationRequests,
 			controller.violationResults,
 		)
-	}
-	for _, request := range controller.violationRequests {
-		if request.Kind != workflowruntime.ViolationKindInvalidCompletion ||
-			request.MaxCount != 2 {
-			t.Fatalf("workflow protocol violation request = %+v", request)
-		}
-	}
-	if first := controller.violationResults[0]; first.Count != 1 || first.Interrupted {
-		t.Fatalf("first workflow violation result = %+v", first)
-	}
-	if second := controller.violationResults[1]; second.Count != 2 || !second.Interrupted {
-		t.Fatalf("second workflow violation result = %+v", second)
 	}
 	if terminal := engine.WorkflowTerminalState(); terminal.Completed {
 		t.Fatalf("workflow terminal state after controller failures = %+v", terminal)

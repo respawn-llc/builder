@@ -173,3 +173,38 @@ func TestCompleteNodeValidatesBeforeEffectBarrier(t *testing.T) {
 		)
 	}
 }
+
+func TestCompleteNodeOperationalFailureDoesNotConsumeProtocolBudget(t *testing.T) {
+	failure := errors.New("workflow store unavailable")
+	controller := &completeNodeBarrierController{completeError: failure}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	publishTestWorkflowExecution(t, engine, testWorkflowConfig(controller, config.WorkflowCompletionModeTool))
+	stepID := "22222222-2222-4222-8222-222222222222"
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
+
+	result, err := (&defaultToolExecutor{engine: engine}).executeCompleteNodeTool(
+		context.Background(),
+		stepID,
+		llm.ToolCall{
+			ID:    "complete-node",
+			Name:  string(toolspec.ToolCompleteNode),
+			Input: json.RawMessage(`{"summary":"done"}`),
+		},
+	)
+	if !errors.Is(err, failure) {
+		t.Fatalf("complete_node error = %v, want %v", err, failure)
+	}
+	if !result.IsError || !result.Terminal {
+		t.Fatalf("complete_node operational result = %+v, want terminal error", result)
+	}
+	if controller.violations.Load() != 0 {
+		t.Fatalf("operational complete_node failure consumed %d protocol violations", controller.violations.Load())
+	}
+}

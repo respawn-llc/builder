@@ -256,7 +256,7 @@ func (c *CurrentNodeController) CompleteAgentCurrentNode(
 ) (workflowruntime.CompletionOutcome, error) {
 	completed, operation, diagnostic, err := c.completeAgentCurrentNode(ctx, req)
 	if err != nil {
-		return workflowruntime.RejectedCompletionOutcome(err), err
+		return classifyCompletionFailure(err)
 	}
 	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{
 		Result: workflowruntime.CompletionResult{
@@ -288,7 +288,7 @@ func (c *CurrentNodeController) CompleteScriptCurrentNode(
 		},
 	)
 	if err != nil {
-		return workflowruntime.RejectedCompletionOutcome(err), err
+		return classifyCompletionFailure(err)
 	}
 	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{
 		Result: workflowruntime.CompletionResult{
@@ -299,6 +299,14 @@ func (c *CurrentNodeController) CompleteScriptCurrentNode(
 		},
 		Diagnostic: diagnostic,
 	}), nil
+}
+
+func classifyCompletionFailure(err error) (workflowruntime.CompletionOutcome, error) {
+	var validation workflowstore.CompletionValidationError
+	if errors.As(err, &validation) {
+		return workflowruntime.RejectedCompletionOutcome(err), nil
+	}
+	return workflowruntime.CompletionOutcome{}, err
 }
 
 func (c *CurrentNodeController) CompleteSessionCurrentNode(
