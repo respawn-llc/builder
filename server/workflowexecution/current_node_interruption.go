@@ -469,6 +469,7 @@ func drainTaskControllerWorkLocked(
 		delete(c.explicitQueued, key)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
+		start.completion.resolve(nil, ErrTaskExecutionNotQuiescent)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
 	}
 	c.explicitQueue = explicitQueue
@@ -505,6 +506,7 @@ func drainTaskControllerWorkLocked(
 			}
 			c.interrupts.addCurrentNode(fence, key)
 			*references = append(*references, start.reference)
+			start.completion.resolve(nil, ErrTaskExecutionNotQuiescent)
 			*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
 		}
 		if len(kept) == 0 {
@@ -524,7 +526,8 @@ func drainTaskControllerWorkLocked(
 		delete(c.explicitReservations, key)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
+		start.completion.resolve(nil, ErrTaskExecutionNotQuiescent)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.completion.done)
 	}
 	for key, start := range c.automaticReservations {
 		if start.reference.TaskID != taskID {
@@ -537,7 +540,8 @@ func drainTaskControllerWorkLocked(
 		c.releaseAgentCapacityLocked(start.agentCapacityLease)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
+		start.completion.resolve(nil, ErrTaskExecutionNotQuiescent)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.completion.done)
 	}
 	return nil
 }

@@ -94,74 +94,85 @@ func (s *Service) submitUserTurn(
 	if err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	err = s.authority.RunCurrentHumanTurn(
-		attempt.Context(),
-		descriptor,
-		attempt.Accept,
-		func(runCtx context.Context, engine *runtime.Engine, accept runtime.CommandAcceptance) error {
-			shouldCompact, err := engine.ShouldCompactBeforeUserMessage(runCtx, projection.ExecutionText)
-			if err != nil {
-				return err
-			}
-			compacted := false
-			compactionBusy := false
-			var acceptedCompactionErr error
-			if shouldCompact {
-				compactionAccepted, compactErr := s.runPreSubmitCompaction(
-					attempt.Context(),
-					request.SessionID,
-					engine,
-				)
-				if compactionAccepted {
-					compacted = true
-					acceptedCompactionErr = compactErr
-				} else if compactErr != nil {
-					if !errors.Is(compactErr, runtime.ErrAgentBusy) {
-						return compactErr
-					}
-					compactionBusy = true
+	runTurn := func(runCtx context.Context, engine *runtime.Engine, accept runtime.CommandAcceptance) error {
+		shouldCompact, err := engine.ShouldCompactBeforeUserMessage(runCtx, projection.ExecutionText)
+		if err != nil {
+			return err
+		}
+		compacted := false
+		compactionBusy := false
+		var acceptedCompactionErr error
+		if shouldCompact {
+			compactionAccepted, compactErr := s.runPreSubmitCompaction(
+				attempt.Context(),
+				request.SessionID,
+				engine,
+			)
+			if compactionAccepted {
+				compacted = true
+				acceptedCompactionErr = compactErr
+			} else if compactErr != nil {
+				if !errors.Is(compactErr, runtime.ErrAgentBusy) {
+					return compactErr
 				}
+				compactionBusy = true
 			}
-			if compactionBusy {
-				queued, queueErr := engine.AcceptHumanSteering(
-					projection.ExecutionText,
-					accept,
-				)
-				if queueErr != nil {
-					return errors.Join(acceptedCompactionErr, queueErr)
-				}
-				response = queuedUserTurnResponse(compacted, queued.ID)
-				return acceptedCompactionErr
-			}
-			outcome, queued, err := engine.SubmitUserMessageOrSteerWithAcceptance(
-				runCtx,
+		}
+		if compactionBusy {
+			queued, queueErr := engine.AcceptHumanSteering(
 				projection.ExecutionText,
 				accept,
 			)
-			if err != nil {
-				return errors.Join(acceptedCompactionErr, err)
+			if queueErr != nil {
+				return errors.Join(acceptedCompactionErr, queueErr)
 			}
-			if queued != nil {
-				response = queuedUserTurnResponse(compacted, queued.ID)
-				return acceptedCompactionErr
-			}
-			response = serverapi.RuntimeSubmitUserTurnResponse{
-				Compacted:  compacted,
-				ResultKind: clientui.UserTurnResultKindNoFinal,
-			}
-			switch outcome.Kind {
-			case runtime.UserTurnResultAssistantFinal:
-				response.ResultKind = clientui.UserTurnResultKindAssistantFinal
-				if outcome.FinalAnswer != nil && outcome.FinalAnswer.Content != nil {
-					response.Message = outcome.FinalAnswer.Content
-				}
-			case runtime.UserTurnResultSilentFinal:
-				response.ResultKind = clientui.UserTurnResultKindSilentFinal
-				response.Message = textutil.Value("")
-			}
+			response = queuedUserTurnResponse(compacted, queued.ID)
 			return acceptedCompactionErr
-		},
-	)
+		}
+		outcome, queued, err := engine.SubmitUserMessageOrSteerWithAcceptance(
+			runCtx,
+			projection.ExecutionText,
+			accept,
+		)
+		if err != nil {
+			return errors.Join(acceptedCompactionErr, err)
+		}
+		if queued != nil {
+			response = queuedUserTurnResponse(compacted, queued.ID)
+			return acceptedCompactionErr
+		}
+		response = serverapi.RuntimeSubmitUserTurnResponse{
+			Compacted:  compacted,
+			ResultKind: clientui.UserTurnResultKindNoFinal,
+		}
+		switch outcome.Kind {
+		case runtime.UserTurnResultAssistantFinal:
+			response.ResultKind = clientui.UserTurnResultKindAssistantFinal
+			if outcome.FinalAnswer != nil && outcome.FinalAnswer.Content != nil {
+				response.Message = outcome.FinalAnswer.Content
+			}
+		case runtime.UserTurnResultSilentFinal:
+			response.ResultKind = clientui.UserTurnResultKindSilentFinal
+			response.Message = textutil.Value("")
+		}
+		return acceptedCompactionErr
+	}
+	executeTurn := func() error {
+		return s.authority.RunCurrentHumanTurn(
+			attempt.Context(),
+			descriptor,
+			attempt.Accept,
+			runTurn,
+		)
+	}
+	err = executeTurn()
+	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) && s.reactivator != nil {
+		if reactivateErr := s.reactivator.ReactivateWorkflowSession(attempt.Context(), sessionID); reactivateErr != nil {
+			err = reactivateErr
+		} else {
+			err = executeTurn()
+		}
+	}
 	if errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
 		err = errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
 	}

@@ -595,6 +595,8 @@ type currentNodeControllerStore struct {
 	completionStarted     chan struct{}
 	completionRelease     chan struct{}
 	completionOnce        sync.Once
+	sessionTaskID         *workflow.TaskID
+	sessionAssociation    *workflowstore.TaskSessionAssociation
 	bindingErr            error
 	bindings              []currentNodeSessionBindingCall
 	interruptStarted      chan struct{}
@@ -844,6 +846,35 @@ func (s *currentNodeControllerStore) ValidateCurrentNodeSessionBinding(_ context
 	defer s.mu.Unlock()
 	s.bindings = append(s.bindings, currentNodeSessionBindingCall{sessionID: sessionID, reference: reference})
 	return s.bindingErr
+}
+
+func (s *currentNodeControllerStore) ResolveCurrentSessionStartContext(
+	_ context.Context,
+	sessionID runtimeids.SessionID,
+) (workflowstore.CurrentNodeStartContext, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionTaskID == nil || s.sessionAssociation == nil ||
+		s.sessionAssociation.SessionID != sessionID {
+		return workflowstore.CurrentNodeStartContext{}, workflowstore.ErrSessionNotCurrentWorkflowNode
+	}
+	for _, currentNode := range s.interrupted {
+		if currentNode.Reference.Equal(s.sessionAssociation.CurrentNode) {
+			return workflowstore.CurrentNodeStartContext{
+				Task:        workflowstore.TaskRecord{ID: *s.sessionTaskID},
+				CurrentNode: currentNode,
+			}, nil
+		}
+	}
+	for _, currentNode := range s.currentNodes {
+		if currentNode.Reference.Equal(s.sessionAssociation.CurrentNode) {
+			return workflowstore.CurrentNodeStartContext{
+				Task:        workflowstore.TaskRecord{ID: *s.sessionTaskID},
+				CurrentNode: currentNode,
+			}, nil
+		}
+	}
+	return workflowstore.CurrentNodeStartContext{}, workflowstore.ErrSessionNotCurrentWorkflowNode
 }
 
 func (s *currentNodeControllerStore) admitCount() int {
@@ -1270,6 +1301,7 @@ type blockingCurrentNodeRunner struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+	cause   error
 }
 
 func (r *blockingCurrentNodeRunner) PublishCurrentNode(context.Context, workflow.CurrentNodeReference, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentSteer, workflowExecutionStart, workflowruntime.Controller) error {
@@ -1281,6 +1313,9 @@ func (r *blockingCurrentNodeRunner) PrepareCurrentNode(context.Context, workflow
 		close(r.entered)
 	})
 	<-r.release
+	if r.cause != nil {
+		return r.cause
+	}
 	return errors.New("blocked current node setup released")
 }
 

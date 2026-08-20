@@ -44,6 +44,10 @@ type WorkflowTaskSessionResolver interface {
 	SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error)
 }
 
+type WorkflowSessionReactivator interface {
+	ReactivateWorkflowSession(context.Context, runtimeids.SessionID) error
+}
+
 var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction cannot be disabled for workflow task sessions")
 
 type Service struct {
@@ -52,6 +56,7 @@ type Service struct {
 	promptStore    PromptHistoryStore
 	promptCommands PromptCommandResolver
 	workflowTasks  WorkflowTaskSessionResolver
+	reactivator    WorkflowSessionReactivator
 	persisted      session.PersistedSessionResolver
 	askViews       servicecontract.AskViewService
 	approvalViews  servicecontract.ApprovalViewService
@@ -150,6 +155,14 @@ func (s *Service) WithWorkflowTaskSessionResolver(resolver WorkflowTaskSessionRe
 		return nil
 	}
 	s.workflowTasks = resolver
+	return s
+}
+
+func (s *Service) WithWorkflowSessionReactivator(reactivator WorkflowSessionReactivator) *Service {
+	if s == nil {
+		return nil
+	}
+	s.reactivator = reactivator
 	return s
 }
 

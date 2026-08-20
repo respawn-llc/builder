@@ -80,6 +80,179 @@ func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsAc
 	}
 }
 
+func TestReactivateWorkflowSessionReturnsAdmissionFailure(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(
+		t,
+		"task-reactivate-startup-failure",
+		"node-reactivate-startup-failure",
+	)
+	sessionID := runtimeids.NewSessionID()
+	taskID := reference.TaskID
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{{
+			Reference:  reference,
+			SessionID:  &sessionID,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+		}},
+		sessionTaskID: &taskID,
+		sessionAssociation: &workflowstore.TaskSessionAssociation{
+			SessionID:   sessionID,
+			CurrentNode: reference,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	cause := errors.New("prepare resumed Workflow runtime")
+	controller := newCurrentNodeControllerForTest(
+		t,
+		store,
+		failingCurrentNodeRunner{cause: cause},
+		authority,
+		1,
+	)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	err := controller.ReactivateWorkflowSession(context.Background(), sessionID)
+	if !errors.Is(err, cause) {
+		t.Fatalf("ReactivateWorkflowSession error = %v, want startup failure %v", err, cause)
+	}
+	if calls := store.interruptionCount(reference); calls != 1 {
+		t.Fatalf("startup-failure interruption writes = %d, want 1", calls)
+	}
+}
+
+func TestReactivateWorkflowSessionJoinsConcurrentExplicitResumeAdmission(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(
+		t,
+		"task-reactivate-concurrent-resume",
+		"node-reactivate-concurrent-resume",
+	)
+	sessionID := runtimeids.NewSessionID()
+	taskID := reference.TaskID
+	interrupted := workflow.CurrentNode{
+		Reference:  reference,
+		SessionID:  &sessionID,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+	}
+	store := &currentNodeControllerStore{
+		interrupted:   []workflow.CurrentNode{interrupted},
+		sessionTaskID: &taskID,
+		sessionAssociation: &workflowstore.TaskSessionAssociation{
+			SessionID:   sessionID,
+			CurrentNode: reference,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	admissionFailure := errors.New("blocked current node setup released")
+	runner := &blockingCurrentNodeRunner{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		cause:   admissionFailure,
+	}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if _, err := controller.ResumeTask(context.Background(), taskID); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	select {
+	case <-runner.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("explicit Resume admission did not begin")
+	}
+	store.mu.Lock()
+	store.interrupted = nil
+	store.currentNodes = []workflow.CurrentNode{{
+		Reference:  reference,
+		SessionID:  &sessionID,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}}
+	store.mu.Unlock()
+
+	reactivated := make(chan error, 1)
+	go func() {
+		reactivated <- controller.ReactivateWorkflowSession(context.Background(), sessionID)
+	}()
+	select {
+	case err := <-reactivated:
+		t.Fatalf("reactivation returned before concurrent Resume admission completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(runner.release)
+	err := <-reactivated
+	if !errors.Is(err, admissionFailure) {
+		t.Fatalf("ReactivateWorkflowSession error = %v, want joined admission failure", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.resumed) != 1 {
+		t.Fatalf("ResumeCurrentNode mutations = %d, want one shared Resume path", len(store.resumed))
+	}
+}
+
+func TestReactivateWorkflowSessionJoinsAlreadyPublishedWorkflowExecution(t *testing.T) {
+	fixture := newCurrentNodeQuestionFixture(t)
+	reference := currentNodeReferenceForControllerTest(
+		t,
+		"task-reactivate-published-resume",
+		"node-reactivate-published-resume",
+	)
+	release := make(chan struct{})
+	handle, sessionID := fixture.startQuestionExecution(
+		t,
+		reference,
+		func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
+			<-release
+			return nil
+		},
+	)
+	t.Cleanup(func() {
+		close(release)
+		if err := handle.Close(context.Background()); err != nil {
+			t.Errorf("close published Workflow execution: %v", err)
+		}
+	})
+	taskID := reference.TaskID
+	fixture.store.mu.Lock()
+	fixture.store.sessionTaskID = &taskID
+	fixture.store.sessionAssociation = &workflowstore.TaskSessionAssociation{
+		SessionID:   sessionID,
+		CurrentNode: reference,
+	}
+	fixture.store.currentNodes = []workflow.CurrentNode{{
+		Reference:  reference,
+		SessionID:  &sessionID,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingAdmitted},
+	}}
+	fixture.store.mu.Unlock()
+
+	if err := fixture.controller.ReactivateWorkflowSession(context.Background(), sessionID); err != nil {
+		t.Fatalf("ReactivateWorkflowSession: %v", err)
+	}
+	workflowRef, workflowScoped := handle.Scope().Workflow()
+	if !workflowScoped || !workflowRef.CurrentNode.Equal(reference) {
+		t.Fatalf("published execution scope = %+v, want Workflow Current Node %v", handle.Scope(), reference)
+	}
+	fixture.store.mu.Lock()
+	defer fixture.store.mu.Unlock()
+	if len(fixture.store.resumed) != 0 {
+		t.Fatalf("ResumeCurrentNode mutations = %d, want published Resume no-op", len(fixture.store.resumed))
+	}
+}
+
 func TestPostTurnCompactionReleasesTaskMutationLaneWhileApprovalFenceIsActive(t *testing.T) {
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
 	controller, operationRef, sessionID := newPostTurnFinalizationControllerForReferenceTest(

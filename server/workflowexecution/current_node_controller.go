@@ -142,6 +142,7 @@ type CurrentNodeController struct {
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionOutcome, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
+		ResolveCurrentSessionStartContext(context.Context, runtimeids.SessionID) (workflowstore.CurrentNodeStartContext, error)
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
 	runner    CurrentNodePublicationRunner
@@ -196,6 +197,7 @@ func NewCurrentNodeController(
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionOutcome, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
+		ResolveCurrentSessionStartContext(context.Context, runtimeids.SessionID) (workflowstore.CurrentNodeStartContext, error)
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	},
 	runner CurrentNodePublicationRunner,
@@ -900,6 +902,7 @@ func (c *CurrentNodeController) Close() error {
 	c.lifecycleBarrier.Lock()
 	var (
 		queuedPreparations []*taskPreparationBatch
+		queuedStarts       []currentNodeQueuedStart
 		workflowExecutions []sessionruntime.WorkflowExecutionRef
 	)
 	c.mu.Lock()
@@ -907,6 +910,7 @@ func (c *CurrentNodeController) Close() error {
 	c.closing = false
 	queuedPreparations = append([]*taskPreparationBatch(nil), c.preparationQueue...)
 	c.preparationQueue = nil
+	queuedStarts = append([]currentNodeQueuedStart(nil), c.explicitQueue...)
 	c.explicitQueue = nil
 	c.explicitQueued = make(map[workflow.CurrentNodeReferenceKey]struct{})
 	c.automaticQueue.clear()
@@ -922,6 +926,9 @@ func (c *CurrentNodeController) Close() error {
 	c.operations = make(map[workflow.CurrentNodeReferenceKey]*currentNodeOperation)
 	for _, batch := range queuedPreparations {
 		closeQueuedTaskPreparationBatch(batch, preparationShutdownCause())
+	}
+	for _, start := range queuedStarts {
+		start.completion.resolve(nil, errors.New("current node workflow controller shut down before admission"))
 	}
 	c.mu.Unlock()
 	c.lifecycleBarrier.Unlock()

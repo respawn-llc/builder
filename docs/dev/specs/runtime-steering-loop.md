@@ -8,7 +8,8 @@
 - A Workflow lifecycle may retain an Active Session Runtime while no Exact Execution Scope is live. Human Goal Steering remains available only for a no-op or mutation that does not require new ordinary Goal execution.
 - A Runtime in Workflow control-only admission accepts passive controls that require no model activation, including permitted Goal mutations, settings, and valid Worktree operations.
 - In that posture, a user Goal mutation that requires starting new ordinary Goal execution fails before Steering acceptance through ordinary Goal mutation error feedback.
-- In that posture, ordinary Send/Steer and post-turn Queue submission fail before acceptance with the existing Runtime-unavailable guidance to Resume. Kent creates no Queue Item, retains no hidden input, and starts no ordinary Agent execution.
+- In that posture, post-turn Queue submission fails before acceptance and creates no Queue Item.
+- Human Send/Steer reactivates the retained Current Node through the same Workflow Resume path as the explicit Resume action, then submits the input to the fresh Workflow Exact Execution Scope. It never starts an ordinary Agent execution.
 - Accepting a Workflow assignment changes that Runtime from Workflow control-only admission to ordinary start-preparing admission. Human Send/Steer, settings, and other ordinary Steering are accepted in that posture, but post-turn Queue submission remains unavailable because no Agent Turn has begun. No provider request is eligible until assignment preparation and application succeed and earlier accepted Steering has applied. A later Workflow Resume or assignment remains Workflow-owned. Retained-Session input does not activate model work.
 - Each Active Session Runtime is the sole authority for its mutable model and transcript state. Client state is derived from Runtime and durable Session state.
 - Steering acceptance establishes FIFO order. Kent promises no order between concurrent producers before one is accepted and gives no producer family priority.
@@ -21,7 +22,7 @@
 - Human Send/Steer, Runtime-affecting slash operations, short settings, model-visible technical entries, manual compaction scheduling, active-Runtime Workflow assignments, live Goal mutations, and active-Runtime Worktree enter/leave use Steering.
 - Human Send/Steer acceptance returns a server Queue Item identity used for pending display and discard. Kent uses no client request identity, request memo, replay key, generic operation result registry, or ambiguous-result reconciliation.
 - Valid human text is not rejected because provider, tool, Worktree, process, Reviewer, Workflow, compaction, or other internal Runtime work is active when that Runtime has an Agent execution that can reach another Step Boundary.
-- A Runtime in Workflow control-only admission has no eligible Step Boundary. Its ordinary input follows the pre-acceptance unavailable behavior above instead of becoming pending Steering.
+- A Runtime in Workflow control-only admission has no eligible Step Boundary. Human Send/Steer first reactivates Workflow Execution; input becomes eligible only through that reactivation.
 - While an Agent Step is running, accepted Steering waits for the next Step Boundary. An Idle Active Session Runtime begins processing accepted Steering without waiting for a prior Step.
 - The Runtime applies Steering one item at a time in accepted order. If one item waits for its concrete domain owner, later items remain accepted behind it.
 - Validation or eligibility failure before acceptance creates no Queue Item. An expected domain-owner failure after acceptance completes that operation's typed failure and leaves unrelated later Steering accepted.
@@ -76,10 +77,10 @@
 - The Workflow owner invokes the provider only after publication releases Workflow mutation ownership. Cancellation after publication but before provider invocation finalizes the published execution without invoking the provider.
 - After successful publication, Authority owns exact start exclusion through retirement. Manual Move and an authorized Task Interrupt use the ordinary running exact lifecycle.
 - A stale or rejected preparation may leave already-accepted Session facts. It does not gain exact liveness or authorize Interrupt.
-- Existing explicit Resume is the recovery path for an interrupted Current Node.
+- Explicit Resume and retained-Session Send/Steer share one recovery path for an interrupted Current Node.
 - Process death may occur before start disposition. On the next startup, the existing Workflow restart owner marks affected executable Current Nodes interrupted.
 - Kent adds no retry, replay, compensation, rollback, clear wait, notification, listener, polling, caller-independent continuation, cleanup worker, or second admission attempt.
-- When no exact execution remains but Workflow control retains the Runtime, the Runtime drains work accepted under ordinary admission before changing to Workflow control-only admission. Input submitted after that change follows the control-only rejection contract and creates no Queue Item or Pending Work.
+- When no exact execution remains but Workflow control retains the Runtime, the Runtime drains work accepted under ordinary admission before changing to Workflow control-only admission. Post-turn Queue input submitted after that change follows the control-only rejection contract; human Send/Steer follows the Workflow reactivation contract above.
 - Previously accepted input that was committed before a Workflow start failure remains ordinary Session transcript state. It is not hidden pending input or a replay record.
 
 ## Exact-Start Transition Window
@@ -102,7 +103,7 @@
 | Operation family | Observable ownership |
 | --- | --- |
 | Human Send/Steer while an ordinary Agent execution is eligible | Steering; acceptance returns a Queue Item without waiting for model work. |
-| Human Send/Steer while the Runtime uses Workflow control-only admission | Reject before acceptance with Runtime-unavailable Resume guidance; create no Queue Item or pending Steering. |
+| Human Send/Steer while the Runtime uses Workflow control-only admission | Resume the retained Current Node through Workflow Execution, wait for its fresh Exact Execution Scope, then submit the input through ordinary live Steering. |
 | Human Send/Steer without an Active Session Runtime | The interactive lifecycle establishes Runtime attachment before submission; the mutation route does not create one. |
 | Cross-Session `kent run steer` | Requires the exact-execution owner and Runtime to identify the same accepting, running Agent Exact Execution Scope; transition, Workflow-completed Step-closing, and finalization gaps return the existing typed unavailable result and never become Runtime-level input. |
 | Thinking level, Fast Mode, Reviewer enabled, auto-compaction enabled, Questions enabled | Steering for later Agent Steps. |

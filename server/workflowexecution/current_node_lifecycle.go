@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"strings"
 
+	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 const ReasonCurrentNodeStartupRecovery workflow.CurrentNodeInterruptionReason = "workflow_startup_recovery"
@@ -163,7 +165,139 @@ type TaskResumePreflight struct {
 }
 
 func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) (TaskResumeResult, error) {
-	return c.resumeTask(ctx, taskID, nil, nil)
+	result, _, err := c.resumeTask(ctx, taskID, nil, nil, nil)
+	return result, err
+}
+
+func (c *CurrentNodeController) ReactivateWorkflowSession(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	if sessionID.IsZero() {
+		return errors.New("session id is required")
+	}
+	input, err := c.store.ResolveCurrentSessionStartContext(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	result, completion, err := c.resumeTask(
+		ctx,
+		input.Task.ID,
+		nil,
+		nil,
+		&input.CurrentNode.Reference,
+	)
+	if err != nil {
+		return err
+	}
+	if result.Outcome != TaskResumeApplied && result.Outcome != TaskResumeNoOp {
+		return fmt.Errorf("workflow Session reactivation returned invalid Resume outcome %q", result.Outcome)
+	}
+	if completion != nil {
+		handle, waitErr := completion.wait(ctx)
+		if waitErr != nil {
+			return fmt.Errorf("reactivate workflow Session %s: %w", sessionID, waitErr)
+		}
+		return validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+	}
+	handle, live := c.authority.SessionExecution(sessionID)
+	if !live {
+		return fmt.Errorf(
+			"reactivate workflow Session %s: Current Node %v has no admission owner or live execution",
+			sessionID,
+			input.CurrentNode.Reference,
+		)
+	}
+	return validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+}
+
+func validateReactivatedWorkflowExecution(
+	handle sessionruntime.ExecutionHandle,
+	sessionID runtimeids.SessionID,
+	currentNode workflow.CurrentNodeReference,
+) error {
+	if handle == nil {
+		return errors.New("reactivated workflow execution is absent")
+	}
+	scope := handle.Scope()
+	if scope.Kind() != sessionruntime.ExecutionScopeAgent {
+		return fmt.Errorf(
+			"reactivated workflow Session %s started non-Agent execution scope %s",
+			sessionID,
+			scope.ID(),
+		)
+	}
+	resource, hasResource := scope.Resource()
+	workflowRef, workflowScoped := scope.Workflow()
+	if !hasResource ||
+		resource.SessionID() != sessionID ||
+		!workflowScoped ||
+		!workflowRef.CurrentNode.Equal(currentNode) {
+		return fmt.Errorf(
+			"reactivated workflow Session %s started mismatched execution scope %s",
+			sessionID,
+			scope.ID(),
+		)
+	}
+	return nil
+}
+
+func (c *CurrentNodeController) currentNodeAdmissionCompletionLocked(
+	key workflow.CurrentNodeReferenceKey,
+) *currentNodeAdmissionCompletion {
+	for _, batch := range c.preparationQueue {
+		for _, start := range batch.starts {
+			startKey, err := start.reference.Key()
+			if err != nil {
+				panic(fmt.Sprintf("inspect queued Task preparation admission: %v", err))
+			}
+			if startKey == key {
+				return start.completion
+			}
+		}
+	}
+	for _, batch := range c.preparationRunning {
+		for _, start := range batch.starts {
+			startKey, err := start.reference.Key()
+			if err != nil {
+				panic(fmt.Sprintf("inspect running Task preparation admission: %v", err))
+			}
+			if startKey == key {
+				return start.completion
+			}
+		}
+	}
+	for _, start := range c.explicitQueue {
+		startKey, err := start.reference.Key()
+		if err != nil {
+			panic(fmt.Sprintf("inspect explicit admission queue: %v", err))
+		}
+		if startKey == key {
+			return start.completion
+		}
+	}
+	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+		startKey, err := entry.start.reference.Key()
+		if err != nil {
+			panic(fmt.Sprintf("inspect automatic admission queue: %v", err))
+		}
+		if startKey == key {
+			return entry.start.completion
+		}
+	}
+	if start, exists := c.explicitReservations[key]; exists {
+		return start.completion
+	}
+	if start, exists := c.automaticReservations[key]; exists {
+		return start.completion
+	}
+	if start, exists := c.admissionWorkers[key]; exists {
+		return start.completion
+	}
+	return nil
 }
 
 // PromoteConcurrencyQueuedTask moves automatic Current Nodes waiting for agent
@@ -222,7 +356,8 @@ func (c *CurrentNodeController) ResumeTaskWithPreparation(
 	if finalizer == nil {
 		return TaskResumeResult{}, errors.New("task resume preparation finalizer is required")
 	}
-	return c.resumeTask(ctx, taskID, &preparation, finalizer)
+	result, _, err := c.resumeTask(ctx, taskID, &preparation, finalizer, nil)
+	return result, err
 }
 
 type TaskResumeConflictError struct {
@@ -324,13 +459,15 @@ func (c *CurrentNodeController) resumeTask(
 	taskID workflow.TaskID,
 	preparation *TaskStartPreparation,
 	finalizer TaskPreparationFinalizer,
-) (TaskResumeResult, error) {
+	watch *workflow.CurrentNodeReference,
+) (TaskResumeResult, *currentNodeAdmissionCompletion, error) {
 	if c == nil {
-		return TaskResumeResult{}, errors.New("current node workflow controller is required")
+		return TaskResumeResult{}, nil, errors.New("current node workflow controller is required")
 	}
 	if preparation != nil && finalizer == nil {
-		return TaskResumeResult{}, errors.New("task resume preparation finalizer is required")
+		return TaskResumeResult{}, nil, errors.New("task resume preparation finalizer is required")
 	}
+	var watchedCompletion *currentNodeAdmissionCompletion
 	result, err := runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (TaskResumeResult, error) {
 		var resolution workflowstore.TaskAttentionResolution
 		classification, err := c.classifyTaskResume(ctx, taskID)
@@ -338,6 +475,15 @@ func (c *CurrentNodeController) resumeTask(
 			return TaskResumeResult{}, err
 		}
 		if len(classification.alreadyResumed) != 0 {
+			if watch != nil {
+				key, keyErr := watch.Key()
+				if keyErr != nil {
+					return TaskResumeResult{}, keyErr
+				}
+				c.mu.Lock()
+				watchedCompletion = c.currentNodeAdmissionCompletionLocked(key)
+				c.mu.Unlock()
+			}
 			return TaskResumeResult{
 				Outcome:      TaskResumeNoOp,
 				CurrentNodes: classification.alreadyResumed,
@@ -380,6 +526,7 @@ func (c *CurrentNodeController) resumeTask(
 			eligibleStarts = append(eligibleStarts, currentNodeQueuedStart{
 				reference:          currentNode.Reference,
 				taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+				completion:         newCurrentNodeAdmissionCompletion(),
 			})
 		}
 		c.mu.Lock()
@@ -419,6 +566,10 @@ func (c *CurrentNodeController) resumeTask(
 			for _, start := range starts {
 				if queueErr := c.queueExplicitStartLocked(start); queueErr != nil {
 					resumeErrs = append(resumeErrs, fmt.Errorf("queue resumed current node %v: %w", start.reference, queueErr))
+					continue
+				}
+				if watch != nil && start.reference.Equal(*watch) {
+					watchedCompletion = start.completion
 				}
 			}
 		} else if len(starts) > 0 {
@@ -428,6 +579,13 @@ func (c *CurrentNodeController) resumeTask(
 			}
 			if batchErr != nil {
 				resumeErrs = append(resumeErrs, batchErr)
+			} else if watch != nil {
+				for _, start := range starts {
+					if start.reference.Equal(*watch) {
+						watchedCompletion = start.completion
+						break
+					}
+				}
 			}
 		}
 		c.mu.Unlock()
@@ -436,7 +594,7 @@ func (c *CurrentNodeController) resumeTask(
 			CurrentNodes: resumed,
 		}, errors.Join(resumeErrs...)
 	})
-	return result, err
+	return result, watchedCompletion, err
 }
 
 func (c *CurrentNodeController) ApplyPendingApproval(

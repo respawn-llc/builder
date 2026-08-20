@@ -595,8 +595,9 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 	controller.mu.Lock()
 	controller.agentCapacityActive = 1
 	controller.automaticReservations[reservedKey] = currentNodeQueuedStart{
-		reference: reserved,
-		policy:    currentNodeAdmissionAutomaticAgent,
+		reference:  reserved,
+		policy:     currentNodeAdmissionAutomaticAgent,
+		completion: newCurrentNodeAdmissionCompletion(),
 		agentCapacityLease: &currentNodeAgentCapacityLease{
 			owner: currentNodeAgentCapacityReservation,
 		},

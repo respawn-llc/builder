@@ -277,8 +277,10 @@
 - Accepted live user steering re-enters the same live completion policy. `structured_output` and `unstructured_output` generation use automatic tool selection.
 - Manual interruption releases the specialized Exact Execution Scope.
 - If the retained Workflow Session still belongs to the interrupted Current Node, Kent may retain its Active Session Runtime for passive control without an Exact Execution Scope.
-- In that retained control-only posture, Goal, settings, and valid Worktree controls remain available, while ordinary Send/Steer and post-turn Queue input fail before acceptance with Resume guidance and create no pending input.
-- Ordinary input does not activate the retained Current Node. Explicit Workflow Resume starts a fresh Exact Execution Scope and remains the sole reactivation path.
+- In that retained control-only posture, Goal, settings, and valid Worktree controls remain available. Post-turn Queue input fails before acceptance and creates no Queue Item.
+- A human Send/Steer to the retained Session and explicit Workflow Resume are two entry points into the same Current Node reactivation path. Both durably resume the interrupted Current Node and start a fresh Workflow Exact Execution Scope; Send/Steer additionally submits its human input to that reactivated execution.
+- Send/Steer reactivation never starts an ordinary non-Workflow Session execution and never creates a second Transition authority. If the retained Session no longer belongs to that Current Node, reactivation fails before accepting the input.
+- Send/Steer reactivation has the same completion contract and tool-choice policy as explicit Resume. It does not create a separate interactive completion mode.
 - Resume starts a fresh Exact Execution Scope while retaining the Session Contract generation's effective completion mode.
 - `complete_node` is always available in tool completion mode, regardless of the Assignee's configured tools.
 - `shell_command` mode requires external structured completion rather than an ordinary assistant final answer.

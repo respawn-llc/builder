@@ -211,6 +211,15 @@ func (r staticRuntimeControlWorkflowTaskResolver) SessionHasWorkflowTask(context
 	return r.workflow, nil
 }
 
+type runtimeControlWorkflowSessionReactivatorFunc func(context.Context, runtimeids.SessionID) error
+
+func (f runtimeControlWorkflowSessionReactivatorFunc) ReactivateWorkflowSession(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) error {
+	return f(ctx, sessionID)
+}
+
 type runtimeControlFakeClient struct {
 	mu                  sync.Mutex
 	responses           []llm.Response
@@ -648,6 +657,45 @@ func TestServiceSubmitUserTurnPreservesBlankFinalPresence(t *testing.T) {
 	}
 	if resp.ResultKind != clientui.UserTurnResultKindSilentFinal {
 		t.Fatalf("blank final response result kind = %v, want silent final", resp.ResultKind)
+	}
+}
+
+func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(
+		t,
+		finalResponseRuntimeControlClient(),
+		nil,
+		runtime.Config{Model: "gpt-5"},
+	)
+	engine.EnterRetainedWorkflowControl()
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	reactivations := 0
+	service.WithWorkflowSessionReactivator(runtimeControlWorkflowSessionReactivatorFunc(
+		func(_ context.Context, got runtimeids.SessionID) error {
+			reactivations++
+			if got != sessionID {
+				t.Fatalf("reactivated session = %s, want %s", got, sessionID)
+			}
+			engine.ExitRetainedWorkflowControl()
+			return nil
+		},
+	))
+
+	response, err := service.SubmitUserTurn(
+		context.Background(),
+		runtimeControlUserTurnRequest(store, "reactivate-retained", "continue"),
+	)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn: %v", err)
+	}
+	if reactivations != 1 {
+		t.Fatalf("workflow reactivations = %d, want 1", reactivations)
+	}
+	if response.ResultKind != clientui.UserTurnResultKindAssistantFinal {
+		t.Fatalf("SubmitUserTurn response = %+v, want assistant final", response)
 	}
 }
 

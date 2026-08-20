@@ -56,6 +56,11 @@ func newTaskPreparationBatch(
 		return nil, errors.New("task preparation requires at least one explicit Current Node start")
 	}
 	ordered := append([]currentNodeQueuedStart(nil), starts...)
+	for index := range ordered {
+		if ordered[index].completion == nil {
+			ordered[index].completion = newCurrentNodeAdmissionCompletion()
+		}
+	}
 	sort.Slice(ordered, func(left, right int) bool {
 		leftReference := ordered[left].reference
 		rightReference := ordered[right].reference
@@ -335,6 +340,10 @@ func (c *CurrentNodeController) publishFailedTaskPreparationBatch(
 	persistenceErr error,
 	interrupted []workflow.CurrentNodeReference,
 ) {
+	failure := errors.Join(cause, persistenceErr)
+	for _, start := range batch.starts {
+		start.completion.resolve(nil, failure)
+	}
 	finalization := TaskPreparationFinalization{Kind: TaskPreparationFailed, Cause: cause}
 	if persistenceErr != nil {
 		finalization = TaskPreparationFinalization{
@@ -384,7 +393,11 @@ func (c *CurrentNodeController) finalizeCanceledTaskPreparationBatch(
 	if cause == nil {
 		cause = errors.New("task preparation was canceled")
 	}
-	batch.finalizer(TaskPreparationFinalization{Kind: kind, Cause: errors.Join(cause, retireErr)})
+	failure := errors.Join(cause, retireErr)
+	for _, start := range batch.starts {
+		start.completion.resolve(nil, failure)
+	}
+	batch.finalizer(TaskPreparationFinalization{Kind: kind, Cause: failure})
 	c.wakeAdmissionWorker()
 }
 
@@ -433,6 +446,9 @@ func closeQueuedTaskPreparationBatch(batch *taskPreparationBatch, cause error) {
 		return
 	}
 	batch.cancel(cause)
+	for _, start := range batch.starts {
+		start.completion.resolve(nil, cause)
+	}
 	close(batch.done)
 }
 
