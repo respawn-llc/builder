@@ -1407,6 +1407,110 @@ func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata
 	}
 }
 
+func TestAutomaticFreshSessionBindsOnlyAfterAssignmentCommit(t *testing.T) {
+	f := newCurrentNodeRunnerFixtureWithPersistenceGate(
+		t,
+		NewScriptedClient(
+			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+			ScriptedRuntimeError(ErrScriptedRuntime),
+		),
+	)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	assignmentPending, releaseAssignment := f.persistenceGate.BlockWhen(
+		func(snapshot session.PersistedStoreSnapshot) bool {
+			return snapshot.Meta.LastSequence >= 2
+		},
+	)
+	t.Cleanup(releaseAssignment)
+
+	currentNode := f.startTask(t, task)
+	select {
+	case <-assignmentPending:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("workflow assignment did not reach persistence")
+	}
+	nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("list Current Nodes before assignment commit: %v", err)
+	}
+	if len(nodes) != 1 || !nodes[0].Reference.Equal(currentNode) || nodes[0].SessionID != nil {
+		t.Fatalf("Current Nodes before assignment commit = %+v, want unbound %v", nodes, currentNode)
+	}
+
+	releaseAssignment()
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].SessionID != nil &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil &&
+			len(f.client.Requests()) == 1
+	})
+}
+
+func TestAutomaticUncommittedFreshAssignmentDoesNotBindSessionToCurrentNode(t *testing.T) {
+	cause := errors.New("assignment persistence failed")
+	f := newCurrentNodeRunnerFixtureWithPersistenceGate(
+		t,
+		NewScriptedClient(
+			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+			ScriptedRuntimeError(ErrScriptedRuntime),
+		),
+	)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	f.persistenceGate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.LastSequence >= 2
+	}, cause)
+
+	currentNode := f.startTask(t, task)
+	nodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	})
+	f.waitForTaskQuiescence(t, task.ID)
+	if nodes[0].SessionID != nil {
+		t.Fatalf(
+			"Current Node retained unassigned Session %s after assignment failure",
+			*nodes[0].SessionID,
+		)
+	}
+	sessionIDs, err := f.metadata.ListProjectSessionIDs(context.Background(), f.projectID)
+	if err != nil {
+		t.Fatalf("list project Sessions: %v", err)
+	}
+	if len(sessionIDs) != 0 {
+		t.Fatalf("project Sessions after uncommitted assignment = %+v, want none", sessionIDs)
+	}
+
+	f.restartRuntime(t)
+	resumed, err := f.controller.ResumeTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ResumeTask after assignment failure: %v", err)
+	}
+	if resumed.Outcome != workflowexecution.TaskResumeApplied ||
+		len(resumed.CurrentNodes) != 1 ||
+		!resumed.CurrentNodes[0].Reference.Equal(currentNode) {
+		t.Fatalf("ResumeTask result = %+v, want applied %v", resumed, currentNode)
+	}
+	nodes = f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].SessionID != nil &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil &&
+			len(f.client.Requests()) == 1
+	})
+	assignments := workflowAssignments(f.client.Requests()[0])
+	if len(assignments) != 1 ||
+		assignments[0].sourcePath != workflowruntime.CurrentNodePromptIdentity(currentNode) {
+		t.Fatalf("resumed request assignments = %+v, want original Current Node assignment", assignments)
+	}
+}
+
 func TestManualMoveUncommittedFreshAssignmentCleansSessionAndLeavesOriginCurrent(t *testing.T) {
 	cause := errors.New("assignment persistence failed")
 	f := newCurrentNodeRunnerFixtureWithPersistenceGate(
@@ -2195,60 +2299,6 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	}); err != nil {
 		t.Fatalf("attached Resource Generation was replaced on Resume: %v", err)
 	}
-}
-
-func TestResumeInterruptsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testing.T) {
-	f := newCurrentNodeRunnerFixture(t)
-	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
-	task := f.createTask(t, workflowID)
-	if err := f.store.LockTaskExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
-		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:       workflow.ExecutionTargetModeNone,
-			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-		},
-		Root: workflowstore.ExecutionRoot{
-			SourceWorkspaceID:   f.workspaceID,
-			SourceWorkspaceRoot: f.workspace,
-		},
-	}); err != nil {
-		t.Fatalf("LockTaskExecutionTarget: %v", err)
-	}
-	started, err := f.store.StartTask(context.Background(), task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	currentNode := started.Mutation.Created[0]
-	if currentNode.SessionID != nil {
-		t.Fatalf("unprepared Current Node Session = %s, want absent", *currentNode.SessionID)
-	}
-	f.restartRuntime(t)
-	recovered, err := f.controller.Recover(context.Background())
-	if err != nil {
-		t.Fatalf("recover restarted Current Nodes: %v", err)
-	}
-	if recovered != 1 {
-		t.Fatalf("recovered Current Nodes = %d, want one", recovered)
-	}
-
-	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
-		t.Fatalf("ResumeTask: %v", err)
-	}
-	interrupted := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 &&
-			nodes[0].Reference.Equal(currentNode.Reference) &&
-			nodes[0].Scheduling != nil &&
-			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted &&
-			nodes[0].Scheduling.Interruption != nil
-	})
-	if requests := f.client.Requests(); len(requests) != 0 {
-		t.Fatalf("model requests = %d, want none for missing Resume assignment", len(requests))
-	}
-	if interrupted[0].SessionID != nil {
-		if count := f.workflowAssignmentRecordCount(t, *interrupted[0].SessionID); count != 0 {
-			t.Fatalf("workflow assignment records = %d, want none from Resume", count)
-		}
-	}
-	f.waitForTaskQuiescence(t, task.ID)
 }
 
 func requestAdvertisesTool(request llm.Request, id toolspec.ID) bool {

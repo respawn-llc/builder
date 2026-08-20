@@ -8,6 +8,7 @@ import (
 	"maps"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"text/template"
 	"time"
@@ -225,13 +226,13 @@ func (s *Starter) prepareCurrentNodeAgentAssignment(
 	if steerErr != nil {
 		return nil, prepared.cleanup(steerErr)
 	}
-	uncommittedCleanup := prepared.cleanup
+	unboundCleanup := prepared.cleanup
 	prepared.cleanup = func(err error) error { return err }
 	return &currentNodeAgentAssignmentSteer{
-		reference:          input.CurrentNode.Reference,
-		completion:         steer,
-		prepared:           prepared,
-		uncommittedCleanup: uncommittedCleanup,
+		reference:      input.CurrentNode.Reference,
+		completion:     steer,
+		prepared:       prepared,
+		unboundCleanup: unboundCleanup,
 		retainSourceRuntime: admission.RuntimeAvailable &&
 			input.ContextMode == workflow.ContextModeContinueSession &&
 			!input.EnteringEdge.RequiresApproval &&
@@ -262,7 +263,7 @@ func (s *Starter) PrepareManualMoveAssignments(
 	cleanupPrepared := func(cause error) error {
 		for _, steer := range steers {
 			if assignment, ok := steer.(*currentNodeAgentAssignmentSteer); ok {
-				cause = assignment.cleanupUncommitted(cause)
+				cause = assignment.cleanupUnboundSession(cause)
 			}
 		}
 		for sessionID, restoration := range restorations {
@@ -458,17 +459,36 @@ type currentNodeAgentAssignmentSteer struct {
 	reference           workflow.CurrentNodeReference
 	completion          runtime.WorkflowAssignmentSteer
 	prepared            preparedCurrentNodeAgentSession
-	uncommittedCleanup  func(error) error
+	unboundCleanup      func(error) error
 	retainSourceRuntime bool
+
+	cleanupMu  sync.Mutex
+	bindOnce   sync.Once
+	bindingErr error
 }
 
-func (s *currentNodeAgentAssignmentSteer) cleanupUncommitted(err error) error {
-	if s == nil || s.uncommittedCleanup == nil {
+func (s *currentNodeAgentAssignmentSteer) cleanupUnboundSession(err error) error {
+	if s == nil {
 		return err
 	}
-	cleanup := s.uncommittedCleanup
-	s.uncommittedCleanup = nil
+	s.cleanupMu.Lock()
+	if s.unboundCleanup == nil {
+		s.cleanupMu.Unlock()
+		return err
+	}
+	cleanup := s.unboundCleanup
+	s.unboundCleanup = nil
+	s.cleanupMu.Unlock()
 	return cleanup(err)
+}
+
+func (s *currentNodeAgentAssignmentSteer) discardUnboundSessionCleanup() {
+	if s == nil {
+		return
+	}
+	s.cleanupMu.Lock()
+	s.unboundCleanup = nil
+	s.cleanupMu.Unlock()
 }
 
 func (s *currentNodeAgentAssignmentSteer) SessionID() runtimeids.SessionID {
@@ -482,15 +502,42 @@ func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) (session.Com
 	if s == nil {
 		return session.CommitReceipt{}, errors.New("current node agent assignment steer is required")
 	}
-	return s.completion.Wait(ctx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	receipt, waitErr := s.completion.Wait(ctx)
+	if !receipt.Committed {
+		cancellation := context.Cause(ctx)
+		if cancellation == nil || !errors.Is(waitErr, cancellation) {
+			waitErr = s.cleanupUnboundSession(waitErr)
+		}
+		return receipt, waitErr
+	}
+	s.bindOnce.Do(func() {
+		if s.prepared.bindSession != nil {
+			s.bindingErr = s.prepared.bindSession(context.WithoutCancel(ctx))
+		}
+	})
+	if s.bindingErr != nil {
+		bindingErr := errors.Join(waitErr, s.bindingErr)
+		if s.prepared.disposable {
+			bindingErr = s.cleanupUnboundSession(bindingErr)
+		} else {
+			s.discardUnboundSessionCleanup()
+		}
+		return session.CommitReceipt{}, bindingErr
+	}
+	return receipt, waitErr
 }
 
 type preparedCurrentNodeAgentSession struct {
-	root    workflowstore.ExecutionRoot
-	plan    launch.SessionPlan
-	client  llm.Client
-	mode    workflowruntime.CompletionMode
-	cleanup func(error) error
+	root        workflowstore.ExecutionRoot
+	plan        launch.SessionPlan
+	client      llm.Client
+	mode        workflowruntime.CompletionMode
+	disposable  bool
+	bindSession func(context.Context) error
+	cleanup     func(error) error
 }
 
 func (s *Starter) prepareCurrentNodeAgentSession(
@@ -541,7 +588,6 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 	if err != nil {
 		return preparedCurrentNodeAgentSession{}, restoreRetainedMetadata(err)
 	}
-	sessionBound := false
 	cleanup := func(err error) error {
 		if retainedSnapshot != nil {
 			return restoreRetainedMetadata(err)
@@ -549,26 +595,7 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 		if !disposable {
 			return err
 		}
-		cleanupCtx := context.WithoutCancel(ctx)
-		if sessionBound && input.CurrentNode.SessionID != nil {
-			cloneSessionID := plan.Descriptor.SessionID()
-			if _, restoreErr := s.store.BindSessionToCurrentNode(cleanupCtx, workflowstore.CurrentNodeSessionBindingRequest{
-				Association: workflowstore.TaskSessionAssociationRequest{
-					SessionID:    *input.CurrentNode.SessionID,
-					CurrentNode:  input.CurrentNode.Reference,
-					AssociatedAt: time.Now().UTC(),
-				},
-				ExpectedCurrentSessionID: &cloneSessionID,
-			}); restoreErr != nil {
-				return errors.Join(err, fmt.Errorf(
-					"restore current node %v source Session %q before clone cleanup: %w",
-					input.CurrentNode.Reference,
-					input.CurrentNode.SessionID,
-					restoreErr,
-				))
-			}
-		}
-		return errors.Join(err, s.cleanupSession(cleanupCtx, plan.Descriptor))
+		return errors.Join(err, s.cleanupSession(context.WithoutCancel(ctx), plan.Descriptor))
 	}
 	if err := s.applyCurrentNodeSessionMetadata(ctx, input, &plan); err != nil {
 		return preparedCurrentNodeAgentSession{}, cleanup(err)
@@ -584,6 +611,7 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 	if err != nil {
 		return preparedCurrentNodeAgentSession{}, cleanup(err)
 	}
+	var bindPreparedSession func(context.Context) error
 	if sessionPrepared {
 		if err := s.store.ValidateCurrentNodeSessionBinding(
 			ctx,
@@ -593,27 +621,26 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 			return preparedCurrentNodeAgentSession{}, cleanup(err)
 		}
 	} else if bindSession {
-		if _, err := s.store.BindSessionToCurrentNode(ctx, workflowstore.CurrentNodeSessionBindingRequest{
-			Association: workflowstore.TaskSessionAssociationRequest{
-				SessionID:    plan.Descriptor.SessionID(),
-				CurrentNode:  input.CurrentNode.Reference,
-				AssociatedAt: time.Now().UTC(),
-			},
-			ExpectedCurrentSessionID: input.SourceSessionID,
-		}); err != nil {
-			return preparedCurrentNodeAgentSession{}, cleanup(err)
-		}
-		sessionBound = true
-		if input.CurrentNode.SessionID == nil {
-			cleanup = func(err error) error { return err }
+		bindPreparedSession = func(bindCtx context.Context) error {
+			_, err := s.store.BindSessionToCurrentNode(bindCtx, workflowstore.CurrentNodeSessionBindingRequest{
+				Association: workflowstore.TaskSessionAssociationRequest{
+					SessionID:    plan.Descriptor.SessionID(),
+					CurrentNode:  input.CurrentNode.Reference,
+					AssociatedAt: time.Now().UTC(),
+				},
+				ExpectedCurrentSessionID: input.SourceSessionID,
+			})
+			return err
 		}
 	}
 	return preparedCurrentNodeAgentSession{
-		root:    root,
-		plan:    plan,
-		client:  client,
-		mode:    mode,
-		cleanup: cleanup,
+		root:        root,
+		plan:        plan,
+		client:      client,
+		mode:        mode,
+		disposable:  disposable,
+		bindSession: bindPreparedSession,
+		cleanup:     cleanup,
 	}, nil
 }
 
