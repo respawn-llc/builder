@@ -11,7 +11,7 @@ import {
 } from "@app/server-api-contract/gen/kent/api/server/server_pb";
 import { InternalFailureDetailsSchema } from "@app/server-api-contract/gen/kent/api/shared/foundation_pb";
 import { ContractError, RpcError } from "./errors";
-import type { JsonValue } from "./json";
+import { compactJsonObject, type JsonValue } from "./json";
 import { rpcErrorCodes } from "./rpcErrorCodes";
 
 type GeneratedProjectReadErrorDetail =
@@ -259,12 +259,6 @@ function compactProjectErrorData(
     ["reason", reason],
     ...Object.entries(values).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
   ]);
-}
-
-function compactJsonObject(values: Readonly<Record<string, JsonValue | undefined>>): JsonValue {
-  return Object.fromEntries(
-    Object.entries(values).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
-  );
 }
 
 function serverNotReadyReason(reason: ServerNotReadyReason): string {
