@@ -48,9 +48,8 @@ type authorityRuntimeEntry struct {
 	engine      *runtime.Engine
 	sessionFeed *sessionFeedSequencer
 	retain      func() (io.Closer, error)
-	mainView    atomic.Pointer[runtimeMainViewPublication]
+	mainView    atomic.Pointer[clientui.RuntimeMainView]
 
-	publicationMu  sync.Mutex
 	mu             sync.Mutex
 	lifecycle      authorityRuntimeEntryLifecycle
 	feedReady      bool
@@ -346,13 +345,13 @@ func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(context.Context) ([]run
 		if !ok {
 			panic("Runtime Main View index contains an invalid entry")
 		}
-		publication := entry.mainView.Load()
-		if publication == nil || !publication.view.Activity.ActiveForControl() {
+		view := entry.mainView.Load()
+		if view == nil || !view.Activity.ActiveForControl() {
 			return true
 		}
 		snapshots = append(snapshots, runtimeactivity.ActiveSessionSnapshot{
 			SessionID: entry.ref.SessionID().String(),
-			Activity:  publication.view.Activity,
+			Activity:  view.Activity,
 		})
 		return true
 	})
@@ -603,19 +602,12 @@ func (r *RuntimeRegistry) publishRuntimeReadModelUpdate(sessionID string, update
 		return nil
 	}
 	if authorityEntry := r.authorityEntryBySession(sessionID); authorityEntry != nil {
-		completed := cloneRuntimeReadModelUpdate(update)
-		if err := completed.Validate(); err != nil {
-			panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", completed, err))
+		if err := update.Validate(); err != nil {
+			panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
 		}
-		authorityEntry.publicationMu.Lock()
-		defer authorityEntry.publicationMu.Unlock()
-		current := authorityEntry.mainView.Load()
-		if current != nil && !completed.Version.NewerThan(current.update.Version) {
-			return nil
-		}
-		publicationErr := r.publishRuntimeMainViewLocked(authorityEntry, completed)
-		authorityEntry.sessionFeed.PublishRuntimeReadModel(completed)
-		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, completed.Activity.ActiveForControl())
+		publicationErr := r.publishRuntimeMainView(authorityEntry, update.Version, update.Activity)
+		authorityEntry.sessionFeed.PublishRuntimeReadModel(update)
+		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, update.Activity.ActiveForControl())
 		return publicationErr
 	}
 	return nil

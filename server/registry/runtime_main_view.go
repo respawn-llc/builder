@@ -7,11 +7,6 @@ import (
 	"core/shared/clientui"
 )
 
-type runtimeMainViewPublication struct {
-	update clientui.RuntimeReadModelUpdate
-	view   clientui.RuntimeMainView
-}
-
 func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.RuntimeMainView, bool) {
 	if r == nil {
 		return clientui.RuntimeMainView{}, false
@@ -28,31 +23,34 @@ func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.Ru
 	if !ok {
 		panic("Runtime Main View index contains an invalid entry")
 	}
-	publication := entry.mainView.Load()
-	if publication == nil {
+	view := entry.mainView.Load()
+	if view == nil {
 		return clientui.RuntimeMainView{}, false
 	}
-	return publication.view, true
+	return *view, true
 }
 
 func (r *RuntimeRegistry) republishRuntimeMainView(entry *authorityRuntimeEntry) error {
 	if r == nil || entry == nil {
 		return nil
 	}
-	entry.publicationMu.Lock()
-	defer entry.publicationMu.Unlock()
-	publication := entry.mainView.Load()
-	if publication == nil {
+	view := entry.mainView.Load()
+	if view == nil {
 		return nil
 	}
-	return r.publishRuntimeMainViewLocked(entry, publication.update)
+	return r.publishRuntimeMainView(entry, view.Version, view.Activity)
 }
 
-func (r *RuntimeRegistry) publishRuntimeMainViewLocked(
+func (r *RuntimeRegistry) publishRuntimeMainView(
 	entry *authorityRuntimeEntry,
-	update clientui.RuntimeReadModelUpdate,
+	version clientui.ReadModelVersion,
+	activity clientui.RuntimeActivity,
 ) error {
-	view, err := runtimeview.MainViewFromRuntimeActivity(entry.engine, update.Version, update.Activity)
+	if activity.ActiveStep != nil {
+		active := *activity.ActiveStep
+		activity.ActiveStep = &active
+	}
+	view, err := runtimeview.MainViewFromRuntimeActivity(entry.engine, version, activity)
 	if err != nil {
 		return err
 	}
@@ -62,15 +60,6 @@ func (r *RuntimeRegistry) publishRuntimeMainViewLocked(
 	if !ready {
 		return nil
 	}
-	entry.mainView.Store(&runtimeMainViewPublication{update: update, view: view})
+	entry.mainView.Store(&view)
 	return nil
-}
-
-func cloneRuntimeReadModelUpdate(update clientui.RuntimeReadModelUpdate) clientui.RuntimeReadModelUpdate {
-	cloned := update
-	if update.Activity.ActiveStep != nil {
-		active := *update.Activity.ActiveStep
-		cloned.Activity.ActiveStep = &active
-	}
-	return cloned
 }
