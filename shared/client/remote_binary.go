@@ -58,16 +58,24 @@ func callGeneratedBinary[
 	if err := c.callBinary(ctx, method, request, result); err != nil {
 		return zeroSuccess, err
 	}
-	var zeroFailure Failure
-	if failure := result.GetError(); failure != zeroFailure {
-		if typed, ok := any(failure).(generatedServerNotReadyFailure); ok {
-			if details := typed.GetServerNotReady(); details != nil {
-				return zeroSuccess, protoapi.ServerNotReadyFromProto(details)
-			}
-		}
-		return zeroSuccess, decodeFailure(failure)
+	classified, err := protoapi.ClassifyResult(result)
+	if err != nil {
+		return zeroSuccess, fmt.Errorf("classify %s result: %w", method.FullName(), err)
 	}
-	return result.GetSuccess(), nil
+	if classified.Outcome == protoapi.OperationSuccess {
+		return result.GetSuccess(), nil
+	}
+	var zeroFailure Failure
+	failure := result.GetError()
+	if failure == zeroFailure {
+		return zeroSuccess, fmt.Errorf("%s classified a failure without an error value", method.FullName())
+	}
+	if typed, ok := any(failure).(generatedServerNotReadyFailure); ok {
+		if details := typed.GetServerNotReady(); details != nil {
+			return zeroSuccess, protoapi.ServerNotReadyFromProto(details)
+		}
+	}
+	return zeroSuccess, decodeFailure(failure)
 }
 
 func (c *Remote) callBinaryControl(

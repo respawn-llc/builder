@@ -395,7 +395,7 @@ function projectHomeSummary(project: ProjectHomeSummary) {
       updatedAt: timestampMillis(project.primaryWorkspace.updatedAt),
     },
     defaultWorkflowID: project.defaultWorkflowId ?? null,
-    defaultWorkflowName: project.defaultWorkflowName ?? "",
+    defaultWorkflowName: project.defaultWorkflowName ?? null,
     defaultWorkflowValid: project.defaultWorkflowValid,
     updatedAt: timestampMillis(project.updatedAt),
     taskCount: project.taskCount,

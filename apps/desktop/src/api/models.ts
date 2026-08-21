@@ -78,7 +78,7 @@ export type ProjectSummary = Readonly<{
   name: string;
   primaryWorkspace: WorkspaceSummary;
   defaultWorkflowID: string | null;
-  defaultWorkflowName: string;
+  defaultWorkflowName: string | null;
   defaultWorkflowValid: boolean;
   updatedAt: number;
   taskCount: number;

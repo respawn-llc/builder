@@ -33,7 +33,10 @@ export function isTaskMissingError(error: unknown): boolean {
 }
 
 export function isProjectMissingError(error: unknown): boolean {
-  return error instanceof RpcError && error.code === rpcErrorCodes.projectNotFound;
+  return (
+    (error instanceof RpcError && error.code === rpcErrorCodes.projectNotFound) ||
+    decodeWorkflowLabelError(error)?.reason === "project_not_found"
+  );
 }
 
 export const workflowTaskCreateSelectionErrorReasons = [

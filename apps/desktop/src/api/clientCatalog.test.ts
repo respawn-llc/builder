@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { create } from "@app/server-api-contract";
-import { ProjectCatalogService } from "@app/server-api-contract/gen/kent/api/project/project_pb";
+import {
+  ProjectAvailability,
+  ProjectCatalogService,
+} from "@app/server-api-contract/gen/kent/api/project/project_pb";
 import {
   SessionCatalogService,
   SessionCategory,
 } from "@app/server-api-contract/gen/kent/api/project/session_catalog_pb";
 import { FakeRpcTransport } from "@/test-support/api";
 import { ApiClient } from "./client";
-import { isProjectMissingError, RpcError } from "./index";
+import { ContractError, isProjectMissingError, RpcError } from "./index";
 
 describe("ApiClient catalog boundary", () => {
   it.each([
@@ -44,13 +47,29 @@ describe("ApiClient catalog boundary", () => {
         outcome: {
           case: "success",
           value: {
-            projects: [],
+            projects: [
+              {
+                projectId: "project-1",
+                projectKey: "PRJ",
+                displayName: "Project",
+                primaryWorkspace: {
+                  workspaceId: "workspace-1",
+                  displayName: "Workspace",
+                  rootPath: "/workspace",
+                  availability: ProjectAvailability.AVAILABLE,
+                  isPrimary: true,
+                  updatedAt: { seconds: 1n, nanos: 0 },
+                },
+                updatedAt: { seconds: 1n, nanos: 0 },
+              },
+            ],
             generatedAt: { seconds: 1n, nanos: 0 },
           },
         },
       }),
     );
     await expect(terminalProjectPage.listProjects(null)).resolves.toMatchObject({
+      projects: [{ defaultWorkflowID: null, defaultWorkflowName: null }],
       nextPageToken: null,
     });
 
@@ -103,6 +122,23 @@ describe("ApiClient catalog boundary", () => {
       method: "kent.api.project.project_catalog_service.list_workspaces",
       data: { code: "project_not_found" },
     });
+
+    const malformedClient = clientWith(
+      ProjectCatalogService.method.listWorkspaces,
+      create(ProjectCatalogService.method.listWorkspaces.output, {
+        outcome: {
+          case: "error",
+          value: {
+            code: "internal_failure",
+            detail: {
+              case: "projectNotFound",
+              value: { projectId: "project-1" },
+            },
+          },
+        },
+      }),
+    );
+    await expect(malformedClient.listWorkspaces("project-1", 0)).rejects.toBeInstanceOf(ContractError);
   });
 });
 

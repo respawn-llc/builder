@@ -17,6 +17,15 @@ describe("sidebar missing-entity errors", () => {
       new RpcError({ code, data, message: "changed", method: "owner.operation" });
     expect(isTaskMissingError(error(rpcErrorCodes.workflowTaskNotFound))).toBe(true);
     expect(isProjectMissingError(error(rpcErrorCodes.projectNotFound))).toBe(true);
+    expect(
+      isProjectMissingError(
+        error(-32047, {
+          type: "workflow_label_error",
+          reason: "project_not_found",
+          project_id: "project-1",
+        }),
+      ),
+    ).toBe(true);
     expect(isProjectMissingError(new Error("project_not_found"))).toBe(false);
   });
 });

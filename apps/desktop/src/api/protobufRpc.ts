@@ -1,4 +1,10 @@
-import { operationName, type DescMethod, type Message, type MessageShape } from "@app/server-api-contract";
+import {
+  classifyResultFailure,
+  operationName,
+  type DescMethod,
+  type Message,
+  type MessageShape,
+} from "@app/server-api-contract";
 
 import { ContractError, RpcError } from "./errors";
 import { rpcErrorCodes } from "./rpcErrorCodes";
@@ -37,6 +43,11 @@ export function requireUnarySuccess(method: DescMethod, result: RpcResult): Mess
 
 export function protobufRpcError(method: DescMethod, failure: RpcFailure): RpcError {
   const operation = operationName(method);
+  try {
+    classifyResultFailure(method.output, failure);
+  } catch {
+    throw new ContractError(`${operation} returned a malformed error outcome.`);
+  }
   return new RpcError({
     code: rpcErrorCode(failure.code),
     message: `${operation} failed with code ${failure.code}.`,
