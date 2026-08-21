@@ -48,7 +48,7 @@ func TestBlankFinalStaysHiddenAndSkipsReviewer(t *testing.T) {
 						*event.Message.Phase == llm.MessagePhaseFinal {
 						assistantFinalPublications.Add(1)
 					}
-				case EventReviewerStarted:
+				case EventRuntimeActivityChanged:
 					reviewerStarts.Add(1)
 				}
 			},

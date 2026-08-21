@@ -108,7 +108,7 @@ func (e *Engine) startReviewer(
 	if prepareErr != nil {
 		prepared.originStepID, err = runtimeids.ParseStepID(stepID)
 		if err != nil {
-			_ = e.completeReviewerActivity(stepID, nil)
+			_ = e.completeReviewerActivity(stepID)
 			return err
 		}
 	}
@@ -124,14 +124,14 @@ func (e *Engine) startReviewer(
 		if applyErr == nil {
 			return nil
 		}
-		_ = e.completeReviewerActivity(stepID, nil)
+		_ = e.completeReviewerActivity(stepID)
 		if errors.Is(applyErr, ErrEngineClosed) || errors.Is(applyErr, context.Canceled) {
 			return nil
 		}
 		e.surfaceRunError(fmt.Errorf("apply Reviewer result: %w", applyErr))
 		return nil
 	}) {
-		_ = e.completeReviewerActivity(stepID, nil)
+		_ = e.completeReviewerActivity(stepID)
 		return ErrEngineClosed
 	}
 	return nil
@@ -142,19 +142,19 @@ func (e *Engine) applyReviewerProviderResult(
 	result reviewerProviderResult,
 ) error {
 	originStepID := prepared.originStepID.String()
+	originProvenance := steeringProvenance{exactStep: &prepared.originStepID}
 	if result.err != nil {
 		persistErr := e.steerOrdered(
-			sessionSteeringProvenance(),
-			steerReviewerErrorFromOriginIntent(prepared.originStepID, result.err.Error()),
+			originProvenance,
+			steerReviewerErrorIntent(result.err.Error()),
 		)
-		status := ReviewerStatus{Outcome: "failed", Error: strings.TrimSpace(result.err.Error())}
-		return errors.Join(persistErr, e.completeReviewerActivity(originStepID, &status))
+		return errors.Join(persistErr, e.completeReviewerActivity(originStepID))
 	}
 	if err := e.observePromptCacheResponseRuntime(
 		prepared.cacheObservation,
 		result.usage,
 	); err != nil {
-		_ = e.completeReviewerActivity(originStepID, nil)
+		_ = e.completeReviewerActivity(originStepID)
 		return err
 	}
 	suggestions := result.suggestions.Suggestions
@@ -168,7 +168,7 @@ func (e *Engine) applyReviewerProviderResult(
 			Role: reviewerStatusEntryRole(status),
 			Text: reviewerStatusText(status, nil),
 		}))
-		return errors.Join(statusErr, e.completeReviewerActivity(originStepID, &status))
+		return errors.Join(statusErr, e.completeReviewerActivity(originStepID))
 	}
 
 	visibility := transcript.EntryVisibilityOngoingCollapsed
@@ -176,10 +176,10 @@ func (e *Engine) applyReviewerProviderResult(
 		visibility = transcript.EntryVisibilityOngoing
 	}
 	if err := e.steerOrdered(
-		sessionSteeringProvenance(),
-		steerReviewerFeedbackFromOriginIntent(prepared.originStepID, suggestions, visibility),
+		originProvenance,
+		steerReviewerFeedbackIntent(suggestions, visibility),
 	); err != nil {
-		_ = e.completeReviewerActivity(originStepID, nil)
+		_ = e.completeReviewerActivity(originStepID)
 		return fmt.Errorf("persist Reviewer feedback: %w", err)
 	}
 	instruction := formatReviewerDeveloperInstruction(suggestions)
@@ -193,13 +193,13 @@ func (e *Engine) applyReviewerProviderResult(
 			Content:     textutil.Value(instruction),
 		}},
 	)); err != nil {
-		_ = e.completeReviewerActivity(originStepID, nil)
+		_ = e.completeReviewerActivity(originStepID)
 		return fmt.Errorf("persist Reviewer follow-up instruction: %w", err)
 	}
 	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
 		return e.runReviewerContinuation(ctx, prepared.originStepID, result.suggestions)
 	}) {
-		_ = e.completeReviewerActivity(originStepID, nil)
+		_ = e.completeReviewerActivity(originStepID)
 		return ErrEngineClosed
 	}
 	return nil
@@ -242,7 +242,7 @@ func (e *Engine) runReviewerContinuation(
 			}))
 		},
 	)
-	completeErr := e.completeReviewerActivity(originStepID.String(), status)
+	completeErr := e.completeReviewerActivity(originStepID.String())
 	if errors.Is(err, context.Canceled) || errors.Is(err, ErrEngineClosed) {
 		return nil
 	}

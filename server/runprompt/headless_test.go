@@ -208,7 +208,7 @@ func TestRunPromptProgressFromRuntimeEventDropsOperationalSpam(t *testing.T) {
 	for _, event := range []runtime.Event{
 		{Kind: runtime.EventToolCallStarted},
 		{Kind: runtime.EventToolCallCompleted},
-		{Kind: runtime.EventReviewerCompleted},
+		{Kind: runtime.EventRuntimeActivityChanged},
 		{
 			Kind: runtime.EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{

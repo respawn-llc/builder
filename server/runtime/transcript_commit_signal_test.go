@@ -256,18 +256,18 @@ func TestReviewerTranscriptPathsUseRichEventsWithoutCommittedConversationUpdated
 	if !hasFeedback {
 		t.Fatalf("expected typed Reviewer feedback event, got %+v", events)
 	}
-	if !hasEventKind(events, EventReviewerCompleted) {
-		t.Fatalf("expected reviewer_completed event, got %+v", events)
+	if !hasEventKind(events, EventRuntimeActivityChanged) {
+		t.Fatalf("expected Runtime activity change event, got %+v", events)
 	}
 	for _, evt := range events {
-		if evt.Kind != EventReviewerCompleted {
+		if evt.Kind != EventRuntimeActivityChanged {
 			continue
 		}
 		if evt.CommittedTranscriptChanged {
-			t.Fatalf("expected reviewer_completed to avoid committed transcript advancement, got %+v", evt)
+			t.Fatalf("expected Runtime activity change to avoid committed transcript advancement, got %+v", evt)
 		}
 		if got := TranscriptEntriesFromEvent(evt); len(got) != 0 {
-			t.Fatalf("expected reviewer_completed transcript entries to be empty, got %+v", got)
+			t.Fatalf("expected Runtime activity change transcript entries to be empty, got %+v", got)
 		}
 	}
 }

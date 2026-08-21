@@ -37,12 +37,11 @@ func TestReviewerActivityPublishesRunningAndTerminalStateToTUI(t *testing.T) {
 			}
 			activity := registry.NewRuntimeRegistry()
 			var engine *runtime.Engine
-			_, engine = newAppRuntimeEngine(t, reviewerActivityMainClient{}, runtime.Config{
+			store, engine := newAppRuntimeEngine(t, reviewerActivityMainClient{}, runtime.Config{
 				Model:         "gpt-5",
 				ThinkingLevel: "medium",
 				OnEvent: func(event runtime.Event) {
-					if event.Kind == runtime.EventReviewerStarted ||
-						event.Kind == runtime.EventReviewerCompleted {
+					if event.Kind == runtime.EventRuntimeActivityChanged {
 						_ = activity.PublishRuntimeEventToAll(event)
 					}
 				},
@@ -160,6 +159,18 @@ func TestReviewerActivityPublishesRunningAndTerminalStateToTUI(t *testing.T) {
 			)
 			if model.isReviewerRunning() {
 				t.Fatalf("TUI Reviewer projection = %+v, want inactive", model.runtimeActivityProjection)
+			}
+			if testCase.terminal == "failure" {
+				closeEngine()
+				reopened := newAppRuntimeEngineWithStore(
+					t,
+					store,
+					reviewerActivityMainClient{},
+					runtime.Config{Model: "gpt-5", ThinkingLevel: "medium"},
+				)
+				if err := reopened.Close(); err != nil {
+					t.Fatalf("close reopened Runtime: %v", err)
+				}
 			}
 		})
 	}

@@ -31,8 +31,7 @@ const (
 	EventToolCallStarted            EventKind = "tool_call_started"
 	EventToolCallCompleted          EventKind = "tool_call_completed"
 	EventToolCallAborted            EventKind = "tool_call_aborted"
-	EventReviewerStarted            EventKind = "reviewer_started"
-	EventReviewerCompleted          EventKind = "reviewer_completed"
+	EventRuntimeActivityChanged     EventKind = "runtime_activity_changed"
 	EventInFlightClearFailed        EventKind = "in_flight_clear_failed"
 	EventCompactionStarted          EventKind = "context_compaction_started"
 	EventCompactionCompleted        EventKind = "context_compaction_completed"
@@ -133,7 +132,6 @@ type Event struct {
 	ToolCall                     *llm.ToolCall
 	ToolResult                   *tools.Result
 	ToolAbortReason              string
-	Reviewer                     *ReviewerStatus
 	Compaction                   *CompactionStatus
 	CacheWarning                 *transcript.CacheWarning
 	CacheWarningVisibility       transcript.EntryVisibility

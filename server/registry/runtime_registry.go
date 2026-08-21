@@ -495,7 +495,7 @@ func (r *RuntimeRegistry) PublishAuthorityRuntimeEvent(ref runtimeids.SessionRes
 }
 
 func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt runtime.Event) error {
-	if evt.Kind == runtime.EventReviewerStarted || evt.Kind == runtime.EventReviewerCompleted {
+	if evt.Kind == runtime.EventRuntimeActivityChanged {
 		return r.publishCurrentRuntimeActivity(entry.ref.SessionID().String())
 	}
 	if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {

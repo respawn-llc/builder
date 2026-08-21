@@ -92,11 +92,6 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 			return nil
 		}
 		entries = []ChatEntry{toolResultChatEntry(*evt.ToolResult)}
-	case EventReviewerCompleted:
-		// Reviewer completion remains a runtime-status event only.
-		// Persisted reviewer terminal rows must arrive through local_entry_added
-		// so the client has exactly one committed transcript source.
-		return nil
 	case EventCompactionCompleted:
 		return nil
 	case EventCompactionFailed:

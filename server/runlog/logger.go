@@ -268,20 +268,6 @@ func FormatRuntimeEvent(evt runtime.Event) string {
 		if evt.ToolResult != nil {
 			return fmt.Sprintf("runtime.event kind=%s step_id=%s call_id=%s name=%s is_error=%t", evt.Kind, stepID, evt.ToolResult.CallID, evt.ToolResult.Name, evt.ToolResult.IsError)
 		}
-	case runtime.EventReviewerCompleted:
-		if evt.Reviewer != nil {
-			line := fmt.Sprintf(
-				"runtime.event kind=%s step_id=%s outcome=%s suggestions=%d",
-				evt.Kind,
-				stepID,
-				evt.Reviewer.Outcome,
-				evt.Reviewer.SuggestionsCount,
-			)
-			if strings.TrimSpace(evt.Reviewer.Error) != "" {
-				line += fmt.Sprintf(" err=%q", evt.Reviewer.Error)
-			}
-			return line
-		}
 	case runtime.EventInFlightClearFailed, runtime.EventPromptHistoryPersistFailed:
 		if strings.TrimSpace(evt.Error) != "" {
 			return fmt.Sprintf("runtime.event kind=%s step_id=%s err=%q", evt.Kind, stepID, evt.Error)

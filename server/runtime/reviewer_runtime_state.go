@@ -86,8 +86,7 @@ func (e *Engine) startReviewerActivityRaw(stepID string) (bool, error) {
 		return false, err
 	}
 	err = e.emitRawAtRevision(Event{
-		Kind:   EventReviewerStarted,
-		StepID: exactStepIDPointer(stepID),
+		Kind: EventRuntimeActivityChanged,
 	}, revision)
 	if err != nil {
 		e.reviewerRuntimeState().Complete(stepID)
@@ -96,16 +95,16 @@ func (e *Engine) startReviewerActivityRaw(stepID string) (bool, error) {
 	return true, nil
 }
 
-func (e *Engine) completeReviewerActivity(stepID string, status *ReviewerStatus) error {
+func (e *Engine) completeReviewerActivity(stepID string) error {
 	if e == nil {
 		return nil
 	}
 	e.outputMutationMu.Lock()
 	defer e.outputMutationMu.Unlock()
-	return e.completeReviewerActivityRaw(stepID, status)
+	return e.completeReviewerActivityRaw(stepID)
 }
 
-func (e *Engine) completeReviewerActivityRaw(stepID string, status *ReviewerStatus) error {
+func (e *Engine) completeReviewerActivityRaw(stepID string) error {
 	if !e.reviewerRuntimeState().Complete(stepID) {
 		return nil
 	}
@@ -114,9 +113,7 @@ func (e *Engine) completeReviewerActivityRaw(stepID string, status *ReviewerStat
 		return err
 	}
 	return e.emitRawAtRevision(Event{
-		Kind:     EventReviewerCompleted,
-		StepID:   exactStepIDPointer(stepID),
-		Reviewer: status,
+		Kind: EventRuntimeActivityChanged,
 	}, revision)
 }
 
