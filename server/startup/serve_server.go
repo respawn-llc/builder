@@ -387,12 +387,10 @@ func serverAuthReady(ctx context.Context, deps transport.GatewayDependencies) bo
 
 type startupGatewayDependencies struct {
 	mu          sync.Mutex
-	cfg         config.App
 	bootstrap   serverbootstrap.Request
 	authSupport serverbootstrap.AuthSupport
 	rootLease   *core.RootLockLease
 	finalizer   apicontract.OnboardingFinalizeService
-	core        *core.Core
 	snapshot    atomic.Pointer[startupDependencySnapshot]
 }
 
@@ -406,20 +404,19 @@ func newStartupGatewayDependencies(ctx context.Context, cfg config.App, bootstra
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease}
-	deps.publishSnapshotLocked(nil, nil)
+	deps := &startupGatewayDependencies{bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease}
+	deps.snapshot.Store(&startupDependencySnapshot{cfg: cfg})
 	deps.finalizer = startupFinalizeService{service: finalizer, activate: deps.activate, activationContext: ctx}
 	return deps
 }
 
 func (d *startupGatewayDependencies) Close() error {
 	d.mu.Lock()
-	if d.core != nil {
-		appCore := d.core
-		d.core = nil
-		d.publishSnapshotLocked(nil, nil)
+	snapshot := d.loadSnapshot()
+	if snapshot.core != nil {
+		d.snapshot.Store(&startupDependencySnapshot{cfg: snapshot.cfg})
 		d.mu.Unlock()
-		return appCore.Close()
+		return snapshot.core.Close()
 	}
 	if d.rootLease != nil {
 		err := d.rootLease.Close()
@@ -434,7 +431,7 @@ func (d *startupGatewayDependencies) Close() error {
 func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverapi.OnboardingFinalizeResponse) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.core != nil {
+	if d.loadSnapshot().core != nil {
 		return nil
 	}
 	refreshed, err := serverbootstrap.ResolveConfig(d.bootstrap)
@@ -456,16 +453,14 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 		_ = runtimeSupport.Background.Close()
 		return d.activationError(resp, err)
 	}
-	d.core = appCore
 	d.rootLease = nil
-	d.cfg = refreshed.Config
-	d.publishSnapshotLocked(appCore, nil)
+	d.snapshot.Store(&startupDependencySnapshot{cfg: refreshed.Config, core: appCore})
 	return nil
 }
 
 func (d *startupGatewayDependencies) activationError(resp serverapi.OnboardingFinalizeResponse, err error) error {
 	diagnostic := err.Error()
-	d.publishSnapshotLocked(nil, err)
+	d.snapshot.Store(&startupDependencySnapshot{cfg: d.loadSnapshot().cfg, activation: err})
 	settingsPath := resp.SettingsPath
 	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{
 		OnboardingCompleted: true,
@@ -494,12 +489,9 @@ func (d *startupGatewayDependencies) RequireCoreActive() error {
 }
 
 func (d *startupGatewayDependencies) loadSnapshot() startupDependencySnapshot {
-	if d == nil {
-		return startupDependencySnapshot{}
-	}
 	snapshot := d.snapshot.Load()
 	if snapshot == nil {
-		return startupDependencySnapshot{}
+		panic("startup dependency snapshot is required")
 	}
 	return *snapshot
 }
@@ -569,38 +561,25 @@ type startupFinalizeService struct {
 	activationContext context.Context
 }
 
-type startupAuthBootstrapService struct {
-	deps *startupGatewayDependencies
+func (d *startupGatewayDependencies) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
+	return d.authBootstrapService().GetAuthBootstrapStatus(ctx, req)
 }
 
-func (s startupAuthBootstrapService) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	return s.deps.authBootstrapService().GetAuthBootstrapStatus(ctx, req)
+func (d *startupGatewayDependencies) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.authBootstrapService().CompleteAuthBootstrap(ctx, req)
 }
 
-func (s startupAuthBootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	s.deps.mu.Lock()
-	defer s.deps.mu.Unlock()
-	return s.deps.authBootstrapService().CompleteAuthBootstrap(ctx, req)
-}
-
-func (s startupAuthBootstrapService) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-	s.deps.mu.Lock()
-	defer s.deps.mu.Unlock()
-	return s.deps.authBootstrapService().AcknowledgeNoAuth(ctx, req)
+func (d *startupGatewayDependencies) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.authBootstrapService().AcknowledgeNoAuth(ctx, req)
 }
 
 func (d *startupGatewayDependencies) authBootstrapService() *authservice.BootstrapService {
 	settings := d.loadSnapshot().cfg.Settings
 	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, settings, apicontract.AllowedPreAuthMethods())
-}
-
-func (d *startupGatewayDependencies) publishSnapshotLocked(appCore *core.Core, activation error) {
-	snapshot := &startupDependencySnapshot{
-		cfg:        d.cfg,
-		core:       appCore,
-		activation: activation,
-	}
-	d.snapshot.Store(snapshot)
 }
 
 func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
@@ -622,7 +601,7 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 
 func (d *startupGatewayDependencies) AuthManager() *auth.Manager { return d.authSupport.AuthManager }
 func (d *startupGatewayDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
-	return startupAuthBootstrapService{deps: d}
+	return d
 }
 func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusService {
 	return authservice.NewStatusService(d.authSupport.AuthManager, d.loadSnapshot().cfg.Settings)
