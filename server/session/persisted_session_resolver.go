@@ -47,12 +47,6 @@ func ResolvePersistedSessionRecord(
 	if err := validatePersistedSessionRecord(id, record); err != nil {
 		return PersistedSessionRecord{}, err
 	}
-	meta, err := normalizePersistedSessionMeta(*record.Meta)
-	if err != nil {
-		return PersistedSessionRecord{}, err
-	}
-	record.Meta = &meta
-	record.ContextFacts = normalizeSessionContextFacts(record.ContextFacts)
 	return record, nil
 }
 
@@ -93,28 +87,4 @@ func validatePersistedSessionDir(expectedDir string, authoritativeDir string) er
 		return errResolverRecordSessionDirMismatch
 	}
 	return nil
-}
-
-func normalizePersistedSessionMeta(meta Meta) (Meta, error) {
-	meta = cloneMeta(meta)
-	if err := normalizeMetaContinuation(&meta); err != nil {
-		return Meta{}, fmt.Errorf("validate session continuation: %w", err)
-	}
-	if err := normalizeMetaChatSettings(&meta); err != nil {
-		return Meta{}, fmt.Errorf("validate session Chat settings: %w", err)
-	}
-	if meta.ActiveWorkflowAssignment != nil {
-		assignment, err := normalizeMessageRecord(*meta.ActiveWorkflowAssignment)
-		if err != nil {
-			return Meta{}, fmt.Errorf("validate active workflow assignment: %w", err)
-		}
-		meta.ActiveWorkflowAssignment = &assignment
-	}
-	if err := normalizeMetaWorktreeReminder(&meta); err != nil {
-		return Meta{}, fmt.Errorf("validate session worktree context: %w", err)
-	}
-	if err := validateMetaCategory(&meta); err != nil {
-		return Meta{}, err
-	}
-	return meta, nil
 }
