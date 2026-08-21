@@ -61,6 +61,9 @@ func TestTerminalBackgroundUpdateQueuesAcrossClosingOrInterruptedStep(t *testing
 			}
 			engine.stepLifecycle = lifecycle
 			engine.ensureOrchestrationCollaborators()
+			if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+				t.Fatalf("pause Runtime operations: %v", err)
+			}
 
 			done := make(chan struct{})
 			go func() {
@@ -72,7 +75,7 @@ func TestTerminalBackgroundUpdateQueuesAcrossClosingOrInterruptedStep(t *testing
 				close(done)
 			}()
 			deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
-			for !engine.HasPendingSteering() {
+			for !engine.hasPendingRuntimeOperations() {
 				if !time.Now().Before(deadline) {
 					t.Fatal("timed out waiting for queued background update")
 				}
@@ -83,7 +86,9 @@ func TestTerminalBackgroundUpdateQueuesAcrossClosingOrInterruptedStep(t *testing
 			}
 
 			lifecycle.end()
-			engine.drainSteeringIncludingDeferredHuman(true)
+			if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+				t.Fatalf("drain Runtime operations: %v", err)
+			}
 			select {
 			case <-done:
 			case <-time.After(runtimeTestSynchronizationTimeout):
@@ -149,7 +154,8 @@ func TestExactOutputCallbackDoesNotHoldLifecycleLock(t *testing.T) {
 
 	steerDone := make(chan error, 1)
 	go func() {
-		steerDone <- engine.steerCurrentStepOrRuntime(
+		steerDone <- engine.steer(
+			lifecycle.active.stepID,
 			steerEventIntent(Event{Kind: EventStreamingErrorUpdated}),
 		)
 	}()
@@ -178,17 +184,17 @@ func TestExactOutputCallbackDoesNotHoldLifecycleLock(t *testing.T) {
 	}
 }
 
-func TestCurrentStepOrRuntimeRejectsClosedEngineWithoutQueueing(t *testing.T) {
+func TestRuntimeSteeringRejectsClosedEngineWithoutQueueing(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	engine.closed.Store(true)
 
-	err := engine.steerCurrentStepOrRuntime(
+	err := engine.steerRuntime(
 		steerEventIntent(Event{Kind: EventStreamingErrorUpdated}),
 	)
 	if !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("closed Runtime steering error = %v, want ErrEngineClosed", err)
 	}
-	if engine.HasPendingSteering() {
+	if engine.hasPendingRuntimeOperations() {
 		t.Fatal("closed Runtime accepted pending Steering")
 	}
 }

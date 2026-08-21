@@ -57,7 +57,12 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 func (a *Authority) RunWorktreeTransition(
 	ctx context.Context,
 	sessionID string,
-	fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+	fn func(
+		context.Context,
+		func(func() error) error,
+		func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error,
+		func(clientui.WorktreeTransitionOutcome) error,
+	) error,
 ) error {
 	if fn == nil {
 		return nil
@@ -68,33 +73,53 @@ func (a *Authority) RunWorktreeTransition(
 	}
 	return a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
 		if resource == nil {
-			return false, fn(runCtx, func(apply func() error) error { return apply() }, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-				if err := context.Cause(syncCtx); err != nil {
-					return err
-				}
-				_, normalizedReminder, err := normalizeTarget(target, reminder)
-				if err != nil || normalizedReminder == nil {
-					return err
-				}
-				return store.SetWorktreeReminderState(normalizedReminder)
-			})
+			return false, fn(
+				runCtx,
+				func(apply func() error) error { return apply() },
+				func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+					if err := context.Cause(syncCtx); err != nil {
+						return err
+					}
+					_, normalizedReminder, err := normalizeTarget(target, reminder)
+					if err != nil || normalizedReminder == nil {
+						return err
+					}
+					return store.SetWorktreeReminderState(normalizedReminder)
+				},
+				func(clientui.WorktreeTransitionOutcome) error { return nil },
+			)
 		}
 		retire := false
 		err := engine.RunWorktreeTransition(runCtx, func() error {
 			active := true
 			defer func() { active = false }()
-			return fn(runCtx, func(apply func() error) error { return apply() }, func(_ context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-				if !active {
-					return errors.New("worktree transition target synchronizer is no longer active")
-				}
-				normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
-				if err != nil {
-					return err
-				}
-				var syncErr error
-				retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
-				return syncErr
-			})
+			return fn(
+				runCtx,
+				func(apply func() error) error { return apply() },
+				func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+					return engine.ApplyWorktreeTransitionTerminal(syncCtx, func(operationCtx context.Context) error {
+						if err := context.Cause(operationCtx); err != nil {
+							return err
+						}
+						if !active {
+							return errors.New("worktree transition target synchronizer is no longer active")
+						}
+						normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
+						if err != nil {
+							return err
+						}
+						var syncErr error
+						retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
+						return syncErr
+					})
+				},
+				func(outcome clientui.WorktreeTransitionOutcome) error {
+					if !active {
+						return errors.New("worktree transition failure synchronizer is no longer active")
+					}
+					return engine.SteerWorktreeTransitionFailure(outcome)
+				},
+			)
 		})
 		return retire, err
 	})
@@ -162,16 +187,6 @@ func (a *Authority) ClearWorktreeReminder(ctx context.Context, sessionID string)
 	}
 	return a.withMaintenanceResource(ctx, id, func(_ context.Context, store *session.Store, _ *agentResource, _ *runtime.Engine) (bool, error) {
 		return false, store.SetWorktreeReminderState(nil)
-	})
-}
-
-func (a *Authority) SteerWorktreeTransitionFailure(ctx context.Context, sessionID string, outcome clientui.WorktreeTransitionOutcome) error {
-	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-	if err != nil {
-		return err
-	}
-	return a.WithCurrentRuntime(ctx, id, func(_ context.Context, engine *runtime.Engine) error {
-		return engine.SteerWorktreeTransitionFailure(outcome)
 	})
 }
 

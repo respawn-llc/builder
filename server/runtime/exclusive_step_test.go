@@ -501,7 +501,7 @@ func (s *stubBackgroundNoticeScheduler) RecordBackgroundShellUpdate(BackgroundSh
 	return nil
 }
 func (s *stubBackgroundNoticeScheduler) QueueBackgroundShellContinuation(BackgroundShellEvent) {}
-func (s *stubBackgroundNoticeScheduler) RunPendingBackgroundShellContinuation(context.Context) error {
+func (s *stubBackgroundNoticeScheduler) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
 	return nil
 }
 func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message)           {}
@@ -522,13 +522,6 @@ func (s *stubExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveS
 		return s.runFn(ctx, options, fn)
 	}
 	return fn(ctx, "stub-step")
-}
-
-func (s *stubExclusiveStepLifecycle) RunExactPreparation(
-	ctx context.Context,
-	fn func(stepCtx context.Context, stepID string) error,
-) error {
-	return s.Run(ctx, exclusiveStepOptions{ActiveKind: ActiveKindInspection}, fn)
 }
 
 func (s *stubExclusiveStepLifecycle) Interrupt() error {
@@ -926,64 +919,6 @@ func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testin
 				t.Fatalf("agent-turn interrupted state=%t, want %t for %s", lifecycle.active.interrupted, test.wantMatch, test.kind)
 			}
 		})
-	}
-}
-
-func TestExclusiveStepExactPreparationDoesNotFinishAgentStepBoundary(t *testing.T) {
-	lifecycleSink := &callbackStepLifecycleSink{}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
-		Model:         "gpt-5",
-		StepLifecycle: lifecycleSink,
-	})
-	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
-	engine.stepLifecycle = lifecycle
-	queuedDone := make(chan error, 1)
-
-	err := lifecycle.RunExactPreparation(context.Background(), func(_ context.Context, stepID string) error {
-		output, part := int64(0), int64(0)
-		if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
-			SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part},
-			Text:             "inspection reasoning",
-		})); err != nil {
-			return err
-		}
-		go func() {
-			queuedDone <- engine.steerRuntime(steerLocalEntryIntent(storedLocalEntry{Role: "info", Text: "queued"}))
-		}()
-		deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
-		for !engine.HasPendingSteering() {
-			if !time.Now().Before(deadline) {
-				return errors.New("timed out waiting for queued Steering")
-			}
-			time.Sleep(time.Millisecond)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("exact preparation: %v", err)
-	}
-	if engine.ActiveRun() != nil {
-		t.Fatalf("exact preparation retained active run: %+v", engine.ActiveRun())
-	}
-	if lifecycleSink.seen(StepLifecycleTransitionBegan) || lifecycleSink.seen(StepLifecycleTransitionEnded) {
-		t.Fatal("exact preparation published through the live Step lifecycle sink")
-	}
-	if !engine.HasPendingSteering() {
-		t.Fatal("exact preparation drained ordinary Steering")
-	}
-	_, traces := engine.transcriptRuntimeState().ReasoningSnapshot()
-	if len(traces) != 1 {
-		t.Fatalf("exact preparation cleared reasoning traces: %+v", traces)
-	}
-
-	engine.drainSteeringIncludingDeferredHuman(true)
-	select {
-	case err := <-queuedDone:
-		if err != nil {
-			t.Fatalf("drain queued Steering: %v", err)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out draining queued Steering after exact preparation")
 	}
 }
 

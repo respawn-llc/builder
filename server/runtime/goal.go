@@ -269,8 +269,6 @@ func (e *Engine) setGoalForStepRaw(stepID string, objective string, actor sessio
 	}
 	objective = strings.TrimSpace(objective)
 	availability := e.GoalMutationAvailability()
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
 	goal, metadataReceipt, err := e.store.SetGoal(objective, actor)
 	result := goalCommandResult(GoalCommandApplied, goal, false, metadataReceipt, session.CommitReceipt{})
 	result.Availability = availability
@@ -329,8 +327,6 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmissionRaw(stepID string, sta
 			return GoalCommandResult{}, err
 		}
 	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
 	goal, transitioned, metadataReceipt, err := e.store.SetGoalStatus(status, actor)
 	disposition := GoalCommandApplied
 	if err == nil && !transitioned {
@@ -618,8 +614,6 @@ func (e *Engine) clearGoalForStepRaw(stepID string, actor session.GoalActor) (Go
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
 	availability := e.GoalMutationAvailability()
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
 	goal, metadataReceipt, err := e.store.ClearGoal(actor)
 	result := goalCommandResult(GoalCommandApplied, goal, true, metadataReceipt, session.CommitReceipt{})
 	result.Availability = availability
@@ -654,8 +648,6 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 			Text:       "Failed to auto-complete active goal on workflow completion: " + err.Error(),
 		}))
 	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
 	availability := e.GoalMutationAvailability()
 	completed, transitioned, _, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem)
 	if err != nil {

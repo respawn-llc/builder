@@ -2176,7 +2176,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	if !resp.Steered || resp.QueueItemID == "" {
 		t.Fatalf("SubmitUserTurn while compacting = %+v, want queued response", resp)
 	}
-	if !engine.HasPendingSteering() {
+	if !engine.HasQueuedUserWork() {
 		t.Fatal("human Steering was not retained while compaction was active")
 	}
 

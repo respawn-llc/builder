@@ -150,9 +150,6 @@ type Engine struct {
 	cfg                         Config
 	reviewerSuggestionsContract jsoncontract.Structured
 	workflowPromptContract      *workflowruntime.CompletionContract
-	// controlMutationMu serializes multi-step control mutations that need to
-	// persist transcript feedback before applying in-memory runtime state.
-	controlMutationMu sync.Mutex
 	// outputMutationMu keeps durable transcript writes, runtime projections, and
 	// event emission in one order for concurrent steering producers.
 	outputMutationMu sync.Mutex
@@ -1186,7 +1183,8 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 		}
 	}
 	executeErr := e.toolFlow.ExecuteToolCalls(ctx, stepID, prepared, collector)
-	postJoin, err := e.coordinateAcceptedResponsePostJoin(
+	postJoin, err := e.coordinateAcceptedResponsePostJoinForOwner(
+		ctx,
 		stepID,
 		prepared,
 		collector,
@@ -1196,6 +1194,32 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 		return postJoin.results, false, err
 	}
 	return postJoin.results, e.WorkflowTerminalState().Completed, postJoin.semanticErr
+}
+
+func (e *Engine) coordinateAcceptedResponsePostJoinForOwner(
+	ctx context.Context,
+	stepID string,
+	prepared []executorToolCall,
+	collector *resultGroupCollector,
+	executeErr error,
+) (acceptedResponsePostJoinOutcome, error) {
+	active := e.ActiveRun()
+	if active == nil || active.StepID != stepID || active.ActiveKind != ActiveKindUserShell {
+		return e.coordinateAcceptedResponsePostJoin(stepID, prepared, collector, executeErr)
+	}
+	deferred := submitEngineRuntimeOperation(e, func(context.Context) (acceptedResponsePostJoinOutcome, error) {
+		return e.coordinateAcceptedResponsePostJoin(stepID, prepared, collector, executeErr)
+	})
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	outcome, err := deferred.Await(context.WithoutCancel(ctx))
+	if err != nil {
+		if fatal := collector.fatalSnapshot(); fatal != nil {
+			return outcome, errors.Join(fatal, err)
+		}
+	}
+	return outcome, err
 }
 
 type acceptedResponsePostJoinOutcome struct {

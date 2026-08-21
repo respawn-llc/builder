@@ -605,11 +605,17 @@ func (e *Engine) steerWithCommitReceiptRaw(stepID string, intent steeringIntent)
 	}
 	receipt := session.CommitReceipt{}
 	intent.items[0].commitReceipt = &receipt
-	err := e.steer(stepID, intent)
+	err := e.steerOrdered(stepID, intent)
 	return receipt, err
 }
 
 func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	return e.steerOrderedRaw(stepID, intents...)
+}
+
+func (e *Engine) steerOrderedRaw(stepID string, intents ...steeringIntent) error {
 	ordered := make([]steeringIntent, 0, len(intents))
 	for _, intent := range intents {
 		if len(intent.items) == 0 {
@@ -620,8 +626,6 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	if len(ordered) == 0 {
 		return nil
 	}
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ordered[i].priority < ordered[j].priority
 	})

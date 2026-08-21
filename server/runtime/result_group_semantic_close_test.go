@@ -329,7 +329,7 @@ func runSemanticCloseFailurePostJoinCase(
 	if goal := engine.Goal(); goal != nil {
 		t.Fatalf("failed close drained Goal mutation: %+v", goal)
 	}
-	if !engine.HasPendingSteering() {
+	if !engine.hasPendingRuntimeOperations() {
 		t.Fatal("failed close removed the accepted Goal Steering tail")
 	}
 	_, projected := engine.transcriptRuntimeState().ToolCompletionSnapshot("close-failure")

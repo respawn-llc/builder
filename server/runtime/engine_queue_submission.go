@@ -117,6 +117,26 @@ func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) err
 	return err
 }
 
+func (e *Engine) ApplyWorktreeTransitionTerminal(
+	ctx context.Context,
+	apply func(context.Context) error,
+) error {
+	if apply == nil {
+		return errors.New("worktree transition terminal mutation is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	deferred := submitEngineRuntimeOperation(e, func(operationCtx context.Context) (struct{}, error) {
+		return struct{}{}, apply(operationCtx)
+	})
+	_, err := deferred.Await(context.WithoutCancel(ctx))
+	return err
+}
+
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user
 // messages or background notices. This is used when a non-turn busy operation
 // (for example manual compaction) completes while queued steering is waiting.

@@ -284,8 +284,9 @@ func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
 }
 
 func (e *Engine) SetStreamingError(text string) {
-	e.transcriptRuntimeState().SetStreamingError(text)
-	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+	e.applyStreamingStateMutation(func(state *transcriptRuntimeState) {
+		state.SetStreamingError(text)
+	})
 }
 
 func (e *Engine) ReportPromptHistoryPersistError(reason string) {
@@ -300,8 +301,21 @@ func (e *Engine) ReportPromptHistoryPersistError(reason string) {
 }
 
 func (e *Engine) ClearStreamingError() {
-	e.transcriptRuntimeState().ClearStreamingError()
-	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+	e.applyStreamingStateMutation(func(state *transcriptRuntimeState) {
+		state.ClearStreamingError()
+	})
+}
+
+func (e *Engine) applyStreamingStateMutation(mutate func(*transcriptRuntimeState)) {
+	if mutate == nil {
+		return
+	}
+	_, _ = awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		e.outputMutationMu.Lock()
+		defer e.outputMutationMu.Unlock()
+		mutate(e.transcriptRuntimeState())
+		return struct{}{}, e.steerOrderedRaw("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+	})
 }
 
 func (e *Engine) SetSessionName(name string) error {
@@ -356,8 +370,6 @@ func (e *Engine) SetFastModeEnabled(enabled bool) (bool, error) {
 		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
 	return awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (bool, error) {
-		e.controlMutationMu.Lock()
-		defer e.controlMutationMu.Unlock()
 		changed := e.localFastModeEnabledChange(enabled)
 		e.applyFastModeEnabled(enabled)
 		return changed, nil
@@ -429,8 +441,6 @@ func (e *Engine) SetQuestionsEnabled(enabled bool) (bool, bool) {
 		changed bool
 		enabled bool
 	}, error) {
-		e.controlMutationMu.Lock()
-		defer e.controlMutationMu.Unlock()
 		changed, current := e.questionsEnabledChange(enabled)
 		if changed {
 			e.applyQuestionsEnabled(enabled)
@@ -479,8 +489,6 @@ func (e *Engine) SetReviewerEnabled(enabled bool) (bool, string, error) {
 		changed bool
 		mode    string
 	}, error) {
-		e.controlMutationMu.Lock()
-		defer e.controlMutationMu.Unlock()
 		changed, mode, err := e.reviewerEnabledChange(enabled)
 		if err != nil {
 			return struct {

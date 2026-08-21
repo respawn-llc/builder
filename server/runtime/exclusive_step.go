@@ -402,7 +402,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(afterPersist f
 }
 
 func (s *defaultExclusiveStepLifecycle) persistInterruption() error {
-	return s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}}))
+	return s.engine.steerOrdered("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}}))
 }
 
 func (s *defaultExclusiveStepLifecycle) runCurrentLocked(run *exclusiveRunState) bool {

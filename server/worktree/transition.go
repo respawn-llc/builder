@@ -90,36 +90,60 @@ func (s *Service) runWorktreeTransition(
 	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
 ) error {
 	defer s.transitionWG.Done()
+	var terminalOutcome *clientui.WorktreeTransitionOutcome
 	err := s.authority.RunWorktreeTransition(
 		ctx,
 		request.sessionID,
-		func(ctx context.Context, authority func(func() error) error, sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error {
-			return execute(ctx, transitionAuthority(authority), func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+		func(
+			ctx context.Context,
+			authority func(func() error) error,
+			sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error,
+			syncFailure func(clientui.WorktreeTransitionOutcome) error,
+		) error {
+			executionErr := execute(ctx, transitionAuthority(authority), func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 				return sync(syncCtx, target, reminder)
 			})
+			if executionErr == nil || s.transitionCtx.Err() != nil {
+				return executionErr
+			}
+			outcome := worktreeTransitionOutcome(request, executionErr)
+			terminalOutcome = &outcome
+			if syncFailure == nil {
+				return errors.Join(executionErr, errors.New("worktree transition failure synchronizer is required"))
+			}
+			return errors.Join(executionErr, syncFailure(outcome))
 		},
 	)
 	if s.transitionCtx.Err() == nil {
-		outcome := clientui.WorktreeTransitionOutcome{
-			OperationID: request.operationID,
-			Transition:  request.kind,
-			State:       clientui.WorktreeTransitionCompleted,
-		}
-		if err != nil {
-			outcome.State = clientui.WorktreeTransitionFailed
-			outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
-			var precondition *serverapi.WorktreeDeletePreconditionError
-			if errors.As(err, &precondition) {
-				dirtyState := precondition.DirtyState
-				outcome.Failure.DeletePrecondition = &dirtyState
-			}
+		outcome := worktreeTransitionOutcome(request, err)
+		if terminalOutcome != nil {
+			outcome = *terminalOutcome
 		}
 		s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
-		if err != nil {
-			_ = s.authority.SteerWorktreeTransitionFailure(s.transitionCtx, request.sessionID, outcome)
-		}
 	}
 	return err
+}
+
+func worktreeTransitionOutcome(
+	request worktreeTransitionRequest,
+	err error,
+) clientui.WorktreeTransitionOutcome {
+	outcome := clientui.WorktreeTransitionOutcome{
+		OperationID: request.operationID,
+		Transition:  request.kind,
+		State:       clientui.WorktreeTransitionCompleted,
+	}
+	if err == nil {
+		return outcome
+	}
+	outcome.State = clientui.WorktreeTransitionFailed
+	outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
+	var precondition *serverapi.WorktreeDeletePreconditionError
+	if errors.As(err, &precondition) {
+		dirtyState := precondition.DirtyState
+		outcome.Failure.DeletePrecondition = &dirtyState
+	}
+	return outcome
 }
 
 func (s *Service) resolveScheduledEnterTarget(

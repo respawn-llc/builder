@@ -57,8 +57,6 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback 
 		changed bool
 		receipt session.CommitReceipt
 	}, error) {
-		e.controlMutationMu.Lock()
-		defer e.controlMutationMu.Unlock()
 		changed := e.localFastModeEnabledChange(enabled)
 		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(changed))
 		if receipt.Committed {
@@ -81,8 +79,6 @@ func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback
 		enabled bool
 		receipt session.CommitReceipt
 	}, error) {
-		e.controlMutationMu.Lock()
-		defer e.controlMutationMu.Unlock()
 		changed, current := e.questionsEnabledChange(enabled)
 		resultEnabled := current
 		if changed {
@@ -110,8 +106,6 @@ func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback 
 		mode    string
 		receipt session.CommitReceipt
 	}, error) {
-		e.controlMutationMu.Lock()
-		defer e.controlMutationMu.Unlock()
 		changed, mode, prepareErr := e.reviewerEnabledChange(enabled)
 		if prepareErr != nil {
 			return struct {
@@ -145,8 +139,6 @@ func (e *Engine) SetReviewerFrequencyWithCommittedFeedback(frequency string, fee
 		changed bool
 		receipt session.CommitReceipt
 	}, error) {
-		e.controlMutationMu.Lock()
-		defer e.controlMutationMu.Unlock()
 		changed := e.ReviewerFrequency() != target
 		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(target != "off", target, changed))
 		if receipt.Committed {

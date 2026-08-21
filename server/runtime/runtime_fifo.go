@@ -152,7 +152,7 @@ func (e *Engine) drainRuntimeOperations(ctx context.Context) error {
 	return e.runtimeFIFO.Drain(ctx)
 }
 
-func (e *Engine) HasPendingRuntimeOperations() bool {
+func (e *Engine) hasPendingRuntimeOperations() bool {
 	return e != nil && e.runtimeFIFO != nil && e.runtimeFIFO.Pending()
 }
 
@@ -279,7 +279,7 @@ func (f *runtimeOperationFIFO) beginClose() {
 		f.pauseDone = nil
 	}
 	if f.pendingCount == 0 {
-		close(f.idleDone)
+		closeRuntimeOperationSignal(f.idleDone)
 	}
 	f.ready.Broadcast()
 	f.mu.Unlock()
@@ -322,8 +322,16 @@ func (f *runtimeOperationFIFO) run() {
 			f.pauseDone = nil
 		}
 		if f.pendingCount == 0 {
-			close(f.idleDone)
+			closeRuntimeOperationSignal(f.idleDone)
 		}
 		f.mu.Unlock()
+	}
+}
+
+func closeRuntimeOperationSignal(signal chan struct{}) {
+	select {
+	case <-signal:
+	default:
+		close(signal)
 	}
 }
