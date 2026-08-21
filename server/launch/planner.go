@@ -141,10 +141,6 @@ func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDi
 	return sessionPlanWithMeta(plan, store.Meta(), containerDir)
 }
 
-func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store) SessionPlan {
-	return sessionPlanWithSnapshot(plan, store, p.ContainerDir)
-}
-
 type RunPromptOverrideOptions struct {
 	AgentSelectionPersisted bool
 	RequiredTools           []toolspec.ID
@@ -324,7 +320,7 @@ func ResolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 			return SessionPlan{}, backfillErr
 		}
 	}
-	return sessionPlanWithMeta(plan, store.Meta(), filepath.Dir(store.Dir())), nil
+	return sessionPlanWithSnapshot(plan, store, filepath.Dir(store.Dir())), nil
 }
 
 func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (SessionPlan, error) {
@@ -350,7 +346,7 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	if err != nil {
 		return SessionPlan{}, err
 	}
-	return sessionPlanWithMeta(SessionPlan{
+	return sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,
@@ -363,7 +359,7 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 		BaseSource:                          baseSource,
 		QuestionsEnabled:                    chatSettings.Questions,
 		AutoCompactionEnabled:               chatSettings.AutoCompaction,
-	}, meta, filepath.Dir(store.Dir())), nil
+	}, store, filepath.Dir(store.Dir())), nil
 }
 
 func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPlan, error) {
@@ -772,12 +768,7 @@ func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, stor
 	return p.applyPreparedRunPromptOverridesWithBudgetApplier(
 		plan,
 		store.Meta(),
-		func(continuation session.ContinuationContext) (session.Meta, error) {
-			if err := store.SetContinuationContext(continuation); err != nil {
-				return session.Meta{}, err
-			}
-			return store.Meta(), nil
-		},
+		store.SetContinuationContext,
 		effectiveOverrides,
 		prepared,
 		options,
@@ -1037,42 +1028,14 @@ func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, stor
 	if store == nil {
 		return SessionPlan{}, nil, errors.New("session store is required")
 	}
-	next, warnings, err := p.applyPreparedRunPromptOverridesWithBudgetApplier(
+	return p.applyPreparedRunPromptOverrides(
 		plan,
 		store.Meta(),
-		func(continuation session.ContinuationContext) (session.Meta, error) {
-			if err := store.SetContinuationContext(continuation); err != nil {
-				return session.Meta{}, err
-			}
-			return store.Meta(), nil
-		},
+		store.SetContinuationContext,
 		overrides,
 		prepared,
 		options,
-		applyDerivedModelContextBudgetOverrides,
 	)
-	if err != nil {
-		return SessionPlan{}, nil, err
-	}
-	var chatSettings session.ChatSettings
-	var fastAvailable *bool
-	if prepared.ProviderCapabilities != nil {
-		value := llm.SupportsFastModeProvider(*prepared.ProviderCapabilities)
-		fastAvailable = &value
-	}
-	next.ActiveSettings, chatSettings, err = applySessionChatSettingsWithRunOverrides(
-		store.Meta(),
-		next.ActiveSettings,
-		overrides,
-		fastAvailable,
-	)
-	if err != nil {
-		return SessionPlan{}, nil, err
-	}
-	next.QuestionsEnabled = chatSettings.Questions
-	next.AutoCompactionEnabled = chatSettings.AutoCompaction
-	next.ThinkingOverrideExplicit = strings.TrimSpace(overrides.ThinkingLevel) != ""
-	return next, warnings, nil
 }
 
 func (p Planner) ApplyPreparedRunPromptOverrides(
@@ -1082,10 +1045,28 @@ func (p Planner) ApplyPreparedRunPromptOverrides(
 	prepared PreparedRunPromptOverrides,
 	options RunPromptOverrideOptions,
 ) (SessionPlan, []string, error) {
-	next, warnings, err := p.applyPreparedRunPromptOverridesWithBudgetApplier(
+	return p.applyPreparedRunPromptOverrides(
 		plan,
 		meta,
 		nil,
+		overrides,
+		prepared,
+		options,
+	)
+}
+
+func (p Planner) applyPreparedRunPromptOverrides(
+	plan SessionPlan,
+	meta session.Meta,
+	persistContinuation func(session.ContinuationContext) error,
+	overrides serverapi.RunPromptOverrides,
+	prepared PreparedRunPromptOverrides,
+	options RunPromptOverrideOptions,
+) (SessionPlan, []string, error) {
+	next, warnings, err := p.applyPreparedRunPromptOverridesWithBudgetApplier(
+		plan,
+		meta,
+		persistContinuation,
 		overrides,
 		prepared,
 		options,
@@ -1094,13 +1075,14 @@ func (p Planner) ApplyPreparedRunPromptOverrides(
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
+	meta.Continuation = next.Continuation
 	var fastAvailable *bool
 	if prepared.ProviderCapabilities != nil {
 		value := llm.SupportsFastModeProvider(*prepared.ProviderCapabilities)
 		fastAvailable = &value
 	}
-	var settings session.ChatSettings
-	next.ActiveSettings, settings, err = applySessionChatSettingsWithRunOverrides(
+	var chatSettings session.ChatSettings
+	next.ActiveSettings, chatSettings, err = applySessionChatSettingsWithRunOverrides(
 		meta,
 		next.ActiveSettings,
 		overrides,
@@ -1109,8 +1091,8 @@ func (p Planner) ApplyPreparedRunPromptOverrides(
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
-	next.QuestionsEnabled = settings.Questions
-	next.AutoCompactionEnabled = settings.AutoCompaction
+	next.QuestionsEnabled = chatSettings.Questions
+	next.AutoCompactionEnabled = chatSettings.AutoCompaction
 	next.ThinkingOverrideExplicit = strings.TrimSpace(overrides.ThinkingLevel) != ""
 	return next, warnings, nil
 }
@@ -1141,7 +1123,7 @@ func applySessionChatSettingsWithRunOverrides(
 func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(
 	plan SessionPlan,
 	meta session.Meta,
-	persistContinuation func(session.ContinuationContext) (session.Meta, error),
+	persistContinuation func(session.ContinuationContext) error,
 	overrides serverapi.RunPromptOverrides,
 	prepared PreparedRunPromptOverrides,
 	options RunPromptOverrideOptions,
@@ -1176,7 +1158,7 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(
 		}
 		meta.Continuation = normalized
 		if persistContinuation != nil {
-			meta, err = persistContinuation(continuation)
+			err = persistContinuation(continuation)
 		}
 		return err
 	}

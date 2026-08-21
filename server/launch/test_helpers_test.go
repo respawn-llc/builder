@@ -168,7 +168,15 @@ func ApplyPreparedRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPr
 	if store == nil {
 		return SessionPlan{}, nil, fmt.Errorf("no test store registered for session %q", plan.Descriptor.SessionID())
 	}
-	return planner.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, RunPromptOverrideOptions{}, applyDerivedModelContextBudgetOverrides)
+	return planner.applyPreparedRunPromptOverridesWithBudgetApplier(
+		plan,
+		store.Meta(),
+		store.SetContinuationContext,
+		overrides,
+		prepared,
+		RunPromptOverrideOptions{},
+		applyDerivedModelContextBudgetOverrides,
+	)
 }
 
 func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
