@@ -25,10 +25,9 @@ import (
 )
 
 type RuntimeRegistry struct {
-	authorityMu                sync.RWMutex
-	authorityBySession         map[string]*authorityRuntimeEntry
+	authorityMu                sync.Mutex
+	authorityBySession         sync.Map
 	authorityChanged           chan struct{}
-	mainViews                  sync.Map
 	sleepObserverMu            sync.Mutex
 	sleepObserver              func(active bool)
 	runStateMu                 sync.Mutex
@@ -67,7 +66,6 @@ const (
 
 func NewRuntimeRegistry() *RuntimeRegistry {
 	return &RuntimeRegistry{
-		authorityBySession:       make(map[string]*authorityRuntimeEntry),
 		authorityChanged:         make(chan struct{}),
 		blockingActivitySessions: make(map[string]bool),
 		pendingPrompts:           newPendingPromptStore(),
@@ -103,7 +101,7 @@ func (r *RuntimeRegistry) ResourceReady(
 		versions:    runtimeactivity.NewVersionSource(uint64(ref.Generation())),
 	}
 	r.authorityMu.Lock()
-	if existing := r.authorityBySession[sessionID]; existing != nil {
+	if existing := r.authorityEntryBySession(sessionID); existing != nil {
 		r.authorityMu.Unlock()
 		return fmt.Errorf(
 			"authority runtime resource %s generation %d cannot replace registered generation %d",
@@ -112,14 +110,12 @@ func (r *RuntimeRegistry) ResourceReady(
 			existing.ref.Generation(),
 		)
 	}
-	r.authorityBySession[sessionID] = entry
+	r.authorityBySession.Store(sessionID, entry)
 	r.authorityMu.Unlock()
-	r.mainViews.Store(sessionID, entry)
 	if err := r.publishCurrentRuntimeActivity(sessionID); err != nil {
-		r.mainViews.Delete(sessionID)
 		r.authorityMu.Lock()
-		if r.authorityBySession[sessionID] == entry {
-			delete(r.authorityBySession, sessionID)
+		if r.authorityEntryBySession(sessionID) == entry {
+			r.authorityBySession.Delete(sessionID)
 			r.signalAuthorityChangeLocked()
 		}
 		r.authorityMu.Unlock()
@@ -133,7 +129,7 @@ func (r *RuntimeRegistry) ResourceReady(
 	entry.mu.Unlock()
 	if ready {
 		r.authorityMu.Lock()
-		if r.authorityBySession[sessionID] == entry {
+		if r.authorityEntryBySession(sessionID) == entry {
 			r.signalAuthorityChangeLocked()
 		}
 		r.authorityMu.Unlock()
@@ -162,7 +158,6 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	retentions := entry.retentions
 	entry.retentions = nil
 	entry.mu.Unlock()
-	r.mainViews.Delete(ref.SessionID().String())
 
 	sessionID := ref.SessionID().String()
 	r.pendingPrompts.CloseSession(sessionID, func(snapshot PendingPromptSnapshot) {
@@ -189,8 +184,8 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 		retentionErr = errors.Join(retentionErr, retention.Close())
 	}
 	r.authorityMu.Lock()
-	if r.authorityBySession[sessionID] == entry {
-		delete(r.authorityBySession, sessionID)
+	if r.authorityEntryBySession(sessionID) == entry {
+		r.authorityBySession.Delete(sessionID)
 		r.signalAuthorityChangeLocked()
 	}
 	r.authorityMu.Unlock()
@@ -201,9 +196,14 @@ func (r *RuntimeRegistry) authorityEntryBySession(sessionID string) *authorityRu
 	if r == nil {
 		return nil
 	}
-	r.authorityMu.RLock()
-	entry := r.authorityBySession[strings.TrimSpace(sessionID)]
-	r.authorityMu.RUnlock()
+	value, ok := r.authorityBySession.Load(strings.TrimSpace(sessionID))
+	if !ok {
+		return nil
+	}
+	entry, ok := value.(*authorityRuntimeEntry)
+	if !ok {
+		panic("authority Runtime index contains an invalid entry")
+	}
 	return entry
 }
 
@@ -213,7 +213,7 @@ func (r *RuntimeRegistry) authorityEntryAndChange(sessionID string) (*authorityR
 	if r.authorityChanged == nil {
 		r.authorityChanged = make(chan struct{})
 	}
-	return r.authorityBySession[strings.TrimSpace(sessionID)], r.authorityChanged
+	return r.authorityEntryBySession(sessionID), r.authorityChanged
 }
 
 func (r *RuntimeRegistry) signalAuthorityChangeLocked() {
@@ -330,7 +330,7 @@ func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(context.Context) ([]run
 		return []runtimeactivity.ActiveSessionSnapshot{}, nil
 	}
 	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0)
-	r.mainViews.Range(func(_, value any) bool {
+	r.authorityBySession.Range(func(_, value any) bool {
 		entry, ok := value.(*authorityRuntimeEntry)
 		if !ok {
 			panic("Runtime Main View index contains an invalid entry")
@@ -459,12 +459,15 @@ func (r *RuntimeRegistry) PublishRuntimeEventToAll(evt runtime.Event) error {
 	if r == nil {
 		return nil
 	}
-	r.authorityMu.RLock()
-	authorityEntries := make([]*authorityRuntimeEntry, 0, len(r.authorityBySession))
-	for _, entry := range r.authorityBySession {
+	authorityEntries := make([]*authorityRuntimeEntry, 0)
+	r.authorityBySession.Range(func(_, value any) bool {
+		entry, ok := value.(*authorityRuntimeEntry)
+		if !ok {
+			panic("authority Runtime index contains an invalid entry")
+		}
 		authorityEntries = append(authorityEntries, entry)
-	}
-	r.authorityMu.RUnlock()
+		return true
+	})
 	for _, entry := range authorityEntries {
 		if err := r.publishRuntimeEvent(entry, evt); err != nil {
 			return err
@@ -788,14 +791,14 @@ func (r *RuntimeRegistry) updateAggregateRuntimeActivityForAuthority(sessionID s
 	if lifecycle == authorityRuntimeEntryRetired && activeForControl {
 		return false
 	}
-	r.authorityMu.RLock()
-	current := r.authorityBySession[id]
+	r.authorityMu.Lock()
+	current := r.authorityEntryBySession(id)
 	if current != entry && (activeForControl || current != nil) {
-		r.authorityMu.RUnlock()
+		r.authorityMu.Unlock()
 		return false
 	}
 	r.updateAggregateRuntimeActivityState(id, activeForControl)
-	r.authorityMu.RUnlock()
+	r.authorityMu.Unlock()
 	return true
 }
 

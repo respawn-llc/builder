@@ -15,13 +15,9 @@ func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.Ru
 	if id == "" {
 		return clientui.RuntimeMainView{}, false
 	}
-	value, ok := r.mainViews.Load(id)
-	if !ok {
+	entry := r.authorityEntryBySession(id)
+	if entry == nil {
 		return clientui.RuntimeMainView{}, false
-	}
-	entry, ok := value.(*authorityRuntimeEntry)
-	if !ok {
-		panic("Runtime Main View index contains an invalid entry")
 	}
 	view := entry.mainView.Load()
 	if view == nil {
