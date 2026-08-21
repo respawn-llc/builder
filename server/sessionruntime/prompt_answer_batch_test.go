@@ -652,7 +652,7 @@ func installPromptBatchEntries(store *executionPromptStore, entries ...*executio
 func clonePromptBatchEntries(entries ...*executionPromptEntry) []*executionPromptEntry {
 	clones := make([]*executionPromptEntry, 0, len(entries))
 	for _, entry := range entries {
-		clones = append(clones, promptBatchEntry(cloneExecutionPromptRequest(entry.snapshot.Request), entry.snapshot.CreatedAt))
+		clones = append(clones, promptBatchEntry(entry.snapshot.Request.Clone(), entry.snapshot.CreatedAt))
 	}
 	return clones
 }

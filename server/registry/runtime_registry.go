@@ -49,7 +49,7 @@ type authorityRuntimeEntry struct {
 	engine      *runtime.Engine
 	sessionFeed *sessionFeedSequencer
 	retain      func() (io.Closer, error)
-	readModel   atomic.Pointer[clientui.RuntimeReadModelUpdate]
+	mainView    atomic.Pointer[runtimeMainViewPublication]
 
 	publicationMu  sync.Mutex
 	mu             sync.Mutex
@@ -76,7 +76,7 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 		readModels:               runtimeactivity.NewCoordinatorCache(runtimeactivity.DefaultCoordinatorCacheLimit),
 		pendingPrompts:           newPendingPromptStore(),
 	}
-	registry.mainViews.Store(&runtimeMainViewCatalog{bySession: make(map[string]clientui.RuntimeMainView)})
+	registry.mainViews.Store(&runtimeMainViewCatalog{bySession: make(map[string]*authorityRuntimeEntry)})
 	return registry
 }
 
@@ -119,6 +119,7 @@ func (r *RuntimeRegistry) ResourceReady(
 	}
 	r.authorityBySession[sessionID] = entry
 	r.authorityMu.Unlock()
+	r.addRuntimeMainViewEntry(entry)
 	if r.readModels != nil {
 		entry.readModelUnpin = r.readModels.Pin(sessionID)
 	}
@@ -347,13 +348,14 @@ func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(context.Context) ([]run
 		return []runtimeactivity.ActiveSessionSnapshot{}, nil
 	}
 	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0, len(catalog.bySession))
-	for sessionID, view := range catalog.bySession {
-		if !view.Activity.ActiveForControl() {
+	for sessionID, entry := range catalog.bySession {
+		publication := entry.mainView.Load()
+		if publication == nil || !publication.view.Activity.ActiveForControl() {
 			continue
 		}
 		snapshots = append(snapshots, runtimeactivity.ActiveSessionSnapshot{
 			SessionID: sessionID,
-			Activity:  cloneRuntimeActivity(view.Activity),
+			Activity:  publication.view.Activity,
 		})
 	}
 	sort.Slice(snapshots, func(i, j int) bool {
@@ -609,12 +611,11 @@ func (r *RuntimeRegistry) publishRuntimeReadModelUpdate(sessionID string, update
 		}
 		authorityEntry.publicationMu.Lock()
 		defer authorityEntry.publicationMu.Unlock()
-		current := authorityEntry.readModel.Load()
-		if current != nil && !completed.Version.NewerThan(current.Version) {
+		current := authorityEntry.mainView.Load()
+		if current != nil && !completed.Version.NewerThan(current.update.Version) {
 			return nil
 		}
-		authorityEntry.readModel.Store(&completed)
-		publicationErr := r.publishRuntimeMainViewLocked(authorityEntry, completed.Version, completed.Activity)
+		publicationErr := r.publishRuntimeMainViewLocked(authorityEntry, completed)
 		authorityEntry.sessionFeed.PublishRuntimeReadModel(completed)
 		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, completed.Activity.ActiveForControl())
 		return publicationErr

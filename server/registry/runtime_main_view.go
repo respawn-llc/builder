@@ -5,11 +5,15 @@ import (
 
 	"core/server/runtimeview"
 	"core/shared/clientui"
-	"core/shared/textutil"
 )
 
 type runtimeMainViewCatalog struct {
-	bySession map[string]clientui.RuntimeMainView
+	bySession map[string]*authorityRuntimeEntry
+}
+
+type runtimeMainViewPublication struct {
+	update clientui.RuntimeReadModelUpdate
+	view   clientui.RuntimeMainView
 }
 
 func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.RuntimeMainView, bool) {
@@ -24,11 +28,15 @@ func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.Ru
 	if catalog == nil {
 		return clientui.RuntimeMainView{}, false
 	}
-	view, ok := catalog.bySession[id]
-	if !ok {
+	entry := catalog.bySession[id]
+	if entry == nil {
 		return clientui.RuntimeMainView{}, false
 	}
-	return cloneRuntimeMainView(view), true
+	publication := entry.mainView.Load()
+	if publication == nil {
+		return clientui.RuntimeMainView{}, false
+	}
+	return publication.view, true
 }
 
 func (r *RuntimeRegistry) republishRuntimeMainView(entry *authorityRuntimeEntry) error {
@@ -37,42 +45,44 @@ func (r *RuntimeRegistry) republishRuntimeMainView(entry *authorityRuntimeEntry)
 	}
 	entry.publicationMu.Lock()
 	defer entry.publicationMu.Unlock()
-	readModel := entry.readModel.Load()
-	if readModel == nil {
+	publication := entry.mainView.Load()
+	if publication == nil {
 		return nil
 	}
-	return r.publishRuntimeMainViewLocked(entry, readModel.Version, readModel.Activity)
+	return r.publishRuntimeMainViewLocked(entry, publication.update)
 }
 
 func (r *RuntimeRegistry) publishRuntimeMainViewLocked(
 	entry *authorityRuntimeEntry,
-	version clientui.ReadModelVersion,
-	activity clientui.RuntimeActivity,
+	update clientui.RuntimeReadModelUpdate,
 ) error {
-	view, err := runtimeview.MainViewFromRuntimeActivity(entry.engine, version, cloneRuntimeActivity(activity))
+	view, err := runtimeview.MainViewFromRuntimeActivity(entry.engine, update.Version, update.Activity)
 	if err != nil {
 		return err
 	}
-	sessionID := entry.ref.SessionID().String()
 	entry.mu.Lock()
 	ready := entry.lifecycle == authorityRuntimeEntryReady
 	entry.mu.Unlock()
 	if !ready {
 		return nil
 	}
+	entry.mainView.Store(&runtimeMainViewPublication{update: update, view: view})
+	return nil
+}
+
+func (r *RuntimeRegistry) addRuntimeMainViewEntry(entry *authorityRuntimeEntry) {
 	r.mainViewCatalogMu.Lock()
 	defer r.mainViewCatalogMu.Unlock()
 	currentCatalog := r.mainViews.Load()
 	if currentCatalog == nil {
-		currentCatalog = &runtimeMainViewCatalog{bySession: make(map[string]clientui.RuntimeMainView)}
+		currentCatalog = &runtimeMainViewCatalog{bySession: make(map[string]*authorityRuntimeEntry)}
 	}
-	next := make(map[string]clientui.RuntimeMainView, len(currentCatalog.bySession)+1)
+	next := make(map[string]*authorityRuntimeEntry, len(currentCatalog.bySession)+1)
 	for id, existing := range currentCatalog.bySession {
 		next[id] = existing
 	}
-	next[sessionID] = view
+	next[entry.ref.SessionID().String()] = entry
 	r.mainViews.Store(&runtimeMainViewCatalog{bySession: next})
-	return nil
 }
 
 func (r *RuntimeRegistry) removeRuntimeMainView(entry *authorityRuntimeEntry) {
@@ -91,41 +101,13 @@ func (r *RuntimeRegistry) removeRuntimeMainView(entry *authorityRuntimeEntry) {
 	if _, ok := current.bySession[sessionID]; !ok {
 		return
 	}
-	next := make(map[string]clientui.RuntimeMainView, len(current.bySession)-1)
+	next := make(map[string]*authorityRuntimeEntry, len(current.bySession)-1)
 	for id, existing := range current.bySession {
 		if id != sessionID {
 			next[id] = existing
 		}
 	}
 	r.mainViews.Store(&runtimeMainViewCatalog{bySession: next})
-}
-
-func cloneRuntimeMainView(view clientui.RuntimeMainView) clientui.RuntimeMainView {
-	cloned := view
-	cloned.Activity = cloneRuntimeActivity(view.Activity)
-	cloned.Session.AgentRole = textutil.Pointer(view.Session.AgentRole)
-	cloned.Session.ExecutionTarget = clientui.NormalizeSessionExecutionTarget(view.Session.ExecutionTarget)
-	cloned.Status.PreviousSessionID = textutil.Pointer(view.Status.PreviousSessionID)
-	cloned.Status.ParentAgentSessionID = textutil.Pointer(view.Status.ParentAgentSessionID)
-	cloned.Status.NavigationTargetSessionID = textutil.Pointer(view.Status.NavigationTargetSessionID)
-	cloned.Status.LastCommittedAssistantFinalAnswer = textutil.Pointer(view.Status.LastCommittedAssistantFinalAnswer)
-	if view.Status.Goal != nil {
-		goal := *view.Status.Goal
-		if view.Status.Goal.Goal != nil {
-			core := *view.Status.Goal.Goal
-			goal.Goal = &core
-		}
-		if view.Status.Goal.Availability != nil {
-			availability := *view.Status.Goal.Availability
-			goal.Availability = &availability
-		}
-		cloned.Status.Goal = &goal
-	}
-	if view.Status.WorkflowSession != nil {
-		workflow := *view.Status.WorkflowSession
-		cloned.Status.WorkflowSession = &workflow
-	}
-	return cloned
 }
 
 func cloneRuntimeActivity(activity clientui.RuntimeActivity) clientui.RuntimeActivity {

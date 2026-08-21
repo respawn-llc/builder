@@ -36,6 +36,38 @@ type AskQuestionRequest struct {
 	AttentionTarget        *clientui.AttentionNotificationTarget `json:"-"`
 }
 
+func (r AskQuestionRequest) Clone() AskQuestionRequest {
+	r.Suggestions = append([]string(nil), r.Suggestions...)
+	r.ApprovalOptions = append([]AskQuestionApprovalOption(nil), r.ApprovalOptions...)
+	if r.QuestionBatch != nil {
+		batch := *r.QuestionBatch
+		batch.BatchPromptIDs = append([]string(nil), batch.BatchPromptIDs...)
+		r.QuestionBatch = &batch
+	}
+	if r.AttentionTarget != nil {
+		target := *r.AttentionTarget
+		if target.WorkflowID != nil {
+			workflowID := *target.WorkflowID
+			target.WorkflowID = &workflowID
+		}
+		if target.CurrentNodeID != nil {
+			currentNodeID := *target.CurrentNodeID
+			target.CurrentNodeID = &currentNodeID
+		}
+		if target.CurrentNodeBranchKey != nil {
+			branchKey := *target.CurrentNodeBranchKey
+			target.CurrentNodeBranchKey = &branchKey
+		}
+		if target.Focus != nil {
+			focus := *target.Focus
+			focus.AskIDs = append([]string(nil), focus.AskIDs...)
+			target.Focus = &focus
+		}
+		r.AttentionTarget = &target
+	}
+	return r
+}
+
 func (r AskQuestionRequest) IsTaskScopedApprovalQuestion() bool {
 	if !r.Approval || r.AttentionTarget == nil || r.AttentionTarget.Focus == nil {
 		return false

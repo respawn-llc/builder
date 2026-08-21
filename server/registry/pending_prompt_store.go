@@ -9,7 +9,6 @@ import (
 
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
-	"core/shared/clientui"
 	"core/shared/runtimeids"
 )
 
@@ -41,7 +40,7 @@ func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.Session
 	if id == "" || requestID == "" {
 		return PendingPromptSnapshot{}, false
 	}
-	snapshot := PendingPromptSnapshot{Request: cloneAskQuestionRequest(req), CreatedAt: createdAt, Resource: resource, ScopeID: scopeID}
+	snapshot := PendingPromptSnapshot{Request: req.Clone(), CreatedAt: createdAt, Resource: resource, ScopeID: scopeID}
 	s.mu.Lock()
 	pending := s.pending[id]
 	if pending == nil {
@@ -88,7 +87,7 @@ func (s *pendingPromptStore) List(sessionID string) []PendingPromptSnapshot {
 	if readModel == nil {
 		return nil
 	}
-	return clonePendingPromptSnapshots(readModel.bySession[strings.TrimSpace(sessionID)])
+	return append([]PendingPromptSnapshot(nil), readModel.bySession[strings.TrimSpace(sessionID)]...)
 }
 
 func (s *pendingPromptStore) CloseSession(sessionID string, resolve func(PendingPromptSnapshot)) {
@@ -128,7 +127,7 @@ func (s *pendingPromptStore) publishSessionLocked(sessionID string, pending map[
 func listPendingPrompts(pending map[string]PendingPromptSnapshot) []PendingPromptSnapshot {
 	items := make([]PendingPromptSnapshot, 0, len(pending))
 	for _, item := range pending {
-		items = append(items, clonePendingPromptSnapshot(item))
+		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool {
 		return sessionruntime.PendingPromptOrderLess(items[i].CreatedAt, items[i].Request.ID, items[j].CreatedAt, items[j].Request.ID)
@@ -136,55 +135,7 @@ func listPendingPrompts(pending map[string]PendingPromptSnapshot) []PendingPromp
 	return items
 }
 
-func clonePendingPromptSnapshots(items []PendingPromptSnapshot) []PendingPromptSnapshot {
-	if len(items) == 0 {
-		return nil
-	}
-	cloned := make([]PendingPromptSnapshot, 0, len(items))
-	for _, item := range items {
-		cloned = append(cloned, clonePendingPromptSnapshot(item))
-	}
-	return cloned
-}
-
 func clonePendingPromptSnapshot(snapshot PendingPromptSnapshot) PendingPromptSnapshot {
-	snapshot.Request = cloneAskQuestionRequest(snapshot.Request)
+	snapshot.Request = snapshot.Request.Clone()
 	return snapshot
-}
-
-func cloneAskQuestionRequest(request askquestion.AskQuestionRequest) askquestion.AskQuestionRequest {
-	request.Suggestions = append([]string(nil), request.Suggestions...)
-	request.ApprovalOptions = append([]askquestion.AskQuestionApprovalOption(nil), request.ApprovalOptions...)
-	if request.QuestionBatch != nil {
-		batch := *request.QuestionBatch
-		batch.BatchPromptIDs = append([]string(nil), batch.BatchPromptIDs...)
-		request.QuestionBatch = &batch
-	}
-	request.AttentionTarget = cloneAttentionNotificationTarget(request.AttentionTarget)
-	return request
-}
-
-func cloneAttentionNotificationTarget(target *clientui.AttentionNotificationTarget) *clientui.AttentionNotificationTarget {
-	if target == nil {
-		return nil
-	}
-	cloned := *target
-	if target.WorkflowID != nil {
-		workflowID := *target.WorkflowID
-		cloned.WorkflowID = &workflowID
-	}
-	if target.CurrentNodeID != nil {
-		currentNodeID := *target.CurrentNodeID
-		cloned.CurrentNodeID = &currentNodeID
-	}
-	if target.CurrentNodeBranchKey != nil {
-		branchKey := *target.CurrentNodeBranchKey
-		cloned.CurrentNodeBranchKey = &branchKey
-	}
-	if target.Focus != nil {
-		focus := *target.Focus
-		focus.AskIDs = append([]string(nil), target.Focus.AskIDs...)
-		cloned.Focus = &focus
-	}
-	return &cloned
 }
