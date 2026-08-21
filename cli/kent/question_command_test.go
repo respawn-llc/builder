@@ -12,6 +12,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -78,10 +79,10 @@ func (r *stubQuestionTaskRemote) ListWorkflowTaskAttention(
 
 func (r *stubQuestionTaskRemote) ResolveProjectPath(
 	_ context.Context,
-	_ serverapi.ProjectResolvePathRequest,
-) (serverapi.ProjectResolvePathResponse, error) {
-	return serverapi.ProjectResolvePathResponse{
-		Binding: &serverapi.ProjectBinding{ProjectID: "project-1"},
+	_ *projectpb.ResolvePathRequest,
+) (*projectpb.ResolvePathSuccess, error) {
+	return &projectpb.ResolvePathSuccess{
+		Binding: &projectpb.ProjectBinding{ProjectId: "project-1"},
 	}, nil
 }
 

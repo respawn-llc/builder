@@ -247,13 +247,9 @@ func newWorkspaceChatMaterializationSessionForRoot(
 	return chat
 }
 
-func materializedSessionPage(t *testing.T, store *Store, projectID string) serverapi.SessionPageResponse {
+func materializedSessionPage(t *testing.T, store *Store, projectID string) SessionPage {
 	t.Helper()
-	page, err := store.ListSessionPage(t.Context(), serverapi.SessionPageRequest{
-		ProjectID: projectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     textutil.Value(10),
-	})
+	page, err := store.ListSessionPage(t.Context(), projectID, sessioncontract.SessionCategoryMain, 0, 10)
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}

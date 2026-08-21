@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -18,13 +19,18 @@ import (
 )
 
 type Frame struct {
-	JSONRPC string                  `json:"jsonrpc"`
-	ID      string                  `json:"id,omitempty"`
-	Method  string                  `json:"method,omitempty"`
-	Params  json.RawMessage         `json:"params,omitempty"`
-	Result  json.RawMessage         `json:"result,omitempty"`
-	Error   *protocol.ResponseError `json:"error,omitempty"`
+	Kind    FrameKind
+	Payload []byte
+
+	encodingErr error
 }
+
+type FrameKind uint8
+
+const (
+	FrameText FrameKind = iota + 1
+	FrameBinary
+)
 
 type Event struct {
 	Frame Frame
@@ -109,9 +115,17 @@ func (c *webSocketConn) Send(ctx context.Context, frame Frame) error {
 	if c.socket == nil {
 		return errors.New("websocket connection is required")
 	}
-	data, err := json.Marshal(frame)
-	if err != nil {
-		return err
+	if frame.encodingErr != nil {
+		return frame.encodingErr
+	}
+	var opcode gws.Opcode
+	switch frame.Kind {
+	case FrameText:
+		opcode = gws.OpcodeText
+	case FrameBinary:
+		opcode = gws.OpcodeBinary
+	default:
+		return fmt.Errorf("unsupported websocket frame kind %d", frame.Kind)
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -121,7 +135,7 @@ func (c *webSocketConn) Send(ctx context.Context, frame Frame) error {
 		}
 		defer func() { _ = c.socket.SetWriteDeadline(time.Time{}) }()
 	}
-	if err := c.socket.WriteMessage(gws.OpcodeText, data); err != nil {
+	if err := c.socket.WriteMessage(opcode, frame.Payload); err != nil {
 		if cerr := ctx.Err(); cerr != nil {
 			return cerr
 		}
@@ -181,12 +195,18 @@ func (c *webSocketConn) OnPong(_ *gws.Conn, _ []byte) {}
 
 func (c *webSocketConn) OnMessage(_ *gws.Conn, message *gws.Message) {
 	defer func() { _ = message.Close() }()
-	var frame Frame
-	if err := json.Unmarshal(message.Bytes(), &frame); err != nil {
-		c.publishError(err)
+	var kind FrameKind
+	switch message.Opcode {
+	case gws.OpcodeText:
+		kind = FrameText
+	case gws.OpcodeBinary:
+		kind = FrameBinary
+	default:
+		c.publishError(fmt.Errorf("unsupported websocket opcode %d", message.Opcode))
 		_ = c.Close()
 		return
 	}
+	frame := Frame{Kind: kind, Payload: append([]byte(nil), message.Bytes()...)}
 	select {
 	case c.events <- Event{Frame: frame}:
 	case <-c.closed:
@@ -298,17 +318,49 @@ func webSocketHandshakeTimeout(ctx context.Context) time.Duration {
 }
 
 func FrameFromRequest(req protocol.Request) Frame {
-	return Frame{JSONRPC: req.JSONRPC, ID: req.ID, Method: req.Method, Params: req.Params}
+	payload, err := json.Marshal(req)
+	return Frame{Kind: FrameText, Payload: payload, encodingErr: err}
 }
 
 func FrameFromResponse(resp protocol.Response) Frame {
-	return Frame{JSONRPC: resp.JSONRPC, ID: resp.ID, Result: resp.Result, Error: resp.Error}
+	payload, err := json.Marshal(resp)
+	return Frame{Kind: FrameText, Payload: payload, encodingErr: err}
 }
 
 func (f Frame) Request() protocol.Request {
-	return protocol.Request{JSONRPC: f.JSONRPC, ID: f.ID, Method: f.Method, Params: f.Params}
+	request, err := f.DecodeRequest()
+	if err != nil {
+		panic(err)
+	}
+	return request
 }
 
 func (f Frame) Response() protocol.Response {
-	return protocol.Response{JSONRPC: f.JSONRPC, ID: f.ID, Result: f.Result, Error: f.Error}
+	response, err := f.DecodeResponse()
+	if err != nil {
+		panic(err)
+	}
+	return response
+}
+
+func (f Frame) DecodeRequest() (protocol.Request, error) {
+	if f.Kind != FrameText {
+		return protocol.Request{}, fmt.Errorf("JSON request requires a text frame, got kind %d", f.Kind)
+	}
+	var request protocol.Request
+	if err := json.Unmarshal(f.Payload, &request); err != nil {
+		return protocol.Request{}, fmt.Errorf("decode JSON request: %w", err)
+	}
+	return request, nil
+}
+
+func (f Frame) DecodeResponse() (protocol.Response, error) {
+	if f.Kind != FrameText {
+		return protocol.Response{}, fmt.Errorf("JSON response requires a text frame, got kind %d", f.Kind)
+	}
+	var response protocol.Response
+	if err := json.Unmarshal(f.Payload, &response); err != nil {
+		return protocol.Response{}, fmt.Errorf("decode JSON response: %w", err)
+	}
+	return response, nil
 }

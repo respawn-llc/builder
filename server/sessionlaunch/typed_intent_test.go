@@ -14,7 +14,7 @@ import (
 	"core/shared/sessioncontract"
 )
 
-func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
+func TestServiceMapsTypedLaunchIntents(t *testing.T) {
 	containerDir := t.TempDir()
 	persistenceRoot := t.TempDir()
 	persistence := sessiontest.NewPersistence()
@@ -54,31 +54,33 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: "/tmp/workspace-a"},
 	}).WithRuntimeAuthority(authority)
 
-	createRequest := serverapi.SessionPlanRequest{
-		ClientRequestID: "same-request-id",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	createRequest := PlanRequest{
+		Mode:   launch.ModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}
-	created, err := service.PlanSession(context.Background(), createRequest)
+	created, err := service.PlanLaunchSession(context.Background(), createRequest)
 	if err != nil {
 		t.Fatalf("plan create-new session: %v", err)
 	}
 
-	replayed, err := service.PlanSession(context.Background(), createRequest)
+	secondCreated, err := service.PlanLaunchSession(context.Background(), createRequest)
 	if err != nil {
-		t.Fatalf("replay create-new session: %v", err)
+		t.Fatalf("plan second create-new session: %v", err)
 	}
-	if replayed.Plan.SessionID != created.Plan.SessionID {
-		t.Fatalf("replayed session ID = %q, want %q", replayed.Plan.SessionID, created.Plan.SessionID)
+	if secondCreated.Plan.Descriptor.SessionID() == created.Plan.Descriptor.SessionID() {
+		t.Fatalf("second create-new session reused session ID %q", created.Plan.Descriptor.SessionID())
 	}
 
-	openRequest := serverapi.SessionPlanRequest{
-		ClientRequestID: "same-request-id",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(targetID),
+	openRequest := PlanRequest{
+		Mode:   launch.ModeInteractive,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(targetID),
 	}
-	if _, err := service.PlanSession(context.Background(), openRequest); err == nil {
-		t.Fatal("different typed intent reused the same client request ID")
+	opened, err := service.PlanLaunchSession(context.Background(), openRequest)
+	if err != nil {
+		t.Fatalf("plan open-existing session: %v", err)
+	}
+	if opened.Plan.Descriptor.SessionID() != targetID {
+		t.Fatalf("open-existing session ID = %q, want %q", opened.Plan.Descriptor.SessionID(), targetID)
 	}
 }
 

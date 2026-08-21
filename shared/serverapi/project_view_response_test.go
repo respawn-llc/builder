@@ -1,7 +1,6 @@
 package serverapi
 
 import (
-	"encoding/json"
 	"testing"
 
 	"core/shared/runtimeids"
@@ -114,63 +113,4 @@ func TestProjectHomeSummaryValidateRejectsMalformedOptionalWorkflowValues(t *tes
 			t.Fatal("valid workflow flag without a workflow accepted")
 		}
 	})
-}
-
-func TestProjectWorkspaceMutationResponseValidateRejectsMalformedResponses(t *testing.T) {
-	summary := validProjectHomeSummaryForResponseTest()
-	if err := (ProjectDefaultWorkspaceSetResponse{Project: summary}).Validate(); err != nil {
-		t.Fatalf("valid default response rejected: %v", err)
-	}
-	if err := (ProjectWorkspaceUnlinkResponse{
-		ProjectID:   "project-1",
-		WorkspaceID: "workspace-1",
-		Project:     &summary,
-	}).Validate(); err != nil {
-		t.Fatalf("valid unlink response rejected: %v", err)
-	}
-	for name, response := range map[string]ProjectWorkspaceUnlinkResponse{
-		"missing project ID":   {WorkspaceID: "workspace-1"},
-		"missing workspace ID": {ProjectID: "project-1"},
-		"blank blocker code": {
-			ProjectID: "project-1", WorkspaceID: "workspace-1",
-			Blockers: []ProjectWorkspaceUnlinkBlocker{{Message: "blocked"}},
-		},
-		"blank blocker message": {
-			ProjectID: "project-1", WorkspaceID: "workspace-1",
-			Blockers: []ProjectWorkspaceUnlinkBlocker{{Code: "blocked"}},
-		},
-		"negative blocker count": {
-			ProjectID: "project-1", WorkspaceID: "workspace-1",
-			Blockers: []ProjectWorkspaceUnlinkBlocker{{Code: "blocked", Message: "blocked", Count: -1}},
-		},
-		"malformed optional project": {
-			ProjectID: "project-1", WorkspaceID: "workspace-1",
-			Project: &ProjectHomeSummary{},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := response.Validate(); err == nil {
-				t.Fatal("malformed response accepted")
-			}
-		})
-	}
-}
-
-func TestProjectWorkspaceUnlinkSuccessJSONOmitsControlFields(t *testing.T) {
-	payload, err := json.Marshal(ProjectWorkspaceUnlinkResponse{
-		ProjectID:   "project-1",
-		WorkspaceID: "workspace-1",
-	})
-	if err != nil {
-		t.Fatalf("marshal unlink response: %v", err)
-	}
-	var fields map[string]string
-	if err := json.Unmarshal(payload, &fields); err != nil {
-		t.Fatalf("decode unlink response: %v", err)
-	}
-	if len(fields) != 2 ||
-		fields["project_id"] != "project-1" ||
-		fields["workspace_id"] != "workspace-1" {
-		t.Fatalf("unlink success JSON = %s, want only resolved identity", payload)
-	}
 }

@@ -6,11 +6,11 @@ default mode="": (server mode) (desktop mode) (docs mode)
 server mode="":
     #!/usr/bin/env bash
     set -euo pipefail
+    just _gen-go
     if [ "{{mode}}" = "--dry-run" ]; then
         files="$(gofmt -l .)"
         [ -z "$files" ] || { echo "$files"; exit 1; }
     elif [ -z "{{mode}}" ]; then
-        just _gen-go
         gofmt -w .
     else
         echo "Usage: just lint server [--dry-run]" >&2

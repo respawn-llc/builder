@@ -3,7 +3,15 @@ package apicontract
 import (
 	"context"
 
+	authpb "core/shared/protoapi/gen/kent/api/auth"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // Interfaces in this package are in-process bindings for shared RPC routes.
@@ -18,17 +26,17 @@ type AskViewService interface {
 }
 
 type AuthBootstrapService interface {
-	GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error)
-	CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error)
-	AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error)
+	GetBootstrapStatus(ctx context.Context, req *emptypb.Empty) (*authpb.BootstrapStatus, error)
+	CompleteBootstrap(ctx context.Context, req *authpb.CompleteBootstrapRequest) (*authpb.BootstrapCompletion, error)
+	AcknowledgeNoAuth(ctx context.Context, req *emptypb.Empty) (*authpb.NoAuthAcknowledgement, error)
 }
 
 type AuthStatusService interface {
-	GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error)
+	GetStatus(ctx context.Context, req *authpb.GetStatusRequest) (*authpb.Status, error)
 }
 
 type CapabilityFactsService interface {
-	GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error)
+	GetFacts(ctx context.Context, req *capabilitypb.GetFactsRequest) (*capabilitypb.Facts, error)
 }
 
 type ChatContextService interface {
@@ -40,7 +48,7 @@ type PromptCommandCatalogService interface {
 }
 
 type OnboardingFinalizeService interface {
-	FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+	Finalize(ctx context.Context, req *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error)
 }
 
 type ProcessControlService interface {
@@ -54,22 +62,22 @@ type ProcessViewService interface {
 }
 
 type ProjectViewService interface {
-	ListProjects(ctx context.Context, req serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error)
-	ListProjectHome(ctx context.Context, req serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error)
-	ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error)
-	PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error)
-	CreateProject(ctx context.Context, req serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error)
-	GetProjectEdit(ctx context.Context, req serverapi.ProjectEditGetRequest) (serverapi.ProjectEditGetResponse, error)
-	UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error)
-	SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error)
-	ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error)
-	GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error)
-	UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error)
-	DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error)
-	AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error)
-	RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error)
-	GetProjectOverview(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error)
-	ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error)
+	ListProjects(ctx context.Context, req *emptypb.Empty) (*projectpb.ProjectListSuccess, error)
+	ListProjectHome(ctx context.Context, req *projectpb.ProjectHomeListRequest) (*projectpb.ProjectHomeListSuccess, error)
+	ResolveProjectPath(ctx context.Context, req *projectpb.ResolvePathRequest) (*projectpb.ResolvePathSuccess, error)
+	PlanWorkspaceBinding(ctx context.Context, req *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error)
+	CreateProject(ctx context.Context, req *projectpb.CreateProjectRequest) (*projectpb.CreateProjectSuccess, error)
+	GetProjectEdit(ctx context.Context, req *projectpb.ProjectEditGetRequest) (*projectpb.GetProjectEditSuccess, error)
+	UpdateProject(ctx context.Context, req *projectpb.UpdateProjectRequest) (*projectpb.UpdateProjectSuccess, error)
+	SetDefaultWorkspace(ctx context.Context, req *projectpb.SetDefaultWorkspaceRequest) (*projectpb.SetDefaultWorkspaceSuccess, error)
+	ListProjectWorkspaces(ctx context.Context, req *projectpb.ProjectWorkspaceListRequest) (*projectpb.ListProjectWorkspacesSuccess, error)
+	GetProjectWorkspace(ctx context.Context, req *projectpb.GetProjectWorkspaceRequest) (*projectpb.GetProjectWorkspaceSuccess, error)
+	UnlinkWorkspaceFromProject(ctx context.Context, req *projectpb.UnlinkWorkspaceRequest) (*projectpb.UnlinkWorkspaceSuccess, error)
+	DeleteProject(ctx context.Context, req *projectpb.DeleteProjectRequest) (*projectpb.DeleteProjectSuccess, error)
+	AttachWorkspaceToProject(ctx context.Context, req *projectpb.AttachWorkspaceRequest) (*projectpb.AttachWorkspaceSuccess, error)
+	RebindWorkspace(ctx context.Context, req *projectpb.RebindWorkspaceRequest) (*projectpb.RebindWorkspaceSuccess, error)
+	GetProjectOverview(ctx context.Context, req *projectpb.GetOverviewRequest) (*projectpb.GetOverviewSuccess, error)
+	ListSessionPage(ctx context.Context, req *projectpb.SessionPageRequest) (*projectpb.SessionPageSuccess, error)
 }
 
 type AttentionNotificationService interface {
@@ -87,8 +95,8 @@ type RunPromptService interface {
 }
 
 type ServerStatusService interface {
-	GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error)
-	GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error)
+	GetReadiness(ctx context.Context, req *emptypb.Empty) (*serverpb.GetReadinessSuccess, error)
+	GetUpdateStatus(ctx context.Context, req *emptypb.Empty) (*serverpb.GetUpdateStatusSuccess, error)
 }
 
 type RuntimeControlService interface {
@@ -126,9 +134,9 @@ type SessionTranscriptService interface {
 }
 
 type SessionLaunchService interface {
-	PlanSession(ctx context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error)
-	WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error)
-	MaterializeWorkspaceChat(ctx context.Context, req serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error)
+	PlanSession(ctx context.Context, req *sessionlaunchpb.SessionPlanRequest) (*sessionlaunchpb.SessionPlanSuccess, error)
+	WorkspaceChatDraft(ctx context.Context, req *sessionlaunchpb.WorkspaceChatDraftRequest) (*sessionlaunchpb.WorkspaceChatDraftSuccess, error)
+	MaterializeWorkspaceChat(ctx context.Context, req *emptypb.Empty) (*sessionlaunchpb.MaterializeWorkspaceChatSuccess, error)
 }
 
 type ChatSettingsService interface {

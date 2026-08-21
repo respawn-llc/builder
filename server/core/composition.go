@@ -36,7 +36,6 @@ import (
 	"core/server/workflowsvc"
 	"core/server/workflowview"
 	"core/server/worktree"
-	rpccontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -206,7 +205,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		},
 	})
 	projectViews := projectService
-	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
+	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings)
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
 	updateStatusService := serverstatus.NewUpdateStatusService(config.Version, cfg.Settings.Debug)
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg, updateStatusService)

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -19,10 +20,10 @@ import (
 type projectDeleteTestOperations struct {
 	listResponse   serverapi.WorkflowTaskListResponse
 	listErr        error
-	deleteResponse serverapi.ProjectDeleteResponse
+	deleteResponse *projectpb.DeleteProjectSuccess
 	deleteErr      error
 	listRequests   []serverapi.WorkflowTaskListRequest
-	deleteRequests []serverapi.ProjectDeleteRequest
+	deleteRequests []*projectpb.DeleteProjectRequest
 }
 
 func (r *projectDeleteTestOperations) ListWorkflowTasks(_ context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
@@ -30,7 +31,7 @@ func (r *projectDeleteTestOperations) ListWorkflowTasks(_ context.Context, req s
 	return r.listResponse, r.listErr
 }
 
-func (r *projectDeleteTestOperations) DeleteProject(_ context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
+func (r *projectDeleteTestOperations) DeleteProject(_ context.Context, req *projectpb.DeleteProjectRequest) (*projectpb.DeleteProjectSuccess, error) {
 	r.deleteRequests = append(r.deleteRequests, req)
 	return r.deleteResponse, r.deleteErr
 }
@@ -233,8 +234,8 @@ func TestProjectDeleteConfirmedSuccessCallsDeleteOnceAndProjectsJSON(t *testing.
 	const projectID = "project-123"
 	remote := &projectDeleteTestOperations{
 		listResponse: projectDeleteTaskListResponse(projectID),
-		deleteResponse: serverapi.ProjectDeleteResponse{
-			ProjectID: projectID,
+		deleteResponse: &projectpb.DeleteProjectSuccess{
+			ProjectId: projectID,
 			Deleted:   true,
 		},
 	}
@@ -248,8 +249,8 @@ func TestProjectDeleteConfirmedSuccessCallsDeleteOnceAndProjectsJSON(t *testing.
 	if len(remote.listRequests) != 1 || len(remote.deleteRequests) != 1 {
 		t.Fatalf("requests = list %d, delete %d; want one each", len(remote.listRequests), len(remote.deleteRequests))
 	}
-	if remote.deleteRequests[0].ProjectID != projectID {
-		t.Fatalf("delete project id = %q, want %q", remote.deleteRequests[0].ProjectID, projectID)
+	if remote.deleteRequests[0].ProjectId != projectID {
+		t.Fatalf("delete project id = %q, want %q", remote.deleteRequests[0].ProjectId, projectID)
 	}
 	var envelope struct {
 		Status string `json:"status"`
@@ -269,11 +270,11 @@ func TestProjectDeleteProjectsServerBlockersInOrderWithTypedCounts(t *testing.T)
 	const projectID = "project-123"
 	remote := &projectDeleteTestOperations{
 		listResponse: projectDeleteTaskListResponse(projectID),
-		deleteResponse: serverapi.ProjectDeleteResponse{
-			ProjectID: projectID,
-			Blockers: []serverapi.ProjectDeleteBlocker{
-				{Code: "first", Message: "first blocker"},
-				{Code: "second", Message: "second blocker", Count: 3},
+		deleteResponse: &projectpb.DeleteProjectSuccess{
+			ProjectId: projectID,
+			Blockers: []*projectpb.ProjectDeleteBlocker{
+				{Code: "non_terminal_tasks", Count: 1},
+				{Code: "active_sessions", Count: 3},
 			},
 		},
 	}
@@ -303,10 +304,11 @@ func TestProjectDeleteProjectsServerBlockersInOrderWithTypedCounts(t *testing.T)
 		envelope.Error.ProjectID != projectID || len(envelope.Error.Blockers) != 2 {
 		t.Fatalf("envelope = %+v, want ordered blockers", envelope)
 	}
-	if envelope.Error.Blockers[0].Code != "first" || envelope.Error.Blockers[0].Count != nil ||
-		envelope.Error.Blockers[1].Code != "second" || envelope.Error.Blockers[1].Count == nil ||
+	if envelope.Error.Blockers[0].Code != "non_terminal_tasks" || envelope.Error.Blockers[0].Count == nil ||
+		*envelope.Error.Blockers[0].Count != 1 ||
+		envelope.Error.Blockers[1].Code != "active_sessions" || envelope.Error.Blockers[1].Count == nil ||
 		*envelope.Error.Blockers[1].Count != 3 {
-		t.Fatalf("blockers = %+v, want absent zero and positive count", envelope.Error.Blockers)
+		t.Fatalf("blockers = %+v, want ordered positive counts", envelope.Error.Blockers)
 	}
 }
 
@@ -316,7 +318,7 @@ func TestProjectDeletePlainOutputUsesExpectedStreams(t *testing.T) {
 		context.Background(),
 		&projectDeleteTestOperations{
 			listResponse:   projectDeleteTaskListResponse(projectID),
-			deleteResponse: serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: true},
+			deleteResponse: &projectpb.DeleteProjectSuccess{ProjectId: projectID, Deleted: true},
 		},
 		projectID,
 		true,
@@ -335,9 +337,9 @@ func TestProjectDeletePlainOutputUsesExpectedStreams(t *testing.T) {
 		context.Background(),
 		&projectDeleteTestOperations{
 			listResponse: projectDeleteTaskListResponse(projectID),
-			deleteResponse: serverapi.ProjectDeleteResponse{
-				ProjectID: projectID,
-				Blockers:  []serverapi.ProjectDeleteBlocker{{Code: "blocked", Message: "blocked", Count: 2}},
+			deleteResponse: &projectpb.DeleteProjectSuccess{
+				ProjectId: projectID,
+				Blockers:  []*projectpb.ProjectDeleteBlocker{{Code: "active_sessions", Count: 2}},
 			},
 		},
 		projectID,
@@ -418,10 +420,10 @@ func TestProjectDeleteRejectsNegativeServerBlockerCount(t *testing.T) {
 	const projectID = "project-123"
 	remote := &projectDeleteTestOperations{
 		listResponse: projectDeleteTaskListResponse(projectID),
-		deleteResponse: serverapi.ProjectDeleteResponse{
-			ProjectID: projectID,
-			Blockers: []serverapi.ProjectDeleteBlocker{
-				{Code: "invalid", Message: "invalid blocker", Count: -1},
+		deleteResponse: &projectpb.DeleteProjectSuccess{
+			ProjectId: projectID,
+			Blockers: []*projectpb.ProjectDeleteBlocker{
+				{Code: "non_terminal_tasks", Count: -1},
 			},
 		},
 	}
@@ -474,46 +476,37 @@ func TestProjectDeleteRejectsMalformedDeleteResponses(t *testing.T) {
 	const projectID = "project-123"
 	tests := []struct {
 		name     string
-		response serverapi.ProjectDeleteResponse
+		response *projectpb.DeleteProjectSuccess
 	}{
 		{
 			name: "mismatched identity",
-			response: serverapi.ProjectDeleteResponse{
-				ProjectID: "other-project",
+			response: &projectpb.DeleteProjectSuccess{
+				ProjectId: "other-project",
 				Deleted:   true,
 			},
 		},
 		{
 			name: "deleted with blockers",
-			response: serverapi.ProjectDeleteResponse{
-				ProjectID: projectID,
+			response: &projectpb.DeleteProjectSuccess{
+				ProjectId: projectID,
 				Deleted:   true,
-				Blockers: []serverapi.ProjectDeleteBlocker{
-					{Code: "blocker", Message: "blocker"},
+				Blockers: []*projectpb.ProjectDeleteBlocker{
+					{Code: "active_sessions", Count: 1},
 				},
 			},
 		},
 		{
 			name: "not deleted without blockers",
-			response: serverapi.ProjectDeleteResponse{
-				ProjectID: projectID,
+			response: &projectpb.DeleteProjectSuccess{
+				ProjectId: projectID,
 			},
 		},
 		{
 			name: "blank blocker code",
-			response: serverapi.ProjectDeleteResponse{
-				ProjectID: projectID,
-				Blockers: []serverapi.ProjectDeleteBlocker{
-					{Message: "blocker"},
-				},
-			},
-		},
-		{
-			name: "blank blocker message",
-			response: serverapi.ProjectDeleteResponse{
-				ProjectID: projectID,
-				Blockers: []serverapi.ProjectDeleteBlocker{
-					{Code: "blocker"},
+			response: &projectpb.DeleteProjectSuccess{
+				ProjectId: projectID,
+				Blockers: []*projectpb.ProjectDeleteBlocker{
+					{Count: 1},
 				},
 			},
 		},

@@ -186,10 +186,9 @@ func TestServiceOpenExistingRepairPlanningOwnsRuntimeAdmission(t *testing.T) {
 	t.Cleanup(releasePlanningPersistence)
 	planned := make(chan error, 1)
 	go func() {
-		_, planErr := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-			ClientRequestID: "planning-runtime-collision",
-			Mode:            serverapi.SessionLaunchModeInteractive,
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		_, planErr := service.PlanLaunchSession(context.Background(), PlanRequest{
+			Mode:   launch.ModeInteractive,
+			Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
 		})
 		planned <- planErr
 	}()
@@ -428,10 +427,9 @@ func TestServiceOpenExistingSubagentSnapshotDoesNotWaitAcrossActiveSteps(t *test
 
 	planned := make(chan error, 1)
 	go func() {
-		_, planErr := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-			ClientRequestID: "snapshot-during-active-step",
-			Mode:            serverapi.SessionLaunchModeInteractive,
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		_, planErr := service.PlanLaunchSession(context.Background(), PlanRequest{
+			Mode:   launch.ModeInteractive,
+			Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
 		})
 		planned <- planErr
 	}()
@@ -516,10 +514,9 @@ func TestServiceOpenExistingWithoutAuthorityFailsBeforeStoreMutation(t *testing.
 	t.Cleanup(releasePersistence)
 	result := make(chan error, 1)
 	go func() {
-		_, planErr := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-			ClientRequestID: "missing-authority",
-			Mode:            serverapi.SessionLaunchModeInteractive,
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		_, planErr := service.PlanLaunchSession(context.Background(), PlanRequest{
+			Mode:   launch.ModeInteractive,
+			Intent: serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 		})
 		result <- planErr
 	}()

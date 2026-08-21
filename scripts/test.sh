@@ -220,6 +220,7 @@ prepare_pty_fixtures() {
 
 run_server() {
 	local args=("${tool_args[@]}")
+	just --quiet _gen-go
 	if [ "${#args[@]}" -eq 0 ]; then
 		prepare_pty_fixtures
 		args=(./...)

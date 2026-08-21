@@ -20,6 +20,7 @@ import (
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -41,7 +42,7 @@ func TestServiceDeletesProjectMetadataAndSessionArtifacts(t *testing.T) {
 	}
 	svc := newProjectViewMetadataService(t, store)
 
-	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	deleted, err := svc.DeleteProject(context.Background(), &projectpb.DeleteProjectRequest{ProjectId: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestServiceDeletesProjectMetadataAndSessionArtifacts(t *testing.T) {
 	if _, err := os.Stat(created.Dir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session dir stat = %v, want not exists", err)
 	}
-	if _, err := svc.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err == nil {
+	if _, err := svc.GetProjectOverview(context.Background(), &projectpb.GetOverviewRequest{ProjectId: binding.ProjectID}); err == nil {
 		t.Fatal("expected deleted project lookup to fail")
 	}
 	if _, err := os.Stat(binding.CanonicalRoot); err != nil {
@@ -78,14 +79,14 @@ func TestServiceDeletesProjectWithBacklogTasks(t *testing.T) {
 	}
 	svc := newProjectViewMetadataService(t, store)
 
-	deleted, err := svc.DeleteProject(ctx, serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	deleted, err := svc.DeleteProject(ctx, &projectpb.DeleteProjectRequest{ProjectId: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
 	if !deleted.Deleted || len(deleted.Blockers) != 0 {
 		t.Fatalf("delete response = %+v, want deleted without backlog blockers", deleted)
 	}
-	if _, err := svc.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err == nil {
+	if _, err := svc.GetProjectOverview(ctx, &projectpb.GetOverviewRequest{ProjectId: binding.ProjectID}); err == nil {
 		t.Fatal("expected deleted backlog-only project lookup to fail")
 	}
 }
@@ -110,10 +111,10 @@ func TestServiceProjectDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
 	svc := newProjectViewMetadataService(t, store)
 	svc.workflowExecution = projectViewQuiescentExecution{err: workflowexecution.ErrTaskExecutionNotQuiescent}
 
-	if _, err := svc.DeleteProject(ctx, serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID}); !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
+	if _, err := svc.DeleteProject(ctx, &projectpb.DeleteProjectRequest{ProjectId: binding.ProjectID}); !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("DeleteProject error = %v, want %v", err, workflowexecution.ErrTaskExecutionNotQuiescent)
 	}
-	if _, err := svc.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err != nil {
+	if _, err := svc.GetProjectOverview(ctx, &projectpb.GetOverviewRequest{ProjectId: binding.ProjectID}); err != nil {
 		t.Fatalf("GetProjectOverview after rejected delete: %v", err)
 	}
 }
@@ -131,7 +132,7 @@ func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	svc := newProjectViewMetadataService(t, store)
 	svc.WithRuntimeAuthority(newProjectViewActiveRuntimeAuthority(t, store, cfg, created))
 
-	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	deleted, err := svc.DeleteProject(context.Background(), &projectpb.DeleteProjectRequest{ProjectId: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
@@ -158,12 +159,12 @@ func TestServiceProjectDeleteSurfacesArtifactCleanupFailureAfterCommit(t *testin
 	}
 	svc := newProjectViewMetadataService(t, store)
 
-	_, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	_, err := svc.DeleteProject(context.Background(), &projectpb.DeleteProjectRequest{ProjectId: binding.ProjectID})
 
 	if err == nil || !errors.Is(err, ErrSessionArtifactEscapesRoot) {
 		t.Fatalf("DeleteProject error = %v, want cleanup escape rejection", err)
 	}
-	if _, err := svc.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err == nil {
+	if _, err := svc.GetProjectOverview(context.Background(), &projectpb.GetOverviewRequest{ProjectId: binding.ProjectID}); err == nil {
 		t.Fatal("project metadata remained after post-commit cleanup failure")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "keep")); err != nil {
@@ -201,8 +202,8 @@ func TestMetadataServicePaginatesProjectWorkspaceCatalog(t *testing.T) {
 	second := attachProjectViewWorkspace(t, store, binding.ProjectID)
 	svc := newProjectViewMetadataService(t, store)
 
-	page1, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{
-		ProjectID: binding.ProjectID,
+	page1, err := svc.ListProjectWorkspaces(context.Background(), &projectpb.ProjectWorkspaceListRequest{
+		ProjectId: binding.ProjectID,
 		Offset:    0,
 		Limit:     2,
 	})
@@ -219,8 +220,8 @@ func TestMetadataServicePaginatesProjectWorkspaceCatalog(t *testing.T) {
 		t.Fatalf("page1 next offset = %v, want 2", page1.NextOffset)
 	}
 
-	page2, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{
-		ProjectID: binding.ProjectID,
+	page2, err := svc.ListProjectWorkspaces(context.Background(), &projectpb.ProjectWorkspaceListRequest{
+		ProjectId: binding.ProjectID,
 		Offset:    *page1.NextOffset,
 		Limit:     2,
 	})
@@ -251,14 +252,14 @@ func TestMetadataServiceSetsDefaultWorkspaceByProjectScopedPath(t *testing.T) {
 	}
 
 	svc := newProjectViewMetadataService(t, store)
-	updated, err := svc.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
-		ProjectID:                second.ProjectID,
-		ProjectWorkspaceSelector: selector,
+	updated, err := svc.SetDefaultWorkspace(context.Background(), &projectpb.SetDefaultWorkspaceRequest{
+		ProjectId: second.ProjectID,
+		Workspace: generatedProjectWorkspaceSelector(selector),
 	})
 	if err != nil {
 		t.Fatalf("SetDefaultWorkspace: %v", err)
 	}
-	if updated.Project.PrimaryWorkspace.WorkspaceID != shared.WorkspaceID {
+	if updated.Project.PrimaryWorkspace.WorkspaceId != shared.WorkspaceID {
 		t.Fatalf("updated primary workspace = %+v, want %q", updated.Project.PrimaryWorkspace, shared.WorkspaceID)
 	}
 }
@@ -274,9 +275,9 @@ func TestMetadataServiceDefaultWorkspaceSelectorPreservesTrueNoOp(t *testing.T) 
 	if err != nil {
 		t.Fatalf("workspace selector: %v", err)
 	}
-	if _, err := svc.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
-		ProjectID:                binding.ProjectID,
-		ProjectWorkspaceSelector: selector,
+	if _, err := svc.SetDefaultWorkspace(context.Background(), &projectpb.SetDefaultWorkspaceRequest{
+		ProjectId: binding.ProjectID,
+		Workspace: generatedProjectWorkspaceSelector(selector),
 	}); err != nil {
 		t.Fatalf("SetDefaultWorkspace no-op: %v", err)
 	}
@@ -297,9 +298,9 @@ func TestMetadataServiceWorkspaceSelectorDistinguishesProjectAndBindingFailures(
 	if err != nil {
 		t.Fatalf("workspace selector: %v", err)
 	}
-	if _, err := svc.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
-		ProjectID:                "project-missing",
-		ProjectWorkspaceSelector: unknownProjectSelector,
+	if _, err := svc.SetDefaultWorkspace(context.Background(), &projectpb.SetDefaultWorkspaceRequest{
+		ProjectId: "project-missing",
+		Workspace: generatedProjectWorkspaceSelector(unknownProjectSelector),
 	}); !errors.Is(err, serverapi.ErrProjectNotFound) {
 		t.Fatalf("unknown project error = %v, want ErrProjectNotFound", err)
 	}
@@ -308,9 +309,9 @@ func TestMetadataServiceWorkspaceSelectorDistinguishesProjectAndBindingFailures(
 	if err != nil {
 		t.Fatalf("workspace selector: %v", err)
 	}
-	if _, err := svc.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
-		ProjectID:                binding.ProjectID,
-		ProjectWorkspaceSelector: unattachedSelector,
+	if _, err := svc.SetDefaultWorkspace(context.Background(), &projectpb.SetDefaultWorkspaceRequest{
+		ProjectId: binding.ProjectID,
+		Workspace: generatedProjectWorkspaceSelector(unattachedSelector),
 	}); !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		t.Fatalf("unattached workspace error = %v, want ErrWorkspaceNotRegistered", err)
 	}
@@ -323,33 +324,34 @@ func TestMetadataServiceRepeatedAttachReturnsTypedAlreadyAttachedOutcome(t *test
 	if err != nil {
 		t.Fatalf("workspace selector: %v", err)
 	}
-	exact, err := svc.GetProjectWorkspace(context.Background(), serverapi.ProjectWorkspaceGetRequest{
-		ProjectID: binding.ProjectID, ProjectWorkspaceSelector: selector,
-	})
-	if err != nil || exact.Result != serverapi.ProjectWorkspaceGetResultAttached ||
-		exact.Workspace == nil || exact.Workspace.WorkspaceID != binding.WorkspaceID {
+	exact, err := svc.GetProjectWorkspace(
+		context.Background(),
+		generatedGetProjectWorkspaceRequest(binding.ProjectID, selector),
+	)
+	if err != nil || exact.Result != projectpb.ProjectWorkspaceGetResult_PROJECT_WORKSPACE_GET_RESULT_ATTACHED ||
+		exact.Workspace == nil || exact.Workspace.WorkspaceId != binding.WorkspaceID {
 		t.Fatalf("exact Workspace response = %+v, error = %v", exact, err)
 	}
 	root := t.TempDir()
 
-	firstAttach, err := svc.AttachWorkspaceToProject(context.Background(), serverapi.ProjectAttachWorkspaceRequest{
-		ProjectID:     binding.ProjectID,
+	firstAttach, err := svc.AttachWorkspaceToProject(context.Background(), &projectpb.AttachWorkspaceRequest{
+		ProjectId:     binding.ProjectID,
 		WorkspaceRoot: root,
 	})
 	if err != nil {
 		t.Fatalf("first AttachWorkspaceToProject: %v", err)
 	}
-	if firstAttach.Outcome != serverapi.ProjectWorkspaceAttachOutcomeAttached {
+	if firstAttach.Outcome != projectpb.ProjectWorkspaceAttachOutcome_PROJECT_WORKSPACE_ATTACH_OUTCOME_ATTACHED {
 		t.Fatalf("first attach outcome = %q, want attached", firstAttach.Outcome)
 	}
-	repeated, err := svc.AttachWorkspaceToProject(context.Background(), serverapi.ProjectAttachWorkspaceRequest{
-		ProjectID:     binding.ProjectID,
+	repeated, err := svc.AttachWorkspaceToProject(context.Background(), &projectpb.AttachWorkspaceRequest{
+		ProjectId:     binding.ProjectID,
 		WorkspaceRoot: root,
 	})
 	if err != nil {
 		t.Fatalf("repeated AttachWorkspaceToProject: %v", err)
 	}
-	if repeated.Outcome != serverapi.ProjectWorkspaceAttachOutcomeAlreadyAttached {
+	if repeated.Outcome != projectpb.ProjectWorkspaceAttachOutcome_PROJECT_WORKSPACE_ATTACH_OUTCOME_ALREADY_ATTACHED {
 		t.Fatalf("repeated attach outcome = %q, want already_attached", repeated.Outcome)
 	}
 }
@@ -539,17 +541,17 @@ func TestServiceListsSessionPageWithOffsetWindow(t *testing.T) {
 	offset := 0
 	limit := 50
 
-	response, err := svc.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Offset:    &offset,
-		Limit:     &limit,
+	response, err := svc.ListSessionPage(context.Background(), &projectpb.SessionPageRequest{
+		ProjectId: binding.ProjectID,
+		Category:  projectpb.SessionCategory_SESSION_CATEGORY_MAIN,
+		Offset:    int32Pointer(offset),
+		Limit:     int32Pointer(limit),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}
-	if response.ProjectID != binding.ProjectID ||
-		response.Category != sessioncontract.SessionCategoryMain ||
+	if response.ProjectId != binding.ProjectID ||
+		response.Category != projectpb.SessionCategory_SESSION_CATEGORY_MAIN ||
 		len(response.Sessions) != 0 ||
 		response.NextOffset != nil {
 		t.Fatalf("response = %+v", response)
@@ -572,14 +574,14 @@ func TestMetadataServiceUnlinksOnlySelectedProjectBindingByPath(t *testing.T) {
 	}
 
 	svc := newProjectViewMetadataService(t, store)
-	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-		ProjectID:                second.ProjectID,
-		ProjectWorkspaceSelector: selector,
+	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), &projectpb.UnlinkWorkspaceRequest{
+		ProjectId: second.ProjectID,
+		Workspace: generatedProjectWorkspaceSelector(selector),
 	})
 	if err != nil {
 		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
 	}
-	if len(unlinked.Blockers) != 0 || unlinked.WorkspaceID != shared.WorkspaceID {
+	if len(unlinked.Blockers) != 0 || unlinked.WorkspaceId != shared.WorkspaceID {
 		t.Fatalf("unlink result = %+v, want selected workspace %q unlinked", unlinked, shared.WorkspaceID)
 	}
 	remainingRoot, remainingBinding, err := store.ResolveWorkspacePath(context.Background(), binding.CanonicalRoot)
@@ -602,9 +604,9 @@ func TestMetadataServiceUnlinkWrongProjectIDSelectorFailsBeforeMutationResolutio
 		t.Fatalf("workspace selector: %v", err)
 	}
 	svc := newProjectViewMetadataService(t, store)
-	_, err = svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-		ProjectID:                other.ProjectID,
-		ProjectWorkspaceSelector: selector,
+	_, err = svc.UnlinkWorkspaceFromProject(context.Background(), &projectpb.UnlinkWorkspaceRequest{
+		ProjectId: other.ProjectID,
+		Workspace: generatedProjectWorkspaceSelector(selector),
 	})
 	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		t.Fatalf("wrong-project error = %v, want ErrWorkspaceNotRegistered", err)
@@ -626,9 +628,9 @@ func TestMetadataServiceUnlinkWorkspaceBlocksActiveRuntimeSession(t *testing.T) 
 	if err != nil {
 		t.Fatalf("workspace selector: %v", err)
 	}
-	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-		ProjectID:                binding.ProjectID,
-		ProjectWorkspaceSelector: selector,
+	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), &projectpb.UnlinkWorkspaceRequest{
+		ProjectId: binding.ProjectID,
+		Workspace: generatedProjectWorkspaceSelector(selector),
 	})
 	if err != nil {
 		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
@@ -643,11 +645,11 @@ func TestMetadataServiceGetsProjectEditForGUI(t *testing.T) {
 	attachProjectViewWorkspace(t, store, binding.ProjectID)
 	svc := newProjectViewMetadataService(t, store)
 
-	edit, err := svc.GetProjectEdit(context.Background(), serverapi.ProjectEditGetRequest{ProjectID: binding.ProjectID})
+	edit, err := svc.GetProjectEdit(context.Background(), &projectpb.ProjectEditGetRequest{ProjectId: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetProjectEdit: %v", err)
 	}
-	if edit.ProjectID != binding.ProjectID || edit.ProjectKey != binding.ProjectKey || edit.DisplayName != binding.ProjectName {
+	if edit.ProjectId != binding.ProjectID || edit.ProjectKey != binding.ProjectKey || edit.DisplayName != binding.ProjectName {
 		t.Fatalf("edit identity = %+v, want %s/%s/%s", edit, binding.ProjectID, binding.ProjectKey, binding.ProjectName)
 	}
 }
@@ -655,9 +657,9 @@ func TestMetadataServiceGetsProjectEditForGUI(t *testing.T) {
 func TestMetadataServiceListsProjectHomeForGUI(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	svc := newProjectViewMetadataService(t, store)
-	created, err := svc.CreateProject(context.Background(), serverapi.ProjectCreateRequest{
+	created, err := svc.CreateProject(context.Background(), &projectpb.CreateProjectRequest{
 		DisplayName:   "GUI Home",
-		ProjectKey:    "HOME",
+		ProjectKey:    stringPointer("HOME"),
 		WorkspaceRoot: t.TempDir(),
 	})
 	if err != nil {
@@ -671,29 +673,29 @@ func TestMetadataServiceListsProjectHomeForGUI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	if _, err := workflowStore.LinkWorkflow(context.Background(), created.Binding.ProjectID, workflow.ID, true); err != nil {
+	if _, err := workflowStore.LinkWorkflow(context.Background(), created.Binding.ProjectId, workflow.ID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
 
-	firstPage, err := svc.ListProjectHome(context.Background(), serverapi.ProjectHomeListRequest{PageSize: 1})
+	firstPage, err := svc.ListProjectHome(context.Background(), projectHomeListRequest(1))
 	if err != nil {
 		t.Fatalf("ListProjectHome first page: %v", err)
 	}
 	if len(firstPage.Projects) != 1 {
 		t.Fatalf("first page count = %d, want 1: %+v", len(firstPage.Projects), firstPage.Projects)
 	}
-	if firstPage.NextPageToken == "" {
+	if firstPage.NextPageToken == nil {
 		t.Fatalf("expected next page token: %+v", firstPage)
 	}
 	first := firstPage.Projects[0]
-	if first.ProjectID != created.Binding.ProjectID || first.ProjectKey != "HOME" {
+	if first.ProjectId != created.Binding.ProjectId || first.ProjectKey != "HOME" {
 		t.Fatalf("first project = %+v, want created HOME project", first)
 	}
-	if first.PrimaryWorkspace.WorkspaceID != created.Binding.WorkspaceID || !first.PrimaryWorkspace.IsPrimary {
-		t.Fatalf("primary workspace = %+v, want %q", first.PrimaryWorkspace, created.Binding.WorkspaceID)
+	if first.PrimaryWorkspace.WorkspaceId != created.Binding.WorkspaceId || !first.PrimaryWorkspace.IsPrimary {
+		t.Fatalf("primary workspace = %+v, want %q", first.PrimaryWorkspace, created.Binding.WorkspaceId)
 	}
-	if first.DefaultWorkflowID == nil || first.DefaultWorkflowID.String() != workflow.ID.String() ||
-		first.DefaultWorkflowName != "Default Board" || !first.DefaultWorkflowValid {
+	if first.DefaultWorkflowId == nil || *first.DefaultWorkflowId != workflow.ID.String() ||
+		first.DefaultWorkflowName == nil || *first.DefaultWorkflowName != "Default Board" || !first.DefaultWorkflowValid {
 		t.Fatalf("default workflow = %+v, want linked workflow %s", first, workflow.ID)
 	}
 	if first.WorkflowCount != 1 {
@@ -702,11 +704,14 @@ func TestMetadataServiceListsProjectHomeForGUI(t *testing.T) {
 	if first.AttentionCount != 0 {
 		t.Fatalf("attention count = %d, want 0", first.AttentionCount)
 	}
-	if firstPage.GeneratedAtUnixMs <= 0 {
-		t.Fatalf("generated_at_unix_ms = %d, want positive", firstPage.GeneratedAtUnixMs)
+	if firstPage.GeneratedAt == nil || firstPage.GeneratedAt.AsTime().UnixMilli() <= 0 {
+		t.Fatalf("generated_at = %v, want positive", firstPage.GeneratedAt)
 	}
 
-	secondPage, err := svc.ListProjectHome(context.Background(), serverapi.ProjectHomeListRequest{PageSize: 1, PageToken: firstPage.NextPageToken})
+	secondPage, err := svc.ListProjectHome(context.Background(), &projectpb.ProjectHomeListRequest{
+		PageSize:  int32Pointer(1),
+		PageToken: firstPage.NextPageToken,
+	})
 	if err != nil {
 		t.Fatalf("ListProjectHome second page: %v", err)
 	}
@@ -714,13 +719,13 @@ func TestMetadataServiceListsProjectHomeForGUI(t *testing.T) {
 		t.Fatalf("second page count = %d, want 1: %+v", len(secondPage.Projects), secondPage.Projects)
 	}
 	second := secondPage.Projects[0]
-	if second.ProjectID != binding.ProjectID {
+	if second.ProjectId != binding.ProjectID {
 		t.Fatalf("second project = %+v, want initial project %s", second, binding.ProjectID)
 	}
-	if second.DefaultWorkflowValid || second.DefaultWorkflowID != nil || second.DefaultWorkflowName != "" {
+	if second.DefaultWorkflowValid || second.DefaultWorkflowId != nil || second.DefaultWorkflowName != nil {
 		t.Fatalf("empty default workflow = %+v, want invalid empty default workflow", second)
 	}
-	if _, err := svc.ListProjectHome(context.Background(), serverapi.ProjectHomeListRequest{PageToken: "bad"}); err == nil {
+	if _, err := svc.ListProjectHome(context.Background(), &projectpb.ProjectHomeListRequest{PageToken: stringPointer("bad")}); err == nil {
 		t.Fatal("expected invalid page token error")
 	}
 }
@@ -744,14 +749,14 @@ func TestMetadataServiceResolveProjectPathMapsRegisteredWorktreeRootToProject(t 
 	}
 	svc := newProjectViewMetadataService(t, store)
 
-	resolved, err := svc.ResolveProjectPath(context.Background(), serverapi.ProjectResolvePathRequest{Path: worktreeRoot})
+	resolved, err := svc.ResolveProjectPath(context.Background(), &projectpb.ResolvePathRequest{Path: worktreeRoot})
 	if err != nil {
 		t.Fatalf("ResolveProjectPath worktree root: %v", err)
 	}
 	if resolved.CanonicalRoot != canonicalWorktreeRoot {
 		t.Fatalf("canonical root = %q, want worktree root %q", resolved.CanonicalRoot, canonicalWorktreeRoot)
 	}
-	if resolved.Binding == nil || resolved.Binding.ProjectID != binding.ProjectID || resolved.Binding.WorkspaceID != binding.WorkspaceID {
+	if resolved.Binding == nil || resolved.Binding.ProjectId != binding.ProjectID || resolved.Binding.WorkspaceId != binding.WorkspaceID {
 		t.Fatalf("resolved binding = %+v, want owning project/workspace %+v", resolved.Binding, binding)
 	}
 }
@@ -761,14 +766,17 @@ func TestMetadataServicePlansInteractiveLocalUnboundWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	svc := newProjectViewMetadataService(t, store)
 
-	plan, err := svc.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: workspace, Mode: serverapi.ProjectBindingPlanModeInteractive})
+	plan, err := svc.PlanWorkspaceBinding(context.Background(), &projectpb.PlanWorkspaceBindingRequest{
+		Path: workspace,
+		Mode: projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_INTERACTIVE,
+	})
 	if err != nil {
 		t.Fatalf("PlanWorkspaceBinding: %v", err)
 	}
-	if plan.Kind != serverapi.ProjectBindingPlanKindLocalUnbound {
-		t.Fatalf("plan kind = %q, want %q", plan.Kind, serverapi.ProjectBindingPlanKindLocalUnbound)
+	if plan.Kind != projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND {
+		t.Fatalf("plan kind = %v, want local unbound", plan.Kind)
 	}
-	if len(plan.Projects) != 1 || plan.Projects[0].ProjectID != binding.ProjectID {
+	if len(plan.Projects) != 1 || plan.Projects[0].ProjectId != binding.ProjectID {
 		t.Fatalf("plan projects = %+v, want registered project %q", plan.Projects, binding.ProjectID)
 	}
 }
@@ -781,15 +789,18 @@ func TestMetadataServicePlansAmbiguousDuplicateWorkspaceBinding(t *testing.T) {
 	}
 	svc := newProjectViewMetadataService(t, store)
 
-	if _, err := svc.ResolveProjectPath(context.Background(), serverapi.ProjectResolvePathRequest{Path: cfg.WorkspaceRoot}); !errors.Is(err, serverapi.ErrWorkspaceBindingAmbiguous) {
+	if _, err := svc.ResolveProjectPath(context.Background(), &projectpb.ResolvePathRequest{Path: cfg.WorkspaceRoot}); !errors.Is(err, serverapi.ErrWorkspaceBindingAmbiguous) {
 		t.Fatalf("ResolveProjectPath duplicate binding error = %v, want ErrWorkspaceBindingAmbiguous", err)
 	}
-	plan, err := svc.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: cfg.WorkspaceRoot, Mode: serverapi.ProjectBindingPlanModeInteractive})
+	plan, err := svc.PlanWorkspaceBinding(context.Background(), &projectpb.PlanWorkspaceBindingRequest{
+		Path: cfg.WorkspaceRoot,
+		Mode: projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_INTERACTIVE,
+	})
 	if err != nil {
 		t.Fatalf("PlanWorkspaceBinding interactive duplicate: %v", err)
 	}
-	if plan.Kind != serverapi.ProjectBindingPlanKindServerWorkspaceSelection {
-		t.Fatalf("interactive plan kind = %q, want %q", plan.Kind, serverapi.ProjectBindingPlanKindServerWorkspaceSelection)
+	if plan.Kind != projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_SERVER_WORKSPACE_SELECTION {
+		t.Fatalf("interactive plan kind = %v, want server workspace selection", plan.Kind)
 	}
 	if len(plan.Projects) != 2 {
 		t.Fatalf("interactive plan projects = %+v, want two projects", plan.Projects)
@@ -798,12 +809,15 @@ func TestMetadataServicePlansAmbiguousDuplicateWorkspaceBinding(t *testing.T) {
 		t.Fatalf("duplicate canonical roots = %q/%q, want %q", first.CanonicalRoot, second.CanonicalRoot, cfg.WorkspaceRoot)
 	}
 
-	plan, err = svc.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: cfg.WorkspaceRoot, Mode: serverapi.ProjectBindingPlanModeHeadless})
+	plan, err = svc.PlanWorkspaceBinding(context.Background(), &projectpb.PlanWorkspaceBindingRequest{
+		Path: cfg.WorkspaceRoot,
+		Mode: projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_HEADLESS,
+	})
 	if err != nil {
 		t.Fatalf("PlanWorkspaceBinding headless duplicate: %v", err)
 	}
-	if plan.Kind != serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous {
-		t.Fatalf("headless plan kind = %q, want %q", plan.Kind, serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous)
+	if plan.Kind != projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_AMBIGUOUS {
+		t.Fatalf("headless plan kind = %v, want headless remote ambiguous", plan.Kind)
 	}
 }
 
@@ -811,14 +825,17 @@ func TestMetadataServicePlansHeadlessSingleRemoteWorkspace(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	svc := newProjectViewMetadataService(t, store)
 
-	plan, err := svc.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: filepath.Join(t.TempDir(), "missing"), Mode: serverapi.ProjectBindingPlanModeHeadless})
+	plan, err := svc.PlanWorkspaceBinding(context.Background(), &projectpb.PlanWorkspaceBindingRequest{
+		Path: filepath.Join(t.TempDir(), "missing"),
+		Mode: projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_HEADLESS,
+	})
 	if err != nil {
 		t.Fatalf("PlanWorkspaceBinding: %v", err)
 	}
-	if plan.Kind != serverapi.ProjectBindingPlanKindHeadlessRemoteSelected || plan.Workspace == nil {
+	if plan.Kind != projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_SELECTED || plan.Workspace == nil {
 		t.Fatalf("plan = %+v, want selected remote workspace", plan)
 	}
-	if plan.Workspace.ProjectID != binding.ProjectID || plan.Workspace.WorkspaceID != binding.WorkspaceID {
+	if plan.Workspace.ProjectId != binding.ProjectID || plan.Workspace.WorkspaceId != binding.WorkspaceID {
 		t.Fatalf("selected workspace = %+v, want %s/%s", plan.Workspace, binding.ProjectID, binding.WorkspaceID)
 	}
 }
@@ -828,12 +845,15 @@ func TestMetadataServicePlansHeadlessAmbiguousRemoteWorkspaces(t *testing.T) {
 	attachProjectViewWorkspace(t, store, binding.ProjectID)
 	svc := newProjectViewMetadataService(t, store)
 
-	plan, err := svc.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: filepath.Join(t.TempDir(), "missing"), Mode: serverapi.ProjectBindingPlanModeHeadless})
+	plan, err := svc.PlanWorkspaceBinding(context.Background(), &projectpb.PlanWorkspaceBindingRequest{
+		Path: filepath.Join(t.TempDir(), "missing"),
+		Mode: projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_HEADLESS,
+	})
 	if err != nil {
 		t.Fatalf("PlanWorkspaceBinding: %v", err)
 	}
-	if plan.Kind != serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous {
-		t.Fatalf("plan kind = %q, want %q", plan.Kind, serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous)
+	if plan.Kind != projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_AMBIGUOUS {
+		t.Fatalf("plan kind = %v, want headless remote ambiguous", plan.Kind)
 	}
 }
 
@@ -991,10 +1011,38 @@ func workspaceIDs(workspaces []serverapi.ProjectWorkspaceSummary) []string {
 	return out
 }
 
-func catalogWorkspaceIDs(workspaces []serverapi.ProjectWorkspaceCatalogRow) []string {
+func catalogWorkspaceIDs(workspaces []*projectpb.ProjectWorkspaceCatalogSummary) []string {
 	ids := make([]string, 0, len(workspaces))
 	for _, workspace := range workspaces {
-		ids = append(ids, workspace.WorkspaceID)
+		ids = append(ids, workspace.WorkspaceId)
 	}
 	return ids
+}
+
+func generatedProjectWorkspaceSelector(selector serverapi.ProjectWorkspaceSelector) *projectpb.ProjectWorkspaceSelector {
+	if workspaceID := selector.WorkspaceIDValue(); workspaceID != nil {
+		return &projectpb.ProjectWorkspaceSelector{
+			Selector: &projectpb.ProjectWorkspaceSelector_WorkspaceId{WorkspaceId: *workspaceID},
+		}
+	}
+	workspaceRoot := selector.WorkspaceRootValue()
+	return &projectpb.ProjectWorkspaceSelector{
+		Selector: &projectpb.ProjectWorkspaceSelector_WorkspaceRoot{WorkspaceRoot: *workspaceRoot},
+	}
+}
+
+func generatedGetProjectWorkspaceRequest(projectID string, selector serverapi.ProjectWorkspaceSelector) *projectpb.GetProjectWorkspaceRequest {
+	request := &projectpb.GetProjectWorkspaceRequest{ProjectId: projectID}
+	if workspaceID := selector.WorkspaceIDValue(); workspaceID != nil {
+		request.Selector = &projectpb.GetProjectWorkspaceRequest_WorkspaceId{WorkspaceId: *workspaceID}
+		return request
+	}
+	workspaceRoot := selector.WorkspaceRootValue()
+	request.Selector = &projectpb.GetProjectWorkspaceRequest_WorkspaceRoot{WorkspaceRoot: *workspaceRoot}
+	return request
+}
+
+func int32Pointer(value int) *int32 {
+	converted := int32(value)
+	return &converted
 }

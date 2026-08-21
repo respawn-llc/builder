@@ -107,6 +107,7 @@ export type {
   MarkdownPreview,
   PendingAsk,
   ProjectBinding,
+  ProjectMutationBinding,
   ProjectDeleteResponse,
   ProjectEdit,
   ProjectMutationResponse,

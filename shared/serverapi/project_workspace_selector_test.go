@@ -1,67 +1,38 @@
 package serverapi
 
-import (
-	"encoding/json"
-	"testing"
-)
+import "testing"
 
-func TestProjectWorkspaceSelectorRoundTripsLegacyWorkspaceIDPayload(t *testing.T) {
-	var request ProjectWorkspaceUnlinkRequest
-	if err := json.Unmarshal([]byte(`{"project_id":"project-1","workspace_id":"workspace-1"}`), &request); err != nil {
-		t.Fatalf("unmarshal legacy request: %v", err)
-	}
-	if err := request.Validate(); err != nil {
-		t.Fatalf("validate legacy request: %v", err)
-	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("marshal legacy request: %v", err)
-	}
-	if string(encoded) != `{"project_id":"project-1","workspace_id":"workspace-1"}` {
-		t.Fatalf("encoded legacy request = %s", encoded)
+func TestProjectWorkspaceSelectorAcceptsExactlyOneIdentity(t *testing.T) {
+	for _, construct := range []func() (ProjectWorkspaceSelector, error){
+		func() (ProjectWorkspaceSelector, error) {
+			return NewProjectWorkspaceSelectorForID("workspace-1")
+		},
+		func() (ProjectWorkspaceSelector, error) {
+			return NewProjectWorkspaceSelectorForRoot("/workspace")
+		},
+	} {
+		selector, err := construct()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := selector.Validate(); err != nil {
+			t.Fatalf("valid selector rejected: %v", err)
+		}
 	}
 }
 
-func TestProjectWorkspaceSelectorAcceptsWorkspaceRoot(t *testing.T) {
-	selector, err := NewProjectWorkspaceSelectorForRoot("/workspace")
-	if err != nil {
-		t.Fatalf("construct path request: %v", err)
-	}
-	request := ProjectWorkspaceUnlinkRequest{
-		ProjectID:                "project-1",
-		ProjectWorkspaceSelector: selector,
-	}
-	if err := request.Validate(); err != nil {
-		t.Fatalf("validate path request: %v", err)
-	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("marshal path request: %v", err)
-	}
-	if string(encoded) != `{"project_id":"project-1","workspace_root":"/workspace"}` {
-		t.Fatalf("encoded path request = %s", encoded)
-	}
-}
-
-func TestProjectWorkspaceSelectorRejectsMultipleOrBlankSelectors(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-	}{
-		{name: "missing", body: `{"project_id":"project-1"}`},
-		{name: "blank id", body: `{"project_id":"project-1","workspace_id":" "}`},
-		{name: "blank root", body: `{"project_id":"project-1","workspace_root":" "}`},
-		{name: "both", body: `{"project_id":"project-1","workspace_id":"workspace-1","workspace_root":"/workspace"}`},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var request ProjectWorkspaceUnlinkRequest
-			if err := json.Unmarshal([]byte(test.body), &request); err != nil {
-				t.Fatalf("unmarshal request: %v", err)
-			}
-			if err := request.Validate(); err == nil {
-				t.Fatal("validate request succeeded")
-			}
-		})
+func TestProjectWorkspaceSelectorRejectsMissingMultipleAndBlankIdentities(t *testing.T) {
+	blank := " "
+	id := "workspace-1"
+	root := "/workspace"
+	for _, selector := range []ProjectWorkspaceSelector{
+		{},
+		{WorkspaceID: &blank},
+		{WorkspaceRoot: &blank},
+		{WorkspaceID: &id, WorkspaceRoot: &root},
+	} {
+		if err := selector.Validate(); err == nil {
+			t.Fatalf("invalid selector accepted: %+v", selector)
+		}
 	}
 }

@@ -7,8 +7,10 @@ import (
 	"core/server/authservice"
 	"core/server/workflow"
 	"core/shared/config"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/protocol"
-	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type ServerStatusService struct {
@@ -22,65 +24,60 @@ func NewServerStatusService(authManager *auth.Manager, cfg config.App, updates *
 	return &ServerStatusService{authManager: authManager, endpoint: config.ServerRPCURL(cfg), settings: cfg.Settings, updates: updates}
 }
 
-func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
+func (s *ServerStatusService) GetReadiness(ctx context.Context, _ *emptypb.Empty) (*serverpb.GetReadinessSuccess, error) {
 	authReady := false
 	settings := config.Settings{}
 	if s != nil {
 		settings = s.settings
 	}
 	authRequired := authservice.StartupAuthRequired(settings)
-	// Only the OpenAI startup gate consults the auth store. When startup auth is
-	// not required (custom/non-OpenAI provider), readiness must not depend on the
-	// auth store at all, so a corrupt or inaccessible auth file can't block it.
+	// Identity-independent providers must not consult the auth store: a corrupt
+	// OpenAI credential file cannot block a custom provider's server readiness.
 	if authRequired && s != nil && s.authManager != nil {
 		state, err := s.authManager.Load(ctx)
 		if err != nil {
-			return serverapi.ServerReadinessResponse{}, err
+			return nil, err
 		}
 		authReady = auth.EvaluateStartupGate(state).Ready
 	}
 	ready := authReady || !authRequired
-	response := serverapi.ServerReadinessResponse{
+	readiness := &serverpb.Readiness{
 		Ready:           ready,
 		ServerVersion:   config.Version,
 		ServerBuild:     config.Version,
 		ProtocolVersion: protocol.Version,
 		AuthReady:       authReady,
 		AuthRequired:    authRequired,
-		Endpoint:        "",
 		SubagentRoles:   subagentRoleSummaries(settings),
 	}
 	if s != nil {
-		response.Endpoint = s.endpoint
+		readiness.Endpoint = s.endpoint
 	}
 	if !ready {
-		response.Causes = []serverapi.ServerReadinessCause{{
+		readiness.Causes = []*serverpb.ReadinessCause{{
 			Code:     "server_not_ready",
-			Severity: "error",
+			Severity: serverpb.ReadinessSeverity_READINESS_SEVERITY_ERROR,
 		}}
 	}
-	return response, nil
+	return &serverpb.GetReadinessSuccess{Readiness: readiness}, nil
 }
 
-func (s *ServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.UpdateStatusResponse{}, err
-	}
+func (s *ServerStatusService) GetUpdateStatus(ctx context.Context, _ *emptypb.Empty) (*serverpb.GetUpdateStatusSuccess, error) {
 	if s == nil || s.updates == nil {
-		return serverapi.UpdateStatusResponse{}, ErrUpdateStatusServiceClosed
+		return nil, ErrUpdateStatusServiceClosed
 	}
-	result, err := s.updates.Status(ctx)
+	result, err := s.updates.status(ctx)
 	if err != nil {
-		return serverapi.UpdateStatusResponse{}, err
+		return nil, err
 	}
-	return serverapi.UpdateStatusResponse{Result: result}, nil
+	return &serverpb.GetUpdateStatusSuccess{Status: result.proto()}, nil
 }
 
-func subagentRoleSummaries(settings config.Settings) []serverapi.SubagentRoleSummary {
+func subagentRoleSummaries(settings config.Settings) []*serverpb.SubagentRoleSummary {
 	names := append([]string{workflow.DefaultAgentRole}, config.AvailableSubagentRoleNames(settings, false)...)
-	roles := make([]serverapi.SubagentRoleSummary, 0, len(names))
+	roles := make([]*serverpb.SubagentRoleSummary, 0, len(names))
 	for _, name := range names {
-		roles = append(roles, serverapi.SubagentRoleSummary{Name: name})
+		roles = append(roles, &serverpb.SubagentRoleSummary{Name: name})
 	}
 	return roles
 }

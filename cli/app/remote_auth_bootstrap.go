@@ -10,9 +10,11 @@ import (
 	serverauth "core/server/auth"
 	"core/shared/apicontract"
 	"core/shared/config"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/serverapi"
 
 	"github.com/charmbracelet/lipgloss"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var (
@@ -24,7 +26,7 @@ func ensureRemoteAuthReady(ctx context.Context, remote apicontract.AuthBootstrap
 	if remote == nil {
 		return errors.New("auth bootstrap client is required")
 	}
-	status, err := remote.GetAuthBootstrapStatus(ctx, serverapi.AuthGetBootstrapStatusRequest{})
+	status, err := remote.GetBootstrapStatus(ctx, &emptypb.Empty{})
 	if err != nil {
 		return err
 	}
@@ -48,9 +50,9 @@ func ensureRemoteAuthReady(ctx context.Context, remote apicontract.AuthBootstrap
 	if apiKey == "" {
 		return serverapi.ErrServerAuthRequired
 	}
-	resp, err := remote.CompleteAuthBootstrap(ctx, serverapi.AuthCompleteBootstrapRequest{
-		Mode:   serverapi.AuthBootstrapModeAPIKey,
-		APIKey: apiKey,
+	resp, err := remote.CompleteBootstrap(ctx, &authpb.CompleteBootstrapRequest{
+		Mode:   authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY,
+		ApiKey: &apiKey,
 	})
 	if err != nil {
 		return err
@@ -62,7 +64,7 @@ func ensureRemoteAuthReady(ctx context.Context, remote apicontract.AuthBootstrap
 	return nil
 }
 
-func (i *interactiveAuthInteractor) completeRemoteAuthBootstrap(ctx context.Context, remote apicontract.AuthBootstrapService, settings config.Settings, status serverapi.AuthGetBootstrapStatusResponse, force bool) error {
+func (i *interactiveAuthInteractor) completeRemoteAuthBootstrap(ctx context.Context, remote apicontract.AuthBootstrapService, settings config.Settings, status *authpb.BootstrapStatus, force bool) error {
 	if i == nil {
 		return errors.New("interactive auth interactor is required")
 	}
@@ -81,12 +83,12 @@ func (i *interactiveAuthInteractor) completeRemoteAuthBootstrap(ctx context.Cont
 			continue
 		}
 		completeReq.Force = force
-		resp, err := remote.CompleteAuthBootstrap(ctx, completeReq)
+		resp, err := remote.CompleteBootstrap(ctx, completeReq)
 		if err != nil {
 			req.FlowErr = err
 			continue
 		}
-		if completeReq.Mode == serverapi.AuthBootstrapModeNone && resp.NoAuthSelected {
+		if completeReq.Mode == authpb.BootstrapMode_BOOTSTRAP_MODE_NONE && resp.NoAuthSelected {
 			if err := enableRemoteNoAuth(ctx, remote); err != nil {
 				return err
 			}
@@ -115,7 +117,7 @@ func enableRemoteNoAuth(ctx context.Context, remote apicontract.AuthBootstrapSer
 	if enabler, ok := remote.(remoteNoAuthAcknowledgementEnabler); ok {
 		return enabler.EnableNoAuthBootstrapAcknowledgement(ctx)
 	}
-	resp, err := remote.AcknowledgeNoAuth(ctx, serverapi.AuthAcknowledgeNoAuthRequest{})
+	resp, err := remote.AcknowledgeNoAuth(ctx, &emptypb.Empty{})
 	if err != nil {
 		return err
 	}
@@ -131,30 +133,33 @@ func disableRemoteNoAuth(remote apicontract.AuthBootstrapService) {
 	}
 }
 
-func (i *interactiveAuthInteractor) collectRemoteBootstrapRequest(ctx context.Context, theme string, choice authMethodChoice, status serverapi.AuthGetBootstrapStatusResponse) (serverapi.AuthCompleteBootstrapRequest, error) {
-	if !supportsBootstrapMode(status.SupportedModes, choice) {
-		return serverapi.AuthCompleteBootstrapRequest{}, fmt.Errorf("auth method %q is not supported by this server", choice)
+func (i *interactiveAuthInteractor) collectRemoteBootstrapRequest(ctx context.Context, theme string, choice authMethodChoice, status *authpb.BootstrapStatus) (*authpb.CompleteBootstrapRequest, error) {
+	if status == nil {
+		return nil, errors.New("auth bootstrap status is required")
 	}
-	oauthOpts := authui.OAuthOptions{Issuer: status.OAuth.Issuer, ClientID: status.OAuth.ClientID}
+	if !supportsBootstrapMode(status.SupportedModes, choice) {
+		return nil, fmt.Errorf("auth method %q is not supported by this server", choice)
+	}
+	oauthOpts := authui.OAuthOptions{Issuer: status.GetOauth().GetIssuer(), ClientID: status.GetOauth().GetClientId()}
 	switch choice {
 	case authMethodChoiceSkip:
-		return serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone}, nil
+		return &authpb.CompleteBootstrapRequest{Mode: authpb.BootstrapMode_BOOTSTRAP_MODE_NONE}, nil
 	case authMethodChoiceEnvAPIKey:
 		apiKey := strings.TrimSpace(i.LookupEnv("OPENAI_API_KEY"))
 		if apiKey == "" {
-			return serverapi.AuthCompleteBootstrapRequest{}, errors.New("OPENAI_API_KEY is not available")
+			return nil, errors.New("OPENAI_API_KEY is not available")
 		}
-		return serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeAPIKey, APIKey: apiKey}, nil
+		return &authpb.CompleteBootstrapRequest{Mode: authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY, ApiKey: &apiKey}, nil
 	case authMethodChoiceBrowserAuto:
 		return i.collectRemoteBrowserAuto(ctx, oauthOpts, theme)
 	case authMethodChoiceDevice:
 		return i.collectRemoteDevice(ctx, oauthOpts, theme)
 	default:
-		return serverapi.AuthCompleteBootstrapRequest{}, fmt.Errorf("unsupported auth method %q", choice)
+		return nil, fmt.Errorf("unsupported auth method %q", choice)
 	}
 }
 
-func (i *interactiveAuthInteractor) collectRemoteBrowserAuto(ctx context.Context, opts authui.OAuthOptions, theme string) (serverapi.AuthCompleteBootstrapRequest, error) {
+func (i *interactiveAuthInteractor) collectRemoteBrowserAuto(ctx context.Context, opts authui.OAuthOptions, theme string) (*authpb.CompleteBootstrapRequest, error) {
 	startListener := i.startCallbackListener
 	if startListener == nil {
 		startListener = func() (oauthCallbackListener, error) {
@@ -167,12 +172,12 @@ func (i *interactiveAuthInteractor) collectRemoteBrowserAuto(ctx context.Context
 	}
 	listener, err := startListener()
 	if err != nil {
-		return serverapi.AuthCompleteBootstrapRequest{}, err
+		return nil, err
 	}
 	defer func() { _ = listener.Close() }()
 	session, err := serverauth.BeginOpenAIBrowserFlow(opts, listener.RedirectURI())
 	if err != nil {
-		return serverapi.AuthCompleteBootstrapRequest{}, err
+		return nil, err
 	}
 	openErr := openBrowser(session.AuthorizeURL)
 	runPage := i.runCallbackPage
@@ -201,24 +206,24 @@ func (i *interactiveAuthInteractor) collectRemoteBrowserAuto(ctx context.Context
 		return authui.AuthMethod{Type: "oauth"}, nil
 	})
 	if err != nil {
-		return serverapi.AuthCompleteBootstrapRequest{}, err
+		return nil, err
 	}
 	if result.Canceled {
-		return serverapi.AuthCompleteBootstrapRequest{}, ErrAuthCanceledByUser
+		return nil, ErrAuthCanceledByUser
 	}
 	if result.Err != nil {
-		return serverapi.AuthCompleteBootstrapRequest{}, result.Err
+		return nil, result.Err
 	}
-	return serverapi.AuthCompleteBootstrapRequest{
-		Mode:              serverapi.AuthBootstrapModeBrowserCallbackURL,
-		CallbackInput:     result.CallbackInput,
-		RedirectURI:       session.RedirectURI,
-		OAuthState:        session.State,
-		OAuthCodeVerifier: session.CodeVerifier,
+	return &authpb.CompleteBootstrapRequest{
+		Mode:              authpb.BootstrapMode_BOOTSTRAP_MODE_BROWSER_CALLBACK_URL,
+		CallbackInput:     &result.CallbackInput,
+		RedirectUri:       &session.RedirectURI,
+		OauthState:        &session.State,
+		OauthCodeVerifier: &session.CodeVerifier,
 	}, nil
 }
 
-func (i *interactiveAuthInteractor) collectRemoteDevice(ctx context.Context, opts authui.OAuthOptions, theme string) (serverapi.AuthCompleteBootstrapRequest, error) {
+func (i *interactiveAuthInteractor) collectRemoteDevice(ctx context.Context, opts authui.OAuthOptions, theme string) (*authpb.CompleteBootstrapRequest, error) {
 	grant, err := serverauth.CollectOpenAIDeviceAuthorizationGrant(ctx, opts, func(code authui.OAuthDeviceCode) {
 		i.printAuthSection(theme, authMethodDisplayTitle(authMethodChoiceDevice), []string{
 			lipgloss.NewStyle().Foreground(uiPalette(theme).primary).Underline(true).Render(code.VerificationURL),
@@ -227,26 +232,26 @@ func (i *interactiveAuthInteractor) collectRemoteDevice(ctx context.Context, opt
 		})
 	})
 	if err != nil {
-		return serverapi.AuthCompleteBootstrapRequest{}, err
+		return nil, err
 	}
-	return serverapi.AuthCompleteBootstrapRequest{
-		Mode:                    serverapi.AuthBootstrapModeDeviceCode,
-		DeviceAuthorizationCode: grant.AuthorizationCode,
-		DeviceCodeVerifier:      grant.CodeVerifier,
+	return &authpb.CompleteBootstrapRequest{
+		Mode:                    authpb.BootstrapMode_BOOTSTRAP_MODE_DEVICE_CODE,
+		DeviceAuthorizationCode: &grant.AuthorizationCode,
+		DeviceCodeVerifier:      &grant.CodeVerifier,
 	}, nil
 }
 
-func supportsBootstrapMode(modes []serverapi.AuthBootstrapMode, choice authMethodChoice) bool {
-	need := serverapi.AuthBootstrapMode("")
+func supportsBootstrapMode(modes []authpb.BootstrapMode, choice authMethodChoice) bool {
+	need := authpb.BootstrapMode_BOOTSTRAP_MODE_UNSPECIFIED
 	switch choice {
 	case authMethodChoiceSkip:
-		need = serverapi.AuthBootstrapModeNone
+		need = authpb.BootstrapMode_BOOTSTRAP_MODE_NONE
 	case authMethodChoiceEnvAPIKey:
-		need = serverapi.AuthBootstrapModeAPIKey
+		need = authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY
 	case authMethodChoiceBrowserAuto:
-		need = serverapi.AuthBootstrapModeBrowserCallbackURL
+		need = authpb.BootstrapMode_BOOTSTRAP_MODE_BROWSER_CALLBACK_URL
 	case authMethodChoiceDevice:
-		need = serverapi.AuthBootstrapModeDeviceCode
+		need = authpb.BootstrapMode_BOOTSTRAP_MODE_DEVICE_CODE
 	default:
 		return false
 	}

@@ -3,18 +3,19 @@ package app
 import (
 	"testing"
 
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 )
 
 func TestOnboardingFinalizeProjectsSelectedCommandImportReference(t *testing.T) {
 	provider := "codex"
 	root := "/source/.codex/prompts"
-	state := newOnboardingFinalizeProjectionState(t, nil, serverapi.CapabilityFactsResponse{})
+	state := newOnboardingFinalizeProjectionState(t, nil, emptyOnboardingCapabilityFacts())
 	state.selections.commandImport = onboardingImportSelection{
 		Mode: onboardingImportModeSymlinkSource,
-		ChoiceRef: serverapi.ImportChoiceRef{
-			Mode:             string(onboardingImportModeSymlinkSource),
-			ImportProviderID: &provider,
+		ChoiceRef: &capabilitypb.ImportChoiceRef{
+			Mode:             capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_SYMLINK_SOURCE,
+			ImportProviderId: &provider,
 			SourceRootPath:   &root,
 		},
 	}
@@ -22,24 +23,21 @@ func TestOnboardingFinalizeProjectsSelectedCommandImportReference(t *testing.T) 
 	if err != nil {
 		t.Fatalf("onboardingFinalizeRequest: %v", err)
 	}
-	if request.CommandsImport == nil || request.CommandsImport.Mode != serverapi.OnboardingImportModeSymlinkSource {
+	if request.CommandsImport == nil || request.CommandsImport.Mode != onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE {
 		t.Fatalf("commands import = %+v", request.CommandsImport)
 	}
-	if request.CommandsImport.ImportProviderID == nil || *request.CommandsImport.ImportProviderID != provider {
-		t.Fatalf("provider = %+v", request.CommandsImport.ImportProviderID)
+	if request.CommandsImport.ImportProviderId == nil || *request.CommandsImport.ImportProviderId != provider {
+		t.Fatalf("provider = %+v", request.CommandsImport.ImportProviderId)
 	}
 }
 
 func TestOnboardingCommandImportOptionsIncludeServerChoices(t *testing.T) {
 	codexRoot := t.TempDir()
 	claudeRoot := t.TempDir()
-	facts := serverapi.ImportCapabilityFacts{
-		Commands: serverapi.ImportItemGroupFact{
-			Choices: []serverapi.ImportChoiceFact{
-				skillSymlinkChoiceFact(string(onboardingImportProviderCodex), codexRoot, 2),
-				skillSymlinkChoiceFact(string(onboardingImportProviderClaudeCode), claudeRoot, 2),
-			},
-		},
+	facts := emptyOnboardingImportFacts()
+	facts.Commands.Choices = []*capabilitypb.ImportChoiceFact{
+		skillSymlinkChoiceFact(string(onboardingImportProviderCodex), codexRoot, 2),
+		skillSymlinkChoiceFact(string(onboardingImportProviderClaudeCode), claudeRoot, 2),
 	}
 	state := testOnboardingFlowStatePtr(t, nil)
 	state.imports = onboardingImportDiscoveryFromFacts(facts)

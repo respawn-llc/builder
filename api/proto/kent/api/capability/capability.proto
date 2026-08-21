@@ -301,7 +301,6 @@ service CapabilityService {
       scope_policy: SCOPE_POLICY_NONE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "capability.facts.get"
     };
   }
 }

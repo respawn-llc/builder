@@ -147,7 +147,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 								"id":   "28e08736-9539-41c1-a96c-56baf10e4fa4",
 								"name": "exec_command",
 								"input": map[string]any{
-									"cmd":           "sleep 2; echo $((51515150+1))",
+									"cmd":           "sleep 1.5; echo $((51515150+1))",
 									"yield_time_ms": 1000,
 								},
 							},
@@ -168,7 +168,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAnyAppends: []string{
 				"ℹ Background shell 1000 completed (exit 0)",
 			},
-			expectedScreenRows: []string{"$ sleep 2; echo $((51515150+1))  " + transcriptrender.BackgroundedShellSuffix},
+			expectedScreenRows: []string{"$ sleep 1.5; echo $((51515150+1))  " + transcriptrender.BackgroundedShellSuffix},
 		},
 	} {
 		tc := tc

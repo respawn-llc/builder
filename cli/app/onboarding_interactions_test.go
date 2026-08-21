@@ -6,7 +6,8 @@ import (
 	"testing"
 
 	"core/shared/config"
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 )
 
 func TestOnboardingWorkflowUsesTypedStepIdentityAndOrder(t *testing.T) {
@@ -204,15 +205,14 @@ func TestOnboardingPendingThinkingBlocksCustomFinalizeButNotDefaults(t *testing.
 func TestOnboardingImportAndSkillTransitionsRemainComplete(t *testing.T) {
 	root := t.TempDir()
 	choice := skillSymlinkChoiceFact("codex", root, 1)
-	facts := serverapi.ImportCapabilityFacts{
-		Skills: serverapi.ImportItemGroupFact{Choices: []serverapi.ImportChoiceFact{choice}},
-		SkillEnablement: []serverapi.SkillEnablementProjectionFact{{
-			ChoiceRef: choice.Ref,
-			Candidates: []serverapi.ImportItemFact{
-				skillItemFact("codex", root, root+"/one", "one", "one", nil, true),
-			},
-		}},
-	}
+	facts := emptyOnboardingImportFacts()
+	facts.Skills.Choices = []*capabilitypb.ImportChoiceFact{choice}
+	facts.SkillEnablement = []*capabilitypb.SkillEnablementProjectionFact{{
+		ChoiceRef: choice.Ref,
+		Candidates: []*capabilitypb.ImportItemFact{
+			skillItemFact("codex", root, root+"/one", "one", "one", nil, true),
+		},
+	}}
 	state := testOnboardingFlowStatePtr(t, nil)
 	state.imports = onboardingImportDiscoveryFromFacts(facts)
 	importStep := findWorkflowStep(t, state, onboardingStepSkillsImport)
@@ -257,17 +257,16 @@ func TestOnboardingThinkingCapabilityLossDoesNotResurrectLatentValues(t *testing
 	thinkingModel := "thinking-model"
 	limitedModel := "limited-model"
 	noThinkingModel := "no-thinking-model"
-	contextWindow := 100_000
-	facts := serverapi.CapabilityFactsResponse{Models: serverapi.ModelCapabilityFacts{
-		KnownModels: []serverapi.ModelCapabilityFact{
-			{ModelID: &thinkingModel, Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "high"}},
-			{ModelID: &limitedModel, Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low"}},
-			{ModelID: &noThinkingModel, Known: true, ContextWindowTokens: &contextWindow},
-		},
-	}}
+	contextWindow := uint32(100_000)
+	facts := emptyOnboardingCapabilityFacts()
+	facts.Models.KnownModels = []*capabilitypb.ModelFact{
+		{ModelId: &thinkingModel, Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "high"}, Verbosity: &capabilitypb.ModelVerbosityFact{Source: "test"}},
+		{ModelId: &limitedModel, Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low"}, Verbosity: &capabilitypb.ModelVerbosityFact{Source: "test"}},
+		{ModelId: &noThinkingModel, Known: true, ContextWindowTokens: &contextWindow, Verbosity: &capabilitypb.ModelVerbosityFact{Source: "test"}},
+	}
 	state := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
 		cfg.Settings.Model = thinkingModel
-		cfg.Settings.ModelContextWindow = contextWindow
+		cfg.Settings.ModelContextWindow = int(contextWindow)
 		cfg.Settings.ThinkingLevel = "high"
 		cfg.Settings.Reviewer.Model = thinkingModel
 		cfg.Settings.Reviewer.ThinkingLevel = "high"
@@ -298,17 +297,16 @@ func TestOnboardingSupervisorThinkingCapabilityLossDoesNotResurrectLatentValues(
 	mainModel := "main-model"
 	reviewerModel := "reviewer-model"
 	noThinkingReviewer := "no-thinking-reviewer"
-	contextWindow := 100_000
-	facts := serverapi.CapabilityFactsResponse{Models: serverapi.ModelCapabilityFacts{
-		KnownModels: []serverapi.ModelCapabilityFact{
-			{ModelID: &mainModel, Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "high"}},
-			{ModelID: &reviewerModel, Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low"}},
-			{ModelID: &noThinkingReviewer, Known: true, ContextWindowTokens: &contextWindow},
-		},
-	}}
+	contextWindow := uint32(100_000)
+	facts := emptyOnboardingCapabilityFacts()
+	facts.Models.KnownModels = []*capabilitypb.ModelFact{
+		{ModelId: &mainModel, Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "high"}, Verbosity: &capabilitypb.ModelVerbosityFact{Source: "test"}},
+		{ModelId: &reviewerModel, Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low"}, Verbosity: &capabilitypb.ModelVerbosityFact{Source: "test"}},
+		{ModelId: &noThinkingReviewer, Known: true, ContextWindowTokens: &contextWindow, Verbosity: &capabilitypb.ModelVerbosityFact{Source: "test"}},
+	}
 	state := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
 		cfg.Settings.Model = mainModel
-		cfg.Settings.ModelContextWindow = contextWindow
+		cfg.Settings.ModelContextWindow = int(contextWindow)
 		cfg.Settings.ThinkingLevel = "high"
 		cfg.Settings.Reviewer.Model = reviewerModel
 		cfg.Settings.Reviewer.ThinkingLevel = "low"
@@ -329,7 +327,7 @@ func TestOnboardingSupervisorThinkingCapabilityLossDoesNotResurrectLatentValues(
 		t.Fatalf("project capability-disabled reviewer: %v", err)
 	}
 	if request.Supervisor == nil || request.Supervisor.Thinking == nil ||
-		request.Supervisor.Thinking.Kind != serverapi.OnboardingThinkingDisabled {
+		request.Supervisor.Thinking.Kind != onboardingpb.ThinkingKind_THINKING_KIND_DISABLED {
 		t.Fatalf("capability-disabled reviewer projection = %+v", request.Supervisor)
 	}
 	if err := reviewerStep.apply(state, reviewerModel); err != nil {
@@ -349,7 +347,7 @@ func TestOnboardingSupervisorThinkingCapabilityLossDoesNotResurrectLatentValues(
 
 	explicitDisabled := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
 		cfg.Settings.Model = mainModel
-		cfg.Settings.ModelContextWindow = contextWindow
+		cfg.Settings.ModelContextWindow = int(contextWindow)
 		cfg.Settings.Reviewer.Model = reviewerModel
 		cfg.Source.Sources["reviewer.model"] = "file"
 	}, facts)

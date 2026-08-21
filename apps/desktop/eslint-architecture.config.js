@@ -90,6 +90,11 @@ const dependencyTargets = {
     "@app/native-bridge",
     architectureEntrypoints.NATIVE_PACKAGE,
   ),
+  SERVER_API_CONTRACT: dependencyTarget(
+    architectureOwners.SERVER_API_CONTRACT,
+    ["@app/server-api-contract", "@app/server-api-contract/**"],
+    ["src/index.ts", "src/gen/**/*.ts"],
+  ),
   SHARED: dependencyTarget(architectureOwners.SHARED, "@/shared/*"),
   TOOLING_TYPES: dependencyTarget(architectureOwners.TOOLING, "@/types"),
   UI: dependencyTarget(architectureOwners.UI, "@/ui"),
@@ -130,6 +135,8 @@ const compositionDependencies = [
 ];
 
 const ownerDependencyMatrix = [
+  ownerDependencies(architectureOwners.API, dependencyTargets.SERVER_API_CONTRACT),
+  ownerDependencies(architectureOwners.TEST_SUPPORT, dependencyTargets.SERVER_API_CONTRACT),
   ownerDependencies(
     architectureOwners.SHELL,
     dependencyTarget(architectureOwners.SHELL),

@@ -8,6 +8,7 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	sharedtheme "core/shared/theme"
 
 	"github.com/charmbracelet/lipgloss"
@@ -124,7 +125,7 @@ func (m *sessionPickerModel) renderRow(tab *sessionPickerTab, index int, showPre
 		}
 		item := tab.sessions()[sessionIndex]
 		title = sessionPickerTitle(item)
-		preview = strings.TrimSpace(item.FirstPromptPreview)
+		preview, _ = textutil.OptionalTrimmed(item.FirstPromptPreview)
 		timestamp = relativeSessionAge(item.UpdatedAt, m.clock()).String()
 	}
 
@@ -157,7 +158,7 @@ func (m *sessionPickerModel) renderRow(tab *sessionPickerTab, index int, showPre
 }
 
 func sessionPickerTitle(item clientui.SessionSummary) string {
-	if title := strings.TrimSpace(item.Name); title != "" {
+	if title, present := textutil.OptionalTrimmed(item.Name); present {
 		return title
 	}
 	return item.SessionID.String()
@@ -171,7 +172,11 @@ func (m *sessionPickerModel) hasPreview(tab *sessionPickerTab, index int) bool {
 		index--
 	}
 	sessions := tab.sessions()
-	return index >= 0 && index < len(sessions) && strings.TrimSpace(sessions[index].FirstPromptPreview) != ""
+	if index < 0 || index >= len(sessions) {
+		return false
+	}
+	_, present := textutil.OptionalTrimmed(sessions[index].FirstPromptPreview)
+	return present
 }
 
 func newSessionPickerStyles(theme string) sessionPickerStyles {

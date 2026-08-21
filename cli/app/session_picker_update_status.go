@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 
-	"core/shared/serverapi"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type sessionPickerUpdateStatusMsg struct {
-	response serverapi.UpdateStatusResponse
+	response *serverpb.GetUpdateStatusSuccess
 	err      error
 }
 
@@ -22,7 +23,7 @@ func (m *sessionPickerModel) collectUpdateStatusCmd() tea.Cmd {
 	client := m.header.updateStatus
 	ctx := m.requestContext
 	return func() tea.Msg {
-		response, err := client.GetUpdateStatus(ctx, serverapi.UpdateStatusRequest{})
+		response, err := client.GetUpdateStatus(ctx, &emptypb.Empty{})
 		if err != nil {
 			return sessionPickerUpdateStatusMsg{err: err}
 		}
@@ -38,24 +39,9 @@ func (m *sessionPickerModel) applyUpdateStatus(message sessionPickerUpdateStatus
 		m.setUpdateStatusFailure(fmt.Errorf("request update status: %w", message.err))
 		return nil
 	}
-	if err := message.response.Validate(); err != nil {
-		m.handleUpdateStatusInvalidContract(err)
-		return nil
-	}
-	result := message.response.Result
-	m.updateStatus = &result
+	m.updateStatus = message.response.GetStatus()
 	m.ensureSelectedVisible(m.tab(m.activeTab))
 	return nil
-}
-
-func (m *sessionPickerModel) handleUpdateStatusInvalidContract(err error) {
-	if err == nil {
-		err = errors.New("update status contract violation")
-	}
-	if m.header.StatusRequest.Settings.Debug {
-		panic(fmt.Sprintf("session picker update status contract violation: %v", err))
-	}
-	m.setUpdateStatusFailure(fmt.Errorf("invalid update status response: %w", err))
 }
 
 func (m *sessionPickerModel) setUpdateStatusFailure(err error) {
@@ -63,7 +49,10 @@ func (m *sessionPickerModel) setUpdateStatusFailure(err error) {
 	if err != nil {
 		cause = err.Error()
 	}
-	result := serverapi.FailedUpdateStatusResult(cause)
-	m.updateStatus = &result
+	m.updateStatus = &serverpb.UpdateStatus{
+		Status: &serverpb.UpdateStatus_CheckFailed{
+			CheckFailed: &serverpb.UpdateCheckFailed{Cause: cause},
+		},
+	}
 	m.ensureSelectedVisible(m.tab(m.activeTab))
 }

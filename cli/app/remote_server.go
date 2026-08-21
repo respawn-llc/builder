@@ -10,8 +10,9 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protocol"
-	"core/shared/serverapi"
 	"core/shared/theme"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type remoteAppServer struct {
@@ -178,7 +179,7 @@ func (s *remoteAppServer) Reauthenticate(ctx context.Context, interactor authInt
 	if s == nil || s.remote == nil {
 		return errors.New("remote server is required")
 	}
-	status, err := s.remote.GetAuthBootstrapStatus(ctx, serverapi.AuthGetBootstrapStatusRequest{})
+	status, err := s.remote.GetBootstrapStatus(ctx, &emptypb.Empty{})
 	if err != nil {
 		return err
 	}

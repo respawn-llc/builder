@@ -5,49 +5,73 @@ import (
 	"errors"
 	"strings"
 
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 )
 
-func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
+func (s *Service) SetDefaultWorkspace(ctx context.Context, req *projectpb.SetDefaultWorkspaceRequest) (*projectpb.SetDefaultWorkspaceSuccess, error) {
+	if req == nil {
+		return nil, errors.New("set default workspace request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+	selector, err := projectWorkspaceSelectorFromGenerated(req.Workspace)
 	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
+		return nil, err
 	}
-	project, err := s.metadata.SetProjectDefaultWorkspaceAndGetSummary(ctx, req.ProjectID, binding.WorkspaceID)
+	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectId, selector)
 	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
+		return nil, err
 	}
-	return serverapi.ProjectDefaultWorkspaceSetResponse{Project: project}, nil
+	project, err := s.metadata.SetProjectDefaultWorkspaceAndGetSummary(ctx, req.ProjectId, binding.WorkspaceID)
+	if err != nil {
+		return nil, wrapWorkspaceMutationError(req.ProjectId, binding.WorkspaceID, err)
+	}
+	generated, err := projectHomeSummaryToGenerated(project)
+	if err != nil {
+		return nil, err
+	}
+	return &projectpb.SetDefaultWorkspaceSuccess{Project: generated}, nil
 }
 
-func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req *projectpb.UnlinkWorkspaceRequest) (*projectpb.UnlinkWorkspaceSuccess, error) {
+	if req == nil {
+		return nil, errors.New("unlink workspace request is required")
 	}
 	if s == nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, errors.New("project service is required")
+		return nil, errors.New("project service is required")
 	}
-	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+	selector, err := projectWorkspaceSelectorFromGenerated(req.Workspace)
 	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+		return nil, err
+	}
+	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectId, selector)
+	if err != nil {
+		return nil, err
 	}
 	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
 		return withRuntimeBlockers(ctx, sessionIDs, s.workspaceActiveSessionBlockers, s.blockSessionStarts)
 	}
-	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, binding.WorkspaceID, nil, runtimeBlocker)
+	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectId, binding.WorkspaceID, nil, runtimeBlocker)
 	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
+		return nil, wrapWorkspaceMutationError(req.ProjectId, binding.WorkspaceID, err)
 	}
-	resp := serverapi.ProjectWorkspaceUnlinkResponse{
-		ProjectID:   strings.TrimSpace(req.ProjectID),
-		WorkspaceID: binding.WorkspaceID,
-		Blockers:    blockers,
+	resp := &projectpb.UnlinkWorkspaceSuccess{
+		ProjectId:   strings.TrimSpace(req.ProjectId),
+		WorkspaceId: binding.WorkspaceID,
+		Blockers:    make([]*projectpb.WorkspaceUnlinkBlocker, 0, len(blockers)),
+	}
+	for _, blocker := range blockers {
+		generated := &projectpb.WorkspaceUnlinkBlocker{Code: blocker.Code}
+		if blocker.Count > 0 {
+			count, conversionErr := nonNegativeInt32(blocker.Count, "workspace unlink blocker count")
+			if conversionErr != nil {
+				return nil, conversionErr
+			}
+			generated.Count = &count
+		}
+		resp.Blockers = append(resp.Blockers, generated)
 	}
 	return resp, nil
 }

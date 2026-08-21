@@ -19,6 +19,9 @@ import (
 	serverstartup "core/server/startup"
 	askquestion "core/server/tools"
 	"core/shared/config"
+	"core/shared/protoapi"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/sessioncontract"
 
@@ -324,17 +327,10 @@ func publishConfiguredRemoteForWorkspace(t *testing.T, workspace string) func() 
 	}
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		if err := serveConfiguredRemoteHandshake(ws, identity); err != nil {
+			return
+		}
 		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if req.Method != protocol.MethodHandshake {
-			_ = websocket.JSON.Send(ws, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake required"))
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: identity})); err != nil {
-			return
-		}
 		for {
 			if err := websocket.JSON.Receive(ws, &req); err != nil {
 				return
@@ -350,4 +346,53 @@ func publishConfiguredRemoteForWorkspace(t *testing.T, workspace string) func() 
 	t.Setenv("KENT_SERVER_HOST", host)
 	t.Setenv("KENT_SERVER_PORT", port)
 	return server.Close
+}
+
+func serveConfiguredRemoteHandshake(ws *websocket.Conn, identity protocol.ServerIdentity) error {
+	var encoded []byte
+	if err := websocket.Message.Receive(ws, &encoded); err != nil {
+		return err
+	}
+	envelope, err := protoapi.DecodeEnvelope(encoded)
+	if err != nil {
+		return err
+	}
+	call := envelope.GetCall()
+	if call == nil || call.Correlation == nil {
+		return errors.New("correlated Handshake call is required")
+	}
+	method := connectionpb.File_kent_api_connection_connection_proto.Services().
+		ByName("ConnectionService").Methods().ByName("Handshake")
+	operation, err := protoapi.OperationFromDescriptor(method)
+	if err != nil {
+		return err
+	}
+	if call.Operation != operation.Name {
+		return errors.New("Handshake must be the first operation")
+	}
+	resultIdentity := &connectionpb.ServerIdentity{
+		ProtocolVersion: identity.ProtocolVersion,
+		ServerId:        identity.ServerID,
+		Pid:             int32(identity.PID),
+	}
+	if identity.PersistenceRootID != "" {
+		resultIdentity.PersistenceRootId = &identity.PersistenceRootID
+	}
+	payload, err := protoapi.Encode(&connectionpb.HandshakeResult{
+		Outcome: &connectionpb.HandshakeResult_Success{
+			Success: &connectionpb.HandshakeSuccess{Identity: resultIdentity},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	response, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
+		Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+			Operation: operation.Name, Correlation: call.Correlation, Payload: payload,
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	return websocket.Message.Send(ws, response)
 }

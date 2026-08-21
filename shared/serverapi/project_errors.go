@@ -13,6 +13,29 @@ var ErrWorkspaceBindingAmbiguous = errors.New("workspace binding is ambiguous")
 var ErrProjectNotFound = errors.New("project not found")
 var ErrProjectUnavailable = errors.New("project is unavailable")
 var ErrWorkspacePathIdentity = errors.New("workspace path identity could not be recovered")
+var ErrProjectKeyConflict = errors.New("project key is already in use")
+var ErrWorkspaceAlreadyBound = errors.New("workspace is already bound")
+var ErrWorkspacePathMissing = errors.New("workspace path does not exist")
+
+type ProjectKeyConflictError struct {
+	ProjectKey string
+}
+
+func (e ProjectKeyConflictError) Error() string {
+	return fmt.Sprintf("%s: %q", ErrProjectKeyConflict, strings.TrimSpace(e.ProjectKey))
+}
+
+func (e ProjectKeyConflictError) Is(target error) bool {
+	return target == ErrProjectKeyConflict
+}
+
+func AsProjectKeyConflict(err error) (ProjectKeyConflictError, bool) {
+	var conflict ProjectKeyConflictError
+	if !errors.As(err, &conflict) {
+		return ProjectKeyConflictError{}, false
+	}
+	return conflict, true
+}
 
 type WorkspaceBindingAmbiguousError struct {
 	CanonicalRoot string
@@ -73,13 +96,9 @@ func AsProjectUnavailable(err error) (ProjectUnavailableError, bool) {
 type WorkspacePathIdentityError struct {
 	WorkspaceRoot string
 	Cause         error
-	remoteMessage *string
 }
 
 func (e WorkspacePathIdentityError) Error() string {
-	if e.remoteMessage != nil && strings.TrimSpace(*e.remoteMessage) != "" {
-		return *e.remoteMessage
-	}
 	root := strings.TrimSpace(e.WorkspaceRoot)
 	if e.Cause == nil {
 		return fmt.Sprintf("%s: %q", ErrWorkspacePathIdentity, root)

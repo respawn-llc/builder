@@ -20,6 +20,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 	sqlitedriver "modernc.org/sqlite"
@@ -1100,9 +1101,9 @@ func (s *Store) ListWorkspaceSessionIDs(ctx context.Context, workspaceID string)
 
 func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workspace sqlitegen.Workspace) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
 	blockers := []serverapi.ProjectWorkspaceUnlinkBlocker{}
-	addCountBlocker := func(code string, message string, count int64) {
+	addCountBlocker := func(code string, count int64) {
 		if count > 0 {
-			blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: code, Message: message, Count: int(count)})
+			blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: code, Count: int(count)})
 		}
 	}
 	primaryWorkspaceID, err := q.GetProjectPrimaryWorkspaceID(ctx, strings.TrimSpace(projectID))
@@ -1110,24 +1111,24 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 		return nil, fmt.Errorf("get project primary workspace: %w", err)
 	}
 	if strings.TrimSpace(primaryWorkspaceID) == strings.TrimSpace(workspace.ID) {
-		blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: "default_workspace", Message: "Workspace is the project default workspace."})
+		blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: "default_workspace"})
 	}
 	workspaceID := sql.NullString{String: workspace.ID, Valid: strings.TrimSpace(workspace.ID) != ""}
 	nonTerminalTasks, err := q.CountNonTerminalTasksBySourceWorkspace(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count non-terminal workspace tasks: %w", err)
 	}
-	addCountBlocker("non_terminal_tasks", "Active or non-terminal tasks still depend on this workspace.", nonTerminalTasks)
+	addCountBlocker("non_terminal_tasks", nonTerminalTasks)
 	executableCurrentNodes, err := q.CountExecutableCurrentNodesByWorkspace(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count executable workspace current nodes: %w", err)
 	}
-	addCountBlocker("executable_current_nodes", "Executable current nodes still depend on this workspace.", executableCurrentNodes)
+	addCountBlocker("executable_current_nodes", executableCurrentNodes)
 	worktrees, err := q.CountWorktreesByWorkspace(ctx, workspace.ID)
 	if err != nil {
 		return nil, fmt.Errorf("count workspace worktrees: %w", err)
 	}
-	addCountBlocker("managed_owned_worktrees", "Worktrees still depend on this workspace.", worktrees)
+	addCountBlocker("managed_owned_worktrees", worktrees)
 	missingSnapshots, err := q.CountTasksMissingSourceWorkspaceSnapshot(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count missing workspace snapshots: %w", err)
@@ -1151,11 +1152,7 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 	if err != nil {
 		return nil, fmt.Errorf("count missing session workspace snapshots: %w", err)
 	}
-	addCountBlocker(
-		"missing_history_snapshot",
-		"Historical task or retained Session references do not have a durable workspace path/name snapshot.",
-		missingSnapshots+missingSessionSnapshots,
-	)
+	addCountBlocker("missing_history_snapshot", missingSnapshots+missingSessionSnapshots)
 	return blockers, nil
 }
 
@@ -2008,52 +2005,71 @@ func (s *Store) ListProjectWorkspacesPage(ctx context.Context, projectID string,
 	return out, nil
 }
 
-func (s *Store) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+func (s *Store) ListSessionPage(
+	ctx context.Context,
+	projectID string,
+	category sessioncontract.SessionCategory,
+	offset int,
+	limit int,
+) (SessionPage, error) {
 	if s == nil || s.queries == nil {
-		return serverapi.SessionPageResponse{}, errors.New("metadata store is required")
+		return SessionPage{}, errors.New("metadata store is required")
 	}
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionPageResponse{}, err
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if trimmedProjectID == "" || trimmedProjectID != projectID {
+		return SessionPage{}, errors.New("project_id is invalid")
 	}
-	window, err := req.ResolveWindow()
-	if err != nil {
-		return serverapi.SessionPageResponse{}, err
+	if _, err := sessioncontract.ParseSessionCategory(string(category)); err != nil {
+		return SessionPage{}, err
+	}
+	if offset < 0 {
+		return SessionPage{}, errors.New("offset must be non-negative")
+	}
+	if limit < 1 || limit > MaxSessionPageSize {
+		return SessionPage{}, fmt.Errorf("limit must be between 1 and %d", MaxSessionPageSize)
 	}
 	rows, err := s.queries.ListSessionPage(ctx, sqlitegen.ListSessionPageParams{
-		ProjectID:  strings.TrimSpace(req.ProjectID),
-		Category:   sql.NullString{String: string(req.Category), Valid: true},
-		PageLimit:  int64(window.Limit + 1),
-		PageOffset: int64(window.Offset),
+		ProjectID:  trimmedProjectID,
+		Category:   sql.NullString{String: string(category), Valid: true},
+		PageLimit:  int64(limit + 1),
+		PageOffset: int64(offset),
 	})
 	if err != nil {
-		return serverapi.SessionPageResponse{}, fmt.Errorf("list session page: %w", err)
+		return SessionPage{}, fmt.Errorf("list session page: %w", err)
 	}
-	rows, nextOffset := serverapi.TrimOffsetLookahead(window, rows)
-	out := serverapi.SessionPageResponse{
-		ProjectID:  strings.TrimSpace(req.ProjectID),
-		Category:   req.Category,
+	var nextOffset *int
+	if len(rows) > limit {
+		value := offset + limit
+		nextOffset = &value
+		rows = rows[:limit]
+	}
+	out := SessionPage{
+		ProjectID:  trimmedProjectID,
+		Category:   category,
 		Sessions:   make([]clientui.SessionSummary, 0, len(rows)),
 		NextOffset: nextOffset,
 	}
 	for _, row := range rows {
 		sessionID, err := runtimeids.ParseSessionID(row.ID)
 		if err != nil {
-			return serverapi.SessionPageResponse{}, fmt.Errorf("validate listed session id %q: %w", row.ID, err)
+			return SessionPage{}, fmt.Errorf("validate listed session id %q: %w", row.ID, err)
 		}
-		category, err := sessioncontract.ParseSessionCategory(row.Category)
+		rowCategory, err := sessioncontract.ParseSessionCategory(row.Category)
 		if err != nil {
-			return serverapi.SessionPageResponse{}, fmt.Errorf("validate listed session category for %q: %w", row.ID, err)
+			return SessionPage{}, fmt.Errorf("validate listed session category for %q: %w", row.ID, err)
 		}
-		out.Sessions = append(out.Sessions, clientui.SessionSummary{
-			SessionID:          sessionID,
-			Category:           category,
-			Name:               row.Name,
-			FirstPromptPreview: row.FirstPromptPreview,
-			UpdatedAt:          timeFromStoredTimestamp(row.UpdatedAtUnixMs),
-		})
-	}
-	if err := out.Validate(); err != nil {
-		return serverapi.SessionPageResponse{}, err
+		summary := clientui.SessionSummary{
+			SessionID: sessionID,
+			Category:  rowCategory,
+			UpdatedAt: timeFromStoredTimestamp(row.UpdatedAtUnixMs),
+		}
+		if row.Name != "" {
+			summary.Name = textutil.Value(row.Name)
+		}
+		if row.FirstPromptPreview != "" {
+			summary.FirstPromptPreview = textutil.Value(row.FirstPromptPreview)
+		}
+		out.Sessions = append(out.Sessions, summary)
 	}
 	return out, nil
 }

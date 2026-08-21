@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"core/shared/config"
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	"core/shared/textutil"
 	"core/shared/theme"
 	"core/shared/toolspec"
@@ -22,7 +22,7 @@ func (e *onboardingSelectionConversionError) Error() string {
 	return fmt.Sprintf("convert onboarding selection %s (%v): %s", e.Field, e.Value, e.Reason)
 }
 
-func newOnboardingFlowState(cfg config.App, facts serverapi.CapabilityFactsResponse) (onboardingFlowState, error) {
+func newOnboardingFlowState(cfg config.App, facts *capabilitypb.Facts) (onboardingFlowState, error) {
 	selections, err := onboardingSelectionsFromConfig(cfg, facts)
 	if err != nil {
 		return onboardingFlowState{}, err
@@ -31,7 +31,7 @@ func newOnboardingFlowState(cfg config.App, facts serverapi.CapabilityFactsRespo
 		selections:    selections,
 		facts:         facts,
 		pendingAction: onboardingPendingActionNone,
-		imports:       onboardingImportDiscoveryFromFacts(facts.Imports),
+		imports:       onboardingImportDiscoveryFromFacts(facts.GetImports()),
 		debug:         cfg.Settings.Debug,
 	}
 	if id := state.imports.commandRecommendationID; id != nil {
@@ -49,7 +49,7 @@ func newOnboardingFlowState(cfg config.App, facts serverapi.CapabilityFactsRespo
 	return state, nil
 }
 
-func onboardingSelectionsFromConfig(cfg config.App, facts serverapi.CapabilityFactsResponse) (onboardingSelections, error) {
+func onboardingSelectionsFromConfig(cfg config.App, facts *capabilitypb.Facts) (onboardingSelections, error) {
 	if err := validateOnboardingFacts(facts); err != nil {
 		return onboardingSelections{}, err
 	}
@@ -144,7 +144,7 @@ func seedThemeSelection(value string) (onboardingThemeSelection, error) {
 	}
 }
 
-func onboardingModelSelectionFromValue(value string, facts serverapi.CapabilityFactsResponse) (onboardingModelSelection, error) {
+func onboardingModelSelectionFromValue(value string, facts *capabilitypb.Facts) (onboardingModelSelection, error) {
 	model := strings.TrimSpace(value)
 	if model == "" {
 		return onboardingModelSelection{}, conversionError("model", value, "must not be blank")
@@ -156,14 +156,14 @@ func onboardingModelSelectionFromValue(value string, facts serverapi.CapabilityF
 	return onboardingModelSelection{kind: kind, value: model}, nil
 }
 
-func seedContextSelection(tokens int, model string, facts serverapi.CapabilityFactsResponse) (onboardingContextSelection, error) {
+func seedContextSelection(tokens int, model string, facts *capabilitypb.Facts) (onboardingContextSelection, error) {
 	fact := modelFactForFacts(facts, model)
 	switch {
 	case tokens == 0:
 		return onboardingContextSelection{kind: onboardingContextDefault}, nil
-	case fact.ContextWindowTokens != nil && tokens == *fact.ContextWindowTokens:
+	case fact.ContextWindowTokens != nil && tokens == int(*fact.ContextWindowTokens):
 		return onboardingContextSelection{kind: onboardingContextDefault}, nil
-	case fact.LargeWindow != nil && tokens == fact.LargeWindow.Tokens:
+	case fact.LargeWindow != nil && tokens == int(fact.LargeWindow.Tokens):
 		return onboardingContextSelection{kind: onboardingContextLarge}, nil
 	case tokens > 0:
 		return onboardingContextSelection{kind: onboardingContextCustom, tokens: tokens}, nil
@@ -200,7 +200,7 @@ func seedVerbositySelection(value config.ModelVerbosity) (onboardingVerbositySel
 	}
 }
 
-func seedSupervisorSelection(settings config.Settings, sources map[string]string, facts serverapi.CapabilityFactsResponse) (onboardingSupervisorSelection, error) {
+func seedSupervisorSelection(settings config.Settings, sources map[string]string, facts *capabilitypb.Facts) (onboardingSupervisorSelection, error) {
 	var frequency onboardingSupervisorFrequency
 	switch strings.TrimSpace(settings.Reviewer.Frequency) {
 	case "", "off":
@@ -281,10 +281,10 @@ func requiredOnboardingSource(sources map[string]string, key string) (string, er
 	}
 }
 
-func validateOnboardingFacts(facts serverapi.CapabilityFactsResponse) error {
-	for index, fact := range facts.Models.KnownModels {
-		if fact.ModelID == nil || strings.TrimSpace(*fact.ModelID) == "" {
-			return conversionError(fmt.Sprintf("facts.models.known_models[%d].model_id", index), fact.ModelID, "known model id must be present")
+func validateOnboardingFacts(facts *capabilitypb.Facts) error {
+	for index, fact := range facts.GetModels().GetKnownModels() {
+		if fact.ModelId == nil || strings.TrimSpace(*fact.ModelId) == "" {
+			return conversionError(fmt.Sprintf("facts.models.known_models[%d].model_id", index), fact.ModelId, "known model id must be present")
 		}
 		if !fact.Known {
 			return conversionError(fmt.Sprintf("facts.models.known_models[%d].known", index), fact.Known, "catalog model must be marked known")
@@ -293,13 +293,13 @@ func validateOnboardingFacts(facts serverapi.CapabilityFactsResponse) error {
 			return err
 		}
 	}
-	if err := validateModelFactDimensions("facts.models.unknown_fallback", facts.Models.UnknownFallback); err != nil {
+	if err := validateModelFactDimensions("facts.models.unknown_fallback", facts.GetModels().GetUnknownFallback()); err != nil {
 		return err
 	}
-	return validateOnboardingImportFacts(facts.Imports)
+	return validateOnboardingImportFacts(facts.GetImports())
 }
 
-func validateModelFactDimensions(field string, fact serverapi.ModelCapabilityFact) error {
+func validateModelFactDimensions(field string, fact *capabilitypb.ModelFact) error {
 	if fact.ContextWindowTokens != nil && *fact.ContextWindowTokens <= 0 {
 		return conversionError(field+".context_window_tokens", *fact.ContextWindowTokens, "must be positive")
 	}
@@ -311,7 +311,7 @@ func validateModelFactDimensions(field string, fact serverapi.ModelCapabilityFac
 			return conversionError(fmt.Sprintf("%s.supported_thinking_levels[%d]", field, index), level, "must not be blank")
 		}
 	}
-	for index, level := range fact.Verbosity.Levels {
+	for index, level := range fact.GetVerbosity().GetLevels() {
 		switch strings.TrimSpace(level) {
 		case string(config.ModelVerbosityLow), string(config.ModelVerbosityMedium), string(config.ModelVerbosityHigh):
 		default:
@@ -321,45 +321,45 @@ func validateModelFactDimensions(field string, fact serverapi.ModelCapabilityFac
 	return nil
 }
 
-func validateOnboardingImportFacts(facts serverapi.ImportCapabilityFacts) error {
-	validateRef := func(field string, ref serverapi.ImportChoiceRef) error {
-		switch onboardingImportMode(ref.Mode) {
+func validateOnboardingImportFacts(facts *capabilitypb.ImportFacts) error {
+	validateRef := func(field string, ref *capabilitypb.ImportChoiceRef) error {
+		switch onboardingImportModeFromProto(ref.GetMode()) {
 		case onboardingImportModeNone:
 			return nil
 		case onboardingImportModeSymlinkSource:
-			if ref.ImportProviderID == nil || strings.TrimSpace(*ref.ImportProviderID) == "" {
-				return conversionError(field+".import_provider_id", ref.ImportProviderID, "must be present and non-blank")
+			if ref.ImportProviderId == nil || strings.TrimSpace(*ref.ImportProviderId) == "" {
+				return conversionError(field+".import_provider_id", ref.ImportProviderId, "must be present and non-blank")
 			}
 			if ref.SourceRootPath == nil || strings.TrimSpace(*ref.SourceRootPath) == "" {
 				return conversionError(field+".source_root_path", ref.SourceRootPath, "must be present and non-blank")
 			}
 			return nil
 		default:
-			return conversionError(field+".mode", ref.Mode, "unsupported import mode")
+			return conversionError(field+".mode", ref.GetMode(), "unsupported import mode")
 		}
 	}
-	for index, choice := range facts.Skills.Choices {
+	for index, choice := range facts.GetSkills().GetChoices() {
 		field := fmt.Sprintf("facts.imports.skills.choices[%d]", index)
 		if err := validateImportChoice(field, choice, validateRef); err != nil {
 			return err
 		}
 	}
-	for index, choice := range facts.Commands.Choices {
+	for index, choice := range facts.GetCommands().GetChoices() {
 		field := fmt.Sprintf("facts.imports.commands.choices[%d]", index)
 		if err := validateImportChoice(field, choice, validateRef); err != nil {
 			return err
 		}
 	}
-	for index, projection := range facts.SkillEnablement {
+	for index, projection := range facts.GetSkillEnablement() {
 		field := fmt.Sprintf("facts.imports.skill_enablement[%d]", index)
-		if err := validateRef(field+".choice_ref", projection.ChoiceRef); err != nil {
+		if err := validateRef(field+".choice_ref", projection.GetChoiceRef()); err != nil {
 			return err
 		}
 		for candidateIndex, candidate := range projection.Candidates {
-			if strings.TrimSpace(candidate.Ref.TargetName) == "" {
+			if strings.TrimSpace(candidate.GetRef().GetTargetName()) == "" {
 				return conversionError(
 					fmt.Sprintf("%s.candidates[%d].ref.target_name", field, candidateIndex),
-					candidate.Ref.TargetName,
+					candidate.GetRef().GetTargetName(),
 					"must not be blank",
 				)
 			}
@@ -368,11 +368,8 @@ func validateOnboardingImportFacts(facts serverapi.ImportCapabilityFacts) error 
 	return nil
 }
 
-func validateImportChoice(field string, choice serverapi.ImportChoiceFact, validateRef func(string, serverapi.ImportChoiceRef) error) error {
-	if choice.ItemCount < 0 {
-		return conversionError(field+".item_count", choice.ItemCount, "must not be negative")
-	}
-	if err := validateRef(field+".ref", choice.Ref); err != nil {
+func validateImportChoice(field string, choice *capabilitypb.ImportChoiceFact, validateRef func(string, *capabilitypb.ImportChoiceRef) error) error {
+	if err := validateRef(field+".ref", choice.GetRef()); err != nil {
 		return err
 	}
 	return nil

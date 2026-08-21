@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Message } from "@app/server-api-contract";
 
 import type { JsonValue } from "./json";
 import { workflowIDSchema } from "./schemas/workflowID";
@@ -10,13 +11,13 @@ export type RpcErrorInfo = Readonly<{
   code: number;
   message: string;
   method: string;
-  data?: JsonValue | undefined;
+  data?: JsonValue | Message | undefined;
 }>;
 
 export class RpcError extends Error {
   readonly code: number;
   readonly method: string;
-  readonly data: JsonValue | undefined;
+  readonly data: JsonValue | Message | undefined;
 
   constructor(info: RpcErrorInfo) {
     super(info.message);
@@ -31,11 +32,10 @@ export function isTaskMissingError(error: unknown): boolean {
   return error instanceof RpcError && error.code === rpcErrorCodes.workflowTaskNotFound;
 }
 
-const projectMissingDataSchema = z.looseObject({ reason: z.literal("project_not_found") });
 export function isProjectMissingError(error: unknown): boolean {
   return (
-    error instanceof RpcError &&
-    (error.code === rpcErrorCodes.projectNotFound || projectMissingDataSchema.safeParse(error.data).success)
+    (error instanceof RpcError && error.code === rpcErrorCodes.projectNotFound) ||
+    decodeWorkflowLabelError(error)?.reason === "project_not_found"
   );
 }
 
@@ -508,14 +508,15 @@ export class CatalogContractError extends ContractError {
   }
 
   static sessionCategoryMismatch(
+    method: string,
     expectedCategory: "main" | "subagent",
     actualCategory: "main" | "subagent",
   ): CatalogContractError {
     return new CatalogContractError(
-      "session.page response category did not match the request.",
+      `${method} response category did not match the request.`,
       "session_category_mismatch",
       {
-        method: "session.page",
+        method,
         expectedCategory,
         actualCategory,
       },
@@ -524,8 +525,13 @@ export class CatalogContractError extends ContractError {
 }
 
 export class ProtocolMismatchError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(
+    readonly requiredProtocolVersion: string,
+    readonly clientProtocolVersion: string,
+  ) {
+    super(
+      `Kent server requires protocol version ${requiredProtocolVersion}, but this client uses ${clientProtocolVersion}. Update the Kent client and server to the same build.`,
+    );
     this.name = "ProtocolMismatchError";
   }
 }

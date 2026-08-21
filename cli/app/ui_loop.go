@@ -34,7 +34,7 @@ type uiLoopRequest struct {
 	initialInput                 string
 	sessionTitle                 *string
 	modelContractLocked          bool
-	configuredModelName          string
+	configuredModelName          *string
 	statusConfig                 uiStatusConfig
 	initialTransientStatus       *string
 	promptCatalog                apicontract.PromptCommandCatalogService

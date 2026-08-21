@@ -1,13 +1,22 @@
 import { z } from "zod";
 
+import { create, operationName, type DescMethod, type MessageShape } from "@app/server-api-contract";
+import { ConnectionService } from "@app/server-api-contract/gen/kent/api/connection/connection_pb";
+
+import {
+  binaryFrameBytes,
+  binaryFramePayload,
+  completeDescriptorResponse,
+  decodeDescriptorResponse,
+  encodeDescriptorCall,
+} from "./descriptorRpc";
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, TransportError } from "./errors";
 import { jsonValueSchema, type JsonValue } from "./json";
+import { protobufRpcError } from "./protobufRpc";
 import type { RpcEventHandler } from "./transport";
 
 export const protocolVersion = __KENT_PROTOCOL_VERSION__;
 export const jsonRpcVersion = "2.0";
-export const handshakeMethod = "protocol.handshake";
-export const protocolVersionMismatchErrorCode = -32025;
 
 export const responseSchema = z.object({
   jsonrpc: z.literal(jsonRpcVersion),
@@ -28,6 +37,11 @@ const notificationSchema = z.object({
   params: z.unknown().optional(),
 });
 const textFrameSchema = z.string();
+type SocketResponse<Result> = Readonly<{ kind: "unmatched" }> | Readonly<{ kind: "matched"; result: Result }>;
+type SocketRequestOptions = Readonly<{
+  timeoutMilliseconds: number | null;
+  signal?: AbortSignal;
+}>;
 
 export async function openSocket(
   endpoint: string,
@@ -40,6 +54,7 @@ export async function openSocket(
       return;
     }
     const socket = new WebSocket(endpoint);
+    socket.binaryType = "arraybuffer";
     const timeout = setTimeout(() => {
       fail(new TransportError(`Connection to ${endpoint} timed out.`));
     }, timeoutMilliseconds);
@@ -75,6 +90,32 @@ export async function openSocket(
   });
 }
 
+export async function sendSocketDescriptorRequest<Method extends DescMethod>(
+  socket: WebSocket,
+  method: Method,
+  request: MessageShape<Method["input"]>,
+  options: SocketRequestOptions,
+): Promise<MessageShape<Method["output"]>> {
+  const correlation = `${method.name}-${Date.now().toString()}`;
+  const { operation, bytes } = encodeDescriptorCall(method, request, correlation);
+  return sendSocketFrame(
+    socket,
+    { label: operation, frame: binaryFramePayload(bytes) },
+    (event): SocketResponse<MessageShape<Method["output"]>> => {
+      const frame = binaryFrameBytes(event.data);
+      if (frame === undefined) {
+        return { kind: "unmatched" };
+      }
+      const response = decodeDescriptorResponse(frame);
+      if (response.correlation !== correlation) {
+        return { kind: "unmatched" };
+      }
+      return { kind: "matched", result: completeDescriptorResponse(method, correlation, response) };
+    },
+    options,
+  );
+}
+
 export function parseFrame(data: string): unknown {
   try {
     return JSON.parse(data);
@@ -83,69 +124,85 @@ export function parseFrame(data: string): unknown {
   }
 }
 
-const handshakeResultSchema = z.object({
-  identity: z
-    .object({
-      persistence_root_id: z.string().optional(),
-    })
-    .optional(),
-});
-
-// assertHandshakeRoot enforces that a connected server serves the persistence
-// root the GUI loaded its configuration from. expectedRootId is empty for the
-// default root (validation skipped); otherwise the server's reported
-// identity.persistence_root_id must match exactly. A server that reports no id
-// (older build) is rejected when an id is required, mirroring the Go client.
-export function assertHandshakeRoot(result: unknown, expectedRootId: string): void {
-  if (expectedRootId.length === 0) {
-    return;
-  }
-  const parsed = handshakeResultSchema.safeParse(result);
-  const reported = parsed.success ? (parsed.data.identity?.persistence_root_id ?? "") : "";
-  if (reported !== expectedRootId) {
-    throw new ServerRootMismatchError(
-      "The Kent server on this endpoint serves a different persistence root than the one this app is configured for. Start a server for the selected root (kent serve --persistence-root <root>) or check KENT_PERSISTENCE_ROOT.",
-    );
-  }
-}
-
-export async function handshakeSubscription(
+export async function setupSocket(
   socket: WebSocket,
-  timeoutMilliseconds: number,
-  expectedRootId: string,
-  signal?: AbortSignal,
+  options: Readonly<{
+    timeoutMilliseconds: number;
+    expectedRootId: string;
+    signal?: AbortSignal;
+    sessionID?: string;
+  }>,
 ): Promise<void> {
-  const options = signal === undefined ? { timeoutMilliseconds } : { timeoutMilliseconds, signal };
-  const result = await sendSocketRequest(
+  const requestOptions =
+    options.signal === undefined
+      ? { timeoutMilliseconds: options.timeoutMilliseconds }
+      : { timeoutMilliseconds: options.timeoutMilliseconds, signal: options.signal };
+  const handshake = await sendSocketDescriptorRequest(
     socket,
-    handshakeMethod,
-    { protocol_version: protocolVersion },
-    options,
+    ConnectionService.method.handshake,
+    create(ConnectionService.method.handshake.input, { protocolVersion }),
+    requestOptions,
   );
-  assertHandshakeRoot(result, expectedRootId);
+  requireDescriptorSuccess(ConnectionService.method.handshake, handshake);
+  const identity = handshake.outcome.case === "success" ? handshake.outcome.value.identity : undefined;
+  assertReportedRoot(identity?.persistenceRootId, options.expectedRootId);
+  if (options.sessionID !== undefined) {
+    const attachment = await sendSocketDescriptorRequest(
+      socket,
+      ConnectionService.method.attachSession,
+      create(ConnectionService.method.attachSession.input, { sessionId: options.sessionID }),
+      requestOptions,
+    );
+    requireDescriptorSuccess(ConnectionService.method.attachSession, attachment);
+  }
 }
 
 export async function sendSocketRequest(
   socket: WebSocket,
   method: string,
   params: JsonValue,
-  options: Readonly<{
-    timeoutMilliseconds: number | null;
-    signal?: AbortSignal;
-  }>,
+  options: SocketRequestOptions,
 ): Promise<unknown> {
-  const { signal, timeoutMilliseconds } = options;
   const id = `${method}-${Date.now().toString()}`;
+  return sendSocketFrame(
+    socket,
+    { label: method, frame: JSON.stringify({ jsonrpc: jsonRpcVersion, id, method, params }) },
+    (event): SocketResponse<unknown> => {
+      const textFrame = textFrameSchema.safeParse(event.data);
+      if (!textFrame.success) {
+        return { kind: "unmatched" };
+      }
+      const response = responseSchema.safeParse(parseFrame(textFrame.data));
+      if (!response.success || response.data.id !== id) {
+        return { kind: "unmatched" };
+      }
+      if (response.data.error !== undefined) {
+        throw socketRequestError(method, response.data.error);
+      }
+      return { kind: "matched", result: response.data.result };
+    },
+    options,
+  );
+}
+
+async function sendSocketFrame<Result>(
+  socket: WebSocket,
+  request: Readonly<{ label: string; frame: string | ArrayBuffer }>,
+  decodeResponse: (event: MessageEvent<unknown>) => SocketResponse<Result>,
+  options: SocketRequestOptions,
+): Promise<Result> {
+  const { frame, label } = request;
+  const { signal, timeoutMilliseconds } = options;
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
-      reject(new TransportError(`${method} request was canceled.`));
+      reject(new TransportError(`${label} request was canceled.`));
       return;
     }
     const timeout =
       timeoutMilliseconds === null
         ? null
         : setTimeout(() => {
-            fail(new TransportError(`${method} request timed out.`));
+            fail(new TransportError(`${label} request timed out.`));
           }, timeoutMilliseconds);
     const cleanup = () => {
       if (timeout !== null) {
@@ -161,38 +218,34 @@ export async function sendSocketRequest(
       reject(cause);
     };
     const listener = (event: MessageEvent<unknown>) => {
-      const textFrame = textFrameSchema.safeParse(event.data);
-      if (!textFrame.success) {
-        return;
+      try {
+        const response = decodeResponse(event);
+        if (response.kind === "unmatched") {
+          return;
+        }
+        cleanup();
+        resolve(response.result);
+      } catch (cause) {
+        fail(cause instanceof Error ? cause : new TransportError(`${label} response decoding failed.`));
       }
-      const response = responseSchema.safeParse(parseFrame(textFrame.data));
-      if (!response.success || response.data.id !== id) {
-        return;
-      }
-      cleanup();
-      if (response.data.error !== undefined) {
-        reject(socketRequestError(method, response.data.error));
-        return;
-      }
-      resolve(response.data.result);
     };
     const close = () => {
-      fail(new TransportError(`${method} request closed before response.`));
+      fail(new TransportError(`${label} request closed before response.`));
     };
     const error = () => {
-      fail(new TransportError(`${method} request failed before response.`));
+      fail(new TransportError(`${label} request failed before response.`));
     };
     const abort = () => {
-      fail(new TransportError(`${method} request was canceled.`));
+      fail(new TransportError(`${label} request was canceled.`));
     };
     socket.addEventListener("message", listener);
     socket.addEventListener("close", close, { once: true });
     socket.addEventListener("error", error, { once: true });
     signal?.addEventListener("abort", abort, { once: true });
     try {
-      socket.send(JSON.stringify({ jsonrpc: jsonRpcVersion, id, method, params }));
+      socket.send(frame);
     } catch (cause) {
-      fail(cause instanceof Error ? cause : new TransportError(`${method} request failed to send.`));
+      fail(cause instanceof Error ? cause : new TransportError(`${label} request failed to send.`));
     }
   });
 }
@@ -201,10 +254,44 @@ export function socketRequestError(
   method: string,
   error: Readonly<{ code: number; message: string; data?: JsonValue | undefined }>,
 ): Error {
-  if (method === handshakeMethod && error.code === protocolVersionMismatchErrorCode) {
-    return new ProtocolMismatchError(error.message);
-  }
   return new RpcError({ code: error.code, message: error.message, method, data: error.data });
+}
+
+function requireDescriptorSuccess(
+  method: typeof ConnectionService.method.handshake | typeof ConnectionService.method.attachSession,
+  result:
+    | MessageShape<typeof ConnectionService.method.handshake.output>
+    | MessageShape<typeof ConnectionService.method.attachSession.output>,
+): void {
+  switch (result.outcome.case) {
+    case "success":
+      return;
+    case "error":
+      if (
+        method === ConnectionService.method.handshake &&
+        result.outcome.value.code === "protocol_version_mismatch"
+      ) {
+        const detail = result.outcome.value.detail;
+        if (detail.case !== "protocolVersionMismatch") {
+          throw protobufRpcError(method, result.outcome.value);
+        }
+        throw new ProtocolMismatchError(detail.value.requiredProtocolVersion, protocolVersion);
+      }
+      throw protobufRpcError(method, result.outcome.value);
+    case undefined:
+      throw new TransportError(`${operationName(method)} returned no outcome.`);
+  }
+}
+
+function assertReportedRoot(reported: string | undefined, expectedRootId: string): void {
+  if (expectedRootId.length === 0) {
+    return;
+  }
+  if ((reported ?? "") !== expectedRootId) {
+    throw new ServerRootMismatchError(
+      "The Kent server on this endpoint serves a different persistence root than the one this app is configured for. Start a server for the selected root (kent serve --persistence-root <root>) or check KENT_PERSISTENCE_ROOT.",
+    );
+  }
 }
 
 export async function waitForSubscriptionEnd(socket: WebSocket, signal: AbortSignal): Promise<void> {

@@ -4,6 +4,7 @@ package kent.api.project;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
+import "kent/api/server/server.proto";
 import "kent/api/shared/foundation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/project;projectpb";
@@ -83,6 +84,12 @@ message SessionPageError {
         error_code: "internal_failure"
       }
     ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -102,7 +109,6 @@ service SessionCatalogService {
       scope_policy: SCOPE_POLICY_PROJECT_VIEW
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "session.page"
     };
   }
 }

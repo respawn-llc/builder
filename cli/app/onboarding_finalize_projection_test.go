@@ -9,42 +9,45 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/serverapi"
 	"core/shared/theme"
 	"core/shared/toolspec"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"google.golang.org/protobuf/proto"
 )
 
 type recordingOnboardingFinalizer struct {
-	requests []serverapi.OnboardingFinalizeRequest
-	response serverapi.OnboardingFinalizeResponse
+	requests []*onboardingpb.FinalizeRequest
+	response *onboardingpb.FinalizeSuccess
 	err      error
 }
 
-func (f *recordingOnboardingFinalizer) FinalizeOnboarding(_ context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+func (f *recordingOnboardingFinalizer) Finalize(_ context.Context, req *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
 	f.requests = append(f.requests, req)
 	return f.response, f.err
 }
 
 var _ apicontract.OnboardingFinalizeService = (*recordingOnboardingFinalizer)(nil)
 
-type onboardingCapabilityFactsClientFunc func(context.Context, serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error)
+type onboardingCapabilityFactsClientFunc func(context.Context, *capabilitypb.GetFactsRequest) (*capabilitypb.Facts, error)
 
-func (fn onboardingCapabilityFactsClientFunc) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
+func (fn onboardingCapabilityFactsClientFunc) GetFacts(ctx context.Context, req *capabilitypb.GetFactsRequest) (*capabilitypb.Facts, error) {
 	return fn(ctx, req)
 }
 
 var _ apicontract.CapabilityFactsService = onboardingCapabilityFactsClientFunc(nil)
 
 func TestOnboardingDefaultsFinalizeThroughServerAPI(t *testing.T) {
-	finalizer := &recordingOnboardingFinalizer{response: serverapi.OnboardingFinalizeResponse{
+	finalizer := &recordingOnboardingFinalizer{response: &onboardingpb.FinalizeSuccess{
 		Completed:    true,
 		SettingsPath: "/server/.kent/config.toml",
 	}}
 	state := newOnboardingFinalizeProjectionState(t, func(cfg *config.App) {
 		cfg.Settings.Theme = theme.Dark
-	}, serverapi.CapabilityFactsResponse{})
+	}, emptyOnboardingCapabilityFacts())
 	model := newOnboardingModel(newOnboardingFinalization(finalizer, context.Background()), state)
 
 	msg := model.finalizeCmd(true)()
@@ -59,10 +62,10 @@ func TestOnboardingDefaultsFinalizeThroughServerAPI(t *testing.T) {
 		t.Fatalf("finalize requests = %d, want 1", len(finalizer.requests))
 	}
 	request := finalizer.requests[0]
-	if request.Theme == nil || *request.Theme != serverapi.OnboardingThemeDark {
+	if request.Theme == nil || *request.Theme != onboardingpb.Theme_THEME_DARK {
 		t.Fatalf("theme = %+v, want dark", request.Theme)
 	}
-	if request.Model != nil || request.CommandsImport == nil || request.CommandsImport.Mode != serverapi.OnboardingImportModeNone {
+	if request.Model != nil || request.CommandsImport == nil || request.CommandsImport.Mode != onboardingpb.ImportMode_IMPORT_MODE_NONE {
 		t.Fatalf("unexpected defaults request: %+v", request)
 	}
 	if !done.result.Completed || !done.result.CreatedDefaultConfig || done.result.SettingsPath != "/server/.kent/config.toml" {
@@ -77,8 +80,8 @@ func TestRunOnboardingFlowHonorsPreSubmissionParentCancellation(t *testing.T) {
 	_, err := runOnboardingFlow(
 		ctx,
 		config.App{},
-		onboardingCapabilityFactsClientFunc(func(context.Context, serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-			return serverapi.CapabilityFactsResponse{}, nil
+		onboardingCapabilityFactsClientFunc(func(context.Context, *capabilitypb.GetFactsRequest) (*capabilitypb.Facts, error) {
+			return testOnboardingCapabilityFacts(), nil
 		}),
 		finalizer,
 	)
@@ -91,7 +94,7 @@ func TestRunOnboardingFlowHonorsPreSubmissionParentCancellation(t *testing.T) {
 }
 
 func TestOnboardingFinalizationIgnoresEscapeAfterSubmission(t *testing.T) {
-	state := newOnboardingFinalizeProjectionState(t, nil, serverapi.CapabilityFactsResponse{})
+	state := newOnboardingFinalizeProjectionState(t, nil, emptyOnboardingCapabilityFacts())
 	model := newOnboardingModel(nil, state)
 	model.finalizing = true
 
@@ -107,9 +110,9 @@ func TestOnboardingFinalizationIgnoresEscapeAfterSubmission(t *testing.T) {
 
 type blockingOnboardingFinalizer struct{}
 
-func (blockingOnboardingFinalizer) FinalizeOnboarding(ctx context.Context, _ serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+func (blockingOnboardingFinalizer) Finalize(ctx context.Context, _ *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
 	<-ctx.Done()
-	return serverapi.OnboardingFinalizeResponse{}, ctx.Err()
+	return nil, ctx.Err()
 }
 
 func TestOnboardingFinalizationTimeoutIsTerminalAndIndeterminate(t *testing.T) {
@@ -117,7 +120,7 @@ func TestOnboardingFinalizationTimeoutIsTerminalAndIndeterminate(t *testing.T) {
 	finalization.timeout = time.Millisecond
 	state := newOnboardingFinalizeProjectionState(t, func(cfg *config.App) {
 		cfg.Settings.Theme = theme.Light
-	}, serverapi.CapabilityFactsResponse{})
+	}, emptyOnboardingCapabilityFacts())
 	model := newOnboardingModel(finalization, state)
 
 	msg := model.finalizeCmd(true)()
@@ -139,13 +142,13 @@ func TestOnboardingFinalizationJoinsSubmittedResultAfterParentCancellation(t *te
 	parent, cancelParent := context.WithCancel(context.Background())
 	started := make(chan struct{})
 	release := make(chan struct{})
-	finalizer := onboardingFinalizeClientFunc(func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	finalizer := onboardingFinalizeClientFunc(func(context.Context, *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
 		close(started)
 		<-release
-		return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/server/config.toml"}, nil
+		return &onboardingpb.FinalizeSuccess{Completed: true, SettingsPath: "/server/config.toml"}, nil
 	})
 	finalization := newOnboardingFinalization(finalizer, parent)
-	request := serverapi.OnboardingFinalizeRequest{}
+	request := &onboardingpb.FinalizeRequest{}
 	if err := finalization.start(request, true, theme.Dark); err != nil {
 		t.Fatalf("start finalization: %v", err)
 	}
@@ -189,7 +192,7 @@ func TestOnboardingTerminalActivationFailureKeepsCommittedOutcomeContext(t *test
 	)
 	state := newOnboardingFinalizeProjectionState(t, func(cfg *config.App) {
 		cfg.Settings.Theme = theme.Light
-	}, serverapi.CapabilityFactsResponse{})
+	}, emptyOnboardingCapabilityFacts())
 	model := newOnboardingModel(finalization, state)
 
 	done := model.finalizeCmd(true)().(onboardingFinalizeDoneMsg)
@@ -215,6 +218,15 @@ func TestOnboardingTerminalActivationFailureKeepsCommittedOutcomeContext(t *test
 
 func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 	modelID := "gpt-5"
+	contextWindow := uint32(272_000)
+	facts := emptyOnboardingCapabilityFacts()
+	facts.Models.KnownModels = []*capabilitypb.ModelFact{{
+		ModelId:             &modelID,
+		Known:               true,
+		ContextWindowTokens: &contextWindow,
+		LargeWindow:         &capabilitypb.ModelLargeWindowFact{Tokens: 1_000_000},
+		Verbosity:           &capabilitypb.ModelVerbosityFact{Source: "test"},
+	}}
 	state := newOnboardingFinalizeProjectionState(t, func(cfg *config.App) {
 		cfg.Settings.Theme = theme.Light
 		cfg.Settings.Model = modelID
@@ -238,42 +250,35 @@ func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 		cfg.Source.Sources["thinking_level"] = "file"
 		cfg.Source.Sources["reviewer.model"] = "file"
 		cfg.Source.Sources["reviewer.thinking_level"] = "file"
-	}, serverapi.CapabilityFactsResponse{Models: serverapi.ModelCapabilityFacts{
-		KnownModels: []serverapi.ModelCapabilityFact{{
-			ModelID:             &modelID,
-			Known:               true,
-			ContextWindowTokens: ptr(272_000),
-			LargeWindow:         &serverapi.ModelLargeWindowFact{Tokens: 1_000_000},
-		}},
-	}})
+	}, facts)
 
 	request, err := onboardingFinalizeRequest(state, false)
 	if err != nil {
 		t.Fatalf("project request: %v", err)
 	}
-	if request.Model == nil || request.Model.Kind != serverapi.OnboardingModelKnown {
+	if request.Model == nil || request.Model.Kind != onboardingpb.ModelKind_MODEL_KIND_KNOWN {
 		t.Fatalf("model = %+v", request.Model)
 	}
-	if request.MainProvider == nil || request.MainProvider.ProviderOverride == nil || *request.MainProvider.ProviderOverride != "openai" || request.MainProvider.OpenAIBaseURL == nil || *request.MainProvider.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
+	if request.MainProvider == nil || request.MainProvider.ProviderOverride == nil || *request.MainProvider.ProviderOverride != "openai" || request.MainProvider.OpenaiBaseUrl == nil || *request.MainProvider.OpenaiBaseUrl != "http://127.0.0.1:8080/v1" {
 		t.Fatalf("main provider = %+v", request.MainProvider)
 	}
-	toolOverrides := map[toolspec.ID]bool{}
+	toolOverrides := map[onboardingpb.ToolID]bool{}
 	for _, override := range request.ToolOverrides {
-		toolOverrides[override.ID] = override.Enabled
+		toolOverrides[override.Id] = override.Enabled
 	}
-	if len(toolOverrides) != 2 || !toolOverrides[toolspec.ToolEdit] || toolOverrides[toolspec.ToolPatch] {
+	if len(toolOverrides) != 2 || !toolOverrides[onboardingpb.ToolID_TOOL_ID_EDIT] || toolOverrides[onboardingpb.ToolID_TOOL_ID_PATCH] {
 		t.Fatalf("tool overrides = %+v", request.ToolOverrides)
 	}
 	if request.ModelTimeoutSeconds == nil || *request.ModelTimeoutSeconds != 123 {
 		t.Fatalf("model timeout = %+v", request.ModelTimeoutSeconds)
 	}
-	if request.ContextWindow == nil || request.ContextWindow.Kind != serverapi.OnboardingContextWindowLarge {
+	if request.ContextWindow == nil || request.ContextWindow.Kind != onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_LARGE {
 		t.Fatalf("context window = %+v", request.ContextWindow)
 	}
-	if request.Supervisor == nil || request.Supervisor.Model == nil || request.Supervisor.Model.Kind != serverapi.OnboardingModelCustom {
+	if request.Supervisor == nil || request.Supervisor.Model == nil || request.Supervisor.Model.Kind != onboardingpb.ModelKind_MODEL_KIND_CUSTOM {
 		t.Fatalf("supervisor = %+v", request.Supervisor)
 	}
-	if request.CommandsImport == nil || request.CommandsImport.Mode != serverapi.OnboardingImportModeNone {
+	if request.CommandsImport == nil || request.CommandsImport.Mode != onboardingpb.ImportMode_IMPORT_MODE_NONE {
 		t.Fatalf("commands import = %+v", request.CommandsImport)
 	}
 }
@@ -282,11 +287,11 @@ func TestOnboardingFinalizeProjectionPreservesPrimaryThinkingVariants(t *testing
 	tests := []struct {
 		name      string
 		configure func(*config.App)
-		want      serverapi.OnboardingThinkingChoice
+		want      *onboardingpb.ThinkingChoice
 	}{
 		{
 			name: "default",
-			want: serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDefault},
+			want: &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DEFAULT},
 		},
 		{
 			name: "explicit-supported-level",
@@ -294,7 +299,7 @@ func TestOnboardingFinalizeProjectionPreservesPrimaryThinkingVariants(t *testing
 				cfg.Settings.ThinkingLevel = "high"
 				cfg.Source.Sources["thinking_level"] = "file"
 			},
-			want: serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: "high"},
+			want: &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_LEVEL, Level: ptrString("high")},
 		},
 		{
 			name: "custom",
@@ -302,7 +307,7 @@ func TestOnboardingFinalizeProjectionPreservesPrimaryThinkingVariants(t *testing
 				cfg.Settings.ThinkingLevel = "ultra"
 				cfg.Source.Sources["thinking_level"] = "file"
 			},
-			want: serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingCustom, Value: "ultra"},
+			want: &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_CUSTOM, Value: ptrString("ultra")},
 		},
 		{
 			name: "disabled",
@@ -310,7 +315,7 @@ func TestOnboardingFinalizeProjectionPreservesPrimaryThinkingVariants(t *testing
 				cfg.Settings.ThinkingLevel = ""
 				cfg.Source.Sources["thinking_level"] = "file"
 			},
-			want: serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDisabled},
+			want: &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DISABLED},
 		},
 	}
 	for _, tt := range tests {
@@ -320,7 +325,7 @@ func TestOnboardingFinalizeProjectionPreservesPrimaryThinkingVariants(t *testing
 			if err != nil {
 				t.Fatalf("project request: %v", err)
 			}
-			if request.Thinking == nil || !reflect.DeepEqual(*request.Thinking, tt.want) {
+			if !proto.Equal(request.Thinking, tt.want) {
 				t.Fatalf("thinking = %+v, want %+v", request.Thinking, tt.want)
 			}
 		})
@@ -353,7 +358,7 @@ func TestOnboardingFinalizeProjectionPreservesReviewerInheritanceOverridesAndOff
 		if request.Supervisor == nil || request.Supervisor.Model == nil || request.Supervisor.Thinking == nil {
 			t.Fatalf("explicit same-valued supervisor projection = %+v", request.Supervisor)
 		}
-		if request.Supervisor.Thinking.Kind != serverapi.OnboardingThinkingLevel {
+		if request.Supervisor.Thinking.Kind != onboardingpb.ThinkingKind_THINKING_KIND_LEVEL {
 			t.Fatalf("reviewer thinking = %+v, want explicit level", request.Supervisor.Thinking)
 		}
 	})
@@ -368,7 +373,7 @@ func TestOnboardingFinalizeProjectionPreservesReviewerInheritanceOverridesAndOff
 			t.Fatalf("project request: %v", err)
 		}
 		if request.Supervisor == nil || request.Supervisor.Thinking == nil ||
-			request.Supervisor.Thinking.Kind != serverapi.OnboardingThinkingDisabled {
+			request.Supervisor.Thinking.Kind != onboardingpb.ThinkingKind_THINKING_KIND_DISABLED {
 			t.Fatalf("disabled reviewer projection = %+v", request.Supervisor)
 		}
 	})
@@ -385,7 +390,7 @@ func TestOnboardingFinalizeProjectionPreservesReviewerInheritanceOverridesAndOff
 		if err != nil {
 			t.Fatalf("project request: %v", err)
 		}
-		if request.Supervisor == nil || request.Supervisor.Frequency != serverapi.OnboardingSupervisorOff ||
+		if request.Supervisor == nil || request.Supervisor.Frequency != onboardingpb.SupervisorFrequency_SUPERVISOR_FREQUENCY_OFF ||
 			request.Supervisor.Model != nil || request.Supervisor.Thinking != nil {
 			t.Fatalf("off supervisor projection = %+v", request.Supervisor)
 		}
@@ -402,9 +407,9 @@ func TestOnboardingFinalizeProjectionPreservesModelContextAndVerbosityVariants(t
 	if err != nil {
 		t.Fatalf("project custom request: %v", err)
 	}
-	if customRequest.Model == nil || customRequest.Model.Kind != serverapi.OnboardingModelCustom ||
-		customRequest.ContextWindow == nil || customRequest.ContextWindow.Kind != serverapi.OnboardingContextWindowCustom ||
-		customRequest.ContextWindow.Tokens != 123_000 || customRequest.Verbosity != nil {
+	if customRequest.Model == nil || customRequest.Model.Kind != onboardingpb.ModelKind_MODEL_KIND_CUSTOM ||
+		customRequest.ContextWindow == nil || customRequest.ContextWindow.Kind != onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_CUSTOM ||
+		customRequest.ContextWindow.GetTokens() != 123_000 || customRequest.Verbosity != nil {
 		t.Fatalf("custom model/context/verbosity projection = %+v", customRequest)
 	}
 
@@ -415,8 +420,8 @@ func TestOnboardingFinalizeProjectionPreservesModelContextAndVerbosityVariants(t
 	if err != nil {
 		t.Fatalf("project known request: %v", err)
 	}
-	if knownRequest.Model == nil || knownRequest.Model.Kind != serverapi.OnboardingModelKnown ||
-		knownRequest.ContextWindow == nil || knownRequest.ContextWindow.Kind != serverapi.OnboardingContextWindowDefault ||
+	if knownRequest.Model == nil || knownRequest.Model.Kind != onboardingpb.ModelKind_MODEL_KIND_KNOWN ||
+		knownRequest.ContextWindow == nil || knownRequest.ContextWindow.Kind != onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_DEFAULT ||
 		knownRequest.Verbosity == nil {
 		t.Fatalf("known model/default-context/present-verbosity projection = %+v", knownRequest)
 	}
@@ -426,16 +431,15 @@ func TestOnboardingFinalizeProjectionPreservesImportAndDisabledSkills(t *testing
 	root := t.TempDir()
 	choice := skillSymlinkChoiceFact("codex", root, 2)
 	facts := testOnboardingCapabilityFacts()
-	facts.Imports = serverapi.ImportCapabilityFacts{
-		Skills: serverapi.ImportItemGroupFact{Choices: []serverapi.ImportChoiceFact{choice}},
-		SkillEnablement: []serverapi.SkillEnablementProjectionFact{{
-			ChoiceRef: choice.Ref,
-			Candidates: []serverapi.ImportItemFact{
-				skillItemFact("codex", root, root+"/one", "one", "one", nil, true),
-				skillItemFact("codex", root, root+"/two", "two", "two", nil, true),
-			},
-		}},
-	}
+	facts.Imports = emptyOnboardingImportFacts()
+	facts.Imports.Skills.Choices = []*capabilitypb.ImportChoiceFact{choice}
+	facts.Imports.SkillEnablement = []*capabilitypb.SkillEnablementProjectionFact{{
+		ChoiceRef: choice.Ref,
+		Candidates: []*capabilitypb.ImportItemFact{
+			skillItemFact("codex", root, root+"/one", "one", "one", nil, true),
+			skillItemFact("codex", root, root+"/two", "two", "two", nil, true),
+		},
+	}}
 	state := newOnboardingFinalizeProjectionState(t, nil, facts)
 	importStep := findWorkflowStep(t, &state, onboardingStepSkillsImport)
 	importOptionID := ""
@@ -458,7 +462,7 @@ func TestOnboardingFinalizeProjectionPreservesImportAndDisabledSkills(t *testing
 	if err != nil {
 		t.Fatalf("project request: %v", err)
 	}
-	if request.SkillsImport == nil || request.SkillsImport.Mode != serverapi.OnboardingImportModeSymlinkSource {
+	if request.SkillsImport == nil || request.SkillsImport.Mode != onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE {
 		t.Fatalf("skills import = %+v", request.SkillsImport)
 	}
 	if !reflect.DeepEqual(request.DisabledSkillNames, []string{"two"}) {
@@ -487,7 +491,7 @@ func TestOnboardingRecoverableRetrySubmitsUnchangedRequest(t *testing.T) {
 		t.Fatal("typed finalization failure must be rendered in the wizard")
 	}
 	finalizer.err = nil
-	finalizer.response = serverapi.OnboardingFinalizeResponse{Completed: true}
+	finalizer.response = &onboardingpb.FinalizeSuccess{Completed: true}
 	second := model.finalizeCmd(false)().(onboardingFinalizeDoneMsg)
 	if second.err != nil {
 		t.Fatalf("retry finalization: %v", second.err)
@@ -499,7 +503,7 @@ func TestOnboardingRecoverableRetrySubmitsUnchangedRequest(t *testing.T) {
 
 func ptr(value int) *int { return &value }
 
-func newOnboardingFinalizeProjectionState(t *testing.T, configure func(*config.App), facts serverapi.CapabilityFactsResponse) onboardingFlowState {
+func newOnboardingFinalizeProjectionState(t *testing.T, configure func(*config.App), facts *capabilitypb.Facts) onboardingFlowState {
 	t.Helper()
 	settings := config.DefaultOnboardingSettings()
 	cfg := config.App{
@@ -521,8 +525,8 @@ func newOnboardingFinalizeProjectionState(t *testing.T, configure func(*config.A
 	return state
 }
 
-type onboardingFinalizeClientFunc func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+type onboardingFinalizeClientFunc func(context.Context, *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error)
 
-func (fn onboardingFinalizeClientFunc) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+func (fn onboardingFinalizeClientFunc) Finalize(ctx context.Context, req *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
 	return fn(ctx, req)
 }

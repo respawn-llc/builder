@@ -10,7 +10,7 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/workflowstore"
-	"core/shared/serverapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/sessioncontract"
 )
 
@@ -24,9 +24,9 @@ func TestMetadataServiceSortsProjectHomeByLatestTaskActivityOrEdit(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewMetadataService: %v", err)
 	}
-	newer, err := svc.CreateProject(ctx, serverapi.ProjectCreateRequest{
+	newer, err := svc.CreateProject(ctx, &projectpb.CreateProjectRequest{
 		DisplayName:   "Newer edit",
-		ProjectKey:    "NEW",
+		ProjectKey:    stringPointer("NEW"),
 		WorkspaceRoot: t.TempDir(),
 	})
 	if err != nil {
@@ -50,23 +50,23 @@ func TestMetadataServiceSortsProjectHomeByLatestTaskActivityOrEdit(t *testing.T)
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	home, err := svc.ListProjectHome(ctx, serverapi.ProjectHomeListRequest{PageSize: 2})
+	home, err := svc.ListProjectHome(ctx, projectHomeListRequest(2))
 	if err != nil {
 		t.Fatalf("ListProjectHome: %v", err)
 	}
-	if got := projectHomeIDs(home.Projects); len(got) != 2 || got[0] != older.ProjectID || got[1] != newer.Binding.ProjectID {
-		t.Fatalf("project order after task activity = %+v, want [%s %s]", got, older.ProjectID, newer.Binding.ProjectID)
+	if got := projectHomeIDs(home.Projects); len(got) != 2 || got[0] != older.ProjectID || got[1] != newer.Binding.ProjectId {
+		t.Fatalf("project order after task activity = %+v, want [%s %s]", got, older.ProjectID, newer.Binding.ProjectId)
 	}
 
-	if _, err := store.DB().ExecContext(ctx, `UPDATE projects SET updated_at_unix_ms = ? WHERE id = ?`, taskActivityUnixMs+1, newer.Binding.ProjectID); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `UPDATE projects SET updated_at_unix_ms = ? WHERE id = ?`, taskActivityUnixMs+1, newer.Binding.ProjectId); err != nil {
 		t.Fatalf("touch newer project edit time: %v", err)
 	}
-	home, err = svc.ListProjectHome(ctx, serverapi.ProjectHomeListRequest{PageSize: 2})
+	home, err = svc.ListProjectHome(ctx, projectHomeListRequest(2))
 	if err != nil {
 		t.Fatalf("ListProjectHome after edit: %v", err)
 	}
-	if got := projectHomeIDs(home.Projects); len(got) != 2 || got[0] != newer.Binding.ProjectID || got[1] != older.ProjectID {
-		t.Fatalf("project order after edit = %+v, want [%s %s]", got, newer.Binding.ProjectID, older.ProjectID)
+	if got := projectHomeIDs(home.Projects); len(got) != 2 || got[0] != newer.Binding.ProjectId || got[1] != older.ProjectID {
+		t.Fatalf("project order after edit = %+v, want [%s %s]", got, newer.Binding.ProjectId, older.ProjectID)
 	}
 
 	projectSessionsDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), older.ProjectID, "sessions")
@@ -81,14 +81,14 @@ func TestMetadataServiceSortsProjectHomeByLatestTaskActivityOrEdit(t *testing.T)
 	if _, err := store.DB().ExecContext(ctx, `UPDATE sessions SET updated_at_unix_ms = ? WHERE id = ?`, sessionActivityUnixMs, sess.Meta().SessionID); err != nil {
 		t.Fatalf("touch session activity: %v", err)
 	}
-	home, err = svc.ListProjectHome(ctx, serverapi.ProjectHomeListRequest{PageSize: 2})
+	home, err = svc.ListProjectHome(ctx, projectHomeListRequest(2))
 	if err != nil {
 		t.Fatalf("ListProjectHome after session activity: %v", err)
 	}
-	if got := projectHomeIDs(home.Projects); len(got) != 2 || got[0] != older.ProjectID || got[1] != newer.Binding.ProjectID {
-		t.Fatalf("project order after session activity = %+v, want [%s %s]", got, older.ProjectID, newer.Binding.ProjectID)
+	if got := projectHomeIDs(home.Projects); len(got) != 2 || got[0] != older.ProjectID || got[1] != newer.Binding.ProjectId {
+		t.Fatalf("project order after session activity = %+v, want [%s %s]", got, older.ProjectID, newer.Binding.ProjectId)
 	}
-	if got := home.Projects[0].UpdatedAtUnixMs; got != sessionActivityUnixMs {
+	if got := home.Projects[0].UpdatedAt.AsTime().UnixMilli(); got != sessionActivityUnixMs {
 		t.Fatalf("latest session activity timestamp = %d, want %d", got, sessionActivityUnixMs)
 	}
 }
@@ -113,13 +113,13 @@ func TestMetadataServiceSortsProjectHomeByTaskChildActivitySources(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			fixture := newProjectHomeActivityFixture(t, ctx)
-			assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.newer.Binding.ProjectID, fixture.older.ProjectID})
+			assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.newer.Binding.ProjectId, fixture.older.ProjectID})
 
 			tc.touch(t, ctx, fixture)
 
-			home := assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.older.ProjectID, fixture.newer.Binding.ProjectID})
-			if home.Projects[0].UpdatedAtUnixMs != fixture.highUnixMs {
-				t.Fatalf("latest activity timestamp = %d, want %d", home.Projects[0].UpdatedAtUnixMs, fixture.highUnixMs)
+			home := assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.older.ProjectID, fixture.newer.Binding.ProjectId})
+			if home.Projects[0].UpdatedAt.AsTime().UnixMilli() != fixture.highUnixMs {
+				t.Fatalf("latest activity timestamp = %d, want %d", home.Projects[0].UpdatedAt.AsTime().UnixMilli(), fixture.highUnixMs)
 			}
 		})
 	}
@@ -128,7 +128,7 @@ func TestMetadataServiceSortsProjectHomeByTaskChildActivitySources(t *testing.T)
 func TestProjectHomeOrderingAdvancesOnCurrentNodeMutation(t *testing.T) {
 	ctx := context.Background()
 	fixture := newProjectHomeActivityFixture(t, ctx)
-	assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.newer.Binding.ProjectID, fixture.older.ProjectID})
+	assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.newer.Binding.ProjectId, fixture.older.ProjectID})
 
 	fixture.setNow(fixture.highUnixMs)
 	if _, err := fixture.store.DB().ExecContext(ctx,
@@ -138,9 +138,9 @@ func TestProjectHomeOrderingAdvancesOnCurrentNodeMutation(t *testing.T) {
 		t.Fatalf("touch task activity: %v", err)
 	}
 
-	home := assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.older.ProjectID, fixture.newer.Binding.ProjectID})
-	if home.Projects[0].UpdatedAtUnixMs != fixture.highUnixMs {
-		t.Fatalf("Current Node mutation activity timestamp = %d, want %d", home.Projects[0].UpdatedAtUnixMs, fixture.highUnixMs)
+	home := assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.older.ProjectID, fixture.newer.Binding.ProjectId})
+	if home.Projects[0].UpdatedAt.AsTime().UnixMilli() != fixture.highUnixMs {
+		t.Fatalf("Current Node mutation activity timestamp = %d, want %d", home.Projects[0].UpdatedAt.AsTime().UnixMilli(), fixture.highUnixMs)
 	}
 }
 
@@ -148,7 +148,7 @@ type projectHomeActivityFixture struct {
 	store         *metadata.Store
 	svc           *Service
 	older         metadata.Binding
-	newer         serverapi.ProjectCreateResponse
+	newer         *projectpb.CreateProjectSuccess
 	task          workflowstore.TaskRecord
 	workflowStore *workflowstore.Store
 	setNow        func(int64)
@@ -162,9 +162,9 @@ func newProjectHomeActivityFixture(t *testing.T, ctx context.Context) projectHom
 	if err != nil {
 		t.Fatalf("NewMetadataService: %v", err)
 	}
-	newer, err := svc.CreateProject(ctx, serverapi.ProjectCreateRequest{
+	newer, err := svc.CreateProject(ctx, &projectpb.CreateProjectRequest{
 		DisplayName:   "Newer project",
-		ProjectKey:    "NEW",
+		ProjectKey:    stringPointer("NEW"),
 		WorkspaceRoot: t.TempDir(),
 	})
 	if err != nil {
@@ -200,9 +200,9 @@ func newProjectHomeActivityFixture(t *testing.T, ctx context.Context) projectHom
 	}
 }
 
-func assertProjectHomeOrder(t testing.TB, ctx context.Context, svc *Service, want []string) serverapi.ProjectHomeListResponse {
+func assertProjectHomeOrder(t testing.TB, ctx context.Context, svc *Service, want []string) *projectpb.ProjectHomeListSuccess {
 	t.Helper()
-	home, err := svc.ListProjectHome(ctx, serverapi.ProjectHomeListRequest{PageSize: len(want)})
+	home, err := svc.ListProjectHome(ctx, projectHomeListRequest(len(want)))
 	if err != nil {
 		t.Fatalf("ListProjectHome: %v", err)
 	}
@@ -218,10 +218,19 @@ func assertProjectHomeOrder(t testing.TB, ctx context.Context, svc *Service, wan
 	return home
 }
 
-func projectHomeIDs(projects []serverapi.ProjectHomeSummary) []string {
+func projectHomeIDs(projects []*projectpb.ProjectHomeSummary) []string {
 	out := make([]string, 0, len(projects))
 	for _, project := range projects {
-		out = append(out, project.ProjectID)
+		out = append(out, project.ProjectId)
 	}
 	return out
+}
+
+func projectHomeListRequest(pageSize int) *projectpb.ProjectHomeListRequest {
+	value := int32(pageSize)
+	return &projectpb.ProjectHomeListRequest{PageSize: &value}
+}
+
+func stringPointer(value string) *string {
+	return &value
 }

@@ -8,10 +8,10 @@ import (
 func runPromptStringPtr(value string) *string { return &value }
 
 func TestRunPromptOverridesAgentRoleJSONRoundTrip(t *testing.T) {
-	req := SessionPlanRequest{
+	req := RunPromptRequest{
 		ClientRequestID: "req-1",
-		Mode:            SessionLaunchModeHeadless,
 		Intent:          CreateNewSessionLaunchIntent(IndependentSessionCreateOrigin()),
+		Prompt:          "hello",
 		Overrides: RunPromptOverrides{
 			AgentRole: runPromptStringPtr("default"),
 		},
@@ -20,7 +20,7 @@ func TestRunPromptOverridesAgentRoleJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	var got SessionPlanRequest
+	var got RunPromptRequest
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -76,8 +76,8 @@ func TestRunPromptRequestJSONRequiresTypedIntentWhenLegacySelectorIsMixed(t *tes
 }
 
 func TestRunPromptOverridesAgentRoleContract(t *testing.T) {
-	var got SessionPlanRequest
-	if err := json.Unmarshal([]byte(`{"client_request_id":"req-1","mode":"headless","intent":{"kind":"create_new","origin":{"kind":"independent"}},"overrides":{"agent_role":"worker"}}`), &got); err != nil {
+	var got RunPromptRequest
+	if err := json.Unmarshal([]byte(`{"client_request_id":"req-1","intent":{"kind":"create_new","origin":{"kind":"independent"}},"prompt":"hello","overrides":{"agent_role":"worker"}}`), &got); err != nil {
 		t.Fatalf("Unmarshal request: %v", err)
 	}
 	if got.Overrides.AgentRole == nil || *got.Overrides.AgentRole != "worker" {

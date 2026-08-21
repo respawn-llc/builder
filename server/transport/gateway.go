@@ -19,6 +19,8 @@ import (
 	"core/shared/invariant"
 	"core/shared/jsoncontract"
 	"core/shared/llmerrors"
+	"core/shared/protoapi"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
@@ -38,10 +40,10 @@ var ErrGatewayDependenciesRequired = errors.New("gateway dependencies are requir
 const canceledByClientMessage = "request canceled by client"
 
 type Gateway struct {
-	deps                              GatewayDependencies
-	identity                          protocol.ServerIdentity
-	onboardingFinalizeRequestContract serverjsoncontract.OnboardingFinalizeRequest
-	sessionExecutionRequestContract   serverjsoncontract.SessionExecutionEnvironmentRequest
+	deps                            GatewayDependencies
+	identity                        protocol.ServerIdentity
+	registration                    gatewayRegistration
+	sessionExecutionRequestContract serverjsoncontract.SessionExecutionEnvironmentRequest
 }
 
 type GatewayDependencies interface {
@@ -130,8 +132,6 @@ type GatewayWorktreeDependencies interface {
 	WorktreeClient() apicontract.WorktreeService
 }
 
-var gatewaySubscriptionMethods = protocolSubscriptionMethodSet()
-
 type gatewayUnaryHandler func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response
 
 var gatewayUnaryHandlers = routeHandlersForKind(apicontract.KindUnary, gatewayUnaryHandlerEntries)
@@ -157,16 +157,13 @@ type gatewayRequestSchedule struct {
 	progressRoute apicontract.Route
 }
 
-var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
-
-func protocolSubscriptionMethodSet() map[string]struct{} {
-	methods := apicontract.SubscriptionMethods()
-	set := make(map[string]struct{}, len(methods))
-	for _, method := range methods {
-		set[strings.TrimSpace(method)] = struct{}{}
-	}
-	return set
+type gatewayEstablishedRequest struct {
+	legacy  *protocol.Request
+	binary  *gatewayBinaryRequest
+	failure *sharedpb.TransportFailure
 }
+
+var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
 
 type connectionState struct {
 	handshakeDone         bool
@@ -210,13 +207,15 @@ func routeHandlersForKind[T any](kind apicontract.Kind, entries map[string]T) ma
 	return handlers
 }
 
-func gatewayProgressHandlerForMethod(method string) (gatewayProgressHandler, apicontract.Route, bool) {
-	route, ok := apicontract.RouteByMethod(strings.TrimSpace(method))
-	if !ok || route.Kind != apicontract.KindProgress {
-		return nil, apicontract.Route{}, false
+func gatewayProgressHandlerForRoute(route apicontract.Route) (gatewayProgressHandler, bool) {
+	if route.Kind != apicontract.KindProgress {
+		return nil, false
 	}
 	handler, ok := gatewayProgressHandlers[route.Method]
-	return handler, route, ok
+	if !ok {
+		return nil, false
+	}
+	return handler, true
 }
 
 func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Gateway, error) {
@@ -226,24 +225,27 @@ func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Ga
 	if strings.TrimSpace(identity.ProtocolVersion) == "" {
 		return nil, errors.New("server identity is required")
 	}
+	registration, err := productionGatewayRegistration()
+	if err != nil {
+		return nil, fmt.Errorf("build Gateway registration: %w", err)
+	}
+	if err := registration.Validate(); err != nil {
+		return nil, fmt.Errorf("validate Gateway registration: %w", err)
+	}
 	debugMode := invariant.NewPolicy().Mode() == invariant.ModePanic
 	if debugDeps, ok := deps.(interface{ DebugEnabled() bool }); ok {
 		debugMode = debugMode || debugDeps.DebugEnabled()
 	}
 	preparer := jsoncontract.NewPreparer(debugMode)
-	onboardingFinalizeRequestContract, err := serverjsoncontract.PrepareOnboardingFinalizeRequest(preparer)
-	if err != nil {
-		return nil, err
-	}
 	sessionExecutionRequestContract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentRequest(preparer)
 	if err != nil {
 		return nil, err
 	}
 	return &Gateway{
-		deps:                              deps,
-		identity:                          identity,
-		onboardingFinalizeRequestContract: onboardingFinalizeRequestContract,
-		sessionExecutionRequestContract:   sessionExecutionRequestContract,
+		deps:                            deps,
+		identity:                        identity,
+		registration:                    registration,
+		sessionExecutionRequestContract: sessionExecutionRequestContract,
 	}, nil
 }
 
@@ -292,11 +294,21 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 	}()
 	for {
 		if !state.handshakeDone {
-			req, err := receiveRequest(connCtx, conn)
+			request, err := g.receiveEstablishedRequest(connCtx, conn)
 			if err != nil {
 				return
 			}
-			if !g.serveGatewayRequest(conn, connCtx, state, req, gatewayRequestScheduleFor(req)) {
+			if request.failure != nil {
+				_ = sendTransportFailure(connCtx, conn, request.failure)
+				return
+			}
+			if request.binary == nil || !isBinaryHandshake(request.binary.binding) {
+				return
+			}
+			if !g.serveBinaryRequest(conn, connCtx, state, *request.binary) {
+				return
+			}
+			if !state.handshakeDone {
 				return
 			}
 			continue
@@ -308,16 +320,24 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 			return
 		}
 
-		req, err := receiveRequest(connCtx, conn)
+		request, err := g.receiveEstablishedRequest(connCtx, conn)
 		if err != nil {
 			<-admission
 			return
 		}
-		schedule := gatewayRequestScheduleFor(req)
+		if request.failure != nil {
+			<-admission
+			if !sendTransportFailure(connCtx, conn, request.failure) {
+				stop()
+				return
+			}
+			continue
+		}
+		schedule := g.gatewayRequestScheduleForEstablished(request)
 		if schedule.kind != gatewayRequestScheduleOrdinary {
 			<-admission
 			ordinary.Wait()
-			if !g.serveGatewayRequest(conn, connCtx, state, req, schedule) {
+			if !g.serveEstablishedRequest(conn, connCtx, state, request, schedule) {
 				stop()
 				return
 			}
@@ -325,27 +345,59 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 		}
 
 		ordinary.Add(1)
-		go func(req protocol.Request, schedule gatewayRequestSchedule) {
+		go func(request gatewayEstablishedRequest, schedule gatewayRequestSchedule) {
 			defer ordinary.Done()
 			defer func() { <-admission }()
-			g.serveOrdinaryGatewayRequest(conn, connCtx, state, req, schedule, stop)
-		}(req, schedule)
+			g.serveOrdinaryEstablishedRequest(conn, connCtx, state, request, schedule, stop)
+		}(request, schedule)
 	}
 }
 
-func gatewayRequestScheduleFor(req protocol.Request) gatewayRequestSchedule {
-	if handler, route, ok := gatewayProgressHandlerForMethod(req.Method); ok {
+func isBinaryHandshake(binding gatewayBinaryBinding) bool {
+	return binding.operation.Descriptor.Parent().Name() == "ConnectionService" &&
+		binding.operation.Descriptor.Name() == "Handshake"
+}
+
+func (g *Gateway) gatewayRequestScheduleForEstablished(request gatewayEstablishedRequest) gatewayRequestSchedule {
+	if request.legacy != nil {
+		return g.gatewayRequestScheduleFor(*request.legacy)
+	}
+	if request.binary == nil {
+		panic("established Gateway request is required")
+	}
+	binding := request.binary.binding
+	if binding.operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_UNARY {
+		panic(fmt.Sprintf("unsupported binary operation kind %s", binding.operation.Options.Kind))
+	}
+	if isGatewayExclusiveBinaryBinding(binding) {
+		return gatewayRequestSchedule{kind: gatewayRequestScheduleExclusive}
+	}
+	return gatewayRequestSchedule{kind: gatewayRequestScheduleOrdinary}
+}
+
+func (g *Gateway) gatewayRequestScheduleFor(req protocol.Request) gatewayRequestSchedule {
+	operation, route, known := g.registration.LegacyOperation(strings.TrimSpace(req.Method))
+	if !known {
+		return gatewayRequestSchedule{kind: gatewayRequestScheduleOrdinary}
+	}
+	switch operation.Options.Kind {
+	case sharedpb.OperationKind_OPERATION_KIND_PROGRESS:
+		route.Scope = routeScopePolicy(operation.Options.ScopePolicy)
+		handler, ok := gatewayProgressHandlerForRoute(route)
+		if !ok {
+			panic(fmt.Sprintf("legacy progress operation %q has no handler", operation.Name))
+		}
 		return gatewayRequestSchedule{
 			kind:          gatewayRequestScheduleProgress,
 			progress:      handler,
 			progressRoute: route,
 		}
-	}
-	if _, ok := gatewaySubscriptionMethods[strings.TrimSpace(req.Method)]; ok {
+	case sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION:
 		return gatewayRequestSchedule{kind: gatewayRequestScheduleSubscription}
-	}
-	if isGatewayExclusiveRequest(req) {
-		return gatewayRequestSchedule{kind: gatewayRequestScheduleExclusive}
+	case sharedpb.OperationKind_OPERATION_KIND_UNARY:
+		if isGatewayExclusiveOperation(operation, route) {
+			return gatewayRequestSchedule{kind: gatewayRequestScheduleExclusive}
+		}
 	}
 	return gatewayRequestSchedule{kind: gatewayRequestScheduleOrdinary}
 }
@@ -364,52 +416,58 @@ func (g *Gateway) serveGatewayRequest(conn rpcwire.Conn, ctx context.Context, st
 	}
 }
 
-func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request, schedule gatewayRequestSchedule, stop func()) {
+func (g *Gateway) serveEstablishedRequest(
+	conn rpcwire.Conn,
+	ctx context.Context,
+	state *connectionState,
+	request gatewayEstablishedRequest,
+	schedule gatewayRequestSchedule,
+) bool {
+	if request.legacy != nil {
+		return g.serveGatewayRequest(conn, ctx, state, *request.legacy, schedule)
+	}
+	if request.binary != nil {
+		return g.serveBinaryRequest(conn, ctx, state, *request.binary)
+	}
+	panic("established Gateway request is required")
+}
+
+func (g *Gateway) serveOrdinaryGatewayRequest(
+	conn rpcwire.Conn,
+	ctx context.Context,
+	state *connectionState,
+	req protocol.Request,
+	schedule gatewayRequestSchedule,
+	stop func(),
+) {
 	if !g.serveGatewayRequest(conn, ctx, state, req, schedule) {
 		stop()
 	}
 }
 
-func isGatewayExclusiveRequest(req protocol.Request) bool {
-	switch req.Method {
-	case protocol.MethodHandshake,
-		protocol.MethodAuthGetBootstrapStatus,
-		protocol.MethodAuthCompleteBootstrap,
-		protocol.MethodAuthAcknowledgeNoAuth,
-		protocol.MethodAuthGetStatus:
-		return true
+func (g *Gateway) serveOrdinaryEstablishedRequest(
+	conn rpcwire.Conn,
+	ctx context.Context,
+	state *connectionState,
+	request gatewayEstablishedRequest,
+	schedule gatewayRequestSchedule,
+	stop func(),
+) {
+	if !g.serveEstablishedRequest(conn, ctx, state, request, schedule) {
+		stop()
 	}
-	route, ok := apicontract.RouteByMethod(req.Method)
-	if !ok {
-		return false
-	}
-	switch route.Scope {
-	case apicontract.ScopeAttachProject, apicontract.ScopeAttachSession:
+}
+
+func isGatewayExclusiveOperation(operation protoapi.Operation, _ apicontract.Route) bool {
+	switch operation.Options.ScopePolicy {
+	case sharedpb.ScopePolicy_SCOPE_POLICY_ATTACH_PROJECT,
+		sharedpb.ScopePolicy_SCOPE_POLICY_ATTACH_SESSION:
 		return true
 	}
 	return false
 }
 
-func isGatewayPreActivationOperation(method string) bool {
-	switch method {
-	case protocol.MethodHandshake,
-		protocol.MethodServerReadinessGet,
-		protocol.MethodAuthGetBootstrapStatus,
-		protocol.MethodAuthCompleteBootstrap,
-		protocol.MethodAuthAcknowledgeNoAuth,
-		protocol.MethodAuthGetStatus,
-		protocol.MethodCapabilityFactsGet,
-		protocol.MethodOnboardingFinalize:
-		return true
-	default:
-		return false
-	}
-}
-
-func (g *Gateway) preflightStartup(method string) error {
-	if isGatewayPreActivationOperation(method) {
-		return nil
-	}
+func (g *Gateway) requireCoreActive() error {
 	lifecycle, ok := g.deps.(GatewayStartupLifecycle)
 	if !ok {
 		return nil
@@ -446,26 +504,28 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if err := req.Validate(); err != nil {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, err.Error())
 	}
-	if req.Method != protocol.MethodHandshake && !state.handshakeDone {
+	if !state.handshakeDone {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
-	route, ok := apicontract.RouteByMethod(req.Method)
+	operation, route, ok := g.registration.LegacyOperation(req.Method)
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
-	if err := g.preflightStartup(req.Method); err != nil {
+	if err := g.requireCoreActive(); err != nil {
 		return responseForError(req.ID, err)
 	}
-	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
+	if err := newRoutePolicyExecutor(g).requireAuthenticationStage(
+		ctx,
+		state,
+		operation.Options.AuthenticationStage,
+	); err != nil {
 		return responseForError(req.ID, err)
 	}
-	handler, ok := gatewayUnaryHandlers[req.Method]
-	if !ok {
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
-	}
+	route.Scope = routeScopePolicy(operation.Options.ScopePolicy)
 	if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {
 		return resp
 	}
+	handler := gatewayUnaryHandlers[req.Method]
 	return handler(g, ctx, state, req)
 }
 
@@ -514,8 +574,50 @@ func receiveRequest(ctx context.Context, conn rpcwire.Conn) (protocol.Request, e
 			if event.Err != nil {
 				return protocol.Request{}, event.Err
 			}
-			return event.Frame.Request(), nil
+			request, err := event.Frame.DecodeRequest()
+			if err != nil {
+				return protocol.Request{}, err
+			}
+			return request, nil
 		}
+	}
+}
+
+func (g *Gateway) receiveEstablishedRequest(ctx context.Context, conn rpcwire.Conn) (gatewayEstablishedRequest, error) {
+	frame, err := receiveFrame(ctx, conn)
+	if err != nil {
+		return gatewayEstablishedRequest{}, err
+	}
+	switch frame.Kind {
+	case rpcwire.FrameText:
+		request, err := frame.DecodeRequest()
+		if err != nil {
+			return gatewayEstablishedRequest{}, err
+		}
+		return gatewayEstablishedRequest{legacy: &request}, nil
+	case rpcwire.FrameBinary:
+		request, failure := g.resolveBinaryRequest(frame.Payload)
+		if failure != nil {
+			return gatewayEstablishedRequest{failure: failure}, nil
+		}
+		return gatewayEstablishedRequest{binary: request}, nil
+	default:
+		return gatewayEstablishedRequest{}, fmt.Errorf("unsupported Gateway frame kind %d", frame.Kind)
+	}
+}
+
+func receiveFrame(ctx context.Context, conn rpcwire.Conn) (rpcwire.Frame, error) {
+	select {
+	case <-ctx.Done():
+		return rpcwire.Frame{}, ctx.Err()
+	case event, ok := <-conn.Events():
+		if !ok {
+			return rpcwire.Frame{}, io.EOF
+		}
+		if event.Err != nil {
+			return rpcwire.Frame{}, event.Err
+		}
+		return event.Frame, nil
 	}
 }
 
@@ -593,9 +695,6 @@ func protocolError(err error) (int, string) {
 	}
 	if errors.Is(err, serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous) {
 		return protocol.ErrCodeWorkflowTaskCompleteAmbiguous, message
-	}
-	if errors.Is(err, serverapi.ErrUnsupportedProvider) {
-		return protocol.ErrCodeUnsupportedProvider, message
 	}
 	if errors.Is(err, serverapi.ErrServerAuthRequired) || errors.Is(err, auth.ErrAuthNotConfigured) {
 		return protocol.ErrCodeAuthRequired, message

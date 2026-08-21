@@ -20,6 +20,7 @@
       "@/*": ["./src/*"],
       "@app/native-bridge": ["./packages/native-bridge/src/index.ts"],
       "@app/server-api-contract": ["./packages/server-api-contract/src/index.ts"],
+      "@app/server-api-contract/*": ["./packages/server-api-contract/src/*"],
       "@app/ui-kit": ["./packages/ui-kit/src/ReorderableList.tsx"],
       "@xyflow/react": ["./src/vendor/xyflow-react-types.ts"],
       "elkjs/lib/elk-api": ["./src/vendor/elkjs-types.ts"],

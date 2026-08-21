@@ -394,7 +394,7 @@ message SubscriptionWindowFacts {
   option (buf.validate.message).cel = {
     id: "kent.auth.subscription_window.reset_at"
     message: "reset_at must not be the zero instant"
-    expression: "!has(this.reset_at) || this.reset_at.seconds != -62135596800 || this.reset_at.nanos != 0"
+    expression: "!has(this.reset_at) || this.reset_at != timestamp('0001-01-01T00:00:00Z')"
   };
 }
 
@@ -461,7 +461,6 @@ service AuthService {
       scope_policy: SCOPE_POLICY_NONE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "auth.getBootstrapStatus"
     };
   }
 
@@ -472,7 +471,6 @@ service AuthService {
       scope_policy: SCOPE_POLICY_NONE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "auth.completeBootstrap"
     };
   }
 
@@ -483,7 +481,6 @@ service AuthService {
       scope_policy: SCOPE_POLICY_NONE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "auth.acknowledgeNoAuth"
     };
   }
 
@@ -494,7 +491,6 @@ service AuthService {
       scope_policy: SCOPE_POLICY_NONE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "auth.getStatus"
     };
   }
 }

@@ -7,24 +7,21 @@ import (
 	"net/url"
 	"strings"
 
-	"core/shared/serverapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 )
 
-func AuthStageFromResponse(response serverapi.AuthStatusResponse) AuthStageResult {
-	if err := response.Validate(); err != nil {
-		return UnavailableAuthStage(err)
+func AuthStageFromResponse(response *authpb.Status) AuthStageResult {
+	resolution := response.GetResolution()
+	if unavailable := resolution.GetUnavailable(); unavailable != nil {
+		return UnavailableAuthStage(fmt.Errorf("%s", unavailable.GetCause()))
 	}
-	resolution := response.Resolution
-	if resolution.Kind == serverapi.AuthStatusResolutionUnavailable {
-		return UnavailableAuthStage(fmt.Errorf("%s", resolution.Failure.Cause))
-	}
-	facts := *resolution.Facts
+	facts := resolution.GetKnown()
 	result := AuthStageResult{
-		Auth:         authInfoFromFacts(facts, resolution.Failure),
-		Subscription: subscriptionInfoFromFacts(response.Subscription),
+		Auth:         authInfoFromFacts(facts, resolution.GetPartialFailure()),
+		Subscription: subscriptionInfoFromFacts(response.GetSubscription()),
 	}
-	if resolution.Failure != nil {
-		result.Warning = "auth: " + strings.TrimSpace(resolution.Failure.Cause)
+	if resolution.GetPartialFailure() != nil {
+		result.Warning = "auth: " + strings.TrimSpace(resolution.GetPartialFailure().GetCause())
 	}
 	return result
 }
@@ -43,52 +40,52 @@ func UnavailableAuthStage(err error) AuthStageResult {
 	return result
 }
 
-func authInfoFromFacts(facts serverapi.AuthStatusFacts, failure *serverapi.AuthStatusFailure) AuthInfo {
-	provider := authProviderStatusLabel(facts.Provider)
+func authInfoFromFacts(facts *authpb.StatusFacts, failure *authpb.StatusFailure) AuthInfo {
+	provider := authProviderStatusLabel(facts.GetProvider())
 	details := make([]string, 0, 4)
-	if facts.Provider.Kind == serverapi.AuthProviderKindOpenAICompatible {
-		if origin := authProviderDisplayOrigin(facts.Provider.DisplayOrigin); origin != "" {
+	if facts.GetProvider().GetKind() == authpb.ProviderKind_PROVIDER_KIND_OPENAI_COMPATIBLE {
+		if origin := authProviderDisplayOrigin(facts.GetProvider().GetDisplayOrigin()); origin != "" {
 			details = append(details, origin)
 		}
 	}
 	info := AuthInfo{
 		Visible:  true,
-		Method:   facts.Method,
+		Method:   facts.GetMethod(),
 		Provider: provider,
 	}
-	switch facts.Method {
-	case serverapi.AuthStatusMethodOAuth:
+	switch facts.GetMethod() {
+	case authpb.AuthMethod_AUTH_METHOD_OAUTH:
 		info.Summary = "Subscription"
-		if facts.OAuth != nil && facts.OAuth.Email != nil {
-			info.Summary = *facts.OAuth.Email
+		if facts.GetOauth() != nil && facts.GetOauth().Email != nil {
+			info.Summary = facts.GetOauth().GetEmail()
 		}
-	case serverapi.AuthStatusMethodAPIKey:
+	case authpb.AuthMethod_AUTH_METHOD_API_KEY:
 		info.Summary = "API Key"
-		if facts.APIKey != nil && facts.APIKey.Suffix != nil {
-			info.Summary += " ..." + *facts.APIKey.Suffix
+		if facts.GetApiKey() != nil && facts.GetApiKey().Suffix != nil {
+			info.Summary += " ..." + facts.GetApiKey().GetSuffix()
 		}
 		if provider != "" {
-			details = append(details, authProviderDetailLabel(facts.Provider))
+			details = append(details, authProviderDetailLabel(facts.GetProvider()))
 		}
-		if preference := authEnvPreferenceLabel(facts.EnvPreference); preference != "" {
+		if preference := authEnvPreferenceLabel(facts.GetEnvPreference()); preference != "" {
 			details = append(details, preference)
 		}
 	default:
 		info.Summary = "No Auth"
 	}
 	if failure != nil {
-		details = append(details, strings.TrimSpace(failure.Cause))
+		details = append(details, strings.TrimSpace(failure.GetCause()))
 	}
 	info.Details = details
 	return info
 }
 
-func subscriptionInfoFromFacts(facts serverapi.AuthSubscriptionFacts) SubscriptionInfo {
-	if !facts.Applicable {
+func subscriptionInfoFromFacts(facts *authpb.SubscriptionFacts) SubscriptionInfo {
+	if !facts.GetApplicable() {
 		return SubscriptionInfo{}
 	}
-	if facts.Failure != nil {
-		cause := strings.TrimSpace(facts.Failure.Cause)
+	if facts.GetFailure() != nil {
+		cause := strings.TrimSpace(facts.GetFailure().GetCause())
 		return SubscriptionInfo{
 			Applicable: true,
 			Summary:    "Subscription unavailable: " + cause,
@@ -98,11 +95,11 @@ func subscriptionInfoFromFacts(facts serverapi.AuthSubscriptionFacts) Subscripti
 	return SubscriptionInfo{
 		Applicable: true,
 		Summary:    subscriptionPlanSummary(facts.Plan),
-		Windows:    subscriptionWindowsFromFacts(facts.Windows),
+		Windows:    subscriptionWindowsFromFacts(facts.GetWindows()),
 	}
 }
 
-func subscriptionWindowsFromFacts(facts []serverapi.AuthSubscriptionWindowFacts) []SubscriptionWindow {
+func subscriptionWindowsFromFacts(facts []*authpb.SubscriptionWindowFacts) []SubscriptionWindow {
 	if len(facts) == 0 {
 		return nil
 	}
@@ -110,13 +107,13 @@ func subscriptionWindowsFromFacts(facts []serverapi.AuthSubscriptionWindowFacts)
 	windows := make([]SubscriptionWindow, 0, len(facts))
 	for _, fact := range facts {
 		window := SubscriptionWindow{
-			Label:       subscriptionWindowDuration(fact.DurationSecs / 60),
-			UsedPercent: fact.UsedPercent,
+			Label:       subscriptionWindowDuration(int(fact.GetDurationSeconds() / 60)),
+			UsedPercent: fact.GetUsedPercent(),
 		}
-		if fact.ResetAt != nil {
-			window.ResetAt = *fact.ResetAt
+		if fact.GetResetAt() != nil {
+			window.ResetAt = fact.GetResetAt().AsTime()
 		}
-		if fact.Bucket == serverapi.AuthSubscriptionWindowBucketAdditional {
+		if fact.GetBucket() == authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_ADDITIONAL {
 			window.Qualifier = subscriptionWindowQualifier(fact, qualifierCounts)
 		}
 		windows = append(windows, window)
@@ -136,7 +133,7 @@ func subscriptionPlanSummary(plan *string) string {
 }
 
 func subscriptionWindowQualifier(
-	window serverapi.AuthSubscriptionWindowFacts,
+	window *authpb.SubscriptionWindowFacts,
 	counts map[string]int,
 ) string {
 	limitName := optionalAuthFactValue(window.LimitName)
@@ -201,33 +198,33 @@ func AuthDisplayLabel(info AuthInfo) string {
 		return "Auth unavailable"
 	}
 	switch info.Method {
-	case serverapi.AuthStatusMethodNone:
+	case authpb.AuthMethod_AUTH_METHOD_NONE:
 		return "No auth"
-	case serverapi.AuthStatusMethodAPIKey:
+	case authpb.AuthMethod_AUTH_METHOD_API_KEY:
 		return authDisplayProviderLabel(info.Provider) + " API Key"
-	case serverapi.AuthStatusMethodOAuth:
+	case authpb.AuthMethod_AUTH_METHOD_OAUTH:
 		return authDisplayProviderLabel(info.Provider) + " Subscription"
 	default:
 		return ""
 	}
 }
 
-func authProviderStatusLabel(provider serverapi.AuthProviderFacts) string {
-	switch provider.Kind {
-	case serverapi.AuthProviderKindOpenAI:
+func authProviderStatusLabel(provider *authpb.ProviderFacts) string {
+	switch provider.GetKind() {
+	case authpb.ProviderKind_PROVIDER_KIND_OPENAI:
 		return "openai"
-	case serverapi.AuthProviderKindOpenAICompatible:
-		if origin := authProviderDisplayOrigin(provider.DisplayOrigin); origin != "" {
+	case authpb.ProviderKind_PROVIDER_KIND_OPENAI_COMPATIBLE:
+		if origin := authProviderDisplayOrigin(provider.GetDisplayOrigin()); origin != "" {
 			return origin
 		}
 		return "openai-compatible"
 	default:
-		return strings.TrimSpace(provider.Identifier)
+		return strings.TrimSpace(provider.GetIdentifier())
 	}
 }
 
-func authProviderDetailLabel(provider serverapi.AuthProviderFacts) string {
-	if provider.Kind == serverapi.AuthProviderKindOpenAI {
+func authProviderDetailLabel(provider *authpb.ProviderFacts) string {
+	if provider.GetKind() == authpb.ProviderKind_PROVIDER_KIND_OPENAI {
 		return "OpenAI"
 	}
 	return authProviderStatusLabel(provider)
@@ -244,7 +241,7 @@ func authDisplayProviderLabel(provider string) string {
 	}
 }
 
-func authProviderDisplayOrigin(origin *serverapi.AuthProviderDisplayOrigin) string {
+func authProviderDisplayOrigin(origin *authpb.ProviderDisplayOrigin) string {
 	if origin == nil {
 		return ""
 	}
@@ -257,11 +254,11 @@ func authProviderDisplayOrigin(origin *serverapi.AuthProviderDisplayOrigin) stri
 	return (&url.URL{Scheme: origin.Scheme, Host: host}).String()
 }
 
-func authEnvPreferenceLabel(preference serverapi.AuthStatusEnvPreference) string {
+func authEnvPreferenceLabel(preference authpb.EnvironmentPreference) string {
 	switch preference {
-	case serverapi.AuthStatusEnvPreferencePreferSaved:
+	case authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_PREFER_SAVED_AUTH:
 		return "saved auth preferred"
-	case serverapi.AuthStatusEnvPreferencePreferEnv:
+	case authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_PREFER_ENV_API_KEY:
 		return "OPENAI_API_KEY preferred"
 	default:
 		return ""

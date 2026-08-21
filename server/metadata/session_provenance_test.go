@@ -8,7 +8,6 @@ import (
 
 	"core/server/session"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
 
@@ -57,11 +56,13 @@ func TestTypedSessionProvenanceRoundTripsAndMakesSessionVisible(t *testing.T) {
 		t.Fatalf("resolved provenance = previous:%v parent-agent:%v", record.Meta.PreviousSessionID, record.Meta.ParentAgentSessionID)
 	}
 
-	page, err := store.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategorySubagent,
-		Limit:     sessionPageInt(10),
-	})
+	page, err := store.ListSessionPage(
+		context.Background(),
+		binding.ProjectID,
+		sessioncontract.SessionCategorySubagent,
+		0,
+		10,
+	)
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}
