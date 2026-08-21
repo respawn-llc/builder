@@ -30,8 +30,9 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 	eng := mustNewTestEngine(t, store, &fakeCompactionClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5"})
-	if err := runTestActiveStep(eng, "seed-step", func() error {
-		return eng.steerBaseMetaContextIfNeeded("seed-step")
+	stepID := runtimeTestStepID("seed-step")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		return eng.steerBaseMetaContextIfNeeded(stepID)
 	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
@@ -119,8 +120,9 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
-	if err := runTestActiveStep(eng, "seed-step", func() error {
-		return eng.steerBaseMetaContextIfNeeded("seed-step")
+	stepID := runtimeTestStepID("seed-step")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		return eng.steerBaseMetaContextIfNeeded(stepID)
 	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
@@ -224,8 +226,9 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
-	if err := runTestActiveStep(eng, "seed-step", func() error {
-		return eng.steerBaseMetaContextIfNeeded("seed-step")
+	stepID := runtimeTestStepID("seed-step")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		return eng.steerBaseMetaContextIfNeeded(stepID)
 	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
@@ -285,8 +288,9 @@ func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *tes
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
-	if err := runTestActiveStep(eng, "seed-step", func() error {
-		return eng.steerBaseMetaContextIfNeeded("seed-step")
+	stepID := runtimeTestStepID("seed-step")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		return eng.steerBaseMetaContextIfNeeded(stepID)
 	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
@@ -325,8 +329,9 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5"})
-	restoreStep := setTestActiveStep(eng, "seed-step")
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	stepID := runtimeTestStepID("seed-step")
+	restoreStep := setTestActiveStep(eng, stepID)
+	if err := eng.steerBaseMetaContextIfNeeded(stepID); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
 	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {

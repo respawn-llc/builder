@@ -272,11 +272,8 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 			return stepLoopResult{}, err
 		}
-		if options.RuntimeMutationOwnership == stepLoopOwnsRuntimeMutations {
-			if err := e.pauseRuntimeOperations(ctx); err != nil {
-				return stepLoopResult{}, err
-			}
-			e.stepLifecycle.EndAgentStepBoundary()
+		if err := e.stepLifecycle.BeginAgentStepBoundary(ctx); err != nil {
+			return stepLoopResult{}, err
 		}
 		if terminal, err := s.workflowDurableCompletionTerminal(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
@@ -398,7 +395,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			if err != nil {
 				return stepLoopResult{}, err
 			}
-			if err := s.completeAgentStepBoundary(ctx, stepID, options); err != nil {
+			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
 				return stepLoopResult{}, err
 			}
 			patchEditsApplied = patchEditsApplied || applied
@@ -413,7 +410,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		if assistantMsg.Content == nil && responseContainsProgress(resp) {
-			if err := s.completeAgentStepBoundary(ctx, stepID, options); err != nil {
+			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
 				return stepLoopResult{}, err
 			}
 			continue
@@ -840,19 +837,16 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		return false, false, err
 	}
 	if calls.hasCalls() {
-		if err := s.completeAgentStepBoundary(ctx, stepID, options); err != nil {
+		if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
 			return false, false, err
 		}
 	}
 	return patchEditsApplied, terminal, nil
 }
 
-func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string, options stepLoopOptions) error {
+func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string) error {
 	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
 	s.engine.persistManualCompactEligibilityBestEffort(stepID, true)
-	if options.RuntimeMutationOwnership == stepLoopDoesNotOwnRuntimeMutations {
-		return nil
-	}
 	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 

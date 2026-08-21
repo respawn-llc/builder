@@ -30,9 +30,10 @@ func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 			mu.Unlock()
 		},
 	})
-	restoreStep := setTestActiveStep(eng, "step-compact")
+	stepID := runtimeTestStepID("step-compact")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
+	if _, err := newCompactionPersistence(eng).replaceHistory(stepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
 		{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary one")},
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("summary two")},
 	})); err != nil {

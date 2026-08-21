@@ -224,7 +224,7 @@ func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 	); err != nil {
 		t.Fatalf("persist deletion call: %v", err)
 	}
-	if err := engine.transcriptRuntimeState().RecordLiveToolStart("step-delete", normalized); err != nil {
+	if err := engine.transcriptRuntimeState().RecordLiveToolStart(runtimeTestStepID("step-delete"), normalized); err != nil {
 		t.Fatalf("record live deletion call: %v", err)
 	}
 	return mismatchedDeletionResult(call.ID)

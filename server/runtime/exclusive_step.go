@@ -786,6 +786,20 @@ func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Conte
 	}
 }
 
+func (s *defaultExclusiveStepLifecycle) BeginAgentStepBoundary(ctx context.Context) error {
+	s.mu.Lock()
+	ownsRuntimeMutations := s.active != nil && isAgentStepCapable(s.active.activeKind)
+	s.mu.Unlock()
+	if !ownsRuntimeMutations {
+		return nil
+	}
+	if err := s.engine.pauseRuntimeOperations(ctx); err != nil {
+		return err
+	}
+	s.EndAgentStepBoundary()
+	return nil
+}
+
 func (s *defaultExclusiveStepLifecycle) EndAgentStepBoundary() {
 	s.mu.Lock()
 	s.boundaryReady = false

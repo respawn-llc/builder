@@ -524,6 +524,16 @@ func (s *stubExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveS
 	return fn(ctx, runtimeTestStepID("stub-step"))
 }
 
+func (s *stubExclusiveStepLifecycle) RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+	return s.Run(ctx, options, fn)
+}
+
+func (s *stubExclusiveStepLifecycle) AcquireReservation(*exclusiveStepReservation) error {
+	return nil
+}
+
+func (s *stubExclusiveStepLifecycle) ReleaseReservation(*exclusiveStepReservation) {}
+
 func (s *stubExclusiveStepLifecycle) Interrupt() error {
 	return nil
 }
@@ -580,6 +590,16 @@ func (s *stubExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply fun
 	}
 	return apply()
 }
+
+func (s *stubExclusiveStepLifecycle) BeginAgentStepBoundary(context.Context) error {
+	return nil
+}
+
+func (s *stubExclusiveStepLifecycle) DrainAgentStepBoundary(context.Context) error {
+	return nil
+}
+
+func (s *stubExclusiveStepLifecycle) EndAgentStepBoundary() {}
 
 func (s *stubExclusiveStepLifecycle) ApplyForExactGoalStep(runID string, stepID string, apply func() error) error {
 	s.mu.Lock()

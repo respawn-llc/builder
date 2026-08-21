@@ -141,13 +141,6 @@ func (s *transcriptRuntimeState) ToolCallSnapshot(callID string) (llm.ToolCall, 
 	return llm.ToolCall{}, false
 }
 
-func (s *transcriptRuntimeState) AbortLiveTools() []TranscriptLiveToolStart {
-	if ledger := s.liveToolLedger(); ledger != nil {
-		return ledger.AbortAll()
-	}
-	return nil
-}
-
 func (s *transcriptRuntimeState) LiveToolSnapshot() []TranscriptLiveToolStart {
 	if s == nil {
 		return nil

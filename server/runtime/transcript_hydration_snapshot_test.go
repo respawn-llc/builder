@@ -27,11 +27,11 @@ func hydrationSnapshot(t *testing.T, engine *Engine) TranscriptHydrationSnapshot
 
 func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T) {
 	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
-	const stepID = "step-current"
+	stepID := runtimeTestStepID("step-current")
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	outputIndex, partIndex := int64(0), int64(0)
-	if err := engine.steer(runtimeTestStepID(stepID), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex},
 		Text:             "inspect the repository", CurrentStatus: &llm.ReasoningStatus{Text: "Planning"},
 	})); err != nil {
@@ -57,7 +57,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 		snapshot.QueuedMessages[1].ID != second.ID {
 		t.Fatalf("owner facts = tools %+v queue %+v", snapshot.InFlightTools, snapshot.QueuedMessages)
 	}
-	if err := engine.steer(runtimeTestStepID(stepID), steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); err != nil {
+	if err := engine.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); err != nil {
 		t.Fatalf("reset reasoning: %v", err)
 	}
 	afterReset := hydrationSnapshot(t, engine)
@@ -71,12 +71,12 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 
 func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing.T) {
 	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
-	const stepID = "step-owner"
+	stepID := runtimeTestStepID("step-owner")
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	engine.compactionRuntimeState().SetCount(7)
-	if err := engine.steer(runtimeTestStepID(stepID), steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(runtimeTestStepID(stepID))}),
-		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: exactStepIDPointer(runtimeTestStepID(stepID)), Compaction: &CompactionStatus{Mode: "remote", Count: 8}}),
+	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)}),
+		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: exactStepIDPointer(stepID), Compaction: &CompactionStatus{Mode: "remote", Count: 8}}),
 	); err != nil {
 		t.Fatalf("steer active owner events: %v", err)
 	}
@@ -102,8 +102,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 		t.Fatalf("goal = %+v suspended=%t", snapshot.Goal, snapshot.GoalSuspended)
 	}
 
-	if err := engine.steer(runtimeTestStepID(stepID), steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: exactStepIDPointer(runtimeTestStepID(stepID))}),
-		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: exactStepIDPointer(runtimeTestStepID(stepID))}),
+	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: exactStepIDPointer(stepID)}),
+		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: exactStepIDPointer(stepID)}),
 	); err != nil {
 		t.Fatalf("steer terminal owner events: %v", err)
 	}
@@ -112,4 +112,33 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 		t.Fatalf("terminal owner state = reviewer %+v compaction %+v count %d",
 			snapshot.ActiveReviewer, snapshot.ActiveCompaction, snapshot.CompactionCount)
 	}
+}
+
+func TestEngineCloseAbortsLiveToolsWithTheirRecordedExactStep(t *testing.T) {
+	var events []Event
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
+		Model:   "gpt-5",
+		OnEvent: func(event Event) { events = append(events, event) },
+	})
+	stepID := runtimeTestStepID("close-live-tool")
+	call := llm.ToolCall{ID: "call-close", Name: "shell"}
+	if err := engine.transcriptRuntimeState().RecordLiveToolStart(stepID, call); err != nil {
+		t.Fatalf("record live tool: %v", err)
+	}
+
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close engine: %v", err)
+	}
+	if live := engine.transcriptRuntimeState().LiveToolSnapshot(); len(live) != 0 {
+		t.Fatalf("live tools after close = %+v, want none", live)
+	}
+	for _, event := range events {
+		if event.Kind == EventToolCallAborted && event.ToolCall != nil && event.ToolCall.ID == call.ID {
+			if event.StepID == nil || *event.StepID != stepID {
+				t.Fatalf("aborted tool Step = %v, want %s", event.StepID, stepID)
+			}
+			return
+		}
+	}
+	t.Fatal("close did not publish the live tool abort")
 }

@@ -15,6 +15,7 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/rollbacktarget"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 
@@ -503,21 +504,31 @@ func (e *Engine) appendPreparedMessageEvent(stepID *string, prepared preparedMes
 	return appended, err
 }
 
-func (e *Engine) emitLiveToolAbortsRaw(stepID string, reason string) error {
+func (e *Engine) emitLiveToolAbortsRaw(reason string) error {
 	if e == nil || e.store == nil {
 		return errors.New("runtime engine is required")
 	}
-	starts := e.transcriptRuntimeState().AbortLiveTools()
-	for _, start := range starts {
+	starts := e.transcriptRuntimeState().LiveToolSnapshot()
+	stepIDs := make([]runtimeids.StepID, len(starts))
+	for index, start := range starts {
+		stepID, err := runtimeids.ParseStepID(start.StepID)
+		if err != nil {
+			return fmt.Errorf("validate live tool Step identity: %w", err)
+		}
+		stepIDs[index] = stepID
+	}
+	for index, start := range starts {
+		stepID := stepIDs[index]
 		call := llm.ToolCall{ID: start.ToolCallID, Name: start.ToolName}
 		if err := e.emitRaw(Event{
 			Kind:            EventToolCallAborted,
-			StepID:          exactStepIDPointer(stepID),
+			StepID:          exactStepIDPointer(stepID.String()),
 			ToolCall:        &call,
 			ToolAbortReason: strings.TrimSpace(reason),
 		}); err != nil {
 			return err
 		}
+		e.transcriptRuntimeState().CompleteLiveTool(start.ToolCallID)
 	}
 	return nil
 }

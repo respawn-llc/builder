@@ -261,12 +261,13 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 			}
 		},
 	})
-	restoreStep := setTestActiveStep(eng, "compact-step")
+	stepID := runtimeTestStepID("compact-step")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
 
 	replaceDone := make(chan error, 1)
 	go func() {
-		_, err := newCompactionPersistence(eng).replaceHistory("compact-step", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
+		_, err := newCompactionPersistence(eng).replaceHistory(stepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
 			Role:        llm.RoleDeveloper,
 			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
 			Content:     textutil.Value("summary"),

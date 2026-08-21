@@ -291,7 +291,7 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 		t.Fatalf("persist result group calls: %v", err)
 	}
 	for _, call := range normalized {
-		if err := engine.transcriptRuntimeState().RecordLiveToolStart("step", call); err != nil {
+		if err := engine.transcriptRuntimeState().RecordLiveToolStart(runtimeTestStepID("step"), call); err != nil {
 			t.Fatalf("record live tool %s: %v", call.ID, err)
 		}
 	}

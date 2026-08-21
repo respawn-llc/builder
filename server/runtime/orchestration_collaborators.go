@@ -38,6 +38,7 @@ type exclusiveStepLifecycle interface {
 	Snapshot() *RunSnapshot
 	WithActiveStep(fn func(stepID string) error) (bool, error)
 	ApplyForActiveStep(stepID string, apply func() error) error
+	BeginAgentStepBoundary(ctx context.Context) error
 	DrainAgentStepBoundary(ctx context.Context) error
 	EndAgentStepBoundary()
 }
@@ -69,15 +70,7 @@ type stepLoopOptions struct {
 	ReviewerClient                 llm.Client
 	RefreshReviewerConfigOnResolve bool
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
-	RuntimeMutationOwnership       stepLoopRuntimeMutationOwnership
 }
-
-type stepLoopRuntimeMutationOwnership uint8
-
-const (
-	stepLoopOwnsRuntimeMutations stepLoopRuntimeMutationOwnership = iota
-	stepLoopDoesNotOwnRuntimeMutations
-)
 
 func observeQueuedUserFlushCommit(options stepLoopOptions, receipt session.CommitReceipt) {
 	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {

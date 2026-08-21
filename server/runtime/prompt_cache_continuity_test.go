@@ -450,8 +450,9 @@ func (f *promptCacheContinuityFixture) assertPersistedProjectionParity(t *testin
 
 func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	t.Helper()
-	restoreStep := setTestActiveStep(engine, "seed-meta")
-	if err := engine.steerBaseMetaContextIfNeeded("seed-meta"); err != nil {
+	stepID := runtimeTestStepID("seed-meta")
+	restoreStep := setTestActiveStep(engine, stepID)
+	if err := engine.steerBaseMetaContextIfNeeded(stepID); err != nil {
 		t.Fatalf("inject agents: %v", err)
 	}
 	restoreStep()

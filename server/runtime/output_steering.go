@@ -626,6 +626,13 @@ func (e *Engine) steerInterruption(intents ...steeringIntent) error {
 	return e.steerOrdered(sessionSteeringProvenance(), intents...)
 }
 
+func (e *Engine) steerLifecycleClose(intents ...steeringIntent) error {
+	if e == nil {
+		return nil
+	}
+	return e.steerOrdered(sessionSteeringProvenance(), intents...)
+}
+
 func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) error {
 	if e == nil {
 		return nil
@@ -1149,11 +1156,7 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 		return appendErr
 	}
 	if item.liveToolAbort != nil {
-		stepID, err := provenance.requireExactStepID()
-		if err != nil {
-			return err
-		}
-		return e.emitLiveToolAbortsRaw(stepID, item.liveToolAbort.reason)
+		return e.emitLiveToolAbortsRaw(item.liveToolAbort.reason)
 	}
 	if item.streaming != nil {
 		stepID, err := provenance.requireExactStepID()
