@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { create } from "@app/server-api-contract";
-import { ServerService } from "@app/server-api-contract/gen/kent/api/server/server_pb";
+import { ReadinessSeverity, ServerService } from "@app/server-api-contract/gen/kent/api/server/server_pb";
 
 import { ApiClient } from "./client";
 import { FakeRpcTransport } from "@/test-support/api";
@@ -34,7 +34,7 @@ describe("ApiClient", () => {
             case: "success",
             value: {
               readiness: {
-                ready: true,
+                ready: false,
                 serverId: "server-1",
                 serverVersion: "1.3.0",
                 serverBuild: "1.3.0",
@@ -42,6 +42,7 @@ describe("ApiClient", () => {
                 authReady: true,
                 endpoint: "ws://127.0.0.1:53082/rpc",
                 subagentRoles: [{ name: "default" }, { name: "coder" }],
+                causes: [{ code: "unauthenticated", severity: ReadinessSeverity.ERROR }],
               },
             },
           },
@@ -51,13 +52,16 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.getReadiness()).resolves.toMatchObject({
-      ready: true,
+    const readiness = await client.getReadiness();
+    expect(readiness).toMatchObject({
+      ready: false,
       serverID: "server-1",
       serverVersion: "1.3.0",
       protocolVersion: protocolVersion,
       subagentRoles: [{ name: "default" }, { name: "coder" }],
+      causes: [{ code: "unauthenticated", severity: "error" }],
     });
+    expect(readiness.causes[0]).not.toHaveProperty("diagnosticID");
     expect(transport.descriptorCalls[0]?.descriptor).toBe(ServerService.method.getReadiness);
     await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({
       outcome: "applied",

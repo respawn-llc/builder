@@ -41,7 +41,7 @@ export type ServerCause = Readonly<{
   severity: string;
   summary?: string;
   nextAction?: string;
-  diagnosticID: string;
+  diagnosticID?: string;
 }>;
 
 export type SubagentRoleSummary = Readonly<{

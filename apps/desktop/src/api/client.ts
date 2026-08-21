@@ -617,7 +617,7 @@ function projectReadiness(readiness: Readiness): ServerReadiness {
       severity: projectReadinessSeverity(cause.severity),
       ...(cause.summary === undefined ? {} : { summary: cause.summary }),
       ...(cause.nextAction === undefined ? {} : { nextAction: cause.nextAction }),
-      diagnosticID: cause.diagnosticId ?? "",
+      ...(cause.diagnosticId === undefined ? {} : { diagnosticID: cause.diagnosticId }),
     })),
   };
 }
