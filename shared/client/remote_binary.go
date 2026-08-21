@@ -65,6 +65,9 @@ func callGeneratedBinary[
 	if classified.Outcome == protoapi.OperationSuccess {
 		return result.GetSuccess(), nil
 	}
+	if classified.Outcome == protoapi.OperationGenericFailure {
+		return zeroSuccess, generatedOperationFailure(classified.Failure.Code)
+	}
 	var zeroFailure Failure
 	failure := result.GetError()
 	if failure == zeroFailure {

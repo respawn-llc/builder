@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/protocol"
@@ -69,7 +70,7 @@ func SessionPlanErrorToProto(
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
 		failure.Code = "auth_required"
 		failure.Detail = &sessionlaunchpb.SessionPlanError_AuthRequired{
-			AuthRequired: &sessionlaunchpb.AuthRequiredDetails{},
+			AuthRequired: &authpb.AuthRequiredDetails{},
 		}
 	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered):
 		failure.Code = "workspace_not_registered"

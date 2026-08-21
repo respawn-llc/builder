@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"core/shared/protoapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
@@ -49,7 +50,7 @@ func (c *Remote) MaterializeWorkspaceChat(
 }
 
 type workspaceChatFailure interface {
-	GetAuthRequired() *sessionlaunchpb.AuthRequiredDetails
+	GetAuthRequired() *authpb.AuthRequiredDetails
 	GetWorkspaceNotRegistered() *projectpb.WorkspaceNotRegisteredDetails
 	GetInternalFailure() *sharedpb.InternalFailureDetails
 }

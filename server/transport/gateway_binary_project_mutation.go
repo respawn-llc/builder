@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"core/shared/apicontract"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 	"google.golang.org/protobuf/proto"
@@ -39,7 +40,7 @@ func registerProjectMutationGatewayBinaryBindings(bindings map[string]gatewayBin
 func binaryProjectCreateFailure(_ *projectpb.CreateProjectRequest, err error) proto.Message {
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &projectpb.AuthRequiredDetails{}
+		return &authpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrProjectKeyConflict):
 		if conflict, ok := serverapi.AsProjectKeyConflict(err); ok {
 			return &projectpb.ProjectKeyConflictDetails{ProjectKey: conflict.ProjectKey}
@@ -55,7 +56,7 @@ func binaryProjectCreateFailure(_ *projectpb.CreateProjectRequest, err error) pr
 func binaryProjectUpdateFailure(request *projectpb.UpdateProjectRequest, err error) proto.Message {
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &projectpb.AuthRequiredDetails{}
+		return &authpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrProjectNotFound) && request != nil:
 		return &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId}
 	case errors.Is(err, serverapi.ErrProjectKeyConflict):
@@ -69,7 +70,7 @@ func binaryProjectUpdateFailure(request *projectpb.UpdateProjectRequest, err err
 func binaryProjectSetDefaultWorkspaceFailure(request *projectpb.SetDefaultWorkspaceRequest, err error) proto.Message {
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &projectpb.AuthRequiredDetails{}
+		return &authpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrProjectNotFound) && request != nil:
 		return &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId}
 	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && request != nil:
@@ -89,7 +90,7 @@ func binaryProjectSetDefaultWorkspaceFailure(request *projectpb.SetDefaultWorksp
 func binaryProjectUnlinkWorkspaceFailure(request *projectpb.UnlinkWorkspaceRequest, err error) proto.Message {
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &projectpb.AuthRequiredDetails{}
+		return &authpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrProjectNotFound) && request != nil:
 		return &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId}
 	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && request != nil:
@@ -115,7 +116,7 @@ func binaryProjectUnlinkWorkspaceFailure(request *projectpb.UnlinkWorkspaceReque
 
 func binaryProjectDeleteFailure(request *projectpb.DeleteProjectRequest, err error) proto.Message {
 	if errors.Is(err, serverapi.ErrServerAuthRequired) {
-		return &projectpb.AuthRequiredDetails{}
+		return &authpb.AuthRequiredDetails{}
 	}
 	if errors.Is(err, serverapi.ErrProjectNotFound) && request != nil {
 		return &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId}
@@ -126,7 +127,7 @@ func binaryProjectDeleteFailure(request *projectpb.DeleteProjectRequest, err err
 func binaryProjectAttachWorkspaceFailure(request *projectpb.AttachWorkspaceRequest, err error) proto.Message {
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &projectpb.AuthRequiredDetails{}
+		return &authpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrProjectNotFound) && request != nil:
 		return &projectpb.ProjectNotFoundDetails{ProjectId: request.ProjectId}
 	case errors.Is(err, serverapi.ErrWorkspaceAlreadyBound):
@@ -140,7 +141,7 @@ func binaryProjectAttachWorkspaceFailure(request *projectpb.AttachWorkspaceReque
 func binaryProjectRebindWorkspaceFailure(request *projectpb.RebindWorkspaceRequest, err error) proto.Message {
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &projectpb.AuthRequiredDetails{}
+		return &authpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && request != nil:
 		root := request.OldWorkspaceRoot
 		return &projectpb.WorkspaceNotRegisteredDetails{WorkspaceRoot: &root}

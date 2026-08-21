@@ -4,6 +4,7 @@ package kent.api.session_launch;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
+import "kent/api/auth/auth.proto";
 import "kent/api/project/project.proto";
 import "kent/api/runtime/runtime.proto";
 import "kent/api/server/server.proto";
@@ -383,8 +384,6 @@ message SessionPlanSuccess {
   repeated string warnings = 2;
 }
 
-message AuthRequiredDetails {}
-
 enum SubagentLaunchDenialKind {
   SUBAGENT_LAUNCH_DENIAL_KIND_UNSPECIFIED = 0;
   SUBAGENT_LAUNCH_DENIAL_KIND_INVALID_TARGET = 1;
@@ -441,7 +440,7 @@ message SessionPlanError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 7 [
+    kent.api.auth.AuthRequiredDetails auth_required = 7 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
@@ -518,7 +517,7 @@ message WorkspaceChatDraftError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 3 [
+    kent.api.auth.AuthRequiredDetails auth_required = 3 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
@@ -567,7 +566,7 @@ message MaterializeWorkspaceChatError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 3 [
+    kent.api.auth.AuthRequiredDetails auth_required = 3 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"

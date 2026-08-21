@@ -5,6 +5,7 @@ package kent.api.project;
 import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
+import "kent/api/auth/auth.proto";
 import "kent/api/server/server.proto";
 import "kent/api/shared/foundation.proto";
 import "kent/api/shared/validation.proto";
@@ -353,8 +354,6 @@ message WorkspaceAlreadyBoundDetails {}
 
 message WorkspacePathMissingDetails {}
 
-message AuthRequiredDetails {}
-
 message WorkspaceMutationDetails {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
   string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
@@ -661,7 +660,7 @@ message CreateProjectError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 6 [
+    kent.api.auth.AuthRequiredDetails auth_required = 6 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
@@ -815,7 +814,7 @@ message UpdateProjectError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 5 [
+    kent.api.auth.AuthRequiredDetails auth_required = 5 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
@@ -905,7 +904,7 @@ message SetDefaultWorkspaceError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 7 [
+    kent.api.auth.AuthRequiredDetails auth_required = 7 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
@@ -1109,7 +1108,7 @@ message UnlinkWorkspaceError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 8 [
+    kent.api.auth.AuthRequiredDetails auth_required = 8 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
@@ -1160,7 +1159,7 @@ message DeleteProjectError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 4 [
+    kent.api.auth.AuthRequiredDetails auth_required = 4 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
@@ -1232,7 +1231,7 @@ message AttachWorkspaceError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 6 [
+    kent.api.auth.AuthRequiredDetails auth_required = 6 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"
@@ -1300,7 +1299,7 @@ message RebindWorkspaceError {
         error_code: "internal_failure"
       }
     ];
-    AuthRequiredDetails auth_required = 7 [
+    kent.api.auth.AuthRequiredDetails auth_required = 7 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "auth_required"

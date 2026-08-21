@@ -8,6 +8,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/protoapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/serverapi"
@@ -94,7 +95,7 @@ func binaryWorkspaceChatDraftFailure(
 ) proto.Message {
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &sessionlaunchpb.AuthRequiredDetails{}
+		return &authpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered):
 		return sessionLaunchWorkspaceNotRegisteredDetails(g, state)
 	default:
@@ -110,7 +111,7 @@ func binaryMaterializeWorkspaceChatFailure(
 ) proto.Message {
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &sessionlaunchpb.AuthRequiredDetails{}
+		return &authpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered):
 		return sessionLaunchWorkspaceNotRegisteredDetails(g, state)
 	default:
