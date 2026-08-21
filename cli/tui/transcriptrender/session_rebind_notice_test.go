@@ -9,7 +9,7 @@ import (
 
 func TestSessionRebindNoticeIsCompactAndExpandsToFullReminder(t *testing.T) {
 	messageType := clientui.TranscriptMessageSessionRebind
-	const fullReminder = "full model-visible Session move reminder"
+	fullReminder := t.Name()
 	row := clientui.TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityOngoingCollapsed,
 		Integrity:  transcript.RowIntegrityValid,
@@ -25,10 +25,10 @@ func TestSessionRebindNoticeIsCompactAndExpandsToFullReminder(t *testing.T) {
 			},
 		},
 	}
-	if _, got := noticeRoleAndText(row.Notice, row.Visibility, ModeDetailCollapsed); got != clientui.SessionRebindCompactLabel {
+	if _, got := noticeRoleAndText(row.Notice, row.Visibility, ModeDetailCollapsed); got != *row.Notice.CompactLabel {
 		t.Fatalf("collapsed Session rebind notice = %q", got)
 	}
-	if _, got := noticeRoleAndText(row.Notice, row.Visibility, ModeDetailExpanded); got != fullReminder {
+	if _, got := noticeRoleAndText(row.Notice, row.Visibility, ModeDetailExpanded); got != row.Notice.Diagnostic.Detail {
 		t.Fatalf("expanded Session rebind notice = %q", got)
 	}
 }

@@ -95,7 +95,8 @@ func TestPlanSessionWorkspaceRetargetDetectsAuthoritativeNoOpWithoutCreatingRemi
 	if !plan.NoOp() {
 		t.Fatalf("plan = %+v, want no-op", plan)
 	}
-	if plan.SourceBinding.ProjectID != fixture.source.ProjectID ||
+	if plan.SourceBinding == nil ||
+		plan.SourceBinding.ProjectID != fixture.source.ProjectID ||
 		plan.SourceBinding.WorkspaceID != fixture.source.WorkspaceID ||
 		plan.SourceEffectiveWorkingDirectory != fixture.source.CanonicalRoot {
 		t.Fatalf("source state = binding %+v cwd %q", plan.SourceBinding, plan.SourceEffectiveWorkingDirectory)
@@ -120,6 +121,48 @@ func TestPlanSessionWorkspaceRetargetDetectsAuthoritativeNoOpWithoutCreatingRemi
 	}
 	if reopened.Meta().RebindReminder != nil {
 		t.Fatalf("no-op commit created reminder: %+v", reopened.Meta().RebindReminder)
+	}
+}
+
+func TestCommitSessionWorkspaceRetargetRebindsUnlinkedSession(t *testing.T) {
+	t.Parallel()
+	fixture := newSessionRetargetFixture(t)
+	ctx := t.Context()
+	if _, err := fixture.store.db.ExecContext(
+		ctx,
+		"UPDATE sessions SET workspace_id = NULL, worktree_id = NULL WHERE id = ?",
+		fixture.session.Meta().SessionID,
+	); err != nil {
+		t.Fatalf("unlink Session workspace: %v", err)
+	}
+	targetRoot := t.TempDir()
+	canonicalTargetRoot, err := canonicalFilesystemPath(targetRoot)
+	if err != nil {
+		t.Fatalf("canonical target root: %v", err)
+	}
+	plan, err := fixture.store.PlanSessionWorkspaceRetarget(ctx, SessionWorkspaceRetargetRequest{
+		SessionID:     fixture.session.Meta().SessionID,
+		WorkspaceRoot: targetRoot,
+	})
+	if err != nil {
+		t.Fatalf("PlanSessionWorkspaceRetarget: %v", err)
+	}
+	if plan.SourceBinding != nil || plan.SourceEffectiveWorkingDirectory != fixture.source.CanonicalRoot {
+		t.Fatalf("unlinked source = binding %+v cwd %q", plan.SourceBinding, plan.SourceEffectiveWorkingDirectory)
+	}
+	result, err := fixture.store.CommitSessionWorkspaceRetarget(ctx, plan, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CommitSessionWorkspaceRetarget: %v", err)
+	}
+	if result.Binding.CanonicalRoot != canonicalTargetRoot {
+		t.Fatalf("retarget binding = %+v, want root %q", result.Binding, canonicalTargetRoot)
+	}
+	target, err := fixture.store.ResolveSessionExecutionTarget(ctx, fixture.session.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.WorkspaceID != result.Binding.WorkspaceID {
+		t.Fatalf("retargeted workspace ID = %q, want %q", target.WorkspaceID, result.Binding.WorkspaceID)
 	}
 }
 

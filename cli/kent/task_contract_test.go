@@ -646,6 +646,7 @@ func TestWorktreeRuntimeOriginHeaderAndBranchCleanupPolicy(t *testing.T) {
 		runID  = "018fdd67-89ab-4cde-8123-456789abc001"
 		stepID = "018fdd67-89ab-4cde-8123-456789abc002"
 	)
+	t.Setenv(sessionenv.SessionIDEnv, "session-1")
 	t.Setenv(sessionenv.RunIDEnv, runID)
 	t.Setenv(sessionenv.StepIDEnv, stepID)
 	origin, err := commandRuntimeOrigin()

@@ -31,6 +31,19 @@ const (
 	sessionWorkspaceChangePickAgain
 )
 
+type sessionRetargetFailureError struct {
+	Failure serverapi.SessionRetargetFailure
+}
+
+func (e *sessionRetargetFailureError) Error() string {
+	return fmt.Sprintf(
+		"Session move failed: %s The Session remains in Project %q at Working Directory %q.",
+		e.Failure.Diagnostic,
+		e.Failure.UnchangedProject.Name,
+		e.Failure.UnchangedWorkingDirectory,
+	)
+}
+
 type workspaceChangePromptResult struct {
 	Rebind bool
 }
@@ -175,13 +188,17 @@ func retargetInteractiveSessionWorkspace(ctx context.Context, server sessionLife
 	if err != nil {
 		return err
 	}
-	if err := response.Validate(); err != nil {
+	if err := response.ValidateForCompletionMode(serverapi.SessionRetargetCompletionWait); err != nil {
 		return err
 	}
-	if response.Outcome == nil || response.Outcome.Kind != serverapi.SessionRetargetOutcomeSucceeded {
-		return errors.New("session retarget did not return a successful outcome")
+	switch response.Outcome.Kind {
+	case serverapi.SessionRetargetOutcomeSucceeded:
+		return nil
+	case serverapi.SessionRetargetOutcomeFailed:
+		return &sessionRetargetFailureError{Failure: *response.Outcome.Failure}
+	default:
+		return errors.New("session retarget returned an unsupported outcome")
 	}
-	return nil
 }
 
 func normalizeWorkspaceChangeDisplayRoot(root string) string {

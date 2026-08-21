@@ -2353,8 +2353,9 @@ SELECT
     p.display_name AS project_display_name,
     p.project_key,
     s.artifact_relpath,
-    COALESCE(s.workspace_id, '') AS workspace_id,
-    COALESCE(w.canonical_root_path, json_extract(s.metadata_json, '$.workspace_root'), '') AS workspace_root,
+    s.workspace_id AS workspace_id,
+    w.canonical_root_path AS registered_workspace_root,
+    s.metadata_json,
     s.worktree_id,
     wt.canonical_root_path AS worktree_root,
     s.cwd_relpath
@@ -2367,16 +2368,17 @@ LIMIT 1
 `
 
 type GetSessionWorkspaceRetargetStateByIDRow struct {
-	SessionID          string
-	ProjectID          string
-	ProjectDisplayName string
-	ProjectKey         string
-	ArtifactRelpath    string
-	WorkspaceID        string
-	WorkspaceRoot      string
-	WorktreeID         sql.NullString
-	WorktreeRoot       sql.NullString
-	CwdRelpath         string
+	SessionID               string
+	ProjectID               string
+	ProjectDisplayName      string
+	ProjectKey              string
+	ArtifactRelpath         string
+	WorkspaceID             sql.NullString
+	RegisteredWorkspaceRoot sql.NullString
+	MetadataJson            string
+	WorktreeID              sql.NullString
+	WorktreeRoot            sql.NullString
+	CwdRelpath              string
 }
 
 func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sessionID string) (GetSessionWorkspaceRetargetStateByIDRow, error) {
@@ -2389,7 +2391,8 @@ func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sess
 		&i.ProjectKey,
 		&i.ArtifactRelpath,
 		&i.WorkspaceID,
-		&i.WorkspaceRoot,
+		&i.RegisteredWorkspaceRoot,
+		&i.MetadataJson,
 		&i.WorktreeID,
 		&i.WorktreeRoot,
 		&i.CwdRelpath,
@@ -9081,7 +9084,7 @@ SET
     )
 WHERE id = ?8
   AND project_id = ?9
-  AND workspace_id = ?10
+  AND workspace_id IS ?10
   AND worktree_id IS NULL
   AND cwd_relpath = ?11
   AND artifact_relpath = ?12

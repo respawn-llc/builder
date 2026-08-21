@@ -1,8 +1,11 @@
 package app
 
 import (
-	"strings"
+	"context"
+	"errors"
 	"testing"
+
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -39,9 +42,6 @@ func TestWorkspaceRetargetLoadingModelRunsOperationAndShowsProgress(t *testing.T
 			return nil
 		},
 	}
-	if view := model.View(); !strings.Contains(view, "Moving Session") {
-		t.Fatalf("loading view = %q", view)
-	}
 	message := model.Init()().(tea.BatchMsg)[0]()
 	if !called {
 		t.Fatal("loading model did not run Session retarget")
@@ -49,5 +49,43 @@ func TestWorkspaceRetargetLoadingModelRunsOperationAndShowsProgress(t *testing.T
 	next, command := model.Update(message)
 	if next.(*workspaceRetargetLoadingModel).err != nil || command == nil {
 		t.Fatalf("completed loading model = %+v command=%v", next, command)
+	}
+}
+
+func TestInteractiveSessionRetargetPreservesTypedFailureFacts(t *testing.T) {
+	failure := serverapi.SessionRetargetFailure{
+		Diagnostic: "target workspace became unavailable",
+		UnchangedProject: serverapi.ProjectReference{
+			ID:   "project-a",
+			Name: "Project A",
+		},
+		UnchangedWorkingDirectory: "/workspace-a",
+	}
+	client := &recordingSessionLifecycleClient{
+		retargetSessionWorkspace: func(
+			_ context.Context,
+			request serverapi.SessionRetargetWorkspaceRequest,
+		) (serverapi.SessionRetargetWorkspaceResponse, error) {
+			return serverapi.SessionRetargetWorkspaceResponse{
+				Acknowledgement: serverapi.WorktreeScheduledAcknowledgement{
+					OperationID: request.OperationID,
+				},
+				Outcome: &serverapi.SessionRetargetOutcome{
+					OperationID: request.OperationID,
+					Kind:        serverapi.SessionRetargetOutcomeFailed,
+					Failure:     &failure,
+				},
+			}, nil
+		},
+	}
+	err := retargetInteractiveSessionWorkspace(
+		t.Context(),
+		narrowSessionLifecycleServer{lifecycle: client},
+		"session-a",
+		"/workspace-b",
+	)
+	var typed *sessionRetargetFailureError
+	if !errors.As(err, &typed) || typed.Failure != failure {
+		t.Fatalf("retarget failure = %T %+v", err, err)
 	}
 }

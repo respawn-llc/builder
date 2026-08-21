@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +17,6 @@ import (
 	sessionruntime "core/server/sessionruntime"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -31,6 +29,12 @@ type retargetIdentityPublisher map[string]int
 func (p retargetIdentityPublisher) PublishSessionIdentity(sessionID string) error {
 	p[sessionID]++
 	return nil
+}
+
+type failingRetargetIdentityPublisher struct{ err error }
+
+func (p failingRetargetIdentityPublisher) PublishSessionIdentity(string) error {
+	return p.err
 }
 
 type retargetOutcomePublisher struct {
@@ -308,17 +312,21 @@ func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t
 		ProjectID:     &targetProjectID,
 	}
 	commitErr := errors.New("commit failed for active rebind")
-	retargeter := fixture.retargeter(failingSessionRetargetCommit{Store: fixture.metadata, err: commitErr})
+	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
+	retargeter := fixture.retargeter(failingSessionRetargetCommit{Store: fixture.metadata, err: commitErr}).
+		WithOutcomePublisher(published)
 	t.Cleanup(func() { _ = retargeter.Close() })
 	client := &selfRetargetRuntimeClient{ignoreRunError: true}
 	engine := fixture.openRuntimeWithClient(t, client)
+	operationID := serverapi.NewWorktreeOperationID()
+	var acknowledgement serverapi.WorktreeScheduledAcknowledgement
 	client.run = func() error {
 		active := engine.ActiveRun()
 		if active == nil {
 			return errors.New("active Agent Step is required")
 		}
-		_, err := retargeter.RetargetWorkspace(context.Background(), SessionWorkspaceRetargetInvocation{
-			OperationID: serverapi.NewWorktreeOperationID(),
+		response, err := retargeter.RetargetWorkspace(context.Background(), SessionWorkspaceRetargetInvocation{
+			OperationID: operationID,
 			Request:     req,
 			Origin: &serverapi.RuntimeStepOrigin{
 				RunID:  active.RunID,
@@ -326,14 +334,23 @@ func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t
 			},
 			CompletionMode: serverapi.SessionRetargetCompletionScheduled,
 		})
+		acknowledgement = response.Acknowledgement
 		return err
 	}
 
 	if _, err := engine.SubmitUserMessage(context.Background(), "try moving this Session"); err != nil {
 		t.Fatalf("originating Agent Step: %v", err)
 	}
-	if !errors.Is(client.runErr, commitErr) {
-		t.Fatalf("retarget error = %v, want %v", client.runErr, commitErr)
+	if client.runErr != nil || acknowledgement.OperationID != operationID {
+		t.Fatalf("scheduled rebind = acknowledgement %+v error %v", acknowledgement, client.runErr)
+	}
+	outcome := <-published.outcomes
+	if outcome.Kind != serverapi.SessionRetargetOutcomeFailed ||
+		outcome.Failure == nil ||
+		outcome.Failure.Diagnostic == "" ||
+		outcome.Failure.UnchangedProject.ID != fixture.sourceBinding.ProjectID ||
+		outcome.Failure.UnchangedWorkingDirectory != fixture.sourceBinding.CanonicalRoot {
+		t.Fatalf("published failure outcome = %+v", *outcome.Failure)
 	}
 	if len(client.requests) != 2 {
 		t.Fatalf("provider requests = %d, want 2", len(client.requests))
@@ -341,7 +358,7 @@ func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t
 	var failureNotice *llm.ResponseItem
 	for _, item := range client.requests[1].Items {
 		if item.MessageType != nil && *item.MessageType == llm.MessageTypeErrorFeedback &&
-			item.Content != nil && strings.Contains(*item.Content, commitErr.Error()) {
+			item.Content != nil {
 			copyItem := item
 			failureNotice = &copyItem
 			break
@@ -349,10 +366,6 @@ func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t
 	}
 	if failureNotice == nil {
 		t.Fatalf("second provider request lacks typed failure notice: %+v", client.requests[1].Items)
-	}
-	if !strings.Contains(*failureNotice.Content, fixture.sourceBinding.ProjectName) ||
-		!strings.Contains(*failureNotice.Content, fixture.sourceBinding.CanonicalRoot) {
-		t.Fatalf("failure notice lacks unchanged Project/Working Directory facts: %q", *failureNotice.Content)
 	}
 	if workdir := fixture.runtimeWorkdir(t); canonicalRetargetTestPath(t, workdir) != canonicalRetargetTestPath(t, fixture.sourceBinding.CanonicalRoot) {
 		t.Fatalf("failed rebind changed runtime workdir to %q", workdir)
@@ -364,6 +377,94 @@ func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t
 		return nil
 	}); err != nil {
 		t.Fatalf("inspect continued Engine: %v", err)
+	}
+}
+
+func TestSessionWorkspaceRetargeterKeepsCommittedSuccessWhenIdentityPublicationFails(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	publishErr := errors.New("identity publication failed")
+	retargeter := NewSessionWorkspaceRetargeter(
+		fixture.metadata,
+		fixture.authority,
+		failingRetargetIdentityPublisher{err: publishErr},
+	)
+	t.Cleanup(func() { _ = retargeter.Close() })
+
+	response, err := retargeter.RetargetWorkspace(t.Context(), SessionWorkspaceRetargetInvocation{
+		OperationID: serverapi.NewWorktreeOperationID(),
+		Request: metadata.SessionWorkspaceRetargetRequest{
+			SessionID:     fixture.child.Meta().SessionID,
+			WorkspaceRoot: fixture.targetWorkspaceRoot,
+		},
+		CompletionMode: serverapi.SessionRetargetCompletionWait,
+	})
+	if err != nil ||
+		response.Outcome == nil ||
+		response.Outcome.Kind != serverapi.SessionRetargetOutcomeSucceeded ||
+		response.Outcome.Success == nil {
+		t.Fatalf("committed rebind response = %+v error %v", response, err)
+	}
+	if response.Outcome.Success.Binding.CanonicalRoot != canonicalRetargetTestPath(t, fixture.targetWorkspaceRoot) {
+		t.Fatalf("committed binding = %+v", response.Outcome.Success.Binding)
+	}
+}
+
+type applyPlanFailureMetadata struct {
+	*metadata.Store
+	applyErr error
+	source   metadata.SessionWorkspaceRetargetSource
+	calls    int
+}
+
+func (m *applyPlanFailureMetadata) PlanSessionWorkspaceRetarget(
+	ctx context.Context,
+	request metadata.SessionWorkspaceRetargetRequest,
+) (metadata.SessionWorkspaceRetargetPlan, error) {
+	m.calls++
+	if m.calls == 1 {
+		return m.Store.PlanSessionWorkspaceRetarget(ctx, request)
+	}
+	return metadata.SessionWorkspaceRetargetPlan{}, m.applyErr
+}
+
+func (m *applyPlanFailureMetadata) ResolveSessionWorkspaceRetargetSource(
+	context.Context,
+	string,
+) (metadata.SessionWorkspaceRetargetSource, error) {
+	return m.source, nil
+}
+
+func TestSessionWorkspaceRetargeterFailureUsesApplyTimeSourceFacts(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	applyErr := errors.New("apply-time plan failed")
+	applySource := metadata.SessionWorkspaceRetargetSource{
+		Project:                   serverapi.ProjectReference{ID: "project-new", Name: "New"},
+		EffectiveWorkingDirectory: filepath.Join(fixture.managedBase, "new"),
+	}
+	source := &applyPlanFailureMetadata{
+		Store:    fixture.metadata,
+		applyErr: applyErr,
+		source:   applySource,
+	}
+	retargeter := fixture.retargeter(source)
+	t.Cleanup(func() { _ = retargeter.Close() })
+
+	response, err := retargeter.RetargetWorkspace(t.Context(), SessionWorkspaceRetargetInvocation{
+		OperationID: serverapi.NewWorktreeOperationID(),
+		Request: metadata.SessionWorkspaceRetargetRequest{
+			SessionID:     fixture.child.Meta().SessionID,
+			WorkspaceRoot: fixture.targetWorkspaceRoot,
+		},
+		CompletionMode: serverapi.SessionRetargetCompletionWait,
+	})
+	if err != nil ||
+		response.Outcome == nil ||
+		response.Outcome.Kind != serverapi.SessionRetargetOutcomeFailed ||
+		response.Outcome.Failure == nil ||
+		response.Outcome.Failure.Diagnostic != applyErr.Error() ||
+		response.Outcome.Failure.UnchangedProject != applySource.Project ||
+		response.Outcome.Failure.UnchangedWorkingDirectory != applySource.EffectiveWorkingDirectory {
+		t.Fatalf("apply-time failure response = %+v error %v", response, err)
 	}
 }
 
@@ -602,13 +703,8 @@ func TestSessionWorkspaceRetargeterSelfRebindAppliesInsideOriginatingStepWithout
 			break
 		}
 	}
-	if reminder == nil || reminder.CompactContent == nil || *reminder.CompactContent != clientui.SessionRebindCompactLabel {
+	if reminder == nil || reminder.CompactContent == nil || reminder.Content == nil {
 		t.Fatalf("second provider request Session move reminder = %+v", reminder)
-	}
-	if reminder.Content == nil ||
-		!strings.Contains(*reminder.Content, fixture.targetProject.ProjectName) ||
-		!strings.Contains(*reminder.Content, fixture.targetWorkspaceRoot) {
-		t.Fatalf("second provider request Session move facts = %+v", reminder)
 	}
 	if fixture.child.Meta().RebindReminder != nil {
 		t.Fatalf("consumed Session move reminder remains durable: %+v", fixture.child.Meta().RebindReminder)

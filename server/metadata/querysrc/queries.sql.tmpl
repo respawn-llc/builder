@@ -2356,8 +2356,9 @@ SELECT
     p.display_name AS project_display_name,
     p.project_key,
     s.artifact_relpath,
-    COALESCE(s.workspace_id, '') AS workspace_id,
-    COALESCE(w.canonical_root_path, json_extract(s.metadata_json, '$.workspace_root'), '') AS workspace_root,
+    s.workspace_id AS workspace_id,
+    w.canonical_root_path AS registered_workspace_root,
+    s.metadata_json,
     s.worktree_id,
     wt.canonical_root_path AS worktree_root,
     s.cwd_relpath
@@ -2689,7 +2690,7 @@ SET
     )
 WHERE id = sqlc.arg(session_id)
   AND project_id = sqlc.arg(source_project_id)
-  AND workspace_id = sqlc.arg(source_workspace_id)
+  AND workspace_id IS sqlc.narg(source_workspace_id)
   AND worktree_id IS NULL
   AND cwd_relpath = sqlc.arg(source_cwd_relpath)
   AND artifact_relpath = sqlc.arg(source_artifact_relpath);

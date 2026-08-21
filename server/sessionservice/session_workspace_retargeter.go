@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -20,6 +21,7 @@ import (
 
 type sessionRetargetMetadata interface {
 	PlanSessionWorkspaceRetarget(context.Context, metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetPlan, error)
+	ResolveSessionWorkspaceRetargetSource(context.Context, string) (metadata.SessionWorkspaceRetargetSource, error)
 	CommitSessionWorkspaceRetarget(context.Context, metadata.SessionWorkspaceRetargetPlan, time.Time) (metadata.SessionWorkspaceRetargetResult, error)
 	ResolveProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error)
 	ProjectWorkspaceAttached(context.Context, string, string) (bool, error)
@@ -102,7 +104,10 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 		Acknowledgement: serverapi.WorktreeScheduledAcknowledgement{OperationID: invocation.OperationID},
 	}
 	if plan.NoOp() {
-		outcome := successfulSessionRetargetOutcome(invocation.OperationID, plan.SourceBinding, false)
+		if plan.SourceBinding == nil {
+			return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("no-op Session retarget requires a source binding")
+		}
+		outcome := successfulSessionRetargetOutcome(invocation.OperationID, *plan.SourceBinding, false)
 		if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
 			response.Outcome = &outcome
 		} else if s.outcomes != nil {
@@ -115,13 +120,27 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 	}
 	run := func(runCtx context.Context) (serverapi.SessionRetargetOutcome, error) {
 		defer s.wg.Done()
-		result, runErr := s.execute(runCtx, invocation.Request, invocation.Origin)
+		result, source, runErr := s.executeWithSource(
+			runCtx,
+			invocation.Request,
+			invocation.Origin,
+			metadata.SessionWorkspaceRetargetSource{
+				Project:                   plan.SourceProject,
+				EffectiveWorkingDirectory: plan.SourceEffectiveWorkingDirectory,
+			},
+		)
 		if runErr != nil {
-			return failedSessionRetargetOutcome(invocation.OperationID, plan, runErr), runErr
+			return failedSessionRetargetOutcome(invocation.OperationID, source, runErr), runErr
 		}
 		if invocation.Origin != nil && result.RebindReminder != nil {
 			if err := s.authority.SteerSessionRebindReminder(runCtx, plan.SessionID, *result.RebindReminder); err != nil {
-				return failedSessionRetargetOutcome(invocation.OperationID, plan, err), err
+				slog.WarnContext(
+					runCtx,
+					"steer committed Session rebind reminder failed",
+					"session_id", plan.SessionID,
+					"operation_id", invocation.OperationID.String(),
+					"error", err,
+				)
 			}
 		}
 		return successfulSessionRetargetOutcome(invocation.OperationID, result.Binding, result.WorkspaceBindingCreated), nil
@@ -138,9 +157,9 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 			s.outcomes.PublishSessionRetargetOutcome(plan.SessionID, outcome)
 		}
 		if runErr != nil {
-			_ = s.authority.SteerSessionRetargetFailure(runCtx, plan.SessionID, outcome)
+			s.steerFailure(runCtx, plan.SessionID, outcome)
 		}
-		return response, runErr
+		return response, nil
 	}
 	go func() {
 		outcome, _ := run(s.lifetimeCtx)
@@ -148,7 +167,7 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 			s.outcomes.PublishSessionRetargetOutcome(plan.SessionID, outcome)
 		}
 		if outcome.Kind == serverapi.SessionRetargetOutcomeFailed {
-			_ = s.authority.SteerSessionRetargetFailure(s.lifetimeCtx, plan.SessionID, outcome)
+			s.steerFailure(s.lifetimeCtx, plan.SessionID, outcome)
 		}
 	}()
 	return response, nil
@@ -181,7 +200,23 @@ func (s *SessionWorkspaceRetargeter) execute(
 	req metadata.SessionWorkspaceRetargetRequest,
 	origin *serverapi.RuntimeStepOrigin,
 ) (metadata.SessionWorkspaceRetargetResult, error) {
+	result, _, err := s.executeWithSource(
+		ctx,
+		req,
+		origin,
+		metadata.SessionWorkspaceRetargetSource{},
+	)
+	return result, err
+}
+
+func (s *SessionWorkspaceRetargeter) executeWithSource(
+	ctx context.Context,
+	req metadata.SessionWorkspaceRetargetRequest,
+	origin *serverapi.RuntimeStepOrigin,
+	fallbackSource metadata.SessionWorkspaceRetargetSource,
+) (metadata.SessionWorkspaceRetargetResult, metadata.SessionWorkspaceRetargetSource, error) {
 	var result metadata.SessionWorkspaceRetargetResult
+	source := fallbackSource
 	err := s.authority.RunSessionExecutionTargetTransition(ctx, req.SessionID, origin, func(
 		runCtx context.Context,
 		store *session.Store,
@@ -190,10 +225,22 @@ func (s *SessionWorkspaceRetargeter) execute(
 	) error {
 		currentPlan, err := s.metadata.PlanSessionWorkspaceRetarget(runCtx, req)
 		if err != nil {
+			resolvedSource, sourceErr := s.metadata.ResolveSessionWorkspaceRetargetSource(runCtx, req.SessionID)
+			if sourceErr != nil {
+				return errors.Join(err, fmt.Errorf("resolve apply-time Session location: %w", sourceErr))
+			}
+			source = resolvedSource
 			return err
 		}
+		source = metadata.SessionWorkspaceRetargetSource{
+			Project:                   currentPlan.SourceProject,
+			EffectiveWorkingDirectory: currentPlan.SourceEffectiveWorkingDirectory,
+		}
 		if currentPlan.NoOp() {
-			result = metadata.SessionWorkspaceRetargetResult{Binding: currentPlan.SourceBinding}
+			if currentPlan.SourceBinding == nil {
+				return errors.New("no-op Session retarget requires a source binding")
+			}
+			result = metadata.SessionWorkspaceRetargetResult{Binding: *currentPlan.SourceBinding}
 			return nil
 		}
 		if store == nil {
@@ -268,9 +315,33 @@ func (s *SessionWorkspaceRetargeter) execute(
 		})
 	})
 	if err != nil {
-		return metadata.SessionWorkspaceRetargetResult{}, err
+		return metadata.SessionWorkspaceRetargetResult{}, source, err
 	}
-	return result, s.publisher.PublishSessionIdentity(req.SessionID)
+	if err := s.publisher.PublishSessionIdentity(req.SessionID); err != nil {
+		slog.WarnContext(
+			ctx,
+			"publish committed Session rebind identity failed",
+			"session_id", req.SessionID,
+			"error", err,
+		)
+	}
+	return result, source, nil
+}
+
+func (s *SessionWorkspaceRetargeter) steerFailure(
+	ctx context.Context,
+	sessionID string,
+	outcome serverapi.SessionRetargetOutcome,
+) {
+	if err := s.authority.SteerSessionRetargetFailure(ctx, sessionID, outcome); err != nil {
+		slog.WarnContext(
+			ctx,
+			"steer Session rebind failure failed",
+			"session_id", sessionID,
+			"operation_id", outcome.OperationID.String(),
+			"error", err,
+		)
+	}
 }
 
 func (s *SessionWorkspaceRetargeter) targetFilesystemContext(
@@ -339,7 +410,7 @@ func successfulSessionRetargetOutcome(
 
 func failedSessionRetargetOutcome(
 	operationID serverapi.WorktreeOperationID,
-	plan metadata.SessionWorkspaceRetargetPlan,
+	source metadata.SessionWorkspaceRetargetSource,
 	err error,
 ) serverapi.SessionRetargetOutcome {
 	return serverapi.SessionRetargetOutcome{
@@ -347,8 +418,8 @@ func failedSessionRetargetOutcome(
 		Kind:        serverapi.SessionRetargetOutcomeFailed,
 		Failure: &serverapi.SessionRetargetFailure{
 			Diagnostic:                err.Error(),
-			UnchangedProject:          plan.SourceProject,
-			UnchangedWorkingDirectory: plan.SourceEffectiveWorkingDirectory,
+			UnchangedProject:          source.Project,
+			UnchangedWorkingDirectory: source.EffectiveWorkingDirectory,
 		},
 	}
 }

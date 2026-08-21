@@ -418,9 +418,13 @@ func commandRuntimeOrigin() (*serverapi.RuntimeStepOrigin, error) {
 }
 
 func newSessionTransitionHeader(sessionID string) (serverapi.WorktreeTransitionHeader, error) {
-	origin, err := commandRuntimeOrigin()
-	if err != nil {
-		return serverapi.WorktreeTransitionHeader{}, err
+	var origin *serverapi.RuntimeStepOrigin
+	if currentSessionID, ok := sessionenv.LookupSessionID(os.LookupEnv); ok && currentSessionID == sessionID {
+		var err error
+		origin, err = commandRuntimeOrigin()
+		if err != nil {
+			return serverapi.WorktreeTransitionHeader{}, err
+		}
 	}
 	return serverapi.WorktreeTransitionHeader{
 		OperationID: serverapi.NewWorktreeOperationID(),

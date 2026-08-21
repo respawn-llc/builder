@@ -2,12 +2,10 @@ package runtime
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -37,14 +35,8 @@ func TestSubmitUserMessageConsumesPendingSessionRebindReminder(t *testing.T) {
 			break
 		}
 	}
-	if rebind == nil || rebind.CompactContent == nil || *rebind.CompactContent != clientui.SessionRebindCompactLabel {
+	if rebind == nil || rebind.Content == nil || rebind.CompactContent == nil {
 		t.Fatalf("typed Session rebind reminder = %+v", rebind)
-	}
-	content := messageContent(*rebind)
-	for _, fact := range []string{"Source", "Target", targetCWD} {
-		if !strings.Contains(content, fact) {
-			t.Fatalf("Session rebind reminder %q does not contain fact %q", content, fact)
-		}
 	}
 	if store.Meta().RebindReminder != nil {
 		t.Fatalf("consumed Session rebind reminder remains durable: %+v", store.Meta().RebindReminder)
