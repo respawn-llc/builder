@@ -283,20 +283,30 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 	if err != nil {
 		return SessionWorkspaceRetargetResult{}, err
 	}
-	reminder := session.SessionRebindReminder{
-		SourceProject: currentSourceProject,
-		TargetProject: currentTargetProject,
-	}
-	if plan.SourceEffectiveWorkingDirectory != binding.CanonicalRoot {
-		reminder.WorkingDirectory = &binding.CanonicalRoot
-	}
-	normalizedReminder, err := session.NormalizeSessionRebindReminder(reminder)
-	if err != nil {
-		return SessionWorkspaceRetargetResult{}, fmt.Errorf("build session rebind reminder: %w", err)
-	}
-	reminderJSON, err := json.Marshal(normalizedReminder)
-	if err != nil {
-		return SessionWorkspaceRetargetResult{}, fmt.Errorf("marshal session rebind reminder: %w", err)
+	var (
+		normalizedReminder *session.SessionRebindReminder
+		reminderJSON       sql.NullString
+	)
+	projectChanged := currentSourceProject.ID != currentTargetProject.ID
+	workingDirectoryChanged := currentEffectiveWorkingDirectory != binding.CanonicalRoot
+	if projectChanged || workingDirectoryChanged {
+		reminder := session.SessionRebindReminder{
+			SourceProject: currentSourceProject,
+			TargetProject: currentTargetProject,
+		}
+		if workingDirectoryChanged {
+			reminder.WorkingDirectory = &binding.CanonicalRoot
+		}
+		normalized, err := session.NormalizeSessionRebindReminder(reminder)
+		if err != nil {
+			return SessionWorkspaceRetargetResult{}, fmt.Errorf("build session rebind reminder: %w", err)
+		}
+		encoded, err := json.Marshal(normalized)
+		if err != nil {
+			return SessionWorkspaceRetargetResult{}, fmt.Errorf("marshal session rebind reminder: %w", err)
+		}
+		normalizedReminder = &normalized
+		reminderJSON = sql.NullString{String: string(encoded), Valid: true}
 	}
 	rows, err := q.RetargetSessionWorkspaceProject(ctx, sqlitegen.RetargetSessionWorkspaceProjectParams{
 		TargetProjectID:          plan.TargetProject.ID,
@@ -305,7 +315,7 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 		UpdatedAtUnixMs:          updatedAt.UnixMilli(),
 		TargetWorkspaceRoot:      binding.CanonicalRoot,
 		TargetWorkspaceContainer: binding.WorkspaceName,
-		RebindReminderJson:       string(reminderJSON),
+		RebindReminderJson:       reminderJSON,
 		SessionID:                plan.SessionID,
 		SourceProjectID:          plan.SourceProject.ID,
 		SourceWorkspaceID:        sessionRetargetWorkspaceID(plan.SourceBinding),
@@ -325,7 +335,7 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 		Binding:                 binding,
 		WorkspaceBindingCreated: created,
 		UpdatedAt:               updatedAt,
-		RebindReminder:          session.CloneSessionRebindReminder(&normalizedReminder),
+		RebindReminder:          session.CloneSessionRebindReminder(normalizedReminder),
 	}, nil
 }
 

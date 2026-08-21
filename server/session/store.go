@@ -455,7 +455,7 @@ type ArtifactRelocationTarget struct {
 }
 
 type ArtifactRelocationObservation struct {
-	RebindReminder *SessionRebindReminder
+	UpdatedRebindReminder *SessionRebindReminder
 }
 
 func (s *Store) RunArtifactRelocation(
@@ -506,7 +506,9 @@ func (s *Store) RunArtifactRelocation(
 	}
 	s.meta.WorkspaceRoot = target.WorkspaceRoot
 	s.meta.WorkspaceContainer = target.WorkspaceContainer
-	s.meta.RebindReminder = CloneSessionRebindReminder(observation.RebindReminder)
+	if observation.UpdatedRebindReminder != nil {
+		s.meta.RebindReminder = CloneSessionRebindReminder(observation.UpdatedRebindReminder)
+	}
 	s.meta.UpdatedAt = target.UpdatedAt
 	return nil
 }

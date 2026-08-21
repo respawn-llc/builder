@@ -108,17 +108,16 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 			return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("no-op Session retarget requires a source binding")
 		}
 		outcome := successfulSessionRetargetOutcome(invocation.OperationID, *plan.SourceBinding, false)
+		s.publishTerminalOutcome(s.lifetimeCtx, plan.SessionID, outcome, nil)
 		if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
 			response.Outcome = &outcome
-		} else if s.outcomes != nil {
-			s.outcomes.PublishSessionRetargetOutcome(plan.SessionID, outcome)
 		}
 		return response, nil
 	}
 	if !s.register() {
 		return serverapi.SessionRetargetWorkspaceResponse{}, context.Canceled
 	}
-	run := func(runCtx context.Context) (serverapi.SessionRetargetOutcome, error) {
+	run := func(runCtx context.Context) (*serverapi.SessionRetargetOutcome, error) {
 		defer s.wg.Done()
 		result, source, runErr := s.executeWithSource(
 			runCtx,
@@ -130,7 +129,11 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 			},
 		)
 		if runErr != nil {
-			return failedSessionRetargetOutcome(invocation.OperationID, source, runErr), runErr
+			if s.shutdownCanceled(runErr) {
+				return nil, runErr
+			}
+			outcome := failedSessionRetargetOutcome(invocation.OperationID, source, runErr)
+			return &outcome, runErr
 		}
 		if invocation.Origin != nil && result.RebindReminder != nil {
 			if err := s.authority.SteerSessionRebindReminder(runCtx, plan.SessionID, *result.RebindReminder); err != nil {
@@ -143,32 +146,32 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 				)
 			}
 		}
-		return successfulSessionRetargetOutcome(invocation.OperationID, result.Binding, result.WorkspaceBindingCreated), nil
+		outcome := successfulSessionRetargetOutcome(invocation.OperationID, result.Binding, result.WorkspaceBindingCreated)
+		return &outcome, nil
 	}
 	if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait || invocation.Origin != nil {
 		runCtx, cancel := s.requestContext(ctx)
 		defer cancel()
 		outcome, runErr := run(runCtx)
-		if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
-			response.Outcome = &outcome
+		if outcome == nil {
+			if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
+				return serverapi.SessionRetargetWorkspaceResponse{}, runErr
+			}
 			return response, nil
 		}
-		if context.Cause(s.lifetimeCtx) == nil && s.outcomes != nil {
-			s.outcomes.PublishSessionRetargetOutcome(plan.SessionID, outcome)
-		}
-		if runErr != nil {
-			s.steerFailure(runCtx, plan.SessionID, outcome)
+		s.publishTerminalOutcome(s.lifetimeCtx, plan.SessionID, *outcome, runErr)
+		if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
+			response.Outcome = outcome
+			return response, nil
 		}
 		return response, nil
 	}
 	go func() {
-		outcome, _ := run(s.lifetimeCtx)
-		if context.Cause(s.lifetimeCtx) == nil && s.outcomes != nil {
-			s.outcomes.PublishSessionRetargetOutcome(plan.SessionID, outcome)
+		outcome, runErr := run(s.lifetimeCtx)
+		if outcome == nil {
+			return
 		}
-		if outcome.Kind == serverapi.SessionRetargetOutcomeFailed {
-			s.steerFailure(s.lifetimeCtx, plan.SessionID, outcome)
-		}
+		s.publishTerminalOutcome(s.lifetimeCtx, plan.SessionID, *outcome, runErr)
 	}()
 	return response, nil
 }
@@ -193,6 +196,12 @@ func (s *SessionWorkspaceRetargeter) requestContext(ctx context.Context) (contex
 		stop()
 		cancel()
 	}
+}
+
+func (s *SessionWorkspaceRetargeter) shutdownCanceled(err error) bool {
+	return err != nil &&
+		context.Cause(s.lifetimeCtx) != nil &&
+		errors.Is(err, context.Canceled)
 }
 
 func (s *SessionWorkspaceRetargeter) execute(
@@ -225,11 +234,6 @@ func (s *SessionWorkspaceRetargeter) executeWithSource(
 	) error {
 		currentPlan, err := s.metadata.PlanSessionWorkspaceRetarget(runCtx, req)
 		if err != nil {
-			resolvedSource, sourceErr := s.metadata.ResolveSessionWorkspaceRetargetSource(runCtx, req.SessionID)
-			if sourceErr != nil {
-				return errors.Join(err, fmt.Errorf("resolve apply-time Session location: %w", sourceErr))
-			}
-			source = resolvedSource
 			return err
 		}
 		source = metadata.SessionWorkspaceRetargetSource{
@@ -309,13 +313,23 @@ func (s *SessionWorkspaceRetargeter) executeWithSource(
 				}
 				runtimeRebound = false
 				return session.ArtifactRelocationObservation{
-					RebindReminder: result.RebindReminder,
+					UpdatedRebindReminder: result.RebindReminder,
 				}, nil
 			})
 		})
 	})
 	if err != nil {
-		return metadata.SessionWorkspaceRetargetResult{}, source, err
+		if s.shutdownCanceled(err) {
+			return metadata.SessionWorkspaceRetargetResult{}, source, err
+		}
+		resolvedSource, sourceErr := s.metadata.ResolveSessionWorkspaceRetargetSource(s.lifetimeCtx, req.SessionID)
+		if sourceErr != nil {
+			return metadata.SessionWorkspaceRetargetResult{}, source, errors.Join(
+				err,
+				fmt.Errorf("resolve post-apply Session location: %w", sourceErr),
+			)
+		}
+		return metadata.SessionWorkspaceRetargetResult{}, resolvedSource, err
 	}
 	if err := s.publisher.PublishSessionIdentity(req.SessionID); err != nil {
 		slog.WarnContext(
@@ -341,6 +355,20 @@ func (s *SessionWorkspaceRetargeter) steerFailure(
 			"operation_id", outcome.OperationID.String(),
 			"error", err,
 		)
+	}
+}
+
+func (s *SessionWorkspaceRetargeter) publishTerminalOutcome(
+	ctx context.Context,
+	sessionID string,
+	outcome serverapi.SessionRetargetOutcome,
+	runErr error,
+) {
+	if s.outcomes != nil {
+		s.outcomes.PublishSessionRetargetOutcome(sessionID, outcome)
+	}
+	if runErr != nil {
+		s.steerFailure(ctx, sessionID, outcome)
 	}
 }
 

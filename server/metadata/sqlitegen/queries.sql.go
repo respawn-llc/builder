@@ -9074,12 +9074,20 @@ SET
     artifact_relpath = ?3,
     updated_at_unix_ms = ?4,
     metadata_json = json_remove(
-        json_set(
-            CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
-            '$.workspace_root', CAST(?5 AS TEXT),
-            '$.workspace_container', CAST(?6 AS TEXT),
-            '$.rebind_reminder', json(CAST(?7 AS TEXT))
-        ),
+        CASE WHEN CAST(?5 AS TEXT) IS NULL THEN
+            json_set(
+                CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+                '$.workspace_root', CAST(?6 AS TEXT),
+                '$.workspace_container', CAST(?7 AS TEXT)
+            )
+        ELSE
+            json_set(
+                CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+                '$.workspace_root', CAST(?6 AS TEXT),
+                '$.workspace_container', CAST(?7 AS TEXT),
+                '$.rebind_reminder', json(CAST(?5 AS TEXT))
+            )
+        END,
         '$.workflow_session'
     )
 WHERE id = ?8
@@ -9095,9 +9103,9 @@ type RetargetSessionWorkspaceProjectParams struct {
 	TargetWorkspaceID        sql.NullString
 	TargetArtifactRelpath    string
 	UpdatedAtUnixMs          int64
+	RebindReminderJson       sql.NullString
 	TargetWorkspaceRoot      string
 	TargetWorkspaceContainer string
-	RebindReminderJson       string
 	SessionID                string
 	SourceProjectID          string
 	SourceWorkspaceID        sql.NullString
@@ -9111,9 +9119,9 @@ func (q *Queries) RetargetSessionWorkspaceProject(ctx context.Context, arg Retar
 		arg.TargetWorkspaceID,
 		arg.TargetArtifactRelpath,
 		arg.UpdatedAtUnixMs,
+		arg.RebindReminderJson,
 		arg.TargetWorkspaceRoot,
 		arg.TargetWorkspaceContainer,
-		arg.RebindReminderJson,
 		arg.SessionID,
 		arg.SourceProjectID,
 		arg.SourceWorkspaceID,

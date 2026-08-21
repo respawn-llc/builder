@@ -166,6 +166,47 @@ func TestCommitSessionWorkspaceRetargetRebindsUnlinkedSession(t *testing.T) {
 	}
 }
 
+func TestCommitSessionWorkspaceRetargetAttachesUnlinkedSameRootWithoutReminder(t *testing.T) {
+	t.Parallel()
+	fixture := newSessionRetargetFixture(t)
+	ctx := t.Context()
+	if _, err := fixture.store.db.ExecContext(
+		ctx,
+		"UPDATE sessions SET workspace_id = NULL, worktree_id = NULL WHERE id = ?",
+		fixture.session.Meta().SessionID,
+	); err != nil {
+		t.Fatalf("unlink Session workspace: %v", err)
+	}
+	plan, err := fixture.store.PlanSessionWorkspaceRetarget(ctx, SessionWorkspaceRetargetRequest{
+		SessionID:     fixture.session.Meta().SessionID,
+		WorkspaceRoot: fixture.source.CanonicalRoot,
+	})
+	if err != nil {
+		t.Fatalf("PlanSessionWorkspaceRetarget: %v", err)
+	}
+	if plan.NoOp() {
+		t.Fatalf("unlinked Session plan = %+v, want attachment apply", plan)
+	}
+	result, err := fixture.store.CommitSessionWorkspaceRetarget(ctx, plan, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CommitSessionWorkspaceRetarget: %v", err)
+	}
+	if result.Binding.WorkspaceID != fixture.source.WorkspaceID || result.RebindReminder != nil {
+		t.Fatalf("same-root attachment result = %+v", result)
+	}
+	reopened, err := session.OpenByID(
+		fixture.config.PersistenceRoot,
+		fixture.session.Meta().SessionID,
+		fixture.store.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.OpenByID: %v", err)
+	}
+	if reopened.Meta().RebindReminder != nil {
+		t.Fatalf("same-root attachment persisted reminder: %+v", reopened.Meta().RebindReminder)
+	}
+}
+
 func TestPlanSessionWorkspaceRetargetRejectsRecordedSourceAndTargetWorktrees(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

@@ -268,6 +268,27 @@ func (retargetRuntimeClient) ProviderCapabilities(context.Context) (llm.Provider
 	return llm.InferProviderCapabilities("openai")
 }
 
+type recordingRetargetRuntimeClient struct {
+	response string
+	requests []llm.Request
+}
+
+func (c *recordingRetargetRuntimeClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+	c.requests = append(c.requests, request)
+	return llm.Response{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value(c.response),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (*recordingRetargetRuntimeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 type selfRetargetRuntimeClient struct {
 	run            func() error
 	ignoreRunError bool
@@ -383,11 +404,12 @@ func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t
 func TestSessionWorkspaceRetargeterKeepsCommittedSuccessWhenIdentityPublicationFails(t *testing.T) {
 	fixture := newRealSessionRetargetFixture(t, false)
 	publishErr := errors.New("identity publication failed")
+	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
 	retargeter := NewSessionWorkspaceRetargeter(
 		fixture.metadata,
 		fixture.authority,
 		failingRetargetIdentityPublisher{err: publishErr},
-	)
+	).WithOutcomePublisher(published)
 	t.Cleanup(func() { _ = retargeter.Close() })
 
 	response, err := retargeter.RetargetWorkspace(t.Context(), SessionWorkspaceRetargetInvocation{
@@ -407,6 +429,52 @@ func TestSessionWorkspaceRetargeterKeepsCommittedSuccessWhenIdentityPublicationF
 	if response.Outcome.Success.Binding.CanonicalRoot != canonicalRetargetTestPath(t, fixture.targetWorkspaceRoot) {
 		t.Fatalf("committed binding = %+v", response.Outcome.Success.Binding)
 	}
+	if publishedOutcome := <-published.outcomes; publishedOutcome.OperationID != response.Outcome.OperationID ||
+		publishedOutcome.Kind != serverapi.SessionRetargetOutcomeSucceeded {
+		t.Fatalf("published wait outcome = %+v, want %+v", publishedOutcome, *response.Outcome)
+	}
+}
+
+func TestSessionWorkspaceRetargeterWaitFailurePublishesAndSteersOutcome(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	commitErr := errors.New("wait-mode commit failed")
+	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
+	retargeter := fixture.retargeter(failingSessionRetargetCommit{Store: fixture.metadata, err: commitErr}).
+		WithOutcomePublisher(published)
+	t.Cleanup(func() { _ = retargeter.Close() })
+	client := &recordingRetargetRuntimeClient{response: t.Name()}
+	engine := fixture.openRuntimeWithClient(t, client)
+	operationID := serverapi.NewWorktreeOperationID()
+
+	response, err := retargeter.RetargetWorkspace(t.Context(), SessionWorkspaceRetargetInvocation{
+		OperationID: operationID,
+		Request: metadata.SessionWorkspaceRetargetRequest{
+			SessionID:     fixture.child.Meta().SessionID,
+			WorkspaceRoot: fixture.targetWorkspaceRoot,
+		},
+		CompletionMode: serverapi.SessionRetargetCompletionWait,
+	})
+	if err != nil ||
+		response.Outcome == nil ||
+		response.Outcome.Kind != serverapi.SessionRetargetOutcomeFailed {
+		t.Fatalf("wait failure response = %+v error %v", response, err)
+	}
+	if publishedOutcome := <-published.outcomes; publishedOutcome.OperationID != operationID ||
+		publishedOutcome.Kind != serverapi.SessionRetargetOutcomeFailed {
+		t.Fatalf("published wait failure = %+v", publishedOutcome)
+	}
+	if _, err := engine.SubmitUserMessage(t.Context(), t.Name()); err != nil {
+		t.Fatalf("SubmitUserMessage after wait failure: %v", err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("provider requests = %d, want 1", len(client.requests))
+	}
+	for _, item := range client.requests[0].Items {
+		if item.MessageType != nil && *item.MessageType == llm.MessageTypeErrorFeedback {
+			return
+		}
+	}
+	t.Fatalf("provider request lacks typed rebind failure notice: %+v", client.requests[0].Items)
 }
 
 type applyPlanFailureMetadata struct {
@@ -465,6 +533,39 @@ func TestSessionWorkspaceRetargeterFailureUsesApplyTimeSourceFacts(t *testing.T)
 		response.Outcome.Failure.UnchangedProject != applySource.Project ||
 		response.Outcome.Failure.UnchangedWorkingDirectory != applySource.EffectiveWorkingDirectory {
 		t.Fatalf("apply-time failure response = %+v error %v", response, err)
+	}
+}
+
+func TestSessionWorkspaceRetargeterFailureUsesAuthoritativePostApplySourceFacts(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	overlappingRoot := filepath.Join(fixture.managedBase, "overlapping")
+	if err := os.MkdirAll(overlappingRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll overlapping target: %v", err)
+	}
+	retargeter := fixture.retargeter(overlappingSessionRetargetCommit{
+		Store: fixture.metadata,
+		request: metadata.SessionWorkspaceRetargetRequest{
+			SessionID:     fixture.child.Meta().SessionID,
+			WorkspaceRoot: overlappingRoot,
+		},
+	})
+	t.Cleanup(func() { _ = retargeter.Close() })
+
+	response, err := retargeter.RetargetWorkspace(t.Context(), SessionWorkspaceRetargetInvocation{
+		OperationID: serverapi.NewWorktreeOperationID(),
+		Request: metadata.SessionWorkspaceRetargetRequest{
+			SessionID:     fixture.child.Meta().SessionID,
+			WorkspaceRoot: fixture.targetWorkspaceRoot,
+		},
+		CompletionMode: serverapi.SessionRetargetCompletionWait,
+	})
+	if err != nil ||
+		response.Outcome == nil ||
+		response.Outcome.Kind != serverapi.SessionRetargetOutcomeFailed ||
+		response.Outcome.Failure == nil ||
+		response.Outcome.Failure.UnchangedProject.ID != fixture.sourceBinding.ProjectID ||
+		canonicalRetargetTestPath(t, response.Outcome.Failure.UnchangedWorkingDirectory) != canonicalRetargetTestPath(t, overlappingRoot) {
+		t.Fatalf("overlapping rebind failure response = %+v error %v", response, err)
 	}
 }
 
@@ -1004,6 +1105,26 @@ func (s *blockingSessionRetargetCommit) CommitSessionWorkspaceRetarget(
 	}
 }
 
+type overlappingSessionRetargetCommit struct {
+	*metadata.Store
+	request metadata.SessionWorkspaceRetargetRequest
+}
+
+func (s overlappingSessionRetargetCommit) CommitSessionWorkspaceRetarget(
+	ctx context.Context,
+	stalePlan metadata.SessionWorkspaceRetargetPlan,
+	updatedAt time.Time,
+) (metadata.SessionWorkspaceRetargetResult, error) {
+	overlappingPlan, err := s.Store.PlanSessionWorkspaceRetarget(ctx, s.request)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetResult{}, err
+	}
+	if _, err := s.Store.CommitSessionWorkspaceRetarget(ctx, overlappingPlan, updatedAt); err != nil {
+		return metadata.SessionWorkspaceRetargetResult{}, err
+	}
+	return s.Store.CommitSessionWorkspaceRetarget(ctx, stalePlan, updatedAt)
+}
+
 type failingSessionRetargetBoundary struct {
 	*metadata.Store
 	err error
@@ -1223,6 +1344,54 @@ func TestSessionWorkspaceRetargeterShutdownCancelsScheduledCallWithoutOutcome(t 
 	select {
 	case outcome := <-published.outcomes:
 		t.Fatalf("shutdown published terminal outcome: %+v", outcome)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSessionWorkspaceRetargeterShutdownCancelsWaitCallWithoutOutcome(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	blocking := &blockingSessionRetargetCommit{
+		Store:   fixture.metadata,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
+	retargeter := fixture.retargeter(blocking).WithOutcomePublisher(published)
+	type waitResult struct {
+		response serverapi.SessionRetargetWorkspaceResponse
+		err      error
+	}
+	done := make(chan waitResult, 1)
+	go func() {
+		response, err := retargeter.RetargetWorkspace(context.Background(), SessionWorkspaceRetargetInvocation{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			Request: metadata.SessionWorkspaceRetargetRequest{
+				SessionID:     fixture.child.Meta().SessionID,
+				WorkspaceRoot: fixture.targetWorkspaceRoot,
+			},
+			CompletionMode: serverapi.SessionRetargetCompletionWait,
+		})
+		done <- waitResult{response: response, err: err}
+	}()
+	select {
+	case <-blocking.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("waiting retarget did not reach commit")
+	}
+	if err := retargeter.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case result := <-done:
+		if !errors.Is(result.err, context.Canceled) || result.response.Outcome != nil {
+			t.Fatalf("shutdown wait result = %+v error %v", result.response, result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("waiting retarget did not return after shutdown")
+	}
+	select {
+	case outcome := <-published.outcomes:
+		t.Fatalf("shutdown published wait terminal outcome: %+v", outcome)
 	case <-time.After(100 * time.Millisecond):
 	}
 }
