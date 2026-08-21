@@ -2,15 +2,17 @@ package auth
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	sharedauth "core/shared/auth"
 )
 
 type Manager struct {
-	store     Store
-	refresher *OAuthRefresher
-	now       func() time.Time
+	mutationMu sync.Mutex
+	store      Store
+	refresher  *OAuthRefresher
+	now        func() time.Time
 }
 
 type CurrentStateResolution struct {
@@ -75,6 +77,8 @@ func (m *Manager) CurrentState(ctx context.Context) (State, error) {
 }
 
 func (m *Manager) ResolveCurrentState(ctx context.Context) (CurrentStateResolution, error) {
+	m.mutationMu.Lock()
+	defer m.mutationMu.Unlock()
 	state, err := m.Load(ctx)
 	if err != nil {
 		return CurrentStateResolution{}, err
@@ -152,6 +156,8 @@ func (m *Manager) SetEnvAPIKeyPreference(ctx context.Context, preference EnvAPIK
 }
 
 func (m *Manager) updateState(ctx context.Context, mutate func(*State) error) (State, error) {
+	m.mutationMu.Lock()
+	defer m.mutationMu.Unlock()
 	state, err := m.StoredState(ctx)
 	if err != nil {
 		return State{}, err

@@ -522,27 +522,6 @@ type startupFinalizeService struct {
 	activationContext context.Context
 }
 
-func (d *startupGatewayDependencies) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	return d.authBootstrapService().GetAuthBootstrapStatus(ctx, req)
-}
-
-func (d *startupGatewayDependencies) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.authBootstrapService().CompleteAuthBootstrap(ctx, req)
-}
-
-func (d *startupGatewayDependencies) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.authBootstrapService().AcknowledgeNoAuth(ctx, req)
-}
-
-func (d *startupGatewayDependencies) authBootstrapService() *authservice.BootstrapService {
-	settings := d.snapshot.Load().cfg.Settings
-	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, settings, apicontract.AllowedPreAuthMethods())
-}
-
 func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
 	resp, err := s.service.FinalizeOnboarding(ctx, req)
 	if err != nil {
@@ -562,7 +541,12 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 
 func (d *startupGatewayDependencies) AuthManager() *auth.Manager { return d.authSupport.AuthManager }
 func (d *startupGatewayDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
-	return d
+	return authservice.NewBootstrapService(
+		d.authSupport.AuthManager,
+		d.authSupport.OAuthOptions,
+		d.snapshot.Load().cfg.Settings,
+		apicontract.AllowedPreAuthMethods(),
+	)
 }
 func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusService {
 	return authservice.NewStatusService(d.authSupport.AuthManager, d.snapshot.Load().cfg.Settings)
