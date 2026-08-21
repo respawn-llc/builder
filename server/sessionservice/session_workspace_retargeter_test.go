@@ -45,6 +45,19 @@ func (p retargetOutcomePublisher) PublishSessionRetargetOutcome(_ string, outcom
 	p.outcomes <- outcome
 }
 
+type blockingRetargetOutcomePublisher struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p blockingRetargetOutcomePublisher) PublishSessionRetargetOutcome(
+	_ string,
+	_ serverapi.SessionRetargetOutcome,
+) {
+	close(p.started)
+	<-p.release
+}
+
 type blockingSessionMetadataObserver struct {
 	store   *metadata.Store
 	mu      sync.Mutex
@@ -1481,5 +1494,47 @@ func TestSessionWorkspaceRetargeterClosedNoOpDoesNotPublishOutcome(t *testing.T)
 	case outcome := <-published.outcomes:
 		t.Fatalf("closed no-op published terminal outcome: %+v", outcome)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSessionWorkspaceRetargeterShutdownDoesNotOvertakeTerminalPublication(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	published := blockingRetargetOutcomePublisher{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	retargeter := fixture.retargeter(fixture.metadata).WithOutcomePublisher(published)
+	retargetDone := make(chan error, 1)
+	go func() {
+		_, err := retargeter.RetargetWorkspace(context.Background(), SessionWorkspaceRetargetInvocation{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			Request: metadata.SessionWorkspaceRetargetRequest{
+				SessionID:     fixture.child.Meta().SessionID,
+				WorkspaceRoot: fixture.sourceBinding.CanonicalRoot,
+			},
+			CompletionMode: serverapi.SessionRetargetCompletionScheduled,
+		})
+		retargetDone <- err
+	}()
+	select {
+	case <-published.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("terminal publication did not start")
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- retargeter.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("shutdown overtook terminal publication: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(published.release)
+	if err := <-retargetDone; err != nil {
+		t.Fatalf("RetargetWorkspace: %v", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }

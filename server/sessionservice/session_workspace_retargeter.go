@@ -82,9 +82,11 @@ func (s *SessionWorkspaceRetargeter) Close() error {
 		return nil
 	}
 	s.mu.Lock()
-	s.closed = true
+	if !s.closed {
+		s.closed = true
+		s.cancel()
+	}
 	s.mu.Unlock()
-	s.cancel()
 	s.wg.Wait()
 	return nil
 }
@@ -370,13 +372,16 @@ func (s *SessionWorkspaceRetargeter) publishTerminalOutcome(
 	outcome serverapi.SessionRetargetOutcome,
 	runErr error,
 ) bool {
-	if context.Cause(s.lifetimeCtx) != nil {
+	// Keep shutdown start and terminal side effects on one lifecycle boundary.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
 		return false
 	}
 	if s.outcomes != nil {
 		s.outcomes.PublishSessionRetargetOutcome(sessionID, outcome)
 	}
-	if runErr != nil && context.Cause(s.lifetimeCtx) == nil {
+	if runErr != nil {
 		s.steerFailure(s.lifetimeCtx, sessionID, outcome)
 	}
 	return true
