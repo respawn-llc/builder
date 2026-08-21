@@ -20,11 +20,15 @@ func NextReadModelVersion(sessionID string) clientui.ReadModelVersion {
 	if id == "" {
 		id = "unknown"
 	}
-	return mustReadModelVersion(
+	version, err := clientui.NewReadModelVersion(
 		processEpoch+"-"+id,
 		1,
 		fallbackSequence.Add(1),
 	)
+	if err != nil {
+		panic(err)
+	}
+	return version
 }
 
 func BuildFeedSnapshot(
@@ -40,12 +44,4 @@ func BuildFeedSnapshot(
 		return clientui.RuntimeReadModelUpdate{}, fmt.Errorf("validate runtime feed read-model update: %w", err)
 	}
 	return update, nil
-}
-
-func mustReadModelVersion(epoch string, generation uint64, sequence uint64) clientui.ReadModelVersion {
-	version, err := clientui.NewReadModelVersion(epoch, generation, sequence)
-	if err != nil {
-		panic(err)
-	}
-	return version
 }
