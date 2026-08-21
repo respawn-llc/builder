@@ -38,7 +38,7 @@ type chatContextAuthReader interface {
 
 type Service struct {
 	persisted         PersistedSessionResolver
-	snapshots         *resolvedSessionSnapshotSource
+	mainViews         runtimeMainViewSnapshotProvider
 	targets           ExecutionTargetResolver
 	app               config.App
 	auth              servicecontract.AuthStatusService
@@ -76,10 +76,10 @@ func NewService(
 ) *Service {
 	svc := &Service{
 		persisted:        sessions,
+		mainViews:        mainViews,
 		targets:          targets,
 		cacheWarningMode: config.CacheWarningModeDefault,
 	}
-	svc.snapshots = newResolvedSessionSnapshotSource(sessions, mainViews, svc.cacheWarningMode)
 	return svc
 }
 
@@ -185,9 +185,6 @@ func (s *Service) WithCacheWarningMode(mode config.CacheWarningMode) *Service {
 		return nil
 	}
 	s.cacheWarningMode = normalizeServiceCacheWarningMode(mode)
-	if s.snapshots != nil {
-		s.snapshots.cacheWarningMode = s.cacheWarningMode
-	}
 	return s
 }
 
@@ -206,11 +203,7 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionMainViewResponse{}, err
 	}
-	snapshot, err := s.resolveSnapshot(ctx, req.SessionID)
-	if err != nil {
-		return serverapi.SessionMainViewResponse{}, err
-	}
-	view, err := snapshot.MainView(ctx)
+	view, err := s.resolveMainView(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.SessionMainViewResponse{}, err
 	}
@@ -445,13 +438,6 @@ func (s *Service) resolveAuth(ctx context.Context, model serverapi.SessionExecut
 func sessionExecutionProviderUsesKentManagedAuth(provider string) bool {
 	capabilities, err := llm.InferProviderCapabilities(strings.TrimSpace(provider))
 	return err == nil && capabilities.IsOpenAIFirstParty
-}
-
-func (s *Service) resolveSnapshot(ctx context.Context, sessionID string) (sessionSnapshot, error) {
-	if s == nil || s.snapshots == nil {
-		return nil, errPersistedSessionResolverRequired
-	}
-	return s.snapshots.resolveSessionSnapshot(ctx, sessionID)
 }
 
 var _ servicecontract.SessionViewService = (*Service)(nil)

@@ -13,10 +13,6 @@ import (
 	"core/shared/textutil"
 )
 
-type sessionSnapshot interface {
-	MainView(ctx context.Context) (clientui.RuntimeMainView, error)
-}
-
 type runtimeMainViewSnapshotProvider interface {
 	RuntimeMainViewSnapshot(sessionID string) (clientui.RuntimeMainView, bool)
 }
@@ -44,12 +40,6 @@ func resultWithContext[T any](ctx context.Context, value T) (T, error) {
 	return value, nil
 }
 
-type resolvedSessionSnapshotSource struct {
-	sessions         PersistedSessionResolver
-	mainViews        runtimeMainViewSnapshotProvider
-	cacheWarningMode config.CacheWarningMode
-}
-
 func resolvePersistedSessionView(
 	ctx context.Context,
 	sessions PersistedSessionResolver,
@@ -65,49 +55,26 @@ func resolvePersistedSessionView(
 	return view, nil
 }
 
-func newResolvedSessionSnapshotSource(
-	sessions PersistedSessionResolver,
-	mainViews runtimeMainViewSnapshotProvider,
-	cacheWarningMode config.CacheWarningMode,
-) *resolvedSessionSnapshotSource {
-	return &resolvedSessionSnapshotSource{
-		sessions:         sessions,
-		mainViews:        mainViews,
-		cacheWarningMode: cacheWarningMode,
-	}
-}
-
-func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Context, sessionID string) (sessionSnapshot, error) {
-	if s == nil {
-		return nil, errPersistedSessionResolverRequired
-	}
+func (s *Service) resolveMainView(ctx context.Context, sessionID string) (clientui.RuntimeMainView, error) {
 	if err := context.Cause(ctx); err != nil {
-		return nil, err
+		return clientui.RuntimeMainView{}, err
 	}
 	if s.mainViews != nil {
 		if view, ok := s.mainViews.RuntimeMainViewSnapshot(sessionID); ok {
-			return publishedRuntimeSessionSnapshot{view: view}, nil
+			return resultWithContext(ctx, view)
 		}
 	}
-	if s.sessions == nil {
-		return nil, errPersistedSessionResolverRequired
+	if s.persisted == nil {
+		return clientui.RuntimeMainView{}, errPersistedSessionResolverRequired
 	}
-	view, err := resolvePersistedSessionView(ctx, s.sessions, sessionID)
+	view, err := resolvePersistedSessionView(ctx, s.persisted, sessionID)
 	if err != nil {
-		return nil, err
+		return clientui.RuntimeMainView{}, err
 	}
-	return dormantSessionSnapshot{
+	return (dormantSessionSnapshot{
 		view:             view,
 		cacheWarningMode: s.cacheWarningMode,
-	}, nil
-}
-
-type publishedRuntimeSessionSnapshot struct {
-	view clientui.RuntimeMainView
-}
-
-func (s publishedRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
-	return resultWithContext(ctx, s.view)
+	}).MainView(ctx)
 }
 
 type dormantSessionSnapshot struct {
