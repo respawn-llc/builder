@@ -267,10 +267,6 @@ type persistedOnlySessionResolver struct {
 	record session.PersistedSessionRecord
 }
 
-func (r persistedOnlySessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	panic("Question history must not resolve a Session Store")
-}
-
 func (r persistedOnlySessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
 	return r.record, nil
 }

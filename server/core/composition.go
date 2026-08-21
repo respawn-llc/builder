@@ -175,7 +175,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		},
 	})
 	projectService.WithRuntimeAuthority(runtimeAuthority)
-	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, metadataStore, storeOptions...)
 	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveOptionalSessionExecutionTarget)
 	if runtimeSupport.Background != nil {
@@ -210,7 +209,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
 	updateStatusService := serverstatus.NewUpdateStatusService(config.Version, cfg.Settings.Debug)
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg, updateStatusService)
-	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, metadataStore).
+	sessionViewService := sessionview.NewService(metadataStore, runtimeRegistry, metadataStore).
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).

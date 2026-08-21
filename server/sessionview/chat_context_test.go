@@ -9,7 +9,6 @@ import (
 
 	"core/server/auth"
 	"core/server/metadata"
-	"core/server/registry"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -193,11 +192,7 @@ func TestReadDormantSessionChatContextUsesProductionPersistenceResolverWithoutEv
 	settings.ContextCompactionThresholdTokens = 75_000
 	settings.CompactionMode = config.CompactionModeLocal
 	service := NewService(
-		registry.NewGlobalPersistenceSessionResolver(
-			persistenceRoot,
-			metadataStore,
-			metadataStore.AuthoritativeSessionStoreOptions()...,
-		),
+		metadataStore,
 		nil,
 		metadataStore,
 	).WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{
