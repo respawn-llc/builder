@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"core/shared/config"
 )
 
 // PersistedSessionRecord is the authoritative persisted session lookup result.
@@ -50,6 +52,38 @@ func ResolvePersistedSessionRecord(
 	}
 	record.Meta = &meta
 	record.ContextFacts = normalizeSessionContextFacts(record.ContextFacts)
+	return record, nil
+}
+
+func ResolveScopedPersistedSessionRecord(
+	ctx context.Context,
+	resolver PersistedSessionResolver,
+	containerDir string,
+	sessionID string,
+) (PersistedSessionRecord, error) {
+	record, err := ResolvePersistedSessionRecord(ctx, resolver, sessionID)
+	if err != nil {
+		return PersistedSessionRecord{}, err
+	}
+	expectedDir, err := ResolveScopedSessionDir(containerDir, sessionID)
+	if err != nil {
+		return PersistedSessionRecord{}, err
+	}
+	expectedIdentity, err := config.CanonicalPathIdentity(expectedDir)
+	if err != nil {
+		return PersistedSessionRecord{}, err
+	}
+	recordIdentity, err := config.CanonicalPathIdentity(record.SessionDir)
+	if err != nil {
+		return PersistedSessionRecord{}, err
+	}
+	if recordIdentity != expectedIdentity {
+		return PersistedSessionRecord{}, fmt.Errorf(
+			"session %q is outside workspace container: %w",
+			strings.TrimSpace(sessionID),
+			ErrOutsideWorkspaceContainer,
+		)
+	}
 	return record, nil
 }
 

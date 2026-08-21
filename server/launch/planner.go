@@ -370,11 +370,22 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		}
 		p.Config = cfg
 	}
+	if req.Intent.Kind() == serverapi.SessionLaunchIntentOpenExisting {
+		sessionID, _ := req.Intent.SessionID()
+		record, err := session.ResolveScopedPersistedSessionRecord(
+			ctx,
+			p.PersistedSessions,
+			p.ContainerDir,
+			sessionID.String(),
+		)
+		if err != nil {
+			return SessionPlan{}, err
+		}
+		req.ReadOnlySnapshot = true
+		return p.PlanPersistedSession(ctx, req, *record.Meta)
+	}
 	store, err := p.openStore(ctx, req)
 	if err != nil {
-		return SessionPlan{}, err
-	}
-	if err := preparePlanStore(req, store); err != nil {
 		return SessionPlan{}, err
 	}
 	return p.planSessionWithStore(ctx, req, store)
@@ -402,37 +413,11 @@ func (p Planner) PlanNewSessionWithPreparedOverrides(
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
-	if err := preparePlanStore(req, store); err != nil {
-		return SessionPlan{}, nil, err
-	}
 	plan, err := p.planSessionWithStore(ctx, req, store)
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
 	return p.ApplyPreparedRunPromptOverridesWithStore(plan, store, overrides, prepared, RunPromptOverrideOptions{})
-}
-
-// PlanSessionWithStore plans an existing Session through its already-admitted
-// Store. It never opens another Store or materializes an event-log capability.
-func (p Planner) PlanSessionWithStore(ctx context.Context, req SessionRequest, store *session.Store) (SessionPlan, error) {
-	if store == nil {
-		return SessionPlan{}, errors.New("session store is required")
-	}
-	if req.Intent.Kind() != serverapi.SessionLaunchIntentOpenExisting {
-		return SessionPlan{}, errors.New("admitted session planning requires an existing-session intent")
-	}
-	sessionID, _ := req.Intent.SessionID()
-	if store.Meta().SessionID != sessionID.String() {
-		return SessionPlan{}, fmt.Errorf(
-			"admitted session store %q does not match requested session %q",
-			store.Meta().SessionID,
-			sessionID,
-		)
-	}
-	if err := preparePlanStore(req, store); err != nil {
-		return SessionPlan{}, err
-	}
-	return p.planSessionWithStore(ctx, req, store)
 }
 
 func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, store *session.Store) (SessionPlan, error) {
@@ -462,18 +447,6 @@ func (p Planner) PlanPersistedSession(
 		)
 	}
 	return p.planSession(ctx, req, meta, nil)
-}
-
-func preparePlanStore(req SessionRequest, store *session.Store) error {
-	if req.ReadOnlySnapshot {
-		return nil
-	}
-	if req.Intent.Kind() == serverapi.SessionLaunchIntentOpenExisting && req.Mode == ModeInteractive {
-		if _, err := store.PromoteSubagentToMain(); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (p Planner) planSession(
@@ -1356,13 +1329,6 @@ func (p Planner) openStore(ctx context.Context, req SessionRequest) (*session.St
 		return nil, errors.New("launch planner container dir is required")
 	}
 	switch req.Intent.Kind() {
-	case serverapi.SessionLaunchIntentOpenExisting:
-		sessionID, _ := req.Intent.SessionID()
-		opened, err := p.openScopedSession(sessionID.String())
-		if err != nil {
-			return nil, err
-		}
-		return opened, nil
 	case serverapi.SessionLaunchIntentCreateNew:
 		origin, ok := req.Intent.CreateOrigin()
 		if !ok {
@@ -1372,48 +1338,6 @@ func (p Planner) openStore(ctx context.Context, req SessionRequest) (*session.St
 	default:
 		return nil, errSessionLaunchIntentRequired
 	}
-}
-
-func (p Planner) openScopedSession(sessionID string) (*session.Store, error) {
-	realSessionDir, err := session.ResolveScopedSessionDir(p.ContainerDir, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	return session.Open(realSessionDir, p.StoreOptions...)
-}
-
-// SelectedSessionLockedContract reads a selected session's persisted lock
-// without materializing a new child or mutating the selected session.
-func (p Planner) SelectedSessionLockedContract(sessionID runtimeids.SessionID) (*session.LockedContract, error) {
-	store, err := p.openScopedSession(sessionID.String())
-	if err != nil {
-		return nil, err
-	}
-	return p.SelectedSessionLockedContractWithStore(store)
-}
-
-func (p Planner) SelectedSessionLockedContractWithStore(store *session.Store) (*session.LockedContract, error) {
-	if store == nil {
-		return nil, errors.New("session store is required")
-	}
-	return store.Meta().Locked, nil
-}
-
-// SelectedSessionPromptFacingTarget resolves a selected session's persisted
-// continuation and lock without materializing or mutating the session.
-func (p Planner) SelectedSessionPromptFacingTarget(sessionID runtimeids.SessionID) (PreparedBaseTarget, error) {
-	store, err := p.openScopedSession(sessionID.String())
-	if err != nil {
-		return PreparedBaseTarget{}, err
-	}
-	return p.SelectedSessionPromptFacingTargetWithStore(store)
-}
-
-func (p Planner) SelectedSessionPromptFacingTargetWithStore(store *session.Store) (PreparedBaseTarget, error) {
-	if store == nil {
-		return PreparedBaseTarget{}, errors.New("session store is required")
-	}
-	return p.SelectedSessionPromptFacingTargetFromMeta(store.Meta())
 }
 
 func (p Planner) SelectedSessionPromptFacingTargetFromMeta(meta session.Meta) (PreparedBaseTarget, error) {
@@ -1430,27 +1354,6 @@ func (p Planner) SelectedSessionPromptFacingTargetFromMeta(meta session.Meta) (P
 		Source:       cloneSourceReport(source),
 		EnabledTools: append([]toolspec.ID(nil), enabledTools...),
 	}, nil
-}
-
-// SelectedSessionContinuationAgentRole reads the persisted continuation role
-// without applying it or mutating the selected session.
-func (p Planner) SelectedSessionContinuationAgentRole(sessionID runtimeids.SessionID) (*string, error) {
-	store, err := p.openScopedSession(sessionID.String())
-	if err != nil {
-		return nil, err
-	}
-	return p.SelectedSessionContinuationAgentRoleWithStore(store)
-}
-
-func (p Planner) SelectedSessionContinuationAgentRoleWithStore(store *session.Store) (*string, error) {
-	if store == nil {
-		return nil, errors.New("session store is required")
-	}
-	continuation := store.Meta().Continuation
-	if continuation == nil {
-		return nil, nil
-	}
-	return cloneContinuationRole(continuation.AgentRole), nil
 }
 
 func (p Planner) createSession(ctx context.Context, origin serverapi.SessionCreateOrigin, mode Mode) (*session.Store, error) {

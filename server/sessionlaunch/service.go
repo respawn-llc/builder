@@ -441,17 +441,7 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 			parentAgentSessionID = &sourceID
 		}
 	}
-	overrides, err := req.Overrides.CanonicalKey()
-	if err != nil {
-		return PlanResult{}, err
-	}
-	memoReq := sessionPlanMemoRequest{
-		Mode:            req.Mode,
-		Intent:          req.Intent,
-		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
-		Overrides:       overrides,
-	}
-	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, func(ctx context.Context) (PlanResult, error) {
+	resolve := func(ctx context.Context) (PlanResult, error) {
 		planner := s.planner
 		if planner.ReloadConfig != nil {
 			snapshot, snapshotErr := planner.ReloadConfig()
@@ -518,7 +508,27 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 				}, req.Overrides, preparedOverrides)
 			},
 		)
-	})
+	}
+	if selectedSessionID != nil {
+		return resolve(ctx)
+	}
+	overrides, err := req.Overrides.CanonicalKey()
+	if err != nil {
+		return PlanResult{}, err
+	}
+	memoReq := sessionPlanMemoRequest{
+		Mode:            req.Mode,
+		Intent:          req.Intent,
+		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
+		Overrides:       overrides,
+	}
+	return s.plans.Do(
+		ctx,
+		strings.TrimSpace(req.ClientRequestID),
+		memoReq,
+		sameSessionPlanMemoRequest,
+		resolve,
+	)
 }
 
 func (s *Service) planExistingSession(

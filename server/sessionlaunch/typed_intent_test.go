@@ -7,14 +7,13 @@ import (
 	"core/server/launch"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/sessionruntime"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
 
-func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
+func TestServiceMemoizesCreateIntentWithoutMemoizingExistingRead(t *testing.T) {
 	containerDir := t.TempDir()
 	persistenceRoot := t.TempDir()
 	persistence := sessiontest.NewPersistence()
@@ -33,15 +32,6 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 		t.Fatalf("parse target session ID: %v", err)
 	}
 
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: persistenceRoot,
-		StoreOptions:    persistence.Options(),
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close runtime authority: %v", err)
-		}
-	})
 	service := NewService(launch.Planner{
 		Config: config.App{
 			WorkspaceRoot:   "/tmp/workspace-a",
@@ -52,7 +42,7 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 		StoreOptions:             persistence.Options(),
 		PersistedSessions:        persistence,
 		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: "/tmp/workspace-a"},
-	}).WithRuntimeAuthority(authority)
+	})
 
 	createRequest := serverapi.SessionPlanRequest{
 		ClientRequestID: "same-request-id",
@@ -77,8 +67,8 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 		Mode:            serverapi.SessionLaunchModeInteractive,
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(targetID),
 	}
-	if _, err := service.PlanSession(context.Background(), openRequest); err == nil {
-		t.Fatal("different typed intent reused the same client request ID")
+	if _, err := service.PlanSession(context.Background(), openRequest); err != nil {
+		t.Fatalf("existing-Session read reused create memoization: %v", err)
 	}
 }
 

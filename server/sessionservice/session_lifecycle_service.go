@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 
 	"core/server/auth"
@@ -12,7 +11,6 @@ import (
 	"core/server/requestmemo"
 	"core/server/session"
 	"core/server/sessionruntime"
-	"core/shared/config"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -130,30 +128,17 @@ func (s *SessionLifecycleService) resolvePersistedSessionMeta(ctx context.Contex
 	if s == nil || s.persisted == nil {
 		return session.Meta{}, errors.New("persisted Session resolver is required")
 	}
-	record, err := session.ResolvePersistedSessionRecord(ctx, s.persisted, sessionID)
+	var (
+		record session.PersistedSessionRecord
+		err    error
+	)
+	if containerDir := strings.TrimSpace(s.containerDir); containerDir != "" {
+		record, err = session.ResolveScopedPersistedSessionRecord(ctx, s.persisted, containerDir, sessionID)
+	} else {
+		record, err = session.ResolvePersistedSessionRecord(ctx, s.persisted, sessionID)
+	}
 	if err != nil {
 		return session.Meta{}, err
-	}
-	if containerDir := strings.TrimSpace(s.containerDir); containerDir != "" {
-		expectedDir, err := session.ResolveScopedSessionDir(containerDir, sessionID)
-		if err != nil {
-			return session.Meta{}, err
-		}
-		expectedIdentity, err := config.CanonicalPathIdentity(expectedDir)
-		if err != nil {
-			return session.Meta{}, err
-		}
-		recordIdentity, err := config.CanonicalPathIdentity(record.SessionDir)
-		if err != nil {
-			return session.Meta{}, err
-		}
-		if recordIdentity != expectedIdentity {
-			return session.Meta{}, fmt.Errorf(
-				"session %q is outside workspace container: %w",
-				sessionID,
-				session.ErrOutsideWorkspaceContainer,
-			)
-		}
 	}
 	return *record.Meta, nil
 }
