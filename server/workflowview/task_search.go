@@ -23,12 +23,6 @@ type TaskSearch struct {
 	projection *TaskStatusProjection
 }
 
-type taskSearchReadSnapshot struct {
-	queries            *sqlitegen.Queries
-	liveTaskStatesJSON *string
-	close              func() error
-}
-
 func NewTaskSearch(
 	metadataStore *metadata.Store,
 	projection *TaskStatusProjection,
@@ -64,28 +58,29 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	snapshot, err := s.captureReadSnapshot(ctx, req, observation.LiveTaskStatesJSON)
+	tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
+		return serverapi.TaskSearchResponse{}, fmt.Errorf("begin task search read transaction: %w", err)
+	}
+	defer func() {
+		if closeErr := tx.Rollback(); closeErr != nil && !errors.Is(closeErr, sql.ErrTxDone) {
+			response = serverapi.TaskSearchResponse{}
+			err = errors.Join(err, fmt.Errorf("close task search read transaction: %w", closeErr))
+		}
+	}()
+	queries := s.queries.WithTx(tx)
+	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
 		}
 		return serverapi.TaskSearchResponse{}, err
 	}
-	defer func() {
-		if closeErr := snapshot.Close(); closeErr != nil {
-			response = serverapi.TaskSearchResponse{}
-			err = errors.Join(err, fmt.Errorf("close task search read snapshot: %w", closeErr))
-		}
-	}()
 	if req.Mode == serverapi.TaskSearchModeFTS5 {
-		if _, validationErr := snapshot.queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
+		if _, validationErr := queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
 		}
 	}
-	if snapshot.liveTaskStatesJSON == nil {
-		return serverapi.TaskSearchResponse{}, errors.New("task search read snapshot is closed")
-	}
-	rows, err := s.queryPage(ctx, snapshot.queries, *snapshot.liveTaskStatesJSON, req, offset)
+	rows, err := s.queryPage(ctx, queries, observation.LiveTaskStatesJSON, req, offset)
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
@@ -96,7 +91,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if hasNext {
 		rows = rows[:req.PageSize]
 	}
-	groups, err := s.materializeGroups(ctx, snapshot.queries, req, rows)
+	groups, err := s.materializeGroups(ctx, queries, req, rows)
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
@@ -110,44 +105,6 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 		return serverapi.TaskSearchResponse{}, fmt.Errorf("validate task search response: %w", err)
 	}
 	return response, nil
-}
-
-func (s *TaskSearch) captureReadSnapshot(
-	ctx context.Context,
-	req serverapi.TaskSearchRequest,
-	liveTaskStatesJSON string,
-) (*taskSearchReadSnapshot, error) {
-	tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("begin task search read transaction: %w", err)
-	}
-	closeTransaction := func() error {
-		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) {
-			return nil
-		}
-		return rollbackErr
-	}
-	queries := s.queries.WithTx(tx)
-	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
-		return nil, errors.Join(err, closeTransaction())
-	}
-	return &taskSearchReadSnapshot{
-		queries:            queries,
-		liveTaskStatesJSON: &liveTaskStatesJSON,
-		close:              closeTransaction,
-	}, nil
-}
-
-func (s *taskSearchReadSnapshot) Close() error {
-	if s == nil || s.close == nil {
-		return nil
-	}
-	close := s.close
-	s.close = nil
-	s.queries = nil
-	s.liveTaskStatesJSON = nil
-	return close()
 }
 
 func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlitegen.Queries, req serverapi.TaskSearchRequest) error {
