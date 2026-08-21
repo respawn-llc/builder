@@ -20,7 +20,6 @@ type TranscriptHydrationSnapshot struct {
 	ActiveReasoningTraces   []TranscriptReasoningTraceState
 	InFlightTools           []TranscriptLiveToolStart
 	QueuedMessages          []QueuedUserMessage
-	ActiveReviewer          *TranscriptReviewerState
 	ActiveCompaction        *TranscriptCompactionState
 	CompactionCount         int
 	ContextUsage            *ContextUsage
@@ -45,10 +44,6 @@ type TranscriptReasoningTraceState struct {
 	ProviderMetadata *llm.ReasoningItemIdentity
 	Text             string
 	startedAt        time.Time
-}
-
-type TranscriptReviewerState struct {
-	StepID string
 }
 
 type TranscriptCompactionState struct {
@@ -96,7 +91,6 @@ func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot 
 		ActiveReasoningTraces:   reasoningTraces,
 		InFlightTools:           e.transcriptRuntimeState().LiveToolSnapshot(),
 		QueuedMessages:          queuedMessages,
-		ActiveReviewer:          e.reviewerRuntimeState().ActiveStepSnapshot(),
 		ActiveCompaction:        e.compactionRuntimeState().ActiveSnapshot(),
 		CompactionCount:         e.CompactionCount(),
 		ContextUsage:            &usage,

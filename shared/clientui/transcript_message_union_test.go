@@ -109,9 +109,6 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			RunID: transcriptTestRunID(t), StepID: transcriptTestStepID(t),
 			Lifecycle: StepLifecycleStarted, ActiveKind: RuntimeActivityActiveKindUserTurn, Status: RunStatusRunning,
 		}), TranscriptMessageStepState},
-		{"reviewer state", NewTranscriptEvent(TranscriptReviewerState{
-			StepID: transcriptTestStepID(t), State: ReviewerStateRunning,
-		}), TranscriptMessageReviewerState},
 		{"runtime read-model update", NewTranscriptEvent(update), TranscriptMessageRuntimeReadModelUpdate},
 		{"session status", NewTranscriptEvent(transcriptTestSessionStatus()), TranscriptMessageSessionStatus},
 		{"session identity", NewTranscriptEvent(transcriptTestSessionIdentity(t)), TranscriptMessageSessionIdentity},

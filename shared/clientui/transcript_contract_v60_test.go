@@ -81,7 +81,6 @@ func TestRuntimeFeedContractUsesPointersForOptionalScalarFacts(t *testing.T) {
 		{owner: TranscriptHydration{}, field: "ActiveAssistant"},
 		{owner: TranscriptHydration{}, field: "ActiveThinkingStatus"},
 		{owner: TranscriptHydration{}, field: "ActiveStep"},
-		{owner: TranscriptHydration{}, field: "ActiveReviewer"},
 		{owner: TranscriptHydration{}, field: "ActiveCompaction"},
 		{owner: TranscriptHydration{}, field: "ContextUsage"},
 		{owner: TranscriptHydration{}, field: "GoalStatus"},
@@ -104,11 +103,11 @@ func TestRuntimeReadModelUpdateRejectsInvalidNestedFacts(t *testing.T) {
 	}
 	valid := RuntimeReadModelUpdate{
 		Version:  version,
-		Activity: RuntimeActivity{State: RuntimeActivityRegisteredIdle, QueueAccepting: true},
+		Activity: RuntimeActivity{State: RuntimeActivityRegisteredIdle, Reviewer: ReviewerActivityInactive, QueueAccepting: true},
 	}
 	tests := []RuntimeReadModelUpdate{
 		{Activity: valid.Activity},
-		{Version: version, Activity: RuntimeActivity{State: RuntimeActivityState("unknown")}},
+		{Version: version, Activity: RuntimeActivity{State: RuntimeActivityState("unknown"), Reviewer: ReviewerActivityInactive}},
 	}
 	for _, update := range tests {
 		if err := update.Validate(); err == nil {
@@ -124,9 +123,9 @@ func TestRuntimeActivityRejectsActiveIdentityOutsideRunningStates(t *testing.T) 
 		ActiveKind: RuntimeActivityActiveKindUserTurn,
 	}
 	tests := []RuntimeActivity{
-		{State: RuntimeActivityRegisteredIdle, ActiveStep: active},
-		{State: RuntimeActivityStarting, QueueAccepting: true},
-		{State: RuntimeActivityRunning},
+		{State: RuntimeActivityRegisteredIdle, Reviewer: ReviewerActivityInactive, ActiveStep: active},
+		{State: RuntimeActivityStarting, Reviewer: ReviewerActivityInactive, QueueAccepting: true},
+		{State: RuntimeActivityRunning, Reviewer: ReviewerActivityInactive},
 	}
 	for _, activity := range tests {
 		if err := activity.Validate(); err == nil {

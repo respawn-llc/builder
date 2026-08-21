@@ -280,7 +280,11 @@ func TestSessionViewFromRuntimeOmitsDefaultAgentRole(t *testing.T) {
 func mainViewFromRuntimeForTest(t *testing.T, eng *runtime.Engine) clientui.RuntimeMainView {
 	t.Helper()
 	version := clientui.ReadModelVersion{Epoch: "runtimeview-test", Generation: 1, Sequence: 1}
-	activity := clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true}
+	activity := clientui.RuntimeActivity{
+		State:          clientui.RuntimeActivityRegisteredIdle,
+		Reviewer:       clientui.ReviewerActivityInactive,
+		QueueAccepting: true,
+	}
 	view, err := MainViewFromRuntimeActivity(eng, version, activity)
 	if err != nil {
 		t.Fatalf("project runtime main view: %v", err)

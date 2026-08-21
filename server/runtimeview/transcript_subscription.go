@@ -40,7 +40,6 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	if err != nil {
 		return clientui.TranscriptHydration{}, err
 	}
-	hydration.ActiveReviewer = transcriptReviewerStateFromRuntime(runtimeSnapshot.ActiveReviewer)
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
 	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalSuspended)
@@ -92,16 +91,6 @@ func transcriptQueuedMessagesFromRuntime(messages []runtime.QueuedUserMessage) (
 		})
 	}
 	return out, nil
-}
-
-func transcriptReviewerStateFromRuntime(state *runtime.TranscriptReviewerState) *clientui.TranscriptReviewerState {
-	if state == nil {
-		return nil
-	}
-	return &clientui.TranscriptReviewerState{
-		StepID: mustTranscriptStepID(state.StepID, "hydrated reviewer"),
-		State:  clientui.ReviewerStateRunning,
-	}
 }
 
 func transcriptCompactionStateFromRuntime(state *runtime.TranscriptCompactionState) *clientui.TranscriptCompactionStatus {
@@ -242,8 +231,6 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		return transcriptStepStateMessages(evt)
 	case runtime.EventLiveRunFinished:
 		return transcriptLiveRunFinishedMessages(evt)
-	case runtime.EventReviewerStarted, runtime.EventReviewerCompleted:
-		return transcriptReviewerStateMessages(evt)
 	case runtime.EventSleepGuardFailed,
 		runtime.EventPromptHistoryPersistFailed,
 		runtime.EventContextFactsPersistFailed,
@@ -630,19 +617,6 @@ func transcriptStepStateMessages(evt runtime.Event) []clientui.TranscriptEvent {
 		state.Lifecycle = clientui.StepLifecycleFinished
 	default:
 		panic(fmt.Sprintf("runtime run state has unknown lifecycle phase %q", evt.RunState.Lifecycle.Phase))
-	}
-	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(state)}
-}
-
-func transcriptReviewerStateMessages(evt runtime.Event) []clientui.TranscriptEvent {
-	state := clientui.TranscriptReviewerState{StepID: mustRuntimeTranscriptStepID(evt.StepID, "reviewer state")}
-	switch evt.Kind {
-	case runtime.EventReviewerStarted:
-		state.State = clientui.ReviewerStateRunning
-	case runtime.EventReviewerCompleted:
-		state.State = clientui.ReviewerStateCompleted
-	default:
-		panic(fmt.Sprintf("runtime event %q is not a reviewer lifecycle event", evt.Kind))
 	}
 	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(state)}
 }

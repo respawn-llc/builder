@@ -75,7 +75,8 @@ func transcriptTestRuntimeReadModelUpdate(t *testing.T) RuntimeReadModelUpdate {
 	return RuntimeReadModelUpdate{
 		Version: version,
 		Activity: RuntimeActivity{
-			State: RuntimeActivityRunning,
+			State:    RuntimeActivityRunning,
+			Reviewer: ReviewerActivityInactive,
 			ActiveStep: &RuntimeActiveStep{
 				RunID:      transcriptTestRunID(t),
 				StepID:     transcriptTestStepID(t),

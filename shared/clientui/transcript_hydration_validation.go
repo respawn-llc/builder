@@ -64,14 +64,6 @@ func (h TranscriptHydration) Validate() error {
 			return fmt.Errorf("transcript hydration active step is not started")
 		}
 	}
-	if h.ActiveReviewer != nil {
-		if err := h.ActiveReviewer.Validate(); err != nil {
-			return fmt.Errorf("validate transcript hydration active reviewer: %w", err)
-		}
-		if h.ActiveReviewer.State != ReviewerStateRunning {
-			return fmt.Errorf("transcript hydration reviewer is not running")
-		}
-	}
 	if h.ActiveCompaction != nil {
 		if err := h.ActiveCompaction.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration active compaction: %w", err)
@@ -140,11 +132,6 @@ func (h TranscriptHydration) validateActiveOwnership() error {
 	}
 	for index, trace := range h.ActiveReasoningTraces {
 		if err := validateHydrationStepOwner(fmt.Sprintf("active reasoning trace %d", index), trace.StepID, activeStep); err != nil {
-			return err
-		}
-	}
-	if h.ActiveReviewer != nil {
-		if err := validateHydrationStepOwner("active reviewer", h.ActiveReviewer.StepID, activeStep); err != nil {
 			return err
 		}
 	}

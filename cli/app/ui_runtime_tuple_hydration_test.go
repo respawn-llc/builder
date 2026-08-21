@@ -162,9 +162,6 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	if m.reasoningStatusHeader != "reasoning" {
 		t.Fatalf("reasoning status = %q, want reasoning", m.reasoningStatusHeader)
 	}
-	if !m.runtimeLifecycle.Reviewer.IsRunning() {
-		t.Fatalf("hydrated reviewer lifecycle missing: %+v", m.runtimeLifecycle)
-	}
 	if m.currentRunID == "" || m.currentStepID == "" || !m.runtimeActivityBusy() {
 		t.Fatalf("hydrated running state missing: activity=%+v run=%q step=%q", m.runtimeActivityProjection, m.currentRunID, m.currentStepID)
 	}
@@ -497,10 +494,6 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 		Lifecycle:  clientui.StepLifecycleStarted,
 		ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 		Status:     clientui.RunStatusRunning,
-	}
-	hydration.ActiveReviewer = &clientui.TranscriptReviewerState{
-		StepID: stepID,
-		State:  clientui.ReviewerStateRunning,
 	}
 	hydration.ActiveCompaction = &clientui.TranscriptCompactionStatus{
 		StepID: stepID,

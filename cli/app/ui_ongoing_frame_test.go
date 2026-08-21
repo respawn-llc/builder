@@ -60,7 +60,10 @@ func TestOngoingFrameInputUsesOperatorLocalSectionsAndCursor(t *testing.T) {
 
 func TestOngoingFrameInputIgnoresRuntimeMainViewCopiesOfTranscriptOwnedFacts(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
-	m.runtimeActivityProjection = clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle}
+	m.runtimeActivityProjection = clientui.RuntimeActivity{
+		State:    clientui.RuntimeActivityRegisteredIdle,
+		Reviewer: clientui.ReviewerActivityInactive,
+	}
 	m.runtimeContextUsage = clientui.RuntimeContextUsage{UsedTokens: 123, WindowTokens: 456}
 
 	frame := m.ongoingFrameInput()

@@ -206,7 +206,8 @@ func setStrictTestRuntimeBusy(t *testing.T, m *uiModel) {
 		t.Fatalf("parse step id: %v", err)
 	}
 	if err := m.applyRuntimeActivityProjection(clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityRunning,
+		State:    clientui.RuntimeActivityRunning,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID: runID, StepID: stepID, ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 		},

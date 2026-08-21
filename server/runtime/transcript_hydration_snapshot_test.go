@@ -69,13 +69,13 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 	}
 }
 
-func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing.T) {
+func TestTranscriptHydrationSnapshotProjectsAndResetsRuntimeOwners(t *testing.T) {
 	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
 	stepID := runtimeTestStepID("step-owner")
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	engine.compactionRuntimeState().SetCount(7)
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)}),
+	if err := engine.steer(stepID,
 		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: exactStepIDPointer(stepID), Compaction: &CompactionStatus{Mode: "remote", Count: 8}}),
 	); err != nil {
 		t.Fatalf("steer active owner events: %v", err)
@@ -88,9 +88,6 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 	engine.goalLoopState().Suspend()
 
 	snapshot := hydrationSnapshot(t, engine)
-	if snapshot.ActiveReviewer == nil || snapshot.ActiveReviewer.StepID != stepID {
-		t.Fatalf("active reviewer = %+v", snapshot.ActiveReviewer)
-	}
 	if snapshot.ActiveCompaction == nil || snapshot.ActiveCompaction.StepID != stepID ||
 		snapshot.ActiveCompaction.Count != 8 || snapshot.CompactionCount != 7 {
 		t.Fatalf("compaction = active %+v count %d", snapshot.ActiveCompaction, snapshot.CompactionCount)
@@ -102,15 +99,15 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 		t.Fatalf("goal = %+v suspended=%t", snapshot.Goal, snapshot.GoalSuspended)
 	}
 
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: exactStepIDPointer(stepID)}),
+	if err := engine.steer(stepID,
 		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: exactStepIDPointer(stepID)}),
 	); err != nil {
 		t.Fatalf("steer terminal owner events: %v", err)
 	}
 	snapshot = hydrationSnapshot(t, engine)
-	if snapshot.ActiveReviewer != nil || snapshot.ActiveCompaction != nil || snapshot.CompactionCount != 7 {
-		t.Fatalf("terminal owner state = reviewer %+v compaction %+v count %d",
-			snapshot.ActiveReviewer, snapshot.ActiveCompaction, snapshot.CompactionCount)
+	if snapshot.ActiveCompaction != nil || snapshot.CompactionCount != 7 {
+		t.Fatalf("terminal owner state = compaction %+v count %d",
+			snapshot.ActiveCompaction, snapshot.CompactionCount)
 	}
 }
 

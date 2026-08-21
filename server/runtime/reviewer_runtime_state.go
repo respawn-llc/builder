@@ -7,12 +7,13 @@ import (
 	"sync"
 
 	"core/server/llm"
+	"core/shared/runtimeids"
 )
 
 type reviewerRuntimeState struct {
 	mu     sync.Mutex
 	client llm.Client
-	active *TranscriptReviewerState
+	active *runtimeids.StepID
 }
 
 func newReviewerRuntimeState(client llm.Client) *reviewerRuntimeState {
@@ -23,13 +24,16 @@ func (s *reviewerRuntimeState) SetActiveStep(stepID string) {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
 	normalized := strings.TrimSpace(stepID)
 	if normalized == "" {
-		s.mu.Unlock()
 		panic("reviewer active step id is required")
 	}
-	s.active = &TranscriptReviewerState{StepID: normalized}
+	active, err := runtimeids.ParseStepID(normalized)
+	if err != nil {
+		panic(err)
+	}
+	s.mu.Lock()
+	s.active = &active
 	s.mu.Unlock()
 }
 
@@ -38,23 +42,23 @@ func (s *reviewerRuntimeState) ClearActiveStep(stepID string) {
 		return
 	}
 	s.mu.Lock()
-	if s.active != nil && s.active.StepID == strings.TrimSpace(stepID) {
+	if s.active != nil && s.active.String() == strings.TrimSpace(stepID) {
 		s.active = nil
 	}
 	s.mu.Unlock()
 }
 
-func (s *reviewerRuntimeState) ActiveStepSnapshot() *TranscriptReviewerState {
+func (s *reviewerRuntimeState) Running() bool {
 	if s == nil {
-		return nil
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active == nil {
-		return nil
-	}
-	state := *s.active
-	return &state
+	return s.active != nil
+}
+
+func (e *Engine) ReviewerRunning() bool {
+	return e != nil && e.reviewerRuntimeState().Running()
 }
 
 func (s *reviewerRuntimeState) Client() llm.Client {

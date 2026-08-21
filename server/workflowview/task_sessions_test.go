@@ -257,7 +257,11 @@ func taskSessionSnapshot(
 func taskSessionRuntimeActivity(t *testing.T, state clientui.RuntimeActivityState) clientui.RuntimeActivity {
 	t.Helper()
 	if !(clientui.RuntimeActivity{State: state}).ActiveForControl() {
-		return clientui.RuntimeActivity{State: state, QueueAccepting: state == clientui.RuntimeActivityRegisteredIdle}
+		return clientui.RuntimeActivity{
+			State:          state,
+			Reviewer:       clientui.ReviewerActivityInactive,
+			QueueAccepting: state == clientui.RuntimeActivityRegisteredIdle,
+		}
 	}
 	runID, err := runtimeids.ParseRunID("11111111-1111-4111-8111-111111111111")
 	if err != nil {
@@ -268,7 +272,8 @@ func taskSessionRuntimeActivity(t *testing.T, state clientui.RuntimeActivityStat
 		t.Fatalf("ParseStepID: %v", err)
 	}
 	return clientui.RuntimeActivity{
-		State: state,
+		State:    state,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID: runID, StepID: stepID, ActiveKind: clientui.RuntimeActivityActiveKindWorkflowTurn,
 		},

@@ -121,8 +121,8 @@ func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *te
 	if assistant.StepID == nil || equalOptionalString(assistant.StepID, completed.StepID) {
 		t.Fatalf("follow-up and Reviewer lifecycle Step identities were not distinct: assistant=%+v completed=%+v", assistant, completed)
 	}
-	if active := eng.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
-		t.Fatalf("Reviewer remained active after successful follow-up: %+v", active)
+	if eng.ReviewerRunning() {
+		t.Fatal("Reviewer remained active after successful follow-up")
 	}
 	if len(snapshotAtCompletion.Entries) < 3 {
 		t.Fatalf("expected feedback, follow-up assistant, and reviewer status in completion snapshot, got %+v", snapshotAtCompletion.Entries)
@@ -258,8 +258,8 @@ func TestReviewerFollowUpFailureTerminalizesReviewerLifecycleStep(t *testing.T) 
 		!equalOptionalString(started.StepID, completed.StepID) {
 		t.Fatalf("Reviewer error terminalization disagrees: started=%+v completed=%+v", started, completed)
 	}
-	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
-		t.Fatalf("Reviewer remained active after follow-up failure: %+v", active)
+	if engine.ReviewerRunning() {
+		t.Fatal("Reviewer remained active after follow-up failure")
 	}
 }
 

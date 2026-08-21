@@ -54,6 +54,22 @@ const (
 	RuntimeActivityClosing        RuntimeActivityState = "closing"
 )
 
+type ReviewerActivity string
+
+const (
+	ReviewerActivityInactive ReviewerActivity = "inactive"
+	ReviewerActivityRunning  ReviewerActivity = "running"
+)
+
+func (a ReviewerActivity) Validate() error {
+	switch a {
+	case ReviewerActivityInactive, ReviewerActivityRunning:
+		return nil
+	default:
+		return fmt.Errorf("unknown reviewer activity %q", a)
+	}
+}
+
 type RuntimeActivityActiveKind string
 
 const (

@@ -26,7 +26,8 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			},
 		}
 		hydration.RuntimeReadModelUpdate.Activity = RuntimeActivity{
-			State: RuntimeActivityRunning,
+			State:    RuntimeActivityRunning,
+			Reviewer: ReviewerActivityInactive,
 			ActiveStep: &RuntimeActiveStep{
 				RunID:      runID,
 				StepID:     stepID,
@@ -83,15 +84,6 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 					CompactText: "reasoning",
 					Text:        "reasoning",
 				}}
-			},
-		},
-		{
-			name: "reviewer",
-			mutate: func(hydration *TranscriptHydration) {
-				hydration.ActiveReviewer = &TranscriptReviewerState{
-					StepID: otherStepID,
-					State:  ReviewerStateRunning,
-				}
 			},
 		},
 		{
@@ -156,6 +148,7 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 	idle := valid
 	idle.RuntimeReadModelUpdate.Activity = RuntimeActivity{
 		State:          RuntimeActivityRegisteredIdle,
+		Reviewer:       ReviewerActivityInactive,
 		QueueAccepting: true,
 	}
 	if err := idle.Validate(); err == nil {

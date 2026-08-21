@@ -40,8 +40,6 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return m.applyTranscriptHumanInputInterrupted(message.Payload().(clientui.TranscriptHumanInputInterrupted))
 	case clientui.TranscriptMessageStepState:
 		m.applyTranscriptStepState(message.Payload().(clientui.TranscriptStepState))
-	case clientui.TranscriptMessageReviewerState:
-		m.applyTranscriptReviewerState(message.Payload().(clientui.TranscriptReviewerState))
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
 		return m.applyTranscriptRuntimeReadModelUpdate(admission)
 	case clientui.TranscriptMessageSessionStatus:
@@ -87,10 +85,6 @@ func (m *uiModel) applyTranscriptHydration(
 	m.reasoningStatusHeader = ""
 	if hydration.ActiveThinkingStatus != nil {
 		m.applyTranscriptThinkingStatusUpdate(*hydration.ActiveThinkingStatus)
-	}
-	m.clearReviewerState()
-	if hydration.ActiveReviewer != nil {
-		m.applyTranscriptReviewerState(*hydration.ActiveReviewer)
 	}
 	if hydration.ActiveStep != nil {
 		m.applyTranscriptStepState(*hydration.ActiveStep)
@@ -157,22 +151,6 @@ func (m *uiModel) applyTranscriptStepState(state clientui.TranscriptStepState) {
 		return
 	}
 	m.reasoningStatusHeader = ""
-	m.clearReviewerState()
-}
-
-func (m *uiModel) applyTranscriptReviewerState(state clientui.TranscriptReviewerState) {
-	switch state.State {
-	case clientui.ReviewerStateRunning:
-		reviewer, err := clientui.NewReviewerLifecycle(true, true)
-		if err != nil {
-			panic(err)
-		}
-		m.runtimeLifecycle.Reviewer = reviewer
-	case clientui.ReviewerStateCompleted:
-		m.runtimeLifecycle.Reviewer = clientui.ReviewerLifecycleIdle
-	default:
-		panic(fmt.Sprintf("unsupported transcript reviewer state %q", state.State))
-	}
 }
 
 func (m *uiModel) applyTranscriptThinkingStatusUpdate(update clientui.TranscriptThinkingStatusUpdate) {

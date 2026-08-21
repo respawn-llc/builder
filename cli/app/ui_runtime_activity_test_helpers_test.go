@@ -13,11 +13,15 @@ func (m *uiModel) setRuntimeActivityBusyForTest(busy bool) {
 		return
 	}
 	if !busy {
-		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle})
+		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{
+			State:    clientui.RuntimeActivityRegisteredIdle,
+			Reviewer: clientui.ReviewerActivityInactive,
+		})
 		return
 	}
 	_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityRunning,
+		State:    clientui.RuntimeActivityRunning,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 			RunID:      ongoingTestRunID(),

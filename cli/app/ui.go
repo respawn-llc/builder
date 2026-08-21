@@ -17,11 +17,6 @@ type uiLogger interface {
 	Logf(format string, args ...any)
 }
 
-func (m *uiModel) clearReviewerState() {
-	m.setReviewerRunning(false)
-	m.setReviewerBlocking(false)
-}
-
 func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) tea.Model {
 	construction := newUIModelConstruction(runtimeClient)
 	for _, opt := range opts {

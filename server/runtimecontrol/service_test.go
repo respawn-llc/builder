@@ -1150,8 +1150,12 @@ func TestServiceInterruptIdleIsNotAccepted(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	service.WithRuntimeActivityResolver(&sequenceRuntimeActivityResolver{
 		snapshots: []runtimeactivity.ResponseSnapshot{{
-			Version:  clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1},
-			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true},
+			Version: clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1},
+			Activity: clientui.RuntimeActivity{
+				State:          clientui.RuntimeActivityRegisteredIdle,
+				Reviewer:       clientui.ReviewerActivityInactive,
+				QueueAccepting: true,
+			},
 		}},
 	})
 	_, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{

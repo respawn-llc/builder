@@ -465,6 +465,7 @@ func ongoingHydrationMessage(sequence uint64) clientui.TranscriptMessage {
 			Version: clientui.ReadModelVersion{Epoch: "ongoing-test", Generation: 1, Sequence: 1},
 			Activity: clientui.RuntimeActivity{
 				State:          clientui.RuntimeActivityRegisteredIdle,
+				Reviewer:       clientui.ReviewerActivityInactive,
 				QueueAccepting: true,
 			},
 		},
@@ -489,6 +490,7 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 			Version: clientui.ReadModelVersion{Epoch: "ongoing-test", Generation: 1, Sequence: sequence},
 			Activity: clientui.RuntimeActivity{
 				State:          clientui.RuntimeActivityRegisteredIdle,
+				Reviewer:       clientui.ReviewerActivityInactive,
 				QueueAccepting: true,
 			},
 		})

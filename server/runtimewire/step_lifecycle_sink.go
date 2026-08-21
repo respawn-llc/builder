@@ -74,6 +74,7 @@ func (s stepLifecycleSink) publish(cause string, terminal bool, resolver runtime
 	if snapshot.Activity.State == clientui.RuntimeActivityUnavailable {
 		snapshot.Activity = clientui.RuntimeActivity{
 			State:          clientui.RuntimeActivityRegisteredIdle,
+			Reviewer:       clientui.ReviewerActivityInactive,
 			QueueAccepting: true,
 		}
 	}

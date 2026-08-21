@@ -22,7 +22,6 @@ const (
 	TranscriptMessageQueuedMessageState        TranscriptMessageKind = "queued_message_state"
 	TranscriptMessageHumanInputInterrupted     TranscriptMessageKind = "human_input_interrupted"
 	TranscriptMessageStepState                 TranscriptMessageKind = "step_state"
-	TranscriptMessageReviewerState             TranscriptMessageKind = "reviewer_state"
 	TranscriptMessageRuntimeReadModelUpdate    TranscriptMessageKind = "runtime_read_model_update"
 	TranscriptMessageSessionStatus             TranscriptMessageKind = "session_status"
 	TranscriptMessageSessionIdentity           TranscriptMessageKind = "session_identity"
@@ -60,7 +59,6 @@ type transcriptEventPayloadValue interface {
 		TranscriptQueuedMessageState |
 		TranscriptHumanInputInterrupted |
 		TranscriptStepState |
-		TranscriptReviewerState |
 		RuntimeReadModelUpdate |
 		TranscriptSessionStatus |
 		TranscriptSessionIdentity |
@@ -118,7 +116,6 @@ type TranscriptHydration struct {
 	ActiveThinkingStatus   *TranscriptThinkingStatusUpdate
 	ActiveReasoningTraces  []TranscriptReasoningTraceUpdate
 	ActiveStep             *TranscriptStepState
-	ActiveReviewer         *TranscriptReviewerState
 	ActiveCompaction       *TranscriptCompactionStatus
 	InFlightTools          []TranscriptToolStart
 	QueuedMessages         []TranscriptQueuedMessageState
@@ -228,8 +225,6 @@ func unmarshalTranscriptEvent(kind TranscriptMessageKind, data []byte) (Transcri
 		return decodeTranscriptPayload[TranscriptHumanInputInterrupted](data)
 	case TranscriptMessageStepState:
 		return decodeTranscriptPayload[TranscriptStepState](data)
-	case TranscriptMessageReviewerState:
-		return decodeTranscriptPayload[TranscriptReviewerState](data)
 	case TranscriptMessageRuntimeReadModelUpdate:
 		return decodeTranscriptPayload[RuntimeReadModelUpdate](data)
 	case TranscriptMessageSessionStatus:
@@ -315,10 +310,6 @@ func (TranscriptHumanInputInterrupted) transcriptEventKind() TranscriptMessageKi
 
 func (TranscriptStepState) transcriptEventKind() TranscriptMessageKind {
 	return TranscriptMessageStepState
-}
-
-func (TranscriptReviewerState) transcriptEventKind() TranscriptMessageKind {
-	return TranscriptMessageReviewerState
 }
 
 func (RuntimeReadModelUpdate) transcriptEventKind() TranscriptMessageKind {

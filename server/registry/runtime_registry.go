@@ -308,7 +308,10 @@ func (r *RuntimeRegistry) WithTranscriptContractViolationPanic(enabled bool) *Ru
 func (r *RuntimeRegistry) RuntimeActivity(sessionID string) (clientui.RuntimeActivity, error) {
 	id := strings.TrimSpace(sessionID)
 	if r == nil || id == "" {
-		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
+		return clientui.RuntimeActivity{
+			State:    clientui.RuntimeActivityUnavailable,
+			Reviewer: clientui.ReviewerActivityInactive,
+		}, nil
 	}
 	snapshot, err := r.RuntimeReadModelSnapshot(context.Background(), id)
 	if err != nil {
@@ -407,6 +410,9 @@ func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(ctx context.Context, s
 	snapshot.Active = runtimeactivity.ActiveStepFromProvider(engine)
 	if engine != nil {
 		snapshot.LiveRunActive = engine.HasActiveLiveRunGroup()
+		if engine.ReviewerRunning() {
+			snapshot.Reviewer = clientui.ReviewerActivityRunning
+		}
 	}
 	if len(r.pendingPrompts.List(id)) > 0 {
 		snapshot.PromptWait = true
@@ -489,6 +495,9 @@ func (r *RuntimeRegistry) PublishAuthorityRuntimeEvent(ref runtimeids.SessionRes
 }
 
 func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt runtime.Event) error {
+	if evt.Kind == runtime.EventReviewerStarted || evt.Kind == runtime.EventReviewerCompleted {
+		return r.publishCurrentRuntimeActivity(entry.ref.SessionID().String())
+	}
 	if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
 		messages, err := runtimeview.TranscriptMessagesFromRuntimeEventChecked(evt)
 		if err != nil {

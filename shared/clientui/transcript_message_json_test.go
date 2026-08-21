@@ -180,7 +180,6 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 			Text:        "restore verbatim",
 		}}}),
 		NewTranscriptEvent(TranscriptStepState{RunID: transcriptTestRunID(t), StepID: stepID, Lifecycle: StepLifecycleStarted, ActiveKind: RuntimeActivityActiveKindUserTurn, Status: RunStatusRunning}),
-		NewTranscriptEvent(TranscriptReviewerState{StepID: stepID, State: ReviewerStateRunning}),
 		NewTranscriptEvent(update),
 		NewTranscriptEvent(transcriptTestSessionStatus()),
 		NewTranscriptEvent(transcriptTestSessionIdentity(t)),

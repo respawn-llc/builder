@@ -18,9 +18,8 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 	var engine *Engine
 	reviewer := &reviewerPipelineStub{
 		runFollowUp: func(stepID string, original llm.Message) (reviewerFollowUpResult, error) {
-			active := engine.reviewerRuntimeState().ActiveStepSnapshot()
-			if active == nil || active.StepID != stepID {
-				t.Fatalf("Reviewer was not active during pipeline execution: %+v", active)
+			if !engine.ReviewerRunning() {
+				t.Fatal("Reviewer was not active during pipeline execution")
 			}
 			return reviewerFollowUpResult{Message: original}, fatalErr
 		},
@@ -63,8 +62,8 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 	if !errors.Is(err, fatalErr) {
 		t.Fatalf("outer Agent Step error = %v, want %v", err, fatalErr)
 	}
-	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
-		t.Fatalf("Reviewer remained active after fatal pipeline return: %+v", active)
+	if engine.ReviewerRunning() {
+		t.Fatal("Reviewer remained active after fatal pipeline return")
 	}
 	started, completed := 0, 0
 	startIndex, completedIndex := -1, -1
@@ -102,7 +101,7 @@ func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *tes
 	if err == nil {
 		t.Fatal("Reviewer start publication unexpectedly succeeded")
 	}
-	if engine.reviewerRuntimeState().ActiveStepSnapshot() != nil {
+	if engine.ReviewerRunning() {
 		t.Fatal("failed Reviewer start left active runtime state")
 	}
 	for _, event := range events {
@@ -120,12 +119,12 @@ func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
 	engine.cfg.OnEvent = func(event Event) {
 		switch event.Kind {
 		case EventReviewerStarted:
-			if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active == nil || active.StepID != stepID {
-				t.Fatalf("Started callback observed Reviewer state %+v", active)
+			if !engine.ReviewerRunning() {
+				t.Fatal("Started callback did not observe active Reviewer state")
 			}
 		case EventReviewerCompleted:
-			if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
-				t.Fatalf("Completed callback observed active Reviewer state %+v", active)
+			if engine.ReviewerRunning() {
+				t.Fatal("Completed callback observed active Reviewer state")
 			}
 		}
 	}
@@ -150,8 +149,8 @@ func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
 	if err := executor.terminalizeReviewerLifecycle(stepID, nil); err == nil {
 		t.Fatal("completion publication unexpectedly succeeded")
 	}
-	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
-		t.Fatalf("completion publication failure left Reviewer active: %+v", active)
+	if engine.ReviewerRunning() {
+		t.Fatal("completion publication failure left Reviewer active")
 	}
 }
 
@@ -178,8 +177,8 @@ func TestReviewerCompletionFromFollowUpStepTerminalizesReviewerLifecycleStep(t *
 	if err := executor.terminalizeReviewerLifecycleAt(followUpStepID, reviewerStepID, nil); err != nil {
 		t.Fatalf("terminalize Reviewer lifecycle: %v", err)
 	}
-	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
-		t.Fatalf("Reviewer remained active after follow-up terminalization: %+v", active)
+	if engine.ReviewerRunning() {
+		t.Fatal("Reviewer remained active after follow-up terminalization")
 	}
 	if completed == nil || completed.StepID == nil || *completed.StepID != reviewerStepID {
 		t.Fatalf("Reviewer completion = %+v, want lifecycle Step %q", completed, reviewerStepID)
@@ -289,8 +288,8 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 							}
 						}
 					}
-					if started != 1 || completed != 1 || engine.reviewerRuntimeState().ActiveStepSnapshot() != nil {
-						t.Fatalf("lifecycle = started:%d completed:%d active:%+v events:%+v", started, completed, engine.reviewerRuntimeState().ActiveStepSnapshot(), events)
+					if started != 1 || completed != 1 || engine.ReviewerRunning() {
+						t.Fatalf("lifecycle = started:%d completed:%d active:%t events:%+v", started, completed, engine.ReviewerRunning(), events)
 					}
 					allRows := TranscriptCommittedRowFactsFromSnapshot(engine.ChatSnapshot())
 					rows := make([]TranscriptCommittedRowFact, 0, 1)

@@ -210,13 +210,11 @@ func (c uiInputController) compactCmd(args string) tea.Cmd {
 
 func (c uiInputController) startRuntimeOperationAffordance() {
 	m := c.model
-	m.clearReviewerState()
 	m.clearActiveAssistantStreamSource()
 }
 
 func (c uiInputController) finishRuntimeOperationAffordance() {
 	m := c.model
-	m.clearReviewerState()
 	m.spinnerFrame = 0
 	if !m.shouldAnimateSpinner() {
 		m.stopSpinnerTicking()
@@ -256,7 +254,10 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
 	c.finishRuntimeOperationAffordance()
 	if msg.token == 0 || !m.hasRuntimeClient() {
-		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle})
+		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{
+			State:    clientui.RuntimeActivityRegisteredIdle,
+			Reviewer: clientui.ReviewerActivityInactive,
+		})
 	}
 	m.discardQueuedInput(activeQueuedID)
 	if msg.err != nil {

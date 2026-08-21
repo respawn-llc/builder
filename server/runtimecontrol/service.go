@@ -548,8 +548,12 @@ func (s *Service) runtimeInterruptResponse(ctx context.Context, sessionID string
 		slog.WarnContext(ctx, "runtime interrupt activity snapshot unavailable", "session_id", sessionID, "error", err)
 		version := runtimeactivity.NextReadModelVersion(sessionID)
 		return serverapi.RuntimeInterruptResponse{
-			Version:  version,
-			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true},
+			Version: version,
+			Activity: clientui.RuntimeActivity{
+				State:              clientui.RuntimeActivityUnavailable,
+				Reviewer:           clientui.ReviewerActivityInactive,
+				DiagnosticRecovery: true,
+			},
 		}, nil
 	}
 	return serverapi.RuntimeInterruptResponse{

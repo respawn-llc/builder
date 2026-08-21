@@ -682,12 +682,6 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 		t.Fatalf("publish active reasoning: %v", err)
 	}
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
-		Kind:   runtime.EventReviewerStarted,
-		StepID: textutil.Value(registryTestStepID),
-	}); err != nil {
-		t.Fatalf("publish active reviewer: %v", err)
-	}
-	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:       runtime.EventCompactionStarted,
 		StepID:     textutil.Value(registryTestStepID),
 		Compaction: &runtime.CompactionStatus{Mode: "auto", Count: 1},
@@ -721,12 +715,6 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 		t.Fatalf(
 			"hydrated active reasoning = status %+v traces %+v, want none after canonical runtime became idle",
 			payload.ActiveThinkingStatus, payload.ActiveReasoningTraces,
-		)
-	}
-	if payload.ActiveReviewer != nil {
-		t.Fatalf(
-			"hydrated active reviewer = %+v, want none after canonical runtime became idle",
-			payload.ActiveReviewer,
 		)
 	}
 	if payload.ActiveCompaction != nil {
@@ -884,6 +872,7 @@ func assertNoSleepObserverState(t *testing.T, notifications <-chan bool) {
 func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) {
 	activity := clientui.RuntimeActivity{
 		State:          clientui.RuntimeActivityRegisteredIdle,
+		Reviewer:       clientui.ReviewerActivityInactive,
 		QueueAccepting: true,
 	}
 	if running {
@@ -896,7 +885,8 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 			panic(err)
 		}
 		activity = clientui.RuntimeActivity{
-			State: clientui.RuntimeActivityRunning,
+			State:    clientui.RuntimeActivityRunning,
+			Reviewer: clientui.ReviewerActivityInactive,
 			ActiveStep: &clientui.RuntimeActiveStep{
 				RunID:      runID,
 				StepID:     stepID,

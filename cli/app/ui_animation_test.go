@@ -79,7 +79,8 @@ func TestTranscriptRuntimeProgressStartsAndRearmsSpinner(t *testing.T) {
 	running := ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)
 	runningPayload := running.Payload().(clientui.RuntimeReadModelUpdate)
 	runningPayload.Activity = clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityRunning,
+		State:    clientui.RuntimeActivityRunning,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID:      ongoingTestRunID(),
 			StepID:     ongoingTestStepID(),
@@ -112,37 +113,6 @@ func TestTranscriptRuntimeProgressStartsAndRearmsSpinner(t *testing.T) {
 	}
 	if !updated.spinnerTickDue.After(now) || cmd == nil {
 		t.Fatalf("runtime progress did not schedule a fresh spinner tick: due=%s now=%s cmd=%v", updated.spinnerTickDue, now, cmd)
-	}
-}
-
-func TestTranscriptReviewerLifecycleStartsAndStopsSpinner(t *testing.T) {
-	oldNow := uiAnimationNow
-	uiAnimationNow = func() time.Time { return time.Unix(1_700_000_200, 0) }
-	t.Cleanup(func() { uiAnimationNow = oldNow })
-
-	m := newAnimationTranscriptModel(t)
-	startedMessage := clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptReviewerState{
-		StepID: ongoingTestStepID(),
-		State:  clientui.ReviewerStateRunning,
-	}))
-
-	next, _ := m.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: startedMessage})
-	started := next.(*uiModel)
-	if !started.isReviewerRunning() || started.spinnerTickToken == 0 {
-		t.Fatalf("reviewer start did not start spinner: running=%t token=%d", started.isReviewerRunning(), started.spinnerTickToken)
-	}
-
-	completedMessage := startedMessage
-	completedMessage.Sequence = 3
-	completedPayload := clientui.TranscriptReviewerState{
-		StepID: ongoingTestStepID(),
-		State:  clientui.ReviewerStateCompleted,
-	}
-	completedMessage = clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(completedPayload))
-	next, _ = started.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: completedMessage})
-	completed := next.(*uiModel)
-	if completed.isReviewerRunning() || completed.spinnerTickToken != 0 {
-		t.Fatalf("reviewer completion did not stop spinner: running=%t token=%d", completed.isReviewerRunning(), completed.spinnerTickToken)
 	}
 }
 

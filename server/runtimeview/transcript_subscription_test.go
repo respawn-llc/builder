@@ -225,7 +225,6 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 		}},
 		InFlightTools:    []runtime.TranscriptLiveToolStart{{StepID: transcriptProjectionStepID, ToolCallID: "call-1", ToolName: "shell"}},
 		QueuedMessages:   []runtime.QueuedUserMessage{{ID: queueItemID.String(), Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value("queued")}}},
-		ActiveReviewer:   &runtime.TranscriptReviewerState{StepID: transcriptProjectionStepID},
 		ActiveCompaction: &runtime.TranscriptCompactionState{StepID: transcriptProjectionStepID, Mode: "auto", Count: 3},
 		ContextUsage:     &runtime.ContextUsage{UsedTokens: 123, WindowTokens: 4000, CacheHitPercent: 25, HasCacheHitPercentage: true},
 		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive},
@@ -242,9 +241,8 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 		hydration.QueuedMessages[0].Status != clientui.QueuedUserMessageAccepted {
 		t.Fatalf("queue = %+v", hydration.QueuedMessages)
 	}
-	if hydration.ActiveReviewer == nil || hydration.ActiveCompaction == nil ||
-		hydration.ActiveCompaction.Count != 3 {
-		t.Fatalf("step owners = reviewer %+v compaction %+v", hydration.ActiveReviewer, hydration.ActiveCompaction)
+	if hydration.ActiveCompaction == nil || hydration.ActiveCompaction.Count != 3 {
+		t.Fatalf("compaction = %+v", hydration.ActiveCompaction)
 	}
 	if hydration.ContextUsage == nil || hydration.ContextUsage.CacheHitPercent == nil ||
 		*hydration.ContextUsage.CacheHitPercent != 25 || hydration.GoalStatus == nil ||

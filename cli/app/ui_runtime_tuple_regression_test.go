@@ -186,12 +186,17 @@ func runtimeTupleTestUpdateMessage(
 }
 
 func runtimeTupleTestIdleActivity() clientui.RuntimeActivity {
-	return clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true}
+	return clientui.RuntimeActivity{
+		State:          clientui.RuntimeActivityRegisteredIdle,
+		Reviewer:       clientui.ReviewerActivityInactive,
+		QueueAccepting: true,
+	}
 }
 
 func runtimeTupleTestRunningActivity() clientui.RuntimeActivity {
 	return clientui.RuntimeActivity{
 		State:          clientui.RuntimeActivityRunning,
+		Reviewer:       clientui.ReviewerActivityInactive,
 		QueueAccepting: true,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID:      ongoingTestRunID(),

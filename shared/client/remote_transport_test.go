@@ -729,8 +729,11 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 					return
 				}
 				response := serverapi.RuntimeInterruptResponse{
-					Version:  version,
-					Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle},
+					Version: version,
+					Activity: clientui.RuntimeActivity{
+						State:    clientui.RuntimeActivityRegisteredIdle,
+						Reviewer: clientui.ReviewerActivityInactive,
+					},
 				}
 				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, response))); err != nil {
 					reportHandlerError(handlerErrs, "send interrupt response: %w", err)
