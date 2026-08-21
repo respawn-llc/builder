@@ -28,7 +28,7 @@ func (e *Engine) appendCommittedEntryWithCommitReceiptRaw(entry storedLocalEntry
 	if entry.Role == "" || entry.Text == "" {
 		return session.CommitReceipt{}, nil
 	}
-	return e.steerWithCommitReceiptRaw("", steerLocalEntryIntent(entry))
+	return e.steerWithCommitReceiptRaw(sessionSteeringProvenance(), steerLocalEntryIntent(entry))
 }
 
 func (e *Engine) appendCommittedControlFeedback(text string) (session.CommitReceipt, error) {

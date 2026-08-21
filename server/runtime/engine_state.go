@@ -314,7 +314,7 @@ func (e *Engine) applyStreamingStateMutation(mutate func(*transcriptRuntimeState
 		e.outputMutationMu.Lock()
 		defer e.outputMutationMu.Unlock()
 		mutate(e.transcriptRuntimeState())
-		return struct{}{}, e.steerOrderedRaw("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+		return struct{}{}, e.steerOrderedRaw(sessionSteeringProvenance(), steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 	})
 }
 

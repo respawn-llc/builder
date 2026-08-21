@@ -810,26 +810,6 @@ func (e *Engine) runStepLoop(ctx context.Context, stepID string) (llm.Message, e
 	return e.runStepLoopWithPendingUserInjectionObserver(ctx, stepID, nil)
 }
 
-func (e *Engine) runBackgroundStepLoop(ctx context.Context, stepID string) (llm.Message, error) {
-	reviewerFrequency := e.ReviewerFrequency()
-	reviewerClient := e.reviewerRuntimeState().Client()
-	e.ensureOrchestrationCollaborators()
-	result, err := e.stepFlow.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
-		ReviewerFrequency:              reviewerFrequency,
-		ReviewerClient:                 reviewerClient,
-		RefreshReviewerConfigOnResolve: true,
-		RuntimeMutationOwnership:       stepLoopDoesNotOwnRuntimeMutations,
-	})
-	outcome := userTurnResultFromStepLoop(result)
-	if outcome.Kind == UserTurnResultAssistantFinal && outcome.FinalAnswer != nil {
-		e.recordLiveRunAssistantFinalAnswer(stepID, *outcome.FinalAnswer)
-	}
-	if result.FinalAnswer == nil {
-		return llm.Message{}, err
-	}
-	return *result.FinalAnswer, err
-}
-
 func (e *Engine) runStepLoopWithPendingUserInjectionObserver(ctx context.Context, stepID string, onQueuedUserFlushCommitted func(session.CommitReceipt)) (llm.Message, error) {
 	result, err := e.runStepLoopWithPendingUserInjectionOutcomeObserver(ctx, stepID, onQueuedUserFlushCommitted)
 	if result.FinalAnswer == nil {

@@ -37,6 +37,22 @@ type activeStepGoalMutation struct {
 	status    session.GoalStatus
 }
 
+type goalStepExpectation struct {
+	exactStep *exactStepIdentity
+}
+
+func anyActiveGoalStep() goalStepExpectation {
+	return goalStepExpectation{}
+}
+
+func exactGoalStep(stepID string) (goalStepExpectation, error) {
+	identity, err := newExactStepIdentity(stepID)
+	if err != nil {
+		return goalStepExpectation{}, err
+	}
+	return goalStepExpectation{exactStep: &identity}, nil
+}
+
 type GoalCommandDisposition uint8
 
 const (
@@ -251,19 +267,20 @@ func (e *Engine) SetGoal(objective string, actor session.GoalActor) (GoalCommand
 		context.Background(),
 		e,
 		func(context.Context) (GoalCommandResult, error) {
-			return e.setGoalForStepRaw("", objective, actor)
+			return e.setGoalRaw(sessionSteeringProvenance(), objective, actor)
 		},
 	)
 }
 
 func (e *Engine) setGoalForStep(stepID string, objective string, actor session.GoalActor) (GoalCommandResult, error) {
-	if strings.TrimSpace(stepID) == "" {
-		return GoalCommandResult{}, errors.New("exact Step identity is required")
+	provenance, err := exactSteeringProvenance(stepID)
+	if err != nil {
+		return GoalCommandResult{}, err
 	}
-	return e.setGoalForStepRaw(stepID, objective, actor)
+	return e.setGoalRaw(provenance, objective, actor)
 }
 
-func (e *Engine) setGoalForStepRaw(stepID string, objective string, actor session.GoalActor) (GoalCommandResult, error) {
+func (e *Engine) setGoalRaw(provenance steeringProvenance, objective string, actor session.GoalActor) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -280,7 +297,7 @@ func (e *Engine) setGoalForStepRaw(stepID string, objective string, actor sessio
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(stepID, msg, goalStatusUpdateFromState(goal, availability))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusUpdateFromState(goal, availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -298,10 +315,11 @@ func (e *Engine) SetGoalStatusWithoutGoalLoopStart(status session.GoalStatus, ac
 }
 
 func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
-	if strings.TrimSpace(stepID) == "" {
-		return GoalCommandResult{}, errors.New("exact Step identity is required")
+	provenance, err := exactSteeringProvenance(stepID)
+	if err != nil {
+		return GoalCommandResult{}, err
 	}
-	return e.setGoalStatusForStepWithGoalLoopAdmissionRaw(stepID, status, actor, requireGoalLoopStart)
+	return e.setGoalStatusRaw(provenance, status, actor, requireGoalLoopStart)
 }
 
 func (e *Engine) setGoalStatusRuntime(status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
@@ -309,12 +327,12 @@ func (e *Engine) setGoalStatusRuntime(status session.GoalStatus, actor session.G
 		context.Background(),
 		e,
 		func(context.Context) (GoalCommandResult, error) {
-			return e.setGoalStatusForStepWithGoalLoopAdmissionRaw("", status, actor, requireGoalLoopStart)
+			return e.setGoalStatusRaw(sessionSteeringProvenance(), status, actor, requireGoalLoopStart)
 		},
 	)
 }
 
-func (e *Engine) setGoalStatusForStepWithGoalLoopAdmissionRaw(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
+func (e *Engine) setGoalStatusRaw(provenance steeringProvenance, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -346,7 +364,7 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmissionRaw(stepID string, sta
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(stepID, msg, goalStatusUpdateFromState(goal, availability))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusUpdateFromState(goal, availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -356,14 +374,18 @@ func (e *Engine) QueueAgentShellSetGoal(objective string, actor session.GoalActo
 }
 
 func (e *Engine) QueueAgentShellSetGoalForStep(stepID string, objective string, actor session.GoalActor) (session.GoalState, bool, error) {
-	return e.queueGoalSetForStep(strings.TrimSpace(stepID), objective, actor)
+	expectation, err := exactGoalStep(stepID)
+	if err != nil {
+		return session.GoalState{}, false, err
+	}
+	return e.queueGoalSetForStep(expectation, objective, actor)
 }
 
 func (e *Engine) QueueGoalSetForActiveStep(objective string, actor session.GoalActor) (session.GoalState, bool, error) {
-	return e.queueGoalSetForStep("", objective, actor)
+	return e.queueGoalSetForStep(anyActiveGoalStep(), objective, actor)
 }
 
-func (e *Engine) queueGoalSetForStep(stepID string, objective string, actor session.GoalActor) (session.GoalState, bool, error) {
+func (e *Engine) queueGoalSetForStep(expectation goalStepExpectation, objective string, actor session.GoalActor) (session.GoalState, bool, error) {
 	if e == nil || e.store == nil {
 		return session.GoalState{}, false, fmt.Errorf("runtime engine is required")
 	}
@@ -371,7 +393,7 @@ func (e *Engine) queueGoalSetForStep(stepID string, objective string, actor sess
 	if objective == "" {
 		return session.GoalState{}, false, errors.New("goal objective is required")
 	}
-	accepted, queued, err := e.enqueueActiveStepGoalMutationForStep(stepID, activeStepGoalMutation{
+	accepted, queued, err := e.enqueueActiveStepGoalMutationForStep(expectation, activeStepGoalMutation{
 		kind:      activeStepGoalMutationSet,
 		objective: objective,
 		actor:     actor,
@@ -402,14 +424,18 @@ func (e *Engine) QueueAgentShellCompleteGoalForStep(stepID string, actor session
 }
 
 func (e *Engine) QueueGoalStatusForActiveStep(status session.GoalStatus, actor session.GoalActor) (session.GoalState, bool, error) {
-	return e.queueGoalStatusForStep("", status, actor)
+	return e.queueGoalStatusForStep(anyActiveGoalStep(), status, actor)
 }
 
 func (e *Engine) QueueGoalStatusForStep(stepID string, status session.GoalStatus, actor session.GoalActor) (session.GoalState, bool, error) {
-	return e.queueGoalStatusForStep(strings.TrimSpace(stepID), status, actor)
+	expectation, err := exactGoalStep(stepID)
+	if err != nil {
+		return session.GoalState{}, false, err
+	}
+	return e.queueGoalStatusForStep(expectation, status, actor)
 }
 
-func (e *Engine) queueGoalStatusForStep(stepID string, status session.GoalStatus, actor session.GoalActor) (session.GoalState, bool, error) {
+func (e *Engine) queueGoalStatusForStep(expectation goalStepExpectation, status session.GoalStatus, actor session.GoalActor) (session.GoalState, bool, error) {
 	if e == nil || e.store == nil {
 		return session.GoalState{}, false, fmt.Errorf("runtime engine is required")
 	}
@@ -423,7 +449,7 @@ func (e *Engine) queueGoalStatusForStep(stepID string, status session.GoalStatus
 		actor:  actor,
 		status: status,
 	}
-	accepted, queued, err := e.enqueueActiveStepGoalMutationForStep(stepID, mutation, func(current *session.GoalState) (session.GoalState, error) {
+	accepted, queued, err := e.enqueueActiveStepGoalMutationForStep(expectation, mutation, func(current *session.GoalState) (session.GoalState, error) {
 		if current == nil {
 			return session.GoalState{}, errors.New("goal is not set")
 		}
@@ -480,21 +506,20 @@ func foldGoalMutations(goal *session.GoalState, mutations []activeStepGoalMutati
 }
 
 func (e *Engine) enqueueActiveStepGoalMutation(mutation activeStepGoalMutation, preview func(*session.GoalState) (session.GoalState, error)) (session.GoalState, bool, error) {
-	return e.enqueueActiveStepGoalMutationForStep("", mutation, preview)
+	return e.enqueueActiveStepGoalMutationForStep(anyActiveGoalStep(), mutation, preview)
 }
 
-func (e *Engine) enqueueActiveStepGoalMutationForStep(expectedStepID string, mutation activeStepGoalMutation, preview func(*session.GoalState) (session.GoalState, error)) (session.GoalState, bool, error) {
+func (e *Engine) enqueueActiveStepGoalMutationForStep(expectation goalStepExpectation, mutation activeStepGoalMutation, preview func(*session.GoalState) (session.GoalState, error)) (session.GoalState, bool, error) {
 	if e == nil || e.stepLifecycle == nil {
 		return session.GoalState{}, false, nil
 	}
-	expectedStepID = strings.TrimSpace(expectedStepID)
 	var accepted session.GoalState
 	queued, err := e.stepLifecycle.WithActiveStep(func(stepID string) error {
 		stepID = strings.TrimSpace(stepID)
 		if stepID == "" {
-			return nil
+			return errors.New("active Step identity is required")
 		}
-		if expectedStepID != "" && stepID != expectedStepID {
+		if expectation.exactStep != nil && stepID != expectation.exactStep.value {
 			return ErrAgentGoalStepInactive
 		}
 		e.activeStepGoalMutationsMu.Lock()
@@ -520,7 +545,7 @@ func (e *Engine) enqueueActiveStepGoalMutationForStep(expectedStepID string, mut
 	if err != nil {
 		return session.GoalState{}, false, err
 	}
-	if expectedStepID != "" && !queued {
+	if expectation.exactStep != nil && !queued {
 		return session.GoalState{}, false, ErrAgentGoalStepInactive
 	}
 	return accepted, queued, err
@@ -601,19 +626,20 @@ func (e *Engine) ClearGoal(actor session.GoalActor) (GoalCommandResult, error) {
 		context.Background(),
 		e,
 		func(context.Context) (GoalCommandResult, error) {
-			return e.clearGoalForStepRaw("", actor)
+			return e.clearGoalRaw(sessionSteeringProvenance(), actor)
 		},
 	)
 }
 
 func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalCommandResult, error) {
-	if strings.TrimSpace(stepID) == "" {
-		return GoalCommandResult{}, errors.New("exact Step identity is required")
+	provenance, err := exactSteeringProvenance(stepID)
+	if err != nil {
+		return GoalCommandResult{}, err
 	}
-	return e.clearGoalForStepRaw(stepID, actor)
+	return e.clearGoalRaw(provenance, actor)
 }
 
-func (e *Engine) clearGoalForStepRaw(stepID string, actor session.GoalActor) (GoalCommandResult, error) {
+func (e *Engine) clearGoalRaw(provenance steeringProvenance, actor session.GoalActor) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -629,7 +655,7 @@ func (e *Engine) clearGoalForStepRaw(stepID string, actor session.GoalActor) (Go
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(stepID, msg, goalStatusClearUpdate(availability))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusClearUpdate(availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -638,7 +664,8 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepID string) {
 	if e == nil || e.store == nil {
 		return
 	}
-	if strings.TrimSpace(stepID) == "" {
+	provenance, provenanceErr := exactSteeringProvenance(stepID)
+	if provenanceErr != nil {
 		panic("workflow completion Goal cascade requires exact Step identity")
 	}
 	if !e.WorkflowTerminalState().Completed {
@@ -670,7 +697,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepID string) {
 		return
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	if _, err := e.steerGoalNoticeAndStatusRaw(stepID, msg, goalStatusUpdateFromState(completed, availability)); err != nil {
+	if _, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusUpdateFromState(completed, availability)); err != nil {
 		reportErr(err)
 	}
 }
@@ -688,11 +715,11 @@ func steerGoalStatusUpdateIntent(update GoalStatusUpdate) steeringIntent {
 }
 
 func (e *Engine) steerGoalNoticeAndStatusRaw(
-	stepID string,
+	provenance steeringProvenance,
 	message llm.Message,
 	update GoalStatusUpdate,
 ) (session.CommitReceipt, error) {
-	return e.steerWithCommitReceiptRaw(stepID, steerGoalNoticeAndStatusIntent(message, update))
+	return e.steerWithCommitReceiptRaw(provenance, steerGoalNoticeAndStatusIntent(message, update))
 }
 
 func (e *Engine) StartGoalLoop() error {

@@ -77,6 +77,29 @@ func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
 	})
 }
 
+func TestPersistedWorkflowAssignmentCommitsFreshSession(t *testing.T) {
+	store := mustCreateTestSession(t)
+
+	receipt, err := PersistWorkflowAssignment(
+		store,
+		workflowAssignmentForCommitReceiptTest(),
+		persistedWorkflowAssignmentContextForTest(t),
+	)
+	if err != nil {
+		t.Fatalf("PersistWorkflowAssignment: %v", err)
+	}
+	if !receipt.Committed {
+		t.Fatalf("fresh workflow assignment receipt = %+v, want committed", receipt)
+	}
+	assignment, err := store.ActiveWorkflowAssignmentProjection()
+	if err != nil {
+		t.Fatalf("read active workflow assignment: %v", err)
+	}
+	if assignment == nil {
+		t.Fatal("fresh Session has no active workflow assignment")
+	}
+}
+
 func TestPersistedWorkflowAssignmentDoesNotRepairExistingSession(t *testing.T) {
 	store := mustCreateTestSession(t)
 	assignment := workflowAssignmentForCommitReceiptTest()

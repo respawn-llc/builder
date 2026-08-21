@@ -299,7 +299,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		if flushed == 0 {
 			return nil
 		}
-		msg, runErr := b.engine.runBackgroundStepLoop(stepCtx, stepID)
+		msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
 		assistant = msg
 		return runErr
 	})

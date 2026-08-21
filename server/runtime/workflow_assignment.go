@@ -110,7 +110,7 @@ func (e *Engine) steerWorkflowAssignmentSnapshot(snapshot WorkflowAssignmentSnap
 				return session.CommitReceipt{}, err
 			}
 		}
-		return e.steerWithCommitReceiptRaw("", intent)
+		return e.steerWithCommitReceiptRaw(sessionSteeringProvenance(), intent)
 	})
 	return WorkflowAssignmentSteer{deferred: deferred}, nil
 }
@@ -222,7 +222,7 @@ func SteerPersistedWorkflowAssignment(
 			deliveryContext.SkillPolicy,
 			time.Now(),
 		).withSubagents(deliveryContext.SubagentCatalogSettings, deliveryContext.EnabledTools)
-		if err := engine.steerBaseMetaContext("", builder, config.SubagentInvocationContextWorkflow); err != nil {
+		if err := engine.steerDormantBaseMetaContext(builder, config.SubagentInvocationContextWorkflow); err != nil {
 			return WorkflowAssignmentSteer{}, err
 		}
 	}

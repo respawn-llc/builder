@@ -404,6 +404,18 @@ func (e *Engine) steerRuntimeBaseMetaContext(
 	return e.steerRuntime(metaContextSteeringIntents(metaResult)...)
 }
 
+func (e *Engine) steerDormantBaseMetaContext(
+	builder metaContextBuilder,
+	invocationContext config.SubagentInvocationContext,
+) error {
+	metaResult, err := buildBaseMetaContext(builder, invocationContext, e.store.Meta().WorktreeReminder)
+	if err != nil {
+		return err
+	}
+	_, err = e.steerDormantMetaContextBuildResult(metaResult)
+	return err
+}
+
 func buildBaseMetaContext(
 	builder metaContextBuilder,
 	invocationContext config.SubagentInvocationContext,
@@ -416,16 +428,34 @@ func buildBaseMetaContext(
 }
 
 func (e *Engine) steerMetaContextBuildResult(stepID string, metaResult metaContextBuildResult) (session.CommitReceipt, error) {
+	if e == nil || e.closed.Load() {
+		return session.CommitReceipt{}, ErrEngineClosed
+	}
+	provenance, err := exactSteeringProvenance(stepID)
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	return e.steerMetaContextBuildResultRaw(provenance, metaResult)
+}
+
+func (e *Engine) steerDormantMetaContextBuildResult(metaResult metaContextBuildResult) (session.CommitReceipt, error) {
+	if e == nil || e.closed.Load() {
+		return session.CommitReceipt{}, ErrEngineClosed
+	}
+	return e.steerMetaContextBuildResultRaw(sessionSteeringProvenance(), metaResult)
+}
+
+func (e *Engine) steerMetaContextBuildResultRaw(provenance steeringProvenance, metaResult metaContextBuildResult) (session.CommitReceipt, error) {
 	intents := metaContextSteeringIntents(metaResult)
 	if len(intents) == 0 {
 		return session.CommitReceipt{}, nil
 	}
 	for _, intent := range intents[:len(intents)-1] {
-		if err := e.steer(stepID, intent); err != nil {
+		if err := e.steerOrdered(provenance, intent); err != nil {
 			return session.CommitReceipt{}, err
 		}
 	}
-	return e.steerWithCommitReceipt(stepID, intents[len(intents)-1])
+	return e.steerWithCommitReceiptRaw(provenance, intents[len(intents)-1])
 }
 
 func metaContextSteeringIntents(metaResult metaContextBuildResult) []steeringIntent {
