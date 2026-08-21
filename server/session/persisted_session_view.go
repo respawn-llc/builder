@@ -13,20 +13,13 @@ type PersistedSessionView struct {
 	eventLog *currentEventLog
 }
 
-func ResolvePersistedSessionView(
-	ctx context.Context,
-	resolver PersistedSessionResolver,
-	sessionID string,
-) (*PersistedSessionView, error) {
+func ResolvePersistedSessionView(ctx context.Context, resolver PersistedSessionResolver, sessionID string) (*PersistedSessionView, error) {
 	record, err := ResolvePersistedSessionRecord(ctx, resolver, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	meta := *record.Meta
-	eventLog, err := openCurrentEventLog(
-		filepath.Join(record.SessionDir, eventsFile),
-		currentEventLogPersistedSnapshot,
-	)
+	eventLog, err := openCurrentEventLog(filepath.Join(record.SessionDir, eventsFile), currentEventLogPersistedSnapshot)
 	if err != nil {
 		return nil, err
 	}

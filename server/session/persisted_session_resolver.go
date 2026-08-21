@@ -27,11 +27,7 @@ type PersistedSessionResolver interface {
 	ResolvePersistedSession(ctx context.Context, sessionID string) (PersistedSessionRecord, error)
 }
 
-func ResolvePersistedSessionRecord(
-	ctx context.Context,
-	resolver PersistedSessionResolver,
-	sessionID string,
-) (PersistedSessionRecord, error) {
+func ResolvePersistedSessionRecord(ctx context.Context, resolver PersistedSessionResolver, sessionID string) (PersistedSessionRecord, error) {
 	if resolver == nil {
 		return PersistedSessionRecord{}, errPersistedSessionResolverRequired
 	}
@@ -49,12 +45,7 @@ func ResolvePersistedSessionRecord(
 	return record, nil
 }
 
-func ResolveScopedPersistedSessionRecord(
-	ctx context.Context,
-	resolver PersistedSessionResolver,
-	containerDir string,
-	sessionID string,
-) (PersistedSessionRecord, error) {
+func ResolveScopedPersistedSessionRecord(ctx context.Context, resolver PersistedSessionResolver, containerDir string, sessionID string) (PersistedSessionRecord, error) {
 	record, err := ResolvePersistedSessionRecord(ctx, resolver, sessionID)
 	if err != nil {
 		return PersistedSessionRecord{}, err
@@ -64,11 +55,7 @@ func ResolveScopedPersistedSessionRecord(
 		return PersistedSessionRecord{}, err
 	}
 	if err := validatePersistedSessionDir(expectedDir, record.SessionDir); err != nil {
-		return PersistedSessionRecord{}, fmt.Errorf(
-			"session %q is outside workspace container: %w",
-			strings.TrimSpace(sessionID),
-			ErrOutsideWorkspaceContainer,
-		)
+		return PersistedSessionRecord{}, fmt.Errorf("session %q is outside workspace container: %w", strings.TrimSpace(sessionID), ErrOutsideWorkspaceContainer)
 	}
 	return record, nil
 }
