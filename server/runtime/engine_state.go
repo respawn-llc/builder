@@ -226,6 +226,8 @@ func (e *Engine) LiveChatContextSnapshot() chatcontext.ProjectionInput {
 	if e == nil {
 		return chatcontext.ProjectionInput{}
 	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
 	e.mu.Lock()
 	policy := e.contextPolicy
 	autoCompactionEnabled := true
@@ -283,7 +285,7 @@ func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
 
 func (e *Engine) SetStreamingError(text string) {
 	e.transcriptRuntimeState().SetStreamingError(text)
-	_ = e.steerRuntime(steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
 func (e *Engine) ReportPromptHistoryPersistError(reason string) {
@@ -294,12 +296,12 @@ func (e *Engine) ReportPromptHistoryPersistError(reason string) {
 	if reason == "" {
 		return
 	}
-	_ = e.steerRuntime(steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
+	_ = e.steer("", steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
 }
 
 func (e *Engine) ClearStreamingError() {
 	e.transcriptRuntimeState().ClearStreamingError()
-	_ = e.steerRuntime(steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
 func (e *Engine) SetSessionName(name string) error {
@@ -307,16 +309,11 @@ func (e *Engine) SetSessionName(name string) error {
 }
 
 func (e *Engine) SetThinkingLevel(level string) error {
-	normalized, ok := NormalizeThinkingLevel(level)
-	if !ok {
-		return fmt.Errorf("invalid thinking level %q (expected low|medium|high|xhigh)", strings.TrimSpace(level))
+	normalized := strings.TrimSpace(level)
+	if normalized == "" {
+		return errors.New("thinking level is required")
 	}
-	_, err := e.enqueueRuntimeSteering(false, steerThinkingLevelIntent(normalized))
-	return err
-}
-
-func (e *Engine) applyThinkingLevel(level string) error {
-	return e.setThinkingValue(level)
+	return e.setThinkingValue(normalized)
 }
 
 // SetWorkflowThinkingValue applies a workflow-owned thinking value. Workflow
@@ -339,7 +336,6 @@ func (e *Engine) setThinkingValue(value string) error {
 	e.mu.Lock()
 	e.cfg.ThinkingLevel = strings.TrimSpace(value)
 	e.mu.Unlock()
-	e.markCurrentRequestShapeDirty()
 	return nil
 }
 
@@ -347,22 +343,11 @@ func (e *Engine) SetFastModeEnabled(enabled bool) (bool, error) {
 	if enabled && !e.FastModeAvailable() {
 		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
-	if state := e.fastModeState(); state != nil {
-		changed := state.SetEnabled(enabled)
-		if changed {
-			e.markCurrentRequestShapeDirty()
-		}
-		return changed, nil
-	}
+	e.controlMutationMu.Lock()
+	defer e.controlMutationMu.Unlock()
 	changed := e.localFastModeEnabledChange(enabled)
 	e.applyFastModeEnabled(enabled)
 	return changed, nil
-}
-
-func (e *Engine) fastModeState() *FastModeState {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.cfg.FastModeState
 }
 
 func (e *Engine) localFastModeEnabledChange(enabled bool) bool {
@@ -380,24 +365,11 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 	}
 	e.mu.Unlock()
 	if changed {
-		e.markCurrentRequestShapeDirty()
 	}
 	return changed
 }
 
-func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	var changed, resultEnabled bool
-	_, err := e.enqueueRuntimeSteering(
-		false,
-		steerAutoCompactionIntent(enabled, &changed, &resultEnabled),
-	)
-	if err != nil {
-		return false, e.AutoCompactionEnabled(), err
-	}
-	return changed, resultEnabled, nil
-}
-
-func (e *Engine) applyAutoCompaction(enabled bool) (bool, bool) {
+func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	current := true
@@ -424,6 +396,8 @@ func (e *Engine) QuestionsEnabled() bool {
 }
 
 func (e *Engine) SetQuestionsEnabled(enabled bool) (bool, bool) {
+	e.controlMutationMu.Lock()
+	defer e.controlMutationMu.Unlock()
 	changed, current := e.questionsEnabledChange(enabled)
 	if changed {
 		e.applyQuestionsEnabled(enabled)
@@ -460,12 +434,45 @@ func (e *Engine) applyQuestionsEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetReviewerEnabled(enabled bool) (bool, string, error) {
+	e.controlMutationMu.Lock()
+	defer e.controlMutationMu.Unlock()
 	changed, mode, err := e.reviewerEnabledChange(enabled)
 	if err != nil {
 		return false, mode, err
 	}
 	e.applyReviewerEnabled(enabled, mode)
 	return changed, mode, nil
+}
+
+func (e *Engine) PrepareReviewerFrequency(frequency string) (string, error) {
+	normalized, ok := NormalizeReviewerFrequency(frequency)
+	if !ok {
+		return "", fmt.Errorf("invalid reviewer frequency %q", strings.TrimSpace(frequency))
+	}
+	if normalized != "off" {
+		if err := e.initReviewerClient(); err != nil {
+			return "", err
+		}
+	}
+	return normalized, nil
+}
+
+func (e *Engine) setReviewerFrequency(frequency string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	current, ok := NormalizeReviewerFrequency(e.cfg.Reviewer.Frequency)
+	if !ok {
+		current = "off"
+	}
+	if current == frequency {
+		return false
+	}
+	e.cfg.Reviewer.Frequency = frequency
+	return true
+}
+
+func (e *Engine) SetReviewerFrequency(frequency string) bool {
+	return e.setReviewerFrequency(frequency)
 }
 
 func (e *Engine) reviewerEnabledChange(enabled bool) (bool, string, error) {
@@ -483,11 +490,7 @@ func (e *Engine) reviewerEnabledChange(enabled bool) (bool, string, error) {
 		if err := e.initReviewerClient(); err != nil {
 			return false, current, err
 		}
-		e.mu.Lock()
-		reviewerState := e.reviewerRuntimeStateLocked()
-		target := reviewerState.ResumeFrequency("edits")
-		e.mu.Unlock()
-		return true, target, nil
+		return true, "edits", nil
 	}
 
 	if current == "off" {
@@ -506,18 +509,13 @@ func (e *Engine) applyReviewerEnabled(enabled bool, targetMode string) (bool, st
 	if !ok {
 		current = "off"
 	}
-	reviewerState := e.reviewerRuntimeStateLocked()
-	if current != "off" {
-		reviewerState.RecordResumeFrequency(current)
-	}
-
 	if enabled {
 		if current != "off" {
 			return false, current
 		}
 		target, ok := NormalizeReviewerFrequency(targetMode)
 		if !ok || target == "off" {
-			target = reviewerState.ResumeFrequency("edits")
+			target = "edits"
 		}
 		e.cfg.Reviewer.Frequency = target
 		return true, target
@@ -539,15 +537,10 @@ func (e *Engine) ThinkingLevel() string {
 func (e *Engine) FastModeEnabled() bool {
 	e.mu.Lock()
 	enabled := e.cfg.FastModeEnabled
-	if e.cfg.FastModeState != nil {
-		enabled = e.cfg.FastModeState.Enabled()
-	}
 	e.mu.Unlock()
 	if !enabled {
 		return false
 	}
-	// The shared state stores the user's preference; callers need the
-	// provider-supported effective state so status and requests stay valid.
 	return e.FastModeAvailable()
 }
 
@@ -593,9 +586,7 @@ func (e *Engine) AutoCompactionEnabled() bool {
 }
 
 func (e *Engine) CompactionMode() string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.compactionPlannerState().mode(e.cfg.CompactionMode)
+	return e.compactionPlannerState().mode(e.contextPolicy)
 }
 
 func (e *Engine) initReviewerClient() error {
@@ -883,10 +874,7 @@ func (e *Engine) modelRequests() *modelRequestRuntimeState {
 
 func (e *Engine) emitRaw(evt Event) error {
 	if evt.Kind == EventToolCallStarted && e.liveRun != nil {
-		stepID, err := requireStepID(evt.StepID, "record live tool start")
-		if err != nil {
-			return err
-		}
+		stepID, _ := textutil.OptionalExact(evt.StepID)
 		e.liveRun.recordToolStart(stepID)
 	}
 	revision, err := e.TranscriptRevision()
@@ -941,7 +929,7 @@ func (e *Engine) publishLiveRunFinished(result LiveRunResult) {
 	copyResult := result
 	e.emitRaw(Event{
 		Kind:          EventLiveRunFinished,
-		StepID:        exactStepIDPointer(result.StepID.String()),
+		StepID:        textutil.Value(result.StepID.String()),
 		LiveRunResult: &copyResult,
 	})
 }

@@ -39,7 +39,6 @@ type promptHistoryStore interface {
 
 type HeadlessBootstrap struct {
 	SessionLaunch    *sessionlaunch.Service
-	FastModeState    *runtime.FastModeState
 	PromptHistory    promptHistoryStore
 	RuntimeAuthority *sessionruntime.Authority
 	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
@@ -196,7 +195,6 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		FilesystemContext:     askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
 		Sources:               plan.Source.Sources,
 		Headless:              true,
-		FastMode:              l.boot.FastModeState,
 		QuestionsEnabled:      textutil.Value(plan.QuestionsEnabled),
 		AutoCompactionEnabled: textutil.Value(plan.AutoCompactionEnabled),
 		StartLogLines:         startLogLines,

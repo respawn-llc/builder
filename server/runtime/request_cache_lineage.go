@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -207,14 +206,6 @@ func (t *requestCacheTracker) RecordResponse(response persistedCacheResponseObse
 }
 
 func (e *Engine) observePromptCacheRequest(stepID string, prepared preparedCacheRequestObservation) error {
-	stepID = strings.TrimSpace(stepID)
-	if stepID == "" {
-		return errors.New("cache request observation requires exact Step provenance")
-	}
-	return e.observePromptCacheRequestForStep(&stepID, prepared)
-}
-
-func (e *Engine) observePromptCacheRequestForStep(stepID *string, prepared preparedCacheRequestObservation) error {
 	if e == nil || e.modelRequests().RequestCache() == nil || strings.TrimSpace(prepared.request.CacheKey) == "" {
 		return nil
 	}
@@ -222,7 +213,7 @@ func (e *Engine) observePromptCacheRequestForStep(stepID *string, prepared prepa
 	if err != nil {
 		return fmt.Errorf("adapt cache request record: %w", err)
 	}
-	if _, _, err := e.eventLog.AppendRecord(textutil.Pointer(stepID), record); err != nil {
+	if _, _, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record); err != nil {
 		return err
 	}
 	return nil
@@ -236,14 +227,6 @@ func cacheWarningEntryVisibility(mode config.CacheWarningMode) transcript.EntryV
 }
 
 func (e *Engine) observePromptCacheResponse(stepID string, prepared preparedCacheRequestObservation, usage llm.Usage) error {
-	stepID = strings.TrimSpace(stepID)
-	if stepID == "" {
-		return errors.New("cache response observation requires exact Step provenance")
-	}
-	return e.observePromptCacheResponseForStep(&stepID, prepared, usage)
-}
-
-func (e *Engine) observePromptCacheResponseForStep(stepID *string, prepared preparedCacheRequestObservation, usage llm.Usage) error {
 	if e == nil || e.modelRequests().RequestCache() == nil || strings.TrimSpace(prepared.request.CacheKey) == "" {
 		return nil
 	}
@@ -288,12 +271,10 @@ func (e *Engine) observePromptCacheResponseForStep(stepID *string, prepared prep
 		return fmt.Errorf("adapt cache response record: %w", err)
 	}
 	records = append(records, responseRecord)
-	intent := steerCacheObservationIntent(records, response, warning, cacheWarningEntryVisibility(e.cfg.CacheWarningMode), true)
-	if stepID == nil {
-		_, err = e.steerRuntimeWithCommitReceipt(intent)
-	} else {
-		_, err = e.steerWithCommitReceipt(*stepID, intent)
-	}
+	_, err = e.steerWithCommitReceipt(
+		stepID,
+		steerCacheObservationIntent(records, response, warning, cacheWarningEntryVisibility(e.cfg.CacheWarningMode), true),
+	)
 	return err
 }
 
@@ -369,7 +350,7 @@ func promptCacheChunks(req llm.Request) ([][]byte, error) {
 			Name:        req.StructuredOutput.Name,
 			Description: req.StructuredOutput.Description,
 			Strict:      req.StructuredOutput.Schema.Strict(),
-			Schema:      compactJSONRaw(req.StructuredOutput.Schema.JSON()),
+			Schema:      compactPreparedSchema(req.StructuredOutput.Schema),
 		}
 	}
 	metadata, err := json.Marshal(promptCacheMetadata{
@@ -439,7 +420,7 @@ func promptCacheTools(tools []llm.Tool) []promptCacheTool {
 		out = append(out, promptCacheTool{
 			Name:        tool.Name,
 			Description: tool.Description,
-			Schema:      compactJSONRaw(tool.Schema.JSON()),
+			Schema:      compactPreparedSchema(tool.Schema),
 		})
 	}
 	return out
@@ -476,6 +457,18 @@ func compactJSONRaw(raw json.RawMessage) string {
 		return compact.String()
 	}
 	return string(trimmed)
+}
+
+type preparedSchema interface {
+	Prepared() bool
+	JSON() []byte
+}
+
+func compactPreparedSchema(schema preparedSchema) string {
+	if !schema.Prepared() {
+		return ""
+	}
+	return compactJSONRaw(json.RawMessage(schema.JSON()))
 }
 
 func extendPromptCacheDigest(previous []byte, chunk []byte) []byte {

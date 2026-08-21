@@ -3,24 +3,20 @@ package runtime
 import (
 	"fmt"
 
-	"core/server/llm"
+	"core/server/chatcontext"
 	compaction "core/shared/config"
+	"core/shared/serverapi"
 )
 
 type compactionPlanningSnapshot struct {
 	autoCompactionEnabled         bool
-	compactionMode                string
-	autoCompactTokenLimit         int
 	preSubmitCompactionLeadTokens int
-	contextWindowTokens           int
-	effectiveContextWindowPercent int
+	policy                        chatcontext.Policy
 	maxOutputTokens               int
 	lockedMaxOutputTokens         int
-	lastUsage                     llm.Usage
 	// currentUsedTokens is the live consumed-context estimate (currentTokenUsage), the same source
 	// the auto-compaction gates check. It is what the handoff-runway estimate must measure so the
-	// estimate and the gates never disagree; lastUsage is a stale provider snapshot kept only for
-	// window-capacity derivation.
+	// estimate and the gates never disagree.
 	currentUsedTokens int
 }
 
@@ -44,52 +40,37 @@ const eagerCompactionContextPercent = 88
 func newCompactionPlanner() *compactionPlanner {
 	return &compactionPlanner{}
 }
-
-func (p *compactionPlanner) mode(raw string) string {
-	normalized, ok := NormalizeCompactionMode(raw)
-	if !ok {
+func (p *compactionPlanner) mode(policy chatcontext.Policy) string {
+	switch policy.CompactionMode {
+	case serverapi.ChatContextCompactionModeDisabled:
+		return "none"
+	case serverapi.ChatContextCompactionModeProviderNative:
 		return "native"
+	default:
+		return "local"
 	}
-	return normalized
 }
 
 func (p *compactionPlanner) autoCompactionAvailable(snapshot compactionPlanningSnapshot) bool {
-	return snapshot.autoCompactionEnabled && p.mode(snapshot.compactionMode) != "none"
+	return snapshot.autoCompactionEnabled && snapshot.policy.CompactionMode != serverapi.ChatContextCompactionModeDisabled
 }
 
-func (p *compactionPlanner) enginePlan(snapshot compactionPlanningSnapshot, caps llm.ProviderCapabilities) compactionEnginePlan {
-	switch p.mode(snapshot.compactionMode) {
-	case "none":
+func (p *compactionPlanner) enginePlan(snapshot compactionPlanningSnapshot) compactionEnginePlan {
+	switch snapshot.policy.CompactionMode {
+	case serverapi.ChatContextCompactionModeDisabled:
 		return compactionEnginePlan{engineKind: compactionEngineNone}
-	case "native":
-		if caps.SupportsResponsesCompact {
-			return compactionEnginePlan{
-				engineKind:                     compactionEngineRemote,
-				fallbackToLocalOnBadCheckpoint: true,
-			}
+	case serverapi.ChatContextCompactionModeProviderNative:
+		return compactionEnginePlan{
+			engineKind:                     compactionEngineRemote,
+			fallbackToLocalOnBadCheckpoint: true,
 		}
-		return compactionEnginePlan{engineKind: compactionEngineLocal}
 	default:
 		return compactionEnginePlan{engineKind: compactionEngineLocal}
 	}
 }
 
 func (p *compactionPlanner) contextWindowTokens(snapshot compactionPlanningSnapshot) int {
-	if snapshot.contextWindowTokens > 0 {
-		return snapshot.contextWindowTokens
-	}
-	if snapshot.lastUsage.WindowTokens > 0 {
-		return snapshot.lastUsage.WindowTokens
-	}
-	return defaultContextWindowTokens
-}
-
-func (p *compactionPlanner) effectiveContextTokenLimit(snapshot compactionPlanningSnapshot) int {
-	percent := snapshot.effectiveContextWindowPercent
-	if percent <= 0 || percent > 100 {
-		percent = 95
-	}
-	return (p.contextWindowTokens(snapshot) * percent) / 100
+	return int(snapshot.policy.ContextWindowTokens)
 }
 
 func (p *compactionPlanner) eagerCompactionEligible(snapshot compactionPlanningSnapshot) bool {
@@ -99,16 +80,8 @@ func (p *compactionPlanner) eagerCompactionEligible(snapshot compactionPlanningS
 	}
 	return snapshot.currentUsedTokens >= window*eagerCompactionContextPercent/100
 }
-
 func (p *compactionPlanner) autoCompactTokenLimit(snapshot compactionPlanningSnapshot) int {
-	if snapshot.autoCompactTokenLimit > 0 {
-		return snapshot.autoCompactTokenLimit
-	}
-	limit := p.effectiveContextTokenLimit(snapshot)
-	if limit < 1 {
-		return 1
-	}
-	return limit
+	return int(snapshot.policy.AutomaticThresholdTokens)
 }
 
 func (p *compactionPlanner) preSubmitTokenLimit(snapshot compactionPlanningSnapshot) int {

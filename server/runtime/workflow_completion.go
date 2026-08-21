@@ -11,9 +11,11 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 const (
@@ -22,6 +24,24 @@ const (
 	// by recording one durable violation and interrupting immediately.
 	workflowInvalidCompletionFailClosedMaxCount = 1
 )
+
+func workflowCompletionOperatorDiagnostic(
+	diagnostic error,
+	afterToolCallID *string,
+) storedLocalEntry {
+	if diagnostic == nil {
+		panic("workflow completion operator diagnostic requires an error")
+	}
+	if strings.TrimSpace(diagnostic.Error()) == "" {
+		panic("workflow completion operator diagnostic requires a non-blank error")
+	}
+	return storedLocalEntry{
+		Visibility:      transcript.EntryVisibilityAuto,
+		Role:            string(transcript.EntryRoleDeveloperErrorFeedback),
+		Text:            diagnostic.Error(),
+		AfterToolCallID: textutil.Pointer(afterToolCallID),
+	}
+}
 
 var workflowFinalAnswerNudge = strings.TrimSpace(prompts.WorkflowFinalAnswerNudgePrompt)
 
@@ -38,6 +58,12 @@ func (e *Engine) workflowCompletionRejectedResult(ctx context.Context, result to
 		result.Terminal = true
 	}
 	return result
+}
+
+func isWorkflowCompletionValidationError(err error) bool {
+	var runtimeValidation workflowruntime.ValidationError
+	var storeValidation workflowstore.CompletionValidationError
+	return errors.As(err, &runtimeValidation) || errors.As(err, &storeValidation)
 }
 
 func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workflowruntime.ViolationKind, detail string) (workflowruntime.ViolationResult, error) {
@@ -85,26 +111,26 @@ func (e *Engine) completeWorkflowCurrentNode(
 	ctx context.Context,
 	stepID string,
 	parsed workflowruntime.ParsedCompletion,
-) (workflowruntime.CompletionOutcome, error) {
+) (workflowruntime.CompletionResult, error) {
 	execution, active := e.currentNodeExecutionConfig()
 	if !active || execution.Controller == nil {
-		return workflowruntime.CompletionOutcome{}, errors.New("current node execution is unavailable")
+		return workflowruntime.CompletionResult{}, errors.New("current node execution is unavailable")
 	}
 	sessionID, err := e.workflowSessionID()
 	if err != nil {
-		return workflowruntime.CompletionOutcome{}, err
+		return workflowruntime.CompletionResult{}, err
 	}
 	run := e.ActiveRun()
 	if run == nil || run.StepID != stepID {
-		return workflowruntime.CompletionOutcome{}, ErrActiveStepInactive
+		return workflowruntime.CompletionResult{}, ErrActiveStepInactive
 	}
 	runID, err := runtimeids.ParseRunID(run.RunID)
 	if err != nil {
-		return workflowruntime.CompletionOutcome{}, fmt.Errorf("active Workflow run identity: %w", err)
+		return workflowruntime.CompletionResult{}, fmt.Errorf("active Workflow run identity: %w", err)
 	}
 	parsedStepID, err := runtimeids.ParseStepID(stepID)
 	if err != nil {
-		return workflowruntime.CompletionOutcome{}, fmt.Errorf("active Workflow step identity: %w", err)
+		return workflowruntime.CompletionResult{}, fmt.Errorf("active Workflow step identity: %w", err)
 	}
 	return execution.Controller.CompleteAgentCurrentNode(ctx, workflowruntime.AgentCompletionRequest{
 		Provenance: workflowruntime.AgentCompletionProvenance{
@@ -123,42 +149,30 @@ func (e *Engine) ApplyWorkflowAgentCompletion(
 	scopeID runtimeids.ExecutionScopeID,
 	runID runtimeids.RunID,
 	stepID runtimeids.StepID,
-	commit func() (workflowruntime.CompletionDecision, error),
-) (workflowruntime.CompletionDecision, error) {
+	commit func() (workflowruntime.CompletionResult, error),
+) (workflowruntime.CompletionResult, error) {
 	if e == nil || commit == nil {
-		return workflowruntime.CompletionDecision{}, errors.New("Workflow Agent completion authority is unavailable")
+		return workflowruntime.CompletionResult{}, errors.New("Workflow Agent completion authority is unavailable")
 	}
 	execution, active := e.currentNodeExecutionConfig()
 	if !active || execution.ScopeID != scopeID {
-		return workflowruntime.CompletionDecision{}, ErrActiveStepInactive
+		return workflowruntime.CompletionResult{}, ErrActiveStepInactive
 	}
 	snapshot := e.ActiveRun()
 	if snapshot == nil || snapshot.RunID != runID.String() || snapshot.StepID != stepID.String() {
-		return workflowruntime.CompletionDecision{}, ErrActiveStepInactive
+		return workflowruntime.CompletionResult{}, ErrActiveStepInactive
 	}
-	var decision workflowruntime.CompletionDecision
+	var result workflowruntime.CompletionResult
 	err := e.ApplyForActiveStep(stepID.String(), func() error {
 		var err error
-		decision, err = commit()
+		result, err = commit()
 		if err != nil {
 			return err
 		}
-		if decision.Accepted == nil {
-			return errors.New("committed Workflow completion returned no accepted outcome")
-		}
-		recorded, err := e.recordWorkflowTerminalState(
-			workflowCompletionSource(execution.CompletionMode),
-			*decision.Accepted,
-		)
-		if err != nil {
-			return err
-		}
-		if !recorded {
-			return ErrActiveStepInactive
-		}
+		e.recordWorkflowTerminalState(workflowCompletionSource(execution.CompletionMode), result)
 		return nil
 	})
-	return decision, err
+	return result, err
 }
 
 func (e *Engine) workflowSessionID() (runtimeids.SessionID, error) {

@@ -22,76 +22,63 @@ import (
 var ErrAuthorityClosed = errors.New("session runtime authority is closed")
 var ErrExecutionNoLongerLive = errors.New("exact execution scope is no longer live")
 
-type WorkflowRetirementDisposition uint8
-
-const (
-	WorkflowRetirementCompleted WorkflowRetirementDisposition = iota + 1
-	WorkflowRetirementOutcomeLess
-)
-
-type WorkflowRetirementOutcome struct {
-	Operation   workflow.CurrentNodeOperationRef
-	Kind        ExecutionScopeKind
-	Disposition WorkflowRetirementDisposition
+type ExecutionFinalized interface {
+	ExecutionFinalized(ExecutionScope)
 }
 
-type WorkflowExecutionRetired interface {
-	WorkflowExecutionRetired(WorkflowRetirementOutcome)
-}
+type ExecutionFinalizedFunc func(ExecutionScope)
 
-type WorkflowExecutionRetiredFunc func(WorkflowRetirementOutcome)
-
-func (f WorkflowExecutionRetiredFunc) WorkflowExecutionRetired(outcome WorkflowRetirementOutcome) {
+func (f ExecutionFinalizedFunc) ExecutionFinalized(scope ExecutionScope) {
 	if f != nil {
-		f(outcome)
+		f(scope)
 	}
 }
 
 type AuthorityOptions struct {
-	Debug                    bool
-	WorkflowExecutionRetired WorkflowExecutionRetired
-	PersistenceRoot          string
-	AuthManager              *auth.Manager
-	Background               *shelltool.Manager
-	StoreOptions             []session.StoreOption
-	EventFeed                AgentResourceEventFeed
-	ResourceLifecycle        AgentResourceLifecycle
-	StepLifecycle            AgentResourceStepLifecycle
-	PromptFeed               ExecutionPromptFeed
+	Debug              bool
+	ExecutionFinalized ExecutionFinalized
+	PersistenceRoot    string
+	AuthManager        *auth.Manager
+	Background         *shelltool.Manager
+	StoreOptions       []session.StoreOption
+	EventFeed          AgentResourceEventFeed
+	ResourceLifecycle  AgentResourceLifecycle
+	StepLifecycle      AgentResourceStepLifecycle
+	PromptFeed         ExecutionPromptFeed
 }
 
 type Authority struct {
-	mu                       sync.Mutex
-	closed                   bool
-	lifecycleCtx             context.Context
-	lifecycleCancel          context.CancelFunc
-	lifecycleWG              sync.WaitGroup
-	nextExecution            ExecutionGeneration
-	nextResource             runtimeids.ResourceGeneration
-	byScope                  map[runtimeids.ExecutionScopeID]*execution
-	workflowExecutions       map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
-	resources                map[runtimeids.SessionID]*agentResource
-	gates                    map[runtimeids.SessionID]*sessionAdmissionGate
-	workflowExecutionRetired WorkflowExecutionRetired
-	promptFeed               ExecutionPromptFeed
-	options                  authorityRuntimeOptions
-	invariantPolicy          invariant.Policy
-	workflowTaskReads        atomic.Pointer[workflowTaskExecutionReadSnapshot]
+	mu                 sync.Mutex
+	closed             bool
+	lifecycleCtx       context.Context
+	lifecycleCancel    context.CancelFunc
+	lifecycleWG        sync.WaitGroup
+	nextExecution      ExecutionGeneration
+	nextResource       runtimeids.ResourceGeneration
+	byScope            map[runtimeids.ExecutionScopeID]*execution
+	workflowExecutions map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
+	resources          map[runtimeids.SessionID]*agentResource
+	gates              map[runtimeids.SessionID]*sessionAdmissionGate
+	executionFinalized ExecutionFinalized
+	promptFeed         ExecutionPromptFeed
+	options            authorityRuntimeOptions
+	invariantPolicy    invariant.Policy
+	workflowTaskReads  atomic.Pointer[workflowTaskExecutionReadSnapshot]
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	authority := &Authority{
-		byScope:                  make(map[runtimeids.ExecutionScopeID]*execution),
-		workflowExecutions:       make(map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
-		resources:                make(map[runtimeids.SessionID]*agentResource),
-		gates:                    make(map[runtimeids.SessionID]*sessionAdmissionGate),
-		lifecycleCtx:             lifecycleCtx,
-		lifecycleCancel:          lifecycleCancel,
-		workflowExecutionRetired: options.WorkflowExecutionRetired,
-		promptFeed:               options.PromptFeed,
-		options:                  newAuthorityRuntimeOptions(options),
-		invariantPolicy:          invariant.OperationalPolicy(options.Debug),
+		byScope:            make(map[runtimeids.ExecutionScopeID]*execution),
+		workflowExecutions: make(map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
+		resources:          make(map[runtimeids.SessionID]*agentResource),
+		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
+		lifecycleCtx:       lifecycleCtx,
+		lifecycleCancel:    lifecycleCancel,
+		executionFinalized: options.ExecutionFinalized,
+		promptFeed:         options.PromptFeed,
+		options:            newAuthorityRuntimeOptions(options),
+		invariantPolicy:    invariant.OperationalPolicy(options.Debug),
 	}
 	if authority.options.background != nil {
 		authority.options.background.SetEventHandler(authority.routeBackgroundEvent)
@@ -181,15 +168,7 @@ func (a *Authority) ExecutionByCurrentNode(
 }
 
 func (a *Authority) workflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey) *execution {
-	execution := a.workflowExecutionByCurrentNodeLocked(ref, key)
-	if execution == nil {
-		return nil
-	}
-	current, ok := execution.scope.Workflow()
-	if !ok || current.OperationID != ref.OperationID {
-		return nil
-	}
-	return execution
+	return a.workflowExecutionByCurrentNodeLocked(ref, key)
 }
 
 func (a *Authority) workflowExecutionByCurrentNodeLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey) *execution {
@@ -359,13 +338,13 @@ func (a *Authority) CompleteAgentStep(
 	scopeID runtimeids.ExecutionScopeID,
 	runID runtimeids.RunID,
 	stepID runtimeids.StepID,
-	operation func() (workflowruntime.CompletionDecision, error),
-) (workflowruntime.CompletionDecision, error) {
+	operation func() (workflowruntime.CompletionResult, error),
+) (workflowruntime.CompletionResult, error) {
 	handle, ok := a.ExecutionByScope(scopeID)
 	if !ok {
-		return workflowruntime.CompletionDecision{}, ErrExecutionNoLongerLive
+		return workflowruntime.CompletionResult{}, ErrExecutionNoLongerLive
 	}
-	var decision workflowruntime.CompletionDecision
+	var result workflowruntime.CompletionResult
 	err := a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
 		exact := handle.(executionHandle).execution
 		if exact.scope.Kind() != ExecutionScopeAgent ||
@@ -378,74 +357,24 @@ func (a *Authority) CompleteAgentStep(
 			exact.resource.ref,
 			func(_ context.Context, engine *runtime.Engine) error {
 				var completionErr error
-				decision, completionErr = engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, operation)
+				result, completionErr = engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, operation)
 				return completionErr
 			},
 		)
-		if decision.CommitReceipt.Committed {
-			exact.completed = true
-			return err
-		}
-		if errors.Is(err, session.ErrMutationDefinitelyUncommitted) {
-			return err
-		}
-		return a.invariant(
-			"classify Agent completion commit certainty",
-			errors.Join(err, errors.New("completion returned without a committed receipt")),
-		)
+		return err
 	})
-	return decision, err
-}
-
-func (a *Authority) ScheduleAgentGoalMutation(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	runID runtimeids.RunID,
-	stepID runtimeids.StepID,
-	mutation runtime.GoalMutation,
-) (runtime.GoalCommandResult, error) {
-	handle, ok := a.SessionExecution(sessionID)
-	if !ok {
-		return runtime.GoalCommandResult{}, runtime.ErrAgentGoalStepInactive
-	}
-	var result runtime.GoalCommandResult
-	err := a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
-		exact := handle.(executionHandle).execution
-		if exact.scope.Kind() != ExecutionScopeAgent ||
-			exact.phase != executionPhaseRunning ||
-			exact.resource == nil {
-			return runtime.ErrAgentGoalStepInactive
-		}
-		return exact.resource.withEngine(
-			ctx,
-			exact.resource.ref,
-			func(_ context.Context, engine *runtime.Engine) error {
-				var err error
-				result, err = engine.ScheduleExactAgentGoalMutation(
-					exact.scope.ID(),
-					runID,
-					stepID,
-					mutation,
-				)
-				return err
-			},
-		)
-	})
-	if errors.Is(err, ErrExecutionNoLongerLive) {
-		return runtime.GoalCommandResult{}, runtime.ErrAgentGoalStepInactive
-	}
 	return result, err
 }
 
 func (a *Authority) CompleteFinalizingScript(
 	scopeID runtimeids.ExecutionScopeID,
-	operation func() (workflowruntime.CompletionDecision, error),
-) (workflowruntime.CompletionDecision, error) {
+	operation func() (workflowruntime.CompletionResult, error),
+) (workflowruntime.CompletionResult, error) {
 	handle, ok := a.ExecutionByScope(scopeID)
 	if !ok {
-		return workflowruntime.CompletionDecision{}, ErrExecutionNoLongerLive
+		return workflowruntime.CompletionResult{}, ErrExecutionNoLongerLive
 	}
-	var decision workflowruntime.CompletionDecision
+	var result workflowruntime.CompletionResult
 	err := a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
 		exact := handle.(executionHandle).execution
 		if exact.scope.Kind() != ExecutionScopeScript ||
@@ -453,20 +382,10 @@ func (a *Authority) CompleteFinalizingScript(
 			return ErrExecutionNoLongerLive
 		}
 		var err error
-		decision, err = operation()
-		if decision.CommitReceipt.Committed {
-			exact.completed = true
-			return err
-		}
-		if errors.Is(err, session.ErrMutationDefinitelyUncommitted) {
-			return err
-		}
-		return a.invariant(
-			"classify Script completion commit certainty",
-			errors.Join(err, errors.New("completion returned without a committed receipt")),
-		)
+		result, err = operation()
+		return err
 	})
-	return decision, err
+	return result, err
 }
 
 func (a *Authority) SessionExecution(sessionID runtimeids.SessionID) (ExecutionHandle, bool) {

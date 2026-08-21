@@ -5,44 +5,59 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 )
 
 type exclusiveStepOptions struct {
 	EmitRunState bool
 	ActiveKind   ActiveKind
+	Reservation  *exclusiveStepReservation
+}
+
+type exclusiveStepReservationKind uint8
+
+const (
+	exclusiveStepReservationManualCompaction exclusiveStepReservationKind = iota + 1
+	exclusiveStepReservationWorktreeTransition
+)
+
+type exclusiveStepReservation = struct {
+	Kind      exclusiveStepReservationKind
+	queueable bool
 }
 
 type exclusiveStepLifecycle interface {
 	Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
-	RunExactPreparation(ctx context.Context, fn func(stepCtx context.Context, stepID string) error) error
+	RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
+	AcquireReservation(reservation *exclusiveStepReservation) error
+	ReleaseReservation(reservation *exclusiveStepReservation)
 	Interrupt() error
 	InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error)
 	InterruptCurrentAgentTurn(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error)
 	IsBusy() bool
 	Snapshot() *RunSnapshot
-	ResolveActiveOutputStep(expectedStepID *string) (*string, error)
+	WithActiveStep(fn func(stepID string) error) (bool, error)
 	ApplyForActiveStep(stepID string, apply func() error) error
-	ApplyForExactGoalStep(runID string, stepID string, apply func() error) error
-	ValidateExactOutput(stepID string, allowClosing bool) error
+	DrainAgentStepBoundary(ctx context.Context) error
+	EndAgentStepBoundary()
 }
 
 type backgroundNoticeScheduler interface {
 	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
 	RecordBackgroundShellUpdate(BackgroundShellEvent) error
 	QueueBackgroundShellContinuation(BackgroundShellEvent)
-	RunPendingBackgroundShellContinuation(context.Context) error
+	RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error
 	QueueDeveloperNotice(msg llm.Message)
-	flushPendingNotices(stepID *string) (int, error)
+	flushPendingNotices(stepID string) (int, error)
 	HasPendingNotices() bool
 	ConsumePendingBackgroundNotice(sessionID string) bool
+	ScheduleIfIdle()
 }
 
 type contextCompactor interface {
 	CompactContextWithAcceptance(ctx context.Context, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
 	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
-	CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult
+	CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error)
 	CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
@@ -85,6 +100,7 @@ const (
 
 type userInjectionCommitResult struct {
 	flushed      int
+	startedStep  bool
 	receipt      session.CommitReceipt
 	queueItemIDs map[string]struct{}
 	disposition  userInjectionFlushDisposition
@@ -93,6 +109,10 @@ type userInjectionCommitResult struct {
 type queuedUserFlushStoppedError struct{}
 
 func (*queuedUserFlushStoppedError) Error() string { return "queued user flush stopped" }
+
+func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
+	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
+}
 
 type stepLoopResult struct {
 	FinalAnswer                *llm.Message
@@ -147,7 +167,6 @@ type reviewerFollowUpResult struct {
 	AssistantCommittedStart    int
 	AssistantCommittedStartSet bool
 	AssistantEventEmitted      bool
-	FollowUpRequired           bool
 }
 
 type phaseProtocolTurn struct {
@@ -175,7 +194,10 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 			e.stepLifecycle = &defaultExclusiveStepLifecycle{engine: e}
 		}
 		if e.backgroundFlow == nil {
-			e.backgroundFlow = &defaultBackgroundNoticeScheduler{engine: e}
+			e.backgroundFlow = &defaultBackgroundNoticeScheduler{engine: e, steps: e.stepLifecycle}
+		}
+		if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok && lifecycle.background == nil {
+			lifecycle.background = e.backgroundFlow
 		}
 		if e.phaseProtocol == nil {
 			e.phaseProtocol = &defaultPhaseProtocol{engine: e}
@@ -199,6 +221,9 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 				reviewer: e.reviewerFlow,
 				messages: e.messageFlow,
 			}
+		}
+		if reviewer, ok := e.reviewerFlow.(*defaultReviewerPipeline); ok && reviewer.stepRunner == nil {
+			reviewer.stepRunner = e.stepFlow
 		}
 	})
 }

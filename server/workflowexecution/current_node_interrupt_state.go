@@ -14,16 +14,16 @@ type currentNodeInterruptFence struct {
 }
 
 // currentNodeInterruptState indexes one Task-wide lifecycle fence only through
-// controller-owned Current Node operation and Current Node identities.
+// exact Scope and Current Node identities.
 // Callers hold CurrentNodeController.mu.
 type currentNodeInterruptState struct {
-	byOperation   map[runtimeids.CurrentNodeOperationID]*currentNodeInterruptFence
+	byScope       map[runtimeids.ExecutionScopeID]*currentNodeInterruptFence
 	byCurrentNode map[workflow.CurrentNodeReferenceKey]*currentNodeInterruptFence
 }
 
 func newCurrentNodeInterruptState() currentNodeInterruptState {
 	return currentNodeInterruptState{
-		byOperation:   make(map[runtimeids.CurrentNodeOperationID]*currentNodeInterruptFence),
+		byScope:       make(map[runtimeids.ExecutionScopeID]*currentNodeInterruptFence),
 		byCurrentNode: make(map[workflow.CurrentNodeReferenceKey]*currentNodeInterruptFence),
 	}
 }
@@ -40,7 +40,7 @@ func (s *currentNodeInterruptState) taskActive(taskID workflow.TaskID) bool {
 }
 
 func (s *currentNodeInterruptState) taskFence(taskID workflow.TaskID) *currentNodeInterruptFence {
-	for _, fence := range s.byOperation {
+	for _, fence := range s.byScope {
 		if fence.taskID == taskID {
 			return fence
 		}
@@ -53,14 +53,14 @@ func (s *currentNodeInterruptState) taskFence(taskID workflow.TaskID) *currentNo
 	return nil
 }
 
-func (s *currentNodeInterruptState) addOperation(
+func (s *currentNodeInterruptState) addScope(
 	fence *currentNodeInterruptFence,
-	operationID runtimeids.CurrentNodeOperationID,
+	scopeID runtimeids.ExecutionScopeID,
 ) {
-	if existing := s.byOperation[operationID]; existing != nil && existing != fence {
-		panic("Current Node operation belongs to conflicting Task interruption fences")
+	if existing := s.byScope[scopeID]; existing != nil && existing != fence {
+		panic("Exact Execution Scope belongs to conflicting Task interruption fences")
 	}
-	s.byOperation[operationID] = fence
+	s.byScope[scopeID] = fence
 }
 
 func (s *currentNodeInterruptState) addCurrentNode(
@@ -73,17 +73,17 @@ func (s *currentNodeInterruptState) addCurrentNode(
 	s.byCurrentNode[key] = fence
 }
 
-func (s *currentNodeInterruptState) operationFenced(operationID runtimeids.CurrentNodeOperationID) bool {
-	return s.byOperation[operationID] != nil
+func (s *currentNodeInterruptState) scopeFenced(scopeID runtimeids.ExecutionScopeID) bool {
+	return s.byScope[scopeID] != nil
 }
 
 func (s *currentNodeInterruptState) currentNodeFenced(key workflow.CurrentNodeReferenceKey) bool {
 	return s.byCurrentNode[key] != nil
 }
 
-func (s *currentNodeInterruptState) finishOperation(operationID runtimeids.CurrentNodeOperationID) {
-	fence := s.byOperation[operationID]
-	delete(s.byOperation, operationID)
+func (s *currentNodeInterruptState) finishScope(scopeID runtimeids.ExecutionScopeID) {
+	fence := s.byScope[scopeID]
+	delete(s.byScope, scopeID)
 	s.finishFence(fence)
 }
 
@@ -102,7 +102,7 @@ func (s *currentNodeInterruptState) finishFence(fence *currentNodeInterruptFence
 }
 
 func (s *currentNodeInterruptState) fenceActive(fence *currentNodeInterruptFence) bool {
-	for _, candidate := range s.byOperation {
+	for _, candidate := range s.byScope {
 		if candidate == fence {
 			return true
 		}
@@ -116,8 +116,8 @@ func (s *currentNodeInterruptState) fenceActive(fence *currentNodeInterruptFence
 }
 
 func (s *currentNodeInterruptState) taskIDs() []workflow.TaskID {
-	seen := make(map[workflow.TaskID]struct{}, len(s.byOperation)+len(s.byCurrentNode))
-	for _, fence := range s.byOperation {
+	seen := make(map[workflow.TaskID]struct{}, len(s.byScope)+len(s.byCurrentNode))
+	for _, fence := range s.byScope {
 		seen[fence.taskID] = struct{}{}
 	}
 	for _, fence := range s.byCurrentNode {

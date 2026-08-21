@@ -479,7 +479,7 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 		return result, err
 	}
 	if m.background != nil {
-		flushed, flushErr := m.background.flushPendingNotices(textutil.Value(stepID))
+		flushed, flushErr := m.background.flushPendingNotices(stepID)
 		result.flushed += flushed
 		if flushErr != nil {
 			return result, flushErr

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"core/server/chatcontext"
 	"core/server/llm"
@@ -15,11 +16,13 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/invariant"
+	"core/shared/jsoncontract"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -48,29 +51,7 @@ func NormalizeThinkingLevel(level string) (string, bool) {
 }
 
 func NormalizeReviewerFrequency(frequency string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(frequency)) {
-	case "off":
-		return "off", true
-	case "all":
-		return "all", true
-	case "edits":
-		return "edits", true
-	default:
-		return "", false
-	}
-}
-
-func NormalizeCompactionMode(mode string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "native":
-		return "native", true
-	case "local":
-		return "local", true
-	case "none":
-		return "none", true
-	default:
-		return "", false
-	}
+	return session.NormalizeReviewerFrequency(frequency)
 }
 
 func normalizeCacheWarningMode(mode config.CacheWarningMode) (config.CacheWarningMode, bool) {
@@ -96,7 +77,6 @@ type Config struct {
 	ThinkingLevel                   string
 	ModelCapabilities               session.LockedModelCapabilities
 	FastModeEnabled                 bool
-	FastModeState                   *FastModeState
 	WebSearchMode                   string
 	PromptFacingSnapshotReloader    PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride    *llm.ProviderCapabilities
@@ -117,6 +97,7 @@ type Config struct {
 	Reviewer                        ReviewerConfig
 	HeadlessMode                    bool
 	ToolPreambles                   bool
+	CurrentNodeExecution            *workflowruntime.CurrentNodeExecutionConfig
 	WorkflowPrompt                  *workflowruntime.PromptContract
 	AskQuestionBatchSkipped         func(tools.AskQuestionBatchMetadata)
 	TranscriptWorkingDir            string
@@ -129,7 +110,6 @@ type Config struct {
 	LifecycleTaskFinished func() error
 	LifecycleRuntimeAbort func() error
 	DurabilityObserver    ResultGroupDurabilityObserver
-	ApplyWorktreeTarget   func(clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
 }
 
 type ReviewerConfig struct {
@@ -162,19 +142,33 @@ type Engine struct {
 	lifecycleClosed bool
 	closed          atomic.Bool
 
-	store                *session.Store
-	eventLog             session.MaterializedEventLog
-	llm                  llm.Client
-	registry             *tools.Registry
-	cfg                  Config
-	invariantPolicy      invariant.Policy
-	steering             *steeringQueue
-	workflowControl      *workflowControlState
-	liveRun              *liveRunCoordinator
-	goalContinuationMu   sync.Mutex
-	pendingGoalLoopStart bool
-	diagnostics          *diagnosticDedupeStore
-	toolCallStarts       *pendingToolCallStartStore
+	store                       *session.Store
+	eventLog                    session.MaterializedEventLog
+	llm                         llm.Client
+	registry                    *tools.Registry
+	cfg                         Config
+	reviewerSuggestionsContract jsoncontract.Structured
+	workflowPromptContract      *workflowruntime.CompletionContract
+	// controlMutationMu serializes multi-step control mutations that need to
+	// persist transcript feedback before applying in-memory runtime state.
+	controlMutationMu sync.Mutex
+	// outputMutationMu keeps durable transcript writes, runtime projections, and
+	// event emission in one order for concurrent steering producers.
+	outputMutationMu           sync.Mutex
+	workflowAssignmentMu       sync.Mutex
+	pendingWorkflowAssignments []queuedWorkflowAssignment
+	// queuedUserWorkMu serializes the server-owned continuation that drains
+	// pending steering/user injections once a busy run releases.
+	queuedUserWorkMu           sync.Mutex
+	queuedUserWorkScheduled    bool
+	queuedUserWorkPauseCount   int
+	queuedUserWorkAutoDrainIDs map[string]struct{}
+	liveRun                    *liveRunCoordinator
+	activeStepGoalMutationsMu  sync.Mutex
+	activeStepGoalMutations    map[string][]activeStepGoalMutation
+	pendingGoalLoopStart       bool
+	diagnostics                *diagnosticDedupeStore
+	toolCallStarts             *pendingToolCallStartStore
 
 	usageState           *usageTrackingState
 	goalLoop             *goalLoopState
@@ -235,19 +229,11 @@ func New(
 	if cfg.MaxTokens < 0 {
 		cfg.MaxTokens = 0
 	}
-	if cfg.EffectiveContextWindowPercent <= 0 || cfg.EffectiveContextWindowPercent > 100 {
-		cfg.EffectiveContextWindowPercent = 95
-	}
 	if cfg.PreSubmitCompactionLeadTokens <= 0 {
 		cfg.PreSubmitCompactionLeadTokens = config.DefaultPreSubmitRunwayTokens
 	}
 	if cfg.LocalCompactionCarryoverLimit <= 0 {
 		cfg.LocalCompactionCarryoverLimit = 20_000
-	}
-	if normalized, ok := NormalizeCompactionMode(cfg.CompactionMode); ok {
-		cfg.CompactionMode = normalized
-	} else {
-		cfg.CompactionMode = "native"
 	}
 	if normalized, ok := normalizeCacheWarningMode(cfg.CacheWarningMode); ok {
 		cfg.CacheWarningMode = normalized
@@ -258,36 +244,44 @@ func New(
 		enabled := true
 		cfg.AutoCompactionEnabled = &enabled
 	}
-	if cfg.ContextWindowTokens <= 0 {
-		if meta, ok := llm.LookupModelMetadata(cfg.Model); ok && meta.ContextWindowTokens > 0 {
-			cfg.ContextWindowTokens = meta.ContextWindowTokens
+	var workflowPromptContract *workflowruntime.CompletionContract
+	if cfg.WorkflowPrompt != nil {
+		prepared, err := newWorkflowPromptCompletionContract(cfg.WorkflowPrompt)
+		if err != nil {
+			return nil, fmt.Errorf("prepare runtime workflow prompt completion contract: %w", err)
 		}
+		workflowPromptContract = &prepared
 	}
 	if !cfg.ModelCapabilities.SupportsReasoningEffort && !cfg.ModelCapabilities.SupportsVisionInputs {
 		cfg.ModelCapabilities = llm.LockedModelCapabilitiesForModel(cfg.Model)
 	}
+	reviewerSuggestionsContract, err := prepareReviewerSuggestionsContract(
+		jsoncontract.NewPreparer(cfg.Debug),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare reviewer suggestions contract: %w", err)
+	}
 	eng := &Engine{
-		store:                store,
-		eventLog:             eventLog,
-		llm:                  client,
-		registry:             registry,
-		cfg:                  cfg,
-		diagnostics:          newDiagnosticDedupeStore(),
-		toolCallStarts:       newPendingToolCallStartStore(),
-		usageState:           newUsageTrackingState(),
-		goalLoop:             newGoalLoopState(),
-		compactionState:      newCompactionRuntimeState(),
-		handoffState:         newHandoffRuntimeState(),
-		phaseState:           newPhaseProtocolState(),
-		reviewerState:        newReviewerRuntimeState(cfg.Reviewer.Client),
-		transcriptState:      newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
-		lockedState:          newLockedContractState(),
-		modelRequestsState:   newModelRequestRuntimeState(),
-		currentNodeExecution: newCurrentNodeExecutionState(),
-		compactionPlanner:    newCompactionPlanner(),
-		steering:             newSteeringQueue(cfg.Debug),
-		invariantPolicy:      invariant.OperationalPolicy(cfg.Debug),
-		workflowControl:      newWorkflowControlState(),
+		store:                       store,
+		eventLog:                    eventLog,
+		llm:                         client,
+		registry:                    registry,
+		cfg:                         cfg,
+		reviewerSuggestionsContract: reviewerSuggestionsContract,
+		workflowPromptContract:      workflowPromptContract,
+		diagnostics:                 newDiagnosticDedupeStore(),
+		toolCallStarts:              newPendingToolCallStartStore(),
+		usageState:                  newUsageTrackingState(),
+		goalLoop:                    newGoalLoopState(),
+		compactionState:             newCompactionRuntimeState(),
+		handoffState:                newHandoffRuntimeState(),
+		phaseState:                  newPhaseProtocolState(),
+		reviewerState:               newReviewerRuntimeState(cfg.Reviewer.Client),
+		transcriptState:             newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
+		lockedState:                 newLockedContractState(),
+		modelRequestsState:          newModelRequestRuntimeState(),
+		currentNodeExecution:        newCurrentNodeExecutionState(),
+		compactionPlanner:           newCompactionPlanner(),
 	}
 	eng.compactionRuntimeState().SetContextFacts(store.ContextFacts())
 	providerCapabilities, err := eng.providerCapabilities(context.Background())
@@ -301,10 +295,9 @@ func New(
 		CompactionMode:                   config.CompactionMode(eng.cfg.CompactionMode),
 	}
 	eng.contextPolicy = chatcontext.ResolvePolicy(policySettings, providerCapabilities, store.Meta().Locked)
-	effectivePolicySettings := chatcontext.ApplyPolicy(policySettings, eng.contextPolicy)
-	eng.cfg.ContextWindowTokens = effectivePolicySettings.ModelContextWindow
-	eng.cfg.AutoCompactTokenLimit = effectivePolicySettings.ContextCompactionThresholdTokens
-	eng.cfg.CompactionMode = string(effectivePolicySettings.CompactionMode)
+	eng.cfg.ContextWindowTokens = int(eng.contextPolicy.ContextWindowTokens)
+	eng.cfg.AutoCompactTokenLimit = int(eng.contextPolicy.AutomaticThresholdTokens)
+	eng.cfg.CompactionMode = eng.compactionPlannerState().mode(eng.contextPolicy)
 	eng.ensureLifecycle()
 	eng.ensureOrchestrationCollaborators()
 
@@ -313,7 +306,6 @@ func New(
 		reviewerFrequency = "off"
 	}
 	eng.cfg.Reviewer.Frequency = reviewerFrequency
-	eng.reviewerRuntimeState().SetResumeFrequency(reviewerFrequency)
 	if reviewerFrequency != "off" {
 		if err := eng.initReviewerClient(); err != nil {
 			return nil, err
@@ -392,36 +384,15 @@ func (e *Engine) Close() error {
 	}
 	e.lifecycleClosed = true
 	e.closed.Store(true)
-	e.steering.close()
+	e.failPendingWorkflowAssignments(ErrEngineClosed)
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	e.lifecycleWG.Wait()
-	e.applyExactRuntimeMutation("runtime_close", &steeringLiveToolAbort{reason: "canceled"})
+	e.steerRuntimeClose("runtime_close", steerLiveToolAbortIntent("canceled"))
 	return interruptErr
-}
-
-func (e *Engine) BeginRetirement() bool {
-	if e == nil {
-		return true
-	}
-	e.ensureOrchestrationCollaborators()
-	e.lifecycleMu.Lock()
-	defer e.lifecycleMu.Unlock()
-	if e.lifecycleClosed || e.closed.Load() {
-		return true
-	}
-	if e.stepLifecycle.IsBusy() ||
-		e.steering.pendingWork() ||
-		e.messageFlow.HasPendingUserInjections() ||
-		e.backgroundFlow.HasPendingNotices() ||
-		e.RetainedWorkflowControlOnly() {
-		return false
-	}
-	e.closed.Store(true)
-	return true
 }
 
 func (e *Engine) closeAdmissionAfterRuntimeAbort() {
@@ -429,7 +400,7 @@ func (e *Engine) closeAdmissionAfterRuntimeAbort() {
 		return
 	}
 	e.closed.Store(true)
-	e.steering.close()
+	e.failPendingWorkflowAssignments(ErrEngineClosed)
 }
 
 func (e *Engine) ensureLifecycle() {
@@ -481,38 +452,94 @@ type QueuedUserMessage struct {
 }
 
 func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
-	return e.queueUserMessage(text, nil)
+	return e.queueUserMessage(text, false, nil)
 }
 
-func (e *Engine) queueUserMessage(text string, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) queueUserMessage(text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
-	if err := e.workflowControl.validateSteering(steeringAdmissionPostTurnQueue); err != nil {
-		return QueuedUserMessage{}, err
-	}
-	var item QueuedUserMessage
-	committed, err := runCommandAcceptance(accept, func() (bool, error) {
-		admitted, err := e.workflowControl.withSteeringAdmission(steeringAdmissionPostTurnQueue, func() (bool, error) {
+	if !forceAutoDrain {
+		var item QueuedUserMessage
+		committed, err := runCommandAcceptance(accept, func() (bool, error) {
+			e.outputMutationMu.Lock()
+			defer e.outputMutationMu.Unlock()
 			var queueErr error
-			ordinal, ordinalErr := e.steering.nextHumanOrdinal()
-			if ordinalErr != nil {
-				return false, ordinalErr
-			}
-			var scope *runtimeids.ExecutionScopeID
-			if execution, active := e.currentNodeExecutionConfig(); active {
-				scopeID := execution.ScopeID
-				scope = &scopeID
-			}
-			item, queueErr = e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
-				admission: ordinal,
-				scope:     scope,
-			})
+			item, queueErr = e.messageFlow.QueueUserMessage(text)
 			if queueErr != nil {
 				return false, queueErr
 			}
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 			return true, nil
 		})
-		if err != nil || !admitted {
-			return admitted, err
+		return item, commandAcceptanceResult(committed, err)
+	}
+	liveItem := QueuedUserMessage{
+		ID:      runtimeids.NewQueueItemID().String(),
+		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
+	}
+	waitedForLiveRunStep := false
+	for {
+		var item QueuedUserMessage
+		livePublication := false
+		committed, err := runCommandAcceptance(accept, func() (bool, error) {
+			if !e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
+				e.markQueuedUserInjectionForAutoDrain(queueItemID)
+			}) {
+				return false, nil
+			}
+			livePublication = true
+			e.outputMutationMu.Lock()
+			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem)
+			if queueErr != nil {
+				e.outputMutationMu.Unlock()
+				queueItemID := mustQueueItemID(liveItem.ID)
+				e.liveRun.finishQueueItemPublication(queueItemID)
+				e.unmarkQueuedUserInjectionForAutoDrain(liveItem.ID)
+				e.completeLiveRunQueueItems(map[string]struct{}{liveItem.ID: {}})
+				return false, queueErr
+			}
+			item = queuedItem
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			e.outputMutationMu.Unlock()
+			return true, nil
+		})
+		if err != nil {
+			return QueuedUserMessage{}, err
+		}
+		if committed {
+			queueItemID := mustQueueItemID(item.ID)
+			if e.liveRun.finishQueueItemPublication(queueItemID) {
+				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
+			} else {
+				e.scheduleQueuedUserInjectionsIfIdle()
+			}
+			return item, nil
+		}
+		if livePublication {
+			return QueuedUserMessage{}, context.Canceled
+		}
+		if !e.waitingForLiveRunStepStart() {
+			break
+		}
+		waitedForLiveRunStep = true
+		time.Sleep(time.Millisecond)
+	}
+	if waitedForLiveRunStep {
+		if accept != nil {
+			return QueuedUserMessage{}, context.Canceled
+		}
+		e.outputMutationMu.Lock()
+		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+		e.outputMutationMu.Unlock()
+		return liveItem, nil
+	}
+	var item QueuedUserMessage
+	committed, err := runCommandAcceptance(accept, func() (bool, error) {
+		e.outputMutationMu.Lock()
+		defer e.outputMutationMu.Unlock()
+		var queueErr error
+		item, queueErr = e.messageFlow.QueueUserMessage(text)
+		if queueErr != nil {
+			return false, queueErr
 		}
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		return true, nil
@@ -520,15 +547,43 @@ func (e *Engine) queueUserMessage(text string, accept CommandAcceptance) (Queued
 	if err := commandAcceptanceResult(committed, err); err != nil {
 		return QueuedUserMessage{}, err
 	}
+	e.markQueuedUserInjectionForAutoDrain(item.ID)
+	e.scheduleQueuedUserInjectionsIfIdle()
 	return item, nil
 }
 
-func activeKindInterruptibleByLiveStop(kind ActiveKind) bool { return kind.Valid() }
+func (e *Engine) waitingForLiveRunStepStart() bool {
+	if e == nil || e.stepLifecycle == nil {
+		return false
+	}
+	snapshot := e.stepLifecycle.Snapshot()
+	if snapshot == nil {
+		return false
+	}
+	return activeKindUsesLiveRun(snapshot.ActiveKind)
+}
+
+func activeKindUsesLiveRun(kind ActiveKind) bool {
+	switch kind {
+	case ActiveKindCompaction, ActiveKindPreSubmitCompaction, ActiveKindRuntimeMaintenance:
+		return false
+	default:
+		return true
+	}
+}
+
+func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
+	return kind.Valid() && kind != ActiveKindRuntimeMaintenance
+}
 
 func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 	e.ensureOrchestrationCollaborators()
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
 	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)
 	if discarded {
+		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
+		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageDiscarded, "", false)
 	}
 	return discarded
@@ -587,7 +642,7 @@ func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
-		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{steer.Message()})); err != nil {
+		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{steer.Message()})); err != nil {
 			return err
 		}
 		if onFlushed != nil {
@@ -653,7 +708,7 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (result WorkflowTurnRes
 	}
 
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn}, func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.RunNext(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn}, func(stepCtx context.Context, stepID string) error {
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
@@ -688,26 +743,41 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 	}
 
 	e.ensureOrchestrationCollaborators()
-	if err := e.workflowControl.validateSteering(steeringAdmissionUserShell); err != nil {
-		return tools.Result{}, err
-	}
-	entry := newUserShellQueueEntry(command, onActive)
-	committed, err := runCommandAcceptance(accept, func() (bool, error) {
-		wake, appendErr := e.steering.append(entry)
-		if wake {
-			e.wakeSteeringDrain()
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserShell}, func(stepCtx context.Context, stepID string) error {
+		if onActive != nil {
+			onActive()
 		}
-		return appendErr == nil, appendErr
+		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
+			return err
+		}
+
+		call := llm.ToolCall{
+			ID:   uuid.NewString(),
+			Name: string(toolspec.ToolExecCommand),
+			Input: mustJSON(map[string]any{
+				"cmd":            command,
+				"user_initiated": true,
+			}),
+		}
+		committed, steerErr := runCommandAcceptance(accept, func() (bool, error) {
+			receipt, err := e.steerWithCommitReceipt(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}}))
+			return receipt.Committed, err
+		})
+		if err := commandAcceptanceResult(committed, steerErr); err != nil {
+			return err
+		}
+		_, registered := e.registry.Get(toolspec.ToolExecCommand)
+		results, execErr := e.executeToolCalls(stepCtx, stepID, []llm.ToolCall{call})
+		if len(results) == 0 {
+			return errors.Join(execErr, errors.New("shell tool execution returned no result"))
+		}
+		result = results[0]
+		if !registered {
+			return errors.Join(execErr, errUnknownTool)
+		}
+		return execErr
 	})
-	if err := commandAcceptanceResult(committed, err); err != nil {
-		return tools.Result{}, err
-	}
-	select {
-	case reply := <-entry.shell.reply:
-		return reply.result, reply.err
-	case <-ctx.Done():
-		return tools.Result{}, context.Cause(ctx)
-	}
+	return result, err
 }
 
 func (e *Engine) runStepLoop(ctx context.Context, stepID string) (llm.Message, error) {
@@ -817,11 +887,11 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 // each iteration so the retry observes the appended synthetic outputs. When the
 // 400 is unrelated to missing outputs (nothing to repair), the original error is
 // returned unchanged.
-func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID string, rebuild func() (llm.Request, error), onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
+func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID string, rebuild func() (llm.Request, error), onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (successfulRequestCandidate, error) {
 	for {
 		req, err := rebuild()
 		if err != nil {
-			return llm.Response{}, err
+			return successfulRequestCandidate{}, err
 		}
 		var emitted atomic.Bool
 		wrappedDelta := onDelta
@@ -844,10 +914,10 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 		}
 		resp, err := e.generateWithRetryClient(ctx, stepID, e.llm, req, wrappedDelta, wrappedReasoningDelta, onAttemptReset)
 		if err == nil {
-			return resp, nil
+			return newSuccessfulRequestCandidate(req, resp), nil
 		}
 		if !llm.HasHTTPStatus(err, 400) {
-			return llm.Response{}, err
+			return successfulRequestCandidate{}, err
 		}
 		if emitted.Load() && onAttemptReset != nil {
 			onAttemptReset()
@@ -857,35 +927,24 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 			missingToolOutputRepairLiveProvider400,
 		)
 		if repairErr != nil {
-			return llm.Response{}, errors.Join(err, repairErr)
+			return successfulRequestCandidate{}, errors.Join(err, repairErr)
 		}
 		if repaired == 0 {
-			return llm.Response{}, err
+			return successfulRequestCandidate{}, err
 		}
 	}
 }
 
 func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, client llm.Client, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
-	stepID = strings.TrimSpace(stepID)
-	if stepID == "" {
-		return llm.Response{}, errors.New("model generation requires exact Step provenance")
-	}
-	return e.generateWithRetryClientForStep(ctx, &stepID, client, req, onDelta, onReasoningDelta, onAttemptReset)
-}
-
-func (e *Engine) generateRuntimeWithRetryClient(ctx context.Context, client llm.Client, req llm.Request) (llm.Response, error) {
-	return e.generateWithRetryClientForStep(ctx, nil, client, req, nil, nil, nil)
-}
-
-func (e *Engine) generateWithRetryClientForStep(ctx context.Context, stepID *string, client llm.Client, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
 	prepared, err := e.modelRequests().RequestCache().Prepare(req)
 	if err != nil {
 		return llm.Response{}, err
 	}
-	if err := e.observePromptCacheRequestForStep(stepID, prepared); err != nil {
+	if err := e.observePromptCacheRequest(stepID, prepared); err != nil {
 		return llm.Response{}, err
 	}
 	var lastErr error
+	publishedProviderDiagnostics := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 2)
 	for i := 0; ; i++ {
 		var (
 			resp                    llm.Response
@@ -944,11 +1003,12 @@ func (e *Engine) generateWithRetryClientForStep(ctx context.Context, stepID *str
 			}
 		}
 		attemptDone.Store(true)
+		e.publishProviderTurnStateDiagnostics(stepID, req.CodexDispatch, publishedProviderDiagnostics)
 		if attemptErr != nil && ctx.Err() != nil {
 			return llm.Response{}, ctx.Err()
 		}
 		if attemptErr == nil {
-			if err := e.observePromptCacheResponseForStep(stepID, prepared, resp.Usage); err != nil {
+			if err := e.observePromptCacheResponse(stepID, prepared, resp.Usage); err != nil {
 				return llm.Response{}, err
 			}
 			return resp, nil
@@ -1162,9 +1222,11 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 			}
 		}
 	}
-	closeErr := e.applyExactRuntimeMutation(stepID, &steeringResultGroupClose{
-		collector: collector,
-	})
+	closeErr := e.steerRuntimeClose(
+		stepID,
+		steerResultGroupCloseIntent(collector),
+	)
+	var goalErr error
 	if fatal := collector.fatalSnapshot(); fatal != nil {
 		return acceptedResponsePostJoinOutcome{}, fatal
 	}
@@ -1174,6 +1236,10 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 	}
 	if closeErr != nil {
 		return acceptedResponsePostJoinOutcome{results: results}, closeErr
+	}
+	goalErr = e.drainActiveStepGoalMutations(stepID)
+	if goalErr != nil {
+		return acceptedResponsePostJoinOutcome{results: results}, goalErr
 	}
 	return acceptedResponsePostJoinOutcome{
 		results:     results,

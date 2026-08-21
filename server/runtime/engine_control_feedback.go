@@ -17,103 +17,53 @@ func (e *Engine) appendCommittedEntryWithCommitReceipt(entry storedLocalEntry) (
 	if entry.Role == "" || entry.Text == "" {
 		return session.CommitReceipt{}, nil
 	}
-	return e.steerRuntimeWithCommitReceipt(steerLocalEntryIntent(entry))
+	return e.steerWithCommitReceipt("", steerLocalEntryIntent(entry))
 }
 
-func committedControlFeedbackMutation(text string) (steeringMutation, error) {
+func (e *Engine) appendCommittedControlFeedback(text string) (session.CommitReceipt, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return nil, errCommittedFeedbackTextRequired
+		return session.CommitReceipt{}, errCommittedFeedbackTextRequired
 	}
-	return &steeringLocalEntry{entry: storedLocalEntry{
+	return e.appendCommittedEntryWithCommitReceipt(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       "system",
 		Text:       text,
-	}}, nil
+	})
 }
 
 func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback func(changed bool) string) (bool, session.CommitReceipt, error) {
-	var changed bool
-	receipt, err := e.steerRuntimeWithCommitReceipt(steerFastModeIntent(enabled, feedback, &changed))
-	return changed, receipt, err
-}
-
-func (e *Engine) applyFastModeWithCommittedFeedback(
-	enabled bool,
-	feedback func(changed bool) string,
-	applyFeedback func(steeringMutation, *session.CommitReceipt) error,
-) (bool, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
 	if enabled && !e.FastModeAvailable() {
 		return false, session.CommitReceipt{}, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
-	if state := e.fastModeState(); state != nil {
-		var receipt session.CommitReceipt
-		var feedbackErr error
-		changed, err := state.SetEnabledWithTransaction(enabled, func(changed bool) error {
-			mutation, err := committedControlFeedbackMutation(feedback(changed))
-			if err != nil {
-				return err
-			}
-			feedbackErr = applyFeedback(mutation, &receipt)
-			if !receipt.Committed {
-				return feedbackErr
-			}
-			return nil
-		})
-		if err != nil {
-			return false, receipt, err
-		}
-		if changed {
-			e.markCurrentRequestShapeDirty()
-		}
-		return changed, receipt, feedbackErr
-	}
+	e.controlMutationMu.Lock()
+	defer e.controlMutationMu.Unlock()
 	changed := e.localFastModeEnabledChange(enabled)
-	var receipt session.CommitReceipt
-	mutation, err := committedControlFeedbackMutation(feedback(changed))
-	if err != nil {
-		return false, receipt, err
-	}
-	feedbackErr := applyFeedback(mutation, &receipt)
+	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(changed))
 	if !receipt.Committed {
-		return false, receipt, feedbackErr
+		return changed, receipt, feedbackErr
 	}
 	e.applyFastModeEnabled(enabled)
 	return changed, receipt, feedbackErr
 }
 
 func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, changed bool) string) (bool, bool, session.CommitReceipt, error) {
-	var changed, resultEnabled bool
-	receipt, err := e.steerRuntimeWithCommitReceipt(
-		steerQuestionsIntent(enabled, feedback, &changed, &resultEnabled),
-	)
-	return changed, resultEnabled, receipt, err
-}
-
-func (e *Engine) applyQuestionsWithCommittedFeedback(
-	enabled bool,
-	feedback func(enabled bool, changed bool) string,
-	applyFeedback func(steeringMutation, *session.CommitReceipt) error,
-) (bool, bool, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, e.QuestionsEnabled(), session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
+	e.controlMutationMu.Lock()
+	defer e.controlMutationMu.Unlock()
 	changed, current := e.questionsEnabledChange(enabled)
 	resultEnabled := current
 	if changed {
 		resultEnabled = enabled
 	}
-	var receipt session.CommitReceipt
-	mutation, err := committedControlFeedbackMutation(feedback(resultEnabled, changed))
-	if err != nil {
-		return false, current, receipt, err
-	}
-	feedbackErr := applyFeedback(mutation, &receipt)
+	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(resultEnabled, changed))
 	if !receipt.Committed {
-		return false, current, receipt, feedbackErr
+		return changed, resultEnabled, receipt, feedbackErr
 	}
 	if changed {
 		e.applyQuestionsEnabled(enabled)
@@ -122,35 +72,38 @@ func (e *Engine) applyQuestionsWithCommittedFeedback(
 }
 
 func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
-	var changed bool
-	var mode string
-	receipt, err := e.steerRuntimeWithCommitReceipt(
-		steerReviewerModeIntent(enabled, feedback, &changed, &mode),
-	)
-	return changed, mode, receipt, err
-}
-
-func (e *Engine) applyReviewerWithCommittedFeedback(
-	enabled bool,
-	feedback func(enabled bool, mode string, changed bool) string,
-	applyFeedback func(steeringMutation, *session.CommitReceipt) error,
-) (bool, string, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, e.ReviewerFrequency(), session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
+	e.controlMutationMu.Lock()
+	defer e.controlMutationMu.Unlock()
 	changed, mode, err := e.reviewerEnabledChange(enabled)
 	if err != nil {
 		return false, mode, session.CommitReceipt{}, err
 	}
-	var receipt session.CommitReceipt
-	mutation, err := committedControlFeedbackMutation(feedback(mode != "off", mode, changed))
-	if err != nil {
-		return false, mode, receipt, err
-	}
-	feedbackErr := applyFeedback(mutation, &receipt)
+	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(mode != "off", mode, changed))
 	if !receipt.Committed {
-		return false, mode, receipt, feedbackErr
+		return changed, mode, receipt, feedbackErr
 	}
 	e.applyReviewerEnabled(enabled, mode)
 	return changed, mode, receipt, feedbackErr
+}
+
+func (e *Engine) SetReviewerFrequencyWithCommittedFeedback(frequency string, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
+	if feedback == nil {
+		return false, e.ReviewerFrequency(), session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
+	}
+	target, err := e.PrepareReviewerFrequency(frequency)
+	if err != nil {
+		return false, e.ReviewerFrequency(), session.CommitReceipt{}, err
+	}
+	e.controlMutationMu.Lock()
+	defer e.controlMutationMu.Unlock()
+	changed := e.ReviewerFrequency() != target
+	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(target != "off", target, changed))
+	if !receipt.Committed {
+		return changed, target, receipt, feedbackErr
+	}
+	e.setReviewerFrequency(target)
+	return changed, target, receipt, feedbackErr
 }

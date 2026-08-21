@@ -15,7 +15,6 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -29,7 +28,6 @@ type AgentRuntimePlanOptions struct {
 	FilesystemContext                   tools.FilesystemContext
 	Sources                             map[string]string
 	Headless                            bool
-	FastMode                            *runtime.FastModeState
 	QuestionsEnabled                    *bool
 	AutoCompactionEnabled               *bool
 	Client                              llm.Client
@@ -246,7 +244,6 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 	wiringOptions := runtimewire.RuntimeWiringOptions{
 		Context:                             resource.ctx,
 		Headless:                            options.Headless,
-		FastMode:                            options.FastMode,
 		QuestionsEnabled:                    options.QuestionsEnabled,
 		AutoCompactionEnabled:               options.AutoCompactionEnabled,
 		Sources:                             maps.Clone(options.Sources),
@@ -261,9 +258,6 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		FilesystemContext:                   options.FilesystemContext,
 		StepLifecycle:                       resource,
 		DurabilityObserver:                  durabilityObserver,
-		ApplyWorktreeTarget: func(target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-			return applyResourceExecutionTarget(resource, target, reminder)
-		},
 		LifecycleTaskFinished: func() error {
 			return a.closeRetiringResource(context.Background(), resource)
 		},

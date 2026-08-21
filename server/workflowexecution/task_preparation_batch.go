@@ -235,9 +235,6 @@ func (c *CurrentNodeController) handoffTaskPreparationBatch(batch *taskPreparati
 		if _, reserved := c.automaticReservations[key]; reserved {
 			return fmt.Errorf("current node %v already has an automatic reservation", start.reference)
 		}
-		if _, admitted := c.operations[key]; admitted {
-			return fmt.Errorf("current node %v already has an admitted operation", start.reference)
-		}
 	}
 	c.removeRunningTaskPreparationLocked(batch)
 	for _, start := range batch.starts {

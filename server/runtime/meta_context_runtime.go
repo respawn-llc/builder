@@ -142,7 +142,7 @@ func (e *Engine) steerMetaContextIfChangedWithReceipt(stepID string, messages []
 	}
 	return e.steerWithCommitReceipt(
 		stepID,
-		steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, pending),
+		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, pending),
 	)
 }
 
@@ -439,6 +439,7 @@ func metaContextSteeringIntents(metaResult metaContextBuildResult) []steeringInt
 	}
 	if messages := metaResult.Projection().Messages(); len(messages) > 0 {
 		intents = append(intents, steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
 			steeringMessageEventDefault,
 			true,
 			messages,

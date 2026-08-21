@@ -41,6 +41,19 @@ type queuedUserMessageAssociation struct {
 	scope     *runtimeids.ExecutionScopeID
 }
 
+type interruptedHumanSteering struct {
+	ordinal uint64
+	item    QueuedUserMessage
+}
+
+func cloneExecutionScopeID(value *runtimeids.ExecutionScopeID) *runtimeids.ExecutionScopeID {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
+}
+
 func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	item.ID = strings.TrimSpace(item.ID)
 	if item.ID == "" {

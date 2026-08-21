@@ -85,9 +85,6 @@ func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot 
 	if e.messageFlow != nil {
 		queuedMessages = e.messageFlow.PendingUserMessages()
 	}
-	if e.steering != nil {
-		queuedMessages = append(queuedMessages, e.steering.pendingHumanMessages()...)
-	}
 	usage := e.ContextUsage()
 	return TranscriptHydrationSnapshot{
 		CommittedRows:           snapshot.Rows,

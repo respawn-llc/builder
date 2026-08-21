@@ -342,10 +342,7 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 				return err
 			}
 		}
-		changed, enabled, err := engine.SetAutoCompactionEnabled(req.Enabled)
-		if err != nil {
-			return err
-		}
+		changed, enabled := engine.SetAutoCompactionEnabled(req.Enabled)
 		resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
 		return s.publishSessionStatus(req.SessionID)
 	})

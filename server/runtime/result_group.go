@@ -349,10 +349,10 @@ func (e *Engine) abortResultGroupForOperationalFailure(
 	if fatal := collector.fatalSnapshot(); fatal != nil {
 		return fatal
 	}
-	steerErr := e.applyExactRuntimeMutation(stepID, &steeringResultGroupReport{
-		collector:          collector,
-		operationalFailure: cause,
-	})
+	steerErr := e.steerRuntimeClose(
+		stepID,
+		steerResultGroupOperationalFailureIntent(collector, cause),
+	)
 	fatal := collector.fatalSnapshot()
 	if fatal == nil {
 		fatal, _ = collector.abortOperational(errors.Join(cause, steerErr))

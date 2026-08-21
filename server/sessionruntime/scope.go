@@ -14,7 +14,6 @@ type ExecutionGeneration uint64
 type WorkflowExecutionRef struct {
 	ProjectID   string
 	WorkflowID  runtimeids.WorkflowID
-	OperationID runtimeids.CurrentNodeOperationID
 	CurrentNode workflow.CurrentNodeReference
 }
 
@@ -25,17 +24,10 @@ func (r WorkflowExecutionRef) Validate() error {
 	if r.WorkflowID.IsZero() {
 		return errors.New("workflow id is required")
 	}
-	if err := r.Operation().Validate(); err != nil {
-		return err
+	if err := r.CurrentNode.Validate(); err != nil {
+		return fmt.Errorf("workflow current node: %w", err)
 	}
 	return nil
-}
-
-func (r WorkflowExecutionRef) Operation() workflow.CurrentNodeOperationRef {
-	return workflow.CurrentNodeOperationRef{
-		OperationID: r.OperationID,
-		CurrentNode: r.CurrentNode,
-	}
 }
 
 type ExecutionScopeKind uint8

@@ -171,6 +171,7 @@ type DetachedAgentExecutionRequest struct {
 	Ask        ExecutionAskHandler
 	Runner     AgentRunner
 	Config     *workflowruntime.CurrentNodeExecutionConfig
+	OnRetire   func()
 }
 
 type DetachedAgentExecution struct {
@@ -255,7 +256,7 @@ func (a *Authority) PrepareDetachedAgentExecution(
 	execution := &execution{
 		authority: a, resource: resource, scope: scope, ctx: runCtx, cancel: cancel,
 		done: make(chan struct{}), prompts: newExecutionPromptStore(a, scope, a.promptFeed),
-		closeResource: closeResource, phase: executionPhaseQueued,
+		closeResource: closeResource, phase: executionPhaseQueued, onRetire: request.OnRetire,
 	}
 	return &DetachedAgentExecution{
 		authority: a, resource: resource, execution: execution, workflowKey: workflowKey,
@@ -384,7 +385,6 @@ func (d *DetachedAgentExecution) Publish(
 	}
 	binding := runtimePublication.Commit()
 	d.execution.workflow = binding
-	d.resource.engine.ExitRetainedWorkflowControl()
 	if correlationPublication != nil {
 		correlationPublication.Commit()
 	}
@@ -886,10 +886,9 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 			resource.pins != 0 ||
 			resource.callbacks != 0 ||
 			resource.steps != 0
-		if !inFlight && resource.engine != nil {
-			inFlight = !resource.engine.BeginRetirement()
-		}
-		if inFlight {
+		queued := resource.engine != nil && resource.engine.HasQueuedUserWork()
+		scheduled := resource.engine != nil && resource.engine.HasScheduledQueuedUserWork()
+		if inFlight || scheduled || (!request.DropOwner && queued) {
 			if request.DropOwner {
 				resource.ownerlessDisposition = agentResourceRetireWhenIdle
 			}
@@ -928,7 +927,7 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		resource.mu.Unlock()
 		return nil
 	}
-	if resource.engine != nil && !resource.engine.BeginRetirement() {
+	if resource.engine != nil && resource.engine.HasScheduledQueuedUserWork() {
 		resource.mu.Unlock()
 		return nil
 	}
@@ -1044,7 +1043,7 @@ func (a *Authority) startAgentExecutionUnderAdmission(
 		a.mu.Unlock()
 		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", sessionID))
 	}
-	if resource.engine.RetainedWorkflowControlOnly() {
+	if resource.engine.CurrentNodeExecutionConfigured() {
 		resource.mu.Unlock()
 		a.mu.Unlock()
 		return nil, errors.Join(
@@ -1357,7 +1356,7 @@ func (a *Authority) WithRetainedWorkflowRuntime(
 		return errors.New("retained workflow runtime callback is required")
 	}
 	return a.WithCurrentRuntime(ctx, sessionID, func(ctx context.Context, engine *runtime.Engine) error {
-		if !engine.RetainedWorkflowControlOnly() {
+		if !engine.CurrentNodeExecutionConfigured() {
 			return errors.Join(
 				serverapi.ErrRuntimeNoActiveRun,
 				fmt.Errorf("session %s has no retained workflow activation", sessionID),

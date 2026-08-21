@@ -45,7 +45,7 @@ type Service struct {
 		InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 		Interrupt(context.Context, workflowexecution.InterruptSelector) error
 		EnsureTaskQuiescent(workflow.TaskID) error
-		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowruntime.CompletionOutcome, error)
+		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowruntime.CompletionResult, error)
 	}
 }
 
@@ -188,7 +188,7 @@ func WithCurrentNodeExecution(execution interface {
 	InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 	Interrupt(context.Context, workflowexecution.InterruptSelector) error
 	EnsureTaskQuiescent(workflow.TaskID) error
-	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowruntime.CompletionOutcome, error)
+	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowruntime.CompletionResult, error)
 }) Option {
 	return func(s *Service) {
 		s.currentNodeExecution = execution
@@ -1988,13 +1988,10 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 			}
 			return serverapi.WorkflowTaskCompleteResponse{}, err
 		}
-		if outcome.Kind != workflowruntime.CompletionOutcomeAccepted || outcome.Accepted == nil {
-			if outcome.Rejection != nil {
-				return serverapi.WorkflowTaskCompleteResponse{}, outcome.Rejection
-			}
-			return serverapi.WorkflowTaskCompleteResponse{}, errors.New("current node completion returned no accepted outcome")
+		if !outcome.IsApplied() {
+			return serverapi.WorkflowTaskCompleteResponse{}, errors.New("current node completion returned no applied result")
 		}
-		completed := outcome.Accepted.Result.CommittedResult
+		completed := outcome.CommittedResult
 		var taskID workflow.TaskID
 		if completed.PendingApproval != nil {
 			taskID = completed.PendingApproval.Source.TaskID

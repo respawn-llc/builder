@@ -119,7 +119,7 @@ func (s *Service) submitUserTurn(
 			}
 		}
 		if compactionBusy {
-			queued, queueErr := engine.AcceptHumanSteering(
+			queued, queueErr := engine.QueueUserMessageForAutoDrainWithAcceptance(
 				projection.ExecutionText,
 				accept,
 			)

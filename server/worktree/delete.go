@@ -59,7 +59,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 			return serverapi.WorktreeDeleteResult{}, err
 		}
 		release()
-		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, sync transitionTargetSync) error {
+		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, _ transitionAuthority, sync transitionTargetSync) error {
 			_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
 			return err
 		})
@@ -313,15 +313,6 @@ func (s *Service) acquireDeleteTargetActivity(
 				return deleteTargetActivityLease{}, err
 			}
 			if active {
-				activeBlockers = append(activeBlockers, target.blocker)
-				continue
-			}
-			retired, err := s.authority.RetireIdleRuntime(lease.ctx, target.id.String())
-			if err != nil {
-				lease.Close()
-				return deleteTargetActivityLease{}, err
-			}
-			if !retired {
 				activeBlockers = append(activeBlockers, target.blocker)
 			}
 		}

@@ -22,6 +22,10 @@ func (p compactionPersistence) replaceHistory(stepID, engine string, mode compac
 	return e.steerWithCommitReceipt(stepID, steerHistoryReplacementIntent(engine, mode, e.compactionRuntimeState().Count()+1, e.LastCommittedAssistantFinalAnswer(), items))
 }
 
+func (p compactionPersistence) setActivity(stepID string, mode compactionMode, count int, active bool) error {
+	return p.engine.steer(stepID, steerCompactionActivityIntent(active, string(mode), count))
+}
+
 func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode compactionMode, engine, provider string, trimmed *int, count int, errText string) error {
 	e := p.engine
 	status := &CompactionStatus{
@@ -37,14 +41,14 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 	case EventCompactionStarted:
 		return e.steer(stepID, steerEventIntent(Event{
 			Kind:       kind,
-			StepID:     exactStepIDPointer(stepID),
+			StepID:     textutil.Value(stepID),
 			Compaction: status,
 		}))
 
 	case EventCompactionCompleted:
 		return e.steer(stepID, steerEventIntent(Event{
 			Kind:       kind,
-			StepID:     exactStepIDPointer(stepID),
+			StepID:     textutil.Value(stepID),
 			Compaction: status,
 		}))
 
@@ -56,7 +60,7 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: "error", Text: message})); err != nil {
 			_ = e.steer(stepID, steerEventIntent(Event{
 				Kind:       kind,
-				StepID:     exactStepIDPointer(stepID),
+				StepID:     textutil.Value(stepID),
 				Compaction: status,
 			}))
 
@@ -64,7 +68,7 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 		}
 		return e.steer(stepID, steerEventIntent(Event{
 			Kind:       kind,
-			StepID:     exactStepIDPointer(stepID),
+			StepID:     textutil.Value(stepID),
 			Compaction: status,
 		}))
 

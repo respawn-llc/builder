@@ -11,7 +11,6 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
-	"core/shared/runtimeids"
 )
 
 const (
@@ -283,15 +282,14 @@ func (c *CurrentNodeController) admit(
 	if err != nil {
 		return nil, err
 	}
-	operationID := runtimeids.NewCurrentNodeOperationID()
 	defer c.releaseReservation(key, start.policy, start.agentCapacityLease)
-	scriptPublication, err := c.runner.PrepareScriptPublication(ctx, reference, operationID, c)
+	scriptPublication, err := c.runner.PrepareScriptPublication(ctx, reference, c)
 	if err != nil {
 		return nil, err
 	}
 	if scriptPublication != nil {
 		start.nodeKind = workflow.NodeKindScript
-		return c.admitPreparedScript(ctx, start, key, operationID, scriptPublication)
+		return c.admitPreparedScript(ctx, start, key, scriptPublication)
 	}
 	if start.nodeKind == workflow.NodeKindScript {
 		return nil, errors.New("Script publication preparation returned no publication")
@@ -318,9 +316,9 @@ func (c *CurrentNodeController) admit(
 	publication, err := c.runner.PrepareAgentPublication(
 		ctx,
 		reference,
-		operationID,
 		start.taskPromptDelivery,
 		assignmentSteer,
+		func() { c.releaseAgentCapacity(start.agentCapacityLease) },
 		c,
 	)
 	if err != nil {
@@ -329,14 +327,13 @@ func (c *CurrentNodeController) admit(
 	if publication == nil {
 		return nil, errors.New("Agent publication preparation returned no publication")
 	}
-	return c.admitPreparedAgent(ctx, start, key, operationID, publication)
+	return c.admitPreparedAgent(ctx, start, key, publication)
 }
 
 func (c *CurrentNodeController) admitPreparedScript(
 	ctx context.Context,
 	start currentNodeQueuedStart,
 	key workflow.CurrentNodeReferenceKey,
-	operationID runtimeids.CurrentNodeOperationID,
 	publication CurrentNodeScriptPublication,
 ) (sessionruntime.ExecutionHandle, error) {
 	defer publication.Cancel()
@@ -353,10 +350,6 @@ func (c *CurrentNodeController) admitPreparedScript(
 			c.mu.Unlock()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		if _, exists := c.operations[key]; exists {
-			c.mu.Unlock()
-			return fmt.Errorf("current node %v already has an admitted operation", start.reference)
-		}
 		c.deleteAdmissionReservationLocked(key, start.policy)
 		c.mu.Unlock()
 		var publishErr error
@@ -367,31 +360,8 @@ func (c *CurrentNodeController) admitPreparedScript(
 			if admissionErr := classifyCurrentNodeAdmission(receipt, err); admissionErr != nil {
 				return admissionErr
 			}
-			c.mu.Lock()
-			c.operations[key] = &currentNodeOperation{
-				ref: workflow.CurrentNodeOperationRef{
-					OperationID: operationID,
-					CurrentNode: start.reference,
-				},
-				policy:             start.policy,
-				agentCapacityLease: start.agentCapacityLease,
-			}
-			c.mu.Unlock()
 			return nil
-		}, func(published sessionruntime.ExecutionHandle) {
-			workflowRef, ok := published.Scope().Workflow()
-			if !ok {
-				panic("published Script execution has no Workflow metadata")
-			}
-			c.mu.Lock()
-			operation := c.operations[key]
-			if operation == nil || operation.ref.OperationID != operationID {
-				c.mu.Unlock()
-				panic("published Script execution has no matching admitted operation")
-			}
-			operation.workflow = &workflowRef
-			c.mu.Unlock()
-		})
+		}, nil)
 		if publishErr != nil {
 			return currentNodeAdmissionError{cause: publishErr, admitted: admitted}
 		}
@@ -423,7 +393,6 @@ func (c *CurrentNodeController) admitPreparedAgent(
 	ctx context.Context,
 	start currentNodeQueuedStart,
 	key workflow.CurrentNodeReferenceKey,
-	operationID runtimeids.CurrentNodeOperationID,
 	publication CurrentNodeAgentPublication,
 ) (sessionruntime.ExecutionHandle, error) {
 	defer func() {
@@ -446,10 +415,6 @@ func (c *CurrentNodeController) admitPreparedAgent(
 			c.mu.Unlock()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		if _, exists := c.operations[key]; exists {
-			c.mu.Unlock()
-			return fmt.Errorf("current node %v already has an admitted operation", start.reference)
-		}
 		c.deleteAdmissionReservationLocked(key, start.policy)
 		c.transitionAgentCapacityLocked(
 			start.agentCapacityLease,
@@ -465,31 +430,8 @@ func (c *CurrentNodeController) admitPreparedAgent(
 			if admissionErr := classifyCurrentNodeAdmission(receipt, err); admissionErr != nil {
 				return admissionErr
 			}
-			c.mu.Lock()
-			c.operations[key] = &currentNodeOperation{
-				ref: workflow.CurrentNodeOperationRef{
-					OperationID: operationID,
-					CurrentNode: start.reference,
-				},
-				policy:             start.policy,
-				agentCapacityLease: start.agentCapacityLease,
-			}
-			c.mu.Unlock()
 			return nil
-		}, func(published sessionruntime.ExecutionHandle) {
-			workflowRef, ok := published.Scope().Workflow()
-			if !ok {
-				panic("published Agent execution has no Workflow metadata")
-			}
-			c.mu.Lock()
-			operation := c.operations[key]
-			if operation == nil || operation.ref.OperationID != operationID {
-				c.mu.Unlock()
-				panic("published Agent execution has no matching admitted operation")
-			}
-			operation.workflow = &workflowRef
-			c.mu.Unlock()
-		})
+		}, nil)
 		if publishErr != nil {
 			return currentNodeAdmissionError{cause: publishErr, admitted: admitted}
 		}
@@ -531,10 +473,6 @@ func classifyCurrentNodeAdmission(receipt session.CommitReceipt, err error) erro
 		return err
 	}
 	panic(fmt.Sprintf("Current Node admission commit certainty is indeterminate: %v", err))
-}
-
-func (c *CurrentNodeController) enqueueAutomaticIntents(intents []CurrentNodeAutomaticIntent) {
-	c.enqueueStarts(automaticQueuedStarts(intents))
 }
 
 func (c *CurrentNodeController) steerStartsAssignments(ctx context.Context, starts []currentNodeQueuedStart) ([]currentNodeQueuedStart, error) {
@@ -818,8 +756,7 @@ func (c *CurrentNodeController) currentNodeOwnedLocked(key workflow.CurrentNodeR
 	if _, reserved := c.automaticReservations[key]; reserved {
 		return true
 	}
-	_, admitted := c.operations[key]
-	return admitted
+	return false
 }
 
 func (c *CurrentNodeController) wakeAdmissionWorker() {
@@ -977,13 +914,8 @@ func (c *CurrentNodeController) releaseAgentCapacityLocked(lease *currentNodeAge
 
 func (c *CurrentNodeController) inFlightAdmissionCountLocked(policy currentNodeAdmissionPolicy) int {
 	count := 0
-	for key, start := range c.admissionWorkers {
+	for _, start := range c.admissionWorkers {
 		if start.policy == policy {
-			if policy.countsAgentCapacity() {
-				if _, admitted := c.operations[key]; admitted {
-					continue
-				}
-			}
 			count++
 		}
 	}

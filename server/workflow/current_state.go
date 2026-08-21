@@ -21,21 +21,6 @@ type CurrentNodeReference struct {
 	transitionBranchKey *TransitionBranchKey
 }
 
-type CurrentNodeOperationRef struct {
-	OperationID runtimeids.CurrentNodeOperationID
-	CurrentNode CurrentNodeReference
-}
-
-func (r CurrentNodeOperationRef) Validate() error {
-	if r.OperationID.IsZero() {
-		return errors.New("current node operation id is required")
-	}
-	if err := r.CurrentNode.Validate(); err != nil {
-		return fmt.Errorf("workflow current node: %w", err)
-	}
-	return nil
-}
-
 func NewCurrentNodeReference(taskID TaskID, nodeID NodeID, transitionBranchKey *TransitionBranchKey) (CurrentNodeReference, error) {
 	ref := CurrentNodeReference{
 		TaskID: TaskID(strings.TrimSpace(string(taskID))),

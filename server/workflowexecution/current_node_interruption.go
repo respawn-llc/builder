@@ -115,13 +115,8 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				return ErrTaskExecutionNotQuiescent
 			}
 			for _, selectedExecution := range selected {
-				key, err := selectedExecution.Operation.CurrentNode.Key()
-				if err != nil {
-					return err
-				}
-				operation := c.operations[key]
-				if operation == nil || operation.ref.OperationID != selectedExecution.Operation.OperationID {
-					return errors.New("authority interrupt selection does not match admitted workflow operation")
+				if selectedExecution.CurrentNode.TaskID != selector.TaskID {
+					return errors.New("authority interrupt selection does not match the selected Task")
 				}
 			}
 
@@ -138,9 +133,9 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			for _, selectedExecution := range selected {
 				stopHandles = append(stopHandles, selectedExecution.Handle)
 				waitHandles = append(waitHandles, selectedExecution.Handle)
-				references = append(references, selectedExecution.Operation.CurrentNode)
+				references = append(references, selectedExecution.CurrentNode)
 				if taskFence != nil {
-					c.interrupts.addOperation(taskFence, selectedExecution.Operation.OperationID)
+					c.interrupts.addScope(taskFence, selectedExecution.Handle.Scope().ID())
 				}
 			}
 			if taskFence == nil {
@@ -242,16 +237,8 @@ func (c *CurrentNodeController) InterruptForManualMove(
 			}
 
 			for _, selectedExecution := range selection.Interruptible {
-				if selectedExecution.Operation.CurrentNode.TaskID != taskID {
+				if selectedExecution.CurrentNode.TaskID != taskID {
 					return errors.New("manual move interruption selection is not workflow scoped")
-				}
-				key, err := selectedExecution.Operation.CurrentNode.Key()
-				if err != nil {
-					return err
-				}
-				operation := c.operations[key]
-				if operation == nil || operation.ref.OperationID != selectedExecution.Operation.OperationID {
-					return errors.New("manual move interruption selection does not match controller ownership")
 				}
 			}
 			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
@@ -265,15 +252,6 @@ func (c *CurrentNodeController) InterruptForManualMove(
 				if start.reference.TaskID == taskID {
 					if _, err := start.reference.Key(); err != nil {
 						return err
-					}
-				}
-			}
-			for _, operation := range c.operations {
-				for _, start := range operation.heldStarts {
-					if start.reference.TaskID == taskID {
-						if _, err := start.reference.Key(); err != nil {
-							return err
-						}
 					}
 				}
 			}
@@ -304,11 +282,11 @@ func (c *CurrentNodeController) InterruptForManualMove(
 			}
 			for _, selectedExecution := range selection.Interruptible {
 				if taskFence != nil {
-					c.interrupts.addOperation(taskFence, selectedExecution.Operation.OperationID)
+					c.interrupts.addScope(taskFence, selectedExecution.Handle.Scope().ID())
 				}
 				stopHandles = append(stopHandles, selectedExecution.Handle)
 				waitHandles = append(waitHandles, selectedExecution.Handle)
-				references = append(references, selectedExecution.Operation.CurrentNode)
+				references = append(references, selectedExecution.CurrentNode)
 			}
 			if taskFence != nil {
 				if err := drainTaskControllerWorkLocked(c, taskID, taskFence, &references, &admissionWaits); err != nil {
@@ -362,13 +340,6 @@ func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow
 			return true
 		}
 	}
-	for _, operation := range c.operations {
-		for _, start := range operation.heldStarts {
-			if start.reference.TaskID == taskID {
-				return true
-			}
-		}
-	}
 	for _, start := range c.automaticReservations {
 		if start.reference.TaskID == taskID {
 			return true
@@ -413,15 +384,6 @@ func validateTaskControllerWorkLocked(c *CurrentNodeController, taskID workflow.
 		if start.reference.TaskID == taskID {
 			if _, err := start.reference.Key(); err != nil {
 				return fmt.Errorf("validate explicit queue for task %s: %w", taskID, err)
-			}
-		}
-	}
-	for _, operation := range c.operations {
-		for _, start := range operation.heldStarts {
-			if start.reference.TaskID == taskID {
-				if _, err := start.reference.Key(); err != nil {
-					return fmt.Errorf("validate held start for task %s: %w", taskID, err)
-				}
 			}
 		}
 	}
@@ -490,30 +452,6 @@ func drainTaskControllerWorkLocked(
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
 		entry = next
-	}
-
-	for _, operation := range c.operations {
-		starts := operation.heldStarts
-		kept := starts[:0]
-		for _, start := range starts {
-			if start.reference.TaskID != taskID {
-				kept = append(kept, start)
-				continue
-			}
-			key, err := start.reference.Key()
-			if err != nil {
-				return fmt.Errorf("drain held start for task %s: %w", taskID, err)
-			}
-			c.interrupts.addCurrentNode(fence, key)
-			*references = append(*references, start.reference)
-			start.completion.resolve(nil, ErrTaskExecutionNotQuiescent)
-			*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
-		}
-		if len(kept) == 0 {
-			operation.heldStarts = nil
-		} else {
-			operation.heldStarts = kept
-		}
 	}
 
 	for key, start := range c.explicitReservations {

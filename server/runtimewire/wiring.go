@@ -17,7 +17,6 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/server/workflowruntime"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -44,7 +43,6 @@ type RuntimeWiringOptions struct {
 	Context                             context.Context
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
-	FastMode                            *runtime.FastModeState
 	QuestionsEnabled                    *bool
 	AutoCompactionEnabled               *bool
 	Sources                             map[string]string
@@ -60,7 +58,6 @@ type RuntimeWiringOptions struct {
 	LifecycleTaskFinished               func() error
 	LifecycleRuntimeAbort               func() error
 	DurabilityObserver                  runtime.ResultGroupDurabilityObserver
-	ApplyWorktreeTarget                 func(clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -224,7 +221,6 @@ func NewRuntimeWiringWithBackground(
 		ThinkingLevel:                   active.ThinkingLevel,
 		ModelCapabilities:               llm.LockedModelCapabilitiesForConfig(active.Model, active.ModelCapabilities),
 		FastModeEnabled:                 active.PriorityRequestMode,
-		FastModeState:                   opts.FastMode,
 		WebSearchMode:                   active.WebSearch,
 		PromptFacingSnapshotReloader:    promptReloader,
 		ProviderCapabilitiesOverride:    providerCapabilitiesOverride,
@@ -268,7 +264,6 @@ func NewRuntimeWiringWithBackground(
 		LifecycleTaskFinished: opts.LifecycleTaskFinished,
 		LifecycleRuntimeAbort: opts.LifecycleRuntimeAbort,
 		DurabilityObserver:    opts.DurabilityObserver,
-		ApplyWorktreeTarget:   opts.ApplyWorktreeTarget,
 	})
 	if err != nil {
 		return nil, err

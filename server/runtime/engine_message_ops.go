@@ -200,7 +200,6 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 	hasBackgroundSession bool,
 	provenance *TranscriptCommittedRowProvenance,
 ) {
-	e.markCurrentRequestShapeDirtyForSignificantMutation()
 	e.transcriptRuntimeState().RecordStoredToolCompletion(payload, provenance)
 	if hasBackgroundSession {
 		e.ensureOrchestrationCollaborators()
@@ -408,9 +407,8 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 }
 
 type preparedMessageProjection struct {
-	message  llm.Message
-	record   session.MessageRecord
-	mutation tokenUsageMutation
+	message llm.Message
+	record  session.MessageRecord
 }
 
 func (e *Engine) prepareMessageProjection(stepID *string, msg llm.Message) (preparedMessageProjection, error) {
@@ -426,15 +424,10 @@ func (e *Engine) prepareMessageProjection(stepID *string, msg llm.Message) (prep
 	if err != nil {
 		return preparedMessageProjection{}, fmt.Errorf("adapt message record: %w", err)
 	}
-	return preparedMessageProjection{message: msg, record: record, mutation: tokenUsageMutationForMessage(msg)}, nil
+	return preparedMessageProjection{message: msg, record: record}, nil
 }
 
 func (e *Engine) applyPreparedMessageProjection(stepID *string, prepared preparedMessageProjection, provenance *TranscriptCommittedRowProvenance) error {
-	if prepared.mutation == tokenUsageMutationSignificant {
-		e.markCurrentRequestShapeDirtyForSignificantMutation()
-	} else {
-		e.markCurrentRequestShapeDirty()
-	}
 	return e.transcriptRuntimeState().AppendMessage(stepID, prepared.message, provenance)
 }
 

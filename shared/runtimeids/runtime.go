@@ -8,12 +8,6 @@ func NewExecutionScopeID() ExecutionScopeID {
 	return ExecutionScopeID{uuidv4Value: newUUIDv4Value()}
 }
 
-type CurrentNodeOperationID struct{ uuidv4Value }
-
-func NewCurrentNodeOperationID() CurrentNodeOperationID {
-	return CurrentNodeOperationID{uuidv4Value: newUUIDv4Value()}
-}
-
 type ReasoningTraceID struct{ uuidv4Value }
 
 func ParseReasoningTraceID(raw string) (ReasoningTraceID, error) {

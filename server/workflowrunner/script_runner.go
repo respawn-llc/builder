@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"core/server/sessionruntime"
@@ -47,7 +48,6 @@ func (p *currentNodeScriptPublication) Cancel() {
 func (s *Starter) PrepareScriptPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-	operationID runtimeids.CurrentNodeOperationID,
 	controller workflowruntime.Controller,
 ) (workflowexecution.CurrentNodeScriptPublication, error) {
 	if s.closed.Load() {
@@ -68,7 +68,6 @@ func (s *Starter) PrepareScriptPublication(
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID:   input.Task.ProjectID,
 			WorkflowID:  input.Workflow.ID,
-			OperationID: operationID,
 			CurrentNode: input.CurrentNode.Reference,
 		},
 		Command: command,
@@ -141,19 +140,18 @@ func (s *Starter) finalizeCurrentNodeScript(
 	if err != nil {
 		return err
 	}
-	if outcome.Kind != workflowruntime.CompletionOutcomeAccepted || outcome.Accepted == nil {
-		if outcome.Rejection != nil {
-			return outcome.Rejection
-		}
-		return errors.New("Script completion returned no accepted outcome")
+	if !outcome.IsApplied() {
+		return errors.New("Script completion returned without an applied result")
 	}
-	s.publishCompletionDiagnostic(ctx, workflowruntime.WorkflowCompletionDiagnostic{
-		Kind:       workflowruntime.WorkflowCompletionDiagnosticCommittedCompletion,
-		Owner:      workflowruntime.DiagnosticOwnerScriptRunner,
-		Operation:  outcome.Accepted.Result.Operation,
-		Diagnostic: outcome.Accepted.Diagnostic,
-	})
-	return nil
+	if outcome.Diagnostic != nil {
+		slog.Error(
+			"Workflow Script completion committed with a diagnostic",
+			"task_id", input.Task.ID,
+			"node_id", input.Node.ID,
+			"error", outcome.Diagnostic,
+		)
+	}
+	return controller.ContinueCurrentNode(context.WithoutCancel(ctx), outcome.CommittedResult)
 }
 
 func scriptExecutionFailure(result sessionruntime.ScriptResult, runErr error) error {

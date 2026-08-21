@@ -49,16 +49,20 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 			queueText = *agentSteer.Message().Content
 		}
 		var item runtime.QueuedUserMessage
+		var accepted bool
 		if callerSessionID.Present {
-			item, err = engine.AcceptAgentSteering(agentSteer, nil)
+			item, accepted, err = engine.QueueAgentSteerForActiveRun(callbackCtx, agentSteer, nil)
 		} else {
-			item, err = engine.AcceptHumanSteering(queueText, nil)
+			item, accepted, err = engine.QueueUserMessageForActiveRun(callbackCtx, queueText, nil)
 		}
-		if errors.Is(err, runtime.ErrNoActiveLiveRun) || errors.Is(err, runtime.ErrSteeringUnavailable) {
+		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
 			return serverapi.ErrRuntimeNoActiveRun
 		}
 		if err != nil {
 			return err
+		}
+		if !accepted {
+			return serverapi.ErrRuntimeNoActiveRun
 		}
 		displayText, displayErr := item.DisplayText()
 		if displayErr != nil {

@@ -53,24 +53,22 @@ type WorkflowAttentionRegistry interface {
 }
 
 type Starter struct {
-	cfg                   config.App
-	metadata              *metadata.Store
-	store                 RuntimeStore
-	authManager           *auth.Manager
-	attention             WorkflowAttentionRegistry
-	runtimeAuthority      *sessionruntime.Authority
-	storeOptions          []session.StoreOption
-	runtimeClientFactory  runtimewire.RuntimeClientFactory
-	taskAwarenessSource   workflowruntime.TaskAwarenessSource
-	completionDiagnostics workflowruntime.WorkflowCompletionDiagnosticSink
-	closed                atomic.Bool
+	cfg                  config.App
+	metadata             *metadata.Store
+	store                RuntimeStore
+	authManager          *auth.Manager
+	attention            WorkflowAttentionRegistry
+	runtimeAuthority     *sessionruntime.Authority
+	storeOptions         []session.StoreOption
+	runtimeClientFactory runtimewire.RuntimeClientFactory
+	taskAwarenessSource  workflowruntime.TaskAwarenessSource
+	closed               atomic.Bool
 }
 
 type StarterOptions struct {
-	RuntimeClientFactory  runtimewire.RuntimeClientFactory
-	RuntimeAuthority      *sessionruntime.Authority
-	TaskDependencies      TaskDependencyCounter
-	CompletionDiagnostics workflowruntime.WorkflowCompletionDiagnosticSink
+	RuntimeClientFactory runtimewire.RuntimeClientFactory
+	RuntimeAuthority     *sessionruntime.Authority
+	TaskDependencies     TaskDependencyCounter
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, attention WorkflowAttentionRegistry, opts StarterOptions) (*Starter, error) {
@@ -85,16 +83,15 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		return nil, err
 	}
 	return &Starter{
-		cfg:                   cfg,
-		metadata:              metadataStore,
-		store:                 store,
-		authManager:           authManager,
-		attention:             attention,
-		runtimeAuthority:      opts.RuntimeAuthority,
-		storeOptions:          metadataStore.AuthoritativeSessionStoreOptions(),
-		runtimeClientFactory:  opts.RuntimeClientFactory,
-		taskAwarenessSource:   taskAwarenessSource,
-		completionDiagnostics: opts.CompletionDiagnostics,
+		cfg:                  cfg,
+		metadata:             metadataStore,
+		store:                store,
+		authManager:          authManager,
+		attention:            attention,
+		runtimeAuthority:     opts.RuntimeAuthority,
+		storeOptions:         metadataStore.AuthoritativeSessionStoreOptions(),
+		runtimeClientFactory: opts.RuntimeClientFactory,
+		taskAwarenessSource:  taskAwarenessSource,
 	}, nil
 }
 
@@ -173,7 +170,7 @@ type currentNodeAgentPublication struct {
 	starter            *Starter
 	input              workflowstore.CurrentNodeStartContext
 	prepared           preparedCurrentNodeAgentSession
-	operationID        runtimeids.CurrentNodeOperationID
+	onRetire           func()
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	controller         workflowruntime.Controller
 	mu                 sync.Mutex
@@ -196,8 +193,8 @@ func (p *currentNodeAgentPublication) Publish(
 		ctx,
 		p.input,
 		p.prepared,
-		p.operationID,
 		p.taskPromptDelivery,
+		p.onRetire,
 		p.controller,
 		admit,
 		published,
@@ -237,10 +234,10 @@ func (s *currentNodeAgentAssignmentSteer) Prepare(ctx context.Context) error {
 	s.started = true
 	s.mu.Unlock()
 
-	var receipt session.CommitReceipt
+	var steer runtime.WorkflowAssignmentSteer
 	admission, err := s.starter.runtimeAuthority.WithDormantSessionStore(ctx, s.prepared.plan.Descriptor, func(_ context.Context, store *session.Store) error {
-		var persistErr error
-		receipt, persistErr = runtime.PersistWorkflowAssignment(
+		var steerErr error
+		steer, steerErr = runtime.SteerPersistedWorkflowAssignment(
 			store,
 			s.assignment,
 			runtime.PersistedWorkflowAssignmentContext{
@@ -253,14 +250,33 @@ func (s *currentNodeAgentAssignmentSteer) Prepare(ctx context.Context) error {
 				EnabledTools:            workflowRuntimeEnabledTools(s.prepared.plan.EnabledTools),
 			},
 		)
-		return persistErr
+		return steerErr
 	})
 	if err == nil && admission.RuntimeAvailable {
-		err = s.starter.runtimeAuthority.WithCurrentRuntime(ctx, s.prepared.plan.Descriptor.SessionID(), func(ctx context.Context, engine *runtime.Engine) error {
-			var applyErr error
-			receipt, applyErr = engine.ApplyWorkflowAssignment(ctx, s.reference, s.assignment, false)
-			return applyErr
+		err = s.starter.runtimeAuthority.WithCurrentRuntime(ctx, s.prepared.plan.Descriptor.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+			selection, selectionErr := currentNodeAgentExecutionSelection(s.input)
+			if selectionErr != nil {
+				return selectionErr
+			}
+			thinkingMutation := workflowThinkingMutationFor(s.input, selection)
+			switch thinkingMutation.Kind() {
+			case launch.WorkflowThinkingMutationSet:
+				if err := engine.SetWorkflowThinkingValue(thinkingMutation.Value()); err != nil {
+					return err
+				}
+			case launch.WorkflowThinkingMutationClear:
+				if err := engine.ClearWorkflowThinkingValue(); err != nil {
+					return err
+				}
+			}
+			var steerErr error
+			steer, steerErr = engine.SteerWorkflowAssignment(s.assignment)
+			return steerErr
 		})
+	}
+	var receipt session.CommitReceipt
+	if err == nil {
+		receipt, err = steer.Wait(ctx)
 	}
 	if err != nil {
 		err = s.prepared.cleanup(err)
@@ -364,9 +380,9 @@ func (s *Starter) PrepareManualMoveAssignments(
 func (s *Starter) PrepareAgentPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-	operationID runtimeids.CurrentNodeOperationID,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	onRetire func(),
 	controller workflowruntime.Controller,
 ) (workflowexecution.CurrentNodeAgentPublication, error) {
 	if s == nil || s.closed.Load() {
@@ -382,7 +398,7 @@ func (s *Starter) PrepareAgentPublication(
 			return nil, err
 		}
 		return &currentNodeAgentPublication{
-			starter: s, input: input, prepared: prepared, operationID: operationID,
+			starter: s, input: input, prepared: prepared, onRetire: onRetire,
 			taskPromptDelivery: taskPromptDelivery, controller: controller,
 		}, nil
 	}
@@ -392,7 +408,7 @@ func (s *Starter) PrepareAgentPublication(
 	}
 	return &currentNodeAgentPublication{
 		starter: s, input: assignment.input,
-		prepared: assignment.prepared, operationID: operationID,
+		prepared: assignment.prepared, onRetire: onRetire,
 		taskPromptDelivery: taskPromptDelivery, controller: controller,
 	}, nil
 }
@@ -401,8 +417,8 @@ func (s *Starter) publishCurrentNodeAgent(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
 	prepared preparedCurrentNodeAgentSession,
-	operationID runtimeids.CurrentNodeOperationID,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
+	onRetire func(),
 	controller workflowruntime.Controller,
 	admit func() error,
 	published func(sessionruntime.ExecutionHandle),
@@ -461,11 +477,11 @@ func (s *Starter) publishCurrentNodeAgent(
 			Workflow: sessionruntime.WorkflowExecutionRef{
 				ProjectID:   input.Task.ProjectID,
 				WorkflowID:  input.Workflow.ID,
-				OperationID: operationID,
 				CurrentNode: reference,
 			},
 			Resource: resource,
 			Config:   runtimeConfig,
+			OnRetire: onRetire,
 			Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 				return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 			},
@@ -685,47 +701,27 @@ func (s *Starter) currentNodeAgentRunner(
 		})
 		if turnResult.Completion != nil && turnEngine != nil {
 			completion := *turnResult.Completion
-			settlement := workflowruntime.PostTurnSettlement{
-				Kind:            workflowruntime.PostTurnSettlementSucceeded,
-				DiagnosticOwner: workflowruntime.DiagnosticOwnerAgentRunner,
+			compactionErr := compactCompletedWorkflowSession(runCtx, turnEngine, completion.CommittedResult)
+			continuationErr := controller.ContinueCurrentNode(
+				context.WithoutCancel(runCtx),
+				completion.CommittedResult,
+			)
+			if completion.Diagnostic != nil {
+				slog.Error(
+					"Workflow completion committed with a diagnostic",
+					"task_id", input.Task.ID,
+					"node_id", input.Node.ID,
+					"session_id", turnEngine.SessionID(),
+					"error", completion.Diagnostic,
+				)
 			}
-			if finalizer, ok := controller.(workflowruntime.PostTurnFinalizer); ok {
-				sessionID, err := runtimeids.ParseSessionID(turnEngine.SessionID())
-				if err != nil {
-					return err
-				}
-				preCompactionTokens, err := turnEngine.WorkflowPreCompactionTokenLimit()
-				if err != nil {
-					return err
-				}
-				settlement, turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, completion.Result.Operation, sessionID, workflowruntime.PostCompletionRuntime{
-					UsedTokens:          turnEngine.ContextUsage().UsedTokens,
-					PreCompactionTokens: preCompactionTokens,
-					CompactionMode:      turnEngine.CompactionMode(),
-					Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
-						return turnEngine.CompactContextForWorkflowPostCompletion(compactionCtx)
-					},
-				})
-			}
-			s.publishCompletionDiagnostic(runCtx, workflowruntime.WorkflowCompletionDiagnostic{
-				Kind:       workflowruntime.WorkflowCompletionDiagnosticCommittedCompletion,
-				Owner:      workflowruntime.DiagnosticOwnerAgentRunner,
-				Operation:  completion.Result.Operation,
-				Diagnostic: completion.Diagnostic,
-			})
-			if settlement.Diagnostic != nil &&
-				settlement.DiagnosticOwner == workflowruntime.DiagnosticOwnerAgentRunner {
-				s.publishCompletionDiagnostic(runCtx, workflowruntime.WorkflowCompletionDiagnostic{
-					Kind:       workflowruntime.WorkflowCompletionDiagnosticPostTurnSettlement,
-					Owner:      settlement.DiagnosticOwner,
-					Operation:  completion.Result.Operation,
-					Diagnostic: settlement.Diagnostic,
-				})
-			}
-			if turnErr != nil {
-				slog.Error("settle accepted Workflow completion failed",
-					"operation_id", completion.Result.Operation.OperationID,
-					"error", turnErr,
+			if postCompletionErr := errors.Join(turnErr, compactionErr, continuationErr); postCompletionErr != nil {
+				slog.Error(
+					"finish accepted Workflow completion",
+					"task_id", input.Task.ID,
+					"node_id", input.Node.ID,
+					"session_id", turnEngine.SessionID(),
+					"error", postCompletionErr,
 				)
 			}
 			return nil
@@ -741,33 +737,27 @@ func (s *Starter) currentNodeAgentRunner(
 	}
 }
 
-func (s *Starter) publishCompletionDiagnostic(
+func compactCompletedWorkflowSession(
 	ctx context.Context,
-	diagnostic workflowruntime.WorkflowCompletionDiagnostic,
-) {
-	if diagnostic.Diagnostic == nil {
-		return
+	engine *runtime.Engine,
+	completed workflowstore.CurrentNodeCompletionResult,
+) error {
+	if engine == nil || !completed.PostCompletionEligible || engine.CompactionMode() == "none" {
+		return nil
 	}
-	if s.completionDiagnostics == nil {
-		slog.Error("Workflow completion diagnostic",
-			"kind", diagnostic.Kind,
-			"owner", diagnostic.Owner,
-			"operation_id", diagnostic.Operation.OperationID,
-			"error", diagnostic.Diagnostic,
-		)
-		return
+	shouldCompact := completed.SessionReuseClassification == workflow.SessionReuseGuaranteedCACReuse
+	if completed.SessionReuseClassification == workflow.SessionReuseThresholdPossibleReuse {
+		threshold, err := engine.WorkflowPreCompactionTokenLimit()
+		if err != nil {
+			return err
+		}
+		shouldCompact = engine.ContextUsage().UsedTokens >= threshold
 	}
-	if err := s.completionDiagnostics.PublishWorkflowCompletionDiagnostic(
-		context.WithoutCancel(ctx),
-		diagnostic,
-	); err != nil {
-		slog.Error("publish Workflow completion diagnostic failed",
-			"kind", diagnostic.Kind,
-			"owner", diagnostic.Owner,
-			"operation_id", diagnostic.Operation.OperationID,
-			"error", err,
-		)
+	if !shouldCompact {
+		return nil
 	}
+	_, err := engine.CompactContextForWorkflowPostCompletion(ctx)
+	return err
 }
 
 func (s *Starter) planCurrentNodeSession(

@@ -57,11 +57,14 @@ const (
 type RuntimeActivityActiveKind string
 
 const (
-	RuntimeActivityActiveKindUserTurn     RuntimeActivityActiveKind = "user_turn"
-	RuntimeActivityActiveKindWorkflowTurn RuntimeActivityActiveKind = "workflow_turn"
-	RuntimeActivityActiveKindGoalLoop     RuntimeActivityActiveKind = "goal_loop"
-	RuntimeActivityActiveKindCompaction   RuntimeActivityActiveKind = "compaction"
-	RuntimeActivityActiveKindBackground   RuntimeActivityActiveKind = "background"
+	RuntimeActivityActiveKindUserTurn            RuntimeActivityActiveKind = "user_turn"
+	RuntimeActivityActiveKindWorkflowTurn        RuntimeActivityActiveKind = "workflow_turn"
+	RuntimeActivityActiveKindGoalLoop            RuntimeActivityActiveKind = "goal_loop"
+	RuntimeActivityActiveKindCompaction          RuntimeActivityActiveKind = "compaction"
+	RuntimeActivityActiveKindPreSubmitCompaction RuntimeActivityActiveKind = "pre_submit_compaction"
+	RuntimeActivityActiveKindUserShell           RuntimeActivityActiveKind = "user_shell"
+	RuntimeActivityActiveKindBackground          RuntimeActivityActiveKind = "background"
+	RuntimeActivityActiveKindRuntimeMaintenance  RuntimeActivityActiveKind = "runtime_maintenance"
 )
 
 func (k RuntimeActivityActiveKind) Validate() error {
@@ -70,7 +73,10 @@ func (k RuntimeActivityActiveKind) Validate() error {
 		RuntimeActivityActiveKindWorkflowTurn,
 		RuntimeActivityActiveKindGoalLoop,
 		RuntimeActivityActiveKindCompaction,
-		RuntimeActivityActiveKindBackground:
+		RuntimeActivityActiveKindPreSubmitCompaction,
+		RuntimeActivityActiveKindUserShell,
+		RuntimeActivityActiveKindBackground,
+		RuntimeActivityActiveKindRuntimeMaintenance:
 		return nil
 	default:
 		return fmt.Errorf("unknown runtime activity active kind %q", k)

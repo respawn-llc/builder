@@ -24,12 +24,14 @@ type RunSnapshot struct {
 type ActiveKind string
 
 const (
-	ActiveKindUserTurn     ActiveKind = "user_turn"
-	ActiveKindWorkflowTurn ActiveKind = "workflow_turn"
-	ActiveKindGoalLoop     ActiveKind = "goal_loop"
-	ActiveKindCompaction   ActiveKind = "compaction"
-	ActiveKindBackground   ActiveKind = "background"
-	ActiveKindInspection   ActiveKind = "inspection"
+	ActiveKindUserTurn            ActiveKind = "user_turn"
+	ActiveKindWorkflowTurn        ActiveKind = "workflow_turn"
+	ActiveKindGoalLoop            ActiveKind = "goal_loop"
+	ActiveKindCompaction          ActiveKind = "compaction"
+	ActiveKindPreSubmitCompaction ActiveKind = "pre_submit_compaction"
+	ActiveKindUserShell           ActiveKind = "user_shell"
+	ActiveKindBackground          ActiveKind = "background"
+	ActiveKindRuntimeMaintenance  ActiveKind = "runtime_maintenance"
 )
 
 func (k ActiveKind) Valid() bool {
@@ -38,8 +40,10 @@ func (k ActiveKind) Valid() bool {
 		ActiveKindWorkflowTurn,
 		ActiveKindGoalLoop,
 		ActiveKindCompaction,
+		ActiveKindPreSubmitCompaction,
+		ActiveKindUserShell,
 		ActiveKindBackground,
-		ActiveKindInspection:
+		ActiveKindRuntimeMaintenance:
 		return true
 	default:
 		return false

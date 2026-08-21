@@ -24,13 +24,13 @@ type WorkflowTerminalState struct {
 	Completed   bool
 	Generation  int64
 	Source      WorkflowCompletionSource
-	Completion  workflowruntime.AcceptedCompletion
+	Completion  workflowruntime.CompletionResult
 	CompletedAt time.Time
 }
 
 type WorkflowTurnResult struct {
 	Assistant  llm.Message
-	Completion *workflowruntime.AcceptedCompletion
+	Completion *workflowruntime.CompletionResult
 }
 
 func workflowCompletionSource(mode workflowruntime.CompletionMode) WorkflowCompletionSource {
@@ -82,25 +82,34 @@ func (e *Engine) WorkflowTerminalState() WorkflowTerminalState {
 	return e.workflowTerminal
 }
 
-func (e *Engine) recordWorkflowTerminalState(
-	source WorkflowCompletionSource,
-	completion workflowruntime.AcceptedCompletion,
-) (bool, error) {
-	switch source {
-	case WorkflowCompletionSourceTool,
-		WorkflowCompletionSourceStructuredOutput,
-		WorkflowCompletionSourceShellCommand,
-		WorkflowCompletionSourceUnstructured:
-	default:
-		return false, e.runtimeInvariant(
-			"record Workflow terminal state",
-			fmt.Errorf("unsupported Workflow completion source %q", source),
-		)
+// failQueuedUserWorkIfTerminal abandons queued user steering once the run has
+// terminally completed, reporting whether it did so. It is the single place that
+// ties workflow completion to queued-user-work failure, so scheduling and
+// submission code can gate on terminal completion without inspecting workflow
+// state directly.
+func (e *Engine) failQueuedUserWorkIfTerminal() bool {
+	if e == nil || !e.WorkflowTerminalState().Completed {
+		return false
 	}
+	e.FailQueuedUserMessages(QueuedUserMessageFailureTerminalWorkflowCompletion)
+	return true
+}
+
+func (e *Engine) setWorkflowTerminalState(source WorkflowCompletionSource, completion workflowruntime.CompletionResult) {
+	if e == nil || !e.currentNodeExecutionActive() {
+		return
+	}
+	transitioned := e.recordWorkflowTerminalState(source, completion)
+	if transitioned {
+		e.cascadeCompleteActiveGoalOnWorkflowCompletion()
+	}
+}
+
+func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource, completion workflowruntime.CompletionResult) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.workflowTerminal.Completed {
-		return false, nil
+		return false
 	}
 	e.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
@@ -109,5 +118,5 @@ func (e *Engine) recordWorkflowTerminalState(
 		Completion:  completion,
 		CompletedAt: time.Now(),
 	}
-	return true, nil
+	return true
 }

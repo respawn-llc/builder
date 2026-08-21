@@ -104,10 +104,7 @@ func completeCurrentNodeJoinArrival(
 	if target.Node.Kind() == workflow.NodeKindAgent &&
 		target.Edge.ContextMode != workflow.ContextModeNewSession &&
 		contextSource.Kind != workflow.ContextSourceSelectedNode {
-		joinContinuationSource, err = mergeCurrentFanoutJoinContinuationSources(arrivals)
-		if err != nil {
-			return CurrentNodeCompletionResult{}, err
-		}
+		joinContinuationSource = contextResolution.ActiveSource
 	}
 	joinSource, err := newNonExecutableCurrentNodeWithPriorValues(
 		source.Reference.TaskID,

@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"core/server/llm"
-	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -162,125 +161,14 @@ type ScriptCompletionRequest struct {
 type CompletionResult struct {
 	TransitionID    workflow.TransitionID
 	State           string
-	Operation       workflow.CurrentNodeOperationRef
 	CommittedResult workflowstore.CurrentNodeCompletionResult
-}
-
-type AcceptedCompletion struct {
-	Result     CompletionResult
-	Diagnostic error
-}
-
-type CompletionOutcomeKind uint8
-
-const (
-	CompletionOutcomeInvalid CompletionOutcomeKind = iota
-	CompletionOutcomeAccepted
-	CompletionOutcomeRejected
-)
-
-type CompletionOutcome struct {
-	Kind      CompletionOutcomeKind
-	Accepted  *AcceptedCompletion
-	Rejection error
-}
-
-func AcceptedCompletionOutcome(completion AcceptedCompletion) CompletionOutcome {
-	return CompletionOutcome{
-		Kind:     CompletionOutcomeAccepted,
-		Accepted: &completion,
-	}
-}
-
-func RejectedCompletionOutcome(err error) CompletionOutcome {
-	return CompletionOutcome{
-		Kind:      CompletionOutcomeRejected,
-		Rejection: err,
-	}
-}
-
-type CompletionDecision struct {
-	CommitReceipt        session.CommitReceipt
-	Accepted             *AcceptedCompletion
-	PostCommitDiagnostic error
-}
-
-// PostCompletionCompactionResult preserves a durable history-replacement
-// receipt separately from operational work that ran after that replacement.
-type PostCompletionCompactionResult struct {
-	CommitReceipt session.CommitReceipt
-	Diagnostic    error
-}
-
-// PostCompletionRuntime is the live runtime authority supplied by the Agent
-// runner to the workflow controller after the completed turn returns.
-type PostCompletionRuntime struct {
-	UsedTokens          int
-	PreCompactionTokens int
-	CompactionMode      string
-	Compact             func(context.Context) PostCompletionCompactionResult
-}
-
-type DiagnosticOwner string
-
-const (
-	DiagnosticOwnerAgentRunner        DiagnosticOwner = "agent_runner"
-	DiagnosticOwnerScriptRunner       DiagnosticOwner = "script_runner"
-	DiagnosticOwnerControllerShutdown DiagnosticOwner = "controller_shutdown"
-)
-
-type WorkflowCompletionDiagnosticKind string
-
-const (
-	WorkflowCompletionDiagnosticCommittedCompletion WorkflowCompletionDiagnosticKind = "committed_completion"
-	WorkflowCompletionDiagnosticPostTurnSettlement  WorkflowCompletionDiagnosticKind = "post_turn_settlement"
-)
-
-type WorkflowCompletionDiagnostic struct {
-	Kind       WorkflowCompletionDiagnosticKind
-	Owner      DiagnosticOwner
-	Operation  workflow.CurrentNodeOperationRef
-	Diagnostic error
-}
-
-type WorkflowCompletionDiagnosticSink interface {
-	PublishWorkflowCompletionDiagnostic(context.Context, WorkflowCompletionDiagnostic) error
-}
-
-type WorkflowCompletionDiagnosticSinkFunc func(context.Context, WorkflowCompletionDiagnostic) error
-
-func (f WorkflowCompletionDiagnosticSinkFunc) PublishWorkflowCompletionDiagnostic(
-	ctx context.Context,
-	diagnostic WorkflowCompletionDiagnostic,
-) error {
-	return f(ctx, diagnostic)
-}
-
-type PostTurnSettlementKind string
-
-const (
-	PostTurnSettlementSucceeded               PostTurnSettlementKind = "succeeded"
-	PostTurnSettlementCompletedWithDiagnostic PostTurnSettlementKind = "completed_with_diagnostic"
-	PostTurnSettlementAborted                 PostTurnSettlementKind = "aborted"
-	PostTurnSettlementShutdownDisposed        PostTurnSettlementKind = "shutdown_disposed"
-)
-
-type PostTurnSettlement struct {
-	Kind            PostTurnSettlementKind
-	DiagnosticOwner DiagnosticOwner
 	Diagnostic      error
-	CommitReceipt   session.CommitReceipt
 }
 
-// PostTurnFinalizer owns the process-local completion fence and releases held
-// successors only after post-turn finalization has completed.
-type PostTurnFinalizer interface {
-	FinalizeCurrentNodePostTurn(
-		context.Context,
-		workflow.CurrentNodeOperationRef,
-		runtimeids.SessionID,
-		PostCompletionRuntime,
-	) (PostTurnSettlement, error)
+const CompletionStateApplied = "applied"
+
+func (r CompletionResult) IsApplied() bool {
+	return r.State == CompletionStateApplied
 }
 
 type ViolationKind string
@@ -295,8 +183,9 @@ type ViolationResult struct {
 }
 
 type Controller interface {
-	CompleteAgentCurrentNode(context.Context, AgentCompletionRequest) (CompletionOutcome, error)
-	CompleteScriptCurrentNode(context.Context, ScriptCompletionRequest) (CompletionOutcome, error)
+	CompleteAgentCurrentNode(context.Context, AgentCompletionRequest) (CompletionResult, error)
+	CompleteScriptCurrentNode(context.Context, ScriptCompletionRequest) (CompletionResult, error)
+	ContinueCurrentNode(context.Context, workflowstore.CurrentNodeCompletionResult) error
 	RecordProtocolViolation(context.Context, ViolationRequest) (ViolationResult, error)
 	ResetProtocolViolationBudget(context.Context, ViolationResetRequest) error
 }

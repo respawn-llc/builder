@@ -83,6 +83,7 @@ const (
 	QueuedUserMessageFailureClosing                    QueuedUserMessageFailureReason = "closing"
 	QueuedUserMessageFailureTerminalWorkflowCompletion QueuedUserMessageFailureReason = "terminal_workflow_completion"
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
+	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
 )
 
 type QueuedUserMessageStatusEvent struct {
@@ -160,6 +161,15 @@ func cloneOptionalStepID(stepID *string) *string {
 		return nil
 	}
 	return exactStepIDPointer(*stepID)
+}
+
+func (event Event) withStepID(stepID *string) Event {
+	if event.StepID == nil {
+		event.StepID = cloneOptionalStepID(stepID)
+	} else {
+		event.StepID = cloneOptionalStepID(event.StepID)
+	}
+	return event
 }
 
 func requireStepID(stepID *string, operation string) (string, error) {

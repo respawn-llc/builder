@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"core/server/llm"
-	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -17,9 +16,11 @@ import (
 
 type defaultBackgroundNoticeScheduler struct {
 	engine *Engine
+	steps  exclusiveStepLifecycle
 
-	mu      sync.Mutex
-	pending []queuedBackgroundNotice
+	mu        sync.Mutex
+	pending   []queuedBackgroundNotice
+	scheduled bool
 }
 
 type queuedBackgroundNotice struct {
@@ -42,40 +43,9 @@ func (e *Engine) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
 	e.backgroundFlow.QueueBackgroundShellContinuation(evt)
 }
 
-func (e *Engine) HasPendingBackgroundShellContinuation() bool {
+func (e *Engine) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
 	e.ensureOrchestrationCollaborators()
-	return e.backgroundFlow.HasPendingNotices()
-}
-
-func (e *Engine) FlushPendingBackgroundShellNotices() (int, error) {
-	e.ensureOrchestrationCollaborators()
-	return e.backgroundFlow.flushPendingNotices(nil)
-}
-
-func (e *Engine) RunPendingBackgroundShellContinuation(ctx context.Context) error {
-	e.ensureOrchestrationCollaborators()
-	return e.backgroundFlow.RunPendingBackgroundShellContinuation(ctx)
-}
-
-func (b *defaultBackgroundNoticeScheduler) RunPendingBackgroundShellContinuation(ctx context.Context) error {
-	if !b.HasPendingNotices() {
-		return nil
-	}
-	return b.engine.stepLifecycle.Run(
-		ctx,
-		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground},
-		func(stepCtx context.Context, stepID string) error {
-			if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
-				return err
-			}
-			flushed, err := b.flushPendingNotices(textutil.Value(stepID))
-			if err != nil || flushed == 0 {
-				return err
-			}
-			_, err = b.engine.runStepLoop(stepCtx, stepID)
-			return err
-		},
-	)
+	return e.backgroundFlow.RunBackgroundShellContinuation(ctx, evt)
 }
 
 func (e *Engine) SteerBackgroundContinuationFailure(err error) error {
@@ -89,28 +59,33 @@ func (e *Engine) SteerBackgroundContinuationFailure(err error) error {
 }
 
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
-	err := b.RecordBackgroundShellUpdate(evt)
-	if queueNotice && err == nil {
-		b.QueueBackgroundShellContinuation(evt)
-	}
-	if err != nil {
+	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
 		b.engine.surfaceRunError(err)
+		return
+	}
+	if queueNotice {
+		b.QueueBackgroundShellContinuation(evt)
 	}
 }
 
-func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(
-	evt BackgroundShellEvent,
-) error {
-	return b.engine.steerCurrentStepOrRuntime(
-		steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}),
-	)
+func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
+	return b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
 }
 
 func (b *defaultBackgroundNoticeScheduler) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
 	if !evt.Type.IsTerminal() {
 		return
 	}
-	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt))
+	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), true)
+}
+
+func (b *defaultBackgroundNoticeScheduler) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
+	if !evt.Type.IsTerminal() {
+		return nil
+	}
+	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), false)
+	_, err := b.runQueuedNotices(ctx)
+	return err
 }
 
 func backgroundShellDeveloperNotice(evt BackgroundShellEvent) llm.Message {
@@ -155,21 +130,31 @@ func formatBackgroundShellCompact(evt BackgroundShellEvent) string {
 }
 
 func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message) {
-	b.queueDeveloperNotice(msg)
+	b.queueDeveloperNotice(msg, true)
 }
 
-func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message) {
+func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message, schedule bool) {
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return
 	}
+	shouldSchedule := false
 	sessionID, _ := textutil.OptionalTrimmed(msg.Name)
 	notice := queuedBackgroundNotice{
 		sessionID: sessionID,
-		intent:    steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{msg}),
+		intent:    steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
 	}
 	b.mu.Lock()
 	b.pending = append(b.pending, notice)
+	if schedule && !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
+		b.scheduled = true
+		shouldSchedule = true
+	}
 	b.mu.Unlock()
+	if shouldSchedule {
+		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
+			b.clearScheduled()
+		}
+	}
 }
 
 func (b *defaultBackgroundNoticeScheduler) drainPendingNotices() []queuedBackgroundNotice {
@@ -177,6 +162,7 @@ func (b *defaultBackgroundNoticeScheduler) drainPendingNotices() []queuedBackgro
 	defer b.mu.Unlock()
 	pending := append([]queuedBackgroundNotice(nil), b.pending...)
 	b.pending = nil
+	b.scheduled = false
 	return pending
 }
 
@@ -186,20 +172,15 @@ func (b *defaultBackgroundNoticeScheduler) restorePendingNotices(notices []queue
 	}
 	b.mu.Lock()
 	b.pending = append(append([]queuedBackgroundNotice(nil), notices...), b.pending...)
+	b.scheduled = false
 	b.mu.Unlock()
 }
 
-func (b *defaultBackgroundNoticeScheduler) flushPendingNotices(stepID *string) (int, error) {
+func (b *defaultBackgroundNoticeScheduler) flushPendingNotices(stepID string) (int, error) {
 	pending := b.drainPendingNotices()
 	flushed := 0
 	for index, notice := range pending {
-		var receipt session.CommitReceipt
-		var err error
-		if stepID == nil {
-			receipt, err = b.engine.steerRuntimeWithCommitReceipt(notice.intent)
-		} else {
-			receipt, err = b.engine.steerWithCommitReceipt(*stepID, notice.intent)
-		}
+		receipt, err := b.engine.steerWithCommitReceipt(stepID, notice.intent)
 		if receipt.Committed {
 			flushed++
 		}
@@ -243,7 +224,28 @@ func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(sessio
 		filtered = append(filtered, notice)
 	}
 	b.pending = filtered
+	if len(b.pending) == 0 {
+		b.scheduled = false
+	}
 	return removed
+}
+
+func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
+	if b.steps != nil && b.steps.IsBusy() {
+		return
+	}
+	shouldSchedule := false
+	b.mu.Lock()
+	if len(b.pending) > 0 && !b.scheduled {
+		b.scheduled = true
+		shouldSchedule = true
+	}
+	b.mu.Unlock()
+	if shouldSchedule {
+		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
+			b.clearScheduled()
+		}
+	}
 }
 
 type harvestedBackgroundCompletion struct {
@@ -266,8 +268,59 @@ func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
 	return fmt.Sprintf("%d", out.SessionID), true
 }
 
+func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) *resultGroupFatal {
+	if _, err := b.runQueuedNotices(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		if fatal, abort := resultGroupFatalFromError(err); abort {
+			return fatal
+		}
+		if steerErr := b.engine.SteerBackgroundContinuationFailure(err); steerErr != nil {
+			b.engine.surfaceRunError(errors.Join(err, steerErr))
+		}
+	}
+	return nil
+}
+
+func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context) (assistant llm.Message, err error) {
+	if len(b.pendingSnapshot()) == 0 {
+		b.clearScheduled()
+		return llm.Message{}, nil
+	}
+	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
+		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
+			return err
+		}
+		flushed, flushErr := b.flushPendingNotices(stepID)
+		if flushErr != nil {
+			return flushErr
+		}
+		if flushed == 0 {
+			return nil
+		}
+		msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
+		assistant = msg
+		return runErr
+	})
+	if err != nil && b.HasPendingNotices() {
+		b.clearScheduled()
+	}
+	if errors.Is(err, ErrAgentBusy) {
+		b.clearScheduled()
+		return llm.Message{}, nil
+	}
+	return assistant, err
+}
+
 func (b *defaultBackgroundNoticeScheduler) pendingSnapshot() []queuedBackgroundNotice {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]queuedBackgroundNotice(nil), b.pending...)
+}
+
+func (b *defaultBackgroundNoticeScheduler) clearScheduled() {
+	b.mu.Lock()
+	b.scheduled = false
+	b.mu.Unlock()
 }

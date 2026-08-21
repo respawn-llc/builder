@@ -74,7 +74,7 @@ type execution struct {
 	phase executionPhase
 
 	protocolViolations int64
-	completed          bool
+	onRetire           func()
 
 	closeResource bool
 }
@@ -84,9 +84,6 @@ func (e *execution) workflowActivity() (workflowExecutionActivity, error) {
 	case executionPhaseQueued:
 		return workflowExecutionQueued, nil
 	case executionPhaseRunning:
-		if e.completed {
-			return workflowExecutionNotRunning, nil
-		}
 		return workflowExecutionRunning, nil
 	default:
 		if e.phase < executionPhaseQueued || e.phase > executionPhaseFinalizing {
@@ -126,35 +123,13 @@ func (h executionHandle) RequestStop() bool {
 	if h.execution == nil {
 		panic("execution handle is uninitialized")
 	}
-	stopped, _ := h.execution.requestStop()
-	return stopped
-}
-
-func (e *execution) requestStop() (bool, error) {
-	e.exactMu.Lock()
-	defer e.exactMu.Unlock()
-	e.authority.mu.Lock()
-	defer e.authority.mu.Unlock()
-	if e.authority.byScope[e.scope.ID()] != e || e.phase != executionPhaseRunning || e.completed {
-		return false, nil
+	select {
+	case <-h.execution.done:
+		return false
+	default:
+		h.execution.cancel()
+		return true
 	}
-	if e.scope.Kind() == ExecutionScopeAgent {
-		if e.resource == nil {
-			return false, e.authority.invariant(
-				"stop running Agent execution",
-				fmt.Errorf("scope=%s has no Runtime resource", e.scope.ID()),
-			)
-		}
-		e.phase = executionPhaseFinalizing
-		if _, workflowAgent := e.scope.Workflow(); workflowAgent {
-			if err := e.retireWorkflowLocked(); err != nil {
-				return false, err
-			}
-			e.resource.engine.RemoveStoppedHumanSteering(e.scope.ID())
-		}
-	}
-	e.cancel()
-	return true, nil
 }
 
 func (h executionHandle) Wait(ctx context.Context) (ExecutionResult, error) {
@@ -204,43 +179,10 @@ func (e *execution) stopError() error {
 }
 
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
-	var invariantErr error
-	workflowAgent := false
-	stoppedWorkflowAgent := false
-	if e.scope.Kind() == ExecutionScopeAgent {
-		_, workflowAgent = e.scope.Workflow()
-	}
-	if workflowAgent {
-		e.exactMu.Lock()
-		e.authority.mu.Lock()
-		if e.authority.byScope[e.scope.ID()] == e {
-			stoppedWorkflowAgent = e.phase == executionPhaseFinalizing
-			switch e.phase {
-			case executionPhaseRunning:
-				e.phase = executionPhaseFinalizing
-			case executionPhaseFinalizing:
-			default:
-				invariantErr = errors.Join(invariantErr, e.authority.invariant(
-					"begin Agent execution retirement",
-					fmt.Errorf("scope=%s phase=%d", e.scope.ID(), e.phase),
-				))
-				e.phase = executionPhaseFinalizing
-			}
-			invariantErr = errors.Join(invariantErr, e.retireWorkflowLocked())
-		}
-		e.authority.mu.Unlock()
-		e.exactMu.Unlock()
-	}
-	if stoppedWorkflowAgent && e.resource != nil {
-		e.resource.engine.RemoveStoppedHumanSteering(e.scope.ID())
-	}
-	cleanupErr := errors.Join(invariantErr, e.cleanup())
+	cleanupErr := e.cleanup()
 	cleanupErr = errors.Join(cleanupErr, e.retire())
 	authority := e.authority
 	executionErr := runErr
-	if invariantErr != nil {
-		executionErr = errors.Join(runErr, invariantErr)
-	}
 	abort, abortErr := runtimeAbortFromError(runErr)
 	if abortErr != nil {
 		executionErr = errors.Join(executionErr, abortErr)
@@ -280,14 +222,11 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	e.runErr = finalErr
 	e.stopErr = errors.Join(stopErr, cleanupErr, closeErr, abortErr)
 	e.resultMu.Unlock()
-	if workflowRef, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.workflowExecutionRetired != nil {
-		disposition := WorkflowRetirementOutcomeLess
-		if e.completed {
-			disposition = WorkflowRetirementCompleted
-		}
-		authority.workflowExecutionRetired.WorkflowExecutionRetired(WorkflowRetirementOutcome{
-			Operation: workflowRef.Operation(), Kind: e.scope.Kind(), Disposition: disposition,
-		})
+	if e.onRetire != nil {
+		e.onRetire()
+	}
+	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
+		authority.executionFinalized.ExecutionFinalized(e.scope)
 	}
 	close(e.done)
 }
@@ -373,10 +312,7 @@ func (e *execution) retireWorkflowLocked() error {
 			fmt.Errorf("scope=%s: %w", e.scope.ID(), err),
 		)
 	}
-	removed := e.authority.removeWorkflowExecutionLocked(workflowRef, workflowKey, e)
-	if removed && e.resource != nil {
-		e.resource.engine.EnterRetainedWorkflowControl()
-	}
+	e.authority.removeWorkflowExecutionLocked(workflowRef, workflowKey, e)
 	return nil
 }
 

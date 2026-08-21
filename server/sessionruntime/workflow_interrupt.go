@@ -20,8 +20,8 @@ type WorkflowInterruptSelection struct {
 }
 
 type WorkflowExecutionSelection struct {
-	Handle    ExecutionHandle
-	Operation workflow.CurrentNodeOperationRef
+	Handle      ExecutionHandle
+	CurrentNode workflow.CurrentNodeReference
 }
 
 var (
@@ -76,12 +76,12 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		case workflowExecutionRunning:
 			ref, _ := execution.scope.Workflow()
 			selection.Interruptible = append(selection.Interruptible, WorkflowExecutionSelection{
-				Handle: executionHandle{execution: execution}, Operation: ref.Operation(),
+				Handle: executionHandle{execution: execution}, CurrentNode: ref.CurrentNode,
 			})
 		case workflowExecutionQueued:
 			ref, _ := execution.scope.Workflow()
 			selection.Queued = append(selection.Queued, WorkflowExecutionSelection{
-				Handle: executionHandle{execution: execution}, Operation: ref.Operation(),
+				Handle: executionHandle{execution: execution}, CurrentNode: ref.CurrentNode,
 			})
 		case workflowExecutionNotRunning:
 		}
@@ -202,8 +202,8 @@ func (a *Authority) WithWorkflowInterruptSelection(
 		}
 		ref, _ := execution.scope.Workflow()
 		selected := WorkflowExecutionSelection{
-			Handle:    executionHandle{execution: execution},
-			Operation: ref.Operation(),
+			Handle:      executionHandle{execution: execution},
+			CurrentNode: ref.CurrentNode,
 		}
 		activity, activityErr := execution.workflowActivity()
 		if activityErr != nil {

@@ -108,12 +108,9 @@ func (c *CurrentNodeController) StartTask(
 		return workflowstore.StartTaskResult{}, errors.New("task start preparation finalizer is required")
 	}
 	return runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
-		c.mu.Lock()
-		if err := c.ensureTaskQuiescentLocked(taskID); err != nil {
-			c.mu.Unlock()
+		if err := c.EnsureTaskQuiescent(taskID); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		c.mu.Unlock()
 		started, err := c.store.StartTask(ctx, taskID)
 		if err != nil {
 			return workflowstore.StartTaskResult{}, err
@@ -617,7 +614,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		sourceKey, err := approval.Source.Key()
+		executionState, err := c.authority.CurrentWorkflowTaskExecutionState(approval.Source.TaskID)
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
@@ -626,8 +623,8 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			c.mu.Unlock()
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		sourceOperation := c.operations[sourceKey]
-		if sourceOperation != nil {
+		if executionState.Running != 0 || executionState.Queued != 0 ||
+			executionState.WaitingQuestions != 0 || executionState.WaitingApprovals != 0 {
 			c.mu.Unlock()
 			return workflowstore.PendingApprovalApplyResult{}, ErrTaskExecutionNotQuiescent
 		}
@@ -673,12 +670,9 @@ func (c *CurrentNodeController) ApplyManualMove(
 	}
 	taskID := prepared.TaskID()
 	return runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
-		c.mu.Lock()
-		if err := c.ensureTaskQuiescentLocked(taskID); err != nil {
-			c.mu.Unlock()
+		if err := c.EnsureTaskQuiescent(taskID); err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
-		c.mu.Unlock()
 		assignmentPreparer, ok := c.steerer.(CurrentNodeManualMoveAssignmentPreparer)
 		if !ok {
 			return workflowstore.ManualMoveResult{}, errors.New("manual move assignment preparation is required")
@@ -753,6 +747,13 @@ func (c *CurrentNodeController) EnsureTaskQuiescent(taskID workflow.TaskID) erro
 	if taskID == "" {
 		return errors.New("workflow task id is required")
 	}
+	state, err := c.authority.CurrentWorkflowTaskExecutionState(taskID)
+	if err != nil {
+		return err
+	}
+	if !workflowTaskExecutionStateQuiescent(state) {
+		return ErrTaskExecutionNotQuiescent
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ensureTaskQuiescentLocked(taskID)
@@ -764,20 +765,35 @@ func (c *CurrentNodeController) CurrentTaskQuiescence(taskIDs []workflow.TaskID)
 	if c == nil {
 		return nil, errors.New("current node workflow controller is required")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	quiescence := make(map[workflow.TaskID]bool, len(taskIDs))
+	executionStates := make(map[workflow.TaskID]sessionruntime.WorkflowTaskExecutionState, len(taskIDs))
 	for _, taskID := range taskIDs {
 		if taskID == "" {
 			return nil, errors.New("workflow task id is required")
 		}
+		state, err := c.authority.CurrentWorkflowTaskExecutionState(taskID)
+		if err != nil {
+			return nil, err
+		}
+		executionStates[taskID] = state
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	quiescence := make(map[workflow.TaskID]bool, len(taskIDs))
+	for _, taskID := range taskIDs {
 		quiescent, err := c.taskQuiescentLocked(taskID)
 		if err != nil {
 			return nil, err
 		}
-		quiescence[taskID] = quiescent
+		quiescence[taskID] = quiescent && workflowTaskExecutionStateQuiescent(executionStates[taskID])
 	}
 	return quiescence, nil
+}
+
+func workflowTaskExecutionStateQuiescent(state sessionruntime.WorkflowTaskExecutionState) bool {
+	return state.Running == 0 &&
+		state.WaitingQuestions == 0 &&
+		state.WaitingApprovals == 0 &&
+		state.Queued == 0
 }
 
 func (c *CurrentNodeController) ensureTaskQuiescentLocked(taskID workflow.TaskID) error {
@@ -803,11 +819,6 @@ func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.Tas
 	}
 	if c.queuedTaskPreparationLocked(taskID) != nil || c.runningTaskPreparationLocked(taskID) != nil {
 		return false
-	}
-	for _, operation := range c.operations {
-		if operation.ref.CurrentNode.TaskID == taskID {
-			return false
-		}
 	}
 	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
 		start := entry.start

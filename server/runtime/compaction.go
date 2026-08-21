@@ -2,9 +2,6 @@ package runtime
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,7 +9,6 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/workflowruntime"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -30,12 +26,8 @@ const (
 	compactionModeManual                 compactionMode = "manual"
 	compactionModeWorkflowPostCompletion compactionMode = "workflow_post_completion"
 
-	defaultContextWindowTokens             = 200_000
-	autoCompactNearLimitMargin             = 8_000
 	compactionSoonReminderPercent          = 85
 	compactionPreservedUserMessageMaxChars = 4_000
-	preciseTokenCountSupportDiagnostic     = "precise_token_count_support_failure"
-	preciseTokenCountFailureDiagnostic     = "precise_token_count_failure"
 
 	additionalCompactionInstructionsHeader                 = "# Additional user instructions or commentary for this task:"
 	compactionPreservedUserMessageHeader                   = "# Last user message before handoff (work may have been done after it was sent):"
@@ -102,7 +94,7 @@ func (e *Engine) CompactContextForWorkflowContinuation(ctx context.Context) erro
 	return err
 }
 
-func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult {
+func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.compactionFlow.CompactContextForWorkflowPostCompletion(ctx)
 }
@@ -165,154 +157,44 @@ func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx cont
 	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, nil, false)
 }
 
-func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult {
-	receipt, err := c.compactQueuedContext(ctx, compactionModeWorkflowPostCompletion, compactionInstructionsInput{}, false, nil, nil, false)
-	return workflowruntime.PostCompletionCompactionResult{
-		CommitReceipt: receipt,
-		Diagnostic:    err,
-	}
+func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error) {
+	return c.compactContext(
+		ctx,
+		compactionModeWorkflowPostCompletion,
+		compactionInstructionsInput{},
+		false,
+		nil,
+		nil,
+		nil,
+		false,
+	)
 }
 
 func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), accept CommandAcceptance, requireEligibility bool) (session.CommitReceipt, error) {
-	if c == nil || c.engine == nil || c.engine.steering == nil {
-		return session.CommitReceipt{}, ErrSteeringUnavailable
+	if requireEligibility {
+		if snapshot := c.steps.Snapshot(); snapshot != nil &&
+			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
+			return session.CommitReceipt{}, ErrManualCompactionActive
+		}
 	}
-	if err := c.engine.workflowControl.validateSteering(steeringAdmissionManualCompaction); err != nil {
+	reservation := &exclusiveStepReservation{
+		Kind:      exclusiveStepReservationManualCompaction,
+		queueable: true,
+	}
+	if err := c.steps.AcquireReservation(reservation); err != nil {
 		return session.CommitReceipt{}, err
 	}
-	request := &pendingCompaction{
-		mode:                        compactionModeManual,
-		instructions:                instructions,
-		includePreservedUserMessage: true,
-		onActive:                    onActive,
-		accept:                      accept,
-		requireEligibility:          requireEligibility,
-		reply:                       make(chan compactionReply, 1),
-	}
-	entry := newCompactionQueueEntry(request)
-	active := c.steps.Snapshot() != nil
-	var wake bool
-	var err error
-	if active {
-		wake, err = c.engine.steering.appendDeferred(entry)
-	} else {
-		wake, err = c.engine.steering.append(entry)
-	}
-	if err != nil {
-		return session.CommitReceipt{}, err
-	}
-	if wake && !active {
-		c.engine.wakeSteeringBoundaryDrain()
-	}
-	select {
-	case reply := <-request.reply:
-		return reply.receipt, reply.err
-	case <-ctx.Done():
-		return session.CommitReceipt{}, context.Cause(ctx)
-	}
-}
-
-func (e *Engine) executePendingCompaction(
-	ctx context.Context,
-	lifecycle *defaultExclusiveStepLifecycle,
-	request *pendingCompaction,
-) (session.CommitReceipt, error) {
-	if request.mode == compactionModeAuto {
-		planningSnapshot := e.compactionPlanningSnapshot()
-		planner := e.compactionPlannerState()
-		if !planner.autoCompactionAvailable(planningSnapshot) || !planner.eagerCompactionEligible(planningSnapshot) {
-			return session.CommitReceipt{}, nil
-		}
-	}
-	var receipt session.CommitReceipt
-	err := lifecycle.runCompactionAtBoundary(ctx, func(stepCtx context.Context, stepID string) error {
-		if request.requireEligibility {
-			planningSnapshot := e.compactionPlanningSnapshot()
-			if e.compactionPlannerState().mode(planningSnapshot.compactionMode) == "none" {
-				return errCompactionDisabledModeNone
-			}
-			if !e.compactionRuntimeState().ManualCompactionEligible() {
-				return ErrManualCompactionTooSoon
-			}
-		}
-		if request.onActive != nil {
-			request.onActive()
-		}
-		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
-			return err
-		}
-		_, compactReceipt, err := e.compactNowWithAcceptance(
-			stepCtx,
-			stepID,
-			request.mode,
-			request.instructions,
-			request.includePreservedUserMessage,
-			request.accept,
-		)
-		receipt = compactReceipt
-		if err == nil || receipt.Committed {
-			e.handoffRuntimeState().ClearRequest()
-		}
-		return err
-	})
-	return receipt, err
-}
-
-func (e *Engine) runAutomaticCompactionAtBoundary(
-	ctx context.Context,
-	lifecycle *defaultExclusiveStepLifecycle,
-) error {
-	if e == nil || lifecycle == nil || e.handoffRuntimeState().RequestSnapshot() != nil ||
-		!e.shouldAutoCompactWithContext(ctx) {
-		return nil
-	}
-	var compact func(context.Context, string) error
-	compact = func(stepCtx context.Context, stepID string) error {
-		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
-			return err
-		}
-		_, receipt, compactErr := e.compactNow(
-			stepCtx,
-			stepID,
-			compactionModeAuto,
-			compactionInstructionsInput{},
-			false,
-		)
-		if compactErr == nil || receipt.Committed {
-			e.handoffRuntimeState().ClearRequest()
-		}
-		if compactErr != nil {
-			return fmt.Errorf("auto compaction failed: %w", compactErr)
-		}
-		return nil
-	}
-	if lifecycle.agentStepOpen() {
-		current := lifecycle.Snapshot()
-		if current == nil {
-			return ErrActiveStepInactive
-		}
-		if err := compact(ctx, current.StepID); err != nil {
-			return err
-		}
-		if err := lifecycle.closeAgentStep(current.StepID); err != nil {
-			return err
-		}
-	} else {
-		if err := lifecycle.runCompactionAtBoundary(ctx, compact); err != nil {
-			return err
-		}
-	}
-	e.drainSteeringIncludingDeferredHuman(true)
-	return nil
+	defer c.steps.ReleaseReservation(reservation)
+	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive, accept, requireEligibility)
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
-	return c.compactQueuedContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, onActive, accept, false)
+	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive, accept, false)
 }
 
 func isAgentStepCapable(kind ActiveKind) bool {
 	switch kind {
-	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop, ActiveKindBackground:
+	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop:
 		return true
 	default:
 		return false
@@ -330,7 +212,7 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	if !planningSnapshot.autoCompactionEnabled {
 		return "", false, errHandoffDisabledByUser
 	}
-	if planner.mode(planningSnapshot.compactionMode) == "none" {
+	if planner.mode(planningSnapshot.policy) == "none" {
 		return "", false, errors.New("User explicitly disabled compaction in configuration.")
 	}
 	if !e.compactionRuntimeState().SoonReminderIssued() {
@@ -342,40 +224,39 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactQueuedContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, onActive func(), accept CommandAcceptance, requireEligibility bool) (session.CommitReceipt, error) {
-	if c == nil || c.engine == nil || c.engine.steering == nil {
-		return session.CommitReceipt{}, ErrSteeringUnavailable
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func(), accept CommandAcceptance, requireEligibility bool) (session.CommitReceipt, error) {
+	e := c.engine
+	activeKind := ActiveKindPreSubmitCompaction
+	if includePreservedUserMessage {
+		activeKind = ActiveKindCompaction
 	}
-	request := &pendingCompaction{
-		mode:                        mode,
-		instructions:                instructions,
-		includePreservedUserMessage: includePreservedUserMessage,
-		onActive:                    onActive,
-		accept:                      accept,
-		requireEligibility:          requireEligibility,
-		reply:                       make(chan compactionReply, 1),
-	}
-	entry := newCompactionQueueEntry(request)
-	active := c.steps.Snapshot() != nil
-	var wake bool
-	var err error
-	if active {
-		wake, err = c.engine.steering.appendDeferred(entry)
-	} else {
-		wake, err = c.engine.steering.append(entry)
-	}
-	if err != nil {
-		return session.CommitReceipt{}, err
-	}
-	if wake && !active {
-		c.engine.wakeSteeringBoundaryDrain()
-	}
-	select {
-	case reply := <-request.reply:
-		return reply.receipt, reply.err
-	case <-ctx.Done():
-		return session.CommitReceipt{}, context.Cause(ctx)
-	}
+	e.pauseQueuedUserAutoDrain()
+	defer e.resumeQueuedUserAutoDrain()
+	var receipt session.CommitReceipt
+	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
+		if requireEligibility {
+			planningSnapshot := e.compactionPlanningSnapshot()
+			if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
+				return errCompactionDisabledModeNone
+			}
+			if !e.compactionRuntimeState().ManualCompactionEligible() {
+				return ErrManualCompactionTooSoon
+			}
+		}
+		if onActive != nil {
+			onActive()
+		}
+		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
+			return err
+		}
+		_, compactReceipt, err := e.compactNowWithAcceptance(stepCtx, stepID, mode, instructions, includePreservedUserMessage, accept)
+		receipt = compactReceipt
+		if err == nil || receipt.Committed {
+			e.handoffRuntimeState().ClearRequest()
+		}
+		return err
+	})
+	return receipt, err
 }
 
 func (e *Engine) autoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error {
@@ -383,7 +264,7 @@ func (e *Engine) autoCompactIfNeeded(ctx context.Context, stepID string, mode co
 	return e.compactionFlow.AutoCompactIfNeeded(ctx, stepID, mode)
 }
 
-func (e *Engine) maybeQueueEagerCompaction(activeKind ActiveKind, resultKind LiveRunResultKind, assistant llm.Message) {
+func (e *Engine) maybeReserveEagerCompaction(activeKind ActiveKind, resultKind LiveRunResultKind, assistant llm.Message) {
 	if e == nil || e.isWorkflowAgent() || resultKind != LiveRunResultAssistantFinalAnswer || isBlankFinalAnswer(assistant) {
 		return
 	}
@@ -397,17 +278,32 @@ func (e *Engine) maybeQueueEagerCompaction(activeKind ActiveKind, resultKind Liv
 	if !planner.autoCompactionAvailable(planningSnapshot) || !planner.eagerCompactionEligible(planningSnapshot) {
 		return
 	}
-	request := &pendingCompaction{
-		mode:  compactionModeAuto,
-		reply: make(chan compactionReply, 1),
+	reservation := &exclusiveStepReservation{
+		Kind:      exclusiveStepReservationManualCompaction,
+		queueable: true,
 	}
-	wake, err := e.steering.append(newCompactionQueueEntry(request))
-	if err != nil {
+	if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
 		e.surfaceRunError(err)
 		return
 	}
-	if wake {
-		e.wakeSteeringBoundaryDrain()
+	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
+		defer e.stepLifecycle.ReleaseReservation(reservation)
+		err := runExclusiveStepWhenIdle(ctx, e.stepLifecycle, ActiveKindCompaction, reservation, func(stepCtx context.Context, stepID string) error {
+			planningSnapshot := e.compactionPlanningSnapshot()
+			planner := e.compactionPlannerState()
+			if !planner.autoCompactionAvailable(planningSnapshot) || !planner.eagerCompactionEligible(planningSnapshot) {
+				return nil
+			}
+			_, receipt, compactErr := e.compactNow(stepCtx, stepID, compactionModeAuto, compactionInstructionsInput{}, false)
+			if compactErr == nil || receipt.Committed {
+				e.handoffRuntimeState().ClearRequest()
+			}
+			return compactErr
+		})
+		e.surfaceRunError(err)
+		return nil
+	}) {
+		e.stepLifecycle.ReleaseReservation(reservation)
 	}
 }
 func (c *defaultContextCompactor) AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error {
@@ -462,63 +358,12 @@ func (c *defaultContextCompactor) ShouldCompactBeforeUserMessage(ctx context.Con
 	}
 	reservedOutput := planner.reservedOutputTokens(planningSnapshot)
 	preSubmitLimit := planner.preSubmitTokenLimit(planningSnapshot)
-	if preSubmitLimit > 0 {
-		_, _ = e.currentInputTokensPreciselyIfDueWithPriority(ctx, preSubmitLimit, true)
-	}
 	estimatedCurrentTotal := e.currentTokenUsage() + reservedOutput
 	if preSubmitLimit > 0 && estimatedCurrentTotal >= preSubmitLimit {
-		if preciseInput, ok := e.currentInputTokensPrecisely(ctx); ok {
-			return preciseInput+reservedOutput >= preSubmitLimit, nil
-		}
 		return true, nil
 	}
 	promptEstimate := estimateItemsTokens(llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(text)}}))
-	if estimatedCurrentTotal+promptEstimate < limit {
-		return false, nil
-	}
-	extra := llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(text)}})
-	req, err := e.buildRequestWithExtraItems(ctx, "", extra, true)
-	if err != nil {
-		return false, err
-	}
-	if preciseInput, ok := e.requestInputTokensPreciselyTracked(ctx, req, false); ok {
-		return preciseInput+reservedOutput >= limit, nil
-	}
 	return estimatedCurrentTotal+promptEstimate >= limit, nil
-}
-
-func (e *Engine) resolveContextWindowTokens(ctx context.Context) int {
-	if configured := e.configuredContextWindowTokens(); configured > 0 {
-		return configured
-	}
-
-	model := e.currentModel()
-	if resolver, ok := e.llm.(llm.ModelContextWindowClient); ok {
-		resolved, err := resolver.ResolveModelContextWindow(ctx, model)
-		if err == nil && resolved > 0 {
-			e.setContextWindowTokens(resolved)
-			return resolved
-		}
-	}
-	return e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
-}
-
-func (e *Engine) configuredContextWindowTokens() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.cfg.ContextWindowTokens > 0 {
-		return e.cfg.ContextWindowTokens
-	}
-	return 0
-}
-
-func (e *Engine) setContextWindowTokens(tokens int) {
-	if tokens <= 0 {
-		return
-	}
-	e.mu.Lock()
-	e.cfg.ContextWindowTokens = tokens
-	e.mu.Unlock()
 }
 
 func (e *Engine) currentModel() string {
@@ -528,274 +373,12 @@ func (e *Engine) currentModel() string {
 	return strings.TrimSpace(e.cfg.Model)
 }
 
-func autoCompactPrecisionMarginForLimit(limit int) int {
-	if limit <= 0 {
-		return autoCompactNearLimitMargin
-	}
-	percentMargin := limit / 50
-	if percentMargin > autoCompactNearLimitMargin {
-		return percentMargin
-	}
-	return autoCompactNearLimitMargin
-}
-
-func (e *Engine) usageAtOrAboveLimit(ctx context.Context, limit int) bool {
+func (e *Engine) usageAtOrAboveLimit(_ context.Context, limit int) bool {
 	if limit <= 0 {
 		return false
 	}
 	reservedOutput := e.compactionPlannerState().reservedOutputTokens(e.compactionPlanningSnapshot())
-	if preciseInput, ok := e.currentInputTokensPreciselyIfDueWithPriority(ctx, limit, true); ok {
-		return preciseInput+reservedOutput >= limit
-	}
-	estimatedInput := e.currentTokenUsage()
-	estimatedTotal := estimatedInput + reservedOutput
-	margin := autoCompactPrecisionMarginForLimit(limit)
-	if estimatedTotal < limit && estimatedTotal+margin < limit {
-		return false
-	}
-	preciseInput, ok := e.currentInputTokensPrecisely(ctx)
-	if !ok {
-		return estimatedTotal >= limit
-	}
-	return preciseInput+reservedOutput >= limit
-}
-
-func (e *Engine) currentInputTokensPrecisely(ctx context.Context) (int, bool) {
-	req, err := e.buildRequest(ctx, "", true)
-	if err != nil {
-		return 0, false
-	}
-	return e.requestInputTokensPreciselyTracked(ctx, req, true)
-}
-
-func (e *Engine) currentInputTokensPreciselyWithoutPromptRefresh(ctx context.Context) (int, bool) {
-	req, err := e.buildRequestWithoutPromptRefresh(ctx)
-	if err != nil {
-		return 0, false
-	}
-	return e.requestInputTokensPreciselyTracked(ctx, req, true)
-}
-
-func (e *Engine) buildRequestWithoutPromptRefresh(ctx context.Context) (llm.Request, error) {
-	locked, err := e.ensureLocked()
-	if err != nil {
-		return llm.Request{}, err
-	}
-	workflowMode, err := e.workflowCompletionMode(ctx)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	requestTools, err := e.requestTools(ctx, workflowMode)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	systemPrompt, err := e.systemPromptWithoutBackfill(locked)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	nativeWebSearch, nativeErr := e.enableNativeWebSearch(ctx)
-	if nativeErr != nil {
-		return llm.Request{}, nativeErr
-	}
-	toolChoiceMode := toolChoiceModeForWorkflowCompletion(workflowMode, e.workflowUseRequiredToolCalls())
-	req, err := llm.RequestFromLockedContract(locked, systemPrompt, e.transcriptRuntimeState().SnapshotItems(), requestTools, llm.ToolControls{
-		ChoiceMode:            toolChoiceMode,
-		EnableNativeWebSearch: nativeWebSearch,
-	})
-	if err != nil {
-		return llm.Request{}, err
-	}
-	req.ReasoningEffort = e.ThinkingLevel()
-	req.FastMode = e.FastModeEnabled()
-	sessionID := e.SessionID()
-	req.SessionID = &sessionID
-	if e.supportsPromptCacheKey(ctx) {
-		if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
-			req.PromptCacheKey = cacheKey
-			req.PromptCacheScope = transcript.CacheWarningScopeConversation
-		}
-	}
-	if err := e.validateToolChoiceSupport(ctx, toolChoiceMode); err != nil {
-		return llm.Request{}, err
-	}
-	return req, nil
-}
-
-func (e *Engine) currentInputTokensPreciselyIfDueWithPriority(ctx context.Context, limit int, critical bool) (int, bool) {
-	if precise, ok := e.lookupCurrentPreciseInputTokens(); ok {
-		if !e.shouldRefreshCurrentPreciseInputTokens(limit, critical) {
-			return precise, true
-		}
-	}
-	if !e.shouldRefreshCurrentPreciseInputTokens(limit, critical) {
-		return 0, false
-	}
-	req, err := e.buildRequest(ctx, "", true)
-	if err != nil {
-		return 0, false
-	}
-	return e.requestInputTokensPreciselyTracked(ctx, req, true)
-}
-
-func (e *Engine) requestInputTokensPreciselyTracked(ctx context.Context, req llm.Request, current bool) (int, bool) {
-	counter, ok := e.llm.(llm.RequestInputTokenCountClient)
-	if !ok {
-		return 0, false
-	}
-	if !e.preciseInputTokenCountSupported(ctx) {
-		return 0, false
-	}
-	cacheKey := ""
-	if payload, err := json.Marshal(req); err == nil {
-		sum := sha256.Sum256(payload)
-		cacheKey = hex.EncodeToString(sum[:])
-	}
-	if cacheKey != "" {
-		if cached, ok := e.lookupPreciseTokenCount(cacheKey, current); ok {
-			if current {
-				e.storePreciseTokenCount(cacheKey, cached, true)
-			}
-			return cached, true
-		}
-	}
-	if e.diagnosticDedupeStore().HasPersisted(preciseTokenCountFailureDiagnostic) {
-		return 0, false
-	}
-	count, err := counter.CountRequestInputTokens(ctx, req)
-	if err != nil {
-		if e.errorIsRepairableMissingToolOutput(err) {
-			// The request carries interrupted tool calls without outputs that the
-			// model request path repairs by appending synthetic outputs. Fall back to
-			// an estimate for this probe only; do not persist a permanent failure that
-			// would disable exact counting for the rest of the active list.
-			return 0, false
-		}
-		e.reportPreciseTokenCountFailure(err)
-		return 0, false
-	}
-	if count <= 0 {
-		return 0, false
-	}
-	if cacheKey != "" {
-		e.storePreciseTokenCount(cacheKey, count, current)
-	}
-	return count, true
-}
-
-func (e *Engine) preciseInputTokenCountSupported(ctx context.Context) bool {
-	caps, err := e.providerCapabilities(ctx)
-	if err != nil {
-		e.reportPreciseTokenCountSupportFailure(err)
-		return false
-	}
-	if !caps.SupportsRequestInputTokenCount {
-		return false
-	}
-	support, ok := e.llm.(llm.RequestInputTokenCountSupportClient)
-	if !ok {
-		return true
-	}
-	supported, err := support.SupportsRequestInputTokenCount(ctx)
-	if err != nil {
-		e.reportPreciseTokenCountSupportFailure(err)
-		return false
-	}
-	return supported
-}
-
-func (e *Engine) reportPreciseTokenCountSupportFailure(err error) {
-	if err == nil {
-		return
-	}
-	message := strings.TrimSpace(err.Error())
-	if message == "" {
-		message = "unknown exact token counting support failure"
-	}
-	entryText := fmt.Sprintf("Exact token counting availability check failed: %s. Falling back to a local token estimate.", message)
-	if persistErr := e.steerRuntimePersistedDiagnosticEntry(
-		preciseTokenCountSupportDiagnostic,
-		"error",
-		entryText,
-	); persistErr != nil {
-		e.AppendCommittedEntry("error", fmt.Sprintf("%s Diagnostic persistence failed: %v", entryText, persistErr))
-	}
-}
-
-func (e *Engine) reportPreciseTokenCountFailure(err error) {
-	if err == nil {
-		return
-	}
-	message := strings.TrimSpace(err.Error())
-	if message == "" {
-		message = "unknown exact token counting failure"
-	}
-	entryText := fmt.Sprintf("Exact token counting failed: %s. Falling back to a local token estimate.", message)
-	if persistErr := e.steerRuntimePersistedDiagnosticEntry(
-		preciseTokenCountFailureDiagnostic,
-		"error",
-		entryText,
-	); persistErr != nil {
-		e.AppendCommittedEntry("error", fmt.Sprintf("%s Diagnostic persistence failed: %v", entryText, persistErr))
-	}
-}
-
-func (e *Engine) lookupPreciseTokenCount(cacheKey string, current bool) (int, bool) {
-	if strings.TrimSpace(cacheKey) == "" || e.modelRequests().TokenUsage() == nil {
-		return 0, false
-	}
-	if current {
-		if cached, ok := e.modelRequests().TokenUsage().lookupCurrent(cacheKey); ok {
-			return cached, true
-		}
-	}
-	return e.modelRequests().TokenUsage().lookup(cacheKey)
-}
-
-func (e *Engine) storePreciseTokenCount(cacheKey string, count int, current bool) {
-	if strings.TrimSpace(cacheKey) == "" || count <= 0 || e.modelRequests().TokenUsage() == nil {
-		return
-	}
-	e.modelRequests().TokenUsage().store(cacheKey, count, current)
-}
-
-func (e *Engine) lookupCurrentPreciseInputTokens() (int, bool) {
-	if e.modelRequests().TokenUsage() == nil {
-		return 0, false
-	}
-	return e.modelRequests().TokenUsage().lookupCurrent("")
-}
-
-// markCurrentRequestShapeDirty invalidates the current-context exact token count
-// whenever the next provider request may differ from the previously counted one.
-func (e *Engine) markCurrentRequestShapeDirty() {
-	tracker := e.modelRequests().TokenUsage()
-	if tracker == nil {
-		return
-	}
-	tracker.invalidateCurrent(tokenUsageMutationPlain)
-}
-
-func (e *Engine) markCurrentRequestShapeDirtyForSignificantMutation() {
-	tracker := e.modelRequests().TokenUsage()
-	if tracker == nil {
-		return
-	}
-	tracker.invalidateCurrent(tokenUsageMutationSignificant)
-}
-
-func (e *Engine) resetCurrentPreciseInputTracking() {
-	tracker := e.modelRequests().TokenUsage()
-	if tracker == nil {
-		return
-	}
-	tracker.invalidateCurrent(tokenUsageMutationHardReset)
-}
-
-func (e *Engine) shouldRefreshCurrentPreciseInputTokens(limit int, critical bool) bool {
-	if limit <= 0 || e.modelRequests().TokenUsage() == nil {
-		return false
-	}
-	return e.modelRequests().TokenUsage().currentCheckpointDue(e.estimatedCurrentTokenUsage(), limit, critical)
+	return e.currentTokenUsage()+reservedOutput >= limit
 }
 
 func (e *Engine) estimatedCurrentTokenUsage() int {
@@ -819,9 +402,6 @@ func (e *Engine) estimatedCurrentTokenUsage() int {
 }
 
 func (e *Engine) currentTokenUsage() int {
-	if precise, ok := e.lookupCurrentPreciseInputTokens(); ok {
-		return precise
-	}
 	return e.estimatedCurrentTokenUsage()
 }
 
@@ -832,7 +412,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool, accept CommandAcceptance) (compactionResult, session.CommitReceipt, error) {
 	planningSnapshot := e.compactionPlanningSnapshot()
 	planner := e.compactionPlannerState()
-	if planner.mode(planningSnapshot.compactionMode) == "none" {
+	if planner.mode(planningSnapshot.policy) == "none" {
 		if mode == compactionModeAuto {
 			return compactionResult{}, session.CommitReceipt{}, nil
 		}
@@ -844,8 +424,6 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		return compactionResult{}, session.CommitReceipt{}, nil
 	}
 
-	_ = e.resolveContextWindowTokens(ctx)
-
 	caps, err := e.providerCapabilities(ctx)
 	if err != nil {
 		return compactionResult{}, session.CommitReceipt{}, err
@@ -856,6 +434,14 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	}
 
 	persistence := newCompactionPersistence(e)
+	if err := persistence.setActivity(stepID, mode, e.compactionRuntimeState().Count()+1, true); err != nil {
+		return compactionResult{}, session.CommitReceipt{}, err
+	}
+	defer func() {
+		if err := persistence.setActivity(stepID, mode, 0, false); err != nil {
+			e.surfaceRunError(fmt.Errorf("clear compaction activity: %w", err))
+		}
+	}()
 	if accept == nil {
 		if err := persistence.emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, nil, 0, ""); err != nil {
 			return compactionResult{}, session.CommitReceipt{}, err
@@ -874,14 +460,26 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		preservedUserMessageText = lastVisibleUserMessageSinceLatestCompaction(input)
 	}
 	var result compactionResult
-	enginePlan := planner.enginePlan(planningSnapshot, caps)
+	enginePlan := planner.enginePlan(planningSnapshot)
+	var requestKind *llm.CodexRequestKind
 	if enginePlan.engineKind == compactionEngineRemote {
-		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions)
+		requestKind = llm.CodexRequestKindCompaction.Optional()
+	}
+	dispatchFactory, err := e.activeDispatchRequestFactory(stepID, requestKind)
+	if err != nil {
+		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
+	}
+	if enginePlan.engineKind == compactionEngineRemote {
+		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions, dispatchFactory)
 		if err != nil && enginePlan.fallbackToLocalOnBadCheckpoint && errors.Is(err, errRemoteCompactionMissingCheckpoint) {
-			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
+			localFactory, factoryErr := e.activeDispatchRequestFactory(stepID, nil)
+			if factoryErr != nil {
+				return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, factoryErr)
+			}
+			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, localFactory)
 		}
 	} else {
-		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
+		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, dispatchFactory)
 	}
 	if err != nil {
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
@@ -927,6 +525,7 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		return compactionResult{}, replacementReceipt, compactionFailure(result, replacementErr)
 	}
 	e.compactionRuntimeState().SetManualCompactionEligible(false)
+	e.persistCompletedCompactionFactsBestEffort(stepID, e.compactionRuntimeState().Count())
 	finalizationErr := replacementErr
 	if result.overflowRepair.Collapsed() {
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: string(transcript.EntryRoleDeveloperErrorFeedback), Text: fmt.Sprintf(
@@ -944,9 +543,6 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		windowTokens = e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
 	}
 	inputTokens := estimateItemsTokens(e.transcriptRuntimeState().SnapshotItems())
-	if preciseInput, ok := e.currentInputTokensPreciselyWithoutPromptRefresh(ctx); ok {
-		inputTokens = preciseInput
-	}
 	compactedUsage := llm.Usage{
 		InputTokens:  inputTokens,
 		OutputTokens: 0,
@@ -1017,7 +613,7 @@ func (e *Engine) applyPendingHandoffIfNeeded(ctx context.Context, stepID string)
 		if !ok {
 			return false, nil
 		}
-		receipt, err := e.steerWithCommitReceipt(stepID, steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{message}))
+		receipt, err := e.steerWithCommitReceipt(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message}))
 		if receipt.Committed {
 			e.handoffRuntimeState().ClearFutureMessage()
 		}
@@ -1065,16 +661,12 @@ func (e *Engine) compactionPlanningSnapshot() compactionPlanningSnapshot {
 	}
 	snapshot := compactionPlanningSnapshot{
 		autoCompactionEnabled:         autoEnabled,
-		compactionMode:                e.cfg.CompactionMode,
-		autoCompactTokenLimit:         e.cfg.AutoCompactTokenLimit,
 		preSubmitCompactionLeadTokens: e.cfg.PreSubmitCompactionLeadTokens,
-		contextWindowTokens:           e.cfg.ContextWindowTokens,
-		effectiveContextWindowPercent: e.cfg.EffectiveContextWindowPercent,
+		policy:                        e.contextPolicy,
 		maxOutputTokens:               e.cfg.MaxTokens,
 	}
 	e.mu.Unlock()
 	snapshot.lockedMaxOutputTokens = e.lockedContractState().MaxOutputToken()
-	snapshot.lastUsage = e.usageTrackingState().Last()
 	snapshot.currentUsedTokens = e.currentTokenUsage()
 	return snapshot
 }
