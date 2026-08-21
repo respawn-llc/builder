@@ -395,7 +395,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			if err != nil {
 				return stepLoopResult{}, err
 			}
-			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
+			if err := e.stepLifecycle.CompleteAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
 			patchEditsApplied = patchEditsApplied || applied
@@ -410,7 +410,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		if assistantMsg.Content == nil && responseContainsProgress(resp) {
-			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
+			if err := e.stepLifecycle.CompleteAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
 			continue
@@ -837,17 +837,11 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		return false, false, err
 	}
 	if calls.hasCalls() {
-		if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
+		if err := e.stepLifecycle.CompleteAgentStepBoundary(ctx); err != nil {
 			return false, false, err
 		}
 	}
 	return patchEditsApplied, terminal, nil
-}
-
-func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string) error {
-	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
-	s.engine.persistManualCompactEligibilityBestEffort(stepID, true)
-	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 
 func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(

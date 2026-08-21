@@ -752,6 +752,33 @@ func (s *defaultExclusiveStepLifecycle) waitForPublicationLocked() {
 }
 
 func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Context) error {
+	if s.activeAgentStepID() == nil {
+		return nil
+	}
+	return s.drainAgentStepBoundary(ctx)
+}
+
+func (s *defaultExclusiveStepLifecycle) CompleteAgentStepBoundary(ctx context.Context) error {
+	stepID := s.activeAgentStepID()
+	if stepID == nil {
+		return nil
+	}
+	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
+	s.engine.persistManualCompactEligibilityBestEffort(*stepID, true)
+	return s.drainAgentStepBoundary(ctx)
+}
+
+func (s *defaultExclusiveStepLifecycle) activeAgentStepID() *string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil || !isAgentStepCapable(s.active.activeKind) {
+		return nil
+	}
+	stepID := s.active.stepID
+	return &stepID
+}
+
+func (s *defaultExclusiveStepLifecycle) drainAgentStepBoundary(ctx context.Context) error {
 	if err := s.engine.drainRuntimeOperations(ctx); err != nil {
 		return err
 	}
@@ -787,10 +814,7 @@ func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Conte
 }
 
 func (s *defaultExclusiveStepLifecycle) BeginAgentStepBoundary(ctx context.Context) error {
-	s.mu.Lock()
-	ownsRuntimeMutations := s.active != nil && isAgentStepCapable(s.active.activeKind)
-	s.mu.Unlock()
-	if !ownsRuntimeMutations {
+	if s.activeAgentStepID() == nil {
 		return nil
 	}
 	if err := s.engine.pauseRuntimeOperations(ctx); err != nil {

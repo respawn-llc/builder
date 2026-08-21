@@ -67,6 +67,50 @@ func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) boo
 	return false
 }
 
+func TestBackgroundStepBoundarySkipsAgentFIFOAndCompactionBookkeeping(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+	engine.stepLifecycle = lifecycle
+	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+		t.Fatalf("pause Runtime FIFO: %v", err)
+	}
+	operationStarted := make(chan struct{})
+	deferred := submitEngineRuntimeOperation(engine, func(context.Context) (struct{}, error) {
+		close(operationStarted)
+		return struct{}{}, nil
+	})
+
+	err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindBackground},
+		func(context.Context, string) error {
+			canceled, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := lifecycle.CompleteAgentStepBoundary(canceled); err != nil {
+				return err
+			}
+			if engine.compactionRuntimeState().ManualCompactionEligible() {
+				return errors.New("background boundary enabled manual compaction")
+			}
+			select {
+			case <-operationStarted:
+				return errors.New("background boundary drained the Runtime FIFO")
+			default:
+			}
+			return nil
+		},
+	)
+	if drainErr := engine.drainRuntimeOperations(t.Context()); drainErr != nil {
+		err = errors.Join(err, drainErr)
+	}
+	if _, awaitErr := deferred.Await(t.Context()); awaitErr != nil {
+		err = errors.Join(err, awaitErr)
+	}
+	if err != nil {
+		t.Fatalf("complete background boundary: %v", err)
+	}
+}
+
 func TestExclusiveStepLifecycleEagerCompactsAfterSuccessfulFinalAtConsumedThreshold(t *testing.T) {
 	t.Parallel()
 	client := &fakeCompactionClient{
@@ -592,6 +636,10 @@ func (s *stubExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply fun
 }
 
 func (s *stubExclusiveStepLifecycle) BeginAgentStepBoundary(context.Context) error {
+	return nil
+}
+
+func (s *stubExclusiveStepLifecycle) CompleteAgentStepBoundary(context.Context) error {
 	return nil
 }
 

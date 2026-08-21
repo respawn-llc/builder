@@ -39,6 +39,7 @@ type exclusiveStepLifecycle interface {
 	WithActiveStep(fn func(stepID string) error) (bool, error)
 	ApplyForActiveStep(stepID string, apply func() error) error
 	BeginAgentStepBoundary(ctx context.Context) error
+	CompleteAgentStepBoundary(ctx context.Context) error
 	DrainAgentStepBoundary(ctx context.Context) error
 	EndAgentStepBoundary()
 }
