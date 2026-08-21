@@ -664,11 +664,9 @@ Blocked by:
 - SQLite reports malformed raw FTS5 syntax and some FTS schema or configuration failures through the same runtime error class.
 - Kent reports every raw FTS5 SQLite evaluation error as one generic operational failure with exit code 1.
 - Search uses the authoritative Task status shared with Task lists and Task detail.
-- Persisted Task fields in one response use one point-in-time view.
-- Live Task activity is observed separately.
-- Task status and status filtering combine that durable view with the separately captured live activity view.
-- A Workflow transition overlapping the request may briefly combine durable fields from before the transition with live status facts from after it, or the reverse.
-- Search text, hit counts, filters, and source metadata remain internally consistent.
+- Persisted Task facts and live Task activity are observed independently.
+- Task status and status filtering combine independently loaded durable and live facts.
+- A Workflow transition or durable Task mutation overlapping the request may produce fields from different completed moments.
 - Short ID candidate selection must not scan every persisted Task.
 - Task Search must support Short ID matching in a persistence root with up to 1,000,000 Tasks.
 - The supported size boundary does not promise a numeric response time.

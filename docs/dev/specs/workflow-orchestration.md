@@ -529,7 +529,7 @@
 
 - Task Search, Task detail, Workflow boards, and Task lists use one server-owned authoritative Task-status projection derived from Current Nodes, pending Workflow Transition Approvals, and current live activity.
 - The projection supplies primary status, every applicable attention kind and reference, available Task actions, and the exact Current Node, Session, or Script targets for those actions. A surface may omit fields it does not expose, but does not independently recompute lifecycle-sensitive facts.
-- Each request combines one internally consistent durable Task-state view with independently loaded owner-local immutable live projections, then derives the complete projection from those views. The live projections may be stale and may represent different completed moments.
+- Each request independently loads durable Task facts and owner-local immutable live projections, then derives the complete projection from those facts. The facts may be stale and may represent different completed moments.
 - Each request is independent. Kent does not synchronize separate Search, List, Board, and Detail requests, so they may observe different lifecycle moments.
 - Agreement among List/Search status filtering, status sorting, and returned status is not a product invariant. Each evaluation still follows the authoritative Task-status semantics.
 - Projected actions and targets are hints that may become stale after the response. Each Task-changing operation checks its authoritative state again before changing the Task.
@@ -572,7 +572,7 @@
 - Task search reuses the authoritative Task status defined above.
 - [CLI Commands](cli-commands.md) owns the complete Task Search command contract.
 - Search returns Task status from the server-owned Task-status projection.
-- Each response is point-in-time consistent for matching text, counts, filters, and Task metadata. It combines that durable view with independently loaded owner-local immutable live projections. The live projections may be stale and may represent different completed moments.
+- Each response independently loads the durable facts used for matching text, counts, filters, and Task metadata and combines them with owner-local immutable live projections. The facts may be stale and may represent different completed moments.
 
 ## Execution Targets And Worktrees
 
