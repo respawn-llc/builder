@@ -17,6 +17,7 @@ type currentEventLogMode uint8
 const (
 	currentEventLogAuthoritative currentEventLogMode = iota + 1
 	currentEventLogReadOnly
+	currentEventLogPersistedSnapshot
 )
 
 type currentEventLog struct {
@@ -24,6 +25,8 @@ type currentEventLog struct {
 	version            int
 	firstEventOffset   int64
 	lastSequence       int64
+	lastCompleteOffset int64
+	boundaryIncomplete bool
 	frozenEndOffset    *int64
 	mode               currentEventLogMode
 	durabilityObserver DurabilityObserver
@@ -79,10 +82,11 @@ func createCurrentEventLogVersion(path string, version int) (_ *currentEventLog,
 	fp = nil
 
 	return &currentEventLog{
-		path:             path,
-		version:          version,
-		firstEventOffset: int64(len(encoded)),
-		mode:             currentEventLogAuthoritative,
+		path:               path,
+		version:            version,
+		firstEventOffset:   int64(len(encoded)),
+		lastCompleteOffset: int64(len(encoded)),
+		mode:               currentEventLogAuthoritative,
 	}, nil
 }
 
@@ -91,15 +95,21 @@ func openCurrentEventLog(
 	mode currentEventLogMode,
 ) (_ *currentEventLog, resultErr error) {
 	switch mode {
-	case currentEventLogAuthoritative, currentEventLogReadOnly:
+	case currentEventLogAuthoritative, currentEventLogReadOnly, currentEventLogPersistedSnapshot:
 	default:
 		return nil, fmt.Errorf("unsupported current event log mode %d", mode)
 	}
-	flags := os.O_RDONLY
-	if mode == currentEventLogAuthoritative {
-		flags = os.O_RDWR
+	var fp *os.File
+	var err error
+	if mode == currentEventLogPersistedSnapshot {
+		fp, err = openRegularSessionFile(path, "current event log")
+	} else {
+		flags := os.O_RDONLY
+		if mode == currentEventLogAuthoritative {
+			flags = os.O_RDWR
+		}
+		fp, err = os.OpenFile(path, flags, 0)
 	}
-	fp, err := os.OpenFile(path, flags, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open current event log: %w", err)
 	}
@@ -108,36 +118,62 @@ func openCurrentEventLog(
 			resultErr = errors.Join(resultErr, fmt.Errorf("close current event log: %w", closeErr))
 		}
 	}()
-	header, firstEventOffset, err := readCurrentEventLogHeader(fp)
-	if err != nil {
-		return nil, err
-	}
 	info, err := fp.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat current event log: %w", err)
 	}
 	size := info.Size()
+	if size == 0 && mode == currentEventLogPersistedSnapshot {
+		return &currentEventLog{
+			path:    path,
+			version: EventLogVersionV2,
+			mode:    mode,
+		}, nil
+	}
+	header, firstEventOffset, err := readCurrentEventLogHeader(fp)
+	if err != nil {
+		return nil, currentEventLogReadError(mode, err)
+	}
 	if mode == currentEventLogAuthoritative {
 		size, _, err = repairCurrentEventLogTail(fp, size, firstEventOffset)
 		if err != nil {
 			return nil, err
 		}
 	}
-	lastRecord, err := readLastCurrentEventRecord(fp, size, firstEventOffset)
+	lastRecord, lastCompleteOffset, boundaryIncomplete, err := readLastCurrentEventRecordBoundary(
+		fp,
+		size,
+		firstEventOffset,
+		true,
+	)
 	if err != nil {
-		return nil, err
+		return nil, currentEventLogReadError(mode, err)
 	}
 	lastSequence := int64(0)
 	if lastRecord != nil {
 		lastSequence = lastRecord.Seq()
 	}
 	return &currentEventLog{
-		path:             path,
-		version:          header.Version,
-		firstEventOffset: firstEventOffset,
-		lastSequence:     lastSequence,
-		mode:             mode,
+		path:               path,
+		version:            header.Version,
+		firstEventOffset:   firstEventOffset,
+		lastSequence:       lastSequence,
+		lastCompleteOffset: lastCompleteOffset,
+		boundaryIncomplete: boundaryIncomplete,
+		mode:               mode,
 	}, nil
+}
+
+func currentEventLogReadError(mode currentEventLogMode, err error) error {
+	if mode != currentEventLogPersistedSnapshot {
+		return err
+	}
+	return wrapEventLogMaterializationError(
+		EventLogMaterializationStageReconciliation,
+		false,
+		false,
+		err,
+	)
 }
 
 func (l *currentEventLog) appendRecords(records []EventRecord) (endOffset int64, resultErr error) {
@@ -268,6 +304,8 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 		return endOffset, fmt.Errorf("fsync current event log: %w", err)
 	}
 	l.lastSequence = records[len(records)-1].Seq()
+	l.lastCompleteOffset = endOffset
+	l.boundaryIncomplete = false
 	return endOffset, nil
 }
 

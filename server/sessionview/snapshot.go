@@ -91,15 +91,8 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 		return clientui.RuntimeMainView{}, err
 	}
 	meta := s.view.Meta()
-	sessionFreshness, err := s.view.ConversationFreshness()
-	if err != nil {
-		return clientui.RuntimeMainView{}, err
-	}
-	revision, err := s.view.Revision()
-	if err != nil {
-		return clientui.RuntimeMainView{}, err
-	}
-	version, err := persistedRuntimeMainViewVersion(meta.SessionID, revision)
+	sessionFreshness := s.view.ConversationFreshness()
+	version, err := persistedRuntimeMainViewVersion(meta.SessionID, s.view.Revision())
 	if err != nil {
 		return clientui.RuntimeMainView{}, err
 	}
@@ -207,14 +200,10 @@ func (s dormantSessionSnapshot) cacheWarningModeOrDefault() config.CacheWarningM
 
 func (s dormantSessionSnapshot) transcriptPage(segment runtime.TranscriptSegmentPage) (clientui.TranscriptPage, error) {
 	meta := s.view.Meta()
-	freshness, err := s.view.ConversationFreshness()
-	if err != nil {
-		return clientui.TranscriptPage{}, err
-	}
 	return runtimeview.TranscriptPageFromSegment(
 		meta.SessionID,
 		meta.Name,
-		runtimeview.ConversationFreshnessFromSession(freshness),
+		runtimeview.ConversationFreshnessFromSession(s.view.ConversationFreshness()),
 		segment,
 	)
 }
