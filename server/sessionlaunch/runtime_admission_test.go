@@ -2,17 +2,14 @@ package sessionlaunch
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -33,14 +30,13 @@ func (sessionLaunchRuntimeClient) ProviderCapabilities(context.Context) (llm.Pro
 func TestServiceOpenExistingSessionDoesNotWaitForActiveRuntime(t *testing.T) {
 	root := t.TempDir()
 	workspace := t.TempDir()
-	containerDir := filepath.Join(root, "sessions")
-	persistence := sessiontest.NewPersistence()
+	containerDir := t.TempDir()
 	store, err := session.Create(
 		containerDir,
 		"sessions",
 		workspace,
 		sessioncontract.SessionCategorySubagent,
-		persistence.Options()...,
+		serviceTestPersistence.Options()...,
 	)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -48,19 +44,18 @@ func TestServiceOpenExistingSessionDoesNotWaitForActiveRuntime(t *testing.T) {
 	sessionID := mustSessionLaunchIntentID(t, store.Meta().SessionID)
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: root,
-		StoreOptions:    persistence.Options(),
+		StoreOptions:    serviceTestPersistence.Options(),
 	})
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
 			t.Errorf("close runtime authority: %v", err)
 		}
 	})
-	service := NewService(launchPlannerForRuntimeAdmissionTest(
-		root,
-		workspace,
-		containerDir,
-		persistence,
-	))
+	service := newSessionLaunchTestService(config.App{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: root,
+		Settings:        config.Settings{Model: "gpt-5"},
+	}, containerDir)
 	filesystemContext, err := runtimewire.NewFilesystemContext(
 		workspace,
 		workspace,
@@ -132,30 +127,11 @@ func TestServiceOpenExistingSessionDoesNotWaitForActiveRuntime(t *testing.T) {
 		t.Fatalf("release active Runtime: %v", err)
 	}
 
-	persisted, err := persistence.ResolvePersistedSession(t.Context(), sessionID.String())
+	persisted, err := serviceTestPersistence.ResolvePersistedSession(t.Context(), sessionID.String())
 	if err != nil {
 		t.Fatalf("resolve persisted Session: %v", err)
 	}
 	if persisted.Meta.Category == nil || *persisted.Meta.Category != sessioncontract.SessionCategorySubagent {
 		t.Fatalf("persisted category = %v, want unchanged subagent", persisted.Meta.Category)
-	}
-}
-
-func launchPlannerForRuntimeAdmissionTest(
-	persistenceRoot string,
-	workspace string,
-	containerDir string,
-	persistence *sessiontest.Persistence,
-) launch.Planner {
-	return launch.Planner{
-		Config: config.App{
-			WorkspaceRoot:   workspace,
-			PersistenceRoot: persistenceRoot,
-			Settings:        config.Settings{Model: "gpt-5"},
-		},
-		ContainerDir:             containerDir,
-		StoreOptions:             persistence.Options(),
-		PersistedSessions:        persistence,
-		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: workspace},
 	}
 }
