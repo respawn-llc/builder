@@ -431,8 +431,14 @@ func binaryInternalFailure(err error) *sharedpb.InternalFailureDetails {
 func (g *Gateway) resolveBinaryRequest(encoded []byte) (*gatewayBinaryRequest, *sharedpb.TransportFailure) {
 	envelope, err := protoapi.DecodeEnvelope(encoded)
 	if err != nil {
+		correlation := protoapi.DecodeEnvelopeCorrelation(encoded)
+		var recoveredCorrelation *string
+		if correlation != "" {
+			recoveredCorrelation = &correlation
+		}
 		return nil, &sharedpb.TransportFailure{
-			Code: sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_MALFORMED_ENVELOPE,
+			Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_MALFORMED_ENVELOPE,
+			Correlation: recoveredCorrelation,
 		}
 	}
 	call := envelope.GetCall()

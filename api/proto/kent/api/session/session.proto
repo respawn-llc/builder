@@ -3,6 +3,7 @@ syntax = "proto3";
 package kent.api.session;
 
 import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
 import "kent/api/runtime/runtime.proto";
 import "kent/api/shared/foundation.proto";
 
@@ -262,6 +263,120 @@ service ReadService {
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
       legacy_wire_name: "session.getExecutionEnvironment"
+    };
+  }
+}
+
+message QuestionHistorySubscribeRequest {
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.question_history_session_id_nonblank"
+      message: "session ID must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  int32 max_handoffs = 2 [(buf.validate.field).int32.gt = 0];
+}
+
+message QuestionHistoryStarted {
+  bool large_history = 1;
+}
+
+message QuestionHistoryQuestion {
+  string question = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.question_history_question_nonblank"
+      message: "question must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string answer = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.question_history_answer_nonblank"
+      message: "answer must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional int32 selected_option_number = 3 [(buf.validate.field).int32.gt = 0];
+  optional string commentary = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.question_history_commentary_nonblank"
+      message: "commentary must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional int64 committed_at_unix_ms = 5 [(buf.validate.field).int64 = {
+    gte: -8640000000000000
+    lte: 8640000000000000
+  }];
+}
+
+message QuestionHistoryCompleted {
+  bool history_omitted = 1;
+}
+
+message QuestionHistoryEvent {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+    QuestionHistoryStarted started = 1;
+    QuestionHistoryQuestion question = 2;
+    QuestionHistoryCompleted completed = 3;
+  }
+}
+
+message QuestionHistorySubscribeError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message QuestionHistorySubscribeResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    QuestionHistorySubscribeError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service QuestionHistoryService {
+  rpc Subscribe(QuestionHistorySubscribeRequest) returns (QuestionHistorySubscribeResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_SUBSCRIPTION
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_ATTACHED_SESSION
+      direction: DIRECTION_CLIENT_TO_SERVER
+      event: {package: "kent.api.session" service: "QuestionHistoryService" method: "Event"}
+      completion: {package: "kent.api.session" service: "QuestionHistoryService" method: "Complete"}
+      legacy_wire_name: "session.questionHistory.subscribe"
+    };
+  }
+  rpc Event(QuestionHistoryEvent) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "session.questionHistory.event"
+    };
+  }
+  rpc Complete(kent.api.shared.StreamCompletion) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "session.questionHistory.complete"
     };
   }
 }

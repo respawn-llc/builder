@@ -39,6 +39,7 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -639,8 +640,32 @@ func TestGatewayHandshakeAndProjectList(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	handshakeGateway(t, conn)
-	if protocol.Version != "126" {
-		t.Fatalf("protocol version = %q, want 126", protocol.Version)
+
+	malformedCorrelation := "malformed-call"
+	malformedCall, err := proto.Marshal(&sharedpb.Envelope{
+		Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
+			Correlation: &malformedCorrelation,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal validation-invalid call: %v", err)
+	}
+	if err := websocket.Message.Send(conn, malformedCall); err != nil {
+		t.Fatalf("send validation-invalid call: %v", err)
+	}
+	var failureFrame []byte
+	if err := websocket.Message.Receive(conn, &failureFrame); err != nil {
+		t.Fatalf("receive validation-invalid call failure: %v", err)
+	}
+	failureEnvelope, err := protoapi.DecodeEnvelope(failureFrame)
+	if err != nil {
+		t.Fatalf("decode validation-invalid call failure: %v", err)
+	}
+	failure := failureEnvelope.GetTransportFailure()
+	if failure == nil ||
+		failure.Code != sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_MALFORMED_ENVELOPE ||
+		failure.GetCorrelation() != malformedCorrelation {
+		t.Fatalf("validation-invalid call failure = %+v", failure)
 	}
 
 	projectCatalog := projectpb.File_kent_api_project_project_proto.Services().ByName("ProjectCatalogService")
