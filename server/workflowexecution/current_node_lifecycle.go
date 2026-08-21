@@ -522,10 +522,14 @@ func (c *CurrentNodeController) resumeTask(
 				continue
 			}
 			seen[key] = struct{}{}
+			promptDelivery := workflowruntime.TaskPromptDeliveryResume
+			if currentNode.AgentExecutionSelection != nil && currentNode.SessionID == nil {
+				promptDelivery = workflowruntime.TaskPromptDeliveryAssignment
+			}
 			eligible = append(eligible, currentNode)
 			eligibleStarts = append(eligibleStarts, currentNodeQueuedStart{
 				reference:          currentNode.Reference,
-				taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+				taskPromptDelivery: promptDelivery,
 				completion:         newCurrentNodeAdmissionCompletion(),
 			})
 		}

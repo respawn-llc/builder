@@ -36,23 +36,26 @@ setup *args: _node
         echo "Would configure core.hooksPath=.githooks"
         exit 0
     fi
-    just install _dependencies
-    git config --local core.hooksPath .githooks
+    bash scripts/quiet-on-success.sh bash -c '
+        just install _dependencies
+        git config --local core.hooksPath .githooks
+    '
 
 # Regenerate protobuf-derived Go and TypeScript sources.
-gen: _node _lint-protobuf _generate
+gen:
+    @bash scripts/quiet-on-success.sh just _node _lint-protobuf _generate
 
 # Run active tests, or select server, desktop, tui, or explicit frozen rust.
 test *args:
-    @bash scripts/test.sh {{ args }}
+    @bash scripts/quiet-on-success.sh --success pass bash scripts/test.sh {{ args }}
 
 # Apply safe lint fixes, or pass --dry-run for read-only validation.
 lint *args:
-    just _area-command _lint {{ args }}
+    @bash scripts/quiet-on-success.sh --success pass just _area-command _lint {{ args }}
 
 # Run lint, tests, and builds for the selected area.
 check *args:
-    just _area-command _check {{ args }}
+    @bash scripts/quiet-on-success.sh --success pass just _area-command _check {{ args }}
 
 [private]
 _area-command *args:
@@ -88,15 +91,15 @@ _area-command *args:
 
 [private]
 _lint-protobuf:
-    GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 lint
+    GOOS= GOARCH= go tool -modfile=tools.mod buf lint
 
 [private]
 _gen-go:
-    GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.go.yaml
+    GOOS= GOARCH= go tool -modfile=tools.mod buf generate --template buf.gen.go.yaml
 
 [private]
 _gen-typescript:
-    GOOS= GOARCH= go run github.com/bufbuild/buf/cmd/buf@v1.72.0 generate --template buf.gen.ts.yaml
+    GOOS= GOARCH= go tool -modfile=tools.mod buf generate --template buf.gen.ts.yaml
 
 [parallel]
 [private]
