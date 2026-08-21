@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"sync"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -24,20 +23,8 @@ type workflowTaskControllerReadSnapshot struct {
 	closed            bool
 }
 
-type currentNodeControllerMutex struct {
-	sync.Mutex
-	owner *CurrentNodeController
-}
-
-func (m *currentNodeControllerMutex) Unlock() {
-	if m.owner != nil {
-		m.owner.publishTaskExecutionReadSnapshotLocked()
-	}
-	m.Mutex.Unlock()
-}
-
-// ObserveWorkflowTaskExecutions never waits for lifecycle ownership. It loads
-// each owner's latest completed immutable projection.
+// ObserveWorkflowTaskExecutions opportunistically refreshes the Controller
+// projection without waiting for lifecycle ownership.
 func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (WorkflowTaskExecutionObservation, error) {
 	if c == nil {
 		return WorkflowTaskExecutionObservation{}, errors.New("current node workflow controller is required")
@@ -63,6 +50,11 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		return WorkflowTaskExecutionObservation{}, err
 	}
 	observation.Executions = executions
+	if c.mu.TryLock() {
+		snapshot := c.taskExecutionReadSnapshotLocked(selected)
+		c.mu.Unlock()
+		c.taskExecutionReads.Store(snapshot)
+	}
 	current := c.taskExecutionReads.Load()
 	if current == nil {
 		for taskID := range selected {
@@ -74,29 +66,19 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		return WorkflowTaskExecutionObservation{}, errors.New("current node workflow controller is closed")
 	}
 	observation.ConcurrencyQueued = cloneConcurrencyQueued(current.concurrencyQueued)
-	if taskIDs == nil {
-		observation.Quiescence = cloneTaskQuiescence(current.quiescence)
-		return observation, nil
-	}
 	for taskID := range selected {
 		quiescent, exists := current.quiescence[taskID]
 		if !exists {
-			quiescent = true
+			quiescent = false
 		}
 		observation.Quiescence[taskID] = quiescent
 	}
 	return observation, nil
 }
 
-func cloneTaskQuiescence(source map[workflow.TaskID]bool) map[workflow.TaskID]bool {
-	cloned := make(map[workflow.TaskID]bool, len(source))
-	for taskID, quiescent := range source {
-		cloned[taskID] = quiescent
-	}
-	return cloned
-}
-
-func (c *CurrentNodeController) publishTaskExecutionReadSnapshotLocked() {
+func (c *CurrentNodeController) taskExecutionReadSnapshotLocked(
+	selected map[workflow.TaskID]struct{},
+) *workflowTaskControllerReadSnapshot {
 	snapshot := &workflowTaskControllerReadSnapshot{
 		concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 		quiescence:        map[workflow.TaskID]bool{},
@@ -130,55 +112,10 @@ func (c *CurrentNodeController) publishTaskExecutionReadSnapshotLocked() {
 		})
 		snapshot.concurrencyQueued[taskID] = references
 	}
-	for taskID := range c.nonQuiescentTaskIDsLocked() {
-		snapshot.quiescence[taskID] = false
+	for taskID := range selected {
+		snapshot.quiescence[taskID] = !c.closed && c.taskExecutionQuiescentLocked(taskID)
 	}
-	c.taskExecutionReads.Store(snapshot)
-}
-
-func (c *CurrentNodeController) nonQuiescentTaskIDsLocked() map[workflow.TaskID]struct{} {
-	taskIDs := make(map[workflow.TaskID]struct{})
-	add := func(taskID workflow.TaskID) {
-		if taskID != "" {
-			taskIDs[taskID] = struct{}{}
-		}
-	}
-	for _, taskID := range c.interrupts.taskIDs() {
-		add(taskID)
-	}
-	for _, batch := range c.preparationQueue {
-		add(batch.taskID)
-	}
-	for _, batch := range c.preparationRunning {
-		add(batch.taskID)
-	}
-	for _, gate := range c.gates {
-		add(gate.reference.TaskID)
-	}
-	for _, live := range c.live {
-		add(live.reference.TaskID)
-	}
-	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
-		add(entry.start.reference.TaskID)
-	}
-	for _, start := range c.automaticReservations {
-		add(start.reference.TaskID)
-	}
-	for _, start := range c.explicitQueue {
-		add(start.reference.TaskID)
-	}
-	for _, start := range c.explicitReservations {
-		add(start.reference.TaskID)
-	}
-	for _, start := range c.admissionWorkers {
-		add(start.reference.TaskID)
-	}
-	for _, starts := range c.heldStarts {
-		for _, start := range starts {
-			add(start.reference.TaskID)
-		}
-	}
-	return taskIDs
+	return snapshot
 }
 
 func cloneConcurrencyQueued(source map[workflow.TaskID][]workflow.CurrentNodeReference) map[workflow.TaskID][]workflow.CurrentNodeReference {

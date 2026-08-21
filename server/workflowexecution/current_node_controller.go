@@ -157,7 +157,7 @@ type CurrentNodeController struct {
 	admissionWG      sync.WaitGroup
 	preparationWG    sync.WaitGroup
 
-	mu                    currentNodeControllerMutex
+	mu                    sync.Mutex
 	closed                bool
 	gates                 map[workflow.CurrentNodeReferenceKey]currentNodeAdmissionGate
 	live                  map[runtimeids.ExecutionScopeID]currentNodeLiveScope
@@ -245,7 +245,6 @@ func NewCurrentNodeController(
 		concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 		quiescence:        map[workflow.TaskID]bool{},
 	})
-	controller.mu.owner = controller
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()
 	return controller, nil

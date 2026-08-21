@@ -114,9 +114,6 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	for _, execution := range locked {
 		execution.prompts.mu.Unlock()
 	}
-	for _, item := range closures {
-		item.store.publishTaskExecutionReadSnapshot()
-	}
 	var publicationErr error
 	for _, item := range closures {
 		publicationErr = errors.Join(publicationErr, item.store.publishClosure(item.closure))

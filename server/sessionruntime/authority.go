@@ -57,7 +57,6 @@ type Authority struct {
 	executionFinalized ExecutionFinalized
 	promptFeed         ExecutionPromptFeed
 	options            authorityRuntimeOptions
-	workflowTaskReadMu sync.Mutex
 	workflowTaskReads  atomic.Pointer[workflowTaskExecutionReadSnapshot]
 }
 
@@ -209,7 +208,6 @@ func (a *Authority) addWorkflowExecutionLocked(ref WorkflowExecutionRef, key wor
 		byWorkflow[ref.CurrentNode.TaskID] = byTask
 	}
 	byTask[key] = item
-	a.publishWorkflowTaskExecutionReadSnapshotLocked()
 }
 
 func (a *Authority) beginWorkflowExecution(item *execution) {
@@ -224,7 +222,6 @@ func (a *Authority) beginWorkflowExecution(item *execution) {
 		panic(fmt.Sprintf("workflow execution scope %s began from phase %d", item.scope.ID(), item.phase))
 	}
 	item.phase = executionPhaseRunning
-	a.publishWorkflowTaskExecutionReadSnapshotLocked()
 }
 
 func (a *Authority) removeWorkflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey, item *execution) {
@@ -250,7 +247,6 @@ func (a *Authority) removeWorkflowExecutionLocked(ref WorkflowExecutionRef, key 
 	if len(byProject) == 0 {
 		delete(a.workflowExecutions, ref.ProjectID)
 	}
-	a.publishWorkflowTaskExecutionReadSnapshotLocked()
 }
 
 func (a *Authority) forEachWorkflowExecutionLocked(fn func(*execution)) {

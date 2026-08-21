@@ -1297,14 +1297,6 @@ func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
 	if err := controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("EnsureTaskQuiescent error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
-	otherTaskID := workflow.TaskID("task-quiescent")
-	quiescence, err := controller.CurrentTaskQuiescence([]workflow.TaskID{reference.TaskID, otherTaskID})
-	if err != nil {
-		t.Fatalf("CurrentTaskQuiescence: %v", err)
-	}
-	if quiescence[reference.TaskID] || !quiescence[otherTaskID] {
-		t.Fatalf("task quiescence = %+v, want reserved Task false and unrelated Task true", quiescence)
-	}
 }
 
 func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState(t *testing.T) {

@@ -414,12 +414,10 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	}
 	s.pending[requestID] = entry
 	s.mu.Unlock()
-	s.publishTaskExecutionReadSnapshot()
 	if err := s.publishPending(snapshot); err != nil {
 		s.mu.Lock()
 		delete(s.pending, requestID)
 		s.mu.Unlock()
-		s.publishTaskExecutionReadSnapshot()
 		close(entry.publicationDone)
 		return nil, err
 	}
@@ -435,7 +433,6 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		}
 		s.mu.Unlock()
 		if current == entry {
-			s.publishTaskExecutionReadSnapshot()
 			if err := s.publishResolved(snapshot); err != nil && returnErr == nil {
 				returnErr = err
 			}
@@ -459,21 +456,9 @@ func (s *executionPromptStore) Close(err error) error {
 	s.mu.Lock()
 	closure := s.closeLocked(err)
 	s.mu.Unlock()
-	s.publishTaskExecutionReadSnapshot()
 	publicationErr := s.publishClosure(closure)
 	s.releaseClosure(closure)
 	return publicationErr
-}
-
-func (s *executionPromptStore) publishTaskExecutionReadSnapshot() {
-	if s == nil || s.authority == nil {
-		return
-	}
-	pending, err := s.pendingReferences()
-	if err != nil {
-		panic(fmt.Sprintf("publish workflow Task prompt read snapshot: %v", err))
-	}
-	s.authority.publishWorkflowTaskPromptReadSnapshot(s.scope, pending)
 }
 
 func (s *executionPromptStore) closeLocked(err error) executionPromptClosure {
@@ -530,6 +515,15 @@ func (s *executionPromptStore) pendingReferences() ([]PendingPromptReference, er
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.pendingReferencesLocked()
+}
+
+func (s *executionPromptStore) tryPendingReferences() ([]PendingPromptReference, bool, error) {
+	if !s.mu.TryRLock() {
+		return nil, false, nil
+	}
+	defer s.mu.RUnlock()
+	references, err := s.pendingReferencesLocked()
+	return references, true, err
 }
 
 func (s *executionPromptStore) pendingReferencesLocked() ([]PendingPromptReference, error) {

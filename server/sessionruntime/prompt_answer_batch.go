@@ -174,7 +174,6 @@ func (s *executionPromptStore) resolvePreparedPromptAnswer(answer preparedPrompt
 	if !removed {
 		return false, nil
 	}
-	s.publishTaskExecutionReadSnapshot()
 	return true, s.deliverPromptResolution(answer.entry, answer.resolution, answer.submitErr)
 }
 
