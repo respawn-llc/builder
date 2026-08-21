@@ -147,14 +147,13 @@ func TestResolveRuntimeActivityTreatsOpenLiveRunGroupAsBlocking(t *testing.T) {
 	}
 }
 
-func TestVersionSourcePermitsSequenceHoles(t *testing.T) {
-	source := NewVersionSource(1)
-	first, err := BuildFeedSnapshot(source.Next(), ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
+func TestReadModelVersionsPermitSequenceHoles(t *testing.T) {
+	first, err := BuildFeedSnapshot(NextReadModelVersion("sequence-holes"), ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
 	if err != nil {
 		t.Fatalf("first snapshot: %v", err)
 	}
-	hole := source.Next()
-	second, err := BuildFeedSnapshot(source.Next(), ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
+	hole := NextReadModelVersion("sequence-holes")
+	second, err := BuildFeedSnapshot(NextReadModelVersion("sequence-holes"), ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
 	if err != nil {
 		t.Fatalf("second snapshot: %v", err)
 	}
@@ -163,9 +162,8 @@ func TestVersionSourcePermitsSequenceHoles(t *testing.T) {
 	}
 }
 
-func TestVersionSourceBuildsCanonicalFeedSnapshot(t *testing.T) {
-	source := NewVersionSource(1)
-	update, err := BuildFeedSnapshot(source.Next(), ResolverSnapshot{
+func TestReadModelVersionBuildsCanonicalFeedSnapshot(t *testing.T) {
+	update, err := BuildFeedSnapshot(NextReadModelVersion("canonical-feed"), ResolverSnapshot{
 		Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
 	})
 	if err != nil {

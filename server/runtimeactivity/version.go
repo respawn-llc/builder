@@ -15,22 +15,6 @@ var (
 	fallbackSequence atomic.Uint64
 )
 
-type VersionSource struct {
-	generation uint64
-	sequence   atomic.Uint64
-}
-
-func NewVersionSource(generation uint64) *VersionSource {
-	if generation == 0 {
-		panic("read model version generation is required")
-	}
-	return &VersionSource{generation: generation}
-}
-
-func (s *VersionSource) Next() clientui.ReadModelVersion {
-	return mustReadModelVersion(processEpoch, s.generation, s.sequence.Add(1))
-}
-
 func NextReadModelVersion(sessionID string) clientui.ReadModelVersion {
 	id := strings.TrimSpace(sessionID)
 	if id == "" {

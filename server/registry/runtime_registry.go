@@ -47,7 +47,6 @@ type authorityRuntimeEntry struct {
 	sessionFeed *sessionFeedSequencer
 	retain      func() (io.Closer, error)
 	mainView    atomic.Pointer[clientui.RuntimeMainView]
-	versions    *runtimeactivity.VersionSource
 
 	mu            sync.Mutex
 	lifecycle     authorityRuntimeEntryLifecycle
@@ -98,7 +97,6 @@ func (r *RuntimeRegistry) ResourceReady(
 		sessionFeed: newSessionFeedSequencer(newTranscriptSubscriptionBroker()),
 		retain:      retain,
 		retentions:  make(map[uint64]io.Closer),
-		versions:    runtimeactivity.NewVersionSource(uint64(ref.Generation())),
 	}
 	r.authorityMu.Lock()
 	if existing := r.authorityEntryBySession(sessionID); existing != nil {
@@ -341,11 +339,6 @@ func (r *RuntimeRegistry) RuntimeReadModelFeedSnapshot(_ context.Context, sessio
 }
 
 func (r *RuntimeRegistry) readModelVersion(sessionID string) clientui.ReadModelVersion {
-	if r != nil {
-		if entry := r.authorityEntryBySession(sessionID); entry != nil {
-			return entry.versions.Next()
-		}
-	}
 	return runtimeactivity.NextReadModelVersion(sessionID)
 }
 
