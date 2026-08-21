@@ -17,6 +17,17 @@ type runtimeMainViewSnapshotProvider interface {
 	RuntimeMainViewSnapshot(sessionID string) (clientui.RuntimeMainView, bool)
 }
 
+func resolvePersistedSessionView(
+	ctx context.Context,
+	sessions PersistedSessionResolver,
+	sessionID string,
+) (*session.PersistedSessionView, error) {
+	if sessions == nil {
+		return nil, errPersistedSessionResolverRequired
+	}
+	return session.ResolvePersistedSessionView(ctx, sessions, sessionID)
+}
+
 func readWithContext[T any](ctx context.Context, read func() (T, error)) (T, error) {
 	var zero T
 	if err := context.Cause(ctx); err != nil {
@@ -38,21 +49,6 @@ func resultWithContext[T any](ctx context.Context, value T) (T, error) {
 		return zero, err
 	}
 	return value, nil
-}
-
-func resolvePersistedSessionView(
-	ctx context.Context,
-	sessions PersistedSessionResolver,
-	sessionID string,
-) (*session.PersistedSessionView, error) {
-	if sessions == nil {
-		return nil, errPersistedSessionResolverRequired
-	}
-	view, err := session.ResolvePersistedSessionView(ctx, sessions, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	return view, nil
 }
 
 func (s *Service) resolveMainView(ctx context.Context, sessionID string) (clientui.RuntimeMainView, error) {

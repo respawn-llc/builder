@@ -22,19 +22,11 @@ func ResolvePersistedSessionView(
 	if err != nil {
 		return nil, err
 	}
-	eventLog, err := openPersistedSessionEventLog(record.SessionDir, *record.Meta)
-	if err != nil {
-		return nil, err
-	}
-	return &PersistedSessionView{
-		meta:     *record.Meta,
-		eventLog: eventLog,
-	}, nil
-}
-
-func openPersistedSessionEventLog(sessionDir string, meta Meta) (*currentEventLog, error) {
-	path := filepath.Join(sessionDir, eventsFile)
-	eventLog, err := openCurrentEventLog(path, currentEventLogPersistedSnapshot)
+	meta := *record.Meta
+	eventLog, err := openCurrentEventLog(
+		filepath.Join(record.SessionDir, eventsFile),
+		currentEventLogPersistedSnapshot,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +39,7 @@ func openPersistedSessionEventLog(sessionDir string, meta Meta) (*currentEventLo
 		}
 	}
 	eventLog.frozenEndOffset = &eventLog.lastCompleteOffset
-	return eventLog, nil
+	return &PersistedSessionView{meta: meta, eventLog: eventLog}, nil
 }
 
 func (v *PersistedSessionView) Meta() Meta {
