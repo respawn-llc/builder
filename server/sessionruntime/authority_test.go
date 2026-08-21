@@ -245,44 +245,6 @@ func TestWorkflowTaskExecutionReadSnapshotDoesNotWaitForLifecycleSelection(t *te
 	}
 }
 
-func TestWorkflowTaskExecutionReadSnapshotDoesNotAliasPublishedCollections(t *testing.T) {
-	authority := NewAuthority(AuthorityOptions{})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	taskID := workflow.TaskID("task-read-alias")
-	authority.workflowTaskReads.Store(&workflowTaskExecutionReadSnapshot{
-		executions: map[workflow.TaskID]TaskExecutionSnapshot{
-			taskID: {
-				Executions: []TaskExecution{{
-					PendingPrompts: []PendingPromptReference{{
-						ID:   "question-1",
-						Kind: PendingPromptKindQuestion,
-					}},
-				}},
-			},
-		},
-	})
-
-	first, err := authority.CurrentWorkflowTaskExecutionReadSnapshot()
-	if err != nil {
-		t.Fatalf("first read snapshot: %v", err)
-	}
-	first[taskID].Executions[0].PendingPrompts[0].ID = "mutated"
-
-	second, err := authority.CurrentWorkflowTaskExecutionReadSnapshot()
-	if err != nil {
-		t.Fatalf("second read snapshot: %v", err)
-	}
-	if len(second[taskID].Executions) != 1 ||
-		len(second[taskID].Executions[0].PendingPrompts) != 1 ||
-		second[taskID].Executions[0].PendingPrompts[0].ID != "question-1" {
-		t.Fatalf("published Task execution snapshot was aliased: %+v", second)
-	}
-}
-
 func TestWorkflowManualMoveSelectionDoesNotRetainAuthorityOwnership(t *testing.T) {
 	sleepPath, err := exec.LookPath("sleep")
 	if err != nil {

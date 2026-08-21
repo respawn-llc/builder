@@ -2,7 +2,6 @@ package registry
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -15,45 +14,63 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestRuntimeRegistryRootAttentionDeliversEveryDurableSnapshotPage(t *testing.T) {
-	notifications := make([]clientui.AttentionNotification, workflowAttentionNotificationSnapshotPageSize*2+1)
-	for index := range notifications {
-		notifications[index] = registryWorkflowInterruptionNotification(
-			fmt.Sprintf("snapshot-%d", index), fmt.Sprintf("task-%d", index), fmt.Sprintf("node-%d", index),
-		)
-	}
+func TestRuntimeRegistryRootAttentionLazilyMergesDurableSnapshotAndBufferedLiveEvents(t *testing.T) {
+	opened := false
 	source := workflowAttentionNotificationSnapshotSourceFunc(func(pageSize int) (WorkflowAttentionNotificationSnapshot, error) {
+		opened = true
 		if pageSize != workflowAttentionNotificationSnapshotPageSize {
 			t.Fatalf("snapshot page size = %d, want %d", pageSize, workflowAttentionNotificationSnapshotPageSize)
 		}
-		return &workflowAttentionNotificationSnapshotSlice{notifications: notifications}, nil
+		return &workflowAttentionNotificationSnapshotSlice{notifications: []clientui.AttentionNotification{
+			registryWorkflowInterruptionNotification("snapshot-1", "task-1", "node-1"),
+			registryWorkflowInterruptionNotification("snapshot-2", "task-2", "node-2"),
+		}}, nil
 	})
+	broker := attentionnotify.NewBroker()
 	registry := NewRuntimeRegistry().
-		WithAttentionNotifications(attentionnotify.NewBroker()).
+		WithAttentionNotifications(broker).
 		WithWorkflowAttentionNotificationSnapshot(source)
+
 	sub, err := registry.SubscribeAttentionNotifications(context.Background(), serverapi.AttentionNotificationSubscribeRequest{})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("SubscribeAttentionNotifications: %v", err)
 	}
 	t.Cleanup(func() { _ = sub.Close() })
-	for index := range notifications {
+	if opened {
+		t.Fatal("root attention snapshot opened before the subscriber requested an event")
+	}
+
+	live := registryWorkflowInterruptionNotification("live-1", "task-3", "node-3")
+	if err := broker.PublishPending(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: "task-3"}, live); err != nil {
+		t.Fatalf("PublishPending live: %v", err)
+	}
+
+	seen := map[string]clientui.AttentionNotificationSource{}
+	for index := range 3 {
 		event := nextRegistryAttentionEvent(t, sub)
-		if event.Source != clientui.AttentionNotificationSourceSnapshot || event.Pending == nil ||
-			event.Pending.ID != notifications[index].ID {
-			t.Fatalf("durable event %d = %+v", index, event)
+		if event.Sequence != uint64(index+1) || event.Pending == nil {
+			t.Fatalf("root attention event %d = %+v", index, event)
 		}
+		seen[event.Pending.ID.UUID] = event.Source
+	}
+	if !opened {
+		t.Fatal("root attention snapshot did not open on first Next")
+	}
+	if seen["snapshot-1"] != clientui.AttentionNotificationSourceSnapshot ||
+		seen["snapshot-2"] != clientui.AttentionNotificationSourceSnapshot ||
+		seen["live-1"] != clientui.AttentionNotificationSourceLive {
+		t.Fatalf("merged root attention events = %+v", seen)
 	}
 }
 
-func TestRuntimeRegistryRootAttentionAllowsSnapshotLiveOverlapWhilePageIsBlocked(t *testing.T) {
+func TestRuntimeRegistryRootAttentionDrainsLiveQuestionsWhileDurableSnapshotLoads(t *testing.T) {
 	snapshotStarted := make(chan struct{})
 	releaseSnapshot := make(chan struct{})
-	overlap := registryWorkflowQuestionNotification("overlap")
 	source := workflowAttentionNotificationSnapshotSourceFunc(func(_ int) (WorkflowAttentionNotificationSnapshot, error) {
 		return &blockingWorkflowAttentionNotificationSnapshot{
 			started:      snapshotStarted,
 			release:      releaseSnapshot,
-			notification: overlap,
+			notification: registryWorkflowInterruptionNotification("snapshot-1", "task-snapshot", "node-snapshot"),
 		}, nil
 	})
 	broker := attentionnotify.NewBroker()
@@ -66,62 +83,94 @@ func TestRuntimeRegistryRootAttentionAllowsSnapshotLiveOverlapWhilePageIsBlocked
 	}
 	t.Cleanup(func() { _ = sub.Close() })
 
-	results := make(chan clientui.AttentionNotificationEvent, 1)
+	type nextResult struct {
+		event clientui.AttentionNotificationEvent
+		err   error
+	}
+	results := make(chan nextResult, 66)
 	go func() {
-		event, _ := sub.Next(context.Background())
-		results <- event
-	}()
-	<-snapshotStarted
-	if err := broker.PublishPending(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: overlap.Target.TaskID}, overlap); err != nil {
-		t.Fatal(err)
-	}
-	close(releaseSnapshot)
-	seen := map[clientui.AttentionNotificationSource]bool{}
-	for _, event := range []clientui.AttentionNotificationEvent{<-results, nextRegistryAttentionEvent(t, sub)} {
-		if event.Pending == nil || event.Pending.ID != overlap.ID {
-			t.Fatalf("overlapping event = %+v", event)
-		}
-		seen[event.Source] = true
-	}
-	if !seen[clientui.AttentionNotificationSourceSnapshot] || !seen[clientui.AttentionNotificationSourceLive] {
-		t.Fatalf("overlapping sources = %+v", seen)
-	}
-}
-
-func TestRuntimeRegistryRootAttentionSurfacesLiveBrokerOverflowAfterHydration(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	source := workflowAttentionNotificationSnapshotSourceFunc(func(_ int) (WorkflowAttentionNotificationSnapshot, error) {
-		return &blockingWorkflowAttentionNotificationSnapshot{
-			started: started, release: release,
-			notification: registryWorkflowInterruptionNotification("snapshot", "task", "node"),
-		}, nil
-	})
-	broker := attentionnotify.NewBroker(attentionnotify.WithBufferSize(1))
-	registry := NewRuntimeRegistry().WithAttentionNotifications(broker).WithWorkflowAttentionNotificationSnapshot(source)
-	sub, err := registry.SubscribeAttentionNotifications(context.Background(), serverapi.AttentionNotificationSubscribeRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sub.Close() })
-	result := make(chan error, 1)
-	go func() {
-		for {
-			if _, err := sub.Next(context.Background()); err != nil {
-				result <- err
+		for range 66 {
+			event, err := sub.Next(context.Background())
+			results <- nextResult{event: event, err: err}
+			if err != nil {
 				return
 			}
 		}
 	}()
-	<-started
-	for index := range 128 {
-		notification := registryWorkflowQuestionNotification(fmt.Sprintf("overflow-%d", index))
+	<-snapshotStarted
+	for index := range 65 {
+		notification := registryWorkflowQuestionNotification(fmt.Sprintf("question-%d", index))
 		if err := broker.PublishPending(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: notification.Target.TaskID}, notification); err != nil {
-			t.Fatal(err)
+			t.Fatalf("PublishPending question %d: %v", index, err)
+		}
+		select {
+		case result := <-results:
+			if result.err != nil {
+				t.Fatalf("Next question %d while snapshot loads: %v", index, result.err)
+			}
+			if result.event.Source != clientui.AttentionNotificationSourceLive ||
+				result.event.Pending == nil ||
+				result.event.Pending.ID != notification.ID {
+				t.Fatalf("live question %d = %+v", index, result.event)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("live question %d was starved by the durable snapshot", index)
 		}
 	}
-	close(release)
-	if err := <-result; !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("overflow error = %v, want ErrStreamGap", err)
+	close(releaseSnapshot)
+	select {
+	case result := <-results:
+		if result.err != nil {
+			t.Fatalf("Next snapshot after live questions: %v", result.err)
+		}
+		if result.event.Source != clientui.AttentionNotificationSourceSnapshot ||
+			result.event.Pending == nil ||
+			result.event.Pending.ID.UUID != "snapshot-1" {
+			t.Fatalf("snapshot after live questions = %+v", result.event)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("durable snapshot did not resume after live questions drained")
+	}
+}
+
+func TestRuntimeRegistryRootAttentionBoundsLiveEventsAheadOfReadySnapshot(t *testing.T) {
+	broker := attentionnotify.NewBroker()
+	live, err := broker.SubscribeDesktop()
+	if err != nil {
+		t.Fatalf("SubscribeDesktop: %v", err)
+	}
+	source := workflowAttentionNotificationSnapshotSourceFunc(func(_ int) (WorkflowAttentionNotificationSnapshot, error) {
+		return &workflowAttentionNotificationSnapshotSlice{notifications: []clientui.AttentionNotification{
+			registryWorkflowInterruptionNotification("snapshot-1", "task-snapshot", "node-snapshot"),
+		}}, nil
+	})
+	sub := newWorkflowAttentionNotificationSubscription(live, source).(*workflowAttentionNotificationSubscription)
+	t.Cleanup(func() { _ = sub.Close() })
+	sub.start.Do(sub.startWorkers)
+	waitForRegistryAttentionCondition(t, func() bool { return len(sub.snapshotOut) == 1 }, "snapshot item was not ready")
+
+	firstLive := registryWorkflowQuestionNotification("question-1")
+	if err := broker.PublishPending(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: firstLive.Target.TaskID}, firstLive); err != nil {
+		t.Fatalf("PublishPending first live: %v", err)
+	}
+	waitForRegistryAttentionCondition(t, func() bool { return len(sub.liveOut) == 1 }, "first live event was not ready")
+	first := nextRegistryAttentionEvent(t, sub)
+	if first.Source != clientui.AttentionNotificationSourceLive || first.Pending == nil || first.Pending.ID != firstLive.ID {
+		t.Fatalf("first merged event = %+v, want one live event ahead of snapshot", first)
+	}
+
+	secondLive := registryWorkflowQuestionNotification("question-2")
+	if err := broker.PublishPending(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: secondLive.Target.TaskID}, secondLive); err != nil {
+		t.Fatalf("PublishPending second live: %v", err)
+	}
+	waitForRegistryAttentionCondition(t, func() bool { return len(sub.liveOut) == 1 }, "second live event was not ready")
+	second := nextRegistryAttentionEvent(t, sub)
+	if second.Source != clientui.AttentionNotificationSourceSnapshot || second.Pending == nil || second.Pending.ID.UUID != "snapshot-1" {
+		t.Fatalf("second merged event = %+v, want ready snapshot after one unrelated live event", second)
+	}
+	third := nextRegistryAttentionEvent(t, sub)
+	if third.Source != clientui.AttentionNotificationSourceLive || third.Pending == nil || third.Pending.ID != secondLive.ID {
+		t.Fatalf("third merged event = %+v, want retained second live event", third)
 	}
 }
 

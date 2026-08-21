@@ -187,10 +187,6 @@ func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterTerminalTransaction(t *
 			},
 		})),
 	}))
-	if events := analyzeCheckpointBytes(t, out.Bytes()).PhaseEvents; len(events) != 0 {
-		t.Fatalf("checkpoint events before step completion = %#v, want none", events)
-	}
-	applyPTYCheckpointStepFinished(wrapped, 3)
 
 	analysis := analyzeCheckpointBytes(t, out.Bytes())
 	if len(analysis.PhaseEvents) != 1 ||
@@ -299,10 +295,6 @@ func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterDeferredDetailTransacti
 
 	model.activeSurface = uiSurfaceOngoingTranscript
 	wrapped.Update(ongoingNormalBufferOwnedMsg{owned: true})
-	if events := analyzeCheckpointBytes(t, out.Bytes()).PhaseEvents; len(events) != 0 {
-		t.Fatalf("phase events before step completion = %#v, want none", events)
-	}
-	applyPTYCheckpointStepFinished(wrapped, 3)
 
 	analysis := analyzeCheckpointBytes(t, out.Bytes())
 	if len(analysis.PhaseEvents) != 1 ||
@@ -335,17 +327,13 @@ func TestPTYCheckpointModelCorrelatesScenarioFinalAppliedToTargetScriptFinalExac
 	}
 
 	applyPTYCheckpointAssistantFinal(wrapped, 3, "target final")
-	if events := analyzeCheckpointBytes(t, out.Bytes()).PhaseEvents; len(events) != 0 {
-		t.Fatalf("phase events before step completion = %#v, want none", events)
-	}
-	applyPTYCheckpointStepFinished(wrapped, 4)
 	analysis := analyzeCheckpointBytes(t, out.Bytes())
 	if len(analysis.PhaseEvents) != 1 ||
 		analysis.PhaseEvents[0].Phase != analyzer.PhaseScenarioFinalApplied {
 		t.Fatalf("phase events after target final = %#v, want one scenario-final-applied event", analysis.PhaseEvents)
 	}
 
-	applyPTYCheckpointAssistantFinal(wrapped, 5, "unexpected later final")
+	applyPTYCheckpointAssistantFinal(wrapped, 4, "unexpected later final")
 	analysis = analyzeCheckpointBytes(t, out.Bytes())
 	if len(analysis.PhaseEvents) != 1 ||
 		analysis.PhaseEvents[0].Phase != analyzer.PhaseScenarioFinalApplied {
@@ -396,19 +384,6 @@ func applyPTYCheckpointAssistantFinal(model *ptyCheckpointModel, sequence uint64
 				Text:     text,
 				Phase:    transcript.AssistantPhaseFinal,
 			},
-		})),
-	}))
-}
-
-func applyPTYCheckpointStepFinished(model *ptyCheckpointModel, sequence uint64) {
-	model.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
-		Kind: ongoingTranscriptEventMessage,
-		Message: clientui.NewTranscriptMessage(sequence, clientui.NewTranscriptEvent(clientui.TranscriptStepState{
-			RunID:      ongoingTestRunID(),
-			StepID:     ongoingTestStepID(),
-			Lifecycle:  clientui.StepLifecycleFinished,
-			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
-			Status:     clientui.RunStatusCompleted,
 		})),
 	}))
 }

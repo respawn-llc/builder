@@ -60,10 +60,6 @@ func (s *serviceTestProcessSource) List() []shelltool.Snapshot {
 	return append([]shelltool.Snapshot(nil), s.snapshots...)
 }
 
-func (s *serviceTestProcessSource) CurrentSnapshots() []shelltool.Snapshot {
-	return append([]shelltool.Snapshot(nil), s.snapshots...)
-}
-
 type serviceTestEnv struct {
 	t             *testing.T
 	ctx           context.Context

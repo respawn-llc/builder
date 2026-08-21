@@ -288,47 +288,6 @@ func TestTaskSearchReflectsTaskAndCommentMutationsImmediately(t *testing.T) {
 	assertTaskSearchEmpty(t, fixture.ctx, search, request)
 }
 
-type taskSearchDurableMutationObservationSource struct {
-	fixture currentNodeViewFixture
-	created *workflowstore.TaskRecord
-}
-
-func (s taskSearchDurableMutationObservationSource) ObserveWorkflowTaskExecutions([]workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
-	task, err := s.fixture.store.CreateTask(s.fixture.ctx, workflowstore.CreateTaskRequest{
-		ProjectID:  s.fixture.binding.ProjectID,
-		WorkflowID: &s.fixture.workflowID,
-		Title:      "created during live observation",
-	})
-	if err != nil {
-		return workflowexecution.WorkflowTaskExecutionObservation{}, err
-	}
-	*s.created = task
-	return workflowexecution.WorkflowTaskExecutionObservation{}, nil
-}
-
-func TestTaskSearchLoadsLiveObservationBeforeOpeningDurableSnapshot(t *testing.T) {
-	fixture, _ := newTaskSearchFixture(t, false)
-	var created workflowstore.TaskRecord
-	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
-		fixture.store,
-		NewTaskProjector(),
-		taskSearchDurableMutationObservationSource{fixture: fixture, created: &created},
-	)
-	if err != nil {
-		t.Fatalf("NewTaskStatusProjection: %v", err)
-	}
-	search := newTaskSearch(t, fixture.metadata, projection)
-
-	response, err := search.Search(fixture.ctx, taskSearchRequest("created during live observation"))
-	if err != nil {
-		t.Fatalf("Search: %v", err)
-	}
-	if created.ID == "" || len(response.Groups) != 1 || response.Groups[0].TaskID != string(created.ID) {
-		t.Fatalf("Search response = %+v, want Task created during independent live observation", response)
-	}
-}
-
 func TestTaskSearchSearchKeepsLiteralResponseCoherentDuringCanonicalMutation(t *testing.T) {
 	fixture, search := newTaskSearchFixture(t, false)
 	task := createTaskSearchTask(t, fixture, "Snapshot", "before needle after")

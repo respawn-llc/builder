@@ -1,7 +1,6 @@
 package workflowview
 
 import (
-	"context"
 	"testing"
 
 	"core/internal/testharness/testsetup"
@@ -12,71 +11,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
-
-type boardDurableMutationObservationSource struct {
-	ctx     context.Context
-	store   *workflowstore.Store
-	taskID  workflow.TaskID
-	newName string
-}
-
-func (s boardDurableMutationObservationSource) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
-	if _, err := s.store.UpdateTask(s.ctx, workflowstore.UpdateTaskRequest{
-		TaskID: s.taskID,
-		Title:  &s.newName,
-	}); err != nil {
-		return workflowexecution.WorkflowTaskExecutionObservation{}, err
-	}
-	quiescence := make(map[workflow.TaskID]bool, len(taskIDs)+1)
-	quiescence[s.taskID] = true
-	for _, taskID := range taskIDs {
-		quiescence[taskID] = true
-	}
-	return workflowexecution.WorkflowTaskExecutionObservation{Quiescence: quiescence}, nil
-}
-
-func TestBoardLoadsLiveObservationOutsideDurableSnapshots(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "before observation")
-	const after = "after observation"
-	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
-		fixture.store,
-		NewTaskProjector(),
-		boardDurableMutationObservationSource{
-			ctx:     fixture.ctx,
-			store:   fixture.store,
-			taskID:  started.task.ID,
-			newName: after,
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewTaskStatusProjection: %v", err)
-	}
-	board, err := NewBoard(
-		fixture.metadata,
-		mustDefinitionProjection(t, fixture.store),
-		testsetup.QuestionsEnabled("coder"),
-		projection,
-	)
-	if err != nil {
-		t.Fatalf("NewBoard: %v", err)
-	}
-
-	page, err := board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:   fixture.binding.ProjectID,
-		WorkflowID:  fixture.workflowID,
-		NodeID:      string(fixture.agentNodeID),
-		PageSize:    20,
-		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-	})
-	if err != nil {
-		t.Fatalf("Board.ListNodeCards: %v", err)
-	}
-	if len(page.Cards) != 1 || page.Cards[0].Title != after {
-		t.Fatalf("board cards = %+v, want durable mutation committed during independent live observation", page.Cards)
-	}
-}
 
 func TestBoardProjectsStartedCurrentNode(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)

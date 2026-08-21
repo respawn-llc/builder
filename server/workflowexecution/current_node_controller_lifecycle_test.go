@@ -17,6 +17,23 @@ import (
 	"core/shared/runtimeids"
 )
 
+func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
+	cause := errors.New("automatic assignment failed")
+	controller := &CurrentNodeController{workerErr: cause}
+	taskID := workflow.TaskID("task-board-read")
+
+	quiescence, err := controller.CurrentTaskQuiescence([]workflow.TaskID{taskID})
+	if err != nil {
+		t.Fatalf("CurrentTaskQuiescence: %v", err)
+	}
+	if !quiescence[taskID] {
+		t.Fatalf("task quiescence = %+v, want quiescent controller snapshot", quiescence)
+	}
+	if err := controller.EnsureTaskQuiescent(taskID); !errors.Is(err, cause) {
+		t.Fatalf("EnsureTaskQuiescent error = %v, want worker failure %v", err, cause)
+	}
+}
+
 func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsActive(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-resume-active-session", "node-implementation")
@@ -302,10 +319,6 @@ func TestObserveWorkflowTaskExecutionsIgnoresLatchedWorkerFailure(t *testing.T) 
 		authority: authority,
 		workerErr: cause,
 	}
-	controller.taskExecutionReads.Store(&workflowTaskControllerReadSnapshot{
-		concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
-		quiescence:        map[workflow.TaskID]bool{},
-	})
 	t.Cleanup(func() {
 		_ = authority.Close(context.Background())
 	})
@@ -351,36 +364,6 @@ func TestObserveWorkflowTaskExecutionsDoesNotWaitForControllerLifecycleLock(t *t
 		t.Fatal("Task status observation waited for Controller lifecycle lock")
 	}
 	unlock()
-}
-
-func TestObserveWorkflowTaskExecutionsDoesNotAliasPublishedCollections(t *testing.T) {
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := &CurrentNodeController{authority: authority}
-	t.Cleanup(func() {
-		_ = authority.Close(context.Background())
-	})
-	taskID := workflow.TaskID("task-status-alias")
-	reference := currentNodeReferenceForControllerTest(t, string(taskID), "node-status-alias")
-	controller.taskExecutionReads.Store(&workflowTaskControllerReadSnapshot{
-		concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{
-			taskID: {reference},
-		},
-		quiescence: map[workflow.TaskID]bool{taskID: false},
-	})
-
-	first, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
-	if err != nil {
-		t.Fatalf("first observation: %v", err)
-	}
-	first.ConcurrencyQueued[taskID] = nil
-
-	second, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
-	if err != nil {
-		t.Fatalf("second observation: %v", err)
-	}
-	if references := second.ConcurrencyQueued[taskID]; len(references) != 1 || !references[0].Equal(reference) {
-		t.Fatalf("published concurrency queue was aliased: %+v", references)
-	}
 }
 
 func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testing.T) {
@@ -605,9 +588,9 @@ func TestCompleteIdleCurrentNodeInterruptsOnlyFailedAgentAndStartsHealthyScriptS
 		completionDone <- err
 	}()
 	<-interruptStarted
-	observation, observationErr := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
-	if observationErr != nil || observation.Quiescence[taskID] {
-		t.Fatalf("healthy Script sibling queued = %t, error = %v, want true", !observation.Quiescence[taskID], observationErr)
+	quiescence, quiescenceErr := controller.CurrentTaskQuiescence([]workflow.TaskID{taskID})
+	if quiescenceErr != nil || quiescence[taskID] {
+		t.Fatalf("healthy Script sibling queued = %t, error = %v, want true", !quiescence[taskID], quiescenceErr)
 	}
 	close(interruptRelease)
 	if completeErr := <-completionDone; !errors.Is(completeErr, cause) {
@@ -706,9 +689,9 @@ func TestCompleteIdleCurrentNodePreparesFanOutAssignmentsIndependently(t *testin
 	case <-time.After(3 * time.Second):
 		t.Fatal("blocked first assignment preparation prevented preparing its sibling")
 	}
-	observation, observationErr := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
-	if observationErr != nil || observation.Quiescence[taskID] {
-		t.Fatalf("prepared sibling queued = %t, error = %v, want true", !observation.Quiescence[taskID], observationErr)
+	quiescence, quiescenceErr := controller.CurrentTaskQuiescence([]workflow.TaskID{taskID})
+	if quiescenceErr != nil || quiescence[taskID] {
+		t.Fatalf("prepared sibling queued = %t, error = %v, want true", !quiescence[taskID], quiescenceErr)
 	}
 	releaseFirst()
 	select {

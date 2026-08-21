@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"sync"
 	"testing"
 	"time"
 
@@ -31,45 +30,22 @@ type observationApprovalViewStub struct {
 type observationTaskDetailStub struct {
 	detail serverapi.WorkflowTaskDetail
 	nodes  []workflow.CurrentNode
-	get    func() serverapi.WorkflowTaskDetail
 }
 
 func (s observationTaskDetailStub) GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
-	if s.get != nil {
-		return s.get(), nil
-	}
 	return s.detail, nil
 }
 
-func (s observationTaskDetailStub) GetTaskByProjectShortID(ctx context.Context, _, _ string) (serverapi.WorkflowTaskDetail, error) {
-	return s.GetTask(ctx, "")
+func (s observationTaskDetailStub) GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error) {
+	return s.detail, nil
 }
 
-func (s observationTaskDetailStub) GetTaskByShortID(ctx context.Context, _ string) (serverapi.WorkflowTaskDetail, error) {
-	return s.GetTask(ctx, "")
+func (s observationTaskDetailStub) GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return s.detail, nil
 }
 
 func (s observationTaskDetailStub) ListCurrentNodes(context.Context, string) ([]workflow.CurrentNode, error) {
 	return s.nodes, nil
-}
-
-type taskObservationState struct {
-	sync.Mutex
-	status serverapi.WorkflowTaskStatusKind
-	calls  chan struct{}
-}
-
-func (s *taskObservationState) detail() serverapi.WorkflowTaskDetail {
-	s.Lock()
-	defer s.Unlock()
-	status := s.status
-	s.calls <- struct{}{}
-	return serverapi.WorkflowTaskDetail{
-		Summary: serverapi.WorkflowTaskSummary{
-			ID: "task-1", ProjectID: "project-1", WorkflowID: runtimeids.NewWorkflowID(), ShortID: "T-1",
-		},
-		Status: serverapi.WorkflowTaskStatus{Kind: status},
-	}
 }
 
 type observationDefinitionStub struct{}
@@ -90,96 +66,6 @@ func (observationAttentionStub) ListTask(context.Context, serverapi.WorkflowTask
 
 func (s observationApprovalViewStub) ListPendingApprovalsBySession(context.Context, serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
 	return serverapi.ApprovalListPendingBySessionResponse{Approvals: s.approvals}, nil
-}
-
-type taskObservationResult struct {
-	response serverapi.WorkflowTaskObservationResponse
-	err      error
-}
-
-func newTaskObservationTest() (*Service, *taskObservationState) {
-	state := &taskObservationState{status: serverapi.WorkflowTaskStatusKindRunning, calls: make(chan struct{}, 4)}
-	return &Service{
-		events: newWorkflowProjectEventBroker(),
-		readModels: ReadModels{
-			Definitions: observationDefinitionStub{},
-			TaskDetail:  observationTaskDetailStub{get: state.detail},
-			Attention:   observationAttentionStub{},
-		},
-	}, state
-}
-
-func observeTaskForTest(ctx context.Context, service *Service, mode serverapi.WorkflowTaskObservationMode) <-chan taskObservationResult {
-	result := make(chan taskObservationResult, 1)
-	go func() {
-		response, err := service.ObserveWorkflowTask(ctx, serverapi.WorkflowTaskObservationRequest{
-			TaskID: "task-1", ProjectID: "project-1", Mode: mode,
-		})
-		result <- taskObservationResult{response, err}
-	}()
-	return result
-}
-
-func publishTaskObservationEvent(service *Service) {
-	projectID := "project-1"
-	service.events.publish(serverapi.WorkflowProjectEvent{
-		ProjectID: &projectID, Resource: serverapi.WorkflowProjectEventResourceTask,
-		Action: serverapi.WorkflowProjectEventActionUpdated, PrimaryEntityID: "task-1",
-	})
-}
-
-func TestObserveWorkflowTaskWaitReachesDurableDoneAfterTaskEvent(t *testing.T) {
-	service, state := newTaskObservationTest()
-	result := observeTaskForTest(t.Context(), service, serverapi.WorkflowTaskObservationWait)
-	<-state.calls
-	state.Lock()
-	state.status = serverapi.WorkflowTaskStatusKindDone
-	state.Unlock()
-	publishTaskObservationEvent(service)
-	got := <-result
-	if got.err != nil || len(got.response.Outcomes) != 1 ||
-		got.response.Outcomes[0].Kind != serverapi.WorkflowTaskObservationDone {
-		t.Fatalf("observation = %+v, err=%v", got.response, got.err)
-	}
-}
-
-func TestObserveWorkflowTaskWatchReprojectsAfterGenericTaskEvent(t *testing.T) {
-	service, state := newTaskObservationTest()
-	ctx, cancel := context.WithCancel(t.Context())
-	result := observeTaskForTest(ctx, service, serverapi.WorkflowTaskObservationWatch)
-	<-state.calls
-	publishTaskObservationEvent(service)
-	<-state.calls
-	cancel()
-	if err := (<-result).err; !errors.Is(err, context.Canceled) {
-		t.Fatalf("observation error = %v, want cancellation after reprojection", err)
-	}
-}
-
-func TestObserveWorkflowTaskPreservesTypedCancellationAndGapErrors(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		gap     bool
-		wantErr error
-	}{
-		{"cancellation", false, context.Canceled},
-		{"stream gap", true, serverapi.ErrStreamGap},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			service, state := newTaskObservationTest()
-			ctx, cancel := context.WithCancel(t.Context())
-			result := observeTaskForTest(ctx, service, serverapi.WorkflowTaskObservationWatch)
-			<-state.calls
-			if test.gap {
-				service.events.Close(serverapi.ErrStreamGap)
-			} else {
-				cancel()
-			}
-			if err := (<-result).err; !errors.Is(err, test.wantErr) {
-				t.Fatalf("observation error = %v, want %v", err, test.wantErr)
-			}
-		})
-	}
 }
 
 func TestObserveWorkflowTaskWaitReturnsInterruptedOutcome(t *testing.T) {

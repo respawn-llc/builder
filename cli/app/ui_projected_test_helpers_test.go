@@ -11,6 +11,7 @@ import (
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
+	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -31,13 +32,8 @@ type testSessionViewSessionResolver struct {
 	store *session.Store
 }
 
-func (r testSessionViewSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
-	meta := r.store.Meta()
-	return session.PersistedSessionRecord{
-		SessionDir:   r.store.Dir(),
-		Meta:         &meta,
-		ContextFacts: r.store.ContextFacts(),
-	}, nil
+func (r testSessionViewSessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
+	return r.store, nil
 }
 
 func waitForTestCondition(t *testing.T, timeout time.Duration, label string, condition func() bool) {
@@ -238,14 +234,28 @@ func newProjectedAuthorityRuntime(
 			t.Errorf("close projected runtime: %v", err)
 		}
 	})
-	reads := sessionview.NewService(testSessionViewSessionResolver{store: store}, activity, nil)
+	reads := sessionview.NewService(testSessionViewSessionResolver{store: store}, activity, authority, nil)
 	controls := runtimecontrol.NewService(authority).WithRuntimeActivityResolver(activity)
 	runtimeClient := newUIRuntimeClientWithReads(sessionID.String(), reads, controls).(*sessionRuntimeClient)
-	view, ok := activity.RuntimeMainViewSnapshot(sessionID.String())
-	if !ok {
-		t.Fatal("projected Runtime Main View snapshot is missing")
+	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String())
+	if err != nil {
+		t.Fatalf("projected runtime snapshot: %v", err)
 	}
-	runtimeClient.storeMainView(view)
+	err = authority.WithCurrentRuntime(t.Context(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		view, err := runtimeview.MainViewFromRuntimeActivity(
+			engine,
+			snapshot.Version,
+			snapshot.Activity,
+		)
+		if err != nil {
+			return err
+		}
+		runtimeClient.storeMainView(view)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read projected runtime: %v", err)
+	}
 	return projectedAuthorityRuntime{
 		client:    runtimeClient,
 		reads:     reads,

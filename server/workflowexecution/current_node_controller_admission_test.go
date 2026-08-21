@@ -1298,12 +1298,12 @@ func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
 		t.Fatalf("EnsureTaskQuiescent error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
 	otherTaskID := workflow.TaskID("task-quiescent")
-	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID, otherTaskID})
+	quiescence, err := controller.CurrentTaskQuiescence([]workflow.TaskID{reference.TaskID, otherTaskID})
 	if err != nil {
-		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
+		t.Fatalf("CurrentTaskQuiescence: %v", err)
 	}
-	if observation.Quiescence[reference.TaskID] || !observation.Quiescence[otherTaskID] {
-		t.Fatalf("task quiescence = %+v, want reserved Task false and unrelated Task true", observation.Quiescence)
+	if quiescence[reference.TaskID] || !quiescence[otherTaskID] {
+		t.Fatalf("task quiescence = %+v, want reserved Task false and unrelated Task true", quiescence)
 	}
 }
 

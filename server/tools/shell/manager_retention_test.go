@@ -12,7 +12,7 @@ import (
 	"core/internal/testharness/testsetup"
 )
 
-func TestManagerRetainsMostRecentlyCompletedShellsWithoutEvictingRunningShells(t *testing.T) {
+func TestManagerRetainsMostRecentlyAccessedCompletedShellsWithoutEvictingRunningShells(t *testing.T) {
 	const completedRetentionLimit = 1_000
 
 	manager := newShellTestManager(t, time.Millisecond)
@@ -31,6 +31,11 @@ func TestManagerRetainsMostRecentlyCompletedShellsWithoutEvictingRunningShells(t
 	}
 
 	victimID := completedIDs[0]
+	for _, id := range completedIDs[1:] {
+		if _, err := manager.Snapshot(id); err != nil {
+			t.Fatalf("refresh completed shell %s: %v", id, err)
+		}
+	}
 	if got := len(manager.List()); got != completedRetentionLimit {
 		t.Fatalf("retained process count = %d, want %d", got, completedRetentionLimit)
 	}

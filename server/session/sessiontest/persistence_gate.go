@@ -8,19 +8,6 @@ import (
 	"core/server/session"
 )
 
-func Must[T any](value T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return value
-}
-
-func MustNoError(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
 // PersistenceGate delegates ordinary persistence while allowing tests to block
 // or fail one typed persistence observation.
 type PersistenceGate struct {
@@ -36,7 +23,6 @@ type persistenceGateStep struct {
 	release chan struct{}
 	err     error
 	match   func(session.PersistedStoreSnapshot) bool
-	after   bool
 }
 
 func NewPersistenceGate(delegate session.PersistenceObserver) *PersistenceGate {
@@ -65,21 +51,6 @@ func (g *PersistenceGate) BlockNext() (<-chan struct{}, func()) {
 	step := &persistenceGateStep{
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
-	}
-	g.arm(step)
-	var once sync.Once
-	return step.entered, func() {
-		once.Do(func() { close(step.release) })
-	}
-}
-
-// BlockNextAfter pauses after the delegated persisted read model has accepted
-// the snapshot, while the writer-owned Store still retains mutation admission.
-func (g *PersistenceGate) BlockNextAfter() (<-chan struct{}, func()) {
-	step := &persistenceGateStep{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-		after:   true,
 	}
 	g.arm(step)
 	var once sync.Once
@@ -127,30 +98,20 @@ func (g *PersistenceGate) ObservePersistedStore(ctx context.Context, snapshot se
 		step = nil
 	}
 	g.mu.Unlock()
-	if step != nil && step.after {
-		if err := g.delegate.ObservePersistedStore(ctx, snapshot); err != nil {
-			return err
-		}
-		return waitPersistenceGateStep(ctx, step)
-	}
 	if step != nil {
-		if err := waitPersistenceGateStep(ctx, step); err != nil {
-			return err
+		close(step.entered)
+		if step.release != nil {
+			select {
+			case <-step.release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if step.err != nil {
+			return step.err
 		}
 	}
 	return g.delegate.ObservePersistedStore(ctx, snapshot)
-}
-
-func waitPersistenceGateStep(ctx context.Context, step *persistenceGateStep) error {
-	close(step.entered)
-	if step.release != nil {
-		select {
-		case <-step.release:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return step.err
 }
 
 func (g *PersistenceGate) ObserveEventLogReconciliation(ctx context.Context, reconciliation session.PersistedEventLogReconciliation) error {

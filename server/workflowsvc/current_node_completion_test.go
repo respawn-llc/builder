@@ -706,6 +706,10 @@ func (*currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowex
 	return nil
 }
 
+func (*currentNodeCompletionExecutionStub) ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error) {
+	return workflowexecution.ManualMoveDispositionQuiescent, nil
+}
+
 func (*currentNodeCompletionExecutionStub) InterruptForManualMove(context.Context, workflow.TaskID, func() error) error {
 	return nil
 }

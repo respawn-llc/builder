@@ -22,7 +22,7 @@ func TestInitialInputPrefersPersistedDraft(t *testing.T) {
 	if err := store.SetInputDraft("persisted"); err != nil {
 		t.Fatalf("set input draft: %v", err)
 	}
-	if got := initialSessionInput(store.Meta(), "fallback"); got != "persisted" {
+	if got := initialSessionInput(store, "fallback"); got != "persisted" {
 		t.Fatalf("initial input = %q, want persisted", got)
 	}
 }

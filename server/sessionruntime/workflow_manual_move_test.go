@@ -48,16 +48,15 @@ func TestAuthorityManualMoveSelectionCancelsPendingQuestionsAndClosesPromptAdmis
 	})
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		snapshots, snapshotErr := authority.CurrentWorkflowTaskExecutionReadSnapshot()
-		if snapshotErr != nil {
-			t.Fatalf("CurrentWorkflowTaskExecutionReadSnapshot: %v", snapshotErr)
+		state, stateErr := authority.CurrentWorkflowTaskExecutionState(taskID)
+		if stateErr != nil {
+			t.Fatalf("CurrentWorkflowTaskExecutionState: %v", stateErr)
 		}
-		executions := snapshots[taskID].Executions
-		if len(executions) == 1 && !executions[0].Queued && executions[0].Script != nil {
+		if state.Running == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("workflow execution snapshot = %+v, want one running Script scope", executions)
+			t.Fatalf("workflow execution state = %+v, want one running scope", state)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

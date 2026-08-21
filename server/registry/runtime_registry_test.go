@@ -14,6 +14,7 @@ import (
 	"core/server/attentionnotify"
 	"core/server/llm"
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
@@ -312,127 +313,6 @@ func TestRuntimeReadModelPublicationWaitsForHydrationAdmission(t *testing.T) {
 	case <-publicationDone:
 	case <-time.After(time.Second):
 		t.Fatal("runtime read-model publication remained blocked after hydration")
-	}
-}
-
-func TestRuntimeMainViewPublicationFollowsRegistryLifecycle(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	ref := registryTestResourceRef(engine.SessionID())
-	registerResource(t, registry, ref, engine)
-
-	if view, ok := registry.RuntimeMainViewSnapshot(engine.SessionID()); !ok || view.Session.SessionID != engine.SessionID() {
-		t.Fatalf("registered Runtime Main View = %+v, present=%t", view, ok)
-	}
-	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
-		t.Fatalf("drain authority runtime resource: %v", err)
-	}
-	if _, ok := registry.RuntimeMainViewSnapshot(engine.SessionID()); ok {
-		t.Fatal("retired Runtime Main View remains published")
-	}
-}
-
-func TestRuntimeMainViewSnapshotClonesPublishedNestedFacts(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	registerReady(t, registry, engine.SessionID(), engine)
-	publishRunState(registry, engine.SessionID(), true)
-
-	first, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if !ok || first.Activity.ActiveStep == nil {
-		t.Fatalf("published Runtime Main View = %+v, present=%t", first, ok)
-	}
-	first.Activity.ActiveStep.ActiveKind = clientui.RuntimeActivityActiveKindBackground
-
-	second, _ := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if second.Activity.ActiveStep == nil || second.Activity.ActiveStep.ActiveKind != clientui.RuntimeActivityActiveKindUserTurn {
-		t.Fatalf("caller mutation aliased published activity: %+v", second.Activity)
-	}
-}
-
-func TestRuntimeMainViewPublicationFollowsVisibleIdentityAndStatusCommits(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	registerReady(t, registry, engine.SessionID(), engine)
-
-	if err := engine.SetSessionName("renamed Session"); err != nil {
-		t.Fatalf("set Runtime Session name: %v", err)
-	}
-	if err := registry.PublishSessionIdentity(engine.SessionID()); err != nil {
-		t.Fatalf("publish Runtime Session identity: %v", err)
-	}
-	identity, _ := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	engine.SetAutoCompactionEnabled(false)
-	if err := registry.PublishSessionStatus(engine.SessionID()); err != nil {
-		t.Fatalf("publish Runtime Session status: %v", err)
-	}
-	status, _ := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if identity.Session.SessionName != "renamed Session" || status.Status.AutoCompactionEnabled ||
-		status.Version != identity.Version {
-		t.Fatalf("identity/status publications = identity %+v status %+v", identity, status)
-	}
-}
-
-func TestRuntimeMainViewPublicationRejectsOlderReadModelUpdate(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	registerReady(t, registry, engine.SessionID(), engine)
-
-	current, err := registry.RuntimeReadModelFeedSnapshot(t.Context(), engine.SessionID())
-	if err != nil {
-		t.Fatalf("read Runtime Read Model: %v", err)
-	}
-
-	subscription, err := registry.SubscribeSessionTranscript(t.Context(), serverapi.TranscriptSubscribeRequest{SessionID: engine.SessionID()})
-	if err != nil {
-		t.Fatalf("subscribe Runtime transcript: %v", err)
-	}
-	if _, err := subscription.Next(t.Context()); err != nil {
-		t.Fatalf("read Runtime transcript hydration: %v", err)
-	}
-	activityChanges := make(chan bool, 2)
-	registry.SetSleepObserver(func(active bool) {
-		activityChanges <- active
-	})
-	publishRunState(registry, engine.SessionID(), true)
-	newer, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if !ok {
-		t.Fatal("newer Runtime Main View snapshot is missing")
-	}
-	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), current)
-
-	view, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
-	if !ok {
-		t.Fatal("Runtime Main View snapshot is missing")
-	}
-	if view.Version != newer.Version {
-		t.Fatalf("Runtime Main View version = %+v, want newer %+v", view.Version, newer.Version)
-	}
-	message, err := subscription.Next(t.Context())
-	if err != nil {
-		t.Fatalf("read Runtime Read Model publication: %v", err)
-	}
-	feed := transcriptPayload[clientui.RuntimeReadModelUpdate](t, message)
-	if feed.Version != newer.Version {
-		t.Fatalf("Runtime Read Model publication version = %+v, want newer %+v", feed.Version, newer.Version)
-	}
-	readCtx, cancelRead := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancelRead()
-	if stale, err := subscription.Next(readCtx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("stale Runtime Read Model publication = %+v, error %v", stale, err)
-	}
-	select {
-	case active := <-activityChanges:
-		if !active {
-			t.Fatal("newer active Runtime publication reported aggregate idle")
-		}
-	default:
-		t.Fatal("newer active Runtime publication did not update aggregate activity")
-	}
-	select {
-	case active := <-activityChanges:
-		t.Fatalf("older Runtime publication changed aggregate activity to %t", active)
-	default:
 	}
 }
 
@@ -1054,12 +934,10 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 			QueueAccepting: true,
 		}
 	}
-	update, err := registry.RuntimeReadModelFeedSnapshot(context.Background(), sessionID)
-	if err != nil {
-		panic(fmt.Sprintf("build Runtime Read Model test update for Session %q: %v", sessionID, err))
-	}
-	update.Activity = activity
-	registry.PublishRuntimeReadModelUpdate(sessionID, update)
+	registry.PublishRuntimeReadModelUpdate(sessionID, clientui.RuntimeReadModelUpdate{
+		Version:  runtimeactivity.NextReadModelVersion(sessionID),
+		Activity: activity,
+	})
 }
 
 func TestActiveRuntimeActivitySnapshotsExcludeRegisteredIdlePopulation(t *testing.T) {

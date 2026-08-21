@@ -15,10 +15,8 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
-	serverbootstrap "core/server/bootstrap"
 	corepkg "core/server/core"
 	"core/server/metadata"
-	"core/server/serverstatus"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
@@ -31,30 +29,6 @@ import (
 
 type envAuthHandler struct {
 	lookupEnv func(string) string
-}
-
-type observedAuthStore struct {
-	auth.Store
-	loads       int
-	saveStarted chan auth.State
-	releaseSave <-chan struct{}
-}
-
-func (s *observedAuthStore) Load(ctx context.Context) (auth.State, error) {
-	s.loads++
-	return s.Store.Load(ctx)
-}
-
-func (s *observedAuthStore) Save(ctx context.Context, state auth.State) error {
-	if s.saveStarted != nil {
-		s.saveStarted <- state
-		select {
-		case <-s.releaseSave:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return s.Store.Save(ctx, state)
 }
 
 func (h envAuthHandler) WrapStore(base auth.Store) auth.Store {
@@ -529,176 +503,11 @@ func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
 	if cause.Code != string(serverapi.ServerNotReadyOnboardingRequired) || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
 		t.Fatalf("unexpected onboarding readiness cause: %+v", cause)
 	}
-	update, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{})
-	if err != nil || update.Result.Kind() != serverapi.UpdateStatusCheckUnavailable {
-		t.Fatalf("GetUpdateStatus before activation = %+v, %v; want unavailable result", update, err)
+	if _, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{}); !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("GetUpdateStatus before activation error = %v, want onboarding not ready", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
-	}
-}
-
-func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T) {
-	initial := config.App{Settings: config.Settings{Model: "gpt-5"}}
-	deps := newStartupGatewayDependencies(t.Context(), initial, serverbootstrap.Request{}, serverbootstrap.AuthSupport{}, nil, nil)
-	pending := initial
-	pending.Settings.Debug = true
-	pending.Settings.ProviderOverride = "anthropic"
-	publishedCore := &corepkg.Core{}
-
-	deps.mu.Lock()
-	deps.cfg = pending
-	type observed struct {
-		debug, authRequired bool
-		core                *corepkg.Core
-	}
-	read := make(chan observed, 1)
-	go func() {
-		read <- observed{deps.DebugEnabled(), deps.ServerAuthRequired(), deps.activeCore()}
-	}()
-	select {
-	case got := <-read:
-		if got.debug || !got.authRequired || got.core != nil {
-			deps.mu.Unlock()
-			t.Fatalf("read crossed unpublished startup tuple: %+v", got)
-		}
-	case <-time.After(time.Second):
-		deps.mu.Unlock()
-		t.Fatal("startup read waited for activation")
-	}
-	deps.publishSnapshotLocked(startupReadinessState{Ready: true}, publishedCore)
-	deps.mu.Unlock()
-	if !deps.DebugEnabled() || deps.ServerAuthRequired() || deps.activeCore() != publishedCore {
-		t.Fatal("completed startup tuple was not published atomically")
-	}
-}
-
-func TestStartupDependencySnapshotDeepCopiesConfig(t *testing.T) {
-	hook := "/tmp/hook"
-	cfg := config.App{
-		Settings: config.Settings{
-			SystemPromptFiles: []config.SystemPromptFile{{Path: "/tmp/prompt"}},
-			SkillToggles:      map[string]bool{"helper": true},
-			Shell:             config.ShellSettings{PostprocessHook: &hook},
-			Subagents: map[string]config.SubagentRole{
-				"worker": {Sources: map[string]string{"model": "file"}, Settings: config.Settings{SkillToggles: map[string]bool{"nested": true}}},
-			},
-		},
-	}
-	deps := newStartupGatewayDependencies(t.Context(), cfg, serverbootstrap.Request{}, serverbootstrap.AuthSupport{}, nil, nil)
-	cfg.Settings.SkillToggles["helper"] = false
-	*cfg.Settings.Shell.PostprocessHook = "mutated"
-	first := (&ServeServer{deps: deps}).Config()
-	first.Settings.SystemPromptFiles[0].Path = "mutated"
-	role := first.Settings.Subagents["worker"]
-	role.Sources["model"], role.Settings.SkillToggles["nested"] = "mutated", false
-	second := deps.loadSnapshot().cfg
-	if !second.Settings.SkillToggles["helper"] || *second.Settings.Shell.PostprocessHook != "/tmp/hook" ||
-		second.Settings.SystemPromptFiles[0].Path != "/tmp/prompt" ||
-		second.Settings.Subagents["worker"].Sources["model"] != "file" ||
-		!second.Settings.Subagents["worker"].Settings.SkillToggles["nested"] {
-		t.Fatalf("published startup config was aliased: %+v", second)
-	}
-}
-
-func TestStartupReadinessReturnsPublishedNotReadyTuple(t *testing.T) {
-	reason := serverapi.ServerNotReadyOnboardingRequired
-	cfg := config.App{Settings: config.Settings{Model: "gpt-5"}}
-	store := &observedAuthStore{Store: auth.NewMemoryStore(auth.State{
-		Scope:  auth.ScopeGlobal,
-		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "key"}},
-	})}
-	for _, test := range []struct {
-		name          string
-		manager       *auth.Manager
-		wantAuthReady bool
-	}{
-		{name: "published not ready"},
-		{name: "pre-core request-owned auth", manager: auth.NewManager(store, nil, nil), wantAuthReady: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			service := startupServerStatusService{
-				base:      serverstatus.NewServerStatusService(test.manager, cfg, nil),
-				readiness: startupReadinessState{Reason: &reason},
-			}
-			got, err := service.GetServerReadiness(t.Context(), serverapi.ServerReadinessRequest{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Ready || got.AuthReady != test.wantAuthReady || len(got.Causes) != 1 ||
-				got.Causes[0].Code != string(reason) {
-				t.Fatalf("readiness = %+v", got)
-			}
-		})
-	}
-	if store.loads != 1 {
-		t.Fatalf("auth loads = %d, want 1", store.loads)
-	}
-}
-
-func TestStartupReadinessUsesRequestOwnedAuthAfterCorePublication(t *testing.T) {
-	store := &observedAuthStore{Store: auth.NewMemoryStore(auth.State{
-		Scope:  auth.ScopeGlobal,
-		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "key"}},
-	})}
-	deps := newStartupGatewayDependencies(t.Context(), config.App{Settings: config.Settings{Model: "gpt-5"}},
-		serverbootstrap.Request{}, serverbootstrap.AuthSupport{AuthManager: auth.NewManager(store, nil, nil)}, nil, nil)
-	deps.mu.Lock()
-	deps.publishSnapshotLocked(startupReadinessState{Ready: true}, &corepkg.Core{})
-	result := make(chan serverapi.ServerReadinessResponse, 1)
-	go func() {
-		got, _ := deps.ServerStatusClient().GetServerReadiness(t.Context(), serverapi.ServerReadinessRequest{})
-		result <- got
-	}()
-	select {
-	case got := <-result:
-		deps.mu.Unlock()
-		if !got.Ready || !got.AuthReady || store.loads != 1 {
-			t.Fatalf("readiness = %+v, loads = %d", got, store.loads)
-		}
-	case <-time.After(time.Second):
-		deps.mu.Unlock()
-		t.Fatal("post-Core readiness waited for startup mutation")
-	}
-}
-
-func TestStartupGatewayReadsPublishedAuthFactsWhileMutationIsBlocked(t *testing.T) {
-	saveStarted, releaseSave := make(chan auth.State), make(chan struct{}, 1)
-	t.Cleanup(func() {
-		select {
-		case releaseSave <- struct{}{}:
-		default:
-		}
-	})
-	store := &observedAuthStore{Store: auth.NewMemoryStore(auth.EmptyState()), saveStarted: saveStarted, releaseSave: releaseSave}
-	deps := newStartupGatewayDependencies(t.Context(), config.App{Settings: config.Settings{Model: "gpt-5"}},
-		serverbootstrap.Request{}, serverbootstrap.AuthSupport{AuthManager: auth.NewManager(store, nil, nil)}, nil, nil)
-	mutation := make(chan error, 1)
-	go func() {
-		_, err := deps.AuthBootstrapClient().CompleteAuthBootstrap(t.Context(), serverapi.AuthCompleteBootstrapRequest{
-			Mode: serverapi.AuthBootstrapModeAPIKey, Force: true, APIKey: "new-key",
-		})
-		mutation <- err
-	}()
-	<-saveStarted
-	read := make(chan bool, 1)
-	go func() {
-		ready, err := deps.ServerStatusClient().GetServerReadiness(t.Context(), serverapi.ServerReadinessRequest{})
-		authStatus, authErr := deps.AuthStatusClient().GetAuthStatus(t.Context(), serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
-		read <- err == nil && authErr == nil && !ready.AuthReady && authStatus.Resolution.Facts != nil &&
-			authStatus.Resolution.Facts.Method == serverapi.AuthStatusMethodNone
-	}()
-	select {
-	case ok := <-read:
-		if !ok {
-			t.Fatal("startup reads did not return prior completed auth facts")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("startup auth read waited for mutation")
-	}
-	releaseSave <- struct{}{}
-	if err := <-mutation; err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -843,13 +652,14 @@ func TestMissingConfigFinalizeActivationFailureIsTypedAndRetryConflicts(t *testi
 	if !errors.Is(competingErr, corepkg.ErrPersistenceRootBusy) {
 		t.Fatalf("root ownership after activation failure = %v, want ErrPersistenceRootBusy", competingErr)
 	}
+	if state := server.deps.ServerReadinessState(); state.Ready || state.Reason == nil || *state.Reason != serverapi.ServerNotReadyActivationFailed || state.Diagnostic == nil || *state.Diagnostic == "" {
+		t.Fatalf("readiness = %+v, want activation_failed diagnostic", state)
+	}
 	readiness, statusErr := server.deps.ServerStatusClient().GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
 	if statusErr != nil {
 		t.Fatalf("GetServerReadiness after activation failure: %v", statusErr)
 	}
-	if readiness.Ready || len(readiness.Causes) == 0 ||
-		readiness.Causes[0].Code != string(serverapi.ServerNotReadyActivationFailed) ||
-		readiness.Causes[0].DiagnosticID == "" {
+	if readiness.Ready || len(readiness.Causes) == 0 || readiness.Causes[0].DiagnosticID == "" {
 		t.Fatalf("readiness response after activation failure = %+v", readiness)
 	}
 	_, retryErr := server.deps.OnboardingFinalizeClient().FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})

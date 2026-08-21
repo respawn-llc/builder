@@ -26,7 +26,6 @@ type ptyCheckpointScenarioState struct {
 	appliedFinalAssistantOrdinal appfixture.ScriptFinalAssistantOrdinal
 	targetFinalSequence          *uint64
 	scenarioComplete             bool
-	stepFinished                 bool
 	finalAppliedEmitted          bool
 	toolStartedEmitted           bool
 	completed                    chan struct{}
@@ -91,20 +90,6 @@ func (state *ptyCheckpointScenarioState) pendingTargetFinalSequence() (uint64, b
 	return *state.targetFinalSequence, true
 }
 
-func (state *ptyCheckpointScenarioState) recordStepFinished(sequence uint64) {
-	if state == nil {
-		panic("record step completion on nil PTY checkpoint scenario state")
-	}
-	if sequence == 0 {
-		panic("record step completion with invalid transcript sequence")
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.targetFinalSequence != nil && sequence > *state.targetFinalSequence {
-		state.stepFinished = true
-	}
-}
-
 func (state *ptyCheckpointScenarioState) claimScenarioFinalApplied(sequence uint64) bool {
 	if state == nil {
 		panic("claim scenario final applied on nil PTY checkpoint scenario state")
@@ -113,7 +98,6 @@ func (state *ptyCheckpointScenarioState) claimScenarioFinalApplied(sequence uint
 	defer state.mu.Unlock()
 	if state.finalAppliedEmitted ||
 		!state.scenarioComplete ||
-		!state.stepFinished ||
 		state.targetFinalSequence == nil ||
 		*state.targetFinalSequence != sequence {
 		return false
@@ -180,7 +164,6 @@ func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	toolStart := ongoingToolStartCandidate(model.inner, msg)
 	ongoingFinal := ongoingAssistantFinalCandidate(model.inner, msg)
 	queuedTargetFinal := ongoingTargetFinalDrainCandidate(model.inner, msg, model.scenario)
-	stepFinished := ongoingStepFinishedCandidate(model.inner, msg)
 	next, cmd := model.inner.Update(msg)
 	if next == nil {
 		panic(fmt.Sprintf("PTY checkpoint inner model returned nil: message_type=%T", msg))
@@ -207,9 +190,6 @@ func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if queuedTargetFinal.terminalAppliedBy(next) {
 		emitScenarioFinalApplied = model.scenario.claimScenarioFinalApplied(queuedTargetFinal.sequence)
-	}
-	if stepFinished.acceptedBy(next) {
-		model.scenario.recordStepFinished(stepFinished.acceptance.sequence)
 	}
 	if !emitScenarioFinalApplied {
 		sequence, ok := model.scenario.pendingTargetFinalSequence()
@@ -247,29 +227,6 @@ func (model *ptyCheckpointModel) emitScenarioFinalApplied() {
 type ptyOngoingAssistantFinalCandidate struct {
 	acceptance        ptyOngoingTranscriptAcceptanceCandidate
 	terminalImmediate bool
-}
-
-type ptyOngoingStepFinishedCandidate struct {
-	acceptance ptyOngoingTranscriptAcceptanceCandidate
-}
-
-func ongoingStepFinishedCandidate(
-	model tea.Model,
-	msg tea.Msg,
-) ptyOngoingStepFinishedCandidate {
-	event, ok := ptyCheckpointTranscriptEvent(msg)
-	if !ok ||
-		!isTranscriptMessageKind(event.Message, clientui.TranscriptMessageStepState) ||
-		event.Message.Payload().(clientui.TranscriptStepState).Lifecycle != clientui.StepLifecycleFinished {
-		return ptyOngoingStepFinishedCandidate{}
-	}
-	return ptyOngoingStepFinishedCandidate{
-		acceptance: ongoingTranscriptAcceptanceCandidate(model, event),
-	}
-}
-
-func (candidate ptyOngoingStepFinishedCandidate) acceptedBy(model tea.Model) bool {
-	return candidate.acceptance.acceptedBy(model)
 }
 
 func ongoingAssistantFinalCandidate(model tea.Model, msg tea.Msg) ptyOngoingAssistantFinalCandidate {

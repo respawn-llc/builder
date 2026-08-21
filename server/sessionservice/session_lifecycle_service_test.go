@@ -18,7 +18,6 @@ import (
 	sessionruntime "core/server/sessionruntime"
 	"core/shared/config"
 	"core/shared/rollbacktarget"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -86,8 +85,7 @@ func newSessionLifecycleServiceWithOptions(root string, authManager *auth.Manage
 		PersistenceRoot: root,
 		StoreOptions:    storeOptions,
 	})
-	return NewSessionLifecycleService(root, authority, authManager).
-		WithPersistedSessionResolver(sessionServiceTestPersistence)
+	return NewSessionLifecycleService(root, authority, authManager)
 }
 
 func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.Manager, storeOptions []session.StoreOption) *SessionLifecycleService {
@@ -95,8 +93,7 @@ func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.
 		PersistenceRoot: root,
 		StoreOptions:    storeOptions,
 	})
-	return NewGlobalSessionLifecycleService(root, authority, authManager).
-		WithPersistedSessionResolver(sessionServiceTestPersistence)
+	return NewGlobalSessionLifecycleService(root, authority, authManager)
 }
 
 var sessionServiceTestPersistence = sessiontest.NewPersistence()
@@ -466,54 +463,6 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	if len(resolver.calls) != 1 || resolver.calls[0] != parent.Meta().SessionID {
 		t.Fatalf("target resolver calls = %#v, want parent once", resolver.calls)
 	}
-}
-
-func TestServiceResolveTransitionOpenSessionReadsIndependently(t *testing.T) {
-	_, containerDir, parent := createPersistedSession(t)
-	child := sessiontest.Must(session.NewLazy(containerDir, "workspace-x", "/tmp/work", sessioncontract.SessionCategoryMain, sessionServiceTestPersistence.Options()...))
-	sessiontest.MustNoError(session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}))
-	sessiontest.MustNoError(child.EnsureDurable())
-	request := serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "independent-open-session-read",
-		SessionID:       child.Meta().SessionID,
-		Transition: serverapi.SessionTransition{
-			Action: serverapi.SessionTransitionActionOpenSession, TargetSessionID: parent.Meta().SessionID,
-		},
-	}
-	binding := serverapi.SessionNavigationBinding{ProjectID: "project-target", WorkspaceID: "workspace-target"}
-
-	t.Run("runtime ownership", func(t *testing.T) {
-		service := newTestSessionLifecycleService(containerDir, nil).
-			WithNavigationTargetResolver(&sessionNavigationTargetResolverStub{target: binding})
-		childID := sessiontest.Must(runtimeids.ParseSessionID(child.Meta().SessionID))
-		descriptor := sessiontest.Must(session.NewScopedOpenSessionDescriptor(childID, containerDir))
-		entered, release := make(chan struct{}), make(chan struct{})
-		ownerDone := make(chan error, 1)
-		go func() {
-			ownerDone <- service.authority.WithSessionStore(t.Context(), descriptor, func(context.Context, *session.Store) error {
-				close(entered)
-				<-release
-				return nil
-			})
-		}()
-		<-entered
-		readDone := make(chan error, 1)
-		go func() {
-			_, err := service.ResolveTransition(t.Context(), request)
-			readDone <- err
-		}()
-		select {
-		case err := <-readDone:
-			if err != nil {
-				t.Fatal(err)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("open-Session read waited for Runtime ownership")
-		}
-		close(release)
-		sessiontest.MustNoError(<-ownerDone)
-	})
-
 }
 
 func TestServiceResolveTransitionOpenSessionRejectsNonProvenanceTargetBeforeResolution(t *testing.T) {

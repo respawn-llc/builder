@@ -81,61 +81,6 @@ type gatewayConcurrencyDependencies struct {
 	debug    bool
 }
 
-type gatewaySchedulingDependencies struct {
-	GatewayDependencies
-	workflow apicontract.WorkflowService
-	probe    *gatewaySchedulingProbe
-}
-
-func (d *gatewaySchedulingDependencies) WorkflowClient() apicontract.WorkflowService {
-	return d.workflow
-}
-
-func (d *gatewaySchedulingDependencies) AuthStatusClient() apicontract.AuthStatusService {
-	return d.probe
-}
-
-func (d *gatewaySchedulingDependencies) AttentionNotificationClient() apicontract.AttentionNotificationService {
-	return d.probe
-}
-
-func (d *gatewaySchedulingDependencies) RunPromptClientForProjectWorkspace(context.Context, string, string) (apicontract.RunPromptService, error) {
-	return d.probe, nil
-}
-
-func (d *gatewaySchedulingDependencies) RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error) {
-	return d.probe, nil
-}
-
-type gatewaySchedulingProbe struct {
-	entered chan struct{}
-	once    sync.Once
-}
-
-func (p *gatewaySchedulingProbe) enter() {
-	p.once.Do(func() { close(p.entered) })
-}
-
-func (p *gatewaySchedulingProbe) GetAuthStatus(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	p.enter()
-	return serverapi.AuthStatusResponse{}, errors.New("scheduling probe")
-}
-
-func (p *gatewaySchedulingProbe) SubscribeAttentionNotifications(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	p.enter()
-	return nil, errors.New("scheduling probe")
-}
-
-func (p *gatewaySchedulingProbe) SubscribeSessionAttentionNotifications(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	p.enter()
-	return nil, errors.New("scheduling probe")
-}
-
-func (p *gatewaySchedulingProbe) RunPrompt(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-	p.enter()
-	return serverapi.RunPromptResponse{}, errors.New("scheduling probe")
-}
-
 type gatewayAutomaticFatalSteerer struct {
 	cause error
 }
@@ -264,64 +209,6 @@ func (d *gatewayConcurrencyDependencies) WorkflowClient() apicontract.WorkflowSe
 
 func (d *gatewayConcurrencyDependencies) DebugEnabled() bool {
 	return d.debug
-}
-
-func TestGatewayDataOnlyAndStreamRequestsStartAlongsideOrdinaryRequest(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		method    string
-		params    any
-		needsBind bool
-	}{
-		{"data-only", protocol.MethodAuthGetStatus, serverapi.AuthStatusRequest{SkipSubscriptionUsage: true}, false},
-		{"subscription", protocol.MethodAttentionNotificationSubscribe, serverapi.AttentionNotificationSubscribeRequest{}, false},
-		{"progress", protocol.MethodRunPrompt, serverapi.RunPromptRequest{
-			ClientRequestID: "progress-probe",
-			Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-			Prompt:          "probe",
-		}, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			appCore, _ := newGatewayTestCore(t, true, true)
-			defer func() { _ = appCore.Close() }()
-			blocked, release := make(chan struct{}), make(chan struct{})
-			t.Cleanup(func() { close(release) })
-			workflow := &gatewayConcurrencyWorkflowService{
-				WorkflowService: appCore.WorkflowClient(),
-				getWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-					close(blocked)
-					select {
-					case <-release:
-						return serverapi.WorkflowTaskGetResponse{}, errors.New("released")
-					case <-ctx.Done():
-						return serverapi.WorkflowTaskGetResponse{}, ctx.Err()
-					}
-				},
-			}
-			probe := &gatewaySchedulingProbe{entered: make(chan struct{})}
-			deps := &gatewaySchedulingDependencies{GatewayDependencies: appCore, workflow: workflow, probe: probe}
-			gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			server := httptest.NewServer(gateway.Handler())
-			defer server.Close()
-			conn := dialGateway(t, server)
-			defer func() { _ = conn.Close() }()
-			handshakeGateway(t, conn)
-			if test.needsBind {
-				callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-			}
-			sendGatewayRequest(t, conn, "blocked", protocol.MethodWorkflowTaskGet, serverapi.WorkflowTaskGetRequest{TaskID: "task-blocked"})
-			<-blocked
-			sendGatewayRequest(t, conn, "probe", test.method, test.params)
-			select {
-			case <-probe.entered:
-			case <-time.After(time.Second):
-				t.Fatalf("%s did not start alongside ordinary work", test.name)
-			}
-		})
-	}
 }
 
 type gatewayCloseTracker struct {

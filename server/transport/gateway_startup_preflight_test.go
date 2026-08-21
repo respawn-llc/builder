@@ -14,7 +14,6 @@ func TestGatewayPreActivationOperationsHaveExactRegisteredSet(t *testing.T) {
 	preActivation := map[string]struct{}{
 		protocol.MethodHandshake:              {},
 		protocol.MethodServerReadinessGet:     {},
-		protocol.MethodServerUpdateStatusGet:  {},
 		protocol.MethodAuthGetBootstrapStatus: {},
 		protocol.MethodAuthCompleteBootstrap:  {},
 		protocol.MethodAuthAcknowledgeNoAuth:  {},
