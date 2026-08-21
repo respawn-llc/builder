@@ -114,7 +114,7 @@ func TestStatusServicePublishesUnavailableWhenInitialLoadFails(t *testing.T) {
 	}
 }
 
-func TestStatusServiceRetainsOAuthFactsWhenRefreshFails(t *testing.T) {
+func TestStatusServiceReadsOAuthFactsWithoutRefreshingCredentials(t *testing.T) {
 	now := time.Date(2026, time.August, 9, 3, 0, 0, 0, time.UTC)
 	store := auth.NewMemoryStore(auth.State{
 		Scope: auth.ScopeGlobal,
@@ -129,23 +129,24 @@ func TestStatusServiceRetainsOAuthFactsWhenRefreshFails(t *testing.T) {
 		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
 	})
 	refreshErr := errors.New("refresh failed")
+	refreshCalled := false
 	refresher := auth.NewOAuthRefresher(
 		func() time.Time { return now },
 		30*time.Second,
 		func(context.Context, auth.Method) (auth.Method, error) {
+			refreshCalled = true
 			return auth.Method{}, refreshErr
 		},
 	)
 	service := NewStatusService(auth.NewManager(store, refresher, func() time.Time { return now }), config.Settings{})
 
-	response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
+	response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
 	if err != nil {
 		t.Fatalf("GetAuthStatus: %v", err)
 	}
 	facts := response.Resolution.Facts
 	if response.Resolution.Kind != serverapi.AuthStatusResolutionKnown ||
-		response.Resolution.Failure == nil ||
-		response.Resolution.Failure.Cause != refreshErr.Error() ||
+		response.Resolution.Failure != nil ||
 		facts == nil ||
 		facts.Method != serverapi.AuthStatusMethodOAuth ||
 		facts.OAuth == nil ||
@@ -153,10 +154,11 @@ func TestStatusServiceRetainsOAuthFactsWhenRefreshFails(t *testing.T) {
 		*facts.OAuth.Email != "user@example.com" {
 		t.Fatalf("resolution = %+v", response.Resolution)
 	}
-	if !response.Subscription.Applicable ||
-		response.Subscription.Failure == nil ||
-		response.Subscription.Failure.Cause != refreshErr.Error() {
-		t.Fatalf("subscription = %+v", response.Subscription)
+	if refreshCalled {
+		t.Fatal("GetAuthStatus refreshed OAuth credentials")
+	}
+	if response.Subscription.Applicable {
+		t.Fatalf("subscription = %+v, want skipped", response.Subscription)
 	}
 }
 

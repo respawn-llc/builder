@@ -503,8 +503,12 @@ func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
 	if cause.Code != string(serverapi.ServerNotReadyOnboardingRequired) || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
 		t.Fatalf("unexpected onboarding readiness cause: %+v", cause)
 	}
-	if _, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{}); !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
-		t.Fatalf("GetUpdateStatus before activation error = %v, want onboarding not ready", err)
+	update, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{})
+	if err != nil {
+		t.Fatalf("GetUpdateStatus before activation: %v", err)
+	}
+	if update.Result.Kind() != serverapi.UpdateStatusCheckUnavailable {
+		t.Fatalf("GetUpdateStatus before activation = %q, want check unavailable", update.Result.Kind())
 	}
 	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
@@ -651,9 +655,6 @@ func TestMissingConfigFinalizeActivationFailureIsTypedAndRetryConflicts(t *testi
 	}
 	if !errors.Is(competingErr, corepkg.ErrPersistenceRootBusy) {
 		t.Fatalf("root ownership after activation failure = %v, want ErrPersistenceRootBusy", competingErr)
-	}
-	if state := server.deps.ServerReadinessState(); state.Ready || state.Reason == nil || *state.Reason != serverapi.ServerNotReadyActivationFailed || state.Diagnostic == nil || *state.Diagnostic == "" {
-		t.Fatalf("readiness = %+v, want activation_failed diagnostic", state)
 	}
 	readiness, statusErr := server.deps.ServerStatusClient().GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
 	if statusErr != nil {
