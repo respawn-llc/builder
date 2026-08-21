@@ -24,13 +24,6 @@ func (r *RuntimeRegistry) publishTranscriptAndMainView(
 	if err := entry.sessionFeed.PublishBuilt(build); err != nil {
 		return err
 	}
-	return r.republishRuntimeMainView(entry)
-}
-
-func (r *RuntimeRegistry) republishRuntimeMainView(entry *authorityRuntimeEntry) error {
-	if r == nil || entry == nil {
-		return nil
-	}
 	view := entry.mainView.Load()
 	if view == nil {
 		return nil
