@@ -86,7 +86,7 @@ func TestBindingMutationResultValidation(t *testing.T) {
 func TestBindingMutationTypedErrorProjection(t *testing.T) {
 	count := int32(1)
 	blocked, err := newBindingMutationBlockedError(" project-1 ", " workspace-1 ", []*projectpb.WorkspaceUnlinkBlocker{
-		{Code: "non_terminal_tasks", Count: &count},
+		{Code: "future_blocker", Count: &count},
 		{Code: "default_workspace"},
 	})
 	if err != nil {
@@ -104,9 +104,14 @@ func TestBindingMutationTypedErrorProjection(t *testing.T) {
 		projection.Blockers[1].Count != nil {
 		t.Fatalf("projection=%+v", projection)
 	}
-	if strings.TrimSpace(projection.Blockers[0].Guidance) == "" ||
+	if projection.Blockers[0].Code != "future_blocker" ||
+		strings.TrimSpace(projection.Blockers[0].Message) == "" ||
+		strings.TrimSpace(projection.Blockers[0].Guidance) == "" ||
 		strings.TrimSpace(projection.Blockers[1].Guidance) == "" {
 		t.Fatalf("guidance=%+v", projection.Blockers)
+	}
+	if message, err := projectWorkspaceMutationErrorMessage(blocked, "ignored", false); err != nil || strings.TrimSpace(message) == "" {
+		t.Fatalf("plain unknown blocker message=%q err=%v", message, err)
 	}
 	guidance, err := blockerGuidanceFor("default_workspace", "project-1")
 	if err != nil ||

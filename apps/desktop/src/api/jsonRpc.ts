@@ -4,6 +4,7 @@ import {
   binaryFramePayload,
   completeDescriptorResponse,
   decodeDescriptorResponse,
+  descriptorResponseCorrelation,
   encodeDescriptorCall,
 } from "./descriptorRpc";
 import { TransportError } from "./errors";
@@ -295,6 +296,10 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       this.#rejectAll(new TransportError("Unsupported WebSocket frame type."));
       return;
     }
+    this.#handleBinaryControlMessage(bytes);
+  }
+
+  #handleBinaryControlMessage(bytes: Uint8Array): void {
     try {
       const response = decodeDescriptorResponse(bytes);
       const pending = this.#pending.get(response.correlation);
@@ -316,7 +321,12 @@ class JsonRpcWebSocketTransport implements RpcTransport {
         );
       }
     } catch (error) {
-      this.#rejectAll(
+      const correlation = descriptorResponseCorrelation(bytes);
+      if (correlation === undefined) {
+        return;
+      }
+      const pending = this.#takePending(correlation);
+      pending?.reject(
         error instanceof Error ? error : new TransportError("Binary response decoding failed."),
       );
     }

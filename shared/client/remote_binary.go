@@ -148,6 +148,9 @@ func (c *remoteControlConn) callBinary(
 	}
 	select {
 	case response := <-responseCh:
+		if response.err != nil {
+			return response.err
+		}
 		if response.binary == nil {
 			return fmt.Errorf("operation %s received a JSON response", operation.Name)
 		}
@@ -259,7 +262,7 @@ func requireBinaryMessageType(
 func decodeBinaryEnvelope(encoded []byte) (*remoteBinaryResponse, string, error) {
 	envelope, err := protoapi.DecodeEnvelope(encoded)
 	if err != nil {
-		return nil, "", err
+		return nil, protoapi.DecodeEnvelopeCorrelation(encoded), err
 	}
 	switch frame := envelope.GetFrame().(type) {
 	case *sharedpb.Envelope_Result:
@@ -273,7 +276,7 @@ func decodeBinaryEnvelope(encoded []byte) (*remoteBinaryResponse, string, error)
 		}
 		return &remoteBinaryResponse{failure: frame.TransportFailure}, frame.TransportFailure.GetCorrelation(), nil
 	default:
-		return nil, "", fmt.Errorf("binary response envelope has unexpected frame type")
+		return nil, protoapi.DecodeEnvelopeCorrelation(encoded), fmt.Errorf("binary response envelope has unexpected frame type")
 	}
 }
 

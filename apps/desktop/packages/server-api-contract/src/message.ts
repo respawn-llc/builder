@@ -25,11 +25,18 @@ export function decode<Descriptor extends DescMessage>(
   descriptor: Descriptor,
   bytes: Uint8Array,
 ): MessageShape<Descriptor> {
-  const message = fromBinary(descriptor, bytes, {
-    readUnknownFields: true,
-  });
+  const message = decodeUnvalidated(descriptor, bytes);
   validate(descriptor, message);
   return message;
+}
+
+export function decodeUnvalidated<Descriptor extends DescMessage>(
+  descriptor: Descriptor,
+  bytes: Uint8Array,
+): MessageShape<Descriptor> {
+  return fromBinary(descriptor, bytes, {
+    readUnknownFields: true,
+  });
 }
 
 export function encode<Descriptor extends DescMessage>(

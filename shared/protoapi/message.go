@@ -8,13 +8,20 @@ import (
 )
 
 func Decode(encoded []byte, message proto.Message) error {
+	if err := unmarshalGenerated(encoded, message); err != nil {
+		return err
+	}
+	return Validate(message)
+}
+
+func unmarshalGenerated(encoded []byte, message proto.Message) error {
 	if message == nil {
 		return fmt.Errorf("generated message is required")
 	}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, message); err != nil {
 		return fmt.Errorf("unmarshal generated message: %w", err)
 	}
-	return Validate(message)
+	return nil
 }
 
 func Encode(message proto.Message) ([]byte, error) {

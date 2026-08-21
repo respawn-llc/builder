@@ -1,6 +1,7 @@
 import {
   decode,
   decodeEnvelope,
+  decodeEnvelopeCorrelation,
   encode,
   encodeEnvelope,
   operationName,
@@ -63,6 +64,10 @@ export function decodeDescriptorResponse(bytes: Uint8Array): DescriptorResponse 
     case undefined:
       throw new TransportError("Binary response envelope has an unexpected frame type.");
   }
+}
+
+export function descriptorResponseCorrelation(bytes: Uint8Array): string | undefined {
+  return decodeEnvelopeCorrelation(bytes);
 }
 
 export function completeDescriptorResponse<Method extends DescMethod>(

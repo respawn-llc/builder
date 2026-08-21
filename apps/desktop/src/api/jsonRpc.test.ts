@@ -132,11 +132,9 @@ describe("JsonRpcWebSocketTransport", () => {
       name: "Priority",
     });
     await waitForSent(socket, 4);
-    binaryAck(socket, 2, ServerService.method.getReadiness, {
-      result: readinessResult(),
-      operation: "kent.api.server.server_service.wrong_operation",
-    });
-    await expect(malformedReadiness).rejects.toThrow("received a result");
+    socket.receive(new Uint8Array([0xff]).buffer);
+    malformedBinaryAck(socket, 2);
+    await expect(malformedReadiness).rejects.toBeInstanceOf(Error);
     errorAck(socket, 3, {
       code: -32031,
       message: "label name already exists",
@@ -748,6 +746,21 @@ function binaryAck<
       },
     },
   });
+  const responseBuffer = new ArrayBuffer(encodedResponse.byteLength);
+  new Uint8Array(responseBuffer).set(encodedResponse);
+  socket.receive(responseBuffer);
+}
+
+function malformedBinaryAck(socket: MockWebSocket, sentIndex: number): void {
+  const call = descriptorCall(socket, sentIndex);
+  const correlation = new TextEncoder().encode(call.correlation);
+  if (correlation.byteLength > 127) {
+    throw new Error("Mock WebSocket correlation is too long for the malformed fixture.");
+  }
+  // Encode an envelope result with correlation but no required operation,
+  // bypassing contract validation to exercise malformed server input.
+  const result = Uint8Array.of(0x12, correlation.byteLength, ...correlation);
+  const encodedResponse = Uint8Array.of(0x12, result.byteLength, ...result);
   const responseBuffer = new ArrayBuffer(encodedResponse.byteLength);
   new Uint8Array(responseBuffer).set(encodedResponse);
   socket.receive(responseBuffer);

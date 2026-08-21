@@ -27,6 +27,7 @@ import (
 
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -247,7 +248,7 @@ func TestDialConfiguredRemoteHonorsExplicitTCPTargetOverDerivedLocalSocket(t *te
 	requireNoHandlerError(t, udsHandlerErrs)
 }
 
-func TestRemoteCanceledUnaryRequestKeepsPersistentControlConnection(t *testing.T) {
+func TestRemoteControlConnectionIsolatesCancellationAndMalformedFrames(t *testing.T) {
 	var connectionCount atomic.Int32
 	handlerErrs := make(chan error, 8)
 	firstRequestSeen := make(chan string, 1)
@@ -259,6 +260,7 @@ func TestRemoteCanceledUnaryRequestKeepsPersistentControlConnection(t *testing.T
 	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
 		connectionCount.Add(1)
 		var firstCorrelation *string
+		malformedResponseSent := false
 		for event := range conn.Events() {
 			if event.Err != nil {
 				return
@@ -304,6 +306,33 @@ func TestRemoteCanceledUnaryRequestKeepsPersistentControlConnection(t *testing.T
 				if err := protoapi.Decode(call.Payload, &emptypb.Empty{}); err != nil {
 					reportHandlerError(handlerErrs, "decode GetReadiness request: %v", err)
 					return
+				}
+				if !malformedResponseSent {
+					malformedResponseSent = true
+					if err := conn.Send(ctx, rpcwire.Frame{
+						Kind:    rpcwire.FrameBinary,
+						Payload: []byte{0xff},
+					}); err != nil {
+						reportHandlerError(handlerErrs, "send uncorrelated malformed response: %v", err)
+						return
+					}
+					invalidEnvelope, err := proto.Marshal(&sharedpb.Envelope{
+						Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+							Correlation: call.Correlation,
+						}},
+					})
+					if err != nil {
+						reportHandlerError(handlerErrs, "encode correlated malformed response: %v", err)
+						return
+					}
+					if err := conn.Send(ctx, rpcwire.Frame{
+						Kind:    rpcwire.FrameBinary,
+						Payload: invalidEnvelope,
+					}); err != nil {
+						reportHandlerError(handlerErrs, "send correlated malformed response: %v", err)
+						return
+					}
+					continue
 				}
 				result := &serverpb.GetReadinessResult{
 					Outcome: &serverpb.GetReadinessResult_Success{Success: &serverpb.GetReadinessSuccess{
@@ -381,6 +410,9 @@ func TestRemoteCanceledUnaryRequestKeepsPersistentControlConnection(t *testing.T
 	}
 
 	readiness := &serverpb.GetReadinessResult{}
+	if err := remote.callBinary(context.Background(), method, &emptypb.Empty{}, readiness); err == nil {
+		t.Fatal("malformed correlated GetReadiness response succeeded")
+	}
 	if err := remote.callBinary(context.Background(), method, &emptypb.Empty{}, readiness); err != nil {
 		t.Fatalf("binary GetReadiness: %v", err)
 	}

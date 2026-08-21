@@ -94,6 +94,7 @@ type remoteControlConn struct {
 type remoteControlResponse struct {
 	legacy *protocol.Response
 	binary *remoteBinaryResponse
+	err    error
 }
 
 func configuredRemoteDialPlan(cfg config.App) (remoteDialPlan, error) {
@@ -302,6 +303,9 @@ func (c *remoteControlConn) call(ctx context.Context, method string, params any,
 	}
 	select {
 	case response := <-responseCh:
+		if response.err != nil {
+			return response.err
+		}
 		if response.legacy == nil {
 			return fmt.Errorf("legacy operation %s received a binary response", method)
 		}
@@ -353,12 +357,12 @@ func (c *remoteControlConn) readLoop() {
 			response.legacy = &legacy
 		case rpcwire.FrameBinary:
 			binary, id, err := decodeBinaryEnvelope(event.Frame.Payload)
-			if err != nil {
-				c.fail(err)
-				return
-			}
 			correlation = id
-			response.binary = binary
+			if err != nil {
+				response.err = err
+			} else {
+				response.binary = binary
+			}
 		default:
 			c.fail(fmt.Errorf("unsupported rpc frame kind %d", event.Frame.Kind))
 			return

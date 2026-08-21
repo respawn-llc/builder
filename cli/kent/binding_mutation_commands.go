@@ -456,13 +456,9 @@ func projectWorkspaceMutationErrorProjection(err error, requestedProjectID strin
 			if guidanceErr != nil {
 				return bindingMutationJSONError{}, guidanceErr
 			}
-			message, messageErr := workspaceUnlinkBlockerMessage(blocker.Code)
-			if messageErr != nil {
-				return bindingMutationJSONError{}, messageErr
-			}
 			projected := bindingMutationBlocker{
 				Code:     strings.TrimSpace(blocker.Code),
-				Message:  message,
+				Message:  workspaceUnlinkBlockerMessage(blocker.Code),
 				Guidance: renderBlockerGuidance(guidanceAction),
 			}
 			if blocker.Count != nil {
@@ -506,15 +502,11 @@ func projectWorkspaceMutationErrorMessage(err error, projectID string, defaultMu
 			return "", guidanceErr
 		}
 		blocker := blockedErr.Blockers[0]
-		blockerMessage, messageErr := workspaceUnlinkBlockerMessage(blocker.Code)
-		if messageErr != nil {
-			return "", messageErr
-		}
 		message := fmt.Sprintf("[%s]", strings.TrimSpace(blocker.Code))
 		if blocker.Count != nil {
 			message += fmt.Sprintf(" (%d)", *blocker.Count)
 		}
-		message += " " + blockerMessage
+		message += " " + workspaceUnlinkBlockerMessage(blocker.Code)
 		message += ": " + renderBlockerGuidance(guidanceAction)
 		return message, nil
 	}
@@ -527,22 +519,22 @@ func projectWorkspaceMutationErrorMessage(err error, projectID string, defaultMu
 	return err.Error(), nil
 }
 
-func workspaceUnlinkBlockerMessage(code string) (string, error) {
+func workspaceUnlinkBlockerMessage(code string) string {
 	switch strings.TrimSpace(code) {
 	case "default_workspace":
-		return "Workspace is the project default workspace.", nil
+		return "Workspace is the project default workspace."
 	case "non_terminal_tasks":
-		return "Active or non-terminal tasks still depend on this workspace.", nil
+		return "Active or non-terminal tasks still depend on this workspace."
 	case "executable_current_nodes":
-		return "Executable current nodes still depend on this workspace.", nil
+		return "Executable current nodes still depend on this workspace."
 	case "managed_owned_worktrees":
-		return "Worktrees still depend on this workspace.", nil
+		return "Worktrees still depend on this workspace."
 	case "missing_history_snapshot":
-		return "Historical task or retained Session references do not have a durable workspace path/name snapshot.", nil
+		return "Historical task or retained Session references do not have a durable workspace path/name snapshot."
 	case "active_sessions":
-		return "Active runtime sessions still depend on this workspace.", nil
+		return "Active runtime sessions still depend on this workspace."
 	default:
-		return "", fmt.Errorf("workspace detach returned unsupported blocker code %q", code)
+		return "Workspace detach is blocked by a condition this CLI does not recognize."
 	}
 }
 
