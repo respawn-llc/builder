@@ -417,14 +417,7 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	return p.planSession(ctx, req, store.Meta(), store)
 }
 
-func (p Planner) PlanPersistedSessionWithPreparedOverrides(
-	ctx context.Context,
-	req SessionRequest,
-	meta session.Meta,
-	overrides serverapi.RunPromptOverrides,
-	prepared PreparedRunPromptOverrides,
-	options RunPromptOverrideOptions,
-) (SessionPlan, []string, error) {
+func (p Planner) PlanPersistedSessionWithPreparedOverrides(ctx context.Context, req SessionRequest, meta session.Meta, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
 	plan, err := p.planSession(ctx, req, meta, nil)
 	if err != nil {
 		return SessionPlan{}, nil, err
@@ -432,12 +425,7 @@ func (p Planner) PlanPersistedSessionWithPreparedOverrides(
 	return p.applyPreparedRunPromptOverrides(plan, meta, nil, overrides, prepared, options)
 }
 
-func (p Planner) planSession(
-	ctx context.Context,
-	req SessionRequest,
-	meta session.Meta,
-	store *session.Store,
-) (SessionPlan, error) {
+func (p Planner) planSession(ctx context.Context, req SessionRequest, meta session.Meta, store *session.Store) (SessionPlan, error) {
 	if store == nil {
 		if req.Intent.Kind() != serverapi.SessionLaunchIntentOpenExisting {
 			return SessionPlan{}, errors.New("persisted session planning requires an existing-session intent")
@@ -725,15 +713,7 @@ func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, stor
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
-	return p.applyPreparedRunPromptOverridesWithBudgetApplier(
-		plan,
-		store.Meta(),
-		store.SetContinuationContext,
-		effectiveOverrides,
-		prepared,
-		options,
-		applyBudget,
-	)
+	return p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store.Meta(), store.SetContinuationContext, effectiveOverrides, prepared, options, applyBudget)
 }
 
 func baseConfigForPlan(plan SessionPlan) config.App {
@@ -988,33 +968,11 @@ func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, stor
 	if store == nil {
 		return SessionPlan{}, nil, errors.New("session store is required")
 	}
-	return p.applyPreparedRunPromptOverrides(
-		plan,
-		store.Meta(),
-		store.SetContinuationContext,
-		overrides,
-		prepared,
-		options,
-	)
+	return p.applyPreparedRunPromptOverrides(plan, store.Meta(), store.SetContinuationContext, overrides, prepared, options)
 }
 
-func (p Planner) applyPreparedRunPromptOverrides(
-	plan SessionPlan,
-	meta session.Meta,
-	persistContinuation func(session.ContinuationContext) error,
-	overrides serverapi.RunPromptOverrides,
-	prepared PreparedRunPromptOverrides,
-	options RunPromptOverrideOptions,
-) (SessionPlan, []string, error) {
-	next, warnings, err := p.applyPreparedRunPromptOverridesWithBudgetApplier(
-		plan,
-		meta,
-		persistContinuation,
-		overrides,
-		prepared,
-		options,
-		applyDerivedModelContextBudgetOverrides,
-	)
+func (p Planner) applyPreparedRunPromptOverrides(plan SessionPlan, meta session.Meta, persistContinuation func(session.ContinuationContext) error, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
+	next, warnings, err := p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, meta, persistContinuation, overrides, prepared, options, applyDerivedModelContextBudgetOverrides)
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
@@ -1063,15 +1021,7 @@ func applySessionChatSettingsWithRunOverrides(
 	)
 }
 
-func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(
-	plan SessionPlan,
-	meta session.Meta,
-	persistContinuation func(session.ContinuationContext) error,
-	overrides serverapi.RunPromptOverrides,
-	prepared PreparedRunPromptOverrides,
-	options RunPromptOverrideOptions,
-	applyBudget modelContextBudgetApplier,
-) (SessionPlan, []string, error) {
+func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, meta session.Meta, persistContinuation func(session.ContinuationContext) error, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
 	if !overrides.HasAny() && prepared.BaseTarget == nil {
 		return sessionPlanWithMeta(plan, meta, p.ContainerDir), nil, nil
 	}
