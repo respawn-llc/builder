@@ -43,7 +43,9 @@ func (m *Manager) CurrentSnapshots() []Snapshot {
 	entries := m.processEntries()
 	out := make([]Snapshot, 0, len(entries))
 	for _, entry := range entries {
-		out = append(out, entry.currentSnapshot())
+		entry.mu.Lock()
+		out = append(out, entry.snapshotLocked())
+		entry.mu.Unlock()
 	}
 	return out
 }

@@ -438,15 +438,6 @@ func (p *processEntry) snapshot() Snapshot {
 	return cloneSnapshot(*snapshot)
 }
 
-func (p *processEntry) currentSnapshot() Snapshot {
-	if p == nil {
-		return Snapshot{}
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.snapshotLocked()
-}
-
 func (p *processEntry) drainPending() []byte {
 	p.mu.Lock()
 	defer p.mu.Unlock()
