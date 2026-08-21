@@ -74,8 +74,6 @@ type SessionRequest struct {
 	Intent                              serverapi.SessionLaunchIntent
 	SkipContinuationAgentRoleValidation bool
 	PreparedPromptFacingTarget          *PreparedBaseTarget
-	AgentSelectionResolved              bool
-	ReadOnlySnapshot                    bool
 }
 
 type SessionPlan struct {
@@ -381,7 +379,6 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		if err != nil {
 			return SessionPlan{}, err
 		}
-		req.ReadOnlySnapshot = true
 		return p.PlanPersistedSession(ctx, req, *record.Meta)
 	}
 	store, err := p.openStore(ctx, req)
@@ -432,9 +429,6 @@ func (p Planner) PlanPersistedSession(
 	req SessionRequest,
 	meta session.Meta,
 ) (SessionPlan, error) {
-	if !req.ReadOnlySnapshot {
-		return SessionPlan{}, errors.New("persisted session planning must be read-only")
-	}
 	if req.Intent.Kind() != serverapi.SessionLaunchIntentOpenExisting {
 		return SessionPlan{}, errors.New("persisted session planning requires an existing-session intent")
 	}
@@ -455,10 +449,7 @@ func (p Planner) planSession(
 	meta session.Meta,
 	store *session.Store,
 ) (SessionPlan, error) {
-	if req.Mode == ModeHeadless && !req.ReadOnlySnapshot {
-		if store == nil {
-			return SessionPlan{}, errors.New("writable session planning requires a store")
-		}
+	if req.Mode == ModeHeadless && store != nil {
 		if err := EnsureSubagentSessionName(store); err != nil {
 			return SessionPlan{}, err
 		}
@@ -492,10 +483,7 @@ func (p Planner) planSession(
 	if meta.Continuation != nil {
 		continuation.AgentRole = continuationAgentRole
 	}
-	if !req.AgentSelectionResolved && !req.ReadOnlySnapshot {
-		if store == nil {
-			return SessionPlan{}, errors.New("writable session planning requires a store")
-		}
+	if store != nil {
 		if err := store.SetContinuationContext(continuation); err != nil {
 			return SessionPlan{}, err
 		}
@@ -513,10 +501,7 @@ func (p Planner) planSession(
 	}
 	if meta.Locked != nil &&
 		(!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") &&
-		!req.ReadOnlySnapshot {
-		if store == nil {
-			return SessionPlan{}, errors.New("writable session planning requires a store")
-		}
+		store != nil {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
 			EnabledTools:    toolspec.IDStrings(enabledTools),
 			HasEnabledTools: true,
