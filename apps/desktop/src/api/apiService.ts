@@ -93,7 +93,7 @@ export interface ApiService {
   readonly connection: ApiConnectionSource;
 
   getReadiness(): Promise<ServerReadiness>;
-  listProjects(pageToken: string): Promise<ProjectPage>;
+  listProjects(pageToken: string | null): Promise<ProjectPage>;
   listSessionPage(projectID: string, category: SessionCategory, offset: number): Promise<SessionCatalogPage>;
   listWorkspaces(projectID: string, offset: number): Promise<WorkspaceCatalogPage>;
   getProjectWorkspace(

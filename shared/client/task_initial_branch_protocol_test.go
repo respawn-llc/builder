@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -31,6 +32,13 @@ func TestInitialBranchClientStopsAtOldServerHandshake(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("old server handshake unexpectedly succeeded")
+	}
+	var mismatch *protocolVersionMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("old server handshake error = %T, want protocol version mismatch", err)
+	}
+	if mismatch.requiredVersion != "125" || mismatch.clientVersion == mismatch.requiredVersion {
+		t.Fatalf("protocol version mismatch = %+v", mismatch)
 	}
 	select {
 	case handlerErr := <-handlerErrs:

@@ -1,6 +1,6 @@
 import { createJsonRpcTransport } from "./jsonRpc";
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, decodeWorkflowLabelError } from "./errors";
-import { subscriptionCompleteMethod } from "./jsonRpcSocket";
+import { protocolVersion, subscriptionCompleteMethod } from "./jsonRpcSocket";
 import { create, decodeEnvelope, encode, encodeEnvelope, operationName } from "@app/server-api-contract";
 import {
   AttachSessionResultSchema,
@@ -382,6 +382,10 @@ describe("JsonRpcWebSocketTransport", () => {
 
     await vi.waitFor(() => {
       expect(errors[0]).toBeInstanceOf(ProtocolMismatchError);
+    });
+    expect(errors[0]).toMatchObject({
+      requiredProtocolVersion: "126",
+      clientProtocolVersion: protocolVersion,
     });
     expect(socket.sent).toHaveLength(1);
     expect(descriptorOperation(socket, 0)).toBe(operationName(ConnectionService.method.handshake));

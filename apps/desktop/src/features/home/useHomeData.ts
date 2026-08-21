@@ -30,9 +30,9 @@ export function useProjectPages() {
   );
   return useInfiniteQuery({
     queryKey: queryKeys.projects,
-    queryFn: async ({ pageParam }) => api.listProjects(pageParam),
-    initialPageParam: "",
-    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
+    queryFn: async ({ pageParam }: Readonly<{ pageParam: string | null }>) => api.listProjects(pageParam),
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
     placeholderData: keepPreviousData,
   });
 }

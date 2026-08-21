@@ -143,7 +143,7 @@ export class ApiClient implements ApiService {
     return projectReadiness(success.readiness);
   }
 
-  async listProjects(pageToken: string): Promise<ProjectPage> {
+  async listProjects(pageToken: string | null): Promise<ProjectPage> {
     return project.listProjectHome(this.#transport, pageToken);
   }
 

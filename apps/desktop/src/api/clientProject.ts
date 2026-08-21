@@ -145,7 +145,7 @@ export async function planWorkspace(transport: DescriptorRpcTransport, path: str
 
 export async function listProjectHome(
   transport: DescriptorRpcTransport,
-  pageToken: string,
+  pageToken: string | null,
 ): Promise<ProjectPage> {
   const method = ProjectCatalogService.method.listHome;
   const success = requireUnarySuccess(
@@ -154,7 +154,7 @@ export async function listProjectHome(
       method,
       create(method.input, {
         pageSize: 40,
-        pageToken: pageToken === "" ? undefined : pageToken,
+        pageToken: pageToken ?? undefined,
       }),
     ),
   );
@@ -163,7 +163,7 @@ export async function listProjectHome(
   }
   return {
     projects: success.projects.map(projectHomeSummary),
-    nextPageToken: success.nextPageToken ?? "",
+    nextPageToken: success.nextPageToken ?? null,
     generatedAt: timestampMillis(success.generatedAt),
   };
 }

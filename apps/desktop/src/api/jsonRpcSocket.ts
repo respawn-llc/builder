@@ -271,7 +271,11 @@ function requireDescriptorSuccess(
         method === ConnectionService.method.handshake &&
         result.outcome.value.code === "protocol_version_mismatch"
       ) {
-        throw new ProtocolMismatchError("unsupported protocol version");
+        const detail = result.outcome.value.detail;
+        if (detail.case !== "protocolVersionMismatch") {
+          throw protobufRpcError(method, result.outcome.value);
+        }
+        throw new ProtocolMismatchError(detail.value.requiredProtocolVersion, protocolVersion);
       }
       throw protobufRpcError(method, result.outcome.value);
     case undefined:

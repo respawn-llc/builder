@@ -14,7 +14,6 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -83,8 +82,8 @@ func handshakeBinaryRPC(ctx context.Context, conn rpcwire.Conn) (protocol.Server
 	); err != nil {
 		return protocol.ServerIdentity{}, err
 	}
-	if err := requireGeneratedSuccess(result); err != nil {
-		return protocol.ServerIdentity{}, fmt.Errorf("handshake: %w", err)
+	if failure := result.GetError(); failure != nil {
+		return protocol.ServerIdentity{}, fmt.Errorf("handshake: %w", handshakeGeneratedError(failure))
 	}
 	identity := result.GetSuccess().GetIdentity()
 	return protocol.ServerIdentity{
@@ -93,6 +92,37 @@ func handshakeBinaryRPC(ctx context.Context, conn rpcwire.Conn) (protocol.Server
 		PID:               int(identity.GetPid()),
 		PersistenceRootID: identity.GetPersistenceRootId(),
 	}, nil
+}
+
+type protocolVersionMismatchError struct {
+	clientVersion   string
+	requiredVersion string
+}
+
+func (e *protocolVersionMismatchError) Error() string {
+	return fmt.Sprintf(
+		"server requires protocol version %q but this client uses %q; update the Kent client and server to the same build",
+		e.requiredVersion,
+		e.clientVersion,
+	)
+}
+
+func handshakeGeneratedError(failure *connectionpb.HandshakeError) error {
+	switch failure.Code {
+	case "protocol_version_mismatch":
+		details := failure.GetProtocolVersionMismatch()
+		if err := protoapi.Validate(details); err != nil {
+			return err
+		}
+		return &protocolVersionMismatchError{
+			clientVersion:   protocol.Version,
+			requiredVersion: details.RequiredProtocolVersion,
+		}
+	case "internal_failure":
+		return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+	default:
+		return generatedOperationFailure(failure.Code)
+	}
 }
 
 func attachRemoteBinaryRPC(
@@ -260,17 +290,6 @@ func attachmentResponseFromGenerated(success *connectionpb.AttachmentSuccess) (r
 		}}, nil
 	}
 	return remoteAttachment{}, fmt.Errorf("attachment success has no attachment")
-}
-
-func requireGeneratedSuccess(result proto.Message) error {
-	classified, err := protoapi.ClassifyResult(result)
-	if err != nil {
-		return err
-	}
-	if classified.Outcome == protoapi.OperationSuccess {
-		return nil
-	}
-	return fmt.Errorf("operation failed with code %q", classified.Failure.Code)
 }
 
 func connectionMethod(name protoreflect.Name) (protoreflect.MethodDescriptor, error) {

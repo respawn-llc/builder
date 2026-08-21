@@ -522,8 +522,13 @@ export class CatalogContractError extends ContractError {
 }
 
 export class ProtocolMismatchError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(
+    readonly requiredProtocolVersion: string,
+    readonly clientProtocolVersion: string,
+  ) {
+    super(
+      `Kent server requires protocol version ${requiredProtocolVersion}, but this client uses ${clientProtocolVersion}. Update the Kent client and server to the same build.`,
+    );
     this.name = "ProtocolMismatchError";
   }
 }

@@ -88,7 +88,7 @@ export type ProjectSummary = Readonly<{
 
 export type ProjectPage = Readonly<{
   projects: readonly ProjectSummary[];
-  nextPageToken: string;
+  nextPageToken: string | null;
   generatedAt: number;
 }>;
 

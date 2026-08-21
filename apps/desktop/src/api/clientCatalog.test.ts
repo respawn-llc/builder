@@ -37,7 +37,23 @@ describe("ApiClient catalog boundary", () => {
     });
   });
 
-  it("projects a full Workspace page", async () => {
+  it("projects terminal Project Home and full Workspace pages", async () => {
+    const terminalProjectPage = clientWith(
+      ProjectCatalogService.method.listHome,
+      create(ProjectCatalogService.method.listHome.output, {
+        outcome: {
+          case: "success",
+          value: {
+            projects: [],
+            generatedAt: { seconds: 1n, nanos: 0 },
+          },
+        },
+      }),
+    );
+    await expect(terminalProjectPage.listProjects(null)).resolves.toMatchObject({
+      nextPageToken: null,
+    });
+
     const client = clientWith(
       ProjectCatalogService.method.listWorkspaces,
       workspaceResult({ workspaceCount: 100, nextOffset: 100 }),
@@ -91,7 +107,10 @@ describe("ApiClient catalog boundary", () => {
 });
 
 function clientWith(
-  descriptor: typeof SessionCatalogService.method.page | typeof ProjectCatalogService.method.listWorkspaces,
+  descriptor:
+    | typeof SessionCatalogService.method.page
+    | typeof ProjectCatalogService.method.listHome
+    | typeof ProjectCatalogService.method.listWorkspaces,
   result: ReturnType<typeof create>,
 ): ApiClient {
   return new ApiClient(new FakeRpcTransport([{ descriptor, result }]));
