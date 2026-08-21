@@ -91,11 +91,16 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 		return 0, nil
 	}
 	repair := &steeringMissingToolOutputRepair{repairStepID: textutil.Pointer(repairStepID), disposition: disposition}
-	stepID, _ := textutil.OptionalValue(repairStepID)
-	err := e.steer(stepID, steeringIntent{
+	intent := steeringIntent{
 		priority: steeringPriorityNormal,
 		items:    []steeringItem{{missingToolOutputRepair: repair}},
-	})
+	}
+	var err error
+	if stepID, present := textutil.OptionalExact(repairStepID); present {
+		err = e.steer(stepID, intent)
+	} else {
+		err = e.steerOrdered(sessionSteeringProvenance(), intent)
+	}
 	return repair.repaired, err
 }
 

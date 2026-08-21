@@ -4,9 +4,7 @@ import (
 	"context"
 	"core/cli/tui"
 	"core/server/llm"
-	"core/shared/clientui"
 	"errors"
-	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"

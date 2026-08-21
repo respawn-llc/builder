@@ -20,9 +20,9 @@ func newReviewerRuntimeState(client llm.Client) *reviewerRuntimeState {
 	return &reviewerRuntimeState{client: client}
 }
 
-func (s *reviewerRuntimeState) SetActiveStep(stepID string) {
+func (s *reviewerRuntimeState) TryStart(stepID string) bool {
 	if s == nil {
-		return
+		return false
 	}
 	normalized := strings.TrimSpace(stepID)
 	if normalized == "" {
@@ -33,19 +33,25 @@ func (s *reviewerRuntimeState) SetActiveStep(stepID string) {
 		panic(err)
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active != nil {
+		return false
+	}
 	s.active = &active
-	s.mu.Unlock()
+	return true
 }
 
-func (s *reviewerRuntimeState) ClearActiveStep(stepID string) {
+func (s *reviewerRuntimeState) Complete(stepID string) bool {
 	if s == nil {
-		return
+		return false
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.active != nil && s.active.String() == strings.TrimSpace(stepID) {
 		s.active = nil
+		return true
 	}
-	s.mu.Unlock()
+	return false
 }
 
 func (s *reviewerRuntimeState) Running() bool {
@@ -59,6 +65,59 @@ func (s *reviewerRuntimeState) Running() bool {
 
 func (e *Engine) ReviewerRunning() bool {
 	return e != nil && e.reviewerRuntimeState().Running()
+}
+
+func (e *Engine) startReviewerActivity(stepID string) (bool, error) {
+	if e == nil || e.closed.Load() {
+		return false, ErrEngineClosed
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	return e.startReviewerActivityRaw(stepID)
+}
+
+func (e *Engine) startReviewerActivityRaw(stepID string) (bool, error) {
+	if !e.reviewerRuntimeState().TryStart(stepID) {
+		return false, nil
+	}
+	revision, err := e.TranscriptRevision()
+	if err != nil {
+		e.reviewerRuntimeState().Complete(stepID)
+		return false, err
+	}
+	err = e.emitRawAtRevision(Event{
+		Kind:   EventReviewerStarted,
+		StepID: exactStepIDPointer(stepID),
+	}, revision)
+	if err != nil {
+		e.reviewerRuntimeState().Complete(stepID)
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *Engine) completeReviewerActivity(stepID string, status *ReviewerStatus) error {
+	if e == nil {
+		return nil
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	return e.completeReviewerActivityRaw(stepID, status)
+}
+
+func (e *Engine) completeReviewerActivityRaw(stepID string, status *ReviewerStatus) error {
+	if !e.reviewerRuntimeState().Complete(stepID) {
+		return nil
+	}
+	revision, err := e.TranscriptRevision()
+	if err != nil {
+		return err
+	}
+	return e.emitRawAtRevision(Event{
+		Kind:     EventReviewerCompleted,
+		StepID:   exactStepIDPointer(stepID),
+		Reviewer: status,
+	}, revision)
 }
 
 func (s *reviewerRuntimeState) Client() llm.Client {

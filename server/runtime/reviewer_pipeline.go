@@ -7,13 +7,13 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
 type defaultReviewerPipeline struct {
-	engine     *Engine
-	stepRunner stepLoopRunner
+	engine *Engine
 }
 
 func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool {
@@ -32,104 +32,222 @@ func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient
 	}
 }
 
-func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
-	e := r.engine
-	reviewerResult, err := r.RunSuggestions(ctx, stepID, reviewerClient)
+func (r *defaultReviewerPipeline) Prepare(
+	ctx context.Context,
+	stepID string,
+	reviewerClient llm.Client,
+) (preparedReviewerRequest, error) {
+	if reviewerClient == nil {
+		return preparedReviewerRequest{}, errors.New("Reviewer client is required")
+	}
+	originStepID, err := runtimeids.ParseStepID(stepID)
 	if err != nil {
-		if persistErr := e.steer(stepID, steerReviewerErrorIntent(err.Error())); persistErr != nil {
-			return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer error: %w", persistErr)
-		}
-		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
-		status := ReviewerStatus{
-			Outcome: "failed",
-			Error:   strings.TrimSpace(err.Error()),
-		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+		return preparedReviewerRequest{}, err
 	}
-	suggestions := reviewerResult.Suggestions
+	req, err := r.engine.buildReviewerDispatchRequest(ctx, stepID, reviewerClient)
+	if err != nil {
+		return preparedReviewerRequest{}, fmt.Errorf("build Reviewer request: %w", err)
+	}
+	cacheObservation, err := r.engine.modelRequests().RequestCache().Prepare(req)
+	if err != nil {
+		return preparedReviewerRequest{}, err
+	}
+	if err := r.engine.observePromptCacheRequest(stepID, cacheObservation); err != nil {
+		return preparedReviewerRequest{}, err
+	}
+	return preparedReviewerRequest{
+		originStepID:     originStepID,
+		client:           reviewerClient,
+		request:          req,
+		cacheObservation: cacheObservation,
+	}, nil
+}
+
+func (r *defaultReviewerPipeline) Run(
+	ctx context.Context,
+	prepared preparedReviewerRequest,
+) reviewerProviderResult {
+	resp, err := generateWithRetryClient(ctx, prepared.client, prepared.request, nil, nil, nil, nil)
+	if err != nil {
+		return reviewerProviderResult{err: err}
+	}
+	cachePct, hasCachePct := resp.Usage.CacheHitPercent()
+	result := reviewerSuggestionsResult{
+		CacheHitPercent:       cachePct,
+		HasCacheHitPercentage: hasCachePct,
+	}
+	if resp.Assistant.Content != nil {
+		result.Suggestions = parseReviewerSuggestionsObject(
+			r.engine.reviewerSuggestionsContract,
+			*resp.Assistant.Content,
+		)
+	}
+	return reviewerProviderResult{
+		suggestions: result,
+		usage:       resp.Usage,
+	}
+}
+
+func (e *Engine) startReviewer(
+	ctx context.Context,
+	stepID string,
+	reviewerClient llm.Client,
+	pipeline reviewerPipeline,
+) error {
+	if e.ReviewerRunning() {
+		return nil
+	}
+	prepared, prepareErr := pipeline.Prepare(ctx, stepID, reviewerClient)
+	started, err := e.startReviewerActivity(stepID)
+	if err != nil {
+		return fmt.Errorf("start Reviewer activity: %w", err)
+	}
+	if !started {
+		return nil
+	}
+	if prepareErr != nil {
+		prepared.originStepID, err = runtimeids.ParseStepID(stepID)
+		if err != nil {
+			_ = e.completeReviewerActivity(stepID, nil)
+			return err
+		}
+	}
+	if !e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+		result := reviewerProviderResult{err: prepareErr}
+		if prepareErr == nil {
+			result = pipeline.Run(lifecycleCtx, prepared)
+		}
+		deferred := submitEngineRuntimeOperation(e, func(context.Context) (struct{}, error) {
+			return struct{}{}, e.applyReviewerProviderResult(prepared, result)
+		})
+		_, applyErr := deferred.Await(context.WithoutCancel(lifecycleCtx))
+		if applyErr == nil {
+			return nil
+		}
+		_ = e.completeReviewerActivity(stepID, nil)
+		if errors.Is(applyErr, ErrEngineClosed) || errors.Is(applyErr, context.Canceled) {
+			return nil
+		}
+		e.surfaceRunError(fmt.Errorf("apply Reviewer result: %w", applyErr))
+		return nil
+	}) {
+		_ = e.completeReviewerActivity(stepID, nil)
+		return ErrEngineClosed
+	}
+	return nil
+}
+
+func (e *Engine) applyReviewerProviderResult(
+	prepared preparedReviewerRequest,
+	result reviewerProviderResult,
+) error {
+	originStepID := prepared.originStepID.String()
+	if result.err != nil {
+		persistErr := e.steerOrdered(
+			sessionSteeringProvenance(),
+			steerReviewerErrorFromOriginIntent(prepared.originStepID, result.err.Error()),
+		)
+		status := ReviewerStatus{Outcome: "failed", Error: strings.TrimSpace(result.err.Error())}
+		return errors.Join(persistErr, e.completeReviewerActivity(originStepID, &status))
+	}
+	if err := e.observePromptCacheResponseRuntime(
+		prepared.cacheObservation,
+		result.usage,
+	); err != nil {
+		_ = e.completeReviewerActivity(originStepID, nil)
+		return err
+	}
+	suggestions := result.suggestions.Suggestions
 	if len(suggestions) == 0 {
-		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
-		status := ReviewerStatus{Outcome: "no_suggestions"}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+		status := ReviewerStatus{
+			Outcome:               "no_suggestions",
+			CacheHitPercent:       result.suggestions.CacheHitPercent,
+			HasCacheHitPercentage: result.suggestions.HasCacheHitPercentage,
+		}
+		statusErr := e.steerOrdered(sessionSteeringProvenance(), steerLocalEntryIntent(storedLocalEntry{
+			Role: reviewerStatusEntryRole(status),
+			Text: reviewerStatusText(status, nil),
+		}))
+		return errors.Join(statusErr, e.completeReviewerActivity(originStepID, &status))
 	}
-	if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
-		return reviewerFollowUpResult{}, err
-	}
+
 	visibility := transcript.EntryVisibilityOngoingCollapsed
 	if e.cfg.Reviewer.VerboseOutput {
 		visibility = transcript.EntryVisibilityOngoing
 	}
-	if err := e.steer(stepID, steerReviewerFeedbackIntent(suggestions, visibility)); err != nil {
-		return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer feedback: %w", err)
+	if err := e.steerOrdered(
+		sessionSteeringProvenance(),
+		steerReviewerFeedbackFromOriginIntent(prepared.originStepID, suggestions, visibility),
+	); err != nil {
+		_ = e.completeReviewerActivity(originStepID, nil)
+		return fmt.Errorf("persist Reviewer feedback: %w", err)
 	}
 	instruction := formatReviewerDeveloperInstruction(suggestions)
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value(instruction)}})); err != nil {
-		return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer follow-up instruction: %w", err)
+	if err := e.steerOrdered(sessionSteeringProvenance(), steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeReviewerFeedback),
+			Content:     textutil.Value(instruction),
+		}},
+	)); err != nil {
+		_ = e.completeReviewerActivity(originStepID, nil)
+		return fmt.Errorf("persist Reviewer follow-up instruction: %w", err)
 	}
-	if r.stepRunner == nil {
-		return reviewerFollowUpResult{}, errors.New("reviewer step runner is not configured")
+	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
+		return e.runReviewerContinuation(ctx, prepared.originStepID, result.suggestions)
+	}) {
+		_ = e.completeReviewerActivity(originStepID, nil)
+		return ErrEngineClosed
 	}
-
-	followUp, err := r.stepRunner.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
-		ReviewerFrequency:              "off",
-		ReviewerClient:                 nil,
-		RefreshReviewerConfigOnResolve: false,
-	})
-	if err != nil {
-		return reviewerFollowUpResult{}, fmt.Errorf("run Reviewer follow-up: %w", err)
-	}
-	if followUp.FinalAnswer == nil && !followUp.SilentFinal {
-		return reviewerFollowUpResult{}, errors.New("Reviewer follow-up returned no answer")
-	}
-	outcome := "applied"
-	if followUp.SilentFinal {
-		outcome = "noop"
-	}
-	status := ReviewerStatus{
-		Outcome:               outcome,
-		SuggestionsCount:      len(suggestions),
-		CacheHitPercent:       reviewerResult.CacheHitPercent,
-		HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
-	}
-	finalAnswer := original
-	if followUp.FinalAnswer != nil {
-		finalAnswer = *followUp.FinalAnswer
-	}
-	return reviewerFollowUpResult{
-		Message:                    finalAnswer,
-		Completion:                 &status,
-		AssistantCommittedStart:    followUp.AssistantCommittedStart,
-		AssistantCommittedStartSet: followUp.AssistantCommittedStartSet,
-		AssistantEventEmitted:      !followUp.SilentFinal,
-	}, nil
+	return nil
 }
 
-func (r *defaultReviewerPipeline) RunSuggestions(ctx context.Context, stepID string, reviewerClient llm.Client) (reviewerSuggestionsResult, error) {
-	e := r.engine
-	if reviewerClient == nil {
-		return reviewerSuggestionsResult{}, nil
+func (e *Engine) runReviewerContinuation(
+	ctx context.Context,
+	originStepID runtimeids.StepID,
+	reviewerResult reviewerSuggestionsResult,
+) *resultGroupFatal {
+	var status *ReviewerStatus
+	err := e.stepLifecycle.RunNext(
+		ctx,
+		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
+		func(stepCtx context.Context, stepID string) error {
+			followUp, runErr := e.stepFlow.RunStepLoopWithOptions(stepCtx, stepID, stepLoopOptions{
+				ReviewerFrequency:              "off",
+				ReviewerClient:                 nil,
+				RefreshReviewerConfigOnResolve: false,
+			})
+			if runErr != nil {
+				return fmt.Errorf("run Reviewer follow-up: %w", runErr)
+			}
+			if followUp.FinalAnswer == nil && !followUp.SilentFinal {
+				return errors.New("Reviewer follow-up returned no answer")
+			}
+			outcome := "applied"
+			if followUp.SilentFinal {
+				outcome = "noop"
+			}
+			status = &ReviewerStatus{
+				Outcome:               outcome,
+				SuggestionsCount:      len(reviewerResult.Suggestions),
+				CacheHitPercent:       reviewerResult.CacheHitPercent,
+				HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
+			}
+			return e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
+				Role: reviewerStatusEntryRole(*status),
+				Text: reviewerStatusText(*status, nil),
+			}))
+		},
+	)
+	completeErr := e.completeReviewerActivity(originStepID.String(), status)
+	if errors.Is(err, context.Canceled) || errors.Is(err, ErrEngineClosed) {
+		return nil
 	}
-	req, err := e.buildReviewerDispatchRequest(ctx, stepID, reviewerClient)
-	if err != nil {
-		return reviewerSuggestionsResult{}, fmt.Errorf("build reviewer request: %w", err)
+	if err != nil || completeErr != nil {
+		e.surfaceRunError(errors.Join(err, completeErr))
 	}
-	resp, err := e.generateWithRetryClient(ctx, stepID, reviewerClient, req, nil, nil, nil)
-	if err != nil {
-		return reviewerSuggestionsResult{}, err
-	}
-	cachePct, hasCachePct := resp.Usage.CacheHitPercent()
-	if resp.Assistant.Content == nil {
-		return reviewerSuggestionsResult{
-			CacheHitPercent:       cachePct,
-			HasCacheHitPercentage: hasCachePct,
-		}, nil
-	}
-	return reviewerSuggestionsResult{
-		Suggestions: parseReviewerSuggestionsObject(
-			e.reviewerSuggestionsContract,
-			*resp.Assistant.Content,
-		),
-		CacheHitPercent:       cachePct,
-		HasCacheHitPercentage: hasCachePct,
-	}, nil
+	return nil
 }

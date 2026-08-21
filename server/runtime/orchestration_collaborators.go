@@ -159,16 +159,21 @@ type messageLifecycle interface {
 
 type reviewerPipeline interface {
 	ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool
-	RunFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error)
-	RunSuggestions(ctx context.Context, stepID string, reviewerClient llm.Client) (reviewerSuggestionsResult, error)
+	Prepare(ctx context.Context, stepID string, reviewerClient llm.Client) (preparedReviewerRequest, error)
+	Run(ctx context.Context, prepared preparedReviewerRequest) reviewerProviderResult
 }
 
-type reviewerFollowUpResult struct {
-	Message                    llm.Message
-	Completion                 *ReviewerStatus
-	AssistantCommittedStart    int
-	AssistantCommittedStartSet bool
-	AssistantEventEmitted      bool
+type preparedReviewerRequest struct {
+	originStepID     runtimeids.StepID
+	client           llm.Client
+	request          llm.Request
+	cacheObservation preparedCacheRequestObservation
+}
+
+type reviewerProviderResult struct {
+	suggestions reviewerSuggestionsResult
+	usage       llm.Usage
+	err         error
 }
 
 type phaseProtocolTurn struct {
@@ -223,9 +228,6 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 				reviewer: e.reviewerFlow,
 				messages: e.messageFlow,
 			}
-		}
-		if reviewer, ok := e.reviewerFlow.(*defaultReviewerPipeline); ok && reviewer.stepRunner == nil {
-			reviewer.stepRunner = e.stepFlow
 		}
 	})
 }

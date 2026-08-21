@@ -500,11 +500,8 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			}
 
 			resolved := assistantMsg
-			resolvedSilentFinalAnswer := silentFinalAnswer
 			resolvedCommittedCoordinate := cloneCommittedAssistantCoordinate(assistantCommittedCoordinate)
-			var reviewerCompletion *ReviewerStatus
-			reviewerRan := false
-			if resolvedSilentFinalAnswer {
+			if silentFinalAnswer {
 				resolvedCommittedStart, resolvedCommittedStartSet := committedAssistantCoordinateFields(resolvedCommittedCoordinate)
 				return stepLoopResult{SilentFinal: true, ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 			}
@@ -516,49 +513,16 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
-				reviewerRan = true
-				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)}))
-				if startErr != nil {
-					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", startErr)
-				}
 				if !assistantEventEmitted {
-					// The answer is already committed before supervisor entries are appended.
-					// Publish it first so live clients never see supervisor entries as a gap
-					// after an unannounced committed assistant message.
 					_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
 					assistantEventEmitted = true
 				}
-				preReviewMessage := resolved
-				reviewed, err := s.reviewer.RunFollowUp(ctx, stepID, resolved, resolvedCommittedStart, resolvedCommittedStartSet, effectiveReviewerClient)
-				if err == nil {
-					resolved = reviewed.Message
-					reviewerCompletion = reviewed.Completion
-					resolvedCommittedStart = reviewed.AssistantCommittedStart
-					resolvedCommittedStartSet = reviewed.AssistantCommittedStartSet
-					resolvedCommittedCoordinate = committedAssistantCoordinateFromFields(resolvedCommittedStart, resolvedCommittedStartSet)
-					assistantEventEmitted = reviewed.AssistantEventEmitted || (assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved))
-				} else {
-					assistantEventEmitted = assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved)
-				}
-				if err != nil {
-					return stepLoopResult{}, errors.Join(err, s.terminalizeReviewerLifecycle(stepID, nil))
+				if err := e.startReviewer(ctx, stepID, effectiveReviewerClient, s.reviewer); err != nil {
+					e.surfaceRunError(err)
 				}
 			}
 			if !assistantEventEmitted {
 				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
-			}
-			if reviewerRan {
-				var statusErr error
-				if reviewerCompletionHasTranscriptStatus(reviewerCompletion) {
-					statusErr = e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
-						Role: reviewerStatusEntryRole(*reviewerCompletion),
-						Text: reviewerStatusText(*reviewerCompletion, nil),
-					}))
-				}
-				terminalizationErr := s.terminalizeReviewerLifecycle(stepID, reviewerCompletion)
-				if statusErr != nil || terminalizationErr != nil {
-					return stepLoopResult{}, errors.Join(statusErr, terminalizationErr)
-				}
 			}
 			if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 				return stepLoopResult{}, err
@@ -568,30 +532,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 	}
-}
-
-func reviewerCompletionHasTranscriptStatus(status *ReviewerStatus) bool {
-	if status == nil {
-		return false
-	}
-	switch strings.TrimSpace(status.Outcome) {
-	case "applied", "noop", "no_suggestions":
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status *ReviewerStatus) error {
-	if s == nil || s.engine == nil {
-		return errors.New("Reviewer lifecycle terminalizer requires an engine")
-	}
-	err := s.engine.steer(stepID, steerEventIntent(Event{
-		Kind:     EventReviewerCompleted,
-		StepID:   exactStepIDPointer(stepID),
-		Reviewer: status,
-	}))
-	return err
 }
 
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) (int, error) {

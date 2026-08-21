@@ -89,12 +89,14 @@ type steeringLocalEntry struct {
 }
 
 type steeringReviewerFeedback struct {
-	suggestions []string
-	visibility  transcript.EntryVisibility
+	originStepID *runtimeids.StepID
+	suggestions  []string
+	visibility   transcript.EntryVisibility
 }
 
 type steeringReviewerError struct {
-	detail string
+	originStepID *runtimeids.StepID
+	detail       string
 }
 
 type steeringCommittedAssistantMessage struct {
@@ -285,6 +287,19 @@ func steerReviewerFeedbackIntent(suggestions []string, visibility transcript.Ent
 
 func steerReviewerErrorIntent(detail string) steeringIntent {
 	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerError: &steeringReviewerError{detail: detail}}}}
+}
+
+func steerReviewerFeedbackFromOriginIntent(stepID runtimeids.StepID, suggestions []string, visibility transcript.EntryVisibility) steeringIntent {
+	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerFeedback: &steeringReviewerFeedback{
+		originStepID: &stepID, suggestions: append([]string(nil), suggestions...), visibility: visibility,
+	}}}}
+}
+
+func steerReviewerErrorFromOriginIntent(stepID runtimeids.StepID, detail string) steeringIntent {
+	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerError: &steeringReviewerError{
+		originStepID: &stepID,
+		detail:       detail,
+	}}}}
 }
 
 func steerHistoryReplacementIntent(engine string, mode compactionMode, compactionNumber int, lastCommittedAssistantFinalAnswer *string, items []llm.ResponseItem) steeringIntent {
@@ -967,9 +982,15 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 		return err
 	}
 	if item.reviewerFeedback != nil {
-		stepID, exactErr := provenance.requireExactStepID()
-		if exactErr != nil {
-			return exactErr
+		stepID := ""
+		if item.reviewerFeedback.originStepID != nil {
+			stepID = item.reviewerFeedback.originStepID.String()
+		} else {
+			var exactErr error
+			stepID, exactErr = provenance.requireExactStepID()
+			if exactErr != nil {
+				return exactErr
+			}
 		}
 		id := runtimeids.NewReviewerFeedbackID()
 		visibility, visibilityErr := sessionEntryVisibilityFromRuntime(item.reviewerFeedback.visibility)
@@ -992,9 +1013,15 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 		return err
 	}
 	if item.reviewerError != nil {
-		stepID, exactErr := provenance.requireExactStepID()
-		if exactErr != nil {
-			return exactErr
+		stepID := ""
+		if item.reviewerError.originStepID != nil {
+			stepID = item.reviewerError.originStepID.String()
+		} else {
+			var exactErr error
+			stepID, exactErr = provenance.requireExactStepID()
+			if exactErr != nil {
+				return exactErr
+			}
 		}
 		id := runtimeids.NewReviewerErrorID()
 		record := session.ReviewerErrorRecord{ID: id, Detail: item.reviewerError.detail}
@@ -1066,24 +1093,15 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 			if err != nil {
 				return err
 			}
-			revision, err := e.TranscriptRevision()
-			if err != nil {
-				return err
-			}
-			e.reviewerRuntimeState().SetActiveStep(eventStepID)
-			return e.emitRawAtRevision(evt, revision)
+			_, err = e.startReviewerActivityRaw(eventStepID)
+			return err
 		}
 		if evt.Kind == EventReviewerCompleted {
 			eventStepID, err := requireExactSteeringStepID(evt.StepID)
 			if err != nil {
 				return err
 			}
-			e.reviewerRuntimeState().ClearActiveStep(eventStepID)
-			revision, err := e.TranscriptRevision()
-			if err != nil {
-				return err
-			}
-			return e.emitRawAtRevision(evt, revision)
+			return e.completeReviewerActivityRaw(eventStepID, evt.Reviewer)
 		}
 		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
 			eventStepID, err := requireExactSteeringStepID(evt.StepID)

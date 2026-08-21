@@ -848,11 +848,6 @@ func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, ste
 	})
 }
 
-func (e *Engine) runReviewerFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
-	e.ensureOrchestrationCollaborators()
-	return e.reviewerFlow.RunFollowUp(ctx, stepID, original, originalCommittedStart, originalCommittedStartSet, reviewerClient)
-}
-
 func (e *Engine) ensureLocked() (session.LockedContract, error) {
 	if locked, ok := e.lockedContractState().Snapshot(); ok {
 		return locked, nil
@@ -969,8 +964,37 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 	if err := e.observePromptCacheRequest(stepID, prepared); err != nil {
 		return llm.Response{}, err
 	}
-	var lastErr error
 	publishedProviderDiagnostics := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 2)
+	resp, err := generateWithRetryClient(
+		ctx,
+		client,
+		req,
+		onDelta,
+		onReasoningDelta,
+		onAttemptReset,
+		func() {
+			e.publishProviderTurnStateDiagnostics(stepID, req.CodexDispatch, publishedProviderDiagnostics)
+		},
+	)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	if err := e.observePromptCacheResponse(stepID, prepared, resp.Usage); err != nil {
+		return llm.Response{}, err
+	}
+	return resp, nil
+}
+
+func generateWithRetryClient(
+	ctx context.Context,
+	client llm.Client,
+	req llm.Request,
+	onDelta func(llm.AssistantDelta),
+	onReasoningDelta func(llm.ReasoningSummaryDelta),
+	onAttemptReset func(),
+	onAttemptFinished func(),
+) (llm.Response, error) {
+	var lastErr error
 	for i := 0; ; i++ {
 		var (
 			resp                    llm.Response
@@ -1029,14 +1053,13 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			}
 		}
 		attemptDone.Store(true)
-		e.publishProviderTurnStateDiagnostics(stepID, req.CodexDispatch, publishedProviderDiagnostics)
+		if onAttemptFinished != nil {
+			onAttemptFinished()
+		}
 		if attemptErr != nil && ctx.Err() != nil {
 			return llm.Response{}, ctx.Err()
 		}
 		if attemptErr == nil {
-			if err := e.observePromptCacheResponse(stepID, prepared, resp.Usage); err != nil {
-				return llm.Response{}, err
-			}
 			return resp, nil
 		}
 		resetAttempt := func() {
