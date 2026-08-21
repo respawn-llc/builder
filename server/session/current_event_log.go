@@ -27,7 +27,6 @@ type currentEventLog struct {
 	lastSequence       int64
 	lastCompleteOffset int64
 	boundaryIncomplete bool
-	frozenEndOffset    *int64
 	mode               currentEventLogMode
 	durabilityObserver DurabilityObserver
 }
@@ -665,8 +664,8 @@ func (l *currentEventLog) readSegmentBackward(
 }
 
 func (l *currentEventLog) boundedReadSize(actual int64) int64 {
-	if l.frozenEndOffset != nil && *l.frozenEndOffset < actual {
-		return *l.frozenEndOffset
+	if l.mode == currentEventLogPersistedSnapshot && l.lastCompleteOffset < actual {
+		return l.lastCompleteOffset
 	}
 	return actual
 }

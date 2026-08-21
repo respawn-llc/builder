@@ -38,7 +38,6 @@ func ResolvePersistedSessionView(
 			BoundaryIncomplete:   eventLog.boundaryIncomplete,
 		}
 	}
-	eventLog.frozenEndOffset = &eventLog.lastCompleteOffset
 	return &PersistedSessionView{meta: meta, eventLog: eventLog}, nil
 }
 
