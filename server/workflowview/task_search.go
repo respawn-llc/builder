@@ -18,7 +18,6 @@ import (
 )
 
 type TaskSearch struct {
-	metadata   *metadata.Store
 	queries    *sqlitegen.Queries
 	projection *TaskStatusProjection
 }
@@ -34,14 +33,13 @@ func NewTaskSearch(
 		return nil, errors.New("task status projection is required")
 	}
 	return &TaskSearch{
-		metadata:   metadataStore,
 		queries:    metadataStore.Queries(),
 		projection: projection,
 	}, nil
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projection == nil {
+	if s == nil || s.queries == nil || s.projection == nil {
 		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := req.Validate(); err != nil {
@@ -58,29 +56,18 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return serverapi.TaskSearchResponse{}, fmt.Errorf("begin task search read transaction: %w", err)
-	}
-	defer func() {
-		if closeErr := tx.Rollback(); closeErr != nil && !errors.Is(closeErr, sql.ErrTxDone) {
-			response = serverapi.TaskSearchResponse{}
-			err = errors.Join(err, fmt.Errorf("close task search read transaction: %w", closeErr))
-		}
-	}()
-	queries := s.queries.WithTx(tx)
-	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
+	if err := s.validateSchemaAndScope(ctx, s.queries, req); err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
 		}
 		return serverapi.TaskSearchResponse{}, err
 	}
 	if req.Mode == serverapi.TaskSearchModeFTS5 {
-		if _, validationErr := queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
+		if _, validationErr := s.queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
 		}
 	}
-	rows, err := s.queryPage(ctx, queries, observation.LiveTaskStatesJSON, req, offset)
+	rows, err := s.queryPage(ctx, s.queries, observation.LiveTaskStatesJSON, req, offset)
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
@@ -91,7 +78,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if hasNext {
 		rows = rows[:req.PageSize]
 	}
-	groups, err := s.materializeGroups(ctx, queries, req, rows)
+	groups, err := s.materializeGroups(ctx, s.queries, req, rows)
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
