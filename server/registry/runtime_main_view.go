@@ -17,10 +17,7 @@ func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.Ru
 	return *view, true
 }
 
-func (r *RuntimeRegistry) publishTranscriptAndMainView(
-	entry *authorityRuntimeEntry,
-	build func() ([]clientui.TranscriptEvent, error),
-) error {
+func (r *RuntimeRegistry) publishTranscriptAndMainView(entry *authorityRuntimeEntry, build func() ([]clientui.TranscriptEvent, error)) error {
 	if err := entry.sessionFeed.PublishBuilt(build); err != nil {
 		return err
 	}
@@ -31,11 +28,7 @@ func (r *RuntimeRegistry) publishTranscriptAndMainView(
 	return r.publishRuntimeMainView(entry, view.Version, view.Activity)
 }
 
-func (r *RuntimeRegistry) publishRuntimeMainView(
-	entry *authorityRuntimeEntry,
-	version clientui.ReadModelVersion,
-	activity clientui.RuntimeActivity,
-) error {
+func (r *RuntimeRegistry) publishRuntimeMainView(entry *authorityRuntimeEntry, version clientui.ReadModelVersion, activity clientui.RuntimeActivity) error {
 	if activity.ActiveStep != nil {
 		active := *activity.ActiveStep
 		activity.ActiveStep = &active
