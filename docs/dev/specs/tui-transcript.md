@@ -321,10 +321,10 @@
 
 - Ring terminal bell when a new `ask_question` is shown.
 - Ring on turn end only if the TUI observed at least two tool calls for an eligible turn.
-- A Reviewer-reviewed turn-end notification is requested only after the Reviewer workflow completes, and every turn-end notification is requested only after the local queued prompt drain is fully idle.
+- Every turn-end notification is requested only after the local queued prompt drain is fully idle.
 - Notifications never delay queued model work.
 - If transcript delivery lags, Kent can omit a notification, delay it until a later Queue drain, or use an earlier observed preview.
-- When the TUI observes a Reviewer-reviewed turn boundary before notification, its preview uses the final answer produced before Reviewer feedback is addressed.
+- Reviewer activity does not defer or otherwise change turn-end notification eligibility or preview selection.
 - A queued prompt drain emits at most one turn-end notification when any observed turn in the drain meets the two-tool threshold, using the last final answer observed by the TUI even when that turn has fewer than two tool calls.
 - Turn-end text includes assistant preview when available, else `<session title>: turn complete`.
 - Ask notifications include `<session title>: Question: <question>` or `<session title>: Action required: <question>`.
