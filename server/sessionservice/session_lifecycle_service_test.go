@@ -108,34 +108,28 @@ type sessionLifecycleRetargeterStub struct {
 }
 
 type sessionNavigationTargetResolverStub struct {
-	target serverapi.SessionNavigationBinding
-	err    error
-	calls  []string
+	target       serverapi.SessionNavigationBinding
+	err          error
+	mu           sync.Mutex
+	calls        []string
+	firstStarted chan struct{}
+	releaseFirst <-chan struct{}
 }
 
-func (s *sessionNavigationTargetResolverStub) ResolveSessionNavigationBinding(_ context.Context, sessionID string) (serverapi.SessionNavigationBinding, error) {
-	s.calls = append(s.calls, sessionID)
-	return s.target, s.err
-}
-
-type firstBlockingSessionNavigationTargetResolver struct {
-	target  serverapi.SessionNavigationBinding
-	started chan struct{}
-	release chan struct{}
-	mu      sync.Mutex
-	calls   int
-}
-
-func (s *firstBlockingSessionNavigationTargetResolver) ResolveSessionNavigationBinding(context.Context, string) (serverapi.SessionNavigationBinding, error) {
+func (s *sessionNavigationTargetResolverStub) ResolveSessionNavigationBinding(ctx context.Context, sessionID string) (serverapi.SessionNavigationBinding, error) {
 	s.mu.Lock()
-	s.calls++
-	call := s.calls
+	s.calls = append(s.calls, sessionID)
+	first := len(s.calls) == 1
 	s.mu.Unlock()
-	if call == 1 {
-		close(s.started)
-		<-s.release
+	if first && s.firstStarted != nil {
+		close(s.firstStarted)
+		select {
+		case <-s.releaseFirst:
+		case <-ctx.Done():
+			return serverapi.SessionNavigationBinding{}, context.Cause(ctx)
+		}
 	}
-	return s.target, nil
+	return s.target, s.err
 }
 
 func (s *sessionLifecycleRetargeterStub) RetargetWorkspace(_ context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error) {
@@ -456,13 +450,19 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	if err := child.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable child: %v", err)
 	}
-	resolver := &sessionNavigationTargetResolverStub{target: serverapi.SessionNavigationBinding{
-		ProjectID:   "project-target",
-		WorkspaceID: "workspace-target",
-	}}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	resolver := &sessionNavigationTargetResolverStub{
+		target: serverapi.SessionNavigationBinding{
+			ProjectID:   "project-target",
+			WorkspaceID: "workspace-target",
+		},
+		firstStarted: firstStarted,
+		releaseFirst: releaseFirst,
+	}
 	service := newTestSessionLifecycleService(containerDir, nil).WithNavigationTargetResolver(resolver)
 
-	response, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
+	request := serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "authorized-navigation",
 		SessionID:       child.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
@@ -470,9 +470,22 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 			TargetSessionID: parent.Meta().SessionID,
 			InitialInput:    textutil.Value("draft reply"),
 		},
-	})
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, resolveErr := service.ResolveTransition(context.Background(), request)
+		firstDone <- resolveErr
+	}()
+	<-firstStarted
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	response, err := service.ResolveTransition(ctx, request)
+	cancel()
 	if err != nil {
-		t.Fatalf("ResolveTransition: %v", err)
+		t.Fatalf("duplicate ResolveTransition waited for the earlier read: %v", err)
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first ResolveTransition: %v", err)
 	}
 	intent, preparation := requireSessionLifecycleLaunch(t, response)
 	targetID, present := intent.SessionID()
@@ -483,71 +496,10 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	if !present || binding.ProjectID != "project-target" || binding.WorkspaceID != "workspace-target" {
 		t.Fatalf("navigation binding = %+v/%t", binding, present)
 	}
-	if len(resolver.calls) != 1 || resolver.calls[0] != parent.Meta().SessionID {
-		t.Fatalf("target resolver calls = %#v, want parent once", resolver.calls)
-	}
-}
-
-func TestServiceResolveTransitionOpenSessionDoesNotWaitForDuplicateRead(t *testing.T) {
-	_, containerDir, parent := createPersistedSession(t)
-	child, err := session.NewLazy(
-		containerDir,
-		"workspace-x",
-		"/tmp/work",
-		sessioncontract.SessionCategoryMain,
-		sessionServiceTestPersistence.Options()...,
-	)
-	if err != nil {
-		t.Fatalf("create child: %v", err)
-	}
-	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}); err != nil {
-		t.Fatalf("InitializeCreationContext: %v", err)
-	}
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable child: %v", err)
-	}
-	resolver := &firstBlockingSessionNavigationTargetResolver{
-		target: serverapi.SessionNavigationBinding{
-			ProjectID:   "project-target",
-			WorkspaceID: "workspace-target",
-		},
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	service := newTestSessionLifecycleService(containerDir, nil).WithNavigationTargetResolver(resolver)
-	request := serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "duplicate-navigation-read",
-		SessionID:       child.Meta().SessionID,
-		Transition: serverapi.SessionTransition{
-			Action:          serverapi.SessionTransitionActionOpenSession,
-			TargetSessionID: parent.Meta().SessionID,
-		},
-	}
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, resolveErr := service.ResolveTransition(t.Context(), request)
-		firstDone <- resolveErr
-	}()
-	<-resolver.started
-
-	secondDone := make(chan error, 1)
-	go func() {
-		_, resolveErr := service.ResolveTransition(t.Context(), request)
-		secondDone <- resolveErr
-	}()
-	select {
-	case resolveErr := <-secondDone:
-		if resolveErr != nil {
-			t.Fatalf("duplicate open-Session transition read: %v", resolveErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("duplicate open-Session transition read waited for the earlier read")
-	}
-
-	close(resolver.release)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first open-Session transition read: %v", err)
+	if len(resolver.calls) != 2 ||
+		resolver.calls[0] != parent.Meta().SessionID ||
+		resolver.calls[1] != parent.Meta().SessionID {
+		t.Fatalf("target resolver calls = %#v, want parent twice", resolver.calls)
 	}
 }
 
