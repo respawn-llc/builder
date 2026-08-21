@@ -362,7 +362,7 @@ The authoritative live status of a Session. It reports whether the Session is un
 
 ### Steering Intent
 
-A typed request to apply one Runtime mutation through the Runtime drain. While an Agent Step executes it waits for a Step Boundary; an Idle Runtime may drain it immediately. A Steering Intent carries only its concrete operation payload and acknowledgement or result. It has no generic request identity, replay, or reconciliation behavior.
+A typed request accepted by an Active Session Runtime to apply one Session mutation in acceptance order. While an Agent Step executes, a Steering Intent that needs a Step Boundary waits for that boundary. An Idle Runtime may apply it immediately. A Steering Intent carries only its concrete operation and acknowledgement or result. It has no generic request identity, replay, or reconciliation behavior.
 
 ### Append Certainty
 
@@ -398,7 +398,7 @@ A complete agent run from a user submission until the runtime returns to idle. A
 
 ### Step Boundary
 
-The interval after one Agent Step ends and before another provider request begins. The Active Session Runtime drains its Steering Queue until empty and then derives whether compaction, an ordinary Agent Step, or idle comes next.
+The interval after one Agent Step ends and before another provider request begins. The Active Session Runtime applies accepted short Session mutations before it chooses compaction, an ordinary Agent Step, or idle as its next state.
 
 ### Queue
 
@@ -408,15 +408,11 @@ The user-facing TUI action that holds user messages until the current turn ends.
 
 The user-facing TUI action that injects a message to take effect after the current step ends, mid-turn between steps, rather than waiting for the turn to finish.
 
-### Steering Queue
-
-The process-local typed FIFO owned by one Active Session Runtime. It contains Steering Intents that wait for the Runtime drain. An Idle Runtime drains when work arrives; an Executing Runtime drains at its next Step Boundary. The Runtime drains until empty before another provider request.
-
 ### Equal Full-Control Attach
 
 Every client attached to a Session has the same control capabilities over the shared Active Session Runtime. Kent has no controller client, limited-control client, read-only attachment, or client lease.
 
-Client connection state is not Session state. A client connection or disconnection for any reason never starts, stops, pauses, cancels, closes, replays, restores, or otherwise changes a Session, Agent Turn, Goal, Queue, Steer, Worktree operation, or accepted Steering Intent. Only an accepted product operation changes server state. The server publishes every event without using subscriber count as a condition: zero connected clients do not suppress publication, and every connected client receives each applicable broadcast.
+Client connection state is not Session state. A client connection or disconnection for any reason never starts, stops, pauses, cancels, closes, replays, restores, or otherwise changes a Session, Agent Turn, Goal, Queue, Steer, Worktree operation, or accepted Session mutation. Only an accepted product operation changes server state. The server publishes every event without using subscriber count as a condition: zero connected clients do not suppress publication, and every connected client receives each applicable broadcast.
 
 ### Goal
 

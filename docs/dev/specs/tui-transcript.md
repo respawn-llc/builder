@@ -229,7 +229,8 @@
 - Only one modification can apply to a worktree at a time.
 - A competing modification waits for the earlier modification and then evaluates the current state again.
 - If the earlier operation deleted the worktree, a later request to enter it fails because the worktree is absent. A later request to delete it again succeeds without another change.
-- Deletion fails immediately if a targeting Active Session Runtime is Executing, processing or holding pending Steering, or has selected/begun exact execution. Kent does not wait for or stop that work.
+- Deletion fails immediately if a targeting Active Session Runtime is executing, processing or holding pending Session mutations, has selected or begun provider or tool work, or remains retained for Workflow control.
+- Kent does not wait for or stop work that blocks deletion.
 - A targeting Idle Active Session Runtime is retired before its Session is retargeted as dormant and the Worktree is removed.
 - If human input becomes accepted first, deletion fails. If deletion retires and retargets first, later input uses the new target.
 - A rejected deletion leaves Session targets, Kent worktree information, Git state, and branch state unchanged.
@@ -254,10 +255,18 @@
 - After successful TUI creation, the TUI applies the ordinary enter operation.
 - Setup failure keeps the Session on its previous worktree, preserves the created worktree for inspection or repair, and shows a foreground error.
 - TUI enter and leave actions return the domain Worktree Operation acknowledgement without waiting for an active Agent Step or the Worktree transition to finish.
-- For an Active Session Runtime, each enter or leave is an independent Steering Intent. At the head of the drain, the Worktree owner completes setup and transition work before Kent applies the target, Working Directory, tool environment, and reminder or failure.
-- Worktree transitions share ordinary Steering FIFO order with human input and receive no priority, matching-retry response, pending-operation deduplication, or different-target busy rejection.
-- Attached clients receive the final success or failure. A successful change becomes model-visible through the ordinary worktree reminder.
-- Unapplied Worktree transition Steering is lost on server shutdown or restart and is never resumed. Reconnecting clients refresh Worktree status.
+- For an Active Session Runtime, each enter or leave is an independent Session mutation.
+- Kent accepts an enter or leave without waiting for the transition.
+- The Worktree owner later applies the target, Working Directory, tool environment, and reminder or failure.
+- Accepted human messages retain their own first-in, first-out order, but a Worktree transition takes the next eligible boundary before human model work that is still queued and has not started.
+- A Worktree transition never preempts an Agent Step already running.
+- After that Agent Step ends, Worktree applies before another ordinary continuation.
+- Human messages remain accepted while Worktree is in progress.
+- Repeated Worktree requests receive no matching-retry response, pending-operation deduplication, or different-target busy rejection.
+- Attached clients receive the final success or failure.
+- A successful change becomes model-visible through the ordinary worktree reminder.
+- An accepted Worktree transition that has not applied is lost on server shutdown or restart and is never resumed.
+- Reconnecting clients refresh Worktree status.
 - Worktree status is observational and target-local. If the recorded worktree directory, branch/ref, or Git binding is missing, status returns the recorded target with typed warnings and does not repair or retarget the session. Status has no selector field; branch and display facts are informational. Status and list omit dirty and ahead/behind state; delete probes dirty state only for the selected live worktree.
 - Deleting a missing registered worktree moves its current Session to main, removes only stale Kent information, and leaves any directory that Git does not recognize as a linked worktree untouched.
 - Worktree setup timeout is configured by `worktrees.setup_timeout_seconds`. The default is 60 seconds. Unset timeout uses the default; a configured timeout of zero or less disables the timeout.
@@ -366,13 +375,23 @@
 ## Reviewer
 
 - Post-turn reviewer exists behind config and defaults to `reviewer.frequency = "edits"`.
-- Reviewer runs only after completed assistant final handoff and only if the turn executed at least one tool call.
+- Reviewer runs only after an eligible completed assistant answer.
 - The Reviewer receives shorter tool output than the main agent.
 - Reviewer contract is minimal JSON `{"suggestions":["..."]}`; invalid payloads are ignored non-fatally.
-- A Reviewer generation failure creates one expanded Reviewer error row. Reviewer running and completion create no transcript row.
-- If suggestions exist, Kent creates the Reviewer feedback row immediately and then runs one extra main-agent follow-up. The row preserves the ordered Markdown suggestions and uses their count as its compact summary.
+- Kent shows the main answer without waiting for Reviewer.
+- Input and ordinary model or tool work remain available while review runs.
+- The TUI status line shows `review` only while the server's live Reviewer activity is `running`.
+- The TUI does not infer Reviewer activity from transcript rows, notifications, or ordinary Runtime activity.
+- Reviewer status is best-effort live state.
+- Reconnect, Runtime replacement, or restart may show no earlier review.
+- Reviewer running and completion create no transcript row.
+- A Reviewer generation failure creates one expanded Reviewer error row later when the Runtime can still receive it.
+- If suggestions exist, Kent later creates one Reviewer feedback row and requests one ordinary main-agent follow-up.
+- The Reviewer feedback row preserves the ordered Markdown suggestions and uses their count as its compact summary.
 - A follow-up that returns a nonblank final answer succeeds. Kent shows that answer and then creates a separate Reviewer outcome row that reports the suggestions as applied.
 - An explicitly blank silent follow-up succeeds without another assistant answer. Kent then creates a separate Reviewer outcome row that reports no changes applied.
 - `reviewer.verbose_output` controls only the TUI's initial feedback presentation: enabled uses `O`, disabled uses `OC`. It never controls whether the feedback row exists.
 - If Kent cannot apply nonempty Reviewer feedback, the issued feedback row remains visible and the engine and Session fail. This includes a missing follow-up answer; an explicitly blank follow-up final answer is successful, not missing.
-- The Reviewer runs once and does not review its own follow-up.
+- Only one Reviewer runs at a time.
+- Another eligible answer is skipped rather than queued.
+- Reviewer does not review its own follow-up.

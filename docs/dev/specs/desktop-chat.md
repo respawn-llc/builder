@@ -55,6 +55,10 @@
 - A later Agent Step starts fresh at `Working…`. Desktop does not morph Thinking Status into an assistant message.
 - Thinking Status is non-interactive. It has no disclosure, Copy action, hover detail, or link to a Reasoning Trace.
 - While the Reviewer model request is processing, the same transient presentation shows a spinner and `Reviewing…`. Reviewer completion removes it and creates no completed-review marker.
+- The main answer is committed and displayed before Reviewer finishes.
+- The composer remains available, and later user or main-model work may proceed while review runs.
+- Reviewer activity is best-effort live state.
+- Desktop does not reconstruct an earlier review from transcript history or require it to survive reconnect, Runtime replacement, or restart.
 - Main-agent Thinking Status takes precedence over Reviewer activity. If a main-agent follow-up starts while Reviewer activity is still represented, the fresh ordinary `Working…` and Thinking Status presentation replaces `Reviewing…`.
 - While a Question or Approval waits for the operator, Thinking Status is absent. The prompt picker alone owns the waiting state.
 - When answering or external resolution resumes main-agent work, Desktop starts fresh at `Working…`.
@@ -145,6 +149,8 @@
 - Supervisor has exactly `Off`, `After edits`, and `Always`, with descriptions `No automatic review`, `Review turns that changed files`, and `Review every completed turn`.
 - Thinking follows the server-provided ordered values. Enumerated values use a stepped control and display the exact chosen value; Low is gray, Medium and High use the primary tone, and Xhigh, Max, and Ultra use the secondary tone. Unsupported Thinking is omitted. A supported non-enumerated value uses an input and Apply action. Rejected input remains entered and shows notification feedback.
 - Fast mode is omitted when unsupported. Questions remains visible and editable as a persisted on/off policy when the selected Agent lacks `ask_question`; the unavailable capability still means that Agent cannot call the tool. Required Auto-compaction remains on and unavailable. When compaction is disabled by Session policy, Auto-compaction shows its stored value but is unavailable.
+- A successful Fast Mode change persists with the Session and affects the next provider or compaction request, never work already running.
+- Reopening the Session restores its Fast Mode setting.
 - Before a new Session's first prompt, all settings and message text are one draft. An untouched New Chat uses the same effective Agent and setting selection as Session launch for its Project workspace. The server persists a pre-Session draft when its message contains nonblank content or at least one setting differs from the current authoritative defaults. Saving a blank message with all current defaults removes that artifact. The first approved action materializes the complete draft atomically into a durable Session. Materialization does not start an Agent Turn or validate provider or runtime readiness. The triggering text, prompt command, or Goal operation then runs as a separate ordinary Session operation. When materialization cannot complete, New Chat keeps the exact workspace draft and shows the failure. When materialization succeeds but the triggering operation fails or is not received, the Session remains with its composer draft and Kent does not automatically replay the trigger. After a connection interruption, Chat refreshes server state and continues from the authoritative workspace draft or a Session whose identity it already received. If a committed materialization response is lost, the Session remains in the Session browser while the lazy route refreshes to a new empty Chat; Desktop does not infer the Session, switch to it, retry materialization, or replay the trigger. Materialization does not lock Agent; Agent remains editable until the first model request, and other changes apply through normal runtime controls.
 - Requested setting values appear immediately and reject repeat activation while pending. On failure, the control returns to the latest server value and shows notification feedback. Other non-Agent settings remain available while work runs and affect only later applicable work, never work already in flight.
 - Sending remains available during a pending setting change. Server operation order determines whether it observes the old or requested value.
@@ -160,7 +166,9 @@
 - Send, Steer, the separate post-turn Queue, human-input acceptance, and Step-boundary timing follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification.
 - `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation except that it accepts an active workspace-path suggestion.
 - `/compact` runs manual context compaction. Text after the command is optional compaction guidance and follows the same behavior as the terminal command.
-- `/compact` enters the Steering Queue. Pending Work shows the exact slash form, including guidance; compaction is selected as an Agent Step only after Steering drains and is never sent to the model as user text.
+- `/compact` enters Pending Work in accepted Session mutation order.
+- Pending Work shows the exact slash form, including guidance.
+- Compaction is selected as an Agent Step only after earlier accepted short mutations apply and is never sent to the model as user text.
 - Ctrl+C is never a Desktop Stop shortcut.
 - On macOS, Command-period stops the current Session's stoppable active work immediately.
 - On Windows and Linux, an Escape handled by the current temporary surface performs only that surface's local action. The first otherwise-unhandled Escape arms Stop for two seconds. A second otherwise-unhandled Escape within that window stops the current Session's stoppable active work.
@@ -204,13 +212,15 @@
 - The progress bar never recolors its complete fill when usage crosses a threshold.
 - Authoritative usage changes animate the progress value. Reduced motion applies the new value immediately.
 - The pop-up has no compaction-guidance field. Its `Compact` action is equivalent to `/compact` with no guidance.
-- Activating `Compact` closes the Context pop-up and uses the same Steering flow as `/compact`. Every other transient surface that initiates manual compaction also closes after accepting the action.
+- Activating `Compact` closes the Context pop-up and uses the same Session mutation behavior as `/compact`.
+- Every other transient surface that initiates manual compaction also closes after accepting the action.
 - Manual compaction guidance is available only through `/compact <guidance>`.
 - While any compaction is active, the compact Context meter replaces its ordinary percentage and ring with a secondary-tone spinner and `Compacting` in the same trigger footprint.
 - The compacting Context trigger remains interactive and can open the Context pop-up. The pop-up keeps the last authoritative usage values visible until new usage arrives.
 - Automatic compaction does not close an already-open Context pop-up. While compaction remains active, an open pop-up keeps its usage details visible and disables `Compact`.
-- Desktop may accept another manual-compaction request while compaction is active; it remains a distinct Steering Intent and receives its own later typed outcome.
-- Repeated manual compaction requests remain separate Steer items. Each is evaluated independently when it reaches the Steering drain.
+- Desktop may accept another manual-compaction request while compaction is active; it remains distinct and receives its own later typed outcome.
+- Repeated manual compaction requests remain separate Steer items.
+- Each manual compaction request is evaluated independently in accepted order.
 - A failed pending or immediate manual-compaction request leaves no pending item. Desktop shows a Sonner error unless an authoritative durable transcript error is explicitly reported as the owner of that failure; Desktop never synthesizes a transcript row.
 - Desktop keeps no local post-compaction cooldown or Agent-Step counter. The server rejects a manual compaction before an Agent Step boundary has occurred since Session creation or the latest successful compaction, and Desktop surfaces that typed error.
 - Successful user-requested compaction is silent while the Desktop window is focused.
@@ -312,7 +322,11 @@
 - Dismissing the sidebar does not cancel the Switch request.
 - A successful Switch acknowledgement closes the Worktree sidebar immediately.
 - Desktop does not optimistically change the current target. The under-composer control and selected list row change only after the authoritative target update arrives.
-- For an Active Session Runtime, the server accepts the target change as a Steering Intent in ordinary FIFO order with human input. Desktop adds no second waiting state or priority rule.
+- For an Active Session Runtime, the server accepts the target change without waiting for it to finish.
+- Desktop adds no second waiting state for an accepted target change.
+- Accepted human messages retain their own first-in, first-out order, but a Worktree transition takes the next eligible boundary before human model work that is still queued and has not started.
+- A Worktree transition never preempts an Agent Step already running.
+- Human messages remain accepted while a Worktree transition is in progress.
 - The Worktree Operation acknowledgement and a later successful transition completion show no Toast or other success notice.
 - A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic through Sonner, and follows the server's existing model-visible failure-Steer behavior.
 - The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
@@ -405,6 +419,9 @@
 
 - An active Question or Approval replaces the normal text-editor area inside the same composer island. The ordinary message/settings draft remains preserved but hidden. Settings, Context, and Stop remain available.
 - The ordinary status line and bottom action row stay present beneath the picker. Stop remains visible while the runtime awaits prompts.
+- Stop uses the same server-authoritative Instant Stop path as ordinary running work.
+- A live Question or Approval remains interruptible.
+- Desktop never cancels only its local prompt picker.
 - Questions and Approvals use one shared prompt-picker interaction and visual language. Their server-provided option kinds differ, but Desktop does not create separate form architectures.
 - The picker shows one pending prompt at a time. It has no tabs, question-title synthesis, or duplicated question previews.
 - The current question is Markdown above a compact navigation line. The line has previous/next chevrons around the current question position. Answer options appear below the navigation line.
@@ -474,7 +491,8 @@
 - Opening a native Chat pop-out failure leaves Chat in the main window and uses the existing native-window failure notice. Desktop does not create a fallback duplicate window or partially navigate the main window.
 - Prompt-answer races follow the Question/Approval contract: externally resolved prompts disappear, stale results cannot replace current prompt state, and a failed still-pending submission preserves its local answer draft.
 - After a batch failure, Desktop refreshes authoritative pending state and preserves local drafts only for prompts that remain pending. Desktop does not retry or replay the failed batch automatically.
-- Impossible typed payloads, transcript integrity violations, and reducer/lifecycle states fail immediately in development. Production uses the owning transcript or operation failure path without placeholder rows, swallowed errors, or fake successful state.
+- Impossible typed payloads and transcript integrity violations fail immediately in development.
+- Production uses the owning transcript or operation failure path without placeholder rows, swallowed errors, or fake successful state.
 
 ## Desktop Exceptions
 

@@ -323,7 +323,8 @@
 - Script stdout is parsed as the workflow completion JSON using the same completion contract as agent nodes. Stderr is diagnostics only and is not mixed into completion parsing.
 - Invalid stdout, invalid script path, interruption, and execution errors leave the script's current Node interrupted with bounded structured details.
 - Script completion applies the selected Transition and creates no retained execution history.
-- Successful Script completion applies exactly one durable Current Node transition. Durable completion and exact retirement may arrive in either order and reduce to the same completed outcome without duplicating continuation or interruption.
+- Successful Script completion applies exactly one durable Current Node transition.
+- A Script finishes through its ordinary direct completion and retirement path without Agent post-turn optimization.
 - Resuming an interrupted Script Node runs the script again with its current inputs, the current script path, and the latest outgoing completion requirements.
 
 ## Workflow Prompting
@@ -332,20 +333,21 @@
 - Every Node Transition into an Agent Current Node materializes exactly one typed assignment for the target Session before its Exact Execution Scope begins.
 - Workflow preparation may resolve or change Session, execution-target, provider, assignment, and Current Node binding facts before durable Current Node admission.
 - Competing preparations may therefore leave accepted Session-side effects. Kent does not promise side-effect-free losing preparation and does not roll back or compensate those effects.
-- With an Active Session Runtime, the assignment enters the ordinary typed Steering FIFO. Without one, the dormant Session Store remains authoritative.
-- Runtime assignment acceptance and application establish FIFO mutation order only. They do not reserve the Workflow start, choose the winning Current Node, or own start readiness or result delivery.
-- Assignment acceptance opens human Send/Steer, settings, and ordinary Steering admission. Post-turn Queue submission remains unavailable because no Agent Turn has begun.
-- The first committed durable Current Node admission wins among competing starts.
+- With an Active Session Runtime, the assignment follows the Session's first-in, first-out mutation order.
+- Without an Active Session Runtime, the durable Session remains authoritative for assignment.
+- Assignment acceptance opens human Send/Steer and short Session settings while startup is preparing.
+- Post-turn Queue remains unavailable until an Agent Turn exists.
 - Preparation creates no live Exact Execution Scope and does not make the Current Node running or interruptible.
-- Before publication begins, caller cancellation consumes the detached Agent execution and releases its resources. Once publication begins, cancellation does not interrupt durable admission or split admission from exact publication.
-- Publication revalidates the Current Node, target Runtime generation, and absence of conflicting live execution while Workflow mutation ownership is held. A committed admission publishes every exact Scope, index, Runtime binding, and running fact before that ownership releases.
-- If another Workflow lifecycle operation changed the Current Node first, Kent discards the detached execution, preserves the winning Workflow state and successor behavior, and publishes no exact state.
-- A definitely uncommitted admission publishes no exact state and leaves the Current Node ready for explicit recovery. An indeterminate admission terminates the backend.
-- The Workflow owner invokes the provider only after publication releases Workflow mutation ownership. Cancellation after publication but before provider invocation finalizes the published execution without invoking the provider.
-- Authority owns exact start exclusion until retirement. Runtime assignment state does not remain as a second start authority.
-- Existing explicit Resume durably requeues an interrupted Current Node and queues its fresh explicit start.
-- Abrupt process death may occur before start disposition. On the next startup, the existing Workflow restart owner marks affected executable Current Nodes interrupted.
-- Kent adds no retry, replay, compensation, rollback, clear wait, notification, listener, polling, caller-independent continuation, cleanup worker, or second admission attempt.
+- The first committed durable Current Node admission wins among competing starts.
+- Immediately before admission, Workflow Execution checks that the expected Current Node still exists and no conflicting exact execution is live.
+- If another Workflow lifecycle operation changed the Current Node first, Kent discards the losing start and preserves the winning Workflow state.
+- A definitely uncommitted admission publishes no exact execution and leaves the Current Node available for explicit recovery.
+- An indeterminate admission terminates the backend.
+- The provider starts only after durable admission and matching exact execution are live.
+- Session Runtime Authority owns exact start exclusion from publication through retirement.
+- Existing explicit Resume durably requeues interrupted Current Nodes and queues their fresh explicit starts.
+- Abrupt process death may occur before startup finishes.
+- On the next startup, Kent marks affected executable Current Nodes interrupted.
 - A direct Transition that continues the same Session without an Approval, pause, Session change, or intervening Node keeps that Active Session Runtime and Steers exactly one next assignment. Kent does not close and reopen the Runtime for that continuation.
 - Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
 - When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.
@@ -412,13 +414,13 @@
 - Manual Move presents exposed protected Assignee and thinking Parameters through the ordinary required-value fields and applies the same selection validation.
 - Manual Move hides and ignores the protected Assignee value for retained-Session reuse and hides either protected value when its selector resolves automatically from zero or one option.
 - A protected value hidden because its selector is disabled, unavailable, or topology-inapplicable is not part of the completion contract and remains an unknown extra value.
-- Deliberately selecting an Approval-gated Transition counts as its Approval. Kent applies the move without creating another Approval and clears any older pending Approval.
+- Deliberately selecting an Approval-gated Transition counts as its Approval.
+- Kent applies that move without creating another Approval.
 - Task Start and manual movement into executable work make no Task change while Execution Target selection is required. Dismissal leaves the Task unchanged.
 - After required selection, Task Start durably places the Task and acknowledges that placement before Execution Target resolution, filesystem work, setup, Session creation, or runtime startup. Those operations run asynchronously without holding the shared Workflow mutation permit; failure interrupts the placed Current Node through the ordinary runtime-start error path.
 - Once a Manual Move is ready to apply and any required Execution Target selection has succeeded, Kent automatically interrupts all live Agent and Script work on the Task, waits for it to stop, revalidates the move, and applies it. A separate Interrupt action is not required.
-- As part of that interruption, Manual Move cancels every pending Question on the Task.
+- As part of that interruption, Manual Move cancels every pending Question and denies and removes every pending Approval on the Task before applying the move.
 - Human `kent task complete --force` is command composition over the existing Task Interrupt and Manual Move operations. It explicitly interrupts and waits first, then invokes this same Manual Move owner with the selected outgoing Transition, commentary, and Parameter values; it is not another completion authority.
-- A pending Approval in a Session blocks Manual Move until it resolves.
 - Other conflicting lifecycle operations block Manual Move.
 - If revalidation or movement fails after live work has been interrupted, the origin Current Nodes remain interrupted and Kent surfaces the move failure instead of resuming them.
 
@@ -477,10 +479,16 @@
 - The compaction request uses the pre-compaction cache key and includes the durable completed assignment and handoff. The replacement summary describes that assignment as completed and cannot present it as still in progress.
 - A successful replacement does not change the retained Session's prompt-cache key. Ordinary `continue_session` and `compact_and_continue_session` keep using that Kent Session ID; changed Workflow assignment and Session Contract content naturally invalidate the changed request prefix.
 - Fan-out compacts the source history once before Session copies are created. Reusing successors receive the same summary with distinct fresh cache keys.
-- Workflow Pre-Compaction is best-effort after durable completion. Kent preserves the history-replacement CommitReceipt separately from later operational errors and does not roll back completion or strand the existing held continuation.
-- A committed replacement remains the authoritative Workflow Pre-Compaction boundary even when later usage, observer, prompt-snapshot, status, or other finalization work reports an error. Kent surfaces that diagnostic nonfatally, releases held continuation, and a later CAC target must not generate a second summary.
-- An uncommitted replacement leaves no boundary. Kent surfaces the operational diagnostic nonfatally and releases held continuation. Threshold-only work proceeds without pre-compaction; authored `compact_and_continue_session` retains its existing target-time CAC, disabled/error, interruption, and ordinary Resume behavior.
-- Nonfatal diagnostics must not fail or interrupt the already-completed source; an Approval source remains waiting for Approval. Cancellation or interruption before durable completion remains fatal through the normal source-scope path. Cancellation after durable completion may abort optional post-turn optimization, but it must settle the completed operation without interrupting the removed source or suppressing its durable continuation. A committed replacement remains authoritative. This feature adds no restart-stable retry, Assignment repair, durable Approval gate, or Resume prerequisite.
+- Workflow Pre-Compaction is best-effort after durable completion and never rolls back the completed Current Node.
+- A committed replacement remains the authoritative Workflow Pre-Compaction boundary even when later finalization reports an error.
+- A later `compact_and_continue_session` target does not create a second summary for a committed Workflow Pre-Compaction boundary.
+- An uncommitted replacement leaves no Workflow Pre-Compaction boundary.
+- Threshold-only work proceeds without pre-compaction after an uncommitted replacement.
+- Authored `compact_and_continue_session` retains its existing target-time behavior after an uncommitted replacement.
+- After compaction succeeds, fails, or is canceled, the durable successor or Pending Approval eventually becomes available through ordinary Workflow continuation exactly once.
+- Nonfatal post-completion diagnostics do not fail or interrupt the already-completed source.
+- An Approval source remains waiting for Approval.
+- Cancellation before durable completion follows the source execution's ordinary failure behavior.
 
 ## Parallelism And Joins
 
@@ -508,16 +516,26 @@
 - When Agent and Script Nodes are both eligible within their applicable capacity, Kent gives neither kind priority. The same-Task continuation preference applies across both kinds.
 - Explicit Start, Resume, approval, and executable manual move may exceed the agent concurrency limit without preempting existing work.
 - Resuming a Task whose automatic Agent Current Nodes are waiting for capacity promotes those queued Nodes into explicit admission. The same Resume action covers an automatically queued first execution and a queued continuation.
+- Public Task Resume classifies and requeues every eligible interrupted Current Node on the Task.
 - Resume returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
 - Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
-- Only running exact execution authorizes Interrupt. A queued Agent or Script alone does not authorize Interrupt. If startup publication is in progress, an otherwise authorized Task Interrupt waits on Workflow mutation serialization for running or failed, then selects ordinary running work if present. A running Agent or Script may authorize Interrupt. A Workflow-completed Agent Step and a finalizing Agent are not interruptible while their Exact Execution Scope remains for Step closure or retirement.
+- Retained-Session Send/Steer resolves one exact Session, Current Node, and parallel branch.
+- Retained-Session Send/Steer requeues and starts only that selected Current Node.
+- Sibling validation or startup failure cannot fail the selected submission or start sibling work.
+- Retained-Session input is accepted only after that selected Current Node has a matching fresh live Workflow Agent execution.
+- Matching live Agent execution remains interruptible while running or waiting for a Question or live Approval.
+- A running Script is also interruptible.
+- A queued Agent or Script alone does not authorize Interrupt.
+- If startup admission is in progress, an otherwise authorized Task Interrupt waits for that short Workflow decision to finish, then interrupts matching live work if present.
+- A Workflow-completed Agent Step and a finalizing Agent are not interruptible while their Exact Execution Scope remains only for Step closure or retirement.
 - Start and Resume admit selected parallel branches independently. A failed branch does not undo or block a sibling that started successfully.
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.
 - Restart does not restore live Questions, live Approvals, Automatic Intents, or Exact Execution Scopes. Kent marks each affected executable Current Node interrupted with a restart reason.
 - A pending Transition Approval survives restart with the exact frozen Transition that the operator saw.
 - Resume does not replay answers or apply a Workflow effect blocked by a prior durability failure.
 - Kent never retries an interrupted Current Node automatically.
-- Task Interrupt can target one Session or every actively executing agent and Script on the Task. A waiting Question and any state without active execution are not interruptible.
+- Task Interrupt can target one Session or every live Agent and Script execution on the Task, including an Agent waiting for a Question or live Approval.
+- State without matching exact live execution is not interruptible.
 - Clients offer Interrupt only while Kent reports matching active execution. Kent checks again before interrupting and makes no change if execution has already stopped.
 - Saved state without matching live execution never becomes interruptible or completion-authoritative as a fallback.
 - Live completion can change a Task only from the matching Exact Execution Scope, Run, and Agent Step. A stopped scope and a non-current Node cannot change Task state. Human forced completion is the Interrupt-then-Manual-Move composition defined above.

@@ -9,7 +9,9 @@
 - Terminal-result delivery is best-effort and never delays execution completion, waiting callers, queued work, interruption, or successor scheduling.
 - Each controlling TUI may run its configured read-only lifecycle command after it accepts a lifecycle event. Desktop, headless, subagent, and server-only use never run it. The server neither supplies nor overrides the command.
 - Each client transcript subscription is ordered and sequence-numbered. Hydration is the first message. Every later update has the next per-subscription sequence number; each update contains the required content, tool completions appear in committed order, and committed assistant entries retain the identity of their streamed output. Clients apply every received message once and in order. Clients receive neither total transcript counts nor absolute offsets or revisions.
-- Opening or reopening Chat hydrates fresh server-authoritative transcript, RuntimeActivity, Session identity and status, execution target, active execution, reasoning, Reviewer, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state. Feed delivery state never replaces those authoritative facts. A missed earlier publication cannot prevent hydration.
+- Opening or reopening Chat hydrates fresh server-authoritative transcript, RuntimeActivity, Session identity and status, execution target, active execution, reasoning, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state.
+- A live Runtime may also report current Reviewer activity as best-effort state without reconstructing an earlier review from transcript history or promising that reconnect observes it.
+- Feed delivery state never replaces authoritative Session facts.
 - Transcript delivery does not promise lossless continuity across subscription establishment, disconnection, process failure, or recovery. When a client detects discontinuity, it reopens the subscription and refreshes authoritative Session state instead of remaining silently stale.
 - A Session with no execution target hydrates without one. Failure to resolve an execution target fails Chat opening or reopening with a clear error; it never becomes an absent or stale target.
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
@@ -30,9 +32,10 @@
 
 - The core model tools are `shell`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
 - Kent does not expose model-callable Goal, worktree, Task, or Workflow tools outside Workflow-controlled Sessions. Adding a tool requires explicit human approval and a spec update.
-- Model/transcript-visible Session mutations use typed Steering Intents unless the Runtime Steering specification assigns the operation to an exact or direct owner.
-- `steer` applies submitted input through the Steering Queue. `queue` remains the separate post-turn user Queue.
-- A human steer remains one user message and applies as one FIFO Steering item.
+- Model/transcript-visible Session mutations follow the Active Session Runtime's accepted mutation order unless the Runtime Steering specification assigns the operation to an exact or direct owner.
+- `steer` applies submitted input through that accepted mutation order.
+- `queue` remains the separate post-turn user Queue.
+- A human steer remains one user message and applies as one first-in, first-out Session mutation.
 - A `kent run steer` invoked from another Session emits each accepted submission as a separate developer-role `agent_steer` message in submission order.
 - A `kent run --continue` invoked from another Session that opens an existing Session uses the same `agent_steer` message. Prompts that create a Session retain their ordinary behavior.
 - A steer issued from another Session contains exactly:
@@ -48,7 +51,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - The message includes the source Session ID and omits its name.
 - A present malformed `KENT_SESSION_ID` fails `kent run steer` before submission. An absent or blank value uses the human-steer behavior.
 - Prompt history stores the complete wrapped message.
-- Tool lifecycle effects, Runtime notices, additions after history replacement, and other model/transcript-visible results enter through the owning Agent Step or a typed Steering Intent. Line-by-line Markdown streaming remains transient presentation rather than a committed Runtime mutation.
+- Tool lifecycle effects, Runtime notices, additions after history replacement, and other model/transcript-visible results enter through the owning Agent Step or accepted Session mutation order.
+- Line-by-line Markdown streaming remains transient presentation rather than a committed Runtime mutation.
 - A Kent-executed tool call is durable before Kent begins its execution. Provider-hosted work may already be complete when Kent receives its outcome; that outcome follows the same compatible Result Group durability as Kent-executed results. Kent commits compatible complete tool results from one Agent Step in one or more ordered Result Groups; an Agent Turn is never a Result Group. Each result keeps its completion, model-visible output, and attached operator diagnostic together, whether it reports success or error.
 - Result Groups preserve provider-required order and otherwise the Agent Step's stable result order. Clients and later model requests see no part of a Result Group before the complete Result Group is durable.
 - Runtime notices that are not model-visible remain in the transcript.
@@ -65,6 +69,10 @@ To respond, run: kent run steer <source-session-id> "message"
 - A `shell` failure never adds the `exec_command failed:` prefix to its model-visible error.
 - Commands have no lifetime limit. `yield_time_ms` returns control and leaves the command running in the background. An output check with no requested wait may return available output immediately.
 - Kent does not limit concurrent command processes, including background processes visible through `/ps`.
+- A foreground command may run while later short Session settings, human input, and model-visible notices are accepted and applied.
+- Kent applies a foreground command's terminal output or typed failure before another provider request starts.
+- After a command moves to the background, it no longer blocks unrelated provider or tool work.
+- The process owner later records and delivers the background terminal result when the Session can still receive it.
 - A model output check requesting less than 15 seconds fails with `Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry`. One requesting more than 24 hours fails with `This poll is too long. Consider using system cron jobs and \`kent run\` headless runs for tasks that require such long wait periods`. Sending input is not subject to those limits.
 - A non-zero command exit is recoverable and does not abort the model turn. Launch failures are not retried automatically. Interruption sends `SIGINT`, then `SIGKILL` after 10 seconds.
 - `[shell].postprocessing_mode` accepts only `none`, `builtin`, `user`, or `all`; omission selects the built-in default, while an empty or unknown value is an error. `[shell].postprocess_hook` is optional; absence is `null`, and a present empty or whitespace-only value is invalid.
@@ -116,6 +124,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - Suggested questions support freeform commentary and use one-based `recommended_option_index`. In the TUI, `Tab` switches between suggestions and freeform editing. A recommendation uses a Success-colored marker and a faint recommended note; selecting that row also applies the ordinary selected-row style. Choosing empty freeform opens editing, and a freeform answer cannot be empty. Returning to suggestions preserves an unsent freeform draft.
 - Internal approvals carry ordered typed options whose labels are authoritative. Outside-workspace access ordinarily offers `Allow once`, `Allow for this session`, and `Deny`, but clients render the labels in the live request and never reconstruct them from decisions. TUI Approval-commentary delivery follows `tui-ask-prompts.md` and `tui-chat-core.md`; the Question CLI passes optional commentary directly through the existing Approval answer.
 - A Question or Approval is not presented when its preceding durability barrier fails. Kent surfaces the failure, ends the affected exact execution, and does not replay the blocked interaction.
+- A live Agent execution waiting for a Question or Approval remains interruptible.
+- Interrupt cancels the pending prompt through the ordinary exact-execution outcome.
 - Question origin is not shown in the UI. Stored answers explicitly include the selected option number and commentary.
 - A prompt answer goes directly to its exact pending-prompt owner and is not a Steering Intent. Single-prompt answers follow prompt order and are not retained across restart. A submitted answer payload is immutable; an editable draft after failed delivery affects only a later explicit submission. Supported post-answer actions validate their inputs.
 - When one model response prepares several valid `ask_question` calls, Kent keeps them serial and FIFO. A single-prompt answer remains in flight until a later prepared Question becomes pending or the same Exact Execution Scope closes. Clients keep the accepted Question visible but disabled until authoritative prompt state replaces or removes it.
@@ -189,20 +199,46 @@ To respond, run: kent run steer <source-session-id> "message"
 - Required tool choice validates against the complete advertised tool set, including local, custom, and enabled provider-hosted tools. An empty set is invalid. A provider that cannot represent required choice returns a policy error before dispatch. Automatic and required requests use the same bounded provider- and transport-failure retry policy; a retry preserves the request's tool-choice mode and advertised tools, and Kent never falls back from required to automatic choice.
 - Tool-choice mode changes only tool selection. It never changes the advertised tools or their order, parallel-tool behavior, or prompt-cache identity. Exact counting of a built request preserves its tool mode and complete tool set; standalone estimation uses automatic choice.
 
+## Fast Mode And Context Usage
+
+- Fast Mode is a persisted Session Chat setting when the active provider supports first-party Responses priority service.
+- Changing Fast Mode during an Agent Step affects the next provider or compaction request and never changes the request already running.
+- A supported request uses the provider's priority service tier when Fast Mode is enabled.
+- Disabled Fast Mode omits the provider's priority service tier.
+- Enabling Fast Mode for an unsupported provider fails without changing the Session setting.
+- Reopening a Session restores its effective Fast Mode setting.
+- Fast Mode does not create another Session Contract generation or prompt-cache identity.
+- Reviewer and compaction requests inherit the Session's effective Fast Mode when their provider supports it.
+- Context usage uses current provider-reported usage when available and Kent's established current-context estimate otherwise.
+- Compaction selection compares current usage with the configured thresholds.
+- Kent does not predict future token growth from earlier turns or maintain a separate adaptive compaction policy.
+
 ## Compaction
 
 - Compaction starts a new bounded active conversation from compacted output while retaining the full durable session history. The compacted output and all new generation context are committed atomically before later model work.
-- Fresh main hydration, reviewer reconstruction, and post-compaction hydration share one canonical stable prefix: applicable Headless context, Subagents, Skills, Worktree context, Agents.md instructions, then active Goal continuation or Workflow context. Fresh and reviewer hydration append Environment after that stable prefix. Post-compaction hydration inserts compacted or handoff output and manual user carryover before the same Environment suffix. Handoff output includes the user-authored future-agent message in the atomic history replacement. Goal and Workflow remain alternative Session-mode context in their respective slots. Outside Workflow execution, Kent includes an active Goal continuation only for an active Goal; paused, completed, cleared, or absent Goals omit it. Opening or resuming a Session without replacement does not add that continuation.
+- Fresh main hydration, Reviewer request construction, and post-compaction hydration share one canonical stable prefix: applicable Headless context, Subagents, Skills, Worktree context, Agents.md instructions, then active Goal continuation or Workflow context.
+- Fresh main and Reviewer requests append Environment after that stable prefix.
+- Post-compaction hydration inserts compacted or handoff output and manual user carryover before the same Environment suffix.
+- Handoff output includes the user-authored future-agent message in the atomic history replacement.
+- Goal and Workflow remain alternative Session-mode context in their respective slots.
+- Outside Workflow execution, Kent includes an active Goal continuation only for an active Goal.
+- Paused, completed, cleared, or absent Goals omit Goal continuation from model context.
+- Opening or resuming a Session without replacement does not add Goal continuation.
 - A resumed non-Workflow Session carries its active Goal verbatim into new model context with the ordinary Goal work and completion guidance, without referring to compaction.
 - If a later notification fails, compaction remains complete, Kent reports the failure, and does not repeat compaction.
 - Kent may compact before a queued user prompt when configured context usage indicates that prompt would likely require it. The trigger is `context_compaction_threshold_tokens - pre_submit_compaction_lead_tokens`. Normal and pre-submit compaction thresholds must be at least 50% of `model_context_window`; invalid settings fail startup.
 - When automatic compaction is enabled, Kent eagerly compacts an eligible non-Workflow Session after any successfully completed agent/model turn with a nonblank final answer when authoritative context usage is at least 88% of that Session's actual model context window. Eligible paths include direct and queued user-message turns, Agent Steer turns, Goal Loops, and background continuations. Workflow turns are excluded. Main and subagent Sessions are eligible in both interactive and Headless modes. Interrupted turns, failed turns, turns waiting for a user answer, and no-final or silent-final outcomes are ineligible.
-- Before queued eager work dispatches compaction, Kent revalidates the Session's current automatic-compaction enablement and consumed-only 88% threshold. If either condition no longer holds, Kent skips the queued work without a provider call or history replacement. This check occurs before compaction starts and does not cancel or reconcile active compaction.
+- Before automatic compaction starts, Kent revalidates the Session's current automatic-compaction enablement and consumed-only 88% threshold.
+- If either automatic-compaction condition no longer holds, Kent skips compaction without a provider call or history replacement.
 - A user message submitted while eager compaction is running waits behind that compaction and is then processed against the compacted context.
 - Eager compaction is speculative. Its failure does not change the preceding successful turn, retains the uncompacted context, uses the ordinary diagnostic reporting, and is not retried automatically.
 - `compaction_mode=none` disables manual and automatic compaction and lets provider context-overflow errors surface.
-- A manual compact request is a Steering Intent. Compaction itself is an Agent Step selected after Steering drains according to the Runtime Steering specification; it is never model-visible user text.
-- Repeated manual compact requests remain distinct Steering Intents. Clients do not coalesce them, and each request receives its own typed outcome.
+- A manual compact request follows the Session's accepted mutation order.
+- Compaction is an Agent Step selected after earlier accepted short mutations apply according to the Runtime Steering specification.
+- A manual compact request is never model-visible user text.
+- Repeated manual compact requests remain distinct.
+- Clients do not coalesce manual compact requests.
+- Each manual compact request receives its own typed outcome.
 - Agent Steps do not overlap, so manual, automatic, pre-submit, and handoff compaction cannot overlap another compaction Agent Step.
 - Manual compaction requires at least one Agent Step boundary since Session creation or the latest successful compaction. The active Agent Step satisfies this requirement when its boundary is reached. A rejected request starts no provider call and commits no history replacement.
 - Disabled-policy and too-soon manual-compaction failures are typed server-owned outcomes shared by every client.
@@ -220,7 +256,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - Goal inspection reads the durable session goal and does not require an Active Session Runtime. Running and dormant sessions return the same goal result; a valid session with no goal returns no goal, while unknown or inaccessible sessions remain errors.
 - Goal inspection excludes runtime-local goal-loop suspension. Live clients derive suspension from runtime status.
 - Successful goal mutations through an Active Session Runtime emit typed goal-status updates carrying the projected goal status state so frontends can update from goal SSOT instead of inferring status from transcript feedback or run lifecycle. Set, pause, resume, complete, and clear emit updates; show/read-only operations do not. A dormant mutation has no live feed: its command response and subsequent session/runtime snapshots project the durable goal state.
-- `/goal <objective>` (TUI slash command or GUI path) submits a typed Goal Steering Intent that sets or replaces the Session Goal. Goal behavior owns whether that mutation starts or continues model work.
+- `/goal <objective>` (TUI slash command or GUI path) submits a typed Session mutation that sets or replaces the Session Goal.
+- Goal behavior owns whether a Goal mutation starts or continues model work.
 - `/goal resume` on a completed goal reopens it as active.
 - `/goal resume` on an already-active goal is no-op and does not emit any model-facing messages.
 - Goal mode requires `ask_question` in the locked tool surface for active model loops. Validate parity at model-work startup and surface a normal runtime error if violated. This parity is enforced inside workflow-controlled Sessions too, so a Goal set there requires `ask_question` visibility as well.
@@ -233,7 +270,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - A valid terminal workflow completion soft-cascades an active goal to complete (actor=system) in the same step, across structured-output, unstructured-output, tool, and shell-command completion intents. A valid completion is never blocked by a still-active goal; paused goals are left intact. The cascade is conditional on the same goal still being active when it commits, and for tool-mode completion it is emitted after the terminal tool result is persisted so it never interleaves a non-tool item between a tool call and its result.
 - That terminal cascade observes only the Goal already durable when completion commits. Goal Steering accepted during the same Agent Step applies later in FIFO order whether it was admitted before or after completion.
 - A same-Step Goal mutation that leaves an active Goal after terminal Workflow completion does not start Goal continuation from that completion boundary. The Goal remains active and idle until later explicit human input starts ordinary work.
-- With an Active Session Runtime, Goal mutation enters its Steering Queue. Without an Active Session Runtime, the dormant Goal owner persists the durable Goal update and corresponding model-facing notice without starting a Runtime.
+- With an Active Session Runtime, Goal mutation follows accepted Session mutation order.
+- Without an Active Session Runtime, the dormant Goal owner persists the durable Goal update and corresponding model-facing notice without starting a Runtime.
 - A human Goal mutation may wait for its applied result. An allowed agent `goal set` or confirmed `goal complete` uses one exact admission that validates the current Exact Execution Scope, Run, and Agent Step and accepts the Steering mutation together.
 - If the originating Agent Step ends first, the agent Goal mutation rejects without acceptance. If admission completes first, it returns an immediate scheduled Goal projection and applies only after the originating Agent Step ends. Terminal Workflow completion earlier in that still-open Step does not by itself reject or revoke the Goal admission.
 - After terminal Workflow completion commits, exact Goal admission remains available only for that same still-open Scope, Run, and Agent Step. Stop, prompt answers, exact steer, and duplicate Workflow completion remain unavailable while caused tool/results finish.
@@ -247,6 +285,30 @@ To respond, run: kent run steer <source-session-id> "message"
 - Ctrl+C during active goal work keeps persisted status `active` and creates runtime-local suspension only. The next user message auto-resumes the suspended goal loop after its turn completes (no `/goal resume` needed); an explicit `/goal pause` is still the hard pause. A user turn that is itself interrupted leaves the loop suspended.
 - The goal status-line indicator in TUI shows the animated spinner only while a goal run is executing; when the goal is `active` but idle (e.g. after Ctrl+C), it shows the idle status dot.
 
+## Reviewer
+
+- Post-turn Reviewer exists behind config and defaults to `reviewer.frequency = "edits"`.
+- Reviewer runs only after an eligible completed assistant answer.
+- Kent captures Reviewer input from that answer boundary before later Session changes can alter it.
+- The main answer commits and becomes visible without waiting for Reviewer.
+- User input and ordinary main-model and tool work may continue while Reviewer runs.
+- Only one Reviewer request may be active for a Session.
+- Another eligible answer is skipped rather than queued while review is active.
+- The Reviewer receives shorter tool output than the main agent and returns minimal JSON `{"suggestions":["..."]}`.
+- Invalid Reviewer payloads are ignored non-fatally.
+- A Reviewer generation failure creates one later Reviewer error row when the Runtime can still receive it.
+- Reviewer running and completion create no transcript row.
+- Nonempty suggestions create one later Reviewer feedback row and request one ordinary main-agent follow-up at the next available model boundary.
+- A follow-up that returns a nonblank final answer reports the suggestions as applied.
+- An explicitly blank silent follow-up reports that no changes were applied.
+- `reviewer.verbose_output` controls only the TUI's initial feedback presentation.
+- `reviewer.verbose_output` never controls whether feedback exists.
+- If Kent cannot apply issued nonempty feedback, the feedback remains visible and the Session follows its ordinary Runtime failure behavior.
+- Reviewer runs once and does not review its own follow-up.
+- Live Reviewer activity is best-effort `inactive` or `running` state.
+- Live Reviewer activity is not persisted or reconstructed from transcript history.
+- Persistent Reviewer activity across later lifecycle boundaries, Runtime replacement, reconnect, or restart is outside this specification.
+
 ## Headless Mode And Shared Control
 
 - Model-originated delegation is limited by parent-agent ancestry. A root is depth `0`; with the default limit `2`, root to subagent to sub-subagent is permitted and the next launch is rejected before creating a Session. The limit applies across roles and Workflow-agent delegation; Workflow Node Sessions start at depth `0`. Opening or continuing a Session is not a child launch.
@@ -256,13 +318,18 @@ To respond, run: kent run steer <source-session-id> "message"
 - `[workflow] subagents` is TOML-only and defaults to `false`. Workflow-agent use of custom roles requires `agent_callable=true`, `[workflow] subagents = true`, and effective `workflow_subagent=true`. `workflow_subagent=false` excludes a role only from Workflow-agent delegation, not human headless use or direct Workflow-node assignment.
 - A live internal access Approval, including an outside-workspace patch request, is an access-request Question for `kent question` and wait/watch presentation. Each authoritative ordered option carries its display label and typed allow-once, allow-session, or deny decision. A durable Workflow Transition Approval is a separate concept and is never a Question or wait/watch outcome.
 - The [CLI Commands](cli-commands.md) specification owns the Question and Run wait/watch command contracts, including presentation, accepted flags, machine-readable output, and exit codes.
-- All attached clients have equal full control of one active Session: transcript and status, steering and queued input, Question and Approval answers, and every control operate on the same live execution. Valid human input remains accepted while internal Runtime work is active and follows the Runtime Steering drain contract. Clients report server-authoritative live activity and do not infer busy state locally.
+- All attached clients have equal full control of one active Session across transcript and status, steering and queued input, Question and Approval answers, and every other control.
+- Valid human input remains accepted while internal Runtime work is active and follows the Runtime Steering ordering contract.
+- Clients report server-authoritative live activity and do not infer busy state locally.
 - A client does not consider a question or approval answered until the server accepts the answer and returns or publishes the resolved shared state.
 - A running Workflow Task is steerable from every attached client, including chat, queued input, Goal control, settings, compaction, worktree, and process controls. The model may not submit a structured final answer invalid for the current Node. Inability to reach active execution is a runtime-unavailable error.
 - Worktree controls are available from every client. List and status are reads. Creation and deletion that do not switch the calling Session execute immediately.
-- Entering or leaving a Worktree for an Active Session Runtime is a Steering Intent carrying the domain Worktree Operation identity. When it reaches the head of the drain, the Worktree owner executes the transition and the Runtime waits for its result before applying the target, Working Directory, tool environment, and reminder or failure.
+- Entering or leaving a Worktree for an Active Session Runtime accepts one Session mutation carrying the domain Worktree Operation identity.
+- Acceptance starts the independent Worktree transition and returns the established acknowledgement without waiting for completion.
+- The Worktree owner later applies the target, Working Directory, tool environment, and reminder or failure.
 - Each explicit Worktree transition is an independent domain operation. Kent does not return an earlier result for a matching retry, reject a different transition merely because another is pending, replay an ambiguous operation, or resume process-local pending transitions after restart.
-- Worktree deletion follows the concrete multi-Session and process blockers in the Runtime Steering and Workflow specifications. It does not use a generic Runtime handoff or settlement protocol.
+- Worktree deletion follows the concrete multi-Session and process blockers in the Runtime Steering and Workflow specifications.
+- Worktree deletion never joins Session mutation ordering.
 - Resuming a Session reapplies its recorded subagent role, including a role that is no longer available in the catalog. If no role was recorded, explicit continuation does not block. After the Session Contract is locked, a later role selection does not replace the retained role.
 
 ## Provider Stream Completion
