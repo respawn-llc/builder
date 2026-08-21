@@ -310,7 +310,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
 	}
 	workflowTaskStatusProjection, err := workflowview.NewTaskStatusProjection(
-		metadataStore,
 		workflowStore,
 		workflowTaskProjector,
 		workflowController,

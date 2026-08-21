@@ -410,7 +410,6 @@ func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 	task := createTaskSearchTask(t, fixture, "Question", "needle")
 	question := fixture.startCurrentNodeQuestion(t, startTaskSearchTask(t, fixture, task))
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		currentNodeViewStatusObservationSource{
@@ -437,7 +436,6 @@ func TestTaskSearchProjectsLiveSessionApprovalStatus(t *testing.T) {
 	started := fixture.startTask(t, "Approval execution")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{

@@ -68,7 +68,7 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 	return &RuntimeRegistry{
 		authorityChanged:         make(chan struct{}),
 		blockingActivitySessions: make(map[string]bool),
-		pendingPrompts:           newPendingPromptStore(),
+		pendingPrompts:           &pendingPromptStore{},
 	}
 }
 
@@ -340,16 +340,12 @@ func (r *RuntimeRegistry) RuntimeReadModelFeedSnapshot(_ context.Context, sessio
 		)
 	}
 	resolver := r.runtimeActivityResolverSnapshot(id)
-	return runtimeactivity.BuildFeedSnapshot(r.readModelVersion(id), resolver)
-}
-
-func (r *RuntimeRegistry) readModelVersion(sessionID string) clientui.ReadModelVersion {
-	return runtimeactivity.NextReadModelVersion(sessionID)
+	return runtimeactivity.BuildFeedSnapshot(runtimeactivity.NextReadModelVersion(id), resolver)
 }
 
 func (r *RuntimeRegistry) unavailableRuntimeReadModelFeedSnapshot(sessionID string) (clientui.RuntimeReadModelUpdate, error) {
 	id := strings.TrimSpace(sessionID)
-	return runtimeactivity.BuildFeedSnapshot(r.readModelVersion(id), runtimeactivity.ResolverSnapshot{})
+	return runtimeactivity.BuildFeedSnapshot(runtimeactivity.NextReadModelVersion(id), runtimeactivity.ResolverSnapshot{})
 }
 
 func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(sessionID string) runtimeactivity.ResolverSnapshot {

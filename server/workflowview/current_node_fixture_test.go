@@ -150,7 +150,6 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 	})
 	projector := NewTaskProjector()
 	projection, err := NewTaskStatusProjection(
-		metadataStore,
 		store,
 		projector,
 		currentNodeViewStatusObservationSource{

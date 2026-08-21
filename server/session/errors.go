@@ -12,9 +12,9 @@ var (
 	// public snapshot/open API can detect it.
 	ErrSessionFileSymlink = errors.New("session file must not be a symlink")
 
-	// errPersistedSessionResolverRequired is returned when a persisted session is
+	// ErrPersistedSessionResolverRequired is returned when a persisted session is
 	// opened without its authoritative structured-metadata resolver.
-	errPersistedSessionResolverRequired = errors.New("persisted session resolver is required")
+	ErrPersistedSessionResolverRequired = errors.New("persisted session resolver is required")
 	errPersistenceObserverRequired      = errors.New("persistence observer is required")
 	errEventLogReconcilerRequired       = errors.New("event log reconciliation observer is required")
 	errEphemeralStoreCannotBeDurable    = errors.New("ephemeral session store cannot be made durable")

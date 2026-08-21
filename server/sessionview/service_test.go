@@ -212,10 +212,10 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 func TestServiceRequiresSessionStoreResolverForDormantReads(t *testing.T) {
 	svc := NewService(nil, nil, nil)
 
-	if _, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: "session-1"}); err == nil || !errors.Is(err, errPersistedSessionResolverRequired) {
+	if _, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: "session-1"}); err == nil || !errors.Is(err, session.ErrPersistedSessionResolverRequired) {
 		t.Fatalf("expected explicit persisted Session resolver error for main view, got %v", err)
 	}
-	if _, err := svc.SessionTranscriptTailEntries(context.Background(), "session-1"); err == nil || !errors.Is(err, errPersistedSessionResolverRequired) {
+	if _, err := svc.SessionTranscriptTailEntries(context.Background(), "session-1"); err == nil || !errors.Is(err, session.ErrPersistedSessionResolverRequired) {
 		t.Fatalf("expected explicit persisted Session resolver error for transcript tail entries, got %v", err)
 	}
 }

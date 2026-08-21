@@ -91,7 +91,7 @@ func (s *Service) SubscribeQuestionHistory(
 		return nil, err
 	}
 	if s == nil || s.persisted == nil {
-		return nil, errPersistedSessionResolverRequired
+		return nil, session.ErrPersistedSessionResolverRequired
 	}
 	record, err := s.persisted.ResolvePersistedSession(ctx, req.SessionID)
 	if err != nil {
@@ -221,7 +221,7 @@ func (s *Service) SessionTranscriptTailEntries(ctx context.Context, sessionID st
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, serverapi.ErrSessionIDRequired
 	}
-	view, err := resolvePersistedSessionView(ctx, s.persisted, sessionID)
+	view, err := session.ResolvePersistedSessionView(ctx, s.persisted, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.Se
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
 	pageReq := clientui.TranscriptPageRequest{Cursor: req.Cursor, NewerCursor: req.NewerCursor}
-	view, err := resolvePersistedSessionView(ctx, s.persisted, req.SessionID)
+	view, err := session.ResolvePersistedSessionView(ctx, s.persisted, req.SessionID)
 	if err != nil {
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
@@ -269,9 +269,9 @@ func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, re
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
 	if s == nil {
-		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errPersistedSessionResolverRequired
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, session.ErrPersistedSessionResolverRequired
 	}
-	view, err := resolvePersistedSessionView(ctx, s.persisted, req.SessionID)
+	view, err := session.ResolvePersistedSessionView(ctx, s.persisted, req.SessionID)
 	if err != nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
@@ -290,7 +290,7 @@ func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req server
 		return serverapi.SessionExecutionEnvironmentResponse{}, err
 	}
 	if s == nil || s.persisted == nil {
-		return serverapi.SessionExecutionEnvironmentResponse{}, errPersistedSessionResolverRequired
+		return serverapi.SessionExecutionEnvironmentResponse{}, session.ErrPersistedSessionResolverRequired
 	}
 	record, err := session.ResolvePersistedSessionRecord(ctx, s.persisted, req.SessionID.String())
 	if err != nil {

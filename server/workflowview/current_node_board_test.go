@@ -93,7 +93,6 @@ func TestBoardDoesNotResolveLiveSessionLabelsForMultipleCards(t *testing.T) {
 		quiescence[task.task.ID] = false
 	}
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{

@@ -844,7 +844,7 @@ func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testi
 		_ = authority.Close(context.Background())
 	})
 	projector := workflowview.NewTaskProjector()
-	projection, err := workflowview.NewTaskStatusProjection(metadataStore, service.store, projector, controller)
+	projection, err := workflowview.NewTaskStatusProjection(service.store, projector, controller)
 	if err != nil {
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
@@ -3595,7 +3595,6 @@ func newWorkflowServiceReadModels(
 		}
 	})
 	projection, err := workflowview.NewTaskStatusProjection(
-		metadataStore,
 		store,
 		projector,
 		workflowViewStatusObservationSource{authority: authority, quiescence: quiescence},

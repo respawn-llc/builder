@@ -327,7 +327,7 @@ func openPersistedSession(
 		eventLogCreationVersion: eventLogVersionPointer(EventLogVersionV2),
 	}
 	if record.Meta == nil {
-		return nil, errPersistedSessionResolverRequired
+		return nil, ErrPersistedSessionResolverRequired
 	}
 	s.meta = cloneMeta(*record.Meta)
 	s.contextFacts = normalizeSessionContextFacts(record.ContextFacts)
@@ -387,7 +387,7 @@ func resolvePersistedSessionMetaForDir(sessionDir string, storeOpts storeOptions
 
 func resolvePersistedSessionRecordForDir(sessionDir string, storeOpts storeOptions) (PersistedSessionRecord, error) {
 	if storeOpts.resolver == nil {
-		return PersistedSessionRecord{}, errPersistedSessionResolverRequired
+		return PersistedSessionRecord{}, ErrPersistedSessionResolverRequired
 	}
 	cleanDir := filepath.Clean(sessionDir)
 	sessionID := filepath.Base(cleanDir)

@@ -428,7 +428,6 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	}
 	fixture.controller = controller
 	projection, err := workflowview.NewTaskStatusProjection(
-		metadataStore,
 		store,
 		workflowview.NewTaskProjector(),
 		controller,

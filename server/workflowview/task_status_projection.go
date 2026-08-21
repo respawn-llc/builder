@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 
-	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -46,14 +45,10 @@ type TaskStatusProjection struct {
 }
 
 func NewTaskStatusProjection(
-	metadataStore *metadata.Store,
 	workflowStore *workflowstore.Store,
 	projector *TaskProjector,
 	liveObservation TaskStatusLiveObservationSource,
 ) (*TaskStatusProjection, error) {
-	if metadataStore == nil || metadataStore.DB() == nil || metadataStore.Queries() == nil {
-		return nil, errors.New("metadata store is required")
-	}
 	if workflowStore == nil {
 		return nil, errors.New("workflow store is required")
 	}

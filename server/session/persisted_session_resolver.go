@@ -29,7 +29,7 @@ type PersistedSessionResolver interface {
 
 func ResolvePersistedSessionRecord(ctx context.Context, resolver PersistedSessionResolver, sessionID string) (PersistedSessionRecord, error) {
 	if resolver == nil {
-		return PersistedSessionRecord{}, errPersistedSessionResolverRequired
+		return PersistedSessionRecord{}, ErrPersistedSessionResolverRequired
 	}
 	id := strings.TrimSpace(sessionID)
 	if id == "" {

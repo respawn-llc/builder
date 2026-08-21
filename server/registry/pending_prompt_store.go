@@ -24,10 +24,6 @@ type pendingPromptStore struct {
 	sessions sync.Map
 }
 
-func newPendingPromptStore() *pendingPromptStore {
-	return &pendingPromptStore{}
-}
-
 func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time) (PendingPromptSnapshot, bool) {
 	id, requestID := strings.TrimSpace(sessionID), strings.TrimSpace(req.ID)
 	if id == "" || requestID == "" {
