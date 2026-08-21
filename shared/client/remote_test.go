@@ -1082,6 +1082,69 @@ func remoteTestRegisteredWorktreeEntry(t *testing.T, sessionScoped bool) servera
 	return entry
 }
 
+func TestRemoteReattachSessionUpdatesBindingOnSameControlConnection(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		for index, expected := range []struct {
+			sessionID     string
+			projectID     string
+			workspaceID   string
+			workspaceRoot string
+		}{
+			{sessionID: "session-a", projectID: "project-a", workspaceID: "workspace-a", workspaceRoot: "/workspace-a"},
+			{sessionID: "session-b", projectID: "project-b", workspaceID: "workspace-b", workspaceRoot: "/workspace-b"},
+			{sessionID: "session-a", projectID: "project-a", workspaceID: "workspace-a", workspaceRoot: "/workspace-a"},
+		} {
+			request := acceptRemoteSessionAttachmentOrClosed(
+				t,
+				ws,
+				expected.projectID,
+				expected.workspaceID,
+				expected.workspaceRoot,
+			)
+			if request == nil {
+				t.Fatalf("attach Session %d closed unexpectedly", index)
+			}
+			if request.SessionId != expected.sessionID {
+				t.Fatalf("attach Session %d = %q, want %q", index, request.SessionId, expected.sessionID)
+			}
+		}
+	})
+
+	remote, err := DialRemoteURLForSession(context.Background(), "ws"+server.URL[len("http"):], "session-a")
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	for _, expected := range []struct {
+		sessionID     string
+		projectID     string
+		workspaceRoot string
+	}{
+		{sessionID: "session-b", projectID: "project-b", workspaceRoot: "/workspace-b"},
+		{sessionID: "session-a", projectID: "project-a", workspaceRoot: "/workspace-a"},
+	} {
+		binding, err := remote.ReattachSession(context.Background(), expected.sessionID)
+		if err != nil {
+			t.Fatalf("ReattachSession(%q): %v", expected.sessionID, err)
+		}
+		current, present := remote.ProjectBinding()
+		if !present ||
+			binding.ProjectID != expected.projectID ||
+			current.ProjectID != expected.projectID ||
+			current.WorkspaceRoot != expected.workspaceRoot {
+			t.Fatalf(
+				"binding after ReattachSession(%q) = returned %+v current %+v/%t",
+				expected.sessionID,
+				binding,
+				current,
+				present,
+			)
+		}
+	}
+}
+
 func TestProtocolErrorMapsSentinelCodes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1278,9 +1341,12 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "request-1",
-		SessionID:       source.SessionID,
-		WorkspaceRoot:   source.TargetRoot,
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			SessionID:   source.SessionID,
+		},
+		WorkspaceRoot:  source.TargetRoot,
+		CompletionMode: serverapi.SessionRetargetCompletionScheduled,
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }

@@ -65,6 +65,7 @@ type metaContextBuildOptions struct {
 	WorkflowTaskAwareness     workflowruntime.TaskAwareness
 	WorkflowTaskPromptKind    prompts.WorkflowTaskPromptKind
 	WorktreeReminder          *session.WorktreeReminderState
+	SessionRebindReminder     *session.SessionRebindReminder
 	IncludeSkillWarnings      bool
 	PermissiveAgentsReadError bool
 }
@@ -82,6 +83,7 @@ type metaContextBuildResult struct {
 	WorkflowExit           []llm.Message
 	Worktree               []llm.Message
 	WorktreeExit           []llm.Message
+	SessionRebind          []llm.Message
 	sessionMode            metaContextSessionMode
 }
 type metaContextSessionMode uint8
@@ -111,13 +113,14 @@ func (p metaContextProjection) Messages() []llm.Message {
 	return out
 }
 func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
-	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Headless)+len(r.HeadlessExit)+len(r.ActiveGoalContinuation)+len(r.Workflow)+len(r.WorkflowExit)+len(r.Worktree)+len(r.WorktreeExit))
+	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Headless)+len(r.HeadlessExit)+len(r.ActiveGoalContinuation)+len(r.Workflow)+len(r.WorkflowExit)+len(r.Worktree)+len(r.WorktreeExit)+len(r.SessionRebind))
 	out = append(out, r.Headless...)
 	out = append(out, r.HeadlessExit...)
 	out = append(out, r.Subagents...)
 	out = append(out, r.Skills...)
 	out = append(out, r.Worktree...)
 	out = append(out, r.WorktreeExit...)
+	out = append(out, r.SessionRebind...)
 	out = append(out, r.Agents...)
 	switch r.sessionMode {
 	case metaContextSessionModeGoal:
@@ -294,8 +297,12 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 			collector.addMessages([]llm.Message{message})
 		}
 	}
-
 	result := collector.result()
+	if opts.SessionRebindReminder != nil {
+		if message, ok := sessionRebindMetaMessage(*opts.SessionRebindReminder); ok {
+			result.SessionRebind = []llm.Message{message}
+		}
+	}
 	switch opts.SessionMode {
 	case metaContextSessionModeOrdinary, metaContextSessionModeGoal, metaContextSessionModeWorkflow, metaContextSessionModeWorkflowExit:
 	default:
@@ -668,6 +675,24 @@ func worktreeModeExitMetaMessage(state session.WorktreeReminderState) (llm.Messa
 		MessageType:     textutil.Value(llm.MessageTypeWorktreeModeExit),
 		WorktreeContext: session.CloneWorktreeContext(&state.WorktreeContext),
 		Content:         textutil.Value(content),
+	}, true
+}
+
+func sessionRebindMetaMessage(reminder session.SessionRebindReminder) (llm.Message, bool) {
+	content := prompts.RenderSessionRebindPrompt(
+		reminder.SourceProject.Name,
+		reminder.TargetProject.Name,
+		reminder.SourceProject.ID == reminder.TargetProject.ID,
+		reminder.WorkingDirectory,
+	)
+	if strings.TrimSpace(content) == "" {
+		return llm.Message{}, false
+	}
+	return llm.Message{
+		Role:           llm.RoleDeveloper,
+		MessageType:    textutil.Value(llm.MessageTypeSessionRebind),
+		Content:        textutil.Value(content),
+		CompactContent: textutil.Value(clientui.SessionRebindCompactLabel),
 	}, true
 }
 

@@ -52,14 +52,15 @@ func TestComposeBundlesClosesWorkflowExecutionBeforeAuthorityAndPersistence(t *t
 
 	metadataIndex, hasMetadata := registrationIndex["metadata store"]
 	authorityIndex, hasAuthority := registrationIndex["session runtime authority"]
+	retargetIndex, hasRetarget := registrationIndex["session retarget operations"]
 	starterIndex, hasStarter := registrationIndex["workflow runtime starter"]
 	controllerIndex, hasController := registrationIndex["workflow execution controller"]
-	if !hasMetadata || !hasAuthority || !hasStarter || !hasController {
-		t.Fatalf("cleanup resources = %+v, want metadata, authority, starter, and controller", registrationIndex)
+	if !hasMetadata || !hasAuthority || !hasRetarget || !hasStarter || !hasController {
+		t.Fatalf("cleanup resources = %+v, want metadata, authority, retarget operations, starter, and controller", registrationIndex)
 	}
-	if !(metadataIndex < authorityIndex && authorityIndex < starterIndex && starterIndex < controllerIndex) {
+	if !(metadataIndex < authorityIndex && authorityIndex < retargetIndex && retargetIndex < starterIndex && starterIndex < controllerIndex) {
 		t.Fatalf(
-			"cleanup registration = %+v, want reverse close order controller, starter, authority, metadata",
+			"cleanup registration = %+v, want reverse close order controller, starter, retarget operations, authority, metadata",
 			registrationIndex,
 		)
 	}

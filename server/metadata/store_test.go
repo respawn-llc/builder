@@ -931,9 +931,6 @@ func TestCommitSessionWorkspaceRetargetAttachesTargetAndUpdatesSession(t *testin
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: bindingA.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
-		t.Fatalf("UpdateSessionExecutionTarget before retarget: %v", err)
-	}
 	if err := sess.SetWorktreeReminderState(&session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeEnter,
 		WorktreeContext: session.WorktreeContext{
@@ -996,12 +993,13 @@ func TestCommitSessionWorkspaceRetargetAttachesTargetAndUpdatesSession(t *testin
 	if reopened.Meta().WorkspaceRoot != canonicalWorkspaceB {
 		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, canonicalWorkspaceB)
 	}
-	if reopened.Meta().WorktreeReminder != nil {
-		t.Fatalf("expected stale worktree reminder cleared after workspace retarget, got %+v", reopened.Meta().WorktreeReminder)
+	if reopened.Meta().WorktreeReminder == nil ||
+		!session.WorktreeReminderStateEqual(*reopened.Meta().WorktreeReminder, *sess.Meta().WorktreeReminder) {
+		t.Fatalf("worktree reminder changed after workspace retarget: got %+v want %+v", reopened.Meta().WorktreeReminder, sess.Meta().WorktreeReminder)
 	}
 }
 
-func TestCommitSessionWorkspaceRetargetClearsSameWorkspaceStaleWorktreeTarget(t *testing.T) {
+func TestPlanSessionWorkspaceRetargetRejectsMissingRecordedSourceWorktree(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
@@ -1038,39 +1036,34 @@ func TestCommitSessionWorkspaceRetargetClearsSameWorkspaceStaleWorktreeTarget(t 
 		t.Fatalf("RemoveAll stale worktree root: %v", err)
 	}
 
-	retargeted := planAndCommitSessionWorkspaceRetarget(t, ctx, store, sess.Meta().SessionID, cfg.WorkspaceRoot)
-	if retargeted.WorkspaceID != binding.WorkspaceID {
-		t.Fatalf("retargeted workspace id = %q, want %q", retargeted.WorkspaceID, binding.WorkspaceID)
-	}
-	var storedWorktreeID sql.NullString
-	if err := store.db.QueryRowContext(ctx, "SELECT worktree_id FROM sessions WHERE id = ?", sess.Meta().SessionID).Scan(&storedWorktreeID); err != nil {
-		t.Fatalf("scan session worktree_id: %v", err)
-	}
-	if storedWorktreeID.Valid {
-		t.Fatalf("stored worktree_id = %+v, want SQL NULL", storedWorktreeID)
+	_, err := store.PlanSessionWorkspaceRetarget(ctx, SessionWorkspaceRetargetRequest{
+		SessionID:     sess.Meta().SessionID,
+		WorkspaceRoot: cfg.WorkspaceRoot,
+	})
+	var retargetErr *serverapi.SessionRetargetError
+	if !errors.As(err, &retargetErr) || retargetErr.Reason != serverapi.SessionRetargetSourceWorktree {
+		t.Fatalf("PlanSessionWorkspaceRetarget error = %v, want source-worktree", err)
 	}
 	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if target.Worktree != nil {
-		t.Fatalf("target worktree = %+v, want nil", target.Worktree)
+	if target.Worktree == nil || target.Worktree.ID != "worktree-stale" {
+		t.Fatalf("target worktree = %+v, want unchanged worktree-stale", target.Worktree)
 	}
-	if target.CwdRelpath != "." {
-		t.Fatalf("target cwd_relpath = %q, want .", target.CwdRelpath)
-	}
-	if target.EffectiveWorkdir != retargeted.CanonicalRoot {
-		t.Fatalf("target effective workdir = %q, want %q", target.EffectiveWorkdir, retargeted.CanonicalRoot)
+	if target.CwdRelpath != "pkg" {
+		t.Fatalf("target cwd_relpath = %q, want pkg", target.CwdRelpath)
 	}
 	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.OpenByID: %v", err)
 	}
-	if reopened.Meta().WorkspaceRoot != retargeted.CanonicalRoot {
-		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, retargeted.CanonicalRoot)
+	if reopened.Meta().WorkspaceRoot != binding.CanonicalRoot {
+		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, binding.CanonicalRoot)
 	}
-	if reopened.Meta().WorktreeReminder != nil {
-		t.Fatalf("reopened worktree reminder = %+v, want nil", reopened.Meta().WorktreeReminder)
+	if reopened.Meta().WorktreeReminder == nil ||
+		!session.WorktreeReminderStateEqual(*reopened.Meta().WorktreeReminder, *sess.Meta().WorktreeReminder) {
+		t.Fatalf("reopened worktree reminder = %+v, want unchanged %+v", reopened.Meta().WorktreeReminder, sess.Meta().WorktreeReminder)
 	}
 }
 

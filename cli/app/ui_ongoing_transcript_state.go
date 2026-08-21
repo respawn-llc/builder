@@ -75,6 +75,15 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
 	case clientui.TranscriptMessageWorktreeTransitionOutcome:
 		return m.reconcileTranscriptWorktreeTransitionOutcome(message.Payload().(clientui.TranscriptWorktreeTransitionOutcome))
+	case clientui.TranscriptMessageSessionRetargetOutcome:
+		outcome := message.Payload().(clientui.TranscriptSessionRetargetOutcome)
+		if outcome.Kind != clientui.TranscriptSessionRetargetSucceeded || outcome.Success == nil {
+			return nil
+		}
+		m.sessionRetargetSuccess = cloneTranscriptSessionRetargetSuccess(outcome.Success)
+		m.nextSessionID = strings.TrimSpace(m.sessionID)
+		m.exitAction = UIActionOpenSession
+		return tea.Quit
 	case clientui.TranscriptMessageOperationalDiagnostic:
 		return m.applyTranscriptOperationalDiagnostic(message.Payload().(clientui.TranscriptOperationalDiagnostic))
 	}

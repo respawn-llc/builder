@@ -1,20 +1,26 @@
 Usage of kent rebind:
-  kent rebind [--project <project-id>] <session-id> <new-path>
+  kent rebind [--session <session-id>] [--project <project-id>] [--json] <path>
 
-Retarget a session to an existing workspace path.
+Schedule a Session move to an existing Workspace root.
 
-Without --project, the session stays in its source project and Kent attaches an
-unbound target path to that project. If the path belongs only to another project,
-Kent prints complete commands for moving the session or attaching the path to
-the source project.
+Inside a Kent agent shell, the current Session is selected by default.
+--session overrides that default and is required outside Kent shell commands.
 
---project moves the session to that project. Kent attaches an unbound target
-workspace automatically and reports the new attachment.
+Without --project, the Session stays in its source Project and Kent attaches an
+unbound target path to that Project. If the path belongs only to another Project,
+Kent prints complete commands for moving the Session or attaching the path to
+the source Project.
 
-Kent waits for active model work to reach its maintenance boundary. A running
-session-owned background process blocks rebinding. Workflow-owned sessions
-cannot move across projects.
+--project moves the Session to that Project. Kent attaches an unbound target
+Workspace automatically.
+
+Kent acknowledges the scheduled move without waiting for an active Agent Step.
+Session-owned background commands do not block the move and continue in the
+directories where they started. Workflow-owned Sessions cannot move across
+Projects. Enter or leave Kent Worktrees with the worktree command rather than
+rebind.
 
 Examples:
-  kent rebind <session-id> ../moved-workspace
-  kent rebind --project <project-id> <session-id> ../other-project
+  kent rebind ../moved-workspace
+  kent rebind --session <session-id> ../moved-workspace
+  kent rebind --session <session-id> --project <project-id> --json ../other-project

@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/clientui"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -59,7 +60,7 @@ func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 		llm.MessageTypeActiveGoalContinuation,
 		llm.MessageTypeWorkflowMode:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
-	case llm.MessageTypeWorktreeMode, llm.MessageTypeWorktreeModeExit:
+	case llm.MessageTypeWorktreeMode, llm.MessageTypeWorktreeModeExit, llm.MessageTypeSessionRebind:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
 	case llm.MessageTypeCompactionSummary:
 		return compactionSummaryChatEntry(msg), true
@@ -123,6 +124,7 @@ func isUnknownDeveloperMessageType(messageType *llm.MessageType) bool {
 		llm.MessageTypeWorkflowMode,
 		llm.MessageTypeWorktreeMode,
 		llm.MessageTypeWorktreeModeExit,
+		llm.MessageTypeSessionRebind,
 		llm.MessageTypeGoal,
 		llm.MessageTypeActiveGoalContinuation,
 		llm.MessageTypeAgentSteer:
@@ -171,6 +173,8 @@ func messageTypeTranscriptVisibility(messageType *llm.MessageType) transcript.En
 	case llm.MessageTypeBackgroundNotice:
 		return transcript.EntryVisibilityOngoingCollapsed
 	case llm.MessageTypeWorkflowMode, llm.MessageTypeWorkflowModeExit:
+		return transcript.EntryVisibilityOngoingCollapsed
+	case llm.MessageTypeSessionRebind:
 		return transcript.EntryVisibilityOngoingCollapsed
 	case llm.MessageTypeCompactionSummary,
 		llm.MessageTypeInterruption,
@@ -237,6 +241,8 @@ func compactLabelForMessage(msg llm.Message) string {
 		return ""
 	case llm.MessageTypeWorktreeModeExit:
 		return ""
+	case llm.MessageTypeSessionRebind:
+		return clientui.SessionRebindCompactLabel
 	case llm.MessageTypeCompactionSummary:
 		return ""
 	case llm.MessageTypeInterruption:

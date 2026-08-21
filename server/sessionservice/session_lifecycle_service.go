@@ -49,7 +49,7 @@ type sessionTransitionMemoRequest struct {
 }
 
 type sessionWorkspaceRetargeter interface {
-	RetargetWorkspace(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
+	RetargetWorkspace(ctx context.Context, req SessionWorkspaceRetargetInvocation) (serverapi.SessionRetargetWorkspaceResponse, error)
 }
 
 type sessionNavigationTargetResolver interface {
@@ -155,24 +155,16 @@ func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, 
 	if s == nil || s.retargeter == nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, errSessionWorkspaceRetargeterRequired
 	}
-	result, err := s.retargeter.RetargetWorkspace(ctx, metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     req.SessionID,
-		WorkspaceRoot: req.WorkspaceRoot,
-		ProjectID:     req.ProjectID,
+	return s.retargeter.RetargetWorkspace(ctx, SessionWorkspaceRetargetInvocation{
+		OperationID: req.OperationID,
+		Request: metadata.SessionWorkspaceRetargetRequest{
+			SessionID:     req.SessionID,
+			WorkspaceRoot: req.WorkspaceRoot,
+			ProjectID:     req.ProjectID,
+		},
+		Origin:         req.Origin,
+		CompletionMode: req.CompletionMode,
 	})
-	if err != nil {
-		return serverapi.SessionRetargetWorkspaceResponse{}, err
-	}
-	binding := result.Binding
-	return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{
-		ProjectID:       binding.ProjectID,
-		ProjectKey:      binding.ProjectKey,
-		ProjectName:     binding.ProjectName,
-		WorkspaceID:     binding.WorkspaceID,
-		CanonicalRoot:   binding.CanonicalRoot,
-		WorkspaceName:   binding.WorkspaceName,
-		WorkspaceStatus: binding.WorkspaceStatus,
-	}, WorkspaceBindingCreated: result.WorkspaceBindingCreated}, nil
 }
 
 func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {

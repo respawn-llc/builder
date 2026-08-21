@@ -14,6 +14,7 @@ import (
 	"core/shared/config"
 	"core/shared/protoapi"
 	authpb "core/shared/protoapi/gen/kent/api/auth"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
@@ -290,7 +291,49 @@ func (c *Remote) projectBinding() (ProjectAttachment, bool) {
 	if c == nil {
 		return ProjectAttachment{}, false
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return remoteAttachmentProjectBinding(c.attachment)
+}
+
+func (c *Remote) ReattachSession(ctx context.Context, sessionID string) (ProjectAttachment, error) {
+	intent, err := newRemoteSessionAttachmentIntent(sessionID)
+	if err != nil {
+		return ProjectAttachment{}, err
+	}
+	request, _ := intent.sessionRequest()
+	method, err := connectionMethod("AttachSession")
+	if err != nil {
+		return ProjectAttachment{}, err
+	}
+	result := &connectionpb.AttachSessionResult{}
+	if err := c.callBinaryControl(
+		ctx,
+		method,
+		&connectionpb.AttachSessionRequest{SessionId: request.sessionID},
+		result,
+	); err != nil {
+		return ProjectAttachment{}, err
+	}
+	if failure := result.GetError(); failure != nil {
+		return ProjectAttachment{}, fmt.Errorf("attach session: %w", attachSessionGeneratedError(failure))
+	}
+	response, err := attachmentResponseFromGenerated(result.GetSuccess())
+	if err != nil {
+		return ProjectAttachment{}, err
+	}
+	if err := intent.validateResponse(response); err != nil {
+		return ProjectAttachment{}, err
+	}
+	binding, present := remoteAttachmentProjectBinding(&response)
+	if !present {
+		return ProjectAttachment{}, errors.New("session reattach omitted Project binding")
+	}
+	c.mu.Lock()
+	c.attachIntent = intent
+	c.attachment = &response
+	c.mu.Unlock()
+	return binding, nil
 }
 
 func callUnscopedRPC[Req any, Resp any](c *Remote, ctx context.Context, method string, req Req) (Resp, error) {
@@ -685,7 +728,14 @@ func (c *Remote) PersistInputDraft(ctx context.Context, req serverapi.SessionPer
 }
 
 func (c *Remote) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	return callUnscopedRPC[serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](c, ctx, protocol.MethodSessionRetargetWorkspace, req)
+	resp, err := callUnscopedRPC[serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](c, ctx, protocol.MethodSessionRetargetWorkspace, req)
+	if err != nil {
+		return serverapi.SessionRetargetWorkspaceResponse{}, err
+	}
+	if err := resp.ValidateForCompletionMode(req.CompletionMode); err != nil {
+		return serverapi.SessionRetargetWorkspaceResponse{}, invalidResponseError("session retarget", err)
+	}
+	return resp, nil
 }
 
 func (c *Remote) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {

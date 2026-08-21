@@ -648,11 +648,11 @@ func TestWorktreeRuntimeOriginHeaderAndBranchCleanupPolicy(t *testing.T) {
 	)
 	t.Setenv(sessionenv.RunIDEnv, runID)
 	t.Setenv(sessionenv.StepIDEnv, stepID)
-	origin, err := worktreeCommandRuntimeOrigin()
+	origin, err := commandRuntimeOrigin()
 	if err != nil || origin == nil || origin.RunID != runID || origin.StepID != stepID {
 		t.Fatalf("origin=%+v err=%v", origin, err)
 	}
-	header, err := newWorktreeCommandTransitionHeader("session-1")
+	header, err := newSessionTransitionHeader("session-1")
 	if err != nil || header.SessionID != "session-1" || header.Origin == nil ||
 		header.Origin.RunID != runID || header.Origin.StepID != stepID ||
 		header.OperationID.String() == "" {
@@ -671,10 +671,10 @@ func TestWorktreeRuntimeOriginHeaderAndBranchCleanupPolicy(t *testing.T) {
 		t.Run(invalid.run+"/"+invalid.step, func(t *testing.T) {
 			t.Setenv(sessionenv.RunIDEnv, invalid.run)
 			t.Setenv(sessionenv.StepIDEnv, invalid.step)
-			if _, err := worktreeCommandRuntimeOrigin(); err == nil {
+			if _, err := commandRuntimeOrigin(); err == nil {
 				t.Fatal("invalid origin accepted")
 			}
-			if _, err := newWorktreeCommandTransitionHeader("session-1"); err == nil {
+			if _, err := newSessionTransitionHeader("session-1"); err == nil {
 				t.Fatal("header accepted invalid origin")
 			}
 		})
@@ -682,10 +682,10 @@ func TestWorktreeRuntimeOriginHeaderAndBranchCleanupPolicy(t *testing.T) {
 
 	unsetEnvironmentForTaskContractTest(t, sessionenv.RunIDEnv)
 	unsetEnvironmentForTaskContractTest(t, sessionenv.StepIDEnv)
-	if origin, err := worktreeCommandRuntimeOrigin(); err != nil || origin != nil {
+	if origin, err := commandRuntimeOrigin(); err != nil || origin != nil {
 		t.Fatalf("absent origin=%+v err=%v", origin, err)
 	}
-	if header, err := newWorktreeCommandTransitionHeader("session-1"); err != nil || header.Origin != nil {
+	if header, err := newSessionTransitionHeader("session-1"); err != nil || header.Origin != nil {
 		t.Fatalf("external header=%+v err=%v", header, err)
 	}
 

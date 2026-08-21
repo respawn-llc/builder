@@ -228,7 +228,16 @@ func (m *uiModel) Transition() UITransition {
 		TargetSessionID:              strings.TrimSpace(m.nextSessionID),
 		ForkRollbackTargetID:         m.nextForkRollbackTargetID,
 		PreviousSessionID:            m.nextPreviousSessionID,
+		SessionRetargetSuccess:       cloneTranscriptSessionRetargetSuccess(m.sessionRetargetSuccess),
 	}
+}
+
+func cloneTranscriptSessionRetargetSuccess(success *clientui.TranscriptSessionRetargetSuccess) *clientui.TranscriptSessionRetargetSuccess {
+	if success == nil {
+		return nil
+	}
+	clone := *success
+	return &clone
 }
 
 func (m *uiModel) logf(format string, args ...any) {

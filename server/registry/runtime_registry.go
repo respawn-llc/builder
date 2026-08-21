@@ -587,6 +587,43 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 	entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(transcriptOutcome)})
 }
 
+func (r *RuntimeRegistry) PublishSessionRetargetOutcome(sessionID string, outcome serverapi.SessionRetargetOutcome) {
+	if r == nil {
+		return
+	}
+	if err := outcome.Validate(); err != nil {
+		panic(fmt.Sprintf("publish invalid session retarget outcome for session %q: %v", strings.TrimSpace(sessionID), err))
+	}
+	projected := clientui.TranscriptSessionRetargetOutcome{
+		OperationID: outcome.OperationID,
+		Kind:        clientui.TranscriptSessionRetargetOutcomeKind(outcome.Kind),
+	}
+	if outcome.Success != nil {
+		projected.Success = &clientui.TranscriptSessionRetargetSuccess{
+			ProjectID:               outcome.Success.Binding.ProjectID,
+			ProjectKey:              outcome.Success.Binding.ProjectKey,
+			ProjectName:             outcome.Success.Binding.ProjectName,
+			WorkspaceID:             outcome.Success.Binding.WorkspaceID,
+			CanonicalRoot:           outcome.Success.Binding.CanonicalRoot,
+			WorkspaceName:           outcome.Success.Binding.WorkspaceName,
+			WorkspaceStatus:         outcome.Success.Binding.WorkspaceStatus,
+			WorkspaceBindingCreated: outcome.Success.WorkspaceBindingCreated,
+		}
+	}
+	if outcome.Failure != nil {
+		projected.Failure = &clientui.TranscriptSessionRetargetFailure{
+			Diagnostic:                outcome.Failure.Diagnostic,
+			UnchangedProjectID:        outcome.Failure.UnchangedProject.ID,
+			UnchangedProjectName:      outcome.Failure.UnchangedProject.Name,
+			UnchangedWorkingDirectory: outcome.Failure.UnchangedWorkingDirectory,
+		}
+	}
+	entry := r.authorityEntryBySession(sessionID)
+	if entry != nil {
+		entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(projected)})
+	}
+}
+
 func (r *RuntimeRegistry) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 	if r == nil {
 		return nil, fmt.Errorf("runtime registry is required")

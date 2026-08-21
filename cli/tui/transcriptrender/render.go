@@ -883,6 +883,7 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 		return StyleRoleNoticeSecondary
 	case clientui.TranscriptMessageHandoffFutureMessage,
 		clientui.TranscriptMessageWorktreeMode,
+		clientui.TranscriptMessageSessionRebind,
 		clientui.TranscriptMessageSubagents:
 		return StyleRoleNotice
 	case clientui.TranscriptMessageGoal, clientui.TranscriptMessageWorkflowMode:

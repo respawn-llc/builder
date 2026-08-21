@@ -16,6 +16,69 @@ type TranscriptWorktreeTransitionOutcome struct {
 	DeletePrecondition *WorktreeDirtyState
 }
 
+type TranscriptSessionRetargetOutcomeKind string
+
+const (
+	TranscriptSessionRetargetSucceeded TranscriptSessionRetargetOutcomeKind = "succeeded"
+	TranscriptSessionRetargetFailed    TranscriptSessionRetargetOutcomeKind = "failed"
+)
+
+type TranscriptSessionRetargetSuccess struct {
+	ProjectID               string
+	ProjectKey              string
+	ProjectName             string
+	WorkspaceID             string
+	CanonicalRoot           string
+	WorkspaceName           string
+	WorkspaceStatus         string
+	WorkspaceBindingCreated bool
+}
+
+type TranscriptSessionRetargetFailure struct {
+	Diagnostic                string
+	UnchangedProjectID        string
+	UnchangedProjectName      string
+	UnchangedWorkingDirectory string
+}
+
+type TranscriptSessionRetargetOutcome struct {
+	OperationID WorktreeTransitionID
+	Kind        TranscriptSessionRetargetOutcomeKind
+	Success     *TranscriptSessionRetargetSuccess
+	Failure     *TranscriptSessionRetargetFailure
+}
+
+func (o TranscriptSessionRetargetOutcome) Validate() error {
+	if err := o.OperationID.Validate(); err != nil {
+		return err
+	}
+	switch o.Kind {
+	case TranscriptSessionRetargetSucceeded:
+		if o.Success == nil || o.Failure != nil {
+			return fmt.Errorf("succeeded session retarget outcome must contain only success")
+		}
+		if strings.TrimSpace(o.Success.ProjectID) == "" ||
+			strings.TrimSpace(o.Success.ProjectName) == "" ||
+			strings.TrimSpace(o.Success.WorkspaceID) == "" ||
+			strings.TrimSpace(o.Success.CanonicalRoot) == "" {
+			return fmt.Errorf("session retarget success binding is incomplete")
+		}
+	case TranscriptSessionRetargetFailed:
+		if o.Failure == nil || o.Success != nil {
+			return fmt.Errorf("failed session retarget outcome must contain only failure")
+		}
+		if strings.TrimSpace(o.Failure.Diagnostic) == "" ||
+			strings.TrimSpace(o.Failure.UnchangedProjectID) == "" ||
+			strings.TrimSpace(o.Failure.UnchangedProjectName) == "" ||
+			strings.TrimSpace(o.Failure.UnchangedWorkingDirectory) == "" {
+			return fmt.Errorf("session retarget failure facts are incomplete")
+		}
+	default:
+		return fmt.Errorf("unknown session retarget outcome kind %q", o.Kind)
+	}
+	return nil
+}
+
 type OperationalDiagnosticCode string
 
 const (

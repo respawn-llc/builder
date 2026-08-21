@@ -65,6 +65,8 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	}
 	return &runtimeLaunchPlan{
 		Wiring:           wiring,
+		reactivator:      reactivator,
+		updateRequest:    lease.UpdateRequest,
 		stopEventStreams: stopStreams,
 		close: func() error {
 			return lease.Release()
@@ -76,7 +78,17 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 }
 
 func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (*runtimeReactivator, *runtimeattach.Activation, error) {
-	lease, err := runtimeattach.Activate(ctx, clients.SessionRuntime, runtimeattach.Request{
+	lease, err := runtimeattach.Activate(ctx, clients.SessionRuntime, runtimeAttachmentRequest(plan))
+	if err != nil {
+		return nil, nil, err
+	}
+	reactivator := newRuntimeReactivator()
+	reactivator.SetReactivateFunc(lease.Reactivate)
+	return reactivator, lease, nil
+}
+
+func runtimeAttachmentRequest(plan sessionLaunchPlan) runtimeattach.Request {
+	return runtimeattach.Request{
 		SessionID:                plan.SessionID,
 		ActiveSettings:           plan.ActiveSettings,
 		EnabledTools:             plan.EnabledTools,
@@ -85,13 +97,7 @@ func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients
 		ThinkingOverrideExplicit: plan.ThinkingOverrideExplicit,
 		AgentSelection:           plan.ActivationAgentSelection,
 		Source:                   plan.Source,
-	})
-	if err != nil {
-		return nil, nil, err
 	}
-	reactivator := newRuntimeReactivator()
-	reactivator.SetReactivateFunc(lease.Reactivate)
-	return reactivator, lease, nil
 }
 
 func prepareSharedRuntimeWiring(

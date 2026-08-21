@@ -10,6 +10,7 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -73,9 +74,9 @@ func TestMaybeHandlePickedSessionWorkspaceChangeCanonicalizesAliases(t *testing.
 
 	action, err := maybeHandlePickedSessionWorkspaceChange(
 		context.Background(),
-		&remoteAppServer{
-			cfg:      config.App{WorkspaceRoot: aliasRoot, Settings: config.Settings{Theme: "dark"}},
-			retarget: &sessionWorkspaceRetargetContext{workspaceRoot: aliasRoot, theme: "dark"},
+		workspaceRetargetContextTestServer{
+			narrowSessionLifecycleServer: narrowSessionLifecycleServer{cfg: config.App{WorkspaceRoot: aliasRoot, Settings: config.Settings{Theme: "dark"}}},
+			retargetContext:              &sessionWorkspaceRetargetContext{workspaceRoot: aliasRoot, theme: "dark"},
 		},
 		"session-1",
 		clientui.SessionExecutionTarget{
@@ -102,9 +103,9 @@ func TestMaybeHandlePickedSessionWorkspaceChangeUsesRemoteServerBindingRoot(t *t
 
 	action, err := maybeHandlePickedSessionWorkspaceChange(
 		context.Background(),
-		&remoteAppServer{
-			cfg:      config.App{WorkspaceRoot: "/source-client-workspace", Settings: config.Settings{Theme: "dark"}},
-			retarget: &sessionWorkspaceRetargetContext{workspaceRoot: "/active-server-workspace", theme: "dark"},
+		workspaceRetargetContextTestServer{
+			narrowSessionLifecycleServer: narrowSessionLifecycleServer{cfg: config.App{WorkspaceRoot: "/source-client-workspace", Settings: config.Settings{Theme: "dark"}}},
+			retargetContext:              &sessionWorkspaceRetargetContext{workspaceRoot: "/active-server-workspace", theme: "dark"},
 		},
 		"session-1",
 		clientui.SessionExecutionTarget{
@@ -232,10 +233,54 @@ func TestRuntimeReleaseUsesFinalModelPolicyAndPreservesErrors(t *testing.T) {
 	})
 }
 
+func TestTransferredRuntimePlanClosesWhenReplacementSetupFails(t *testing.T) {
+	setupErr := errors.New("replacement setup failed")
+	closeCalls := 0
+	plan := &runtimeLaunchPlan{close: func() error {
+		closeCalls++
+		return nil
+	}}
+	err := closeTransferredRuntimePlanAfterSetupFailure(plan, setupErr)
+	if !errors.Is(err, setupErr) || closeCalls != 1 {
+		t.Fatalf("setup cleanup = err %v close calls %d", err, closeCalls)
+	}
+}
+
+func TestSessionRetargetBindingChangedRefreshesSameProjectWorkspace(t *testing.T) {
+	current := client.ProjectAttachment{
+		ProjectID:     "project-a",
+		WorkspaceID:   "workspace-a",
+		WorkspaceRoot: "/workspace-a",
+	}
+	if !sessionRetargetBindingChanged(current, true, &clientui.TranscriptSessionRetargetSuccess{
+		ProjectID:     "project-a",
+		WorkspaceID:   "workspace-b",
+		CanonicalRoot: "/workspace-b",
+	}) {
+		t.Fatal("same-Project Workspace move did not request Remote refresh")
+	}
+	if sessionRetargetBindingChanged(current, true, &clientui.TranscriptSessionRetargetSuccess{
+		ProjectID:     current.ProjectID,
+		WorkspaceID:   current.WorkspaceID,
+		CanonicalRoot: current.WorkspaceRoot,
+	}) {
+		t.Fatal("unchanged binding requested Remote refresh")
+	}
+}
+
 type narrowSessionLifecycleServer struct {
 	lifecycle      apicontract.SessionLifecycleService
 	cfg            config.App
 	reauthenticate func(context.Context, authInteractor) error
+}
+
+type workspaceRetargetContextTestServer struct {
+	narrowSessionLifecycleServer
+	retargetContext *sessionWorkspaceRetargetContext
+}
+
+func (s workspaceRetargetContextTestServer) workspaceRetargetContext() *sessionWorkspaceRetargetContext {
+	return s.retargetContext
 }
 
 func (s narrowSessionLifecycleServer) SessionLifecycleClient() apicontract.SessionLifecycleService {

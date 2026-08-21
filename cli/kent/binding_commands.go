@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/clientui"
@@ -24,6 +22,13 @@ import (
 )
 
 var bindingCommandRPCTimeout = 5 * time.Second
+
+type rebindCommandArguments struct {
+	SessionID  string
+	TargetPath string
+	ProjectID  *string
+	JSON       bool
+}
 
 func projectSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) > 0 {
@@ -127,15 +132,67 @@ func attachSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func rebindSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" rebind", stderr, rebindUsage)
-	projectID := fs.String("project", "", "target project ID; required to move a session across projects")
-	if ok, exitCode := parseCommandFlags(fs, args); !ok {
+	parsed, ok, exitCode := parseRebindCommandArguments(args, stderr)
+	if !ok {
 		return exitCode
 	}
-	remaining := fs.Args()
-	if len(remaining) != 2 {
-		fmt.Fprintln(stderr, "rebind requires <session-id> and <new-path>")
+	targetRoot, err := normalizeBindingCommandPath(parsed.TargetPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	request, err := newRebindRequest(parsed.SessionID, targetRoot, parsed.ProjectID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
+	}
+	remote, err := openSessionCommandRemote(context.Background(), parsed.SessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer func() { _ = remote.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), bindingCommandRPCTimeout)
+	defer cancel()
+	response, err := remote.RetargetSessionWorkspace(ctx, request)
+	if err != nil {
+		fmt.Fprintln(stderr, formatSessionRetargetCommandError(targetRoot, err))
+		return 1
+	}
+	if err := response.Validate(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return writeRebindAcknowledgement(stdout, stderr, response.Acknowledgement, parsed.JSON)
+}
+
+func parseRebindCommandArguments(args []string, stderr io.Writer) (rebindCommandArguments, bool, int) {
+	fs := newCommandFlagSet(config.Command+" rebind", stderr, rebindUsage)
+	sessionFlag := fs.String("session", "", "session to retarget; required outside Kent shell commands")
+	projectID := fs.String("project", "", "target project ID; required to move a session across projects")
+	jsonOut := fs.Bool("json", false, "write the scheduled acknowledgement as JSON")
+	if ok, exitCode := parseCommandFlags(fs, args); !ok {
+		return rebindCommandArguments{}, false, exitCode
+	}
+	remaining := fs.Args()
+	if len(remaining) != 1 {
+		fmt.Fprintln(stderr, "rebind requires exactly one path")
+		return rebindCommandArguments{}, false, 2
+	}
+	sessionProvided := false
+	fs.Visit(func(parsedFlag *flag.Flag) {
+		if parsedFlag.Name == "session" {
+			sessionProvided = true
+		}
+	})
+	if sessionProvided && strings.TrimSpace(*sessionFlag) == "" {
+		fmt.Fprintln(stderr, "session id must not be blank")
+		return rebindCommandArguments{}, false, 2
+	}
+	sessionID, err := resolveCommandSession(*sessionFlag)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return rebindCommandArguments{}, false, 2
 	}
 	var targetProjectID *string
 	fs.Visit(func(parsedFlag *flag.Flag) {
@@ -147,22 +204,41 @@ func rebindSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if targetProjectID != nil && *targetProjectID == "" {
 		fmt.Fprintln(stderr, "project id must not be blank")
-		return 2
+		return rebindCommandArguments{}, false, 2
 	}
-	response, err := retargetSessionWorkspaceResponse(context.Background(), remaining[0], remaining[1], targetProjectID)
+	return rebindCommandArguments{
+		SessionID:  sessionID,
+		TargetPath: remaining[0],
+		ProjectID:  targetProjectID,
+		JSON:       *jsonOut,
+	}, true, 0
+}
+
+func newRebindRequest(sessionID string, workspaceRoot string, projectID *string) (serverapi.SessionRetargetWorkspaceRequest, error) {
+	header, err := newSessionTransitionHeader(sessionID)
 	if err != nil {
-		fmt.Fprintln(stderr, formatSessionRetargetCommandError(remaining[1], err))
+		return serverapi.SessionRetargetWorkspaceRequest{}, err
+	}
+	return serverapi.SessionRetargetWorkspaceRequest{
+		WorktreeTransitionHeader: header,
+		WorkspaceRoot:            workspaceRoot,
+		ProjectID:                projectID,
+		CompletionMode:           serverapi.SessionRetargetCompletionScheduled,
+	}, nil
+}
+
+func writeRebindAcknowledgement(stdout io.Writer, stderr io.Writer, acknowledgement serverapi.WorktreeScheduledAcknowledgement, jsonOut bool) int {
+	if err := acknowledgement.Validate(); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	_, _ = fmt.Fprintln(stdout, response.Binding.WorkspaceID)
-	if response.WorkspaceBindingCreated {
-		_, _ = fmt.Fprintf(
-			stderr,
-			"Attached workspace %q to project %q (%s).\n",
-			response.Binding.CanonicalRoot,
-			response.Binding.ProjectName,
-			response.Binding.ProjectID,
-		)
+	if jsonOut {
+		return writeCommandJSON(stdout, stderr, acknowledgement)
+	}
+	_, err := fmt.Fprintln(stdout, "Session rebind scheduled for the agent's next step. This usually takes a few seconds.")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
 	return 0
 }
@@ -233,10 +309,6 @@ func rebindWorkspaceWithTimeout(ctx context.Context, remote apicontract.ProjectV
 	return remote.RebindWorkspace(rpcCtx, &projectpb.RebindWorkspaceRequest{OldWorkspaceRoot: oldWorkspaceRoot, NewWorkspaceRoot: newWorkspaceRoot})
 }
 
-func retargetSessionWorkspace(ctx context.Context, remote apicontract.SessionLifecycleService, sessionID string, workspaceRoot string, projectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	return remote.RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: sessionID, WorkspaceRoot: workspaceRoot, ProjectID: projectID})
-}
-
 func listProjects(ctx context.Context) ([]clientui.ProjectSummary, error) {
 	_, remote, err := openBindingCommandRemote(ctx, ".")
 	if err != nil {
@@ -277,19 +349,6 @@ func createProject(ctx context.Context, displayName string, workspaceRoot string
 		return nil, err
 	}
 	return resp.Binding, nil
-}
-
-func retargetSessionWorkspaceResponse(ctx context.Context, sessionID string, newPath string, projectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	newCfg, remote, err := openBindingCommandRemote(ctx, newPath)
-	if err != nil {
-		return serverapi.SessionRetargetWorkspaceResponse{}, err
-	}
-	defer func() { _ = remote.Close() }()
-	resp, err := retargetSessionWorkspace(ctx, remote, sessionID, newCfg.WorkspaceRoot, projectID)
-	if err != nil {
-		return serverapi.SessionRetargetWorkspaceResponse{}, err
-	}
-	return resp, nil
 }
 
 func openBindingCommandRemote(ctx context.Context, path string) (config.App, *client.Remote, error) {

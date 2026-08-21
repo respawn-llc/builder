@@ -215,7 +215,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithChatContextWorkspaceResolver(workspaceConfigResolver).
 		WithChatContextAuthReader(authSupport.AuthManager).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
-	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
+	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry).
+		WithOutcomePublisher(runtimeRegistry)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
 		WithPersistedSessionResolver(metadataStore).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
@@ -230,6 +231,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		if workflowRuntimeStarter != nil {
 			_ = workflowRuntimeStarter.Close()
 		}
+		_ = sessionWorkspaceRetargeter.Close()
 		_ = runtimeAuthority.Close(context.Background())
 		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
@@ -387,6 +389,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		sessionRuntimeAPI:       sessionRuntimeAPI,
 		sessionViewService:      sessionViewService,
 		sessionLifecycleService: sessionLifecycleService,
+		sessionRetargeter:       sessionWorkspaceRetargeter,
 		updateStatusService:     updateStatusService,
 		workflowService:         workflowService,
 		workflowController:      workflowController,

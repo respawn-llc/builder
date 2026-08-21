@@ -18,7 +18,8 @@ const (
 	SessionRetargetTargetProjectRequired SessionRetargetErrorReason = "target_project_required"
 	SessionRetargetTargetProjectConflict SessionRetargetErrorReason = "target_project_conflict"
 	SessionRetargetWorkflowOwned         SessionRetargetErrorReason = "workflow_owned"
-	SessionRetargetBackgroundProcess     SessionRetargetErrorReason = "background_process_active"
+	SessionRetargetSourceWorktree        SessionRetargetErrorReason = "source_worktree"
+	SessionRetargetTargetWorktree        SessionRetargetErrorReason = "target_worktree"
 )
 
 type ProjectReference struct {
@@ -71,7 +72,8 @@ func (e *SessionRetargetError) Validate() error {
 			}
 		}
 	case SessionRetargetWorkflowOwned,
-		SessionRetargetBackgroundProcess:
+		SessionRetargetSourceWorktree,
+		SessionRetargetTargetWorktree:
 	default:
 		return fmt.Errorf("invalid session retarget reason %q", e.Reason)
 	}

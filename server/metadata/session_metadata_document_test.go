@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/server/session"
+	"core/shared/serverapi"
 )
 
 func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
@@ -25,6 +26,10 @@ func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
 			CreatedAt:  createdAt,
 		},
 		WorktreeReminder: &session.WorktreeReminderState{Mode: session.WorktreeReminderModeEnter},
+		RebindReminder: &session.SessionRebindReminder{
+			SourceProject: serverapi.ProjectReference{ID: "source-project", Name: "Source"},
+			TargetProject: serverapi.ProjectReference{ID: "target-project", Name: "Target"},
+		},
 		Goal: &session.GoalState{
 			ID:        "goal",
 			Objective: "finish",

@@ -18,6 +18,7 @@ func cloneMeta(in Meta) Meta {
 		out.PendingModelRecovery = &pending
 	}
 	out.WorktreeReminder = CloneWorktreeReminderState(in.WorktreeReminder)
+	out.RebindReminder = CloneSessionRebindReminder(in.RebindReminder)
 	if in.UsageState != nil {
 		usage := *in.UsageState
 		out.UsageState = &usage

@@ -9,6 +9,7 @@ import "kent/api/shared/foundation.proto";
 import "kent/api/shared/validation.proto";
 import "kent/api/session_launch/validation.proto";
 import "kent/api/session_launch/session_launch.proto";
+import "kent/api/worktree/worktree.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/session_launch;sessionlaunchpb";
 
@@ -80,9 +81,7 @@ message SessionPersistInputDraftResult {
 }
 
 message SessionRetargetWorkspaceRequest {
-  string session_id = 1 [
-    (buf.validate.field).string.(scoped_session_id) = true
-  ];
+  kent.api.worktree.TransitionHeader transition = 1 [(buf.validate.field).required = true];
   string workspace_root = 2 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
@@ -99,9 +98,19 @@ message SessionRetargetWorkspaceRequest {
       expression: "this.trim() != ''"
     }
   ];
+  SessionRetargetCompletionMode completion_mode = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
 }
 
-message SessionRetargetWorkspaceSuccess {
+enum SessionRetargetCompletionMode {
+  SESSION_RETARGET_COMPLETION_MODE_UNSPECIFIED = 0;
+  SESSION_RETARGET_COMPLETION_MODE_SCHEDULED = 1;
+  SESSION_RETARGET_COMPLETION_MODE_WAIT = 2;
+}
+
+message SessionRetargetSucceeded {
   kent.api.project.ProjectBinding binding = 1 [(buf.validate.field).required = true];
   bool workspace_binding_created = 2;
 }
@@ -109,6 +118,36 @@ message SessionRetargetWorkspaceSuccess {
 message ProjectReference {
   string id = 1 [(buf.validate.field).string.min_len = 1];
   string name = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message SessionRetargetFailed {
+  string diagnostic = 1 [(buf.validate.field).string.min_len = 1];
+  ProjectReference unchanged_project = 2 [(buf.validate.field).required = true];
+  string unchanged_working_directory = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message SessionRetargetOutcome {
+  string operation_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  oneof result {
+    option (buf.validate.oneof).required = true;
+
+    SessionRetargetSucceeded succeeded = 2;
+    SessionRetargetFailed failed = 3;
+  }
+}
+
+message SessionRetargetWorkspaceSuccess {
+  kent.api.worktree.ScheduledAcknowledgement acknowledgement = 1 [(buf.validate.field).required = true];
+  optional SessionRetargetOutcome outcome = 2;
+
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.retarget_outcome_operation"
+    message: "outcome operation_id must match the acknowledgement"
+    expression: "!has(this.outcome) || this.outcome.operation_id == this.acknowledgement.operation_id"
+  };
 }
 
 message SessionRetargetFacts {
@@ -143,7 +182,11 @@ message SessionRetargetWorkflowOwnedDetails {
   SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
 }
 
-message SessionRetargetBackgroundProcessActiveDetails {
+message SessionRetargetSourceWorktreeDetails {
+  SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
+}
+
+message SessionRetargetTargetWorktreeDetails {
   SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
 }
 
@@ -171,13 +214,19 @@ message SessionRetargetWorkspaceError {
         error_code: "workflow_owned"
       }
     ];
-    SessionRetargetBackgroundProcessActiveDetails background_process_active = 5 [
+    SessionRetargetSourceWorktreeDetails source_worktree = 5 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
-        error_code: "background_process_active"
+        error_code: "source_worktree"
       }
     ];
-    kent.api.shared.InternalFailureDetails internal_failure = 6 [
+    SessionRetargetTargetWorktreeDetails target_worktree = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "target_worktree"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 7 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"

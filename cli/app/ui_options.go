@@ -27,6 +27,7 @@ type UITransition struct {
 	TargetSessionID              string
 	ForkRollbackTargetID         string
 	PreviousSessionID            *runtimeids.SessionID
+	SessionRetargetSuccess       *clientui.TranscriptSessionRetargetSuccess
 }
 
 const (

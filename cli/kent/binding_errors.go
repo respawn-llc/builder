@@ -34,12 +34,12 @@ func buildSessionRetargetCommandGuidance(targetPath string, retargetErr *servera
 	for _, candidate := range candidates {
 		guidance.Candidates = append(guidance.Candidates, sessionRetargetCandidateCommand{
 			Project: candidate,
-			Tokens:  []string{brand.Command, "rebind", "--project", candidate.ID, retargetErr.SessionID, targetPath},
+			Tokens:  []string{brand.Command, "rebind", "--session", retargetErr.SessionID, "--project", candidate.ID, targetPath},
 		})
 	}
 	if retargetErr.Reason == serverapi.SessionRetargetTargetProjectRequired {
 		guidance.AttachToSource = []string{brand.Command, "attach", "--project", retargetErr.SourceProject.ID, targetPath}
-		guidance.RebindIntoSource = []string{brand.Command, "rebind", retargetErr.SessionID, targetPath}
+		guidance.RebindIntoSource = []string{brand.Command, "rebind", "--session", retargetErr.SessionID, targetPath}
 	}
 	return guidance
 }
@@ -144,8 +144,10 @@ func formatSessionRetargetCommandError(targetPath string, err error) error {
 			return fmt.Errorf("session %s is owned by workflow task(s) %s and cannot move across projects: %w", retargetErr.SessionID, strings.Join(taskIDs, ", "), err)
 		}
 		return fmt.Errorf("session %s is workflow-owned and cannot move across projects: %w", retargetErr.SessionID, err)
-	case serverapi.SessionRetargetBackgroundProcess:
-		return fmt.Errorf("session %s has an active background process; stop it before rebinding: %w", retargetErr.SessionID, err)
+	case serverapi.SessionRetargetSourceWorktree:
+		return errors.New("You are still in a worktree of the original workspace, which would make transition to the main worktree implicit. First, leave the worktree to enter a regular workspace, then try to rebind after the move finishes")
+	case serverapi.SessionRetargetTargetWorktree:
+		return errors.New("The target path is a Kent Worktree, not a Workspace, attaching it as a workspace is not correct and pollutes the project. Rebind to the main workspace, then enter the worktree directly instead.")
 	default:
 		return err
 	}

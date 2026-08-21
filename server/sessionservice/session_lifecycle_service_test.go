@@ -102,9 +102,9 @@ func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.
 var sessionServiceTestPersistence = sessiontest.NewPersistence()
 
 type sessionLifecycleRetargeterStub struct {
-	result metadata.SessionWorkspaceRetargetResult
-	err    error
-	req    metadata.SessionWorkspaceRetargetRequest
+	response serverapi.SessionRetargetWorkspaceResponse
+	err      error
+	req      SessionWorkspaceRetargetInvocation
 }
 
 type sessionNavigationTargetResolverStub struct {
@@ -132,9 +132,9 @@ func (s *sessionNavigationTargetResolverStub) ResolveSessionNavigationBinding(ct
 	return s.target, s.err
 }
 
-func (s *sessionLifecycleRetargeterStub) RetargetWorkspace(_ context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error) {
+func (s *sessionLifecycleRetargeterStub) RetargetWorkspace(_ context.Context, req SessionWorkspaceRetargetInvocation) (serverapi.SessionRetargetWorkspaceResponse, error) {
 	s.req = req
-	return s.result, s.err
+	return s.response, s.err
 }
 
 func createPersistedSession(t *testing.T) (string, string, *session.Store) {
@@ -292,45 +292,97 @@ func TestServicePersistInputDraftWritesBySessionID(t *testing.T) {
 
 func TestServiceRetargetSessionWorkspaceDelegatesAndMapsBinding(t *testing.T) {
 	projectID := "project-target"
-	retargeter := &sessionLifecycleRetargeterStub{result: metadata.SessionWorkspaceRetargetResult{
-		Binding: metadata.Binding{
-			ProjectID:       projectID,
-			ProjectKey:      "TAR",
-			ProjectName:     "Target",
-			WorkspaceID:     "workspace-target",
-			CanonicalRoot:   t.TempDir(),
-			WorkspaceName:   "target",
-			WorkspaceStatus: "available",
+	targetRoot := t.TempDir()
+	operationID := serverapi.NewWorktreeOperationID()
+	retargeter := &sessionLifecycleRetargeterStub{response: serverapi.SessionRetargetWorkspaceResponse{
+		Acknowledgement: serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID},
+		Outcome: &serverapi.SessionRetargetOutcome{
+			OperationID: operationID,
+			Kind:        serverapi.SessionRetargetOutcomeSucceeded,
+			Success: &serverapi.SessionRetargetSuccess{
+				Binding: serverapi.ProjectBinding{
+					ProjectID:       projectID,
+					ProjectKey:      "TAR",
+					ProjectName:     "Target",
+					WorkspaceID:     "workspace-target",
+					CanonicalRoot:   targetRoot,
+					WorkspaceName:   "target",
+					WorkspaceStatus: "available",
+				},
+				WorkspaceBindingCreated: true,
+			},
 		},
-		WorkspaceBindingCreated: true,
 	}}
 	service := NewGlobalSessionLifecycleService(t.TempDir(), nil, nil).WithWorkspaceRetargeter(retargeter)
+	origin := &serverapi.RuntimeStepOrigin{
+		RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID: "018fdd67-89ab-4cde-8123-456789abc002",
+	}
 	resp, err := service.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		WorkspaceRoot:   retargeter.result.Binding.CanonicalRoot,
-		ProjectID:       &projectID,
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: operationID,
+			SessionID:   "session-1",
+			Origin:      origin,
+		},
+		WorkspaceRoot:  targetRoot,
+		ProjectID:      &projectID,
+		CompletionMode: serverapi.SessionRetargetCompletionWait,
 	})
 	if err != nil {
 		t.Fatalf("RetargetSessionWorkspace: %v", err)
 	}
-	if retargeter.req.ProjectID == nil || *retargeter.req.ProjectID != projectID {
+	if retargeter.req.Request.ProjectID == nil || *retargeter.req.Request.ProjectID != projectID {
 		t.Fatalf("retarget request = %+v, want target project %q", retargeter.req, projectID)
 	}
-	if resp.Binding.ProjectID != projectID || resp.Binding.ProjectKey != "TAR" {
-		t.Fatalf("binding = %+v, want mapped retarget result", resp.Binding)
+	if retargeter.req.OperationID != operationID || retargeter.req.CompletionMode != serverapi.SessionRetargetCompletionWait {
+		t.Fatalf("retarget invocation = %+v", retargeter.req)
 	}
-	if !resp.WorkspaceBindingCreated {
+	if retargeter.req.Origin != origin {
+		t.Fatalf("retarget origin = %+v, want %+v", retargeter.req.Origin, origin)
+	}
+	if resp.Acknowledgement.OperationID != operationID || resp.Outcome == nil || resp.Outcome.Success == nil {
+		t.Fatalf("response = %+v, want acknowledgement and success outcome", resp)
+	}
+	if resp.Outcome.Success.Binding.ProjectID != projectID || resp.Outcome.Success.Binding.ProjectKey != "TAR" {
+		t.Fatalf("binding = %+v, want mapped retarget result", resp.Outcome.Success.Binding)
+	}
+	if !resp.Outcome.Success.WorkspaceBindingCreated {
 		t.Fatal("WorkspaceBindingCreated = false, want true")
+	}
+}
+
+func TestServiceRetargetSessionWorkspaceScheduledModeReturnsOnlyAcknowledgement(t *testing.T) {
+	operationID := serverapi.NewWorktreeOperationID()
+	targetRoot := t.TempDir()
+	retargeter := &sessionLifecycleRetargeterStub{response: serverapi.SessionRetargetWorkspaceResponse{
+		Acknowledgement: serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID},
+	}}
+	service := NewGlobalSessionLifecycleService(t.TempDir(), nil, nil).WithWorkspaceRetargeter(retargeter)
+	response, err := service.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: operationID,
+			SessionID:   "session-1",
+		},
+		WorkspaceRoot:  targetRoot,
+		CompletionMode: serverapi.SessionRetargetCompletionScheduled,
+	})
+	if err != nil {
+		t.Fatalf("RetargetSessionWorkspace: %v", err)
+	}
+	if response.Acknowledgement.OperationID != operationID || response.Outcome != nil {
+		t.Fatalf("scheduled response = %+v", response)
 	}
 }
 
 func TestServiceRetargetSessionWorkspaceRequiresRetargeter(t *testing.T) {
 	service := NewSessionLifecycleService(t.TempDir(), nil, nil)
 	_, err := service.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		WorkspaceRoot:   t.TempDir(),
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			SessionID:   "session-1",
+		},
+		WorkspaceRoot:  t.TempDir(),
+		CompletionMode: serverapi.SessionRetargetCompletionScheduled,
 	})
 	if !errors.Is(err, errSessionWorkspaceRetargeterRequired) {
 		t.Fatalf("RetargetSessionWorkspace error = %v, want missing retargeter", err)

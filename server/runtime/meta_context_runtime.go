@@ -23,7 +23,14 @@ func (e *Engine) ensureMetaContextForRequest(ctx context.Context, stepID string)
 		return err
 	}
 	if !e.baseMetaInjected {
-		return e.steerFreshMetaContext(ctx, stepID)
+		pendingRebind := e.store.Meta().RebindReminder != nil
+		if err := e.steerFreshMetaContext(ctx, stepID); err != nil {
+			return err
+		}
+		if pendingRebind {
+			return e.store.SetSessionRebindReminder(nil)
+		}
+		return nil
 	}
 	if err := e.steerHeadlessModeTransitionIfNeeded(stepID); err != nil {
 		return err
@@ -31,13 +38,17 @@ func (e *Engine) ensureMetaContextForRequest(ctx context.Context, stepID string)
 	if err := e.steerWorkflowModeIfNeeded(ctx, stepID); err != nil {
 		return err
 	}
-	return e.materializePendingWorktreeReminder(stepID)
+	if err := e.materializePendingWorktreeReminder(stepID); err != nil {
+		return err
+	}
+	return e.materializePendingSessionRebindReminder(stepID)
 }
 
 func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error {
 	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
 	options := baseMetaContextBuildOptions(true)
 	options.WorktreeReminder = session.CloneWorktreeReminderState(e.store.Meta().WorktreeReminder)
+	options.SessionRebindReminder = session.CloneSessionRebindReminder(e.store.Meta().RebindReminder)
 	steer := func(options metaContextBuildOptions) (session.CommitReceipt, error) {
 		metaResult, err := builder.Build(options)
 		if err != nil {
@@ -385,6 +396,7 @@ func (e *Engine) steerBaseMetaContext(
 	options := baseMetaContextBuildOptions(true)
 	options.SubagentInvocationContext = invocationContext
 	options.WorktreeReminder = session.CloneWorktreeReminderState(e.store.Meta().WorktreeReminder)
+	options.SessionRebindReminder = session.CloneSessionRebindReminder(e.store.Meta().RebindReminder)
 	metaResult, err := builder.Build(options)
 	if err != nil {
 		return err

@@ -193,6 +193,7 @@ type bundleCompositionInput struct {
 	sessionRuntimeAPI       *sessionruntime.API
 	sessionViewService      *sessionview.Service
 	sessionLifecycleService *sessionservice.SessionLifecycleService
+	sessionRetargeter       *sessionservice.SessionWorkspaceRetargeter
 	updateStatusService     *serverstatus.UpdateStatusService
 	workflowService         *workflowsvc.Service
 	workflowController      *workflowexecution.CurrentNodeController
@@ -221,6 +222,12 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 					return nil
 				}
 				return in.runtimeAuthority.Close(context.Background())
+			}},
+			{name: "session retarget operations", close: func() error {
+				if in.sessionRetargeter == nil {
+					return nil
+				}
+				return in.sessionRetargeter.Close()
 			}},
 			{name: "workflow runtime starter", close: func() error {
 				if in.workflowRuntimeStarter == nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"core/shared/apicontract"
 	"core/shared/client"
@@ -14,7 +15,6 @@ import (
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/google/uuid"
 )
 
 const (
@@ -22,6 +22,7 @@ const (
 )
 
 var runWorkspaceChangePromptFlow = runWorkspaceChangePrompt
+var runWorkspaceRetargetLoadingFlow = runWorkspaceRetargetLoading
 
 type sessionWorkspaceChangeAction int
 
@@ -142,7 +143,9 @@ func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server session
 	if !result.Rebind {
 		return sessionWorkspaceChangePickAgain, nil
 	}
-	if err := retargetInteractiveSessionWorkspace(ctx, server, sessionID, currentRoot); err != nil {
+	if err := runWorkspaceRetargetLoadingFlow(retargetContext.theme, func() error {
+		return retargetInteractiveSessionWorkspace(ctx, server, sessionID, currentRoot)
+	}); err != nil {
 		return sessionWorkspaceChangeProceed, err
 	}
 	return sessionWorkspaceChangeProceed, nil
@@ -160,8 +163,25 @@ func retargetInteractiveSessionWorkspace(ctx context.Context, server sessionLife
 	if trimmedWorkspaceRoot == "" {
 		return errors.New("workspace root is required")
 	}
-	_, err := server.SessionLifecycleClient().RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: trimmedSessionID, WorkspaceRoot: trimmedWorkspaceRoot})
-	return err
+	operationID := serverapi.NewWorktreeOperationID()
+	response, err := server.SessionLifecycleClient().RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: operationID,
+			SessionID:   trimmedSessionID,
+		},
+		WorkspaceRoot:  trimmedWorkspaceRoot,
+		CompletionMode: serverapi.SessionRetargetCompletionWait,
+	})
+	if err != nil {
+		return err
+	}
+	if err := response.Validate(); err != nil {
+		return err
+	}
+	if response.Outcome == nil || response.Outcome.Kind != serverapi.SessionRetargetOutcomeSucceeded {
+		return errors.New("session retarget did not return a successful outcome")
+	}
+	return nil
 }
 
 func normalizeWorkspaceChangeDisplayRoot(root string) string {
@@ -288,4 +308,69 @@ func runWorkspaceChangePrompt(selectedRoot string, currentRoot string, theme str
 		return workspaceChangePromptResult{}, fmt.Errorf("unexpected workspace change prompt model type %T", finalModel)
 	}
 	return finalized.result, nil
+}
+
+type workspaceRetargetDoneMsg struct{ err error }
+type workspaceRetargetSpinnerMsg struct{}
+
+type workspaceRetargetLoadingModel struct {
+	width        int
+	height       int
+	theme        string
+	spinnerFrame int
+	run          func() error
+	err          error
+}
+
+func (m *workspaceRetargetLoadingModel) Init() tea.Cmd {
+	return tea.Batch(
+		func() tea.Msg { return workspaceRetargetDoneMsg{err: m.run()} },
+		tea.Tick(spinnerTickInterval, func(time.Time) tea.Msg { return workspaceRetargetSpinnerMsg{} }),
+	)
+}
+
+func (m *workspaceRetargetLoadingModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	switch typed := message.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = typed.Width, typed.Height
+	case workspaceRetargetDoneMsg:
+		m.err = typed.err
+		return m, tea.Quit
+	case workspaceRetargetSpinnerMsg:
+		m.spinnerFrame++
+		return m, tea.Tick(spinnerTickInterval, func(time.Time) tea.Msg { return workspaceRetargetSpinnerMsg{} })
+	}
+	return m, nil
+}
+
+func (m *workspaceRetargetLoadingModel) View() string {
+	return renderStartupFullScreenPrompt(startupFullScreenPromptSpec{
+		Width:           m.width,
+		Height:          m.height,
+		Title:           renderStartupPlainTitle(workspaceChangePromptHeaderFallback, m.theme),
+		Theme:           m.theme,
+		Lines:           []askPromptLine{{Text: pendingToolSpinnerFrame(m.spinnerFrame) + " Moving Session...", Kind: askPromptLineKindHint}},
+		MinContentLines: 1,
+	})
+}
+
+func runWorkspaceRetargetLoading(theme string, run func() error) error {
+	if run == nil {
+		return errors.New("Session retarget operation is required")
+	}
+	model := &workspaceRetargetLoadingModel{
+		width:  defaultPickerWidth,
+		height: defaultPickerHeight,
+		theme:  strings.TrimSpace(theme),
+		run:    run,
+	}
+	finalModel, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
+	if err != nil {
+		return err
+	}
+	finalized, ok := finalModel.(*workspaceRetargetLoadingModel)
+	if !ok {
+		return fmt.Errorf("unexpected Session retarget loading model type %T", finalModel)
+	}
+	return finalized.err
 }

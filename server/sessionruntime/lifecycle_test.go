@@ -109,6 +109,54 @@ func (o *lifecycleReminderQueueObserver) ObservePersistedStore(_ context.Context
 
 type lifecycleRequestCaptureClient chan llm.Request
 
+type lifecycleBlockingTransitionClient struct {
+	started      chan struct{}
+	release      chan struct{}
+	secondCalled chan bool
+	applied      <-chan struct{}
+	calls        atomic.Int32
+}
+
+func (c *lifecycleBlockingTransitionClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+	if c.calls.Add(1) == 1 {
+		close(c.started)
+		<-c.release
+	} else {
+		select {
+		case <-c.applied:
+			c.secondCalled <- true
+		default:
+			c.secondCalled <- false
+		}
+	}
+	return llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (*lifecycleBlockingTransitionClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
+type lifecycleExactTransitionClient struct {
+	apply func() error
+}
+
+func (c *lifecycleExactTransitionClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+	if err := c.apply(); err != nil {
+		return llm.Response{}, err
+	}
+	return llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (*lifecycleExactTransitionClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 type lifecycleRuntimeAbort struct {
 	committed bool
 	cause     error
@@ -582,6 +630,142 @@ func TestAuthoritySyncExecutionTargetPersistsReminderBeforeQueuedUserDrain(t *te
 		}
 	}
 	t.Fatalf("queued model request omitted the persisted worktree reminder: %+v", request.Items)
+}
+
+func TestAuthoritySessionExecutionTargetTransitionRunsBeforeNormallyQueuedUserWorkAndKeepsRuntime(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	applied := make(chan struct{})
+	client := &lifecycleBlockingTransitionClient{
+		started:      make(chan struct{}),
+		release:      make(chan struct{}),
+		secondCalled: make(chan bool, 1),
+		applied:      applied,
+	}
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	openLifecycleRuntime(t, fixture.authority, sessionID, "owner-a", &plan)
+	var engine *runtime.Engine
+	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
+		engine = current
+		return nil
+	}); err != nil {
+		t.Fatalf("capture runtime: %v", err)
+	}
+
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "first")
+		submitDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first Agent Step did not start")
+	}
+
+	transitionDone := make(chan error, 1)
+	go func() {
+		transitionDone <- fixture.authority.RunSessionExecutionTargetTransition(
+			context.Background(),
+			sessionID.String(),
+			nil,
+			func(_ context.Context, _ *session.Store, maintenance *ActiveRuntimeMaintenance, authority func(func() error) error) error {
+				if maintenance == nil {
+					return errors.New("active runtime maintenance is required")
+				}
+				return authority(func() error {
+					close(applied)
+					return nil
+				})
+			},
+		)
+	}()
+	if _, accepted, err := engine.QueueUserMessageForActiveRun(
+		context.Background(),
+		"queued normally",
+		runtimeids.NewRuntimeClientRequestID(),
+		nil,
+	); err != nil || !accepted {
+		t.Fatalf("queue user work accepted=%t err=%v", accepted, err)
+	}
+	select {
+	case <-applied:
+		t.Fatal("transition applied before the active Agent Step completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(client.release)
+	if err := <-transitionDone; err != nil {
+		t.Fatalf("execution-target transition: %v", err)
+	}
+	if err := <-submitDone; err != nil {
+		t.Fatalf("first Agent Step: %v", err)
+	}
+	select {
+	case sawApplied := <-client.secondCalled:
+		if !sawApplied {
+			t.Fatal("queued user work reached the model before the transition")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("normally queued user work did not continue")
+	}
+	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(context.Context, *runtime.Engine) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("runtime did not remain available: %v", err)
+	}
+}
+
+func TestAuthoritySessionExecutionTargetTransitionAppliesFromItsExactActiveStep(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := &lifecycleExactTransitionClient{}
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	openLifecycleRuntime(t, fixture.authority, sessionID, "owner-a", &plan)
+	var engine *runtime.Engine
+	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
+		engine = current
+		return nil
+	}); err != nil {
+		t.Fatalf("capture runtime: %v", err)
+	}
+	applied := false
+	client.apply = func() error {
+		active := engine.ActiveRun()
+		if active == nil {
+			return errors.New("active Agent Step is required")
+		}
+		return fixture.authority.RunSessionExecutionTargetTransition(
+			context.Background(),
+			sessionID.String(),
+			&serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
+			func(_ context.Context, _ *session.Store, maintenance *ActiveRuntimeMaintenance, authority func(func() error) error) error {
+				if maintenance == nil {
+					return errors.New("active runtime maintenance is required")
+				}
+				return authority(func() error {
+					applied = true
+					return nil
+				})
+			},
+		)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "self rebind")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Agent Step: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("exact execution-target transition deadlocked its originating Agent Step")
+	}
+	if !applied {
+		t.Fatal("exact execution-target transition did not apply")
+	}
 }
 
 type lifecyclePersistenceObserver struct {

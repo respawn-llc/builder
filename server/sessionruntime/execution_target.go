@@ -68,15 +68,9 @@ func (a *Authority) RunWorktreeTransition(
 	if err != nil {
 		return err
 	}
-	return a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
+	return a.runExecutionTargetBoundary(ctx, id, origin, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine, authority func(func() error) error) (bool, error) {
 		if resource == nil {
-			if origin != nil {
-				return false, serverapi.NewWorktreeImmediateTransitionError(
-					serverapi.WorktreeImmediateTransitionOriginInactive,
-					runtimeUnavailableErr(id.String()),
-				)
-			}
-			return false, fn(runCtx, func(apply func() error) error { return apply() }, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+			return false, fn(runCtx, authority, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 				if err := context.Cause(syncCtx); err != nil {
 					return err
 				}
@@ -87,41 +81,8 @@ func (a *Authority) RunWorktreeTransition(
 				return store.SetWorktreeReminderState(normalizedReminder)
 			})
 		}
-		if origin == nil {
-			var retire bool
-			err := engine.RunWorktreeTransition(runCtx, func() error {
-				active := true
-				defer func() { active = false }()
-				return fn(runCtx, func(apply func() error) error { return apply() }, func(_ context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-					if !active {
-						return errors.New("worktree transition target synchronizer is no longer active")
-					}
-					normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
-					if err != nil {
-						return err
-					}
-					var syncErr error
-					retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
-					return syncErr
-				})
-			})
-			return retire, err
-		}
-		activeStep := runtimeactivity.ActiveStepFromProvider(engine)
-		if activeStep == nil || activeStep.RunID != origin.RunID || activeStep.StepID != origin.StepID {
-			return false, serverapi.NewWorktreeImmediateTransitionError(
-				serverapi.WorktreeImmediateTransitionOriginInactive,
-				runtime.ErrActiveStepInactive,
-			)
-		}
 		active := true
 		defer func() { active = false }()
-		authority := func(apply func() error) error {
-			if !active {
-				return runtime.ErrActiveStepInactive
-			}
-			return engine.ApplyForActiveStep(origin.StepID, apply)
-		}
 		retire := false
 		err := fn(runCtx, authority, func(_ context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 			if !active {
@@ -135,6 +96,54 @@ func (a *Authority) RunWorktreeTransition(
 			retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
 			return syncErr
 		})
+		return retire, err
+	})
+}
+
+type executionTargetBoundaryCallback func(
+	context.Context,
+	*session.Store,
+	*agentResource,
+	*runtime.Engine,
+	func(func() error) error,
+) (bool, error)
+
+func (a *Authority) runExecutionTargetBoundary(
+	ctx context.Context,
+	id runtimeids.SessionID,
+	origin *serverapi.RuntimeStepOrigin,
+	fn executionTargetBoundaryCallback,
+) error {
+	return a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
+		if resource == nil {
+			if origin != nil {
+				return false, serverapi.NewWorktreeImmediateTransitionError(
+					serverapi.WorktreeImmediateTransitionOriginInactive,
+					runtimeUnavailableErr(id.String()),
+				)
+			}
+			return fn(runCtx, store, nil, nil, func(apply func() error) error { return apply() })
+		}
+		if origin == nil {
+			var retire bool
+			err := engine.RunWorktreeTransition(runCtx, func() error {
+				var callbackErr error
+				retire, callbackErr = fn(runCtx, store, resource, engine, func(apply func() error) error { return apply() })
+				return callbackErr
+			})
+			return retire, err
+		}
+		activeStep := runtimeactivity.ActiveStepFromProvider(engine)
+		if activeStep == nil || activeStep.RunID != origin.RunID || activeStep.StepID != origin.StepID {
+			return false, serverapi.NewWorktreeImmediateTransitionError(
+				serverapi.WorktreeImmediateTransitionOriginInactive,
+				runtime.ErrActiveStepInactive,
+			)
+		}
+		authority := func(apply func() error) error {
+			return engine.ApplyForActiveStep(origin.StepID, apply)
+		}
+		retire, err := fn(runCtx, store, resource, engine, authority)
 		if err != nil {
 			kind := serverapi.WorktreeImmediateTransitionApplyFailed
 			if errors.Is(err, runtime.ErrActiveStepInactive) {
@@ -143,6 +152,29 @@ func (a *Authority) RunWorktreeTransition(
 			return retire, serverapi.NewWorktreeImmediateTransitionError(kind, err)
 		}
 		return retire, nil
+	})
+}
+
+func (a *Authority) RunSessionExecutionTargetTransition(
+	ctx context.Context,
+	sessionID string,
+	origin *serverapi.RuntimeStepOrigin,
+	fn func(context.Context, *session.Store, *ActiveRuntimeMaintenance, func(func() error) error) error,
+) error {
+	if fn == nil {
+		return nil
+	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return a.runExecutionTargetBoundary(ctx, id, origin, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine, authority func(func() error) error) (bool, error) {
+		if resource == nil {
+			return false, fn(runCtx, store, nil, authority)
+		}
+		return runActiveRuntimeMaintenance(resource, engine, func(maintenance *ActiveRuntimeMaintenance) error {
+			return fn(runCtx, store, maintenance, authority)
+		})
 	})
 }
 
@@ -162,43 +194,57 @@ func (a *Authority) RunSessionMaintenance(
 		if resource == nil {
 			return false, fn(runCtx, store, nil)
 		}
-		var retire bool
+		var (
+			retire bool
+			runErr error
+		)
 		err := engine.RunWhenIdleBeforeQueuedUserWork(runCtx, runtime.ActiveKindRuntimeMaintenance, func() error {
-			previousContext := tools.FilesystemContext{}
-			if resource.localTools != nil {
-				previousContext = resource.localTools.FilesystemContext()
-			}
-			currentContext := previousContext.Clone()
-			active := true
-			maintenance := &ActiveRuntimeMaintenance{
-				PreviousFilesystemContext: previousContext,
-				Replace: func(next tools.FilesystemContext) error {
-					if !active {
-						return errors.New("active runtime maintenance rebind is no longer active")
-					}
-					if err := rebindResourceContext(resource, engine, next); err != nil {
-						return err
-					}
-					currentContext = next.Clone()
-					return nil
-				},
-			}
-			callbackErr := fn(runCtx, store, maintenance)
-			active = false
-			retire = retire || maintenance.retire
-			if callbackErr == nil || currentContext.Equal(previousContext) {
-				return callbackErr
-			}
-			rollbackErr := rebindResourceContext(resource, engine, previousContext)
-			if rollbackErr != nil {
-				retire = true
-				engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureRuntimeUnavailable)
-				rollbackErr = fmt.Errorf("rollback runtime filesystem context: %w", rollbackErr)
-			}
-			return errors.Join(callbackErr, rollbackErr)
+			retire, runErr = runActiveRuntimeMaintenance(resource, engine, func(maintenance *ActiveRuntimeMaintenance) error {
+				return fn(runCtx, store, maintenance)
+			})
+			return runErr
 		})
 		return retire, err
 	})
+}
+
+func runActiveRuntimeMaintenance(
+	resource *agentResource,
+	engine *runtime.Engine,
+	fn func(*ActiveRuntimeMaintenance) error,
+) (bool, error) {
+	previousContext := tools.FilesystemContext{}
+	if resource.localTools != nil {
+		previousContext = resource.localTools.FilesystemContext()
+	}
+	currentContext := previousContext.Clone()
+	active := true
+	maintenance := &ActiveRuntimeMaintenance{
+		PreviousFilesystemContext: previousContext,
+		Replace: func(next tools.FilesystemContext) error {
+			if !active {
+				return errors.New("active runtime maintenance is no longer active")
+			}
+			if err := rebindResourceContext(resource, engine, next); err != nil {
+				return err
+			}
+			currentContext = next.Clone()
+			return nil
+		},
+	}
+	callbackErr := fn(maintenance)
+	active = false
+	retire := maintenance.retire
+	if callbackErr == nil || currentContext.Equal(previousContext) {
+		return retire, callbackErr
+	}
+	rollbackErr := rebindResourceContext(resource, engine, previousContext)
+	if rollbackErr != nil {
+		retire = true
+		engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureRuntimeUnavailable)
+		rollbackErr = fmt.Errorf("rollback runtime filesystem context: %w", rollbackErr)
+	}
+	return retire, errors.Join(callbackErr, rollbackErr)
 }
 
 func (a *Authority) ClearWorktreeReminder(ctx context.Context, sessionID string) error {
@@ -218,6 +264,26 @@ func (a *Authority) SteerWorktreeTransitionFailure(ctx context.Context, sessionI
 	}
 	return a.WithCurrentRuntime(ctx, id, func(_ context.Context, engine *runtime.Engine) error {
 		return engine.SteerWorktreeTransitionFailure(outcome)
+	})
+}
+
+func (a *Authority) SteerSessionRetargetFailure(ctx context.Context, sessionID string, outcome serverapi.SessionRetargetOutcome) error {
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return a.WithCurrentRuntime(ctx, id, func(_ context.Context, engine *runtime.Engine) error {
+		return engine.SteerSessionRetargetFailure(outcome)
+	})
+}
+
+func (a *Authority) SteerSessionRebindReminder(ctx context.Context, sessionID string, reminder session.SessionRebindReminder) error {
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return a.WithCurrentRuntime(ctx, id, func(_ context.Context, engine *runtime.Engine) error {
+		return engine.SteerSessionRebindReminder(reminder)
 	})
 }
 

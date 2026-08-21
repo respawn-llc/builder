@@ -2352,9 +2352,16 @@ SELECT
     s.project_id,
     p.display_name AS project_display_name,
     p.project_key,
-    s.artifact_relpath
+    s.artifact_relpath,
+    COALESCE(s.workspace_id, '') AS workspace_id,
+    COALESCE(w.canonical_root_path, json_extract(s.metadata_json, '$.workspace_root'), '') AS workspace_root,
+    s.worktree_id,
+    wt.canonical_root_path AS worktree_root,
+    s.cwd_relpath
 FROM sessions s
 JOIN projects p ON p.id = s.project_id
+LEFT JOIN workspaces w ON w.id = s.workspace_id
+LEFT JOIN worktrees wt ON wt.id = s.worktree_id
 WHERE s.id = ?1
 LIMIT 1
 `
@@ -2365,6 +2372,11 @@ type GetSessionWorkspaceRetargetStateByIDRow struct {
 	ProjectDisplayName string
 	ProjectKey         string
 	ArtifactRelpath    string
+	WorkspaceID        string
+	WorkspaceRoot      string
+	WorktreeID         sql.NullString
+	WorktreeRoot       sql.NullString
+	CwdRelpath         string
 }
 
 func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sessionID string) (GetSessionWorkspaceRetargetStateByIDRow, error) {
@@ -2376,6 +2388,11 @@ func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sess
 		&i.ProjectDisplayName,
 		&i.ProjectKey,
 		&i.ArtifactRelpath,
+		&i.WorkspaceID,
+		&i.WorkspaceRoot,
+		&i.WorktreeID,
+		&i.WorktreeRoot,
+		&i.CwdRelpath,
 	), getSessionWorkspaceRetargetStateByID, 1)
 
 	return i, err
@@ -9058,13 +9075,16 @@ SET
             CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
             '$.workspace_root', CAST(?5 AS TEXT),
             '$.workspace_container', CAST(?6 AS TEXT),
-            '$.worktree_reminder', json('null')
+            '$.rebind_reminder', json(CAST(?7 AS TEXT))
         ),
         '$.workflow_session'
     )
-WHERE id = ?7
-  AND project_id = ?8
-  AND artifact_relpath = ?9
+WHERE id = ?8
+  AND project_id = ?9
+  AND workspace_id = ?10
+  AND worktree_id IS NULL
+  AND cwd_relpath = ?11
+  AND artifact_relpath = ?12
 `
 
 type RetargetSessionWorkspaceProjectParams struct {
@@ -9074,8 +9094,11 @@ type RetargetSessionWorkspaceProjectParams struct {
 	UpdatedAtUnixMs          int64
 	TargetWorkspaceRoot      string
 	TargetWorkspaceContainer string
+	RebindReminderJson       string
 	SessionID                string
 	SourceProjectID          string
+	SourceWorkspaceID        sql.NullString
+	SourceCwdRelpath         string
 	SourceArtifactRelpath    string
 }
 
@@ -9087,11 +9110,14 @@ func (q *Queries) RetargetSessionWorkspaceProject(ctx context.Context, arg Retar
 		arg.UpdatedAtUnixMs,
 		arg.TargetWorkspaceRoot,
 		arg.TargetWorkspaceContainer,
+		arg.RebindReminderJson,
 		arg.SessionID,
 		arg.SourceProjectID,
+		arg.SourceWorkspaceID,
+		arg.SourceCwdRelpath,
 		arg.SourceArtifactRelpath,
 	)
-	err = recordQueryError(ctx, err, retargetSessionWorkspaceProject, 9)
+	err = recordQueryError(ctx, err, retargetSessionWorkspaceProject, 12)
 
 	if err != nil {
 		return 0, err

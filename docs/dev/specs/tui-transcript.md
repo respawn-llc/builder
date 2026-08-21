@@ -55,6 +55,7 @@
 - Ask-question entries show only the question when collapsed.
 - Known developer/context reminders, including worktree reminders, use typed compact labels when collapsed.
 - Expanding a known developer/context reminder reveals its full model-visible entry content verbatim.
+- A successful Session rebind appears as a typed, collapsed developer/context row labeled `Session moved`. Expanding it reveals the full model-visible reminder.
 - Expanding preserves the current camera position so new entry content grows below its collapsed preview.
 - Detail compact labels use typed message and tool facts. They do not infer meaning from display text.
 - Unknown roles, unknown message types, and invalid/missing metadata remain visible and expandable when recoverable text exists.
