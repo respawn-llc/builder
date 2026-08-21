@@ -247,17 +247,13 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 		waitEngineLifecycleTasks(t, eng)
 	})
 
-	submitDone := make(chan struct {
-		message llm.Message
-		err     error
-	}, 1)
-	go func() {
-		message, err := eng.SubmitUserMessage(context.Background(), "run task")
-		submitDone <- struct {
-			message llm.Message
-			err     error
-		}{message: message, err: err}
-	}()
+	answer, err := eng.SubmitUserMessage(context.Background(), "run task")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if got := messageContent(answer); got != "foreground done" {
+		t.Fatalf("immediate assistant content = %q, want foreground done", got)
+	}
 	select {
 	case <-reviewerStarted:
 	case <-time.After(runtimeTestSynchronizationTimeout):
@@ -267,13 +263,7 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 		t.Fatalf("AcceptHumanSteering: %v", err)
 	}
 	releaseReviewer()
-	result := <-submitDone
-	if result.err != nil {
-		t.Fatalf("submit: %v", result.err)
-	}
-	if messageContent(result.message) != "reviewed done" {
-		t.Fatalf("assistant content = %q, want reviewed done", messageContent(result.message))
-	}
+	waitEngineLifecycleTasks(t, eng)
 	mainClient.mu.Lock()
 	requests := append([]llm.Request(nil), mainClient.calls...)
 	mainClient.mu.Unlock()
@@ -281,6 +271,16 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 		t.Fatalf("main-agent requests = %d, want initial and reviewer follow-up", len(requests))
 	}
 	assertRequestHasUserMessage(t, requests[1], "steer reviewer follow-up", true)
+	snapshot := eng.ChatSnapshot()
+	foundReviewedAnswer := false
+	for _, entry := range snapshot.Entries {
+		if entry.Role == "assistant" && entry.Text == "reviewed done" {
+			foundReviewedAnswer = true
+		}
+	}
+	if !foundReviewedAnswer {
+		t.Fatalf("late continuation answer missing from snapshot: %+v", snapshot.Entries)
+	}
 }
 
 func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {

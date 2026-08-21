@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"core/server/llm"
@@ -229,6 +230,7 @@ func TestReviewerTranscriptPathsUseRichEventsWithoutCommittedConversationUpdated
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
+	var eventsMu sync.Mutex
 	events := make([]Event, 0, 48)
 	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
@@ -239,11 +241,23 @@ func TestReviewerTranscriptPathsUseRichEventsWithoutCommittedConversationUpdated
 			VerboseOutput: true,
 			Client:        reviewerClient,
 		},
-		OnEvent: func(evt Event) { events = append(events, evt) },
+		OnEvent: func(evt Event) {
+			eventsMu.Lock()
+			events = append(events, evt)
+			eventsMu.Unlock()
+		},
 	})
-	if _, err := eng.SubmitUserMessage(context.Background(), "do the task"); err != nil {
+	answer, err := eng.SubmitUserMessage(context.Background(), "do the task")
+	if err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
+	if got := messageContent(answer); got != "original final" {
+		t.Fatalf("immediate assistant content = %q, want original final", got)
+	}
+	waitEngineLifecycleTasks(t, eng)
+	eventsMu.Lock()
+	events = append([]Event(nil), events...)
+	eventsMu.Unlock()
 	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 0 {
 		t.Fatalf("committed conversation_updated count after user flush = %d, want 0; events=%+v", got, events)
 	}

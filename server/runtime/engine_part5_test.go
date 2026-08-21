@@ -358,10 +358,14 @@ func TestReviewerBlankFinalKeepsOriginalAnswerAndReportsNoChanges(t *testing.T) 
 		},
 	})
 
-	_, err := eng.SubmitUserMessage(context.Background(), "do task")
+	answer, err := eng.SubmitUserMessage(context.Background(), "do task")
 	if err != nil {
 		t.Fatalf("submit with blank Reviewer follow-up: %v", err)
 	}
+	if got := messageContent(answer); got != "original final" {
+		t.Fatalf("immediate assistant content = %q, want original final", got)
+	}
+	waitEngineLifecycleTasks(t, eng)
 	if reviewerClient.StreamCalls() != 1 {
 		t.Fatalf("reviewer stream calls = %d, want 1", reviewerClient.StreamCalls())
 	}
