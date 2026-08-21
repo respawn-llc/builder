@@ -20,6 +20,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 	sqlitedriver "modernc.org/sqlite"
@@ -2057,13 +2058,18 @@ func (s *Store) ListSessionPage(
 		if err != nil {
 			return SessionPage{}, fmt.Errorf("validate listed session category for %q: %w", row.ID, err)
 		}
-		out.Sessions = append(out.Sessions, clientui.SessionSummary{
-			SessionID:          sessionID,
-			Category:           rowCategory,
-			Name:               row.Name,
-			FirstPromptPreview: row.FirstPromptPreview,
-			UpdatedAt:          timeFromStoredTimestamp(row.UpdatedAtUnixMs),
-		})
+		summary := clientui.SessionSummary{
+			SessionID: sessionID,
+			Category:  rowCategory,
+			UpdatedAt: timeFromStoredTimestamp(row.UpdatedAtUnixMs),
+		}
+		if row.Name != "" {
+			summary.Name = textutil.Value(row.Name)
+		}
+		if row.FirstPromptPreview != "" {
+			summary.FirstPromptPreview = textutil.Value(row.FirstPromptPreview)
+		}
+		out.Sessions = append(out.Sessions, summary)
 	}
 	return out, nil
 }

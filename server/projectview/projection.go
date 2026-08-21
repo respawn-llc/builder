@@ -11,6 +11,7 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -219,15 +220,11 @@ func sessionPageToGenerated(page metadata.SessionPage) (*projectpb.SessionPageSu
 		session := &projectpb.SessionSummary{
 			SessionId: summary.SessionID.String(),
 			Category:  summaryCategory,
+			Name:      textutil.Pointer(summary.Name),
+			FirstPromptPreview: textutil.Pointer(
+				summary.FirstPromptPreview,
+			),
 			UpdatedAt: timestamppb.New(summary.UpdatedAt),
-		}
-		if summary.Name != "" {
-			name := summary.Name
-			session.Name = &name
-		}
-		if summary.FirstPromptPreview != "" {
-			preview := summary.FirstPromptPreview
-			session.FirstPromptPreview = &preview
 		}
 		success.Sessions = append(success.Sessions, session)
 	}

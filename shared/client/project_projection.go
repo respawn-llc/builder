@@ -8,6 +8,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func ProjectAvailabilityFromProto(value projectpb.ProjectAvailability) (clientui.ProjectAvailability, error) {
@@ -131,8 +132,8 @@ func SessionSummaryFromProto(session *projectpb.SessionSummary) (clientui.Sessio
 	return clientui.SessionSummary{
 		SessionID:          sessionID,
 		Category:           category,
-		Name:               session.GetName(),
-		FirstPromptPreview: session.GetFirstPromptPreview(),
+		Name:               textutil.Pointer(session.Name),
+		FirstPromptPreview: textutil.Pointer(session.FirstPromptPreview),
 		UpdatedAt:          session.UpdatedAt.AsTime(),
 	}, nil
 }
