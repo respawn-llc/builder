@@ -1105,6 +1105,36 @@ func (s *blockingSessionRetargetCommit) CommitSessionWorkspaceRetarget(
 	}
 }
 
+type shutdownRaceFailureMetadata struct {
+	*metadata.Store
+	retargeter *SessionWorkspaceRetargeter
+	commitErr  error
+	closeDone  chan error
+}
+
+func (s *shutdownRaceFailureMetadata) CommitSessionWorkspaceRetarget(
+	context.Context,
+	metadata.SessionWorkspaceRetargetPlan,
+	time.Time,
+) (metadata.SessionWorkspaceRetargetResult, error) {
+	return metadata.SessionWorkspaceRetargetResult{}, s.commitErr
+}
+
+func (s *shutdownRaceFailureMetadata) ResolveSessionWorkspaceRetargetSource(
+	_ context.Context,
+	sessionID string,
+) (metadata.SessionWorkspaceRetargetSource, error) {
+	source, err := s.Store.ResolveSessionWorkspaceRetargetSource(context.Background(), sessionID)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetSource{}, err
+	}
+	go func() {
+		s.closeDone <- s.retargeter.Close()
+	}()
+	<-s.retargeter.lifetimeCtx.Done()
+	return source, nil
+}
+
 type overlappingSessionRetargetCommit struct {
 	*metadata.Store
 	request metadata.SessionWorkspaceRetargetRequest
@@ -1392,6 +1422,64 @@ func TestSessionWorkspaceRetargeterShutdownCancelsWaitCallWithoutOutcome(t *test
 	select {
 	case outcome := <-published.outcomes:
 		t.Fatalf("shutdown published wait terminal outcome: %+v", outcome)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSessionWorkspaceRetargeterShutdownRaceSuppressesOrdinaryFailureOutcome(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	source := &shutdownRaceFailureMetadata{
+		Store:     fixture.metadata,
+		commitErr: errors.New("ordinary commit failure"),
+		closeDone: make(chan error, 1),
+	}
+	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
+	retargeter := fixture.retargeter(source).WithOutcomePublisher(published)
+	source.retargeter = retargeter
+
+	response, err := retargeter.RetargetWorkspace(context.Background(), SessionWorkspaceRetargetInvocation{
+		OperationID: serverapi.NewWorktreeOperationID(),
+		Request: metadata.SessionWorkspaceRetargetRequest{
+			SessionID:     fixture.child.Meta().SessionID,
+			WorkspaceRoot: fixture.targetWorkspaceRoot,
+		},
+		CompletionMode: serverapi.SessionRetargetCompletionWait,
+	})
+	if !errors.Is(err, context.Canceled) || response.Outcome != nil {
+		t.Fatalf("shutdown race response = %+v error %v", response, err)
+	}
+	if closeErr := <-source.closeDone; closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+	select {
+	case outcome := <-published.outcomes:
+		t.Fatalf("shutdown race published terminal outcome: %+v", outcome)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSessionWorkspaceRetargeterClosedNoOpDoesNotPublishOutcome(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
+	retargeter := fixture.retargeter(fixture.metadata).WithOutcomePublisher(published)
+	if err := retargeter.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	response, err := retargeter.RetargetWorkspace(context.Background(), SessionWorkspaceRetargetInvocation{
+		OperationID: serverapi.NewWorktreeOperationID(),
+		Request: metadata.SessionWorkspaceRetargetRequest{
+			SessionID:     fixture.child.Meta().SessionID,
+			WorkspaceRoot: fixture.sourceBinding.CanonicalRoot,
+		},
+		CompletionMode: serverapi.SessionRetargetCompletionScheduled,
+	})
+	if !errors.Is(err, context.Canceled) || response.Outcome != nil {
+		t.Fatalf("closed no-op response = %+v error %v", response, err)
+	}
+	select {
+	case outcome := <-published.outcomes:
+		t.Fatalf("closed no-op published terminal outcome: %+v", outcome)
 	case <-time.After(100 * time.Millisecond):
 	}
 }

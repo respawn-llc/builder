@@ -108,7 +108,9 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 			return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("no-op Session retarget requires a source binding")
 		}
 		outcome := successfulSessionRetargetOutcome(invocation.OperationID, *plan.SourceBinding, false)
-		s.publishTerminalOutcome(s.lifetimeCtx, plan.SessionID, outcome, nil)
+		if !s.publishTerminalOutcome(plan.SessionID, outcome, nil) {
+			return serverapi.SessionRetargetWorkspaceResponse{}, context.Canceled
+		}
 		if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
 			response.Outcome = &outcome
 		}
@@ -159,7 +161,12 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 			}
 			return response, nil
 		}
-		s.publishTerminalOutcome(s.lifetimeCtx, plan.SessionID, *outcome, runErr)
+		if !s.publishTerminalOutcome(plan.SessionID, *outcome, runErr) {
+			if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
+				return serverapi.SessionRetargetWorkspaceResponse{}, context.Canceled
+			}
+			return response, nil
+		}
 		if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
 			response.Outcome = outcome
 			return response, nil
@@ -171,7 +178,7 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 		if outcome == nil {
 			return
 		}
-		s.publishTerminalOutcome(s.lifetimeCtx, plan.SessionID, *outcome, runErr)
+		s.publishTerminalOutcome(plan.SessionID, *outcome, runErr)
 	}()
 	return response, nil
 }
@@ -359,17 +366,20 @@ func (s *SessionWorkspaceRetargeter) steerFailure(
 }
 
 func (s *SessionWorkspaceRetargeter) publishTerminalOutcome(
-	ctx context.Context,
 	sessionID string,
 	outcome serverapi.SessionRetargetOutcome,
 	runErr error,
-) {
+) bool {
+	if context.Cause(s.lifetimeCtx) != nil {
+		return false
+	}
 	if s.outcomes != nil {
 		s.outcomes.PublishSessionRetargetOutcome(sessionID, outcome)
 	}
-	if runErr != nil {
-		s.steerFailure(ctx, sessionID, outcome)
+	if runErr != nil && context.Cause(s.lifetimeCtx) == nil {
+		s.steerFailure(s.lifetimeCtx, sessionID, outcome)
 	}
+	return true
 }
 
 func (s *SessionWorkspaceRetargeter) targetFilesystemContext(
