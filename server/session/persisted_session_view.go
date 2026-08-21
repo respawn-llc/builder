@@ -3,11 +3,10 @@ package session
 import (
 	"context"
 	"path/filepath"
-	"strings"
 )
 
 // PersistedSessionView is a bounded read-only projection captured from one
-// persisted metadata record and one exact event-log boundary.
+// persisted metadata record and one independently bounded event-log projection.
 type PersistedSessionView struct {
 	meta     Meta
 	eventLog *currentEventLog
@@ -22,14 +21,6 @@ func ResolvePersistedSessionView(ctx context.Context, resolver PersistedSessionR
 	eventLog, err := openCurrentEventLog(filepath.Join(record.SessionDir, eventsFile), currentEventLogPersistedSnapshot)
 	if err != nil {
 		return nil, err
-	}
-	if eventLog.boundaryIncomplete || eventLog.lastSequence != meta.LastSequence {
-		return nil, EventLogReconciliationConflictError{
-			SessionID:            strings.TrimSpace(meta.SessionID),
-			ObservedLastSequence: eventLog.lastSequence,
-			CurrentLastSequence:  meta.LastSequence,
-			BoundaryIncomplete:   eventLog.boundaryIncomplete,
-		}
 	}
 	return &PersistedSessionView{meta: meta, eventLog: eventLog}, nil
 }
