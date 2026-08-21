@@ -19,12 +19,11 @@ func (m *Manager) List() []Snapshot {
 	if m == nil {
 		return nil
 	}
-	out := make([]Snapshot, 0)
-	m.published.Range(func(_, value any) bool {
-		entry := value.(*processEntry)
+	entries := m.processEntries()
+	out := make([]Snapshot, 0, len(entries))
+	for _, entry := range entries {
 		out = append(out, entry.snapshot())
-		return true
-	})
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Running != out[j].Running {
 			return out[i].Running
@@ -41,12 +40,7 @@ func (m *Manager) CurrentSnapshots() []Snapshot {
 	if m == nil {
 		return nil
 	}
-	m.mu.Lock()
-	entries := make([]*processEntry, 0, len(m.entries))
-	for _, entry := range m.entries {
-		entries = append(entries, entry)
-	}
-	m.mu.Unlock()
+	entries := m.processEntries()
 	out := make([]Snapshot, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, entry.currentSnapshot())
@@ -65,7 +59,7 @@ func (m *Manager) Count() int {
 }
 
 func (m *Manager) Snapshot(id string) (Snapshot, error) {
-	entry, err := m.publishedEntry(strings.TrimSpace(id))
+	entry, err := m.readEntry(strings.TrimSpace(id))
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -79,11 +73,8 @@ func (m *Manager) Close() error {
 		return nil
 	}
 	m.closed = true
-	entries := make([]*processEntry, 0, len(m.entries))
-	for _, entry := range m.entries {
-		entries = append(entries, entry)
-	}
 	m.mu.Unlock()
+	entries := m.processEntries()
 
 	for _, entry := range entries {
 		entry.mu.Lock()
@@ -242,23 +233,32 @@ func (m *Manager) Close() error {
 func (m *Manager) entry(id string) (*processEntry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	entry, ok := m.entries[id]
-	if !ok {
+	entry, err := m.readEntry(id)
+	if err != nil {
 		return nil, ErrResultUnavailable
 	}
 	m.touchCompletedLocked(id)
 	return entry, nil
 }
 
-func (m *Manager) publishedEntry(id string) (*processEntry, error) {
+func (m *Manager) readEntry(id string) (*processEntry, error) {
 	if m == nil {
 		return nil, ErrResultUnavailable
 	}
-	value, ok := m.published.Load(id)
+	value, ok := m.entries.Load(id)
 	if !ok {
 		return nil, ErrResultUnavailable
 	}
 	return value.(*processEntry), nil
+}
+
+func (m *Manager) processEntries() []*processEntry {
+	entries := make([]*processEntry, 0)
+	m.entries.Range(func(_, value any) bool {
+		entries = append(entries, value.(*processEntry))
+		return true
+	})
+	return entries
 }
 
 func (m *Manager) emitEvent(evt Event) bool {
@@ -365,12 +365,7 @@ func (m *Manager) RetryTerminalEvents(ownerSessionID string) {
 	if ownerSessionID == "" {
 		return
 	}
-	m.mu.Lock()
-	entries := make([]*processEntry, 0, len(m.entries))
-	for _, entry := range m.entries {
-		entries = append(entries, entry)
-	}
-	m.mu.Unlock()
+	entries := m.processEntries()
 	for _, entry := range entries {
 		entry.mu.Lock()
 		pending := entry.ownerSessionID == ownerSessionID &&
@@ -536,16 +531,15 @@ func (m *Manager) allocateProcessSlot() (string, string, error) {
 func (m *Manager) releaseEntry(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.entries, id)
-	m.published.Delete(id)
+	m.entries.Delete(id)
 	m.removeCompletedLocked(id)
 }
 
 func (m *Manager) retainCompletedEntry(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	entry, exists := m.entries[id]
-	if !exists || entry.isRunning() {
+	entry, err := m.readEntry(id)
+	if err != nil || entry.isRunning() {
 		return
 	}
 	m.removeCompletedLocked(id)
@@ -554,10 +548,9 @@ func (m *Manager) retainCompletedEntry(id string) {
 		evictedID := m.completedRecency[0]
 		m.completedRecency[0] = ""
 		m.completedRecency = m.completedRecency[1:]
-		evicted, exists := m.entries[evictedID]
-		if exists && !evicted.isRunning() {
-			delete(m.entries, evictedID)
-			m.published.Delete(evictedID)
+		evicted, err := m.readEntry(evictedID)
+		if err == nil && !evicted.isRunning() {
+			m.entries.Delete(evictedID)
 		}
 	}
 }

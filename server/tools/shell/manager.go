@@ -22,7 +22,7 @@ import (
 type Manager struct {
 	mu                   sync.Mutex
 	nextID               int
-	entries              map[string]*processEntry
+	entries              sync.Map
 	completedRecency     []string
 	tempDir              string
 	onEvent              func(Event) bool
@@ -31,7 +31,6 @@ type Manager struct {
 	closeWaitTimeout     time.Duration
 	defaultPostprocessor *postprocess.Runner
 	closed               bool
-	published            sync.Map
 }
 
 type ManagerOption func(*Manager)
@@ -72,7 +71,6 @@ func NewManager(opts ...ManagerOption) (*Manager, error) {
 	}
 	mgr := &Manager{
 		nextID:               initialProcessID,
-		entries:              make(map[string]*processEntry),
 		tempDir:              tempDir,
 		minimumExecToBgTime:  defaultMinimumExecToBgTime,
 		closeGracePeriod:     closeGracePeriod,
@@ -250,8 +248,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		closeDetachedResources(stdin, log)
 		return ExecResult{}, errors.New("background shell manager is closed")
 	}
-	m.entries[id] = entry
-	m.published.Store(id, entry)
+	m.entries.Store(id, entry)
 	m.mu.Unlock()
 
 	go m.waitForExit(entry)
@@ -448,7 +445,7 @@ func (m *Manager) Kill(id string) error {
 }
 
 func (m *Manager) InlineOutput(id string, maxChars int) (string, string, error) {
-	entry, err := m.publishedEntry(strings.TrimSpace(id))
+	entry, err := m.readEntry(strings.TrimSpace(id))
 	if err != nil {
 		return "", "", err
 	}
