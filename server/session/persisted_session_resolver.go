@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"core/shared/config"
@@ -69,15 +70,7 @@ func ResolveScopedPersistedSessionRecord(
 	if err != nil {
 		return PersistedSessionRecord{}, err
 	}
-	expectedIdentity, err := config.CanonicalPathIdentity(expectedDir)
-	if err != nil {
-		return PersistedSessionRecord{}, err
-	}
-	recordIdentity, err := config.CanonicalPathIdentity(record.SessionDir)
-	if err != nil {
-		return PersistedSessionRecord{}, err
-	}
-	if recordIdentity != expectedIdentity {
+	if err := validatePersistedSessionDir(expectedDir, record.SessionDir); err != nil {
 		return PersistedSessionRecord{}, fmt.Errorf(
 			"session %q is outside workspace container: %w",
 			strings.TrimSpace(sessionID),
@@ -85,6 +78,21 @@ func ResolveScopedPersistedSessionRecord(
 		)
 	}
 	return record, nil
+}
+
+func validatePersistedSessionDir(expectedDir string, authoritativeDir string) error {
+	expectedIdentity, err := config.CanonicalPathIdentity(filepath.Clean(expectedDir))
+	if err != nil {
+		return err
+	}
+	authoritativeIdentity, err := config.CanonicalPathIdentity(authoritativeDir)
+	if err != nil {
+		return err
+	}
+	if expectedIdentity != authoritativeIdentity {
+		return errResolverRecordSessionDirMismatch
+	}
+	return nil
 }
 
 func normalizePersistedSessionMeta(meta Meta) (Meta, error) {
