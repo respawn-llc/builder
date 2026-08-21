@@ -132,13 +132,6 @@ func sessionPlanWithMeta(plan SessionPlan, meta session.Meta, containerDir strin
 	return plan
 }
 
-func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDir string) SessionPlan {
-	if store == nil {
-		panic("session plan snapshot requires a store")
-	}
-	return sessionPlanWithMeta(plan, store.Meta(), containerDir)
-}
-
 type RunPromptOverrideOptions struct {
 	AgentSelectionPersisted bool
 	RequiredTools           []toolspec.ID
@@ -318,7 +311,7 @@ func ResolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 			return SessionPlan{}, backfillErr
 		}
 	}
-	return sessionPlanWithSnapshot(plan, store, filepath.Dir(store.Dir())), nil
+	return sessionPlanWithMeta(plan, store.Meta(), filepath.Dir(store.Dir())), nil
 }
 
 func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (SessionPlan, error) {
@@ -344,7 +337,7 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	if err != nil {
 		return SessionPlan{}, err
 	}
-	return sessionPlanWithSnapshot(SessionPlan{
+	return sessionPlanWithMeta(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,
@@ -357,7 +350,7 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 		BaseSource:                          baseSource,
 		QuestionsEnabled:                    chatSettings.Questions,
 		AutoCompactionEnabled:               chatSettings.AutoCompaction,
-	}, store, filepath.Dir(store.Dir())), nil
+	}, meta, filepath.Dir(store.Dir())), nil
 }
 
 func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPlan, error) {
@@ -379,7 +372,7 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		if err != nil {
 			return SessionPlan{}, err
 		}
-		return p.PlanPersistedSession(ctx, req, *record.Meta)
+		return p.planSession(ctx, req, *record.Meta, nil)
 	}
 	store, err := p.openStore(ctx, req)
 	if err != nil {
@@ -424,23 +417,19 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	return p.planSession(ctx, req, store.Meta(), store)
 }
 
-func (p Planner) PlanPersistedSession(
+func (p Planner) PlanPersistedSessionWithPreparedOverrides(
 	ctx context.Context,
 	req SessionRequest,
 	meta session.Meta,
-) (SessionPlan, error) {
-	if req.Intent.Kind() != serverapi.SessionLaunchIntentOpenExisting {
-		return SessionPlan{}, errors.New("persisted session planning requires an existing-session intent")
+	overrides serverapi.RunPromptOverrides,
+	prepared PreparedRunPromptOverrides,
+	options RunPromptOverrideOptions,
+) (SessionPlan, []string, error) {
+	plan, err := p.planSession(ctx, req, meta, nil)
+	if err != nil {
+		return SessionPlan{}, nil, err
 	}
-	sessionID, _ := req.Intent.SessionID()
-	if meta.SessionID != sessionID.String() {
-		return SessionPlan{}, fmt.Errorf(
-			"persisted session %q does not match requested session %q",
-			meta.SessionID,
-			sessionID,
-		)
-	}
-	return p.planSession(ctx, req, meta, nil)
+	return p.applyPreparedRunPromptOverrides(plan, meta, nil, overrides, prepared, options)
 }
 
 func (p Planner) planSession(
@@ -449,6 +438,19 @@ func (p Planner) planSession(
 	meta session.Meta,
 	store *session.Store,
 ) (SessionPlan, error) {
+	if store == nil {
+		if req.Intent.Kind() != serverapi.SessionLaunchIntentOpenExisting {
+			return SessionPlan{}, errors.New("persisted session planning requires an existing-session intent")
+		}
+		sessionID, _ := req.Intent.SessionID()
+		if meta.SessionID != sessionID.String() {
+			return SessionPlan{}, fmt.Errorf(
+				"persisted session %q does not match requested session %q",
+				meta.SessionID,
+				sessionID,
+			)
+		}
+	}
 	if req.Mode == ModeHeadless && store != nil {
 		if err := EnsureSubagentSessionName(store); err != nil {
 			return SessionPlan{}, err
@@ -990,23 +992,6 @@ func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, stor
 		plan,
 		store.Meta(),
 		store.SetContinuationContext,
-		overrides,
-		prepared,
-		options,
-	)
-}
-
-func (p Planner) ApplyPreparedRunPromptOverrides(
-	plan SessionPlan,
-	meta session.Meta,
-	overrides serverapi.RunPromptOverrides,
-	prepared PreparedRunPromptOverrides,
-	options RunPromptOverrideOptions,
-) (SessionPlan, []string, error) {
-	return p.applyPreparedRunPromptOverrides(
-		plan,
-		meta,
-		nil,
 		overrides,
 		prepared,
 		options,

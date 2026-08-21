@@ -590,17 +590,14 @@ func (s *Service) planExistingSession(
 		return PlanResult{}, err
 	}
 	preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
-	plan, err := planner.PlanPersistedSession(ctx, launch.SessionRequest{
-		Mode:                                launch.Mode(req.Mode),
-		Intent:                              req.Intent,
-		SkipContinuationAgentRoleValidation: roleOverride.Default,
-		PreparedPromptFacingTarget:          preparedPromptFacingTarget,
-	}, meta)
-	if err != nil {
-		return PlanResult{}, err
-	}
-	plan, warnings, err := planner.ApplyPreparedRunPromptOverrides(
-		plan,
+	plan, warnings, err := planner.PlanPersistedSessionWithPreparedOverrides(
+		ctx,
+		launch.SessionRequest{
+			Mode:                                launch.Mode(req.Mode),
+			Intent:                              req.Intent,
+			SkipContinuationAgentRoleValidation: roleOverride.Default,
+			PreparedPromptFacingTarget:          preparedPromptFacingTarget,
+		},
 		meta,
 		req.Overrides,
 		preparedOverrides,
