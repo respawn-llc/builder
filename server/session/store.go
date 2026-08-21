@@ -330,28 +330,13 @@ func openPersistedSession(
 	if record.Meta == nil {
 		return nil, errPersistedSessionResolverRequired
 	}
-	s.meta = cloneMeta(*record.Meta)
-	s.contextFacts = normalizeSessionContextFacts(record.ContextFacts)
-	s.initialContextFacts = s.contextFacts.Clone()
-	if err := normalizeMetaContinuation(&s.meta); err != nil {
-		return nil, fmt.Errorf("validate session continuation: %w", err)
-	}
-	if err := normalizeMetaChatSettings(&s.meta); err != nil {
-		return nil, fmt.Errorf("validate session Chat settings: %w", err)
-	}
-	if s.meta.ActiveWorkflowAssignment != nil {
-		assignment, err := normalizeMessageRecord(*s.meta.ActiveWorkflowAssignment)
-		if err != nil {
-			return nil, fmt.Errorf("validate active workflow assignment: %w", err)
-		}
-		s.meta.ActiveWorkflowAssignment = &assignment
-	}
-	if err := normalizeMetaWorktreeReminder(&s.meta); err != nil {
-		return nil, fmt.Errorf("validate session worktree context: %w", err)
-	}
-	if err := validateMetaCategory(&s.meta); err != nil {
+	meta, err := normalizePersistedSessionMeta(*record.Meta)
+	if err != nil {
 		return nil, err
 	}
+	s.meta = meta
+	s.contextFacts = normalizeSessionContextFacts(record.ContextFacts)
+	s.initialContextFacts = s.contextFacts.Clone()
 	lock, lockPath, err := acquireEventLogPersistenceLock(record.SessionDir)
 	if err != nil {
 		return nil, err

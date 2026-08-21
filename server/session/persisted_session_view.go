@@ -11,10 +11,8 @@ import (
 // PersistedSessionView is a bounded read-only projection captured from one
 // persisted metadata record and one exact event-log boundary.
 type PersistedSessionView struct {
-	meta                  Meta
-	contextFacts          SessionContextFacts
-	conversationFreshness ConversationFreshness
-	eventLog              *currentEventLog
+	meta     Meta
+	eventLog currentEventLog
 }
 
 func ResolvePersistedSessionView(
@@ -22,62 +20,25 @@ func ResolvePersistedSessionView(
 	resolver PersistedSessionResolver,
 	sessionID string,
 ) (*PersistedSessionView, error) {
-	id := strings.TrimSpace(sessionID)
-	record, err := ResolvePersistedSessionRecord(ctx, resolver, id)
+	record, err := ResolvePersistedSessionRecord(ctx, resolver, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return OpenPersistedSessionView(id, record)
-}
-
-func OpenPersistedSessionView(sessionID string, record PersistedSessionRecord) (*PersistedSessionView, error) {
-	if record.Meta == nil {
-		return nil, errResolverRecordMissingMetadata
-	}
-	if err := validatePersistedSessionRecord(strings.TrimSpace(sessionID), record); err != nil {
-		return nil, err
-	}
-	meta := cloneMeta(*record.Meta)
-	if err := normalizeMetaContinuation(&meta); err != nil {
-		return nil, fmt.Errorf("validate session continuation: %w", err)
-	}
-	if err := normalizeMetaChatSettings(&meta); err != nil {
-		return nil, fmt.Errorf("validate session Chat settings: %w", err)
-	}
-	if meta.ActiveWorkflowAssignment != nil {
-		assignment, err := normalizeMessageRecord(*meta.ActiveWorkflowAssignment)
-		if err != nil {
-			return nil, fmt.Errorf("validate active workflow assignment: %w", err)
-		}
-		meta.ActiveWorkflowAssignment = &assignment
-	}
-	if err := normalizeMetaWorktreeReminder(&meta); err != nil {
-		return nil, fmt.Errorf("validate session worktree context: %w", err)
-	}
-	if err := validateMetaCategory(&meta); err != nil {
-		return nil, err
-	}
-	eventLog, err := openPersistedSessionEventLog(record.SessionDir, meta)
+	eventLog, err := openPersistedSessionEventLog(record.SessionDir, *record.Meta)
 	if err != nil {
 		return nil, err
-	}
-	freshness := ConversationFreshnessFresh
-	if meta.ConversationEstablished {
-		freshness = ConversationFreshnessEstablished
 	}
 	return &PersistedSessionView{
-		meta:                  meta,
-		contextFacts:          normalizeSessionContextFacts(record.ContextFacts),
-		conversationFreshness: freshness,
-		eventLog:              eventLog,
+		meta:     *record.Meta,
+		eventLog: eventLog,
 	}, nil
 }
 
-func openPersistedSessionEventLog(sessionDir string, meta Meta) (_ *currentEventLog, resultErr error) {
+func openPersistedSessionEventLog(sessionDir string, meta Meta) (_ currentEventLog, resultErr error) {
 	path := filepath.Join(sessionDir, eventsFile)
 	fp, err := openRegularSessionFile(path, "current event log")
 	if err != nil {
-		return nil, fmt.Errorf("open current event log: %w", err)
+		return currentEventLog{}, fmt.Errorf("open current event log: %w", err)
 	}
 	defer func() {
 		if closeErr := fp.Close(); closeErr != nil {
@@ -86,15 +47,15 @@ func openPersistedSessionEventLog(sessionDir string, meta Meta) (_ *currentEvent
 	}()
 	info, err := fp.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("stat current event log: %w", err)
+		return currentEventLog{}, fmt.Errorf("stat current event log: %w", err)
 	}
 	size := info.Size()
 	if size == 0 {
 		if meta.LastSequence != 0 {
-			return nil, eventLogBoundaryConflict(meta, 0)
+			return currentEventLog{}, eventLogBoundaryConflict(meta, 0)
 		}
 		frozen := int64(0)
-		return &currentEventLog{
+		return currentEventLog{
 			path:             path,
 			version:          EventLogVersionV2,
 			firstEventOffset: 0,
@@ -104,7 +65,7 @@ func openPersistedSessionEventLog(sessionDir string, meta Meta) (_ *currentEvent
 	}
 	header, firstEventOffset, err := readCurrentEventLogHeader(fp)
 	if err != nil {
-		return nil, persistedEventLogFormatError(err)
+		return currentEventLog{}, persistedEventLogFormatError(err)
 	}
 	lastRecord, endOffset, tornTail, err := readLastCurrentEventRecordBoundary(
 		fp,
@@ -113,7 +74,7 @@ func openPersistedSessionEventLog(sessionDir string, meta Meta) (_ *currentEvent
 		true,
 	)
 	if err != nil {
-		return nil, persistedEventLogFormatError(err)
+		return currentEventLog{}, persistedEventLogFormatError(err)
 	}
 	observedSequence := int64(0)
 	if lastRecord != nil {
@@ -122,13 +83,13 @@ func openPersistedSessionEventLog(sessionDir string, meta Meta) (_ *currentEvent
 	if tornTail {
 		conflict := eventLogBoundaryConflict(meta, observedSequence)
 		conflict.BoundaryIncomplete = true
-		return nil, conflict
+		return currentEventLog{}, conflict
 	}
 	if observedSequence != meta.LastSequence {
-		return nil, eventLogBoundaryConflict(meta, observedSequence)
+		return currentEventLog{}, eventLogBoundaryConflict(meta, observedSequence)
 	}
 	frozen := endOffset
-	return &currentEventLog{
+	return currentEventLog{
 		path:             path,
 		version:          header.Version,
 		firstEventOffset: firstEventOffset,
@@ -162,47 +123,39 @@ func (v *PersistedSessionView) Meta() Meta {
 	return cloneMeta(v.meta)
 }
 
-func (v *PersistedSessionView) ContextFacts() SessionContextFacts {
-	if v == nil {
-		return SessionContextFacts{}
-	}
-	return v.contextFacts.Clone()
-}
-
-func (v *PersistedSessionView) ContextSnapshot() ContextSnapshot {
-	return ContextSnapshot{Meta: v.Meta(), Facts: v.ContextFacts()}
-}
-
 func (v *PersistedSessionView) Revision() (int64, error) {
-	if v == nil || v.eventLog == nil {
+	if v == nil {
 		return 0, errors.New("persisted Session event log is required")
 	}
 	return v.eventLog.lastSequence, nil
 }
 
 func (v *PersistedSessionView) ConversationFreshness() (ConversationFreshness, error) {
-	if v == nil || v.eventLog == nil {
+	if v == nil {
 		return ConversationFreshnessFresh, errors.New("persisted Session event log is required")
 	}
-	return v.conversationFreshness, nil
+	if v.meta.ConversationEstablished {
+		return ConversationFreshnessEstablished, nil
+	}
+	return ConversationFreshnessFresh, nil
 }
 
 func (v *PersistedSessionView) ReadRecentRecords(maxRecords int) (EventRecordWindow, error) {
-	if v == nil || v.eventLog == nil {
+	if v == nil {
 		return EventRecordWindow{}, errors.New("persisted Session event log is required")
 	}
 	return v.eventLog.readRecentRecords(maxRecords, activeTailReverseChunkBytes)
 }
 
 func (v *PersistedSessionView) ReadNewestSegmentBackward(match func(EventRecord) bool) (EventRecordWindow, error) {
-	if v == nil || v.eventLog == nil {
+	if v == nil {
 		return EventRecordWindow{}, errors.New("persisted Session event log is required")
 	}
 	return v.eventLog.readNewestSegmentBackward(activeTailReverseChunkBytes, match)
 }
 
 func (v *PersistedSessionView) ReadSegmentBackward(endOffset int64, match func(EventRecord) bool) (EventRecordWindow, error) {
-	if v == nil || v.eventLog == nil {
+	if v == nil {
 		return EventRecordWindow{}, errors.New("persisted Session event log is required")
 	}
 	if endOffset <= 0 {
@@ -212,7 +165,7 @@ func (v *PersistedSessionView) ReadSegmentBackward(endOffset int64, match func(E
 }
 
 func (v *PersistedSessionView) ReadSegmentForward(startOffset int64, match func(EventRecord) bool) (EventRecordWindow, error) {
-	if v == nil || v.eventLog == nil {
+	if v == nil {
 		return EventRecordWindow{}, errors.New("persisted Session event log is required")
 	}
 	return v.eventLog.readSegmentForward(startOffset, activeTailReverseChunkBytes, match)
