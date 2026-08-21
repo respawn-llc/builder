@@ -3,7 +3,6 @@ package sessionview
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"core/server/runtime"
 	"core/server/runtimeview"
@@ -88,7 +87,11 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 	}
 	meta := s.view.Meta()
 	sessionFreshness := s.view.ConversationFreshness()
-	version, err := persistedRuntimeMainViewVersion(meta.SessionID, meta.LastSequence)
+	version, err := clientui.NewReadModelVersion(
+		"persisted-session-"+meta.SessionID,
+		1,
+		uint64(meta.LastSequence)+1,
+	)
 	if err != nil {
 		return clientui.RuntimeMainView{}, err
 	}
@@ -117,17 +120,6 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 		Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable},
 	}
 	return resultWithContext(ctx, view)
-}
-
-func persistedRuntimeMainViewVersion(sessionID string, revision int64) (clientui.ReadModelVersion, error) {
-	if revision < 0 {
-		return clientui.ReadModelVersion{}, fmt.Errorf("persisted Session revision must not be negative")
-	}
-	return clientui.NewReadModelVersion(
-		"persisted-session-"+sessionID,
-		1,
-		uint64(revision)+1,
-	)
 }
 
 func (s dormantSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
