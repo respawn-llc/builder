@@ -518,13 +518,7 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
 		Overrides:       overrides,
 	}
-	return s.plans.Do(
-		ctx,
-		strings.TrimSpace(req.ClientRequestID),
-		memoReq,
-		sameSessionPlanMemoRequest,
-		resolve,
-	)
+	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, resolve)
 }
 
 func (s *Service) planExistingSession(
@@ -570,22 +564,11 @@ func (s *Service) planExistingSession(
 		}
 		preparation.OmittedTarget = &target
 	}
-	preparedOverrides, err := launch.PrepareRunPromptOverridesWithContext(
-		planner.Config,
-		req.Overrides,
-		authState,
-		preparation,
-	)
+	preparedOverrides, err := launch.PrepareRunPromptOverridesWithContext(planner.Config, req.Overrides, authState, preparation)
 	if err != nil {
 		return PlanResult{}, err
 	}
-	meta, agentSelectionResolved, err := applyPreparedAgentChatSettings(
-		planner.Config,
-		authState,
-		roleOverride,
-		preparedOverrides,
-		meta,
-	)
+	meta, agentSelectionResolved, err := applyPreparedAgentChatSettings(planner.Config, authState, roleOverride, preparedOverrides, meta)
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -609,12 +592,7 @@ func (s *Service) planExistingSession(
 	return s.finalizeLaunchPlan(ctx, plan, warnings, err)
 }
 
-func authorizePersistedHeadlessRole(
-	planner launch.Planner,
-	req serverapi.SessionPlanRequest,
-	caller *subagentpolicy.Caller,
-	meta session.Meta,
-) error {
+func authorizePersistedHeadlessRole(planner launch.Planner, req serverapi.SessionPlanRequest, caller *subagentpolicy.Caller, meta session.Meta) error {
 	if req.Mode != serverapi.SessionLaunchModeHeadless {
 		return nil
 	}
@@ -637,13 +615,7 @@ func authorizePersistedHeadlessRole(
 	)
 }
 
-func applyPreparedAgentChatSettings(
-	app config.App,
-	authState auth.State,
-	roleOverride serverapi.RunPromptAgentRoleOverride,
-	preparedOverrides launch.PreparedRunPromptOverrides,
-	meta session.Meta,
-) (session.Meta, bool, error) {
+func applyPreparedAgentChatSettings(app config.App, authState auth.State, roleOverride serverapi.RunPromptAgentRoleOverride, preparedOverrides launch.PreparedRunPromptOverrides, meta session.Meta) (session.Meta, bool, error) {
 	state, err := session.ChatSettingsStateFromMeta(meta)
 	if err != nil {
 		return session.Meta{}, false, err
