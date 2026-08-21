@@ -500,23 +500,16 @@ func (d *startupGatewayDependencies) DebugEnabled() bool {
 	return d.loadSnapshot().cfg.Settings.Debug
 }
 
-type startupServerStatusService struct {
-	base     apicontract.ServerStatusService
-	snapshot startupDependencySnapshot
-}
-
-func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
-	resp, err := s.base.GetServerReadiness(ctx, req)
+func (d *startupGatewayDependencies) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
+	snapshot := d.loadSnapshot()
+	resp, err := serverstatus.NewServerStatusService(
+		d.authSupport.AuthManager,
+		snapshot.cfg,
+		nil,
+	).GetServerReadiness(ctx, req)
 	if err != nil {
 		return serverapi.ServerReadinessResponse{}, err
 	}
-	return applyStartupReadiness(resp, s.snapshot), nil
-}
-
-func applyStartupReadiness(
-	resp serverapi.ServerReadinessResponse,
-	snapshot startupDependencySnapshot,
-) serverapi.ServerReadinessResponse {
 	if snapshot.core == nil {
 		resp.Ready = false
 		reason := serverapi.ServerNotReadyOnboardingRequired
@@ -540,19 +533,20 @@ func applyStartupReadiness(
 		}
 		resp.Causes = []serverapi.ServerReadinessCause{cause}
 	}
-	return resp
+	return resp, nil
 }
 
-func (s startupServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
+func (d *startupGatewayDependencies) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.UpdateStatusResponse{}, err
 	}
-	if s.snapshot.core == nil {
+	snapshot := d.loadSnapshot()
+	if snapshot.core == nil {
 		return serverapi.UpdateStatusResponse{
 			Result: serverapi.CheckUnavailableUpdateStatusResult(),
 		}, nil
 	}
-	return s.snapshot.core.ServerStatusClient().GetUpdateStatus(ctx, req)
+	return snapshot.core.ServerStatusClient().GetUpdateStatus(ctx, req)
 }
 
 type startupFinalizeService struct {
@@ -610,11 +604,7 @@ func (d *startupGatewayDependencies) CapabilityFactsClient() apicontract.Capabil
 	return capabilityfacts.NewService(capabilityfacts.Options{Config: d.loadSnapshot().cfg, AuthManager: d.authSupport.AuthManager})
 }
 func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStatusService {
-	snapshot := d.loadSnapshot()
-	return startupServerStatusService{
-		base:     serverstatus.NewServerStatusService(d.authSupport.AuthManager, snapshot.cfg, nil),
-		snapshot: snapshot,
-	}
+	return d
 }
 func (d *startupGatewayDependencies) ServerAuthRequired() bool {
 	return authservice.StartupAuthRequired(d.loadSnapshot().cfg.Settings)
