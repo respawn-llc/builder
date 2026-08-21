@@ -46,10 +46,6 @@ func (v *PersistedSessionView) Meta() Meta {
 	return cloneMeta(v.meta)
 }
 
-func (v *PersistedSessionView) Revision() int64 {
-	return v.eventLog.lastSequence
-}
-
 func (v *PersistedSessionView) ConversationFreshness() ConversationFreshness {
 	if v.meta.ConversationEstablished {
 		return ConversationFreshnessEstablished

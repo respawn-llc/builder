@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"core/shared/config"
@@ -74,8 +73,8 @@ func ResolveScopedPersistedSessionRecord(
 	return record, nil
 }
 
-func validatePersistedSessionDir(expectedDir string, authoritativeDir string) error {
-	expectedIdentity, err := config.CanonicalPathIdentity(filepath.Clean(expectedDir))
+func validatePersistedSessionDir(expectedDir, authoritativeDir string) error {
+	expectedIdentity, err := config.CanonicalPathIdentity(expectedDir)
 	if err != nil {
 		return err
 	}

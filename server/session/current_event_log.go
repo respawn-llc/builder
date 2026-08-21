@@ -82,11 +82,10 @@ func createCurrentEventLogVersion(path string, version int) (_ *currentEventLog,
 	fp = nil
 
 	return &currentEventLog{
-		path:               path,
-		version:            version,
-		firstEventOffset:   int64(len(encoded)),
-		lastCompleteOffset: int64(len(encoded)),
-		mode:               currentEventLogAuthoritative,
+		path:             path,
+		version:          version,
+		firstEventOffset: int64(len(encoded)),
+		mode:             currentEventLogAuthoritative,
 	}, nil
 }
 
@@ -140,12 +139,7 @@ func openCurrentEventLog(
 			return nil, err
 		}
 	}
-	lastRecord, lastCompleteOffset, boundaryIncomplete, err := readLastCurrentEventRecordBoundary(
-		fp,
-		size,
-		firstEventOffset,
-		true,
-	)
+	lastRecord, lastCompleteOffset, boundaryIncomplete, err := readLastCurrentEventRecord(fp, size, firstEventOffset)
 	if err != nil {
 		return nil, currentEventLogReadError(mode, err)
 	}
@@ -252,7 +246,7 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 	if err != nil {
 		return 0, err
 	}
-	lastRecord, err := readLastCurrentEventRecord(fp, currentSize, l.firstEventOffset)
+	lastRecord, _, _, err := readLastCurrentEventRecord(fp, currentSize, l.firstEventOffset)
 	if err != nil {
 		return 0, err
 	}
@@ -304,8 +298,6 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 		return endOffset, fmt.Errorf("fsync current event log: %w", err)
 	}
 	l.lastSequence = records[len(records)-1].Seq()
-	l.lastCompleteOffset = endOffset
-	l.boundaryIncomplete = false
 	return endOffset, nil
 }
 
@@ -673,7 +665,7 @@ func (l *currentEventLog) readSegmentBackward(
 }
 
 func (l *currentEventLog) boundedReadSize(actual int64) int64 {
-	if l != nil && l.frozenEndOffset != nil && *l.frozenEndOffset < actual {
+	if l.frozenEndOffset != nil && *l.frozenEndOffset < actual {
 		return *l.frozenEndOffset
 	}
 	return actual
@@ -858,16 +850,6 @@ func readLastCurrentEventRecord(
 	fp *os.File,
 	size int64,
 	firstEventOffset int64,
-) (*EventRecord, error) {
-	record, _, _, err := readLastCurrentEventRecordBoundary(fp, size, firstEventOffset, true)
-	return record, err
-}
-
-func readLastCurrentEventRecordBoundary(
-	fp *os.File,
-	size int64,
-	firstEventOffset int64,
-	tolerateTornTail bool,
 ) (*EventRecord, int64, bool, error) {
 	endOffset := size
 	tornTail := false
@@ -887,12 +869,6 @@ func readLastCurrentEventRecordBoundary(
 					startOffset,
 				)
 			}
-			if !tolerateTornTail {
-				return nil, 0, false, fmt.Errorf(
-					"current event log contains an incomplete empty event line at byte %d",
-					startOffset,
-				)
-			}
 			tornTail = true
 			endOffset = startOffset
 			continue
@@ -906,7 +882,7 @@ func readLastCurrentEventRecordBoundary(
 		if err == nil {
 			return &record, endOffset, tornTail, nil
 		}
-		if terminated || json.Valid(trimmedLine) || !tolerateTornTail {
+		if terminated || json.Valid(trimmedLine) {
 			return nil, 0, false, fmt.Errorf(
 				"decode current event record at byte %d: %w",
 				startOffset,

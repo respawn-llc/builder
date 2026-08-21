@@ -88,7 +88,7 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 	}
 	meta := s.view.Meta()
 	sessionFreshness := s.view.ConversationFreshness()
-	version, err := persistedRuntimeMainViewVersion(meta.SessionID, s.view.Revision())
+	version, err := persistedRuntimeMainViewVersion(meta.SessionID, meta.LastSequence)
 	if err != nil {
 		return clientui.RuntimeMainView{}, err
 	}
