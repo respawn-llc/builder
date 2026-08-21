@@ -19,6 +19,7 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -40,7 +41,7 @@ type sessionLaunchPlan struct {
 	SessionID                  string
 	ActiveSettings             config.Settings
 	EnabledTools               []toolspec.ID
-	ConfiguredModelName        string
+	ConfiguredModelName        *string
 	SessionTitle               *string
 	PromptHistory              []string
 	ModelContractLocked        bool
@@ -234,16 +235,12 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
-	configuredModelName := ""
-	if resp.Plan.ConfiguredModelName != nil {
-		configuredModelName = *resp.Plan.ConfiguredModelName
-	}
 	return sessionLaunchPlan{
 		Mode:                     req.Mode,
 		SessionID:                resp.Plan.SessionId,
 		ActiveSettings:           activeSettings,
 		EnabledTools:             enabledTools,
-		ConfiguredModelName:      configuredModelName,
+		ConfiguredModelName:      textutil.Pointer(resp.Plan.ConfiguredModelName),
 		SessionTitle:             sessionTitle,
 		PromptHistory:            append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked:      resp.Plan.ModelContractLocked,

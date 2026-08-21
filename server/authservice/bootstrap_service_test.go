@@ -88,6 +88,9 @@ func TestCompleteBootstrapNoneClearsAuthWhenAuthOptional(t *testing.T) {
 	if !resp.AuthReady {
 		t.Fatal("expected optional auth skip to be ready")
 	}
+	if resp.MethodType != nil {
+		t.Fatalf("no-auth method type = %q, want absent", *resp.MethodType)
+	}
 	state, err := store.Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -115,6 +118,9 @@ func TestCompleteBootstrapNoneSavesNoAuthPreferenceWhenAuthRequired(t *testing.T
 	}
 	if resp.AuthReady {
 		t.Fatal("did not expect no-auth preference to satisfy required startup readiness")
+	}
+	if resp.MethodType != nil {
+		t.Fatalf("no-auth method type = %q, want absent", *resp.MethodType)
 	}
 	state, err := store.Load(context.Background())
 	if err != nil {

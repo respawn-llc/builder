@@ -47,7 +47,7 @@ type Request struct {
 	SessionName           string
 	SessionID             string
 	AgentRole             *string
-	ConfiguredModelName   string
+	ConfiguredModelName   *string
 	ModelName             string
 	ThinkingLevel         string
 	FastModeAvailable     bool

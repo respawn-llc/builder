@@ -146,6 +146,9 @@ func TestStatusRequestCarriesCachedRuntimeAgentRole(t *testing.T) {
 	if request.AgentRole == nil || *request.AgentRole != role {
 		t.Fatalf("status request agent role = %v, want %q", request.AgentRole, role)
 	}
+	if request.ConfiguredModelName != nil {
+		t.Fatalf("status request configured model = %q, want absent", *request.ConfiguredModelName)
+	}
 }
 
 func TestStatusRefreshUsesCurrentSessionAgentRoleWhenRuntimeCacheIsCold(t *testing.T) {

@@ -202,7 +202,13 @@ func callBinaryRPC(
 		if correlation != requestID {
 			continue
 		}
-		return decodeBinaryResponse(operation, requestID, response, result)
+		if err := decodeBinaryResponse(operation, requestID, response, result); err != nil {
+			return err
+		}
+		if _, err := protoapi.ClassifyResult(result); err != nil {
+			return fmt.Errorf("classify %s result: %w", operation.Name, err)
+		}
+		return nil
 	}
 }
 

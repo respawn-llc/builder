@@ -376,6 +376,9 @@ func TestConfiguredDaemonPlanSessionUsesSessionWorkspaceLocalConfig(t *testing.T
 	if plan.ActiveSettings.Model != "workspace-model" || plan.ActiveSettings.ThinkingLevel != "high" {
 		t.Fatalf("active settings = %+v, want workspace-local model/thinking", plan.ActiveSettings)
 	}
+	if plan.ConfiguredModelName == nil || *plan.ConfiguredModelName != "workspace-model" {
+		t.Fatalf("configured model = %v, want workspace-model", plan.ConfiguredModelName)
+	}
 	if !plan.Source.WorkspaceSettingsFileExists {
 		t.Fatalf("expected workspace settings source, got %+v", plan.Source)
 	}

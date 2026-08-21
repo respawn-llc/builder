@@ -211,6 +211,9 @@ func binaryServerReadinessFailure(err error) proto.Message {
 }
 
 func binaryUpdateStatusFailure(err error) proto.Message {
+	if errors.Is(err, serverapi.ErrServerAuthRequired) || errors.Is(err, auth.ErrAuthNotConfigured) {
+		return &authpb.AuthRequiredDetails{}
+	}
 	var notReady *serverapi.ServerNotReadyError
 	if errors.As(err, &notReady) {
 		details, conversionErr := protoapi.ServerNotReadyToProto(notReady)

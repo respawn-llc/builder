@@ -10,6 +10,7 @@ import (
 	"core/shared/config"
 	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -169,11 +170,10 @@ func (s *BootstrapService) bootstrapResponseFromState(state auth.State) *authpb.
 			email = &value
 		}
 	}
-	methodType := strings.TrimSpace(string(state.Method.Type))
 	return &authpb.BootstrapCompletion{
 		AuthReady:      !s.authRequired || auth.EvaluateStartupGate(state).Ready,
 		NoAuthSelected: state.IsNoAuthSelected(),
-		MethodType:     &methodType,
+		MethodType:     textutil.OptionalTrimmedString(string(state.Method.Type)),
 		AccountId:      accountID,
 		Email:          email,
 	}

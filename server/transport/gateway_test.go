@@ -31,6 +31,7 @@ import (
 	authpb "core/shared/protoapi/gen/kent/api/auth"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
@@ -928,6 +929,15 @@ func TestGatewayAuthBootstrapAPIKeyCompletionEnablesAuthRequiredMethods(t *testi
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
+	updateStatusMethod := serverpb.File_kent_api_server_server_proto.Services().
+		ByName("ServerService").Methods().ByName("GetUpdateStatus")
+	var updateStatusResult serverpb.GetUpdateStatusResult
+	callGatewayDescriptor(t, conn, "update-status-before-auth", updateStatusMethod, &emptypb.Empty{}, &updateStatusResult)
+	if failure := updateStatusResult.GetError(); failure == nil ||
+		failure.Code != "auth_required" ||
+		failure.GetAuthRequired() == nil {
+		t.Fatalf("Get Update Status before auth = %+v, want auth_required", &updateStatusResult)
+	}
 
 	requireGatewayProjectAttachment(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
 	if respErr := callGatewayExpectError(t, conn, "run-1", protocol.MethodRunPrompt, serverapi.RunPromptRequest{ClientRequestID: "run-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "test"}); respErr.Code != protocol.ErrCodeAuthRequired {

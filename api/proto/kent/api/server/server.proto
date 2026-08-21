@@ -4,6 +4,7 @@ package kent.api.server;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
+import "kent/api/auth/auth.proto";
 import "kent/api/shared/foundation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/server;serverpb";
@@ -167,6 +168,12 @@ message GetUpdateStatusError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    kent.api.auth.AuthRequiredDetails auth_required = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
       }
     ];
   }

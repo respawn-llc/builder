@@ -11,6 +11,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type UIOption func(*uiModelConstruction)
@@ -69,9 +70,14 @@ func WithUIModelName(model string) UIOption {
 	}
 }
 
-func WithUIConfiguredModelName(model string) UIOption {
+func WithUIConfiguredModelName(model *string) UIOption {
 	return func(m *uiModelConstruction) {
-		m.configuredModelName = strings.TrimSpace(model)
+		configured, present := textutil.OptionalTrimmed(model)
+		if !present {
+			m.configuredModelName = nil
+			return
+		}
+		m.configuredModelName = textutil.Value(configured)
 	}
 }
 
