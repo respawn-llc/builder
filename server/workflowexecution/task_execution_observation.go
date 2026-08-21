@@ -45,7 +45,7 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		ConcurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 		Quiescence:        map[workflow.TaskID]bool{},
 	}
-	executions, err := c.authority.CurrentWorkflowTaskExecutionReadSnapshot()
+	executions, err := c.authority.CurrentWorkflowTaskExecutionSnapshots()
 	if err != nil {
 		return WorkflowTaskExecutionObservation{}, err
 	}

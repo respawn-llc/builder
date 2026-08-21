@@ -428,7 +428,7 @@ func TestTaskSearchFiltersQueuedAndRunningCurrentNodeExecutions(t *testing.T) {
 	})
 	runningLease.Release()
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshots, snapshotErr := fixture.authority.CurrentProjectWorkflowTaskExecutionSnapshots(fixture.binding.ProjectID, fixture.workflowID)
+		snapshots, snapshotErr := fixture.authority.CurrentWorkflowTaskExecutionSnapshots()
 		if snapshotErr != nil {
 			return false
 		}

@@ -48,7 +48,7 @@ func TestAuthorityManualMoveSelectionCancelsPendingQuestionsAndClosesPromptAdmis
 	})
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		snapshot, snapshotErr := authority.CurrentScopedTaskExecutionSnapshot(ref.ProjectID, ref.WorkflowID, taskID)
+		snapshot, snapshotErr := currentScopedTaskExecutionSnapshot(authority, ref.ProjectID, ref.WorkflowID, taskID)
 		if snapshotErr != nil {
 			t.Fatalf("CurrentScopedTaskExecutionSnapshot: %v", snapshotErr)
 		}
