@@ -28,8 +28,7 @@ type RuntimeRegistry struct {
 	authorityMu                sync.RWMutex
 	authorityBySession         map[string]*authorityRuntimeEntry
 	authorityChanged           chan struct{}
-	mainViewCatalogMu          sync.Mutex
-	mainViews                  atomic.Pointer[runtimeMainViewCatalog]
+	mainViews                  sync.Map
 	sleepObserverMu            sync.Mutex
 	sleepObserver              func(active bool)
 	runStateMu                 sync.Mutex
@@ -69,15 +68,13 @@ const (
 )
 
 func NewRuntimeRegistry() *RuntimeRegistry {
-	registry := &RuntimeRegistry{
+	return &RuntimeRegistry{
 		authorityBySession:       make(map[string]*authorityRuntimeEntry),
 		authorityChanged:         make(chan struct{}),
 		blockingActivitySessions: make(map[string]bool),
 		readModels:               runtimeactivity.NewCoordinatorCache(runtimeactivity.DefaultCoordinatorCacheLimit),
 		pendingPrompts:           newPendingPromptStore(),
 	}
-	registry.mainViews.Store(&runtimeMainViewCatalog{bySession: make(map[string]*authorityRuntimeEntry)})
-	return registry
 }
 
 func (r *RuntimeRegistry) ResourceReady(
@@ -119,12 +116,12 @@ func (r *RuntimeRegistry) ResourceReady(
 	}
 	r.authorityBySession[sessionID] = entry
 	r.authorityMu.Unlock()
-	r.addRuntimeMainViewEntry(entry)
+	r.mainViews.Store(sessionID, entry)
 	if r.readModels != nil {
 		entry.readModelUnpin = r.readModels.Pin(sessionID)
 	}
 	if err := r.publishCurrentRuntimeActivity(sessionID); err != nil {
-		r.removeRuntimeMainView(entry)
+		r.mainViews.Delete(sessionID)
 		r.authorityMu.Lock()
 		if r.authorityBySession[sessionID] == entry {
 			delete(r.authorityBySession, sessionID)
@@ -173,7 +170,7 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	retentions := entry.retentions
 	entry.retentions = nil
 	entry.mu.Unlock()
-	r.removeRuntimeMainView(entry)
+	r.mainViews.Delete(ref.SessionID().String())
 
 	sessionID := ref.SessionID().String()
 	r.pendingPrompts.CloseSession(sessionID, func(snapshot PendingPromptSnapshot) {
@@ -343,21 +340,22 @@ func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(context.Context) ([]run
 	if r == nil {
 		return []runtimeactivity.ActiveSessionSnapshot{}, nil
 	}
-	catalog := r.mainViews.Load()
-	if catalog == nil {
-		return []runtimeactivity.ActiveSessionSnapshot{}, nil
-	}
-	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0, len(catalog.bySession))
-	for sessionID, entry := range catalog.bySession {
+	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0)
+	r.mainViews.Range(func(_, value any) bool {
+		entry, ok := value.(*authorityRuntimeEntry)
+		if !ok {
+			panic("Runtime Main View index contains an invalid entry")
+		}
 		publication := entry.mainView.Load()
 		if publication == nil || !publication.view.Activity.ActiveForControl() {
-			continue
+			return true
 		}
 		snapshots = append(snapshots, runtimeactivity.ActiveSessionSnapshot{
-			SessionID: sessionID,
+			SessionID: entry.ref.SessionID().String(),
 			Activity:  publication.view.Activity,
 		})
-	}
+		return true
+	})
 	sort.Slice(snapshots, func(i, j int) bool {
 		return snapshots[i].SessionID < snapshots[j].SessionID
 	})

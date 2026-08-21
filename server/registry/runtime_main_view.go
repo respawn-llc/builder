@@ -7,10 +7,6 @@ import (
 	"core/shared/clientui"
 )
 
-type runtimeMainViewCatalog struct {
-	bySession map[string]*authorityRuntimeEntry
-}
-
 type runtimeMainViewPublication struct {
 	update clientui.RuntimeReadModelUpdate
 	view   clientui.RuntimeMainView
@@ -24,13 +20,13 @@ func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.Ru
 	if id == "" {
 		return clientui.RuntimeMainView{}, false
 	}
-	catalog := r.mainViews.Load()
-	if catalog == nil {
+	value, ok := r.mainViews.Load(id)
+	if !ok {
 		return clientui.RuntimeMainView{}, false
 	}
-	entry := catalog.bySession[id]
-	if entry == nil {
-		return clientui.RuntimeMainView{}, false
+	entry, ok := value.(*authorityRuntimeEntry)
+	if !ok {
+		panic("Runtime Main View index contains an invalid entry")
 	}
 	publication := entry.mainView.Load()
 	if publication == nil {
@@ -70,57 +66,11 @@ func (r *RuntimeRegistry) publishRuntimeMainViewLocked(
 	return nil
 }
 
-func (r *RuntimeRegistry) addRuntimeMainViewEntry(entry *authorityRuntimeEntry) {
-	r.mainViewCatalogMu.Lock()
-	defer r.mainViewCatalogMu.Unlock()
-	currentCatalog := r.mainViews.Load()
-	if currentCatalog == nil {
-		currentCatalog = &runtimeMainViewCatalog{bySession: make(map[string]*authorityRuntimeEntry)}
-	}
-	next := make(map[string]*authorityRuntimeEntry, len(currentCatalog.bySession)+1)
-	for id, existing := range currentCatalog.bySession {
-		next[id] = existing
-	}
-	next[entry.ref.SessionID().String()] = entry
-	r.mainViews.Store(&runtimeMainViewCatalog{bySession: next})
-}
-
-func (r *RuntimeRegistry) removeRuntimeMainView(entry *authorityRuntimeEntry) {
-	if r == nil || entry == nil {
-		return
-	}
-	sessionID := entry.ref.SessionID().String()
-	entry.publicationMu.Lock()
-	defer entry.publicationMu.Unlock()
-	r.mainViewCatalogMu.Lock()
-	defer r.mainViewCatalogMu.Unlock()
-	current := r.mainViews.Load()
-	if current == nil {
-		return
-	}
-	if _, ok := current.bySession[sessionID]; !ok {
-		return
-	}
-	next := make(map[string]*authorityRuntimeEntry, len(current.bySession)-1)
-	for id, existing := range current.bySession {
-		if id != sessionID {
-			next[id] = existing
-		}
-	}
-	r.mainViews.Store(&runtimeMainViewCatalog{bySession: next})
-}
-
-func cloneRuntimeActivity(activity clientui.RuntimeActivity) clientui.RuntimeActivity {
-	cloned := activity
-	if activity.ActiveStep != nil {
-		active := *activity.ActiveStep
-		cloned.ActiveStep = &active
-	}
-	return cloned
-}
-
 func cloneRuntimeReadModelUpdate(update clientui.RuntimeReadModelUpdate) clientui.RuntimeReadModelUpdate {
 	cloned := update
-	cloned.Activity = cloneRuntimeActivity(update.Activity)
+	if update.Activity.ActiveStep != nil {
+		active := *update.Activity.ActiveStep
+		cloned.Activity.ActiveStep = &active
+	}
 	return cloned
 }
