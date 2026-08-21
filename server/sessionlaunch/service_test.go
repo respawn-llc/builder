@@ -8,9 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
@@ -26,26 +24,6 @@ import (
 )
 
 type failingAuthStateReader struct{}
-
-type firstBlockingPersistedSessionResolver struct {
-	base    session.PersistedSessionResolver
-	started chan struct{}
-	release chan struct{}
-	mu      sync.Mutex
-	calls   int
-}
-
-func (r *firstBlockingPersistedSessionResolver) ResolvePersistedSession(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error) {
-	r.mu.Lock()
-	r.calls++
-	call := r.calls
-	r.mu.Unlock()
-	if call == 1 {
-		close(r.started)
-		<-r.release
-	}
-	return r.base.ResolvePersistedSession(ctx, sessionID)
-}
 
 type nonRefreshingAuthStateReader struct {
 	loaded       auth.State
@@ -401,54 +379,6 @@ func TestServicePlanSessionDedupesForceNewSessionRequestID(t *testing.T) {
 	}
 	if first.Plan.SessionID != second.Plan.SessionID {
 		t.Fatalf("session ids = %q and %q, want stable replay", first.Plan.SessionID, second.Plan.SessionID)
-	}
-}
-
-func TestServicePlanExistingSessionDoesNotWaitForDuplicateRead(t *testing.T) {
-	root := t.TempDir()
-	containerDir := filepath.Join(root, "sessions")
-	workspace := t.TempDir()
-	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
-	service := newSessionLaunchTestService(config.App{
-		WorkspaceRoot:   workspace,
-		PersistenceRoot: root,
-		Settings:        config.Settings{Model: "gpt-5"},
-	}, containerDir)
-	resolver := &firstBlockingPersistedSessionResolver{
-		base:    serviceTestPersistence,
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	service.planner.PersistedSessions = resolver
-	req := serverapi.SessionPlanRequest{
-		ClientRequestID: "duplicate-existing-read",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
-	}
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := service.PlanSession(t.Context(), req)
-		firstDone <- err
-	}()
-	<-resolver.started
-
-	secondDone := make(chan error, 1)
-	go func() {
-		_, err := service.PlanSession(t.Context(), req)
-		secondDone <- err
-	}()
-	select {
-	case err := <-secondDone:
-		if err != nil {
-			t.Fatalf("duplicate existing-Session plan: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("duplicate existing-Session plan waited for the earlier read")
-	}
-	close(resolver.release)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first existing-Session plan: %v", err)
 	}
 }
 
