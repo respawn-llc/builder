@@ -28,6 +28,7 @@ func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverap
 	if s != nil {
 		settings = s.settings
 	}
+	authRequired := authservice.StartupAuthRequired(settings)
 	if s != nil && s.authManager != nil {
 		state, err := s.authManager.Load(ctx)
 		if err != nil {
@@ -35,13 +36,6 @@ func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverap
 		}
 		authReady = auth.EvaluateStartupGate(state).Ready
 	}
-	return ReadinessResponse(s.endpoint, settings, authReady), nil
-}
-
-// ReadinessResponse builds readiness facts from one selected settings snapshot
-// and one already-observed authentication fact.
-func ReadinessResponse(endpoint string, settings config.Settings, authReady bool) serverapi.ServerReadinessResponse {
-	authRequired := authservice.StartupAuthRequired(settings)
 	ready := authReady || !authRequired
 	response := serverapi.ServerReadinessResponse{
 		Ready:           ready,
@@ -50,8 +44,11 @@ func ReadinessResponse(endpoint string, settings config.Settings, authReady bool
 		ProtocolVersion: protocol.Version,
 		AuthReady:       authReady,
 		AuthRequired:    authRequired,
-		Endpoint:        endpoint,
+		Endpoint:        "",
 		SubagentRoles:   subagentRoleSummaries(settings),
+	}
+	if s != nil {
+		response.Endpoint = s.endpoint
 	}
 	if !ready {
 		response.Causes = []serverapi.ServerReadinessCause{{
@@ -59,7 +56,7 @@ func ReadinessResponse(endpoint string, settings config.Settings, authReady bool
 			Severity: "error",
 		}}
 	}
-	return response
+	return response, nil
 }
 
 func (s *ServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
