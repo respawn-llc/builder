@@ -76,7 +76,7 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 		readModels:               runtimeactivity.NewCoordinatorCache(runtimeactivity.DefaultCoordinatorCacheLimit),
 		pendingPrompts:           newPendingPromptStore(),
 	}
-	registry.mainViews.Store(&runtimeMainViewCatalog{bySession: make(map[string]runtimeMainViewPublication)})
+	registry.mainViews.Store(&runtimeMainViewCatalog{bySession: make(map[string]clientui.RuntimeMainView)})
 	return registry
 }
 
@@ -347,13 +347,13 @@ func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(context.Context) ([]run
 		return []runtimeactivity.ActiveSessionSnapshot{}, nil
 	}
 	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0, len(catalog.bySession))
-	for sessionID, publication := range catalog.bySession {
-		if !publication.view.Activity.ActiveForControl() {
+	for sessionID, view := range catalog.bySession {
+		if !view.Activity.ActiveForControl() {
 			continue
 		}
 		snapshots = append(snapshots, runtimeactivity.ActiveSessionSnapshot{
 			SessionID: sessionID,
-			Activity:  cloneRuntimeActivity(publication.view.Activity),
+			Activity:  cloneRuntimeActivity(view.Activity),
 		})
 	}
 	sort.Slice(snapshots, func(i, j int) bool {

@@ -14,7 +14,6 @@ import (
 	"core/server/attentionnotify"
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
@@ -934,10 +933,12 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 			QueueAccepting: true,
 		}
 	}
-	registry.PublishRuntimeReadModelUpdate(sessionID, clientui.RuntimeReadModelUpdate{
-		Version:  runtimeactivity.NextReadModelVersion(sessionID),
-		Activity: activity,
-	})
+	update, err := registry.RuntimeReadModelFeedSnapshot(context.Background(), sessionID)
+	if err != nil {
+		panic(fmt.Sprintf("build Runtime Read Model test update for Session %q: %v", sessionID, err))
+	}
+	update.Activity = activity
+	registry.PublishRuntimeReadModelUpdate(sessionID, update)
 }
 
 func TestActiveRuntimeActivitySnapshotsExcludeRegisteredIdlePopulation(t *testing.T) {

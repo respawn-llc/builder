@@ -1,22 +1,15 @@
 package registry
 
 import (
-	"fmt"
 	"strings"
 
 	"core/server/runtimeview"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
 
 type runtimeMainViewCatalog struct {
-	bySession map[string]runtimeMainViewPublication
-}
-
-type runtimeMainViewPublication struct {
-	resource runtimeids.SessionResourceRef
-	view     clientui.RuntimeMainView
+	bySession map[string]clientui.RuntimeMainView
 }
 
 func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.RuntimeMainView, bool) {
@@ -31,11 +24,11 @@ func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.Ru
 	if catalog == nil {
 		return clientui.RuntimeMainView{}, false
 	}
-	publication, ok := catalog.bySession[id]
+	view, ok := catalog.bySession[id]
 	if !ok {
 		return clientui.RuntimeMainView{}, false
 	}
-	return cloneRuntimeMainView(publication.view), true
+	return cloneRuntimeMainView(view), true
 }
 
 func (r *RuntimeRegistry) republishRuntimeMainView(entry *authorityRuntimeEntry) error {
@@ -56,48 +49,28 @@ func (r *RuntimeRegistry) publishRuntimeMainViewLocked(
 	version clientui.ReadModelVersion,
 	activity clientui.RuntimeActivity,
 ) error {
+	view, err := runtimeview.MainViewFromRuntimeActivity(entry.engine, version, cloneRuntimeActivity(activity))
+	if err != nil {
+		return err
+	}
+	sessionID := entry.ref.SessionID().String()
 	entry.mu.Lock()
 	ready := entry.lifecycle == authorityRuntimeEntryReady
 	entry.mu.Unlock()
 	if !ready {
 		return nil
 	}
-	view, err := runtimeview.MainViewFromRuntimeActivity(entry.engine, version, cloneRuntimeActivity(activity))
-	if err != nil {
-		return err
-	}
-	sessionID := entry.ref.SessionID().String()
-	if err := validateRuntimeMainView(sessionID, view); err != nil {
-		return err
-	}
-	publication := runtimeMainViewPublication{
-		resource: entry.ref,
-		view:     cloneRuntimeMainView(view),
-	}
-
-	entry.mu.Lock()
-	ready = entry.lifecycle == authorityRuntimeEntryReady
-	entry.mu.Unlock()
-	if !ready {
-		return nil
-	}
-	r.authorityMu.RLock()
-	current := r.authorityBySession[sessionID]
-	r.authorityMu.RUnlock()
-	if current != entry {
-		return nil
-	}
 	r.mainViewCatalogMu.Lock()
 	defer r.mainViewCatalogMu.Unlock()
 	currentCatalog := r.mainViews.Load()
 	if currentCatalog == nil {
-		currentCatalog = &runtimeMainViewCatalog{bySession: make(map[string]runtimeMainViewPublication)}
+		currentCatalog = &runtimeMainViewCatalog{bySession: make(map[string]clientui.RuntimeMainView)}
 	}
-	next := make(map[string]runtimeMainViewPublication, len(currentCatalog.bySession)+1)
+	next := make(map[string]clientui.RuntimeMainView, len(currentCatalog.bySession)+1)
 	for id, existing := range currentCatalog.bySession {
 		next[id] = existing
 	}
-	next[sessionID] = publication
+	next[sessionID] = view
 	r.mainViews.Store(&runtimeMainViewCatalog{bySession: next})
 	return nil
 }
@@ -115,55 +88,16 @@ func (r *RuntimeRegistry) removeRuntimeMainView(entry *authorityRuntimeEntry) {
 	if current == nil {
 		return
 	}
-	publication, ok := current.bySession[sessionID]
-	if !ok || publication.resource != entry.ref {
+	if _, ok := current.bySession[sessionID]; !ok {
 		return
 	}
-	next := make(map[string]runtimeMainViewPublication, len(current.bySession)-1)
+	next := make(map[string]clientui.RuntimeMainView, len(current.bySession)-1)
 	for id, existing := range current.bySession {
 		if id != sessionID {
 			next[id] = existing
 		}
 	}
 	r.mainViews.Store(&runtimeMainViewCatalog{bySession: next})
-}
-
-func validateRuntimeMainView(sessionID string, view clientui.RuntimeMainView) error {
-	if err := view.Version.Validate(); err != nil {
-		return fmt.Errorf("validate Runtime Main View version: %w", err)
-	}
-	if err := view.Activity.Validate(); err != nil {
-		return fmt.Errorf("validate Runtime Main View activity: %w", err)
-	}
-	if strings.TrimSpace(view.Session.SessionID) != strings.TrimSpace(sessionID) {
-		return fmt.Errorf(
-			"Runtime Main View Session ID %q does not match resource Session ID %q",
-			strings.TrimSpace(view.Session.SessionID),
-			strings.TrimSpace(sessionID),
-		)
-	}
-	if view.Session.AgentRole != nil && strings.TrimSpace(*view.Session.AgentRole) == "" {
-		return fmt.Errorf("Runtime Main View agent role is empty")
-	}
-	if view.Status.Goal != nil {
-		if view.Status.Goal.Availability == nil {
-			return fmt.Errorf("Runtime Main View Goal availability is required")
-		}
-		if err := view.Status.Goal.Availability.Validate(); err != nil {
-			return fmt.Errorf("validate Runtime Main View Goal availability: %w", err)
-		}
-		if view.Status.Goal.Goal != nil {
-			if err := view.Status.Goal.Goal.Validate(); err != nil {
-				return fmt.Errorf("validate Runtime Main View Goal: %w", err)
-			}
-		}
-	}
-	if workflow := view.Status.WorkflowSession; workflow != nil {
-		if strings.TrimSpace(workflow.TaskID) == "" || workflow.WorkflowID.IsZero() {
-			return fmt.Errorf("Runtime Main View Workflow Session identity is incomplete")
-		}
-	}
-	return nil
 }
 
 func cloneRuntimeMainView(view clientui.RuntimeMainView) clientui.RuntimeMainView {
