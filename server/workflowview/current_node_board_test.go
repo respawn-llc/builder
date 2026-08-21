@@ -56,7 +56,8 @@ func TestBoardProjectsStartedCurrentNode(t *testing.T) {
 		len(card.ActiveNodeIDs) != 1 ||
 		card.ActiveNodeIDs[0] != string(fixture.agentNodeID) ||
 		card.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
-		card.Actions.CanStart {
+		card.Actions.CanStart ||
+		card.Actions.CanDelete {
 		t.Fatalf("board card = %+v, want started Current Node projection", card)
 	}
 }

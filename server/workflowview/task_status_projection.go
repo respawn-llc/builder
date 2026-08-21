@@ -210,10 +210,7 @@ func (p *TaskStatusProjection) Project(
 		if !exists {
 			return nil, fmt.Errorf("workflow current node projection omitted task %q", taskID)
 		}
-		quiescent, exists := observation.Live.Quiescence[taskID]
-		if !exists {
-			quiescent = true
-		}
+		quiescent := observation.Live.Quiescence[taskID]
 		liveExecutions := append([]sessionruntime.TaskExecution(nil), observation.Live.Executions[taskID].Executions...)
 		concurrencyQueued := append(
 			[]workflow.CurrentNodeReference(nil),

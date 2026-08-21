@@ -48,6 +48,7 @@ type authorityRuntimeEntry struct {
 	retain      func() (io.Closer, error)
 	mainView    atomic.Pointer[clientui.RuntimeMainView]
 
+	publicationMu sync.Mutex
 	mu            sync.Mutex
 	lifecycle     authorityRuntimeEntryLifecycle
 	feedReady     bool
@@ -147,15 +148,19 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	if entry == nil {
 		return nil
 	}
+	entry.publicationMu.Lock()
 	entry.mu.Lock()
 	if entry.lifecycle != authorityRuntimeEntryReady {
 		entry.mu.Unlock()
+		entry.publicationMu.Unlock()
 		return nil
 	}
 	entry.lifecycle = authorityRuntimeEntryDraining
 	retentions := entry.retentions
 	entry.retentions = nil
 	entry.mu.Unlock()
+	entry.mainView.Store(nil)
+	entry.publicationMu.Unlock()
 
 	sessionID := ref.SessionID().String()
 	r.pendingPrompts.CloseSession(sessionID, func(snapshot PendingPromptSnapshot) {
@@ -316,7 +321,7 @@ func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(context.Context) ([]run
 		}
 		snapshots = append(snapshots, runtimeactivity.ActiveSessionSnapshot{
 			SessionID: entry.ref.SessionID().String(),
-			Activity:  view.Activity,
+			Activity:  cloneRuntimeActivity(view.Activity),
 		})
 		return true
 	})
@@ -542,12 +547,19 @@ func (r *RuntimeRegistry) PublishRuntimeReadModelUpdate(sessionID string, update
 	if err := update.Validate(); err != nil {
 		panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
 	}
-	publicationErr := r.publishRuntimeMainView(entry, update.Version, update.Activity)
-	entry.sessionFeed.PublishRuntimeReadModel(update)
-	r.updateAggregateRuntimeActivityForAuthority(sessionID, entry, update.Activity.ActiveForControl())
+	entry.publicationMu.Lock()
+	defer entry.publicationMu.Unlock()
+	current := entry.mainView.Load()
+	if current != nil &&
+		(current.Version == update.Version || current.Version.NewerThan(update.Version)) {
+		return
+	}
+	publicationErr := r.publishRuntimeMainViewLocked(entry, update.Version, update.Activity)
 	if publicationErr != nil {
 		log.Printf("publish Runtime Main View for Session %q: %v", strings.TrimSpace(sessionID), publicationErr)
 	}
+	entry.sessionFeed.PublishRuntimeReadModel(update)
+	r.updateAggregateRuntimeActivityForAuthority(sessionID, entry, update.Activity.ActiveForControl())
 }
 
 func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome) {
