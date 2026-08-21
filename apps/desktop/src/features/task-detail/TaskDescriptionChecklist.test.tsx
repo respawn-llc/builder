@@ -13,6 +13,70 @@ import { createBrowserNativeBridge } from "@/test-support/native-bridge";
 import { installResizeObserverGeometry } from "@/test-support/resize-observer";
 
 describe("Task description checklist", () => {
+  it("keeps a refreshed checklist editable when a live Comment reveals changed Task data", async () => {
+    const initialBody = "- [ ] Keep the Markdown source";
+    const updatedBody = "New context\n\n- [ ] Keep the Markdown source";
+    const initialTask = {
+      task: {
+        ...taskDetailResponse.task,
+        body: initialBody,
+      },
+    };
+    const services = mountTaskDetailSurface(initialTask, {
+      routes: [
+        {
+          method: "workflow.task.get",
+          handler: (_params, callIndex) =>
+            callIndex === 0
+              ? initialTask
+              : {
+                  task: {
+                    ...taskDetailResponse.task,
+                    body: updatedBody,
+                  },
+                },
+        },
+        { method: "workflow.task.update", result: taskUpdateResponse },
+      ],
+    });
+
+    expect(await screen.findByRole("checkbox")).not.toBeChecked();
+    await waitFor(() => {
+      expect(services.transport.subscriptions).toContainEqual({
+        method: "workflow.subscribeProject",
+        params: { project_id: "project-1" },
+      });
+    });
+    act(() => {
+      services.transport.emit("workflow.project", {
+        event: {
+          action: "comment_added",
+          occurred_at_unix_ms: 2,
+          primary_entity_id: "task-1",
+          project_id: "project-1",
+          related_ids: ["comment-1"],
+          resource: "task",
+          workflow_id: "11111111-1111-4111-8111-111111111111",
+        },
+      });
+    });
+
+    expect(await screen.findByText("New context")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByTestId("task-detail-save"));
+
+    await waitFor(() => {
+      expect(services.transport.calls).toContainEqual({
+        method: "workflow.task.update",
+        params: {
+          task_id: "task-1",
+          title: "Resolve blocker",
+          body: "New context\n\n- [x] Keep the Markdown source",
+        },
+      });
+    });
+  });
+
   it("edits the local description draft and waits for Save before updating the Task", async () => {
     const services = mountTaskDetailSurface(
       {
@@ -381,7 +445,6 @@ describe("Task description checklist", () => {
           draft: { body: taskDetailResponse.task.body, title: taskDetailResponse.task.summary.title },
           editingComment: null,
           newCommentBody: "",
-          scrollOffsetPx: 0,
           selectedTab: "comments",
         },
       });

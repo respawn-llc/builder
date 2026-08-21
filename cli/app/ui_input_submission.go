@@ -68,7 +68,7 @@ func (c uiInputController) startTypedSubmissionWithPreSubmitQueuePositionAndOrde
 	if blocked, blockCmd := c.blockInjectedQueueSubmission(); blocked {
 		return blockCmd
 	}
-	c.startRuntimeOperationAffordance(false)
+	c.startRuntimeOperationAffordance()
 	command, isUserShell := parseUserShellCommand(text)
 	if isUserShell {
 		m.logf("step.user_shell.start command_chars=%d", len(command))
@@ -190,7 +190,7 @@ func (c uiInputController) startCompactionWithOrigin(args string, origin uiCompa
 	if m.isCompacting() {
 		return nil
 	}
-	c.startRuntimeOperationAffordance(true)
+	c.startRuntimeOperationAffordance()
 	m.compactionOrigin = origin
 	m.logf("compaction.start args_chars=%d", len(strings.TrimSpace(args)))
 	m.layout().syncViewport()
@@ -208,24 +208,18 @@ func (c uiInputController) compactCmd(args string) tea.Cmd {
 	}
 }
 
-func (c uiInputController) startRuntimeOperationAffordance(compacting bool) {
+func (c uiInputController) startRuntimeOperationAffordance() {
 	m := c.model
 	m.clearReviewerState()
 	m.clearActiveAssistantStreamSource()
-	if compacting {
-		m.setCompacting(true)
-	}
 }
 
-func (c uiInputController) finishRuntimeOperationAffordance(compacting bool) {
+func (c uiInputController) finishRuntimeOperationAffordance() {
 	m := c.model
 	m.clearReviewerState()
 	m.spinnerFrame = 0
 	if !m.shouldAnimateSpinner() {
 		m.stopSpinnerTicking()
-	}
-	if compacting {
-		m.setCompacting(false)
 	}
 }
 
@@ -260,7 +254,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	}
 	m.activeSubmit = activeSubmitState{}
 	m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
-	c.finishRuntimeOperationAffordance(false)
+	c.finishRuntimeOperationAffordance()
 	if msg.token == 0 || !m.hasRuntimeClient() {
 		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle})
 	}
@@ -361,7 +355,7 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	compactionOrigin := m.compactionOrigin
 	m.compactionOrigin = uiCompactionOriginNone
 	m.observeRuntimeRequestResult(msg.err)
-	c.finishRuntimeOperationAffordance(true)
+	c.finishRuntimeOperationAffordance()
 	if msg.err != nil {
 		restoreInjectedCmd := c.restoreInjectedInputsIntoComposer()
 		c.restoreQueuedMessagesIntoInput()

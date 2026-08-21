@@ -68,6 +68,7 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   initialScrollKey?: string | undefined;
   initialScrollRequestKey?: string | undefined;
   initialScrollAlign?: "auto" | "start" | undefined;
+  layoutChangeScrollBehavior?: "preserve-leading-item" | "natural" | undefined;
   paddingEnd?: number | undefined;
   paddingStart?: number | undefined;
   className?: string | undefined;
@@ -91,6 +92,7 @@ type VirtualizedInfiniteListResolvedProps<TItem> = Omit<
   | "role"
   | "rowSpacing"
   | "initialScrollAlign"
+  | "layoutChangeScrollBehavior"
   | "paddingEnd"
   | "paddingStart"
   | "hasPreviousPage"
@@ -100,6 +102,7 @@ type VirtualizedInfiniteListResolvedProps<TItem> = Omit<
   itemRole: AriaRole;
   rowSpacing: "default" | "compact" | "tight";
   initialScrollAlign: "auto" | "start";
+  layoutChangeScrollBehavior: "preserve-leading-item" | "natural";
   paddingEnd: number;
   paddingStart: number;
   hasPreviousPage: boolean;
@@ -115,6 +118,7 @@ function resolveVirtualizedInfiniteListProps<TItem>(
     itemRole: props.itemRole ?? (props.role === "listbox" ? "presentation" : "listitem"),
     rowSpacing: props.rowSpacing ?? "default",
     initialScrollAlign: props.initialScrollAlign ?? "start",
+    layoutChangeScrollBehavior: props.layoutChangeScrollBehavior ?? "preserve-leading-item",
     paddingEnd: props.paddingEnd ?? 0,
     paddingStart: props.paddingStart ?? 0,
     hasPreviousPage: props.hasPreviousPage ?? false,
@@ -150,6 +154,7 @@ function VirtualizedInfiniteListContent<TItem>({
   initialScrollKey,
   initialScrollRequestKey,
   initialScrollAlign,
+  layoutChangeScrollBehavior,
   paddingEnd,
   paddingStart,
   className,
@@ -185,8 +190,6 @@ function VirtualizedInfiniteListContent<TItem>({
   const lastLoadMoreKeyRef = useRef<string | null>(null);
   const wasFetchingPreviousPageRef = useRef(false);
   const wasFetchingNextPageRef = useRef(false);
-  const leadingAnchorRef = useRef<VirtualizedLeadingAnchor | null>(null);
-  const previousAnchorEntriesRef = useRef<readonly VirtualizedAnchorEntry[]>([]);
   const previousBoundaryCount = Number(previousBoundary !== undefined);
   const headerCount = Number(header !== undefined);
   const emptyCount = Number(items.length === 0 && empty !== undefined);
@@ -249,9 +252,7 @@ function VirtualizedInfiniteListContent<TItem>({
     estimateSize,
     pinnedIndexes,
   });
-  const visibleIndexes = isFallbackRendering
-    ? fallbackIndexes
-    : virtualItems.map((virtualItem) => virtualItem.index);
+  const visibleIndexes = virtualizedVisibleIndexes(fallbackIndexes, virtualItems);
   const renderRow = (virtualIndex: number): ReactNode =>
     renderVirtualizedRow({
       empty,
@@ -269,59 +270,6 @@ function VirtualizedInfiniteListContent<TItem>({
       renderItem,
       virtualIndex,
     });
-
-  const captureLeadingAnchor = useCallback(() => {
-    const element = scrollRef.current;
-    if (element === null || items.length === 0) {
-      leadingAnchorRef.current = null;
-      return;
-    }
-    const scrollTop = element.scrollTop;
-    const virtualItem = virtualizer
-      .getVirtualItems()
-      .find(
-        (item) =>
-          item.index >= itemStartIndex &&
-          item.index < itemStartIndex + items.length &&
-          item.start <= scrollTop &&
-          item.end > scrollTop,
-      );
-    if (virtualItem !== undefined) {
-      const item = items[virtualItem.index - itemStartIndex];
-      leadingAnchorRef.current =
-        item === undefined
-          ? null
-          : {
-              anchorKey: getItemAnchorKeyForItem(item),
-              occurrenceKey: getItemOccurrenceKeyForItem(item),
-              inRowOffset: scrollTop - virtualItem.start,
-            };
-      return;
-    }
-    const estimatedSize = Math.max(1, estimateSize());
-    const estimatedVirtualIndex = Math.max(
-      itemStartIndex,
-      Math.floor(Math.max(0, scrollTop - paddingStart) / estimatedSize),
-    );
-    const dataIndex = Math.min(items.length - 1, estimatedVirtualIndex - itemStartIndex);
-    const item = items[dataIndex];
-    leadingAnchorRef.current =
-      item === undefined
-        ? null
-        : {
-            anchorKey: getItemAnchorKeyForItem(item),
-            occurrenceKey: getItemOccurrenceKeyForItem(item),
-            inRowOffset: scrollTop - (paddingStart + estimatedVirtualIndex * estimatedSize),
-          };
-  }, [
-    estimateSize,
-    getItemAnchorKeyForItem,
-    getItemOccurrenceKeyForItem,
-    itemStartIndex,
-    items,
-    paddingStart,
-    virtualizer,
-  ]);
 
   useEffect(() => {
     if (initialScrollKey === undefined) {
@@ -365,46 +313,21 @@ function VirtualizedInfiniteListContent<TItem>({
     pixelOffsetAppliedKeyRef.current = validatedPixelOffsetRequest.key;
   }, [items.length, validatedPixelOffsetRequest, virtualizer]);
 
-  useLayoutEffect(() => {
-    const currentEntries = items.map((item) => ({
-      anchorKey: getItemAnchorKeyForItem(item),
-      occurrenceKey: getItemOccurrenceKeyForItem(item),
-    }));
-    const previousEntries = previousAnchorEntriesRef.current;
-    const anchor = recoverableLeadingAnchor(
-      leadingAnchorRef.current,
-      pixelOffsetAppliedKeyRef.current,
-      validatedPixelOffsetRequest?.key,
-    );
-    if (previousEntries.length > 0 && anchor !== null && scrollRef.current !== null) {
-      restoreLeadingAnchor({
-        anchor,
-        currentEntries,
-        element: scrollRef.current,
-        estimateSize,
-        isFallbackRendering,
-        itemStartIndex,
-        paddingStart,
-        previousEntries,
-        virtualizer,
-      });
-    }
-    previousAnchorEntriesRef.current = currentEntries;
-    pixelOffsetAppliedKeyRef.current = null;
-    captureLeadingAnchor();
-  }, [
-    captureLeadingAnchor,
+  const onScroll = useVirtualizedLeadingAnchor({
+    behavior: layoutChangeScrollBehavior,
     estimateSize,
-    getItemAnchorKeyForItem,
-    getItemOccurrenceKeyForItem,
+    getItemAnchorKey: getItemAnchorKeyForItem,
+    getItemOccurrenceKey: getItemOccurrenceKeyForItem,
     isFallbackRendering,
     itemStartIndex,
     items,
     paddingStart,
-    validatedPixelOffsetRequest,
+    pixelOffsetAppliedKeyRef,
+    pixelOffsetRequestKey: validatedPixelOffsetRequest?.key,
+    scrollRef,
     virtualItems,
     virtualizer,
-  ]);
+  });
 
   useVirtualizedLoadMore({
     atEdge: resolvePreviousLoadEdge({
@@ -447,7 +370,7 @@ function VirtualizedInfiniteListContent<TItem>({
         className={className}
         data-testid={testId}
         id={id}
-        onScroll={captureLeadingAnchor}
+        onScroll={onScroll}
         ref={setScrollElement}
         role={role}
       >
@@ -492,7 +415,7 @@ function VirtualizedInfiniteListContent<TItem>({
       className={className}
       data-testid={testId}
       id={id}
-      onScroll={captureLeadingAnchor}
+      onScroll={onScroll}
       ref={setScrollElement}
       role={role}
     >
@@ -538,6 +461,143 @@ function VirtualizedInfiniteListContent<TItem>({
   );
 }
 
+function useVirtualizedLeadingAnchor<TItem>({
+  behavior,
+  estimateSize,
+  getItemAnchorKey,
+  getItemOccurrenceKey,
+  isFallbackRendering,
+  itemStartIndex,
+  items,
+  paddingStart,
+  pixelOffsetAppliedKeyRef,
+  pixelOffsetRequestKey,
+  scrollRef,
+  virtualItems,
+  virtualizer,
+}: Readonly<{
+  behavior: "preserve-leading-item" | "natural";
+  estimateSize: () => number;
+  getItemAnchorKey: (item: TItem) => string;
+  getItemOccurrenceKey: (item: TItem) => string;
+  isFallbackRendering: boolean;
+  itemStartIndex: number;
+  items: readonly TItem[];
+  paddingStart: number;
+  pixelOffsetAppliedKeyRef: { current: string | null };
+  pixelOffsetRequestKey: string | undefined;
+  scrollRef: { current: HTMLDivElement | null };
+  virtualItems: readonly VirtualItem[];
+  virtualizer: ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>;
+}>): (() => void) | undefined {
+  const leadingAnchorRef = useRef<VirtualizedLeadingAnchor | null>(null);
+  const previousAnchorEntriesRef = useRef<readonly VirtualizedAnchorEntry[]>([]);
+  const captureLeadingAnchor = useCallback(() => {
+    const element = scrollRef.current;
+    if (element === null || items.length === 0) {
+      leadingAnchorRef.current = null;
+      return;
+    }
+    const scrollTop = element.scrollTop;
+    const virtualItem = virtualizer
+      .getVirtualItems()
+      .find(
+        (item) =>
+          item.index >= itemStartIndex &&
+          item.index < itemStartIndex + items.length &&
+          item.start <= scrollTop &&
+          item.end > scrollTop,
+      );
+    if (virtualItem !== undefined) {
+      const item = items[virtualItem.index - itemStartIndex];
+      leadingAnchorRef.current =
+        item === undefined
+          ? null
+          : {
+              anchorKey: getItemAnchorKey(item),
+              occurrenceKey: getItemOccurrenceKey(item),
+              inRowOffset: scrollTop - virtualItem.start,
+            };
+      return;
+    }
+    const estimatedSize = Math.max(1, estimateSize());
+    const estimatedVirtualIndex = Math.max(
+      itemStartIndex,
+      Math.floor(Math.max(0, scrollTop - paddingStart) / estimatedSize),
+    );
+    const dataIndex = Math.min(items.length - 1, estimatedVirtualIndex - itemStartIndex);
+    const item = items[dataIndex];
+    leadingAnchorRef.current =
+      item === undefined
+        ? null
+        : {
+            anchorKey: getItemAnchorKey(item),
+            occurrenceKey: getItemOccurrenceKey(item),
+            inRowOffset: scrollTop - (paddingStart + estimatedVirtualIndex * estimatedSize),
+          };
+  }, [
+    estimateSize,
+    getItemAnchorKey,
+    getItemOccurrenceKey,
+    itemStartIndex,
+    items,
+    paddingStart,
+    scrollRef,
+    virtualizer,
+  ]);
+
+  useLayoutEffect(() => {
+    if (behavior === "natural") {
+      leadingAnchorRef.current = null;
+      previousAnchorEntriesRef.current = [];
+      return;
+    }
+    const currentEntries = items.map((item) => ({
+      anchorKey: getItemAnchorKey(item),
+      occurrenceKey: getItemOccurrenceKey(item),
+    }));
+    const previousEntries = previousAnchorEntriesRef.current;
+    const anchor = recoverableLeadingAnchor(
+      leadingAnchorRef.current,
+      pixelOffsetAppliedKeyRef.current,
+      pixelOffsetRequestKey,
+    );
+    if (previousEntries.length > 0 && anchor !== null && scrollRef.current !== null) {
+      restoreLeadingAnchor({
+        anchor,
+        currentEntries,
+        element: scrollRef.current,
+        estimateSize,
+        isFallbackRendering,
+        itemStartIndex,
+        paddingStart,
+        previousEntries,
+        virtualizer,
+      });
+    }
+    previousAnchorEntriesRef.current = currentEntries;
+    pixelOffsetAppliedKeyRef.current = null;
+    captureLeadingAnchor();
+  }, [
+    behavior,
+    captureLeadingAnchor,
+    estimateSize,
+    getItemAnchorKey,
+    getItemOccurrenceKey,
+    isFallbackRendering,
+    itemStartIndex,
+    items,
+    paddingStart,
+    pixelOffsetAppliedKeyRef,
+    pixelOffsetRequestKey,
+    scrollRef,
+    virtualItems,
+    virtualizer,
+  ]);
+
+  return behavior === "preserve-leading-item" ? captureLeadingAnchor : undefined;
+}
+
 function fallbackVirtualIndexes({
   count,
   estimateSize,
@@ -558,6 +618,13 @@ function fallbackVirtualIndexes({
     overscan: 6,
   };
   return pinnedVirtualRangeExtractor(range, pinnedIndexes);
+}
+
+function virtualizedVisibleIndexes(
+  fallbackIndexes: readonly number[],
+  virtualItems: readonly VirtualItem[],
+): readonly number[] {
+  return virtualItems.length === 0 ? fallbackIndexes : virtualItems.map((virtualItem) => virtualItem.index);
 }
 
 function restoreLeadingAnchor({

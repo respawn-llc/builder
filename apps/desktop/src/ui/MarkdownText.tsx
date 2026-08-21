@@ -102,7 +102,7 @@ function MarkdownCore({
         components={richComponents}
         controls={false}
         isAnimating={animated}
-        mode="streaming"
+        mode={animated ? "streaming" : "static"}
         plugins={{ renderers: [{ component: HighlightedCode, language: languageKeys }] }}
         remarkPlugins={[[remarkGfm, {}], remarkBreaks]}
         {...(onChange === undefined ? {} : { parseMarkdownIntoBlocksFn: singleMarkdownBlock })}

@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { appI18n } from "@/i18n";
@@ -51,8 +51,6 @@ describe("Task Detail live refresh", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("radio")).toHaveLength(4);
     });
-    const list = screen.getByTestId("task-detail-island-stack");
-    list.scrollTop = 241;
     const submits = screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") });
     await user.click(submits.reduce((first) => first));
 
@@ -60,7 +58,6 @@ describe("Task Detail live refresh", () => {
       expect(screen.queryByText("ask-1")).not.toBeInTheDocument();
       expect(screen.getByText("ask-2")).toBeInTheDocument();
       expect(screen.getAllByRole("radio")[0]).toHaveFocus();
-      expect(list.scrollTop).toBe(241);
     });
     await user.click(screen.getByRole("button", { name: appI18n.t("task.submitAnswer") }));
     expect(answerCount).toBe(2);
@@ -217,7 +214,7 @@ describe("Task Detail live refresh", () => {
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
   });
 
-  it("does not jump focus or scroll when the intended next prompt disappears and the earlier prompt restores", async () => {
+  it("does not move focus when the intended next prompt disappears and the earlier prompt restores", async () => {
     let attention = taskAttentionWithOneOption("ask-1", "ask-2", "ask-3");
     const answer = deferred<undefined>();
     mountTaskDetailSurface(taskDetailResponse, {
@@ -230,18 +227,13 @@ describe("Task Detail live refresh", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("radio")).toHaveLength(6);
     });
-    const list = screen.getByTestId("task-detail-island-stack");
-    list.scrollTop = 241;
     const submits = screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") });
     await user.click(submits.reduce((first) => first));
     await waitFor(() => {
       expect(screen.queryByText("ask-1")).not.toBeInTheDocument();
       expect(screen.getByText("ask-2")).toBeInTheDocument();
       expect(screen.getAllByRole("radio")[0]).toHaveFocus();
-      expect(list.scrollTop).toBe(241);
     });
-    list.scrollTop = 317;
-    fireEvent.scroll(list);
     attention = taskAttentionWithOneOption("ask-1", "ask-3");
     answer.reject(new Error("delivery failed"));
     await waitFor(() => {
@@ -251,7 +243,6 @@ describe("Task Detail live refresh", () => {
       expect(radios).toHaveLength(4);
       expect(radios[0]).not.toHaveFocus();
       expect(radios[2]).not.toHaveFocus();
-      expect(list.scrollTop).toBe(317);
     });
   });
 

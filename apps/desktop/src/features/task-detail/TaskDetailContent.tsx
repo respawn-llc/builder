@@ -25,7 +25,6 @@ import {
   useStatusController,
 } from "@/app-facade";
 import { useUpdateTask } from "@/shared/task-mutations";
-import type { VirtualizedPixelOffsetRequest } from "@/ui";
 import {
   initialDescriptionPresentationState,
   type DescriptionPresentationState,
@@ -145,7 +144,6 @@ export function TaskDetailContent({
   const navigation = useAppNavigation();
   const relationshipNavigationAvailable = hasRelationshipNavigation(navigator, openSidebar);
   const restored = decodeTaskDetailRetainedState(retainedState);
-  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
   const serverDraft = taskDraft(detail);
   const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
     base: restored?.base ?? serverDraft,
@@ -162,7 +160,7 @@ export function TaskDetailContent({
     restored?.selectedTab ?? "comments",
   );
   const [localDependencyFocusRequest, setLocalDependencyFocusRequest] = useState<number | null>(null);
-  const promptAnswers = useTaskPromptAnswers({ attention, detail, scrollElement });
+  const promptAnswers = useTaskPromptAnswers({ attention, detail });
   const update = useUpdateTask(detail.id, detail.projectID);
   useTaskDetailRetainedCapture({
     base: draftState.base,
@@ -285,9 +283,7 @@ export function TaskDetailContent({
           onQuestionSelectionChange={(key: PromptAnswerKey, selection: QuestionSelectionState) => {
             promptAnswers.setState((previous) => previous.withSelection(key, selection));
           }}
-          onScrollElementChange={setScrollElement}
           onSaveDraft={saveDraft}
-          pixelOffsetRequest={promptAnswers.pixelOffsetRequest}
           primaryFocusRequest={promptAnswers.primaryFocusRequest}
           promptAnswerState={promptAnswers.state}
           selectedTab={selectedTab}
@@ -303,20 +299,15 @@ export function TaskDetailContent({
 function useTaskPromptAnswers({
   attention,
   detail,
-  scrollElement,
 }: Readonly<{
   attention: ReturnType<typeof useTaskAttention>;
   detail: TaskDetail;
-  scrollElement: HTMLDivElement | null;
 }>) {
   const { api } = useAppServices();
   const { push } = useStatusController();
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [state, setState] = useState<PromptAnswerState>(emptyPromptAnswerState);
-  const [pixelOffsetRequest, setPixelOffsetRequest] = useState<VirtualizedPixelOffsetRequest | undefined>(
-    undefined,
-  );
   const [primaryFocusRequest, setPrimaryFocusRequest] = useState<PromptPrimaryFocusRequest | undefined>(
     undefined,
   );
@@ -393,10 +384,8 @@ function useTaskPromptAnswers({
             (item) => item.kind !== "question" || !state.isMasked(promptAnswerKey(item)),
           ),
           requestID: requestSequence.value,
-          scrollOffsetPx: scrollElement?.scrollTop ?? 0,
           submittedKey: promptAnswerKey(attempt.attention),
         });
-        setPixelOffsetRequest(handoff.pixelOffsetRequest);
         setPrimaryFocusRequest(handoff.primaryFocusRequest);
         await coordinator.submit({
           attention: attempt.attention,
@@ -405,7 +394,7 @@ function useTaskPromptAnswers({
         });
       },
     }),
-    [api, attention.data?.items, coordinator, requestSequence, scrollElement, state],
+    [api, attention.data?.items, coordinator, requestSequence, state],
   );
   const projectedState =
     attention.data === undefined
@@ -421,11 +410,9 @@ function useTaskPromptAnswers({
   }
   return {
     answerQuestion,
-    pixelOffsetRequest,
     primaryFocusRequest,
     reset(): void {
       setState(emptyPromptAnswerState());
-      setPixelOffsetRequest(undefined);
       setPrimaryFocusRequest(undefined);
     },
     setState,

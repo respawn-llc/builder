@@ -1,16 +1,10 @@
 import type { DetailTab } from "./TaskDetailTabs";
 import type { useTaskActivity, useTaskComments } from "./useTaskDetailData";
-import type { VirtualizedPixelOffsetRequest } from "@/ui";
 export const selectedFeed = <Comments, Activity>(
   tab: DetailTab,
   comments: Comments,
   activity: Activity,
 ): Comments | Activity => (tab === "comments" ? comments : activity);
-export const feedPixelOffsetRequest = (
-  attentionPending: boolean,
-  feedPending: boolean,
-  request: VirtualizedPixelOffsetRequest | undefined,
-) => (attentionPending || feedPending ? undefined : request);
 type TaskDetailPagingInput = Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
   comments: ReturnType<typeof useTaskComments>;

@@ -46,6 +46,9 @@ function List({
   items = ["a", "b", "c"],
   ready = true,
   request,
+  initialScrollKey,
+  initialScrollRequestKey,
+  layoutChangeScrollBehavior,
   onScrollElementChange,
 }: Readonly<{
   hasNextPage?: boolean;
@@ -62,6 +65,9 @@ function List({
   items?: readonly string[];
   ready?: boolean;
   request?: VirtualizedPixelOffsetRequest | undefined;
+  initialScrollKey?: string | undefined;
+  initialScrollRequestKey?: string | undefined;
+  layoutChangeScrollBehavior?: "preserve-leading-item" | "natural";
   onScrollElementChange?: (element: HTMLDivElement | null) => void;
 }>) {
   return (
@@ -72,7 +78,10 @@ function List({
       hasPreviousPage={hasPreviousPage}
       isFetchingNextPage={false}
       isFetchingPreviousPage={false}
+      initialScrollKey={initialScrollKey}
+      initialScrollRequestKey={initialScrollRequestKey}
       items={items}
+      layoutChangeScrollBehavior={layoutChangeScrollBehavior}
       loadingLabel="Loading"
       nextBoundary={nextBoundary}
       onLoadMore={onLoadMore}
@@ -90,7 +99,44 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
   beforeEach(() => {
     virtualizer.getVirtualItems.mockReturnValue([]);
     virtualizer.getOffsetForIndex.mockClear();
+    virtualizer.scrollToIndex.mockClear();
     virtualizer.scrollToOffset.mockClear();
+  });
+
+  it("keeps explicit initial navigation when layout-change preservation is disabled", () => {
+    render(
+      <List
+        initialScrollKey="dependencies"
+        initialScrollRequestKey="task-1:dependencies"
+        items={["header", "body", "dependencies"]}
+        layoutChangeScrollBehavior="natural"
+      />,
+    );
+
+    expect(virtualizer.scrollToIndex).toHaveBeenCalledWith(2, {
+      align: "start",
+      behavior: "auto",
+    });
+  });
+
+  it("leaves the viewport untouched when layout-change preservation is disabled", () => {
+    const initialItems = ["header", "body", "feed"];
+    const refreshedItems = ["new", ...initialItems];
+    virtualizer.getOffsetForIndex.mockImplementation((index: number) => [index * 40]);
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 80, index: 1, key: "body", lane: 0, size: 40, start: 40 },
+    ]);
+    const view = render(<List items={initialItems} layoutChangeScrollBehavior="natural" />);
+    const list = screen.getByRole("list");
+    list.scrollTop = 40;
+    fireEvent.scroll(list);
+
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 120, index: 2, key: "body", lane: 0, size: 40, start: 80 },
+    ]);
+    view.rerender(<List items={refreshedItems} layoutChangeScrollBehavior="natural" />);
+
+    expect(screen.getByRole("list").scrollTop).toBe(40);
   });
 
   it("applies each valid request key once through the virtualizer after rows mount", () => {

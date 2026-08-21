@@ -397,7 +397,7 @@
 - The sidebar retains at most 50 destinations.
 - A push beyond the limit preserves the root and evicts the oldest non-root destination.
 - Only the current destination remains mounted and live.
-- Back restores Task Detail scroll position, description expansion, selected Comments or Activity tab, unsaved Task title and body edits, unsaved new-comment text, and one edited-comment draft.
+- Back restores Task Detail description expansion, selected Comments or Activity tab, unsaved Task title and body edits, unsaved new-comment text, and one edited-comment draft.
 - Restored Task Detail refreshes server-authoritative data and layers retained unsaved input over it.
 - Inactive Task Detail data follows the ordinary Desktop query-cache lifetime.
 - A mounted Task or Project destination that receives a typed missing result goes Back, including closing when it is the root.
@@ -408,7 +408,6 @@
 - Ordinary New Task keeps header Back and X available while its request is pending.
 - A failed related creation restores header Back and X and preserves the form recovery path.
 - Successful Project deletion from Project Edit closes that mounted Project Edit sidebar.
-- Scroll restoration reuses bounded cached feed pages while the ordinary query cache retains them, refreshes them asynchronously, and resumes at the nearest available loaded pixel position. A cold cache opens the newest page. Restoration never requests additional pages solely to reach the prior offset, and ordinary edge-driven loading continues from there.
 - Inbox Previous and Next replace the current Inbox Task without adding sidebar history.
 - Related-Task navigation and Dependency Add are unavailable while a Task or comment save is pending.
 - Relationship Remove keeps its independent availability while another Task Detail save is pending.
@@ -452,10 +451,10 @@
 - Runtime Approvals use the actual prompt, approval-specific choices, select the one-time allow choice when offered and otherwise the first offered choice, and do not offer `Neither`; Deny requires commentary. Workflow transition approval offers only Approve and shows source Node, Transition Key and label, target Nodes, required values, commentary, Workflow Version, and stale warning.
 - Task Detail sends each `Submit answer` independently and does not collect responses across Questions or runtime Approvals.
 - Selecting `Submit answer` removes that prompt from local attention before Kent reports the result.
-- Task Detail moves focus to the next unresolved prompt's first answer control and keeps the attention list at the submitted prompt's position.
+- Task Detail moves focus to the next unresolved prompt's first answer control.
 - The next prompt accepts edits and submission while earlier answer deliveries are in progress. Answer deliveries may finish in a different order.
 - After every answer attempt settles, Task Detail refetches Task attention. It restores the submitted selection and commentary only if refreshed attention still contains the exact Session, Step, and prompt identity; otherwise it discards that answer state.
-- If delivery fails while the same Task Detail is present and refreshed attention still contains the prompt, Task Detail restores it in server order, surfaces the failure, and permits manual retry without moving focus or scroll away from another prompt being edited.
+- If delivery fails while the same Task Detail is present and refreshed attention still contains the prompt, Task Detail restores it in server order, surfaces the failure, and permits manual retry without moving focus away from another prompt being edited.
 - If the attention refetch fails, Task Detail restores the prompt from cached attention with its submitted selection and commentary, surfaces the reconciliation failure, and permits manual retry. A retry may report that the prompt was already resolved.
 - Task Detail does not replay a failed answer automatically.
 - If delivery fails after the operator leaves the originating Task Detail, Desktop discards the submitted answer state and identifies the Task in the failure notification. Reopening the Task uses server-provided defaults for an unresolved prompt.

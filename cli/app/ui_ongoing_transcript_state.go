@@ -49,7 +49,8 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageSessionIdentity:
 		return m.applyTranscriptSessionIdentity(message.Payload().(clientui.TranscriptSessionIdentity))
 	case clientui.TranscriptMessageCompactionStatus:
-		m.applyTranscriptCompactionStatus(message.Payload().(clientui.TranscriptCompactionStatus))
+		// RuntimeActivity is the authoritative compaction lifecycle. This event
+		// carries lifecycle notification facts, not live-session state.
 	case clientui.TranscriptMessageContextUsage:
 		m.applyTranscriptContextUsage(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
@@ -86,10 +87,6 @@ func (m *uiModel) applyTranscriptHydration(
 	m.reasoningStatusHeader = ""
 	if hydration.ActiveThinkingStatus != nil {
 		m.applyTranscriptThinkingStatusUpdate(*hydration.ActiveThinkingStatus)
-	}
-	m.setCompacting(false)
-	if hydration.ActiveCompaction != nil {
-		m.applyTranscriptCompactionStatus(*hydration.ActiveCompaction)
 	}
 	m.clearReviewerState()
 	if hydration.ActiveReviewer != nil {
@@ -175,17 +172,6 @@ func (m *uiModel) applyTranscriptReviewerState(state clientui.TranscriptReviewer
 		m.runtimeLifecycle.Reviewer = clientui.ReviewerLifecycleIdle
 	default:
 		panic(fmt.Sprintf("unsupported transcript reviewer state %q", state.State))
-	}
-}
-
-func (m *uiModel) applyTranscriptCompactionStatus(status clientui.TranscriptCompactionStatus) {
-	switch status.State {
-	case clientui.CompactionStarted:
-		m.setCompacting(true)
-	case clientui.CompactionCompleted, clientui.CompactionFailed:
-		m.setCompacting(false)
-	default:
-		panic(fmt.Sprintf("unsupported transcript compaction state %q", status.State))
 	}
 }
 
