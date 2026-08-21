@@ -1,14 +1,12 @@
 package registry
 
 import (
-	"strings"
-
 	"core/server/runtimeview"
 	"core/shared/clientui"
 )
 
 func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.RuntimeMainView, bool) {
-	entry := r.authorityEntryBySession(strings.TrimSpace(sessionID))
+	entry := r.authorityEntryBySession(sessionID)
 	if entry == nil {
 		return clientui.RuntimeMainView{}, false
 	}
@@ -17,6 +15,16 @@ func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.Ru
 		return clientui.RuntimeMainView{}, false
 	}
 	return *view, true
+}
+
+func (r *RuntimeRegistry) publishTranscriptAndMainView(
+	entry *authorityRuntimeEntry,
+	build func() ([]clientui.TranscriptEvent, error),
+) error {
+	if err := entry.sessionFeed.PublishBuilt(build); err != nil {
+		return err
+	}
+	return r.republishRuntimeMainView(entry)
 }
 
 func (r *RuntimeRegistry) republishRuntimeMainView(entry *authorityRuntimeEntry) error {

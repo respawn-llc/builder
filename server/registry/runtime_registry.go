@@ -415,7 +415,7 @@ func (r *RuntimeRegistry) publishCurrentRuntimeActivity(sessionID string) error 
 	if err != nil {
 		return err
 	}
-	_ = r.publishRuntimeReadModelUpdate(id, update)
+	r.PublishRuntimeReadModelUpdate(id, update)
 	return nil
 }
 
@@ -461,16 +461,13 @@ func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt 
 		entry.sessionFeed.Publish(messages)
 	}
 	if runtimeEventShouldPublishSessionStatus(evt) {
-		if err := entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+		return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
 			status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 			if err != nil {
 				return nil, err
 			}
 			return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)}, nil
-		}); err != nil {
-			return err
-		}
-		return r.republishRuntimeMainView(entry)
+		})
 	}
 	return nil
 }
@@ -484,7 +481,7 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string) error {
 	if entry == nil {
 		return nil
 	}
-	if err := entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
 		identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
 		if err != nil {
 			return nil, err
@@ -495,10 +492,7 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string) error {
 		}
 		identity.ExecutionTarget = target
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(identity)}, nil
-	}); err != nil {
-		return err
-	}
-	return r.republishRuntimeMainView(entry)
+	})
 }
 
 func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
@@ -509,16 +503,13 @@ func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
 	if entry == nil {
 		return nil
 	}
-	if err := entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
 		status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 		if err != nil {
 			return nil, err
 		}
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)}, nil
-	}); err != nil {
-		return err
-	}
-	return r.republishRuntimeMainView(entry)
+	})
 }
 
 func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {
@@ -551,25 +542,19 @@ func (r *RuntimeRegistry) PublishRuntimeReadModelUpdate(sessionID string, update
 	if r == nil {
 		return
 	}
-	if err := r.publishRuntimeReadModelUpdate(sessionID, update); err != nil {
-		log.Printf("publish Runtime Main View for Session %q: %v", strings.TrimSpace(sessionID), err)
+	entry := r.authorityEntryBySession(sessionID)
+	if entry == nil {
+		return
 	}
-}
-
-func (r *RuntimeRegistry) publishRuntimeReadModelUpdate(sessionID string, update clientui.RuntimeReadModelUpdate) error {
-	if r == nil {
-		return nil
+	if err := update.Validate(); err != nil {
+		panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
 	}
-	if authorityEntry := r.authorityEntryBySession(sessionID); authorityEntry != nil {
-		if err := update.Validate(); err != nil {
-			panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
-		}
-		publicationErr := r.publishRuntimeMainView(authorityEntry, update.Version, update.Activity)
-		authorityEntry.sessionFeed.PublishRuntimeReadModel(update)
-		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, update.Activity.ActiveForControl())
-		return publicationErr
+	publicationErr := r.publishRuntimeMainView(entry, update.Version, update.Activity)
+	entry.sessionFeed.PublishRuntimeReadModel(update)
+	r.updateAggregateRuntimeActivityForAuthority(sessionID, entry, update.Activity.ActiveForControl())
+	if publicationErr != nil {
+		log.Printf("publish Runtime Main View for Session %q: %v", strings.TrimSpace(sessionID), publicationErr)
 	}
-	return nil
 }
 
 func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome) {
