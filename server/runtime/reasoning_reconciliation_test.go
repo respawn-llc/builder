@@ -28,18 +28,18 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 		secondOutput, secondPart := int64(1), int64(0)
 		first := &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &firstPart}
 		second := &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &secondPart}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: first, Text: "first",
 		})); err != nil {
 			t.Fatalf("seed first trace: %v", err)
 		}
 		now = now.Add(1500 * time.Millisecond)
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: first, Text: "first update",
 		})); err != nil {
 			t.Fatalf("update first trace: %v", err)
 		}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: second, Text: "second",
 		})); err != nil {
 			t.Fatalf("seed second trace: %v", err)
@@ -71,7 +71,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 
 		zeroOutput, zeroPart := int64(2), int64(0)
 		zero := &llm.ReasoningSourceCoordinate{OutputIndex: &zeroOutput, PartIndex: &zeroPart}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: zero, Text: "zero",
 		})); err != nil {
 			t.Fatalf("seed zero trace: %v", err)
@@ -107,7 +107,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 		executor := &defaultStepExecutor{engine: engine}
 		output, part := int64(0), int64(0)
 		coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: coordinate, Text: "retry",
 		})); err != nil {
 			t.Fatalf("seed retry trace: %v", err)
@@ -155,7 +155,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 		executor := &defaultStepExecutor{engine: engine}
 		oldOutput, oldPart := int64(0), int64(0)
 		old := &llm.ReasoningSourceCoordinate{OutputIndex: &oldOutput, PartIndex: &oldPart}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: old, Text: "old",
 		})); err != nil {
 			t.Fatalf("seed old trace: %v", err)
@@ -166,7 +166,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 		}
 		freshOutput, freshPart := int64(1), int64(0)
 		fresh := &llm.ReasoningSourceCoordinate{OutputIndex: &freshOutput, PartIndex: &freshPart}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: fresh, Text: "fresh",
 		})); err != nil {
 			t.Fatalf("seed fresh trace: %v", err)
@@ -203,7 +203,7 @@ func TestReasoningTraceDurationRestoresThroughPersistedTranscript(t *testing.T) 
 	defer restoreStep()
 	output, part := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate, Text: "restored",
 	})); err != nil {
 		t.Fatalf("seed restored trace: %v", err)
@@ -243,7 +243,7 @@ func TestCompletedResponseAbortThenReasoningResetWithoutAssistantStream(t *testi
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	outputIndex, partIndex := int64(0), int64(0)
-	if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID(stepID), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex},
 		Text:             "discard me",
 		CurrentStatus:    &llm.ReasoningStatus{Text: "Thinking"},
@@ -336,7 +336,7 @@ func TestReconcileReasoningRejectsInvalidCoordinateAndConsumesCommittedTrace(t *
 
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate,
 		Text:             "provisional",
 	})); err != nil {
@@ -365,7 +365,7 @@ func TestReconcileReasoningConsumesTraceAfterCommittedObserverError(t *testing.T
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate,
 		Text:             "provisional",
 	})); err != nil {
@@ -394,7 +394,7 @@ func TestReconcileReasoningRejectsCompletedIdentityConflictWithStream(t *testing
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
 	streamIdentity := &llm.ReasoningItemIdentity{ItemID: "reason_stream", PartIndex: &partIndex}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate,
 		ItemIdentity:     streamIdentity,
 		Text:             "streamed",
@@ -425,7 +425,7 @@ func TestReconcileReasoningKeepsTraceWhenCommitIsNotDurable(t *testing.T) {
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate,
 		Text:             "provisional",
 	})); err != nil {
@@ -480,7 +480,7 @@ func TestReconcileReasoningUsesFirstSeenProvisionalOrder(t *testing.T) {
 		{SourceCoordinate: first, Text: "first"},
 		{SourceCoordinate: second, Text: "second"},
 	} {
-		if err := engine.steer("step", steerReasoningDeltaIntent(item)); err != nil {
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(item)); err != nil {
 			t.Fatalf("seed provisional reasoning: %v", err)
 		}
 	}
@@ -500,7 +500,7 @@ func TestReconcileReasoningUsesFirstSeenProvisionalOrder(t *testing.T) {
 		{SourceCoordinate: first, Text: "first"},
 		{SourceCoordinate: second, Text: "second"},
 	} {
-		if err := engine.steer("step", steerReasoningDeltaIntent(item)); err != nil {
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(item)); err != nil {
 			t.Fatalf("seed reordered reasoning: %v", err)
 		}
 	}
@@ -590,7 +590,7 @@ func TestReasoningCumulativeUpdatesKeepIdentityAndPosition(t *testing.T) {
 	defer restoreStep()
 	firstOutput, secondOutput, part := int64(0), int64(1), int64(0)
 	providerIdentity := &llm.ReasoningItemIdentity{ItemID: "reason_provider", PartIndex: &part}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &part},
 		ItemIdentity:     providerIdentity,
 		Text:             "provider first",
@@ -603,7 +603,7 @@ func TestReasoningCumulativeUpdatesKeepIdentityAndPosition(t *testing.T) {
 	}
 	providerPublicIdentity := traces[0].Identity
 
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &part},
 		Text:             "Kent first",
 	})); err != nil {
@@ -617,13 +617,13 @@ func TestReasoningCumulativeUpdatesKeepIdentityAndPosition(t *testing.T) {
 
 	// A cumulative provider update can omit metadata, while a cumulative Kent
 	// update can gain provider metadata. Neither transition changes its public ID.
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &part},
 		Text:             "provider cumulative",
 	})); err != nil {
 		t.Fatalf("steer provider cumulative reasoning: %v", err)
 	}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &part},
 		ItemIdentity:     &llm.ReasoningItemIdentity{ItemID: "reason_metadata", PartIndex: &part},
 		Text:             "Kent cumulative",
@@ -659,7 +659,7 @@ func TestReasoningResetClearsEveryTraceAndRetainsStatus(t *testing.T) {
 		if index == 0 {
 			delta.CurrentStatus = &llm.ReasoningStatus{Text: "Thinking"}
 		}
-		if err := engine.steer("step", steerReasoningDeltaIntent(delta)); err != nil {
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(delta)); err != nil {
 			t.Fatalf("steer reset trace: %v", err)
 		}
 	}
@@ -683,7 +683,7 @@ func TestCorrelatedReasoningCommitEmitsOneRowAndConsumesIdentity(t *testing.T) {
 	output, part := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
 	identity := &llm.ReasoningItemIdentity{ItemID: "reason_1", PartIndex: &part}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate, ItemIdentity: identity, Text: "trace",
 	})); err != nil {
 		t.Fatalf("seed correlated trace: %v", err)

@@ -271,7 +271,7 @@ func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 				restoreStep := setTestActiveStep(engine, "11111111-1111-4111-8111-111111111111")
 				defer restoreStep()
 				mustBlockTestEventLogAppends(t, store)
-				err := engine.steer("11111111-1111-4111-8111-111111111111", testCase.intent())
+				err := engine.steer(runtimeTestStepID("11111111-1111-4111-8111-111111111111"), testCase.intent())
 				if err == nil {
 					t.Fatal("uncommitted typed Reviewer append succeeded")
 				}
@@ -287,7 +287,7 @@ func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 				restoreStep := setTestActiveStep(engine, "22222222-2222-4222-8222-222222222222")
 				defer restoreStep()
 				gate.FailNext(observerErr)
-				err := engine.steer("22222222-2222-4222-8222-222222222222", testCase.intent())
+				err := engine.steer(runtimeTestStepID("22222222-2222-4222-8222-222222222222"), testCase.intent())
 				if !errors.Is(err, observerErr) {
 					t.Fatalf("committed typed Reviewer error = %v, want %v", err, observerErr)
 				}

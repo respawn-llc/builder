@@ -24,7 +24,7 @@ func TestRunStepLoopCancellationPreventsModelDispatch(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := engine.runStepLoop(ctx, "step"); !errors.Is(err, context.Canceled) {
+	if _, err := engine.runStepLoop(ctx, runtimeTestStepID("step")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled step error = %v", err)
 	}
 	if calls := len(client.calls); calls != 0 {

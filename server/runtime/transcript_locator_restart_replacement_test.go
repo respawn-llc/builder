@@ -139,7 +139,7 @@ func TestHistoryReplacementEmissionReturnsMissingOrdinalError(t *testing.T) {
 		textutil.OptionalExactString("step-1"),
 		0,
 		[]ChatEntry{{
-			StepID:     exactStepIDPointer("step-1"),
+			StepID:     exactStepIDPointer(runtimeTestStepID("step-1")),
 			Role:       "user",
 			Text:       "private transcript text",
 			Visibility: transcript.EntryVisibilityOngoing,

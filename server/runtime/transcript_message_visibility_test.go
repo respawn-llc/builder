@@ -71,7 +71,7 @@ func TestAssistantMessagesRemainOngoingAcrossCommentaryAndFinalPhases(t *testing
 				Role:    llm.RoleAssistant,
 				Phase:   textutil.Value(test.phase),
 				Content: textutil.Value("assistant content"),
-			}, 1, exactStepIDPointer(chatStoreTestStepID))
+			}, 1, exactStepIDPointer(runtimeTestStepID(chatStoreTestStepID)))
 			scannedEntries := scan.PageSnapshot().Snapshot.Entries
 			if len(scannedEntries) != 1 || scannedEntries[0].Visibility != test.want {
 				t.Fatalf("scanned assistant entries = %+v, want one %q row", scannedEntries, test.want)

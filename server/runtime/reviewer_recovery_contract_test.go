@@ -92,7 +92,7 @@ func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T
 		Model: "gpt-5", OnEvent: func(event Event) { events = append(events, event) },
 	})
 	blocker := mustBlockTestEventLogAppends(t, store)
-	if err := engine.steer("entry", steerLocalEntryIntent(storedLocalEntry{Role: string(transcript.EntryRoleReviewerStatus), Text: "status"})); err == nil {
+	if err := engine.steer(runtimeTestStepID("entry"), steerLocalEntryIntent(storedLocalEntry{Role: string(transcript.EntryRoleReviewerStatus), Text: "status"})); err == nil {
 		t.Fatal("local entry append failure was not surfaced")
 	}
 	if len(events) != 0 || len(mustTranscriptHydrationSnapshot(t, engine).CommittedRows) != 0 {

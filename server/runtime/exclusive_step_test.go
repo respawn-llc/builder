@@ -85,7 +85,7 @@ func TestExclusiveStepLifecycleEagerCompactsAfterSuccessfulFinalAtConsumedThresh
 		context.Background(),
 		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
 		func(_ context.Context, stepID string) error {
-			if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
+			if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(
 				steeringMessageEventNone,
 				true,
 				[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
@@ -128,7 +128,7 @@ func TestExclusiveStepLifecycleEagerCompactsEligibleAgentKinds(t *testing.T) {
 				context.Background(),
 				exclusiveStepOptions{EmitRunState: true, ActiveKind: kind},
 				func(_ context.Context, stepID string) error {
-					if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
+					if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(
 						steeringMessageEventNone,
 						true,
 						[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("input")}},
@@ -402,7 +402,7 @@ func TestExclusiveStepLifecycleFailedEagerCompactionDoesNotRetry(t *testing.T) {
 		context.Background(),
 		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
 		func(_ context.Context, stepID string) error {
-			if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
+			if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(
 				steeringMessageEventNone,
 				true,
 				[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
@@ -521,7 +521,7 @@ func (s *stubExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveS
 	if s.runFn != nil {
 		return s.runFn(ctx, options, fn)
 	}
-	return fn(ctx, "stub-step")
+	return fn(ctx, runtimeTestStepID("stub-step"))
 }
 
 func (s *stubExclusiveStepLifecycle) Interrupt() error {
@@ -546,6 +546,16 @@ func (s *stubExclusiveStepLifecycle) Snapshot() *RunSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneRunSnapshot(s.snapshot)
+}
+
+func (s *stubExclusiveStepLifecycle) WithActiveStep(fn func(stepID string) error) (bool, error) {
+	s.mu.Lock()
+	stepID := s.activeStepID
+	s.mu.Unlock()
+	if stepID == "" || fn == nil {
+		return false, nil
+	}
+	return true, fn(runtimeTestStepID(stepID))
 }
 
 func (s *stubExclusiveStepLifecycle) ResolveActiveOutputStep(expectedStepID *string) (*string, error) {
@@ -1020,7 +1030,7 @@ func TestExclusiveStepLifecycleDiscardsStreamingMessageOnInterrupt(t *testing.T)
 	done := make(chan error, 1)
 	go func() {
 		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn, EmitRunState: true}, func(stepCtx context.Context, stepID string) error {
-			_ = eng.steer(stepID, steerAssistantDeltaIntent(llm.AssistantDelta{Text: "partial streamed answer"}))
+			_ = eng.steer(runtimeTestStepID(stepID), steerAssistantDeltaIntent(llm.AssistantDelta{Text: "partial streamed answer"}))
 			close(started)
 			<-stepCtx.Done()
 			return stepCtx.Err()

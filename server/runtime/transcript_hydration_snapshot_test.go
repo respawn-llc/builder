@@ -31,7 +31,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	outputIndex, partIndex := int64(0), int64(0)
-	if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID(stepID), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex},
 		Text:             "inspect the repository", CurrentStatus: &llm.ReasoningStatus{Text: "Planning"},
 	})); err != nil {
@@ -57,7 +57,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 		snapshot.QueuedMessages[1].ID != second.ID {
 		t.Fatalf("owner facts = tools %+v queue %+v", snapshot.InFlightTools, snapshot.QueuedMessages)
 	}
-	if err := engine.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); err != nil {
+	if err := engine.steer(runtimeTestStepID(stepID), steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); err != nil {
 		t.Fatalf("reset reasoning: %v", err)
 	}
 	afterReset := hydrationSnapshot(t, engine)
@@ -75,9 +75,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	engine.compactionRuntimeState().SetCount(7)
-	if err := engine.steer(stepID,
-		steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)}),
-		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: exactStepIDPointer(stepID), Compaction: &CompactionStatus{Mode: "remote", Count: 8}}),
+	if err := engine.steer(runtimeTestStepID(stepID), steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(runtimeTestStepID(stepID))}),
+		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: exactStepIDPointer(runtimeTestStepID(stepID)), Compaction: &CompactionStatus{Mode: "remote", Count: 8}}),
 	); err != nil {
 		t.Fatalf("steer active owner events: %v", err)
 	}
@@ -103,9 +102,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 		t.Fatalf("goal = %+v suspended=%t", snapshot.Goal, snapshot.GoalSuspended)
 	}
 
-	if err := engine.steer(stepID,
-		steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: exactStepIDPointer(stepID)}),
-		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: exactStepIDPointer(stepID)}),
+	if err := engine.steer(runtimeTestStepID(stepID), steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: exactStepIDPointer(runtimeTestStepID(stepID))}),
+		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: exactStepIDPointer(runtimeTestStepID(stepID))}),
 	); err != nil {
 		t.Fatalf("steer terminal owner events: %v", err)
 	}

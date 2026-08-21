@@ -59,7 +59,7 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 	}
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	if _, err := eng.runStepLoop(context.Background(), "step-1"); err != nil {
+	if _, err := eng.runStepLoop(context.Background(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("first runStepLoop: %v", err)
 	}
 	restoreStep()
@@ -76,7 +76,7 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 	}
 
 	restoreStep = setTestActiveStep(eng, "step-2")
-	msg, err := eng.runStepLoop(context.Background(), "step-2")
+	msg, err := eng.runStepLoop(context.Background(), runtimeTestStepID("step-2"))
 	restoreStep()
 	if err != nil {
 		t.Fatalf("second runStepLoop: %v", err)
@@ -702,7 +702,7 @@ func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsF
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	msg, err := eng.runStepLoop(context.Background(), "step-1")
+	msg, err := eng.runStepLoop(context.Background(), runtimeTestStepID("step-1"))
 	restoreStep()
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
@@ -784,7 +784,7 @@ func TestRunStepLoopInjectsReminderBeforeTriggerHandoff(t *testing.T) {
 	eng.setLastUsage(llm.Usage{InputTokens: 8_900, WindowTokens: 20_000})
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	msg, err := eng.runStepLoop(context.Background(), "step-1")
+	msg, err := eng.runStepLoop(context.Background(), runtimeTestStepID("step-1"))
 	restoreStep()
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
@@ -829,7 +829,7 @@ func TestCacheWarningSteeringPropagatesCommittedAppendError(t *testing.T) {
 
 	observer.armed = true
 	restoreStep := setTestActiveStep(eng, "step-1")
-	err := eng.steer("step-1", steeringIntent{items: []steeringMutation{&steeringCacheWarning{
+	err := eng.steer(runtimeTestStepID("step-1"), steeringIntent{items: []steeringMutation{&steeringCacheWarning{
 		warning: transcript.CacheWarning{
 			Scope:  transcript.CacheWarningScopeConversation,
 			Reason: transcript.CacheWarningReasonCompaction,
@@ -856,7 +856,7 @@ func TestRunStepLoopBailsOnCanceledContextWithoutModelCall(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := eng.runStepLoop(ctx, "step-1")
+	_, err := eng.runStepLoop(ctx, runtimeTestStepID("step-1"))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("runStepLoop err = %v, want context.Canceled", err)
 	}

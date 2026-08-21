@@ -275,7 +275,7 @@ func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
 
 	restoreStep := setTestActiveStep(eng, "step-1")
 	defer restoreStep()
-	if err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{Visibility: transcript.EntryVisibilityAuto, Role: "reviewer_suggestions", Text: "Supervisor suggested:\n1. Add verification notes.", CondensedText: textutil.Value("Supervisor made 1 suggestion.")})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerLocalEntryIntent(storedLocalEntry{Visibility: transcript.EntryVisibilityAuto, Role: "reviewer_suggestions", Text: "Supervisor suggested:\n1. Add verification notes.", CondensedText: textutil.Value("Supervisor made 1 suggestion.")})); err != nil {
 		t.Fatalf("append persisted local entry: %v", err)
 	}
 	if got := len(events); got != 1 {
@@ -302,7 +302,7 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 		Reviewer: ReviewerConfig{Model: "gpt-5"},
 	})
 	restorePrepStep := setTestActiveStep(eng, "prep-1")
-	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first request")}})); err != nil {
+	if err := eng.steer(runtimeTestStepID("prep-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first request")}})); err != nil {
 		t.Fatalf("append first message: %v", err)
 	}
 	restorePrepStep()
@@ -374,7 +374,7 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 
 	restoreStep := setTestActiveStep(eng, "step-1")
 	defer restoreStep()
-	_, err := eng.runStepLoop(context.Background(), "step-1")
+	_, err := eng.runStepLoop(context.Background(), runtimeTestStepID("step-1"))
 	if err == nil {
 		t.Fatal("expected runStepLoop to fail when reviewer status persistence fails")
 	}
@@ -592,7 +592,7 @@ func TestAppendPersistedLocalEntryRejectsInvalidRecords(t *testing.T) {
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := eng.steer("step-1", steerLocalEntryIntent(test.entry)); err == nil {
+			if err := eng.steer(runtimeTestStepID("step-1"), steerLocalEntryIntent(test.entry)); err == nil {
 				t.Fatal("invalid local entry persistence succeeded")
 			}
 			events, err := collectTestEventRecords(store)

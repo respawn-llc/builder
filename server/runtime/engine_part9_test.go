@@ -74,7 +74,7 @@ func TestCriticalExactRecountsAfterToolCompletionBeforeToolMessageAppend(t *test
 	restoreStep := setTestActiveStep(eng, "step")
 	defer restoreStep()
 	call := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
-	if err := eng.steer("step", steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step"), steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
 		t.Fatalf("append assistant tool call: %v", err)
 	}
 	if precise, ok := eng.currentInputTokensPrecisely(context.Background()); !ok || precise != 100 {
@@ -344,7 +344,7 @@ func TestRestoreMessagesPreservesRecoveredMultiToolExactTokenParity(t *testing.T
 	defer restoreStep()
 	call1 := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
 	call2 := llm.ToolCall{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ls"}`)}
-	if err := live.steer("step", steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}})); err != nil {
+	if err := live.steer(runtimeTestStepID("step"), steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}})); err != nil {
 		t.Fatalf("append live assistant tool calls: %v", err)
 	}
 	if _, err := live.executeToolCalls(context.Background(), "step", []llm.ToolCall{call1, call2}); err != nil {

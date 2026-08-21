@@ -556,23 +556,11 @@ func steerCacheObservationIntent(records []session.EventRecordPayload, response 
 }
 
 type steeringProvenance struct {
-	exactStep *exactStepIdentity
-}
-
-type exactStepIdentity struct {
-	value string
-}
-
-func newExactStepIdentity(stepID string) (exactStepIdentity, error) {
-	stepID = strings.TrimSpace(stepID)
-	if stepID == "" {
-		return exactStepIdentity{}, errors.New("exact Step identity is required")
-	}
-	return exactStepIdentity{value: stepID}, nil
+	exactStep *runtimeids.StepID
 }
 
 func exactSteeringProvenance(stepID string) (steeringProvenance, error) {
-	identity, err := newExactStepIdentity(stepID)
+	identity, err := runtimeids.ParseStepID(stepID)
 	if err != nil {
 		return steeringProvenance{}, err
 	}
@@ -587,7 +575,7 @@ func (p steeringProvenance) stepID() *string {
 	if p.exactStep == nil {
 		return nil
 	}
-	stepID := p.exactStep.value
+	stepID := p.exactStep.String()
 	return &stepID
 }
 
@@ -595,18 +583,18 @@ func (p steeringProvenance) requireExactStepID() (string, error) {
 	if p.exactStep == nil {
 		return "", errors.New("steering intent requires exact Step provenance")
 	}
-	return p.exactStep.value, nil
+	return p.exactStep.String(), nil
 }
 
 func requireExactSteeringStepID(stepID *string) (string, error) {
 	if stepID == nil {
 		return "", errors.New("steering intent requires exact Step provenance")
 	}
-	identity, err := newExactStepIdentity(*stepID)
+	identity, err := runtimeids.ParseStepID(*stepID)
 	if err != nil {
 		return "", errors.New("steering intent requires exact Step provenance")
 	}
-	return identity.value, nil
+	return identity.String(), nil
 }
 
 func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
@@ -632,13 +620,6 @@ func (e *Engine) steerRuntime(intents ...steeringIntent) error {
 }
 
 func (e *Engine) steerInterruption(intents ...steeringIntent) error {
-	if e == nil || e.closed.Load() {
-		return ErrEngineClosed
-	}
-	return e.steerOrdered(sessionSteeringProvenance(), intents...)
-}
-
-func (e *Engine) steerDormant(intents ...steeringIntent) error {
 	if e == nil || e.closed.Load() {
 		return ErrEngineClosed
 	}

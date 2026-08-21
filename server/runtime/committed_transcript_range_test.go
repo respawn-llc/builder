@@ -56,21 +56,16 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 			{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 		},
 	}
-	if err := engine.steer(
-		"step",
-		steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-			true,
-			[]llm.Message{assistant},
-		),
+	if err := engine.steer(runtimeTestStepID("step"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+		true,
+		[]llm.Message{assistant},
+	),
 	); err != nil {
 		t.Fatalf("persist assistant message: %v", err)
 	}
 	assistantEntries := TranscriptEntriesFromEvent(Event{Kind: EventAssistantMessage, Message: assistant})
 	assistantStart := engine.CommittedTranscriptEntryCount() - len(assistantEntries)
-	if err := engine.steer(
-		"step",
-		steerCommittedAssistantMessageIntent(assistant, &committedAssistantCoordinate{start: assistantStart}),
-	); err != nil {
+	if err := engine.steer(runtimeTestStepID("step"), steerCommittedAssistantMessageIntent(assistant, &committedAssistantCoordinate{start: assistantStart})); err != nil {
 		t.Fatalf("publish assistant message: %v", err)
 	}
 
@@ -136,12 +131,10 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 	); err != nil {
 		t.Fatalf("materialize final-answer tool call: %v", err)
 	}
-	if err := engine.steer(
-		"step",
-		steerLocalEntryIntent(storedLocalEntry{
-			Role: string(transcript.EntryRoleReasoning),
-			Text: "reasoning",
-		}),
+	if err := engine.steer(runtimeTestStepID("step"), steerLocalEntryIntent(storedLocalEntry{
+		Role: string(transcript.EntryRoleReasoning),
+		Text: "reasoning",
+	}),
 	); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
@@ -207,7 +200,7 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 	)
 	restoreStep := setTestActiveStep(engine, "step")
 	defer restoreStep()
-	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
+	if _, err := engine.runStepLoopWithOptions(context.Background(), runtimeTestStepID("step"), "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -279,7 +272,7 @@ func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
 	restoreStep := setTestActiveStep(engine, "step")
 	defer restoreStep()
 
-	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
+	if _, err := engine.runStepLoopWithOptions(context.Background(), runtimeTestStepID("step"), "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -541,31 +534,27 @@ func TestHistoryReplacementPublishesPreservedUserMessageBeforeFollowingLocalEntr
 	if !ok {
 		t.Fatal("expected typed compaction-preserved user message")
 	}
-	if err := engine.steer(
-		"compaction",
-		steerHistoryReplacementIntent(
-			"local",
-			compactionModeManual,
-			1,
-			nil,
-			llm.ItemsFromMessages([]llm.Message{
-				{
-					Role:        llm.RoleUser,
-					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-					Content:     textutil.Value("summary"),
-				},
-				carryover,
-			}),
-		),
+	if err := engine.steer(runtimeTestStepID("compaction"), steerHistoryReplacementIntent(
+		"local",
+		compactionModeManual,
+		1,
+		nil,
+		llm.ItemsFromMessages([]llm.Message{
+			{
+				Role:        llm.RoleUser,
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				Content:     textutil.Value("summary"),
+			},
+			carryover,
+		}),
+	),
 	); err != nil {
 		t.Fatalf("persist manual history replacement: %v", err)
 	}
-	if err := engine.steer(
-		"compaction",
-		steerLocalEntryIntent(storedLocalEntry{
-			Role: string(transcript.EntryRoleSystem),
-			Text: "notice",
-		}),
+	if err := engine.steer(runtimeTestStepID("compaction"), steerLocalEntryIntent(storedLocalEntry{
+		Role: string(transcript.EntryRoleSystem),
+		Text: "notice",
+	}),
 	); err != nil {
 		t.Fatalf("append following local entry: %v", err)
 	}

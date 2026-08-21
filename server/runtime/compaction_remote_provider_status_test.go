@@ -35,13 +35,13 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 		ContextWindowTokens: 2_500,
 	})
 	restoreStep := setTestActiveStep(engine, "input")
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 			ID:    "call-1",
@@ -51,7 +51,7 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 	)); err != nil {
 		t.Fatalf("persist tool call: %v", err)
 	}
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{
 			Role:       llm.RoleTool,
@@ -168,7 +168,7 @@ func newRemoteCompactionFixture(
 		CompactionMode: "native",
 	})
 	restoreStep := setTestActiveStep(engine, "input")
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {

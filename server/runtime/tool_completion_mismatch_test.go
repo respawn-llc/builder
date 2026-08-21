@@ -55,7 +55,7 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 		}
 	}()
 
-	_, _ = engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+	_, _ = engine.steerWithCommitReceipt(runtimeTestStepID("step-delete"), steerToolCompletionIntent(result))
 }
 
 func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testing.T) {
@@ -68,7 +68,7 @@ func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testin
 	defer restoreStep()
 	result := mismatchedDeletionCompletion(t, engine)
 
-	if err := engine.steer("step-delete", steerToolCompletionIntent(result)); err != nil {
+	if err := engine.steer(runtimeTestStepID("step-delete"), steerToolCompletionIntent(result)); err != nil {
 		t.Fatalf("persist release fallback: %v", err)
 	}
 	assertDeletionMismatchFallback(t, engine, store, result)
@@ -94,7 +94,7 @@ func TestToolCompletionDeletionMismatchDoesNotApplyUncommittedFallback(t *testin
 	emitted = nil
 	blocker := mustBlockTestEventLogAppends(t, store)
 
-	receipt, err := engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+	receipt, err := engine.steerWithCommitReceipt(runtimeTestStepID("step-delete"), steerToolCompletionIntent(result))
 	if err == nil || receipt.Committed {
 		t.Fatalf("uncommitted fallback outcome: receipt=%+v err=%v", receipt, err)
 	}
@@ -138,7 +138,7 @@ func TestToolCompletionDeletionMismatchAppliesCommittedFallbackAfterObserverErro
 	emitted = nil
 	gate.FailNext(observerErr)
 
-	receipt, err := engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+	receipt, err := engine.steerWithCommitReceipt(runtimeTestStepID("step-delete"), steerToolCompletionIntent(result))
 	if !receipt.Committed || !errors.Is(err, observerErr) {
 		t.Fatalf("committed fallback outcome: receipt=%+v err=%v", receipt, err)
 	}
@@ -214,15 +214,13 @@ func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 		CustomInput: textutil.Value("*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"),
 	}
 	normalized := normalizeToolCallForTranscript(call, engine.transcriptWorkingDir())
-	if err := engine.steer(
-		"step-delete",
-		steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-			true,
-			[]llm.Message{{
-				Role:      llm.RoleAssistant,
-				ToolCalls: []llm.ToolCall{normalized},
-			}},
-		),
+	if err := engine.steer(runtimeTestStepID("step-delete"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+		true,
+		[]llm.Message{{
+			Role:      llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{normalized},
+		}},
+	),
 	); err != nil {
 		t.Fatalf("persist deletion call: %v", err)
 	}

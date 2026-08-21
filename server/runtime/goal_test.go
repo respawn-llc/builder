@@ -108,7 +108,7 @@ func TestExactAgentGoalSetDrainsAfterToolCompletion(t *testing.T) {
 			Name: string(toolspec.ToolExecCommand),
 		}},
 	}
-	if err := engine.steer(stepID.String(), steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{assistant})); err != nil {
+	if err := engine.steer(runtimeTestStepID(stepID.String()), steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{assistant})); err != nil {
 		t.Fatalf("append assistant tool call: %v", err)
 	}
 	result := tools.Result{
@@ -117,7 +117,7 @@ func TestExactAgentGoalSetDrainsAfterToolCompletion(t *testing.T) {
 		Output:  json.RawMessage(`{"output":"ok","exit_code":0,"truncated":false}`),
 		Summary: textutil.Value("ok"),
 	}
-	if err := engine.steer(stepID.String(), steerToolCompletionIntent(result)); err != nil {
+	if err := engine.steer(runtimeTestStepID(stepID.String()), steerToolCompletionIntent(result)); err != nil {
 		t.Fatalf("append tool completion: %v", err)
 	}
 	engine.drainSteeringAtBoundary(context.Background(), stepID.String())
@@ -405,7 +405,7 @@ func TestActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *testing.T
 		t.Fatalf("SetGoal: %v", err)
 	}
 
-	_, err := engine.runStepLoop(t.Context(), "step-1")
+	_, err := engine.runStepLoop(t.Context(), runtimeTestStepID("step-1"))
 	if !errors.Is(err, ErrGoalRequiresAskQuestion) {
 		t.Fatalf("runStepLoop error = %v, want ErrGoalRequiresAskQuestion", err)
 	}
@@ -440,7 +440,7 @@ func TestActiveGoalAllowsModelTurnWithAskQuestionEnabled(t *testing.T) {
 		t.Fatalf("SetGoal: %v", err)
 	}
 
-	if _, err := engine.runStepLoop(t.Context(), "step-1"); err != nil {
+	if _, err := engine.runStepLoop(t.Context(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
@@ -459,7 +459,7 @@ func TestActiveGoalAllowsModelTurnWithQuestionsDisabledWhenAskQuestionToolVisibl
 		t.Fatalf("SetGoal: %v", err)
 	}
 
-	if _, err := engine.runStepLoop(t.Context(), "step-1"); err != nil {
+	if _, err := engine.runStepLoop(t.Context(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("runStepLoop with questions disabled: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
@@ -1122,7 +1122,7 @@ func completeGoalFromActiveStep(engine *Engine) {
 	if active == nil {
 		return
 	}
-	_ = engine.steer(active.StepID, steeringIntent{items: []steeringMutation{
+	_ = engine.steer(runtimeTestStepID(active.StepID), steeringIntent{items: []steeringMutation{
 		&steeringGoalMutation{mutation: GoalMutation{
 			Kind:   GoalMutationStatus,
 			Status: session.GoalStatusComplete,

@@ -154,10 +154,7 @@ func TestExactOutputCallbackDoesNotHoldLifecycleLock(t *testing.T) {
 
 	steerDone := make(chan error, 1)
 	go func() {
-		steerDone <- engine.steer(
-			lifecycle.active.stepID,
-			steerEventIntent(Event{Kind: EventStreamingErrorUpdated}),
-		)
+		steerDone <- engine.steer(runtimeTestStepID(lifecycle.active.stepID), steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 	}()
 	select {
 	case <-callbackStarted:
@@ -199,7 +196,7 @@ func TestRuntimeSteeringRejectsClosedEngineWithoutQueueing(t *testing.T) {
 	}
 }
 
-func TestBackgroundProviderStepProtectsRuntimeMutationUntilBoundary(t *testing.T) {
+func TestBackgroundFinalAnswerDoesNotStrandRuntimeMutationFIFO(t *testing.T) {
 	providerStarted := make(chan struct{})
 	releaseProvider := make(chan struct{})
 	client := &hookClient{
@@ -240,8 +237,11 @@ func TestBackgroundProviderStepProtectsRuntimeMutationUntilBoundary(t *testing.T
 	}()
 	select {
 	case err := <-mutationDone:
-		t.Fatalf("Runtime mutation completed during protected background provider Step: %v", err)
-	case <-time.After(25 * time.Millisecond):
+		if err != nil {
+			t.Fatalf("apply Runtime mutation during background provider request: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background provider request blocked an unrelated Runtime mutation")
 	}
 
 	close(releaseProvider)
@@ -252,14 +252,6 @@ func TestBackgroundProviderStepProtectsRuntimeMutationUntilBoundary(t *testing.T
 		}
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for background final answer")
-	}
-	select {
-	case err := <-mutationDone:
-		if err != nil {
-			t.Fatalf("apply Runtime mutation at background Step Boundary: %v", err)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Runtime mutation at background Step Boundary")
 	}
 	if err := engine.SetThinkingLevel("medium"); err != nil {
 		t.Fatalf("apply Runtime mutation after background final answer: %v", err)

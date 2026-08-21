@@ -327,7 +327,7 @@ func steerDanglingToolCall(t *testing.T, engine *Engine, stepID string, call llm
 	t.Helper()
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
-	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+	if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
 	)); err != nil {

@@ -217,14 +217,12 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		Output: json.RawMessage(`{"ok":"completed only in memory"}`),
 	}
 	var outcome *resultGroupReportOutcome
-	if err := engine.steer(
-		stepID,
-		steerResultGroupReportIntent(
-			collector,
-			calls[1].ID,
-			resultGroupUnit{result: laterResult},
-			&outcome,
-		),
+	if err := engine.steer(runtimeTestStepID(stepID), steerResultGroupReportIntent(
+		collector,
+		calls[1].ID,
+		resultGroupUnit{result: laterResult},
+		&outcome,
+	),
 	); err != nil || outcome == nil || *outcome != resultGroupReportAccepted {
 		t.Fatalf("report later crash result = outcome:%v error:%v", outcome, err)
 	}

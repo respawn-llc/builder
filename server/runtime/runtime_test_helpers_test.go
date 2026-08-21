@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 func newTestToolRegistry(t testing.TB, registrations ...tools.HandlerRegistration) *tools.Registry {
@@ -56,6 +59,19 @@ type testPersistedEvent struct {
 }
 
 const runtimeTestSynchronizationTimeout = 30 * time.Second
+
+var runtimeTestStepIDs sync.Map
+
+func runtimeTestStepID(seed string) string {
+	if parsed, err := runtimeids.ParseStepID(seed); err == nil {
+		return parsed.String()
+	}
+	if seed == "" {
+		panic("runtime test Step identity seed is required")
+	}
+	stepID, _ := runtimeTestStepIDs.LoadOrStore(seed, uuid.NewString())
+	return stepID.(string)
+}
 
 func withGenerateRetryDelays(t *testing.T, delays []time.Duration) {
 	t.Helper()
@@ -275,6 +291,7 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 }
 
 func setTestActiveStep(engine *Engine, stepID string) func() {
+	stepID = runtimeTestStepID(stepID)
 	previous := engine.stepLifecycle
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{
 		activeStepID: stepID,
@@ -290,6 +307,7 @@ func setTestActiveStep(engine *Engine, stepID string) func() {
 }
 
 func steerTestActiveStep(engine *Engine, stepID string, intents ...steeringIntent) error {
+	stepID = runtimeTestStepID(stepID)
 	restore := setTestActiveStep(engine, stepID)
 	defer restore()
 	return engine.steer(stepID, intents...)
@@ -308,6 +326,7 @@ func generateTestActiveStep(
 	client llm.Client,
 	request llm.Request,
 ) (llm.Response, error) {
+	stepID = runtimeTestStepID(stepID)
 	restore := setTestActiveStep(engine, stepID)
 	defer restore()
 	return engine.generateWithRetryClient(ctx, stepID, client, request, nil, nil, nil)
@@ -319,6 +338,7 @@ func runReviewerSuggestionsTestActiveStep(
 	stepID string,
 	client llm.Client,
 ) (reviewerSuggestionsResult, error) {
+	stepID = runtimeTestStepID(stepID)
 	restore := setTestActiveStep(engine, stepID)
 	defer restore()
 	return engine.runReviewerSuggestions(ctx, stepID, client)
@@ -330,7 +350,7 @@ func runStepLoopInActiveTestRun(
 	engine *Engine,
 ) (llm.Message, error) {
 	t.Helper()
-	const stepID = "test-step"
+	stepID := runtimeTestStepID("test-step")
 	restore := setTestActiveStep(engine, stepID)
 	defer restore()
 	return engine.runStepLoop(ctx, stepID)

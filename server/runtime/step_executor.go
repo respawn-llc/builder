@@ -272,10 +272,12 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 			return stepLoopResult{}, err
 		}
-		if err := e.pauseRuntimeOperations(ctx); err != nil {
-			return stepLoopResult{}, err
+		if options.RuntimeMutationOwnership == stepLoopOwnsRuntimeMutations {
+			if err := e.pauseRuntimeOperations(ctx); err != nil {
+				return stepLoopResult{}, err
+			}
+			e.stepLifecycle.EndAgentStepBoundary()
 		}
-		e.stepLifecycle.EndAgentStepBoundary()
 		if terminal, err := s.workflowDurableCompletionTerminal(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		} else if terminal {
@@ -848,6 +850,9 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string, options stepLoopOptions) error {
 	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
 	s.engine.persistManualCompactEligibilityBestEffort(stepID, true)
+	if options.RuntimeMutationOwnership == stepLoopDoesNotOwnRuntimeMutations {
+		return nil
+	}
 	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 

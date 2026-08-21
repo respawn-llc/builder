@@ -25,7 +25,7 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 		{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 		{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 	}
-	if err := engine.steer("step-1", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: calls}},
 	)); err != nil {
@@ -38,7 +38,7 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 	liveLocators := make(map[string]transcript.CommittedRowLocator, len(results))
 	for _, result := range results {
 		before := len(events)
-		if err := engine.steer("step-1", steerToolCompletionIntent(result)); err != nil {
+		if err := engine.steer(runtimeTestStepID("step-1"), steerToolCompletionIntent(result)); err != nil {
 			t.Fatalf("persist tool completion %s: %v", result.CallID, err)
 		}
 		for _, event := range events[before:] {
@@ -57,7 +57,7 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 			Name:       textutil.Value(string(result.Name)),
 			Content:    textutil.Value(string(result.Output)),
 		}
-		if err := engine.steer("step-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+		if err := engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
 			[]llm.Message{mirror},
 		)); err != nil {

@@ -204,7 +204,7 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 		})
 		mustBlockTestEventLogAppends(t, store)
 
-		err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+		err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
 			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("uncommitted")}},
 		))
@@ -230,7 +230,7 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 		})
 		gate.FailNext(observerErr)
 
-		err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+		err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
 			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("committed")}},
 		))

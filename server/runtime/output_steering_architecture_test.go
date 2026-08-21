@@ -18,9 +18,7 @@ func TestResultGroupFlushConsumesWorkflowPostCompletionBoundaryOnlyAfterCommit(t
 	}
 	collector := testResultGroupCollector(t, "first", "second")
 	var secondOutcome *resultGroupReportOutcome
-	if err := engine.steer(
-		"step",
-		steerResultGroupReportIntent(collector, "second", testResultGroupUnit("second"), &secondOutcome),
+	if err := engine.steer(runtimeTestStepID("step"), steerResultGroupReportIntent(collector, "second", testResultGroupUnit("second"), &secondOutcome),
 		steerResultGroupFlushIntent(collector, ResultGroupFlushQuestion),
 	); err != nil {
 		t.Fatalf("flush blocked later result: %v", err)
@@ -29,9 +27,7 @@ func TestResultGroupFlushConsumesWorkflowPostCompletionBoundaryOnlyAfterCommit(t
 		t.Fatal("non-committing Result Group flush consumed the boundary")
 	}
 	var firstOutcome *resultGroupReportOutcome
-	if err := engine.steer(
-		"step",
-		steerResultGroupReportIntent(collector, "first", testResultGroupUnit("first"), &firstOutcome),
+	if err := engine.steer(runtimeTestStepID("step"), steerResultGroupReportIntent(collector, "first", testResultGroupUnit("first"), &firstOutcome),
 		steerResultGroupFlushIntent(collector, ResultGroupFlushQuestion),
 	); err != nil {
 		t.Fatalf("flush committed Result Group: %v", err)

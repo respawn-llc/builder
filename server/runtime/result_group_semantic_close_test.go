@@ -55,9 +55,9 @@ func TestSemanticCloseDoesNotRereportCompletedCellAndLeavesNoEmptySlot(t *testin
 	}
 	for _, call := range calls {
 		normalized := normalizeToolCallForTranscript(call, engine.transcriptWorkingDir())
-		if err := engine.steer("step", steerEventIntent(Event{
+		if err := engine.steer(runtimeTestStepID("step"), steerEventIntent(Event{
 			Kind:                       EventToolCallStarted,
-			StepID:                     exactStepIDPointer("step"),
+			StepID:                     exactStepIDPointer(runtimeTestStepID("step")),
 			ToolCall:                   &normalized,
 			CommittedTranscriptChanged: true,
 		})); err != nil {
@@ -77,7 +77,7 @@ func TestSemanticCloseDoesNotRereportCompletedCellAndLeavesNoEmptySlot(t *testin
 		Output: json.RawMessage(`{"ok":true}`),
 	}
 	var outcome *resultGroupReportOutcome
-	if err := engine.steer("step", steerResultGroupReportIntent(
+	if err := engine.steer(runtimeTestStepID("step"), steerResultGroupReportIntent(
 		collector,
 		first.CallID,
 		resultGroupUnit{result: first},

@@ -810,6 +810,20 @@ func (e *Engine) runStepLoop(ctx context.Context, stepID string) (llm.Message, e
 	return e.runStepLoopWithPendingUserInjectionObserver(ctx, stepID, nil)
 }
 
+func (e *Engine) runBackgroundStepLoop(ctx context.Context, stepID string) (llm.Message, error) {
+	reviewerFrequency := e.ReviewerFrequency()
+	reviewerClient := e.reviewerRuntimeState().Client()
+	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, nil, stepLoopDoesNotOwnRuntimeMutations)
+	outcome := userTurnResultFromStepLoop(result)
+	if outcome.Kind == UserTurnResultAssistantFinal && outcome.FinalAnswer != nil {
+		e.recordLiveRunAssistantFinalAnswer(stepID, *outcome.FinalAnswer)
+	}
+	if result.FinalAnswer == nil {
+		return llm.Message{}, err
+	}
+	return *result.FinalAnswer, err
+}
+
 func (e *Engine) runStepLoopWithPendingUserInjectionObserver(ctx context.Context, stepID string, onQueuedUserFlushCommitted func(session.CommitReceipt)) (llm.Message, error) {
 	result, err := e.runStepLoopWithPendingUserInjectionOutcomeObserver(ctx, stepID, onQueuedUserFlushCommitted)
 	if result.FinalAnswer == nil {
@@ -821,7 +835,7 @@ func (e *Engine) runStepLoopWithPendingUserInjectionObserver(ctx context.Context
 func (e *Engine) runStepLoopWithPendingUserInjectionOutcomeObserver(ctx context.Context, stepID string, onQueuedUserFlushCommitted func(session.CommitReceipt)) (stepLoopResult, error) {
 	reviewerFrequency := e.ReviewerFrequency()
 	reviewerClient := e.reviewerRuntimeState().Client()
-	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted)
+	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted, stepLoopOwnsRuntimeMutations)
 	outcome := userTurnResultFromStepLoop(result)
 	if outcome.Kind == UserTurnResultAssistantFinal && outcome.FinalAnswer != nil {
 		e.recordLiveRunAssistantFinalAnswer(stepID, *outcome.FinalAnswer)
@@ -835,16 +849,17 @@ func (e *Engine) runStepLoopWithPendingUserInjectionOutcomeObserver(ctx context.
 // resolution re-reads current runtime reviewer config so busy-time toggles (for
 // example from /supervisor) affect the currently running step at completion.
 func (e *Engine) runStepLoopWithOptions(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient llm.Client, refreshReviewerConfigOnResolve bool) (stepLoopResult, error) {
-	return e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, refreshReviewerConfigOnResolve, nil)
+	return e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, refreshReviewerConfigOnResolve, nil, stepLoopOwnsRuntimeMutations)
 }
 
-func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient llm.Client, refreshReviewerConfigOnResolve bool, onQueuedUserFlushCommitted func(session.CommitReceipt)) (stepLoopResult, error) {
+func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient llm.Client, refreshReviewerConfigOnResolve bool, onQueuedUserFlushCommitted func(session.CommitReceipt), runtimeMutationOwnership stepLoopRuntimeMutationOwnership) (stepLoopResult, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.stepFlow.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
 		ReviewerFrequency:              reviewerFrequency,
 		ReviewerClient:                 reviewerClient,
 		RefreshReviewerConfigOnResolve: refreshReviewerConfigOnResolve,
 		OnQueuedUserFlushCommitted:     onQueuedUserFlushCommitted,
+		RuntimeMutationOwnership:       runtimeMutationOwnership,
 	})
 }
 

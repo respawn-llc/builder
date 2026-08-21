@@ -179,7 +179,7 @@ func TestRunStepLoopMaterializesPendingWorktreeReminder(t *testing.T) {
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
 	if err := eng.stepLifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(ctx context.Context, stepID string) error {
-		_, err := eng.runStepLoop(ctx, stepID)
+		_, err := eng.runStepLoop(ctx, runtimeTestStepID(stepID))
 		return err
 	}); err != nil {
 		t.Fatalf("runStepLoop: %v", err)
@@ -255,7 +255,7 @@ func TestRunStepLoopCountsPendingWorktreeReminderBeforeAutoCompaction(t *testing
 	eng.setLastUsage(llm.Usage{InputTokens: 999, WindowTokens: 2_000})
 
 	if err := eng.stepLifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(ctx context.Context, stepID string) error {
-		_, err := eng.runStepLoop(ctx, stepID)
+		_, err := eng.runStepLoop(ctx, runtimeTestStepID(stepID))
 		return err
 	}); err != nil {
 		t.Fatalf("runStepLoop: %v", err)

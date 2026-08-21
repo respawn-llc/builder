@@ -261,7 +261,7 @@ func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t 
 			"future_agent_message": "continue",
 		}),
 	}
-	if err := engine.steer("handoff", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := engine.steer(runtimeTestStepID("handoff"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{
 			Role:      llm.RoleAssistant,
@@ -272,7 +272,7 @@ func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t 
 	)); err != nil {
 		t.Fatalf("persist trigger-handoff call: %v", err)
 	}
-	if err := engine.steer("handoff", steerToolCompletionIntent(tools.Result{
+	if err := engine.steer(runtimeTestStepID("handoff"), steerToolCompletionIntent(tools.Result{
 		CallID:  handoffCall.ID,
 		Name:    toolspec.ToolTriggerHandoff,
 		IsError: true,
@@ -555,7 +555,7 @@ func persistSuccessfulTriggerHandoff(t *testing.T, engine *Engine, callID string
 			"future_agent_message": "continue",
 		}),
 	}
-	if err := engine.steer("handoff", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := engine.steer(runtimeTestStepID("handoff"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{
 			Role:      llm.RoleAssistant,
@@ -566,7 +566,7 @@ func persistSuccessfulTriggerHandoff(t *testing.T, engine *Engine, callID string
 	)); err != nil {
 		t.Fatalf("persist trigger-handoff call: %v", err)
 	}
-	if err := engine.steer("handoff", steerToolCompletionIntent(tools.Result{
+	if err := engine.steer(runtimeTestStepID("handoff"), steerToolCompletionIntent(tools.Result{
 		CallID: handoffCall.ID,
 		Name:   toolspec.ToolTriggerHandoff,
 		Output: mustJSON(tools.TriggerHandoffResultPayload{

@@ -52,9 +52,7 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
 		func(ctx context.Context, stepID string) error {
 			_, err = engine.runStepLoopWithOptions(
-				ctx,
-				stepID,
-				"all",
+				ctx, runtimeTestStepID(stepID), "all",
 				&fakeClient{},
 				false,
 			)
@@ -98,8 +96,8 @@ func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *tes
 	}
 	engine.eventLog = session.MaterializedEventLog{}
 
-	err := engine.steer("11111111-1111-4111-8111-111111111111", steerEventIntent(Event{
-		Kind: EventReviewerStarted, StepID: exactStepIDPointer("11111111-1111-4111-8111-111111111111"),
+	err := engine.steer(runtimeTestStepID("11111111-1111-4111-8111-111111111111"), steerEventIntent(Event{
+		Kind: EventReviewerStarted, StepID: exactStepIDPointer(runtimeTestStepID("11111111-1111-4111-8111-111111111111")),
 	}))
 	if err == nil {
 		t.Fatal("Reviewer start publication unexpectedly succeeded")
@@ -131,10 +129,10 @@ func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
 			}
 		}
 	}
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)})); err != nil {
+	if err := engine.steer(runtimeTestStepID(stepID), steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(runtimeTestStepID(stepID))})); err != nil {
 		t.Fatalf("publish Reviewer start: %v", err)
 	}
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: exactStepIDPointer(stepID)})); err != nil {
+	if err := engine.steer(runtimeTestStepID(stepID), steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: exactStepIDPointer(runtimeTestStepID(stepID))})); err != nil {
 		t.Fatalf("publish Reviewer completion: %v", err)
 	}
 }
@@ -144,7 +142,7 @@ func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
 	stepID := "11111111-1111-4111-8111-111111111111"
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)})); err != nil {
+	if err := engine.steer(runtimeTestStepID(stepID), steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(runtimeTestStepID(stepID))})); err != nil {
 		t.Fatalf("publish Reviewer start: %v", err)
 	}
 	engine.eventLog = session.MaterializedEventLog{}
@@ -163,9 +161,9 @@ func TestReviewerCompletionFromFollowUpStepTerminalizesReviewerLifecycleStep(t *
 	followUpStepID := "22222222-2222-4222-8222-222222222222"
 	restoreStep := setTestActiveStep(engine, followUpStepID)
 	defer restoreStep()
-	if err := engine.steer(followUpStepID, steerEventIntent(Event{
+	if err := engine.steer(runtimeTestStepID(followUpStepID), steerEventIntent(Event{
 		Kind:   EventReviewerStarted,
-		StepID: exactStepIDPointer(reviewerStepID),
+		StepID: exactStepIDPointer(runtimeTestStepID(reviewerStepID)),
 	})); err != nil {
 		t.Fatalf("publish Reviewer start: %v", err)
 	}
@@ -264,7 +262,7 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 						context.Background(),
 						exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
 						func(ctx context.Context, stepID string) error {
-							_, runErr = engine.runStepLoopWithOptions(ctx, stepID, "all", &fakeClient{}, false)
+							_, runErr = engine.runStepLoopWithOptions(ctx, runtimeTestStepID(stepID), "all", &fakeClient{}, false)
 							return runErr
 						},
 					)
@@ -360,7 +358,7 @@ func (s *reviewerFactSteeringStub) RunFollowUp(
 	_ llm.Client,
 ) (reviewerFollowUpResult, error) {
 	s.before()
-	if err := s.engine.steer(stepID, s.intent()); err != nil {
+	if err := s.engine.steer(runtimeTestStepID(stepID), s.intent()); err != nil {
 		return reviewerFollowUpResult{}, err
 	}
 	return reviewerFollowUpResult{

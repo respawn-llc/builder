@@ -10,6 +10,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -38,7 +39,7 @@ type activeStepGoalMutation struct {
 }
 
 type goalStepExpectation struct {
-	exactStep *exactStepIdentity
+	exactStep *runtimeids.StepID
 }
 
 func anyActiveGoalStep() goalStepExpectation {
@@ -46,7 +47,7 @@ func anyActiveGoalStep() goalStepExpectation {
 }
 
 func exactGoalStep(stepID string) (goalStepExpectation, error) {
-	identity, err := newExactStepIdentity(stepID)
+	identity, err := runtimeids.ParseStepID(stepID)
 	if err != nil {
 		return goalStepExpectation{}, err
 	}
@@ -519,7 +520,7 @@ func (e *Engine) enqueueActiveStepGoalMutationForStep(expectation goalStepExpect
 		if stepID == "" {
 			return errors.New("active Step identity is required")
 		}
-		if expectation.exactStep != nil && stepID != expectation.exactStep.value {
+		if expectation.exactStep != nil && stepID != expectation.exactStep.String() {
 			return ErrAgentGoalStepInactive
 		}
 		e.activeStepGoalMutationsMu.Lock()
