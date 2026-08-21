@@ -147,25 +147,28 @@ func TestResolveRuntimeActivityTreatsOpenLiveRunGroupAsBlocking(t *testing.T) {
 	}
 }
 
-func TestCoordinatorSnapshotsPermitResponseOnlyVersionHoles(t *testing.T) {
-	cache := NewCoordinatorCache(4)
-	first, err := cache.Snapshot("session-1", ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
+func TestVersionSourcePermitsSequenceHoles(t *testing.T) {
+	source := NewVersionSource(1)
+	first, err := source.FeedSnapshot(func() (ResolverSnapshot, error) {
+		return ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}}, nil
+	})
 	if err != nil {
 		t.Fatalf("first snapshot: %v", err)
 	}
-	hole := cache.Next("session-1")
-	second, err := cache.Snapshot("session-1", ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
+	hole := source.Next()
+	second, err := source.FeedSnapshot(func() (ResolverSnapshot, error) {
+		return ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}}, nil
+	})
 	if err != nil {
 		t.Fatalf("second snapshot: %v", err)
 	}
 	if !hole.NewerThan(first.Version) || !second.Version.NewerThan(hole) {
-		t.Fatalf("versions did not preserve response-only hole ordering: first=%+v hole=%+v second=%+v", first.Version, hole, second.Version)
+		t.Fatalf("versions did not preserve hole ordering: first=%+v hole=%+v second=%+v", first.Version, hole, second.Version)
 	}
 }
 
-func TestCoordinatorBuildsCanonicalFeedSnapshot(t *testing.T) {
-	cache := NewCoordinatorCache(4)
-	update, err := cache.WithFeedSnapshot("session-feed", func() (ResolverSnapshot, error) {
+func TestVersionSourceBuildsCanonicalFeedSnapshot(t *testing.T) {
+	update, err := NewVersionSource(1).FeedSnapshot(func() (ResolverSnapshot, error) {
 		return ResolverSnapshot{
 			Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
 		}, nil
@@ -178,25 +181,6 @@ func TestCoordinatorBuildsCanonicalFeedSnapshot(t *testing.T) {
 	}
 	if update.Activity.State != clientui.RuntimeActivityRegisteredIdle || !update.Activity.QueueAccepting {
 		t.Fatalf("canonical activity = %+v", update.Activity)
-	}
-}
-
-func TestCoordinatorCacheEvictsDormantSessionsWithGenerationRollover(t *testing.T) {
-	cache := NewCoordinatorCache(1)
-	first := cache.Next("session-1")
-	_ = cache.Next("session-2")
-	second := cache.Next("session-1")
-	if first.Epoch != second.Epoch {
-		t.Fatalf("same cache epoch changed: first=%+v second=%+v", first, second)
-	}
-	if second.Generation == first.Generation {
-		t.Fatalf("recreated coordinator must receive a new generation, first=%+v second=%+v", first, second)
-	}
-	if cache.IsCurrent("session-1", first) {
-		t.Fatalf("old generation event must be rejected after eviction/recreate")
-	}
-	if !cache.IsCurrent("session-1", second) {
-		t.Fatalf("current generation event was rejected: %+v", second)
 	}
 }
 
