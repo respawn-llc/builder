@@ -454,9 +454,7 @@ func (d *startupGatewayDependencies) activationError(resp serverapi.OnboardingFi
 	}, err)
 }
 
-func (d *startupGatewayDependencies) activeCore() *core.Core {
-	return d.snapshot.Load().core
-}
+func (d *startupGatewayDependencies) activeCore() *core.Core { return d.snapshot.Load().core }
 
 func (d *startupGatewayDependencies) RequireCoreActive() error {
 	snapshot := d.snapshot.Load()
@@ -467,24 +465,14 @@ func (d *startupGatewayDependencies) RequireCoreActive() error {
 		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 	}
 	diagnostic := snapshot.activation.Error()
-	return serverapi.NewServerNotReadyError(
-		serverapi.ServerNotReadyActivationFailed,
-		serverapi.ServerNotReadyDetails{Diagnostic: &diagnostic},
-		snapshot.activation,
-	)
+	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{Diagnostic: &diagnostic}, snapshot.activation)
 }
 
-func (d *startupGatewayDependencies) DebugEnabled() bool {
-	return d.snapshot.Load().cfg.Settings.Debug
-}
+func (d *startupGatewayDependencies) DebugEnabled() bool { return d.snapshot.Load().cfg.Settings.Debug }
 
 func (d *startupGatewayDependencies) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
 	snapshot := d.snapshot.Load()
-	resp, err := serverstatus.NewServerStatusService(
-		d.authSupport.AuthManager,
-		snapshot.cfg,
-		nil,
-	).GetServerReadiness(ctx, req)
+	resp, err := serverstatus.NewServerStatusService(d.authSupport.AuthManager, snapshot.cfg, nil).GetServerReadiness(ctx, req)
 	if err != nil {
 		return serverapi.ServerReadinessResponse{}, err
 	}
@@ -509,9 +497,7 @@ func (d *startupGatewayDependencies) GetUpdateStatus(ctx context.Context, req se
 	}
 	snapshot := d.snapshot.Load()
 	if snapshot.core == nil {
-		return serverapi.UpdateStatusResponse{
-			Result: serverapi.CheckUnavailableUpdateStatusResult(),
-		}, nil
+		return serverapi.UpdateStatusResponse{Result: serverapi.CheckUnavailableUpdateStatusResult()}, nil
 	}
 	return snapshot.core.ServerStatusClient().GetUpdateStatus(ctx, req)
 }
@@ -541,12 +527,7 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 
 func (d *startupGatewayDependencies) AuthManager() *auth.Manager { return d.authSupport.AuthManager }
 func (d *startupGatewayDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
-	return authservice.NewBootstrapService(
-		d.authSupport.AuthManager,
-		d.authSupport.OAuthOptions,
-		d.snapshot.Load().cfg.Settings,
-		apicontract.AllowedPreAuthMethods(),
-	)
+	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, d.snapshot.Load().cfg.Settings, apicontract.AllowedPreAuthMethods())
 }
 func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusService {
 	return authservice.NewStatusService(d.authSupport.AuthManager, d.snapshot.Load().cfg.Settings)
@@ -554,9 +535,7 @@ func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusSe
 func (d *startupGatewayDependencies) CapabilityFactsClient() apicontract.CapabilityFactsService {
 	return capabilityfacts.NewService(capabilityfacts.Options{Config: d.snapshot.Load().cfg, AuthManager: d.authSupport.AuthManager})
 }
-func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStatusService {
-	return d
-}
+func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStatusService { return d }
 func (d *startupGatewayDependencies) ServerAuthRequired() bool {
 	return authservice.StartupAuthRequired(d.snapshot.Load().cfg.Settings)
 }
