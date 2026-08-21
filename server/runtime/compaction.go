@@ -160,33 +160,32 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 	accept CommandAcceptance,
 ) (session.CommitReceipt, error) {
 	e := c.engine
-	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[session.CommitReceipt], error) {
+	return awaitEngineRuntimeOperation(ctx, e, func(context.Context) (session.CommitReceipt, error) {
 		if snapshot := c.steps.Snapshot(); snapshot != nil &&
 			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
-			return runtimeDeferred[session.CommitReceipt]{}, ErrManualCompactionActive
+			return session.CommitReceipt{}, ErrManualCompactionActive
 		}
 		planningSnapshot := e.compactionPlanningSnapshot()
 		if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
-			return runtimeDeferred[session.CommitReceipt]{}, errCompactionDisabledModeNone
+			return session.CommitReceipt{}, errCompactionDisabledModeNone
 		}
 		reservation := &exclusiveStepReservation{
 			Kind:      exclusiveStepReservationManualCompaction,
 			queueable: true,
 		}
 		if err := c.steps.AcquireReservation(reservation); err != nil {
-			return runtimeDeferred[session.CommitReceipt]{}, err
+			return session.CommitReceipt{}, err
 		}
 		committed, acceptErr := runCommandAcceptance(accept, func() (bool, error) {
 			return true, nil
 		})
 		if err := commandAcceptanceResult(committed, acceptErr); err != nil {
 			c.steps.ReleaseReservation(reservation)
-			return runtimeDeferred[session.CommitReceipt]{}, err
+			return session.CommitReceipt{}, err
 		}
-		deferred := newRuntimeDeferred[session.CommitReceipt]()
 		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
 			defer c.steps.ReleaseReservation(reservation)
-			receipt, runErr := c.compactContext(
+			_, runErr := c.compactContext(
 				lifecycleCtx,
 				compactionModeManual,
 				instructions,
@@ -196,7 +195,6 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 				nil,
 				true,
 			)
-			deferred.complete(receipt, runErr)
 			fatal, abort := resultGroupFatalFromError(runErr)
 			if abort {
 				return fatal
@@ -205,14 +203,10 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 		})
 		if !launched {
 			c.steps.ReleaseReservation(reservation)
-			deferred.complete(session.CommitReceipt{}, ErrEngineClosed)
+			return session.CommitReceipt{}, ErrEngineClosed
 		}
-		return deferred, nil
+		return session.CommitReceipt{}, nil
 	})
-	if err != nil {
-		return session.CommitReceipt{}, err
-	}
-	return terminal.Await(ctx)
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
@@ -299,16 +293,19 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 		if requireEligibility {
 			planningSnapshot := e.compactionPlanningSnapshot()
 			if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
-				return errCompactionDisabledModeNone
+				return c.reportManualCompactionSelectionFailure(stepID, errCompactionDisabledModeNone)
 			}
 			if !e.compactionRuntimeState().ManualCompactionEligible() {
-				return ErrManualCompactionTooSoon
+				return c.reportManualCompactionSelectionFailure(stepID, ErrManualCompactionTooSoon)
 			}
 		}
 		if onActive != nil {
 			onActive()
 		}
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
+			if requireEligibility {
+				return c.reportManualCompactionSelectionFailure(stepID, err)
+			}
 			return err
 		}
 		_, compactReceipt, err := e.compactNowWithAcceptance(stepCtx, stepID, mode, instructions, includePreservedUserMessage, accept)
@@ -319,6 +316,23 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 		return err
 	})
 	return receipt, err
+}
+
+func (c *defaultContextCompactor) reportManualCompactionSelectionFailure(stepID string, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	emitErr := newCompactionPersistence(c.engine).emitStatus(
+		stepID,
+		EventCompactionFailed,
+		compactionModeManual,
+		"selector",
+		"unknown",
+		nil,
+		0,
+		cause.Error(),
+	)
+	return errors.Join(cause, emitErr)
 }
 
 func (e *Engine) autoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error {
@@ -486,16 +500,23 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		return compactionResult{}, session.CommitReceipt{}, nil
 	}
 
-	caps, err := e.providerCapabilities(ctx)
-	if err != nil {
-		return compactionResult{}, session.CommitReceipt{}, err
-	}
-	providerID := strings.TrimSpace(caps.ProviderID)
-	if providerID == "" {
-		providerID = "unknown"
+	providerID := "unknown"
+	persistence := newCompactionPersistence(e)
+	compactionFailure := func(result compactionResult, err error) error {
+		if accept != nil {
+			return err
+		}
+		return errors.Join(err, persistence.emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error()))
 	}
 
-	persistence := newCompactionPersistence(e)
+	caps, err := e.providerCapabilities(ctx)
+	if err != nil {
+		return compactionResult{}, session.CommitReceipt{}, compactionFailure(compactionResult{}, err)
+	}
+	if resolvedProviderID := strings.TrimSpace(caps.ProviderID); resolvedProviderID != "" {
+		providerID = resolvedProviderID
+	}
+
 	if err := persistence.setActivity(stepID, mode, e.compactionRuntimeState().Count()+1, true); err != nil {
 		return compactionResult{}, session.CommitReceipt{}, err
 	}
@@ -509,13 +530,6 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 			return compactionResult{}, session.CommitReceipt{}, err
 		}
 	}
-	compactionFailure := func(result compactionResult, err error) error {
-		if accept != nil {
-			return err
-		}
-		return errors.Join(err, persistence.emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error()))
-	}
-
 	instructions := compactionInstructionsForMode(mode, instructionsInput)
 	preservedUserMessageText := ""
 	if mode == compactionModeManual && includePreservedUserMessage {

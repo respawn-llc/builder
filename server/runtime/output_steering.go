@@ -556,24 +556,31 @@ func steerCacheObservationIntent(records []session.EventRecordPayload, response 
 }
 
 func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
-	if e.closed.Load() {
+	if e == nil || e.closed.Load() {
 		return ErrEngineClosed
 	}
-	if strings.TrimSpace(stepID) == "" && e.runtimeFIFO != nil {
-		_, err := awaitEngineRuntimeOperation(
-			context.Background(),
-			e,
-			func(context.Context) (struct{}, error) {
-				return struct{}{}, e.steerOrdered("", intents...)
-			},
-		)
-		return err
+	if strings.TrimSpace(stepID) == "" {
+		return errors.New("exact Step identity is required")
 	}
 	return e.steerOrdered(stepID, intents...)
 }
 
 func (e *Engine) steerRuntime(intents ...steeringIntent) error {
-	return e.steer("", intents...)
+	_, err := awaitEngineRuntimeOperation(
+		context.Background(),
+		e,
+		func(context.Context) (struct{}, error) {
+			return struct{}{}, e.steerOrdered("", intents...)
+		},
+	)
+	return err
+}
+
+func (e *Engine) steerInterruption(intents ...steeringIntent) error {
+	if e == nil || e.closed.Load() {
+		return ErrEngineClosed
+	}
+	return e.steerOrdered("", intents...)
 }
 
 func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) error {
@@ -584,16 +591,30 @@ func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) err
 }
 
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
-	if strings.TrimSpace(stepID) == "" && e.runtimeFIFO != nil {
-		return awaitEngineRuntimeOperation(
-			context.Background(),
-			e,
-			func(context.Context) (session.CommitReceipt, error) {
-				return e.steerWithCommitReceiptRaw("", intent)
-			},
-		)
+	if e == nil || e.closed.Load() {
+		return session.CommitReceipt{}, ErrEngineClosed
+	}
+	if strings.TrimSpace(stepID) == "" {
+		return session.CommitReceipt{}, errors.New("exact Step identity is required")
 	}
 	return e.steerWithCommitReceiptRaw(stepID, intent)
+}
+
+func (e *Engine) steerRuntimeWithCommitReceipt(intent steeringIntent) (session.CommitReceipt, error) {
+	return awaitEngineRuntimeOperation(
+		context.Background(),
+		e,
+		func(context.Context) (session.CommitReceipt, error) {
+			return e.steerWithCommitReceiptRaw("", intent)
+		},
+	)
+}
+
+func (e *Engine) steerDormantWithCommitReceipt(intent steeringIntent) (session.CommitReceipt, error) {
+	if e == nil {
+		return session.CommitReceipt{}, ErrEngineClosed
+	}
+	return e.steerWithCommitReceiptRaw("", intent)
 }
 
 func (e *Engine) steerWithCommitReceiptRaw(stepID string, intent steeringIntent) (session.CommitReceipt, error) {

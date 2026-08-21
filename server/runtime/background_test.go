@@ -199,6 +199,68 @@ func TestRuntimeSteeringRejectsClosedEngineWithoutQueueing(t *testing.T) {
 	}
 }
 
+func TestBackgroundFinalAnswerDoesNotStrandRuntimeMutationFIFO(t *testing.T) {
+	providerStarted := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	client := &hookClient{
+		response: llm.Response{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("background work handled"),
+			},
+		},
+		beforeReturn: func() error {
+			close(providerStarted)
+			<-releaseProvider
+			return nil
+		},
+	}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	scheduler := engine.backgroundFlow.(*defaultBackgroundNoticeScheduler)
+	scheduler.queueDeveloperNotice(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Content: textutil.Value("background process completed"),
+	}, false)
+
+	backgroundDone := make(chan error, 1)
+	go func() {
+		_, err := scheduler.runQueuedNotices(t.Context())
+		backgroundDone <- err
+	}()
+	select {
+	case <-providerStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for background provider request")
+	}
+
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- engine.SetThinkingLevel("low")
+	}()
+	select {
+	case err := <-mutationDone:
+		if err != nil {
+			t.Fatalf("apply Runtime mutation during background provider request: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background provider request blocked an unrelated Runtime mutation")
+	}
+
+	close(releaseProvider)
+	select {
+	case err := <-backgroundDone:
+		if err != nil {
+			t.Fatalf("background final answer: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for background final answer")
+	}
+	if err := engine.SetThinkingLevel("medium"); err != nil {
+		t.Fatalf("apply Runtime mutation after background final answer: %v", err)
+	}
+}
+
 func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *testing.T) {
 	for _, tt := range []struct {
 		name        string

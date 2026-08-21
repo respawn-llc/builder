@@ -15,16 +15,13 @@ var (
 )
 
 func (e *Engine) appendCommittedEntryWithCommitReceipt(entry storedLocalEntry) (session.CommitReceipt, error) {
-	if e != nil && e.runtimeFIFO != nil {
-		return awaitEngineRuntimeOperation(
-			context.Background(),
-			e,
-			func(context.Context) (session.CommitReceipt, error) {
-				return e.appendCommittedEntryWithCommitReceiptRaw(entry)
-			},
-		)
-	}
-	return e.appendCommittedEntryWithCommitReceiptRaw(entry)
+	return awaitEngineRuntimeOperation(
+		context.Background(),
+		e,
+		func(context.Context) (session.CommitReceipt, error) {
+			return e.appendCommittedEntryWithCommitReceiptRaw(entry)
+		},
+	)
 }
 
 func (e *Engine) appendCommittedEntryWithCommitReceiptRaw(entry storedLocalEntry) (session.CommitReceipt, error) {

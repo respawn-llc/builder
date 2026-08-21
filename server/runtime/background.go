@@ -69,7 +69,7 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 }
 
 func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
-	return b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
+	return b.engine.steerRuntime(steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
 }
 
 func (b *defaultBackgroundNoticeScheduler) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
@@ -299,7 +299,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		if flushed == 0 {
 			return nil
 		}
-		msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
+		msg, runErr := b.engine.runBackgroundStepLoop(stepCtx, stepID)
 		assistant = msg
 		return runErr
 	})

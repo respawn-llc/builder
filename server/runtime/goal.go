@@ -247,18 +247,18 @@ func (e *Engine) goalLoopRestartNeeded() bool {
 }
 
 func (e *Engine) SetGoal(objective string, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.setGoalForStep("", objective, actor)
+	return awaitEngineRuntimeOperation(
+		context.Background(),
+		e,
+		func(context.Context) (GoalCommandResult, error) {
+			return e.setGoalForStepRaw("", objective, actor)
+		},
+	)
 }
 
 func (e *Engine) setGoalForStep(stepID string, objective string, actor session.GoalActor) (GoalCommandResult, error) {
-	if strings.TrimSpace(stepID) == "" && e != nil && e.runtimeFIFO != nil {
-		return awaitEngineRuntimeOperation(
-			context.Background(),
-			e,
-			func(context.Context) (GoalCommandResult, error) {
-				return e.setGoalForStepRaw("", objective, actor)
-			},
-		)
+	if strings.TrimSpace(stepID) == "" {
+		return GoalCommandResult{}, errors.New("exact Step identity is required")
 	}
 	return e.setGoalForStepRaw(stepID, objective, actor)
 }
@@ -286,7 +286,7 @@ func (e *Engine) setGoalForStepRaw(stepID string, objective string, actor sessio
 }
 
 func (e *Engine) SetGoalStatus(status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.setGoalStatusForStep("", status, actor)
+	return e.setGoalStatusRuntime(status, actor, true)
 }
 
 func (e *Engine) setGoalStatusForStep(stepID string, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
@@ -294,20 +294,24 @@ func (e *Engine) setGoalStatusForStep(stepID string, status session.GoalStatus, 
 }
 
 func (e *Engine) SetGoalStatusWithoutGoalLoopStart(status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.setGoalStatusForStepWithGoalLoopAdmission("", status, actor, false)
+	return e.setGoalStatusRuntime(status, actor, false)
 }
 
 func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
-	if strings.TrimSpace(stepID) == "" && e != nil && e.runtimeFIFO != nil {
-		return awaitEngineRuntimeOperation(
-			context.Background(),
-			e,
-			func(context.Context) (GoalCommandResult, error) {
-				return e.setGoalStatusForStepWithGoalLoopAdmissionRaw("", status, actor, requireGoalLoopStart)
-			},
-		)
+	if strings.TrimSpace(stepID) == "" {
+		return GoalCommandResult{}, errors.New("exact Step identity is required")
 	}
 	return e.setGoalStatusForStepWithGoalLoopAdmissionRaw(stepID, status, actor, requireGoalLoopStart)
+}
+
+func (e *Engine) setGoalStatusRuntime(status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
+	return awaitEngineRuntimeOperation(
+		context.Background(),
+		e,
+		func(context.Context) (GoalCommandResult, error) {
+			return e.setGoalStatusForStepWithGoalLoopAdmissionRaw("", status, actor, requireGoalLoopStart)
+		},
+	)
 }
 
 func (e *Engine) setGoalStatusForStepWithGoalLoopAdmissionRaw(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
@@ -593,18 +597,18 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 }
 
 func (e *Engine) ClearGoal(actor session.GoalActor) (GoalCommandResult, error) {
-	return e.clearGoalForStep("", actor)
+	return awaitEngineRuntimeOperation(
+		context.Background(),
+		e,
+		func(context.Context) (GoalCommandResult, error) {
+			return e.clearGoalForStepRaw("", actor)
+		},
+	)
 }
 
 func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalCommandResult, error) {
-	if strings.TrimSpace(stepID) == "" && e != nil && e.runtimeFIFO != nil {
-		return awaitEngineRuntimeOperation(
-			context.Background(),
-			e,
-			func(context.Context) (GoalCommandResult, error) {
-				return e.clearGoalForStepRaw("", actor)
-			},
-		)
+	if strings.TrimSpace(stepID) == "" {
+		return GoalCommandResult{}, errors.New("exact Step identity is required")
 	}
 	return e.clearGoalForStepRaw(stepID, actor)
 }
@@ -630,9 +634,12 @@ func (e *Engine) clearGoalForStepRaw(stepID string, actor session.GoalActor) (Go
 	return result, err
 }
 
-func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
+func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepID string) {
 	if e == nil || e.store == nil {
 		return
+	}
+	if strings.TrimSpace(stepID) == "" {
+		panic("workflow completion Goal cascade requires exact Step identity")
 	}
 	if !e.WorkflowTerminalState().Completed {
 		return
@@ -642,7 +649,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		return
 	}
 	reportErr := func(err error) {
-		_ = e.steerOrdered("", steerLocalEntryIntent(storedLocalEntry{
+		_ = e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 			Text:       "Failed to auto-complete active goal on workflow completion: " + err.Error(),
@@ -663,7 +670,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		return
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	if _, err := e.steerGoalNoticeAndStatusRaw("", msg, goalStatusUpdateFromState(completed, availability)); err != nil {
+	if _, err := e.steerGoalNoticeAndStatusRaw(stepID, msg, goalStatusUpdateFromState(completed, availability)); err != nil {
 		reportErr(err)
 	}
 }
@@ -678,26 +685,6 @@ func goalStatusClearUpdate(availability *session.GoalAvailability) GoalStatusUpd
 
 func steerGoalStatusUpdateIntent(update GoalStatusUpdate) steeringIntent {
 	return steerEventIntent(Event{Kind: EventGoalStatusUpdated, GoalStatus: &update})
-}
-
-func (e *Engine) steerGoalNoticeAndStatus(
-	stepID string,
-	message llm.Message,
-	update GoalStatusUpdate,
-) (session.CommitReceipt, error) {
-	if e == nil || e.closed.Load() {
-		return session.CommitReceipt{}, ErrEngineClosed
-	}
-	if strings.TrimSpace(stepID) == "" && e.runtimeFIFO != nil {
-		return awaitEngineRuntimeOperation(
-			context.Background(),
-			e,
-			func(context.Context) (session.CommitReceipt, error) {
-				return e.steerGoalNoticeAndStatusRaw("", message, update)
-			},
-		)
-	}
-	return e.steerGoalNoticeAndStatusRaw(stepID, message, update)
 }
 
 func (e *Engine) steerGoalNoticeAndStatusRaw(
@@ -862,7 +849,7 @@ func (e *Engine) surfaceRunError(err error) {
 		if message == "" {
 			message = err.Error()
 		}
-		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
+		_ = e.steerRuntime(steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 			Text:       "Failed to persist run error: " + appendErr.Error(),
@@ -893,7 +880,7 @@ func (e *Engine) steerRuntimeErrorFeedback(err error) (string, error) {
 	if message == "" {
 		message = err.Error()
 	}
-	return message, e.steer("", steerLocalEntryIntent(storedLocalEntry{
+	return message, e.steerRuntime(steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 		Text:       message,

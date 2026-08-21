@@ -230,7 +230,7 @@ func SteerPersistedWorkflowAssignment(
 }
 
 func completePersistedWorkflowAssignment(engine *Engine, message llm.Message) WorkflowAssignmentSteer {
-	receipt, err := engine.steerWithCommitReceipt("", steerMessagesWithPersistenceIntent(
+	receipt, err := engine.steerDormantWithCommitReceipt(steerMessagesWithPersistenceIntent(
 		steeringPriorityRuntimeContext,
 		steeringMessageEventDefault,
 		true,

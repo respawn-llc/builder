@@ -44,7 +44,7 @@ func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
 		if err != nil {
 			t.Fatalf("build workflow assignment: %v", err)
 		}
-		receipt, waitErr := engine.steerWithCommitReceipt("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+		receipt, waitErr := engine.steerDormantWithCommitReceipt(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
 			[]llm.Message{message},
 		))

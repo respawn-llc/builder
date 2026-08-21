@@ -2,10 +2,13 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
 const maxPendingRuntimeOperations = 9_999
+
+var errRuntimeOperationFIFORequired = errors.New("active Runtime Engine requires a Runtime operation FIFO")
 
 type runtimeDeferred[T any] struct {
 	state *runtimeDeferredState[T]
@@ -121,13 +124,11 @@ func submitEngineRuntimeOperation[T any](
 	if engine == nil || engine.closed.Load() || operation == nil {
 		return completedRuntimeDeferred[T](ErrEngineClosed)
 	}
-	if engine.runtimeFIFO == nil {
-		deferred := newRuntimeDeferred[T]()
-		result, err := operation(context.Background())
-		deferred.complete(result, err)
-		return deferred
+	fifo, err := engine.requiredRuntimeOperationFIFO()
+	if err != nil {
+		return completedRuntimeDeferred[T](err)
 	}
-	return submitRuntimeOperation(engine.runtimeFIFO, operation)
+	return submitRuntimeOperation(fifo, operation)
 }
 
 func awaitEngineRuntimeOperation[T any](
@@ -139,21 +140,40 @@ func awaitEngineRuntimeOperation[T any](
 }
 
 func (e *Engine) pauseRuntimeOperations(ctx context.Context) error {
-	if e == nil || e.runtimeFIFO == nil {
-		return nil
+	fifo, err := e.requiredRuntimeOperationFIFO()
+	if err != nil {
+		return err
 	}
-	return e.runtimeFIFO.Pause(ctx)
+	return fifo.Pause(ctx)
 }
 
 func (e *Engine) drainRuntimeOperations(ctx context.Context) error {
-	if e == nil || e.runtimeFIFO == nil {
-		return nil
+	fifo, err := e.requiredRuntimeOperationFIFO()
+	if err != nil {
+		return err
 	}
-	return e.runtimeFIFO.Drain(ctx)
+	return fifo.Drain(ctx)
 }
 
 func (e *Engine) hasPendingRuntimeOperations() bool {
-	return e != nil && e.runtimeFIFO != nil && e.runtimeFIFO.Pending()
+	if e == nil {
+		return false
+	}
+	fifo, err := e.requiredRuntimeOperationFIFO()
+	if err != nil {
+		panic(err)
+	}
+	return fifo.Pending()
+}
+
+func (e *Engine) requiredRuntimeOperationFIFO() (*runtimeOperationFIFO, error) {
+	if e == nil {
+		return nil, ErrEngineClosed
+	}
+	if e.runtimeFIFO == nil {
+		return nil, errRuntimeOperationFIFORequired
+	}
+	return e.runtimeFIFO, nil
 }
 
 func (f *runtimeOperationFIFO) submit(operation runtimeOperation) bool {

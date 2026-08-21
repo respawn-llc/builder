@@ -69,7 +69,15 @@ type stepLoopOptions struct {
 	ReviewerClient                 llm.Client
 	RefreshReviewerConfigOnResolve bool
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
+	RuntimeMutationOwnership       stepLoopRuntimeMutationOwnership
 }
+
+type stepLoopRuntimeMutationOwnership uint8
+
+const (
+	stepLoopOwnsRuntimeMutations stepLoopRuntimeMutationOwnership = iota
+	stepLoopDoesNotOwnRuntimeMutations
+)
 
 func observeQueuedUserFlushCommit(options stepLoopOptions, receipt session.CommitReceipt) {
 	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {

@@ -18,8 +18,7 @@ func SteerPersistedMessage(
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return engine.steerWithCommitReceipt(
-		"",
+	return engine.steerDormantWithCommitReceipt(
 		steerMessagesWithPersistenceIntent(
 			steeringPriorityRuntimeContext,
 			steeringMessageEventDefault,

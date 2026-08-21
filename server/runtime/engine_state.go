@@ -297,7 +297,7 @@ func (e *Engine) ReportPromptHistoryPersistError(reason string) {
 	if reason == "" {
 		return
 	}
-	_ = e.steer("", steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
+	_ = e.steerRuntime(steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
 }
 
 func (e *Engine) ClearStreamingError() {

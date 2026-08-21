@@ -19,7 +19,7 @@ func (e *Engine) SteerWorktreeTransitionFailure(outcome clientui.WorktreeTransit
 		return errors.New("failed worktree transition outcome is required")
 	}
 	diagnostic := strings.TrimSpace(outcome.Failure.Diagnostic)
-	return e.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+	return e.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeErrorFeedback),
 		Content: textutil.Value(fmt.Sprintf(
