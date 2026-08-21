@@ -272,6 +272,9 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 			return stepLoopResult{}, err
 		}
+		if err := e.pauseRuntimeOperations(ctx); err != nil {
+			return stepLoopResult{}, err
+		}
 		e.stepLifecycle.EndAgentStepBoundary()
 		if terminal, err := s.workflowDurableCompletionTerminal(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
@@ -845,9 +848,6 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string) error {
 	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
 	s.engine.persistManualCompactEligibilityBestEffort(stepID, true)
-	if err := s.engine.flushPendingWorkflowAssignments(stepID); err != nil {
-		return err
-	}
 	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 

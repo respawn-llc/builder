@@ -242,6 +242,20 @@ func (e *Engine) QueueAgentSteerForActiveRun(ctx context.Context, steer AgentSte
 }
 
 func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
+		item     QueuedUserMessage
+		accepted bool
+	}, error) {
+		item, accepted, operationErr := e.queueMessageForActiveRunRaw(ctx, message, onActive, beforeQueue, accept)
+		return struct {
+			item     QueuedUserMessage
+			accepted bool
+		}{item: item, accepted: accepted}, operationErr
+	})
+	return result.item, result.accepted, err
+}
+
+func (e *Engine) queueMessageForActiveRunRaw(ctx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
 	if e == nil {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}

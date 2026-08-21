@@ -149,6 +149,11 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 	if err != nil {
 		return err
 	}
+	if isAgentStepCapable(options.ActiveKind) {
+		if pauseErr := s.engine.pauseRuntimeOperations(ctx); pauseErr != nil {
+			return s.finishStep(stepID, options, pauseErr)
+		}
+	}
 	if options.EmitRunState {
 		if snapshot := s.Snapshot(); snapshot != nil {
 			s.engine.beginLiveRunStep(snapshot)
@@ -172,15 +177,18 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 }
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
+	if isAgentStepCapable(options.ActiveKind) {
+		if drainErr := s.engine.drainRuntimeOperations(context.Background()); drainErr != nil &&
+			!errors.Is(drainErr, ErrEngineClosed) {
+			err = errors.Join(err, fmt.Errorf("drain Runtime operations at agent Step Boundary: %w", drainErr))
+		}
+	}
 	s.closeActiveStepQueue(stepID)
 	if fatal, ok := resultGroupFatalFromError(err); ok {
 		return s.finishRuntimeAbort(stepID, options, fatal)
 	}
 	if clearReasoningErr := s.engine.steer(stepID, steerClearReasoningStateIntent()); clearReasoningErr != nil {
 		err = errors.Join(err, fmt.Errorf("clear reasoning state at agent step termination: %w", clearReasoningErr))
-	}
-	if assignmentErr := s.engine.flushPendingWorkflowAssignments(stepID); assignmentErr != nil {
-		err = errors.Join(err, fmt.Errorf("flush workflow assignments: %w", assignmentErr))
 	}
 	if drainErr := s.engine.drainActiveStepGoalMutations(stepID); drainErr != nil {
 		err = errors.Join(err, fmt.Errorf("drain active-step goal mutations: %w", drainErr))
@@ -744,6 +752,9 @@ func (s *defaultExclusiveStepLifecycle) waitForPublicationLocked() {
 }
 
 func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Context) error {
+	if err := s.engine.drainRuntimeOperations(ctx); err != nil {
+		return err
+	}
 	for {
 		s.mu.Lock()
 		if s.active == nil || !isAgentStepCapable(s.active.activeKind) ||

@@ -150,7 +150,69 @@ func (c *defaultContextCompactor) CompactContextWithAcceptance(ctx context.Conte
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return c.compactManualContext(ctx, instructions, onActive, accept, true)
+	return c.scheduleManualCompaction(ctx, instructions, onActive, accept)
+}
+
+func (c *defaultContextCompactor) scheduleManualCompaction(
+	ctx context.Context,
+	instructions compactionInstructionsInput,
+	onActive func(),
+	accept CommandAcceptance,
+) (session.CommitReceipt, error) {
+	e := c.engine
+	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[session.CommitReceipt], error) {
+		if snapshot := c.steps.Snapshot(); snapshot != nil &&
+			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
+			return runtimeDeferred[session.CommitReceipt]{}, ErrManualCompactionActive
+		}
+		planningSnapshot := e.compactionPlanningSnapshot()
+		if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
+			return runtimeDeferred[session.CommitReceipt]{}, errCompactionDisabledModeNone
+		}
+		reservation := &exclusiveStepReservation{
+			Kind:      exclusiveStepReservationManualCompaction,
+			queueable: true,
+		}
+		if err := c.steps.AcquireReservation(reservation); err != nil {
+			return runtimeDeferred[session.CommitReceipt]{}, err
+		}
+		committed, acceptErr := runCommandAcceptance(accept, func() (bool, error) {
+			return true, nil
+		})
+		if err := commandAcceptanceResult(committed, acceptErr); err != nil {
+			c.steps.ReleaseReservation(reservation)
+			return runtimeDeferred[session.CommitReceipt]{}, err
+		}
+		deferred := newRuntimeDeferred[session.CommitReceipt]()
+		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+			defer c.steps.ReleaseReservation(reservation)
+			receipt, runErr := c.compactContext(
+				lifecycleCtx,
+				compactionModeManual,
+				instructions,
+				true,
+				reservation,
+				onActive,
+				nil,
+				true,
+			)
+			deferred.complete(receipt, runErr)
+			fatal, abort := resultGroupFatalFromError(runErr)
+			if abort {
+				return fatal
+			}
+			return nil
+		})
+		if !launched {
+			c.steps.ReleaseReservation(reservation)
+			deferred.complete(session.CommitReceipt{}, ErrEngineClosed)
+		}
+		return deferred, nil
+	})
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	return terminal.Await(ctx)
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {

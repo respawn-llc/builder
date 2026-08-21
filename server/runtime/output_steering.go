@@ -559,6 +559,16 @@ func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
 	if e.closed.Load() {
 		return ErrEngineClosed
 	}
+	if strings.TrimSpace(stepID) == "" && e.runtimeFIFO != nil {
+		_, err := awaitEngineRuntimeOperation(
+			context.Background(),
+			e,
+			func(context.Context) (struct{}, error) {
+				return struct{}{}, e.steerOrdered("", intents...)
+			},
+		)
+		return err
+	}
 	return e.steerOrdered(stepID, intents...)
 }
 
@@ -574,6 +584,19 @@ func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) err
 }
 
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
+	if strings.TrimSpace(stepID) == "" && e.runtimeFIFO != nil {
+		return awaitEngineRuntimeOperation(
+			context.Background(),
+			e,
+			func(context.Context) (session.CommitReceipt, error) {
+				return e.steerWithCommitReceiptRaw("", intent)
+			},
+		)
+	}
+	return e.steerWithCommitReceiptRaw(stepID, intent)
+}
+
+func (e *Engine) steerWithCommitReceiptRaw(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
 	if len(intent.items) != 1 {
 		return session.CommitReceipt{}, fmt.Errorf(
 			"commit receipt requires exactly one steering item (items=%d)",

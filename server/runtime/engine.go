@@ -141,6 +141,7 @@ type Engine struct {
 	lifecycleWG     sync.WaitGroup
 	lifecycleClosed bool
 	closed          atomic.Bool
+	runtimeFIFO     *runtimeOperationFIFO
 
 	store                       *session.Store
 	eventLog                    session.MaterializedEventLog
@@ -154,9 +155,7 @@ type Engine struct {
 	controlMutationMu sync.Mutex
 	// outputMutationMu keeps durable transcript writes, runtime projections, and
 	// event emission in one order for concurrent steering producers.
-	outputMutationMu           sync.Mutex
-	workflowAssignmentMu       sync.Mutex
-	pendingWorkflowAssignments []queuedWorkflowAssignment
+	outputMutationMu sync.Mutex
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
 	queuedUserWorkMu           sync.Mutex
@@ -353,6 +352,7 @@ func New(
 		return nil, fmt.Errorf("runtime construction retained %d dangling tool call(s) after repair", len(dangling))
 	}
 	eng.restorePersistedUsageState(meta.UsageState)
+	eng.runtimeFIFO = newRuntimeOperationFIFO()
 	return eng, nil
 }
 
@@ -384,13 +384,14 @@ func (e *Engine) Close() error {
 	}
 	e.lifecycleClosed = true
 	e.closed.Store(true)
-	e.failPendingWorkflowAssignments(ErrEngineClosed)
+	e.runtimeFIFO.beginClose()
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	e.lifecycleWG.Wait()
+	e.runtimeFIFO.Close()
 	e.steerRuntimeClose("runtime_close", steerLiveToolAbortIntent("canceled"))
 	return interruptErr
 }
@@ -400,7 +401,7 @@ func (e *Engine) closeAdmissionAfterRuntimeAbort() {
 		return
 	}
 	e.closed.Store(true)
-	e.failPendingWorkflowAssignments(ErrEngineClosed)
+	e.runtimeFIFO.beginClose()
 }
 
 func (e *Engine) ensureLifecycle() {
@@ -456,6 +457,12 @@ func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
 }
 
 func (e *Engine) queueUserMessage(text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (QueuedUserMessage, error) {
+		return e.queueUserMessageRaw(text, forceAutoDrain, accept)
+	})
+}
+
+func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	if !forceAutoDrain {
 		var item QueuedUserMessage
@@ -741,9 +748,31 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 	if command == "" {
 		return tools.Result{}, errors.New("empty command")
 	}
+	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[tools.Result], error) {
+		deferred := newRuntimeDeferred[tools.Result]()
+		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+			result, runErr := e.runUserShellCommand(lifecycleCtx, command, onActive, accept)
+			deferred.complete(result, runErr)
+			fatal, abort := resultGroupFatalFromError(runErr)
+			if abort {
+				return fatal
+			}
+			return nil
+		})
+		if !launched {
+			deferred.complete(tools.Result{}, ErrEngineClosed)
+		}
+		return deferred, nil
+	})
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return terminal.Await(ctx)
+}
 
+func (e *Engine) runUserShellCommand(ctx context.Context, command string, onActive func(), accept CommandAcceptance) (result tools.Result, err error) {
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserShell}, func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.RunNext(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserShell}, func(stepCtx context.Context, stepID string) error {
 		if onActive != nil {
 			onActive()
 		}

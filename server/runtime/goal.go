@@ -251,6 +251,19 @@ func (e *Engine) SetGoal(objective string, actor session.GoalActor) (GoalCommand
 }
 
 func (e *Engine) setGoalForStep(stepID string, objective string, actor session.GoalActor) (GoalCommandResult, error) {
+	if strings.TrimSpace(stepID) == "" && e != nil && e.runtimeFIFO != nil {
+		return awaitEngineRuntimeOperation(
+			context.Background(),
+			e,
+			func(context.Context) (GoalCommandResult, error) {
+				return e.setGoalForStepRaw("", objective, actor)
+			},
+		)
+	}
+	return e.setGoalForStepRaw(stepID, objective, actor)
+}
+
+func (e *Engine) setGoalForStepRaw(stepID string, objective string, actor session.GoalActor) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -269,7 +282,7 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal, availability))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(stepID, msg, goalStatusUpdateFromState(goal, availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -287,6 +300,19 @@ func (e *Engine) SetGoalStatusWithoutGoalLoopStart(status session.GoalStatus, ac
 }
 
 func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
+	if strings.TrimSpace(stepID) == "" && e != nil && e.runtimeFIFO != nil {
+		return awaitEngineRuntimeOperation(
+			context.Background(),
+			e,
+			func(context.Context) (GoalCommandResult, error) {
+				return e.setGoalStatusForStepWithGoalLoopAdmissionRaw("", status, actor, requireGoalLoopStart)
+			},
+		)
+	}
+	return e.setGoalStatusForStepWithGoalLoopAdmissionRaw(stepID, status, actor, requireGoalLoopStart)
+}
+
+func (e *Engine) setGoalStatusForStepWithGoalLoopAdmissionRaw(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -320,7 +346,7 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal, availability))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(stepID, msg, goalStatusUpdateFromState(goal, availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -575,6 +601,19 @@ func (e *Engine) ClearGoal(actor session.GoalActor) (GoalCommandResult, error) {
 }
 
 func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalCommandResult, error) {
+	if strings.TrimSpace(stepID) == "" && e != nil && e.runtimeFIFO != nil {
+		return awaitEngineRuntimeOperation(
+			context.Background(),
+			e,
+			func(context.Context) (GoalCommandResult, error) {
+				return e.clearGoalForStepRaw("", actor)
+			},
+		)
+	}
+	return e.clearGoalForStepRaw(stepID, actor)
+}
+
+func (e *Engine) clearGoalForStepRaw(stepID string, actor session.GoalActor) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -592,7 +631,7 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusClearUpdate(availability))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(stepID, msg, goalStatusClearUpdate(availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -609,7 +648,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		return
 	}
 	reportErr := func(err error) {
-		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
+		_ = e.steerOrdered("", steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 			Text:       "Failed to auto-complete active goal on workflow completion: " + err.Error(),
@@ -632,7 +671,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		return
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed, availability)); err != nil {
+	if _, err := e.steerGoalNoticeAndStatusRaw("", msg, goalStatusUpdateFromState(completed, availability)); err != nil {
 		reportErr(err)
 	}
 }
@@ -657,7 +696,24 @@ func (e *Engine) steerGoalNoticeAndStatus(
 	if e == nil || e.closed.Load() {
 		return session.CommitReceipt{}, ErrEngineClosed
 	}
-	return e.steerWithCommitReceipt(stepID, steerGoalNoticeAndStatusIntent(message, update))
+	if strings.TrimSpace(stepID) == "" && e.runtimeFIFO != nil {
+		return awaitEngineRuntimeOperation(
+			context.Background(),
+			e,
+			func(context.Context) (session.CommitReceipt, error) {
+				return e.steerGoalNoticeAndStatusRaw("", message, update)
+			},
+		)
+	}
+	return e.steerGoalNoticeAndStatusRaw(stepID, message, update)
+}
+
+func (e *Engine) steerGoalNoticeAndStatusRaw(
+	stepID string,
+	message llm.Message,
+	update GoalStatusUpdate,
+) (session.CommitReceipt, error) {
+	return e.steerWithCommitReceiptRaw(stepID, steerGoalNoticeAndStatusIntent(message, update))
 }
 
 func (e *Engine) StartGoalLoop() error {

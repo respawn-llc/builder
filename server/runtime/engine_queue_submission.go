@@ -67,25 +67,54 @@ func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) err
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	reservation := &exclusiveStepReservation{
-		Kind:      exclusiveStepReservationWorktreeTransition,
-		queueable: true,
-	}
-	if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
+	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[struct{}], error) {
+		reservation := &exclusiveStepReservation{
+			Kind:      exclusiveStepReservationWorktreeTransition,
+			queueable: true,
+		}
+		if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
+			return runtimeDeferred[struct{}]{}, err
+		}
+		deferred := newRuntimeDeferred[struct{}]()
+		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+			defer e.stepLifecycle.ReleaseReservation(reservation)
+			transitionCtx, cancel := context.WithCancelCause(lifecycleCtx)
+			stopCallerCancellation := context.AfterFunc(ctx, func() {
+				cancel(context.Cause(ctx))
+			})
+			defer func() {
+				stopCallerCancellation()
+				cancel(context.Canceled)
+			}()
+			e.pauseQueuedUserAutoDrain()
+			defer e.resumeQueuedUserAutoDrain()
+			runErr := runExclusiveStepWhenIdle(
+				transitionCtx,
+				e.stepLifecycle,
+				ActiveKindRuntimeMaintenance,
+				reservation,
+				func(context.Context, string) error {
+					return fn()
+				},
+			)
+			deferred.complete(struct{}{}, runErr)
+			fatal, abort := resultGroupFatalFromError(runErr)
+			if abort {
+				return fatal
+			}
+			return nil
+		})
+		if !launched {
+			e.stepLifecycle.ReleaseReservation(reservation)
+			deferred.complete(struct{}{}, ErrEngineClosed)
+		}
+		return deferred, nil
+	})
+	if err != nil {
 		return err
 	}
-	defer e.stepLifecycle.ReleaseReservation(reservation)
-	e.pauseQueuedUserAutoDrain()
-	defer e.resumeQueuedUserAutoDrain()
-	return runExclusiveStepWhenIdle(
-		ctx,
-		e.stepLifecycle,
-		ActiveKindRuntimeMaintenance,
-		reservation,
-		func(context.Context, string) error {
-			return fn()
-		},
-	)
+	_, err = terminal.Await(ctx)
+	return err
 }
 
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user
@@ -190,15 +219,11 @@ func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, tex
 	if strings.TrimSpace(text) == "" {
 		return UserTurnResult{}, nil, errors.New("empty message")
 	}
-	result, err = e.submitUserMessageWithOutcome(ctx, text, nil, nil, accept)
-	if errors.Is(err, ErrAgentBusy) {
-		item, queueErr := e.QueueUserMessageForAutoDrainWithAcceptance(text, accept)
-		if queueErr != nil {
-			return UserTurnResult{}, nil, queueErr
-		}
-		return UserTurnResult{}, &item, nil
+	item, err := e.QueueUserMessageForAutoDrainWithAcceptance(text, accept)
+	if err != nil {
+		return UserTurnResult{}, nil, err
 	}
-	return result, nil, err
+	return UserTurnResult{}, &item, nil
 }
 
 func (e *Engine) QueueUserMessageForAutoDrain(text string) (QueuedUserMessage, error) {

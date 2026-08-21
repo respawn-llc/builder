@@ -305,7 +305,10 @@ func (e *Engine) ClearStreamingError() {
 }
 
 func (e *Engine) SetSessionName(name string) error {
-	return e.store.SetName(name)
+	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		return struct{}{}, e.store.SetName(name)
+	})
+	return err
 }
 
 func (e *Engine) SetThinkingLevel(level string) error {
@@ -313,7 +316,10 @@ func (e *Engine) SetThinkingLevel(level string) error {
 	if normalized == "" {
 		return errors.New("thinking level is required")
 	}
-	return e.setThinkingValue(normalized)
+	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		return struct{}{}, e.setThinkingValue(normalized)
+	})
+	return err
 }
 
 // SetWorkflowThinkingValue applies a workflow-owned thinking value. Workflow
@@ -323,13 +329,19 @@ func (e *Engine) SetWorkflowThinkingValue(value workflow.ThinkingValue) error {
 	if err := value.Validate(); err != nil {
 		return err
 	}
-	return e.setThinkingValue(string(value))
+	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		return struct{}{}, e.setThinkingValue(string(value))
+	})
+	return err
 }
 
 // ClearWorkflowThinkingValue removes a workflow-owned thinking override while
 // preserving the current prompt-cache lineage and contract generation.
 func (e *Engine) ClearWorkflowThinkingValue() error {
-	return e.setThinkingValue("")
+	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		return struct{}{}, e.setThinkingValue("")
+	})
+	return err
 }
 
 func (e *Engine) setThinkingValue(value string) error {
@@ -343,11 +355,13 @@ func (e *Engine) SetFastModeEnabled(enabled bool) (bool, error) {
 	if enabled && !e.FastModeAvailable() {
 		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed := e.localFastModeEnabledChange(enabled)
-	e.applyFastModeEnabled(enabled)
-	return changed, nil
+	return awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (bool, error) {
+		e.controlMutationMu.Lock()
+		defer e.controlMutationMu.Unlock()
+		changed := e.localFastModeEnabledChange(enabled)
+		e.applyFastModeEnabled(enabled)
+		return changed, nil
+	})
 }
 
 func (e *Engine) localFastModeEnabledChange(enabled bool) bool {
@@ -370,20 +384,35 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	current := true
-	if e.cfg.AutoCompactionEnabled != nil {
-		current = *e.cfg.AutoCompactionEnabled
+	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+		changed bool
+		enabled bool
+	}, error) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		current := true
+		if e.cfg.AutoCompactionEnabled != nil {
+			current = *e.cfg.AutoCompactionEnabled
+		}
+		if current == enabled {
+			return struct {
+				changed bool
+				enabled bool
+			}{enabled: current}, nil
+		}
+		if e.cfg.AutoCompactionEnabled == nil {
+			e.cfg.AutoCompactionEnabled = new(bool)
+		}
+		*e.cfg.AutoCompactionEnabled = enabled
+		return struct {
+			changed bool
+			enabled bool
+		}{changed: true, enabled: enabled}, nil
+	})
+	if err != nil {
+		return false, e.AutoCompactionEnabled()
 	}
-	if current == enabled {
-		return false, current
-	}
-	if e.cfg.AutoCompactionEnabled == nil {
-		e.cfg.AutoCompactionEnabled = new(bool)
-	}
-	*e.cfg.AutoCompactionEnabled = enabled
-	return true, enabled
+	return result.changed, result.enabled
 }
 
 func (e *Engine) QuestionsEnabled() bool {
@@ -396,14 +425,26 @@ func (e *Engine) QuestionsEnabled() bool {
 }
 
 func (e *Engine) SetQuestionsEnabled(enabled bool) (bool, bool) {
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed, current := e.questionsEnabledChange(enabled)
-	if changed {
-		e.applyQuestionsEnabled(enabled)
-		current = enabled
+	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+		changed bool
+		enabled bool
+	}, error) {
+		e.controlMutationMu.Lock()
+		defer e.controlMutationMu.Unlock()
+		changed, current := e.questionsEnabledChange(enabled)
+		if changed {
+			e.applyQuestionsEnabled(enabled)
+			current = enabled
+		}
+		return struct {
+			changed bool
+			enabled bool
+		}{changed: changed, enabled: current}, nil
+	})
+	if err != nil {
+		return false, e.QuestionsEnabled()
 	}
-	return changed, current
+	return result.changed, result.enabled
 }
 
 func (e *Engine) questionsEnabledChange(enabled bool) (bool, bool) {
@@ -434,14 +475,26 @@ func (e *Engine) applyQuestionsEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed, mode, err := e.reviewerEnabledChange(enabled)
-	if err != nil {
-		return false, mode, err
-	}
-	e.applyReviewerEnabled(enabled, mode)
-	return changed, mode, nil
+	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+		changed bool
+		mode    string
+	}, error) {
+		e.controlMutationMu.Lock()
+		defer e.controlMutationMu.Unlock()
+		changed, mode, err := e.reviewerEnabledChange(enabled)
+		if err != nil {
+			return struct {
+				changed bool
+				mode    string
+			}{mode: mode}, err
+		}
+		e.applyReviewerEnabled(enabled, mode)
+		return struct {
+			changed bool
+			mode    string
+		}{changed: changed, mode: mode}, nil
+	})
+	return result.changed, result.mode, err
 }
 
 func (e *Engine) PrepareReviewerFrequency(frequency string) (string, error) {
@@ -472,7 +525,10 @@ func (e *Engine) setReviewerFrequency(frequency string) bool {
 }
 
 func (e *Engine) SetReviewerFrequency(frequency string) bool {
-	return e.setReviewerFrequency(frequency)
+	changed, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (bool, error) {
+		return e.setReviewerFrequency(frequency), nil
+	})
+	return err == nil && changed
 }
 
 func (e *Engine) reviewerEnabledChange(enabled bool) (bool, string, error) {
