@@ -161,12 +161,7 @@ func currentEventLogReadError(mode currentEventLogMode, err error) error {
 	if mode != currentEventLogPersistedSnapshot {
 		return err
 	}
-	return wrapEventLogMaterializationError(
-		EventLogMaterializationStageReconciliation,
-		false,
-		false,
-		err,
-	)
+	return wrapEventLogMaterializationError(EventLogMaterializationStageReconciliation, false, false, err)
 }
 
 func (l *currentEventLog) appendRecords(records []EventRecord) (endOffset int64, resultErr error) {

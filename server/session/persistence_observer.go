@@ -97,12 +97,7 @@ type EventLogReconciliationConflictError struct {
 
 func (e EventLogReconciliationConflictError) Error() string {
 	if e.BoundaryIncomplete {
-		return fmt.Sprintf(
-			"session %q event-log reconciliation observed an incomplete boundary after sequence %d while metadata is at sequence %d",
-			e.SessionID,
-			e.ObservedLastSequence,
-			e.CurrentLastSequence,
-		)
+		return fmt.Sprintf("session %q event-log reconciliation observed an incomplete boundary after sequence %d while metadata is at sequence %d", e.SessionID, e.ObservedLastSequence, e.CurrentLastSequence)
 	}
 	return fmt.Sprintf(
 		"session %q event-log reconciliation observed sequence %d but metadata advanced to %d",
