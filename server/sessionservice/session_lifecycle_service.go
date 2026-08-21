@@ -31,9 +31,7 @@ type SessionLifecycleService struct {
 	transitions     *requestmemo.Memo[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]
 }
 
-func (s *SessionLifecycleService) WithPersistedSessionResolver(
-	resolver session.PersistedSessionResolver,
-) *SessionLifecycleService {
+func (s *SessionLifecycleService) WithPersistedSessionResolver(resolver session.PersistedSessionResolver) *SessionLifecycleService {
 	if s != nil {
 		s.persisted = resolver
 	}
@@ -111,17 +109,11 @@ func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serve
 	if req.OverrideStoredDraft {
 		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
 	}
-	if s == nil || s.persisted == nil {
-		return serverapi.SessionInitialInputResponse{}, errors.New("persisted Session resolver is required")
-	}
-	sessionID := strings.TrimSpace(req.SessionID)
-	meta, err := s.resolvePersistedSessionMeta(ctx, sessionID)
+	meta, err := s.resolvePersistedSessionMeta(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.SessionInitialInputResponse{}, err
 	}
-	return serverapi.SessionInitialInputResponse{
-		Input: initialSessionInput(meta, req.TransitionInput),
-	}, nil
+	return serverapi.SessionInitialInputResponse{Input: initialSessionInput(meta, req.TransitionInput)}, nil
 }
 
 func (s *SessionLifecycleService) resolvePersistedSessionMeta(ctx context.Context, sessionID string) (session.Meta, error) {
@@ -250,13 +242,9 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 		if err != nil {
 			return serverapi.SessionResolveTransitionResponse{}, err
 		}
-		resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{
-			Transition: sessionTransition{
-				Action:          req.Transition.Action,
-				InitialInput:    textutil.Pointer(req.Transition.InitialInput),
-				TargetSessionID: req.Transition.TargetSessionID,
-			},
-		})
+		resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{Transition: sessionTransition{
+			Action: req.Transition.Action, InitialInput: textutil.Pointer(req.Transition.InitialInput), TargetSessionID: req.Transition.TargetSessionID,
+		}})
 		if err != nil {
 			return serverapi.SessionResolveTransitionResponse{}, err
 		}
@@ -274,11 +262,7 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 	})
 }
 
-func (s *SessionLifecycleService) resolveForkRollbackTransition(
-	ctx context.Context,
-	req serverapi.SessionResolveTransitionRequest,
-	store *session.Store,
-) (serverapi.SessionResolveTransitionResponse, error) {
+func (s *SessionLifecycleService) resolveForkRollbackTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest, store *session.Store) (serverapi.SessionResolveTransitionResponse, error) {
 	transition := sessionTransition{
 		Action:                       req.Transition.Action,
 		InitialPrompt:                req.Transition.InitialPrompt,
