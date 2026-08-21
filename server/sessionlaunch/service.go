@@ -700,29 +700,16 @@ func applyPreparedAgentChatSettings(
 	if err != nil {
 		return session.Meta{}, false, err
 	}
-	baseline := prepared.Baseline
-	meta.ChatSettings = &session.ChatSettingsOverrides{
-		Supervisor:     textutil.Value(baseline.Supervisor),
-		Thinking:       textutil.Value(baseline.Thinking),
-		Fast:           textutil.Value(baseline.Fast),
-		Questions:      textutil.Value(baseline.Questions),
-		AutoCompaction: textutil.Value(baseline.AutoCompaction),
+	projected, result, err := session.ProjectChatSettingsMutation(meta, session.ChatSettingsMutation{
+		Agent: &session.ChatAgentSelection{Agent: targetAgent, Baseline: prepared.Baseline},
+	})
+	if errors.Is(err, session.ErrChatAgentLocked) {
+		return meta, false, nil
 	}
-	continuation := session.ContinuationContext{}
-	if meta.Continuation != nil {
-		continuation = *meta.Continuation
-	}
-	continuation.OpenAIBaseURL = nil
-	if targetAgent == config.DefaultSubagentRole {
-		continuation.AgentRole = nil
-	} else {
-		continuation.AgentRole = textutil.Value(targetAgent)
-	}
-	meta.Continuation, err = session.NormalizeContinuationContext(continuation)
 	if err != nil {
 		return session.Meta{}, false, err
 	}
-	return meta, true, nil
+	return projected, result.Changed, nil
 }
 
 func preparePromptFacingTarget(
