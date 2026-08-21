@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"core/server/tools"
@@ -32,7 +31,7 @@ type Manager struct {
 	closeWaitTimeout     time.Duration
 	defaultPostprocessor *postprocess.Runner
 	closed               bool
-	catalog              atomic.Pointer[processCatalogSnapshot]
+	published            sync.Map
 }
 
 type ManagerOption func(*Manager)
@@ -92,7 +91,6 @@ func NewManager(opts ...ManagerOption) (*Manager, error) {
 		_ = os.RemoveAll(tempDir)
 		return nil, errors.New("shell postprocessor is required")
 	}
-	mgr.publishCatalogLocked()
 	return mgr, nil
 }
 
@@ -253,7 +251,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		return ExecResult{}, errors.New("background shell manager is closed")
 	}
 	m.entries[id] = entry
-	m.publishCatalogLocked()
+	m.published.Store(id, entry)
 	m.mu.Unlock()
 
 	go m.waitForExit(entry)

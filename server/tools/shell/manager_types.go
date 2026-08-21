@@ -278,10 +278,6 @@ type processEntry struct {
 	publishedSnapshot    atomic.Pointer[Snapshot]
 }
 
-type processCatalogSnapshot struct {
-	entries map[string]*processEntry
-}
-
 func (p *processEntry) signal() {
 	select {
 	case p.notify <- struct{}{}:

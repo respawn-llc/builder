@@ -16,14 +16,15 @@ import (
 )
 
 func (m *Manager) List() []Snapshot {
-	catalog := m.catalog.Load()
-	if catalog == nil {
+	if m == nil {
 		return nil
 	}
-	out := make([]Snapshot, 0, len(catalog.entries))
-	for _, entry := range catalog.entries {
+	out := make([]Snapshot, 0)
+	m.published.Range(func(_, value any) bool {
+		entry := value.(*processEntry)
 		out = append(out, entry.snapshot())
-	}
+		return true
+	})
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Running != out[j].Running {
 			return out[i].Running
@@ -253,15 +254,11 @@ func (m *Manager) publishedEntry(id string) (*processEntry, error) {
 	if m == nil {
 		return nil, ErrResultUnavailable
 	}
-	catalog := m.catalog.Load()
-	if catalog == nil {
-		return nil, ErrResultUnavailable
-	}
-	entry, ok := catalog.entries[id]
+	value, ok := m.published.Load(id)
 	if !ok {
 		return nil, ErrResultUnavailable
 	}
-	return entry, nil
+	return value.(*processEntry), nil
 }
 
 func (m *Manager) emitEvent(evt Event) bool {
@@ -540,8 +537,8 @@ func (m *Manager) releaseEntry(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.entries, id)
+	m.published.Delete(id)
 	m.removeCompletedLocked(id)
-	m.publishCatalogLocked()
 }
 
 func (m *Manager) retainCompletedEntry(id string) {
@@ -560,20 +557,9 @@ func (m *Manager) retainCompletedEntry(id string) {
 		evicted, exists := m.entries[evictedID]
 		if exists && !evicted.isRunning() {
 			delete(m.entries, evictedID)
+			m.published.Delete(evictedID)
 		}
 	}
-	m.publishCatalogLocked()
-}
-
-func (m *Manager) publishCatalogLocked() {
-	entries := make(map[string]*processEntry, len(m.entries))
-	for id, entry := range m.entries {
-		if entry == nil || entry.publishedSnapshot.Load() == nil {
-			panic(fmt.Sprintf("background shell process %s has no published snapshot", id))
-		}
-		entries[id] = entry
-	}
-	m.catalog.Store(&processCatalogSnapshot{entries: entries})
 }
 
 func (m *Manager) touchCompletedLocked(id string) {
