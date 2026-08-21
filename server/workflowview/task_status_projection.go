@@ -2,7 +2,6 @@ package workflowview
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +40,6 @@ type TaskStatusProjectionResult struct {
 }
 
 type TaskStatusProjection struct {
-	metadata        *metadata.Store
 	workflowStore   *workflowstore.Store
 	projector       *TaskProjector
 	liveObservation TaskStatusLiveObservationSource
@@ -66,7 +64,6 @@ func NewTaskStatusProjection(
 		return nil, errors.New("workflow task live observation source is required")
 	}
 	return &TaskStatusProjection{
-		metadata:        metadataStore,
 		workflowStore:   workflowStore,
 		projector:       projector,
 		liveObservation: liveObservation,
@@ -145,37 +142,17 @@ func taskStatusLiveStatesJSON(observation workflowexecution.WorkflowTaskExecutio
 	return string(raw), nil
 }
 
-func (p *TaskStatusProjection) WithSnapshot(
-	ctx context.Context,
-	taskIDs []workflow.TaskID,
-	operation func(TaskStatusObservation, *TaskStatusDurableSnapshot) error,
-) error {
-	if p == nil {
-		return errors.New("task status projection is required")
-	}
-	if operation == nil {
-		return errors.New("task status snapshot operation is required")
-	}
-	observation, err := p.Observe(taskIDs)
-	if err != nil {
-		return err
-	}
-	return p.WithDurableSnapshot(ctx, func(durable *TaskStatusDurableSnapshot) error {
-		return operation(observation, durable)
-	})
-}
-
 func (p *TaskStatusProjection) Project(
 	ctx context.Context,
 	observation TaskStatusObservation,
-	durable *TaskStatusDurableSnapshot,
+	queries *sqlitegen.Queries,
 	taskIDs []workflow.TaskID,
 ) (map[workflow.TaskID]TaskStatusProjectionResult, error) {
 	if p == nil {
 		return nil, errors.New("task status projection is required")
 	}
-	if err := durable.validate(); err != nil {
-		return nil, err
+	if queries == nil {
+		return nil, errors.New("workflow queries are required")
 	}
 	if !json.Valid([]byte(observation.LiveTaskStatesJSON)) {
 		return nil, errors.New("task status observation live task states are malformed")
@@ -185,15 +162,15 @@ func (p *TaskStatusProjection) Project(
 		return nil, err
 	}
 	ids := encodedTaskIDs.values
-	statuses, err := durable.projectedStatuses(ctx, encodedTaskIDs, observation.LiveTaskStatesJSON)
+	statuses, err := p.projectedStatuses(ctx, queries, encodedTaskIDs, observation.LiveTaskStatesJSON)
 	if err != nil {
 		return nil, err
 	}
-	currentNodesByTask, err := durable.CurrentNodesByTask(ctx, ids)
+	currentNodesByTask, err := p.workflowStore.ListCurrentNodesByTaskWithQueries(ctx, queries, ids)
 	if err != nil {
 		return nil, err
 	}
-	tasksByID, err := durable.TasksByTask(ctx, ids)
+	tasksByID, err := tasksByTask(ctx, queries, encodedTaskIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -210,11 +187,11 @@ func (p *TaskStatusProjection) Project(
 			workflowIDs = append(workflowIDs, workflowID)
 		}
 	}
-	definitions, err := durable.Definitions(ctx, workflowIDs)
+	definitions, err := p.definitions(ctx, queries, workflowIDs)
 	if err != nil {
 		return nil, err
 	}
-	pendingApprovalsByTask, err := durable.PendingApprovalsByTask(ctx, ids)
+	pendingApprovalsByTask, err := pendingApprovalsByTask(ctx, queries, encodedTaskIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -291,78 +268,12 @@ func taskStatusAttentionCount(currentNodes []workflow.CurrentNode, executions []
 	return count
 }
 
-// TaskStatusDurableSnapshot keeps related durable reads on one read-only
-// SQLite transaction. Live observations are loaded independently before this
-// snapshot opens. Its methods fail after the owning callback returns.
-type TaskStatusDurableSnapshot struct {
-	queries       *sqlitegen.Queries
-	workflowStore *workflowstore.Store
-	projector     *TaskProjector
-	closed        bool
-}
-
-func (p *TaskStatusProjection) WithDurableSnapshot(
+func tasksByTask(
 	ctx context.Context,
-	operation func(*TaskStatusDurableSnapshot) error,
-) (err error) {
-	if p == nil {
-		return errors.New("task status projection is required")
-	}
-	if operation == nil {
-		return errors.New("task status durable snapshot operation is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	tx, err := p.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return fmt.Errorf("begin task status durable snapshot: %w", err)
-	}
-	snapshot := &TaskStatusDurableSnapshot{
-		queries:       p.metadata.Queries().WithTx(tx),
-		workflowStore: p.workflowStore,
-		projector:     p.projector,
-	}
-	defer func() {
-		rollbackErr := tx.Rollback()
-		snapshot.closed = true
-		snapshot.queries = nil
-		if err == nil && rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = fmt.Errorf("close task status durable snapshot: %w", rollbackErr)
-		}
-	}()
-	return operation(snapshot)
-}
-
-func (s *TaskStatusDurableSnapshot) validate() error {
-	if s == nil {
-		return errors.New("task status durable snapshot is required")
-	}
-	if s.closed || s.queries == nil {
-		return errors.New("task status durable snapshot is closed")
-	}
-	return nil
-}
-
-func (s *TaskStatusDurableSnapshot) Task(ctx context.Context, taskID string) (sqlitegen.TaskRecord, error) {
-	if err := s.validate(); err != nil {
-		return sqlitegen.TaskRecord{}, err
-	}
-	return s.queries.GetTask(ctx, taskID)
-}
-
-func (s *TaskStatusDurableSnapshot) TasksByTask(
-	ctx context.Context,
-	taskIDs []workflow.TaskID,
+	queries *sqlitegen.Queries,
+	encodedTaskIDs taskIDsEncoding,
 ) (map[workflow.TaskID]sqlitegen.TaskRecord, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
-	encodedTaskIDs, err := encodeTaskIDs(taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.queries.ListTasksByIDs(ctx, encodedTaskIDs.json)
+	rows, err := queries.ListTasksByIDs(ctx, encodedTaskIDs.json)
 	if err != nil {
 		return nil, err
 	}
@@ -386,41 +297,17 @@ func (s *TaskStatusDurableSnapshot) TasksByTask(
 	return tasks, nil
 }
 
-func (s *TaskStatusDurableSnapshot) BoardNodeTasks(
+func (p *TaskStatusProjection) projectedStatuses(
 	ctx context.Context,
-	params sqlitegen.ListBoardNodeTasksParams,
-) ([]sqlitegen.ListBoardNodeTasksRow, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
-	return s.queries.ListBoardNodeTasks(ctx, params)
-}
-
-func (s *TaskStatusDurableSnapshot) ProjectedStatuses(
-	ctx context.Context,
-	taskIDs []workflow.TaskID,
-	liveTaskStatesJSON string,
-) (map[workflow.TaskID]workflowTaskStatusFact, error) {
-	encodedTaskIDs, err := encodeTaskIDs(taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	return s.projectedStatuses(ctx, encodedTaskIDs, liveTaskStatesJSON)
-}
-
-func (s *TaskStatusDurableSnapshot) projectedStatuses(
-	ctx context.Context,
+	queries *sqlitegen.Queries,
 	taskIDs taskIDsEncoding,
 	liveTaskStatesJSON string,
 ) (map[workflow.TaskID]workflowTaskStatusFact, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
 	if len(taskIDs.values) == 0 {
 		return map[workflow.TaskID]workflowTaskStatusFact{}, nil
 	}
 	requested := taskIDSet(taskIDs.values)
-	rows, err := s.queries.ListWorkflowTaskStatusProjectionByTasks(ctx, sqlitegen.ListWorkflowTaskStatusProjectionByTasksParams{
+	rows, err := queries.ListWorkflowTaskStatusProjectionByTasks(ctx, sqlitegen.ListWorkflowTaskStatusProjectionByTasksParams{
 		TaskIdsJson:        taskIDs.json,
 		LiveTaskStatesJson: liveTaskStatesJSON,
 	})
@@ -436,7 +323,7 @@ func (s *TaskStatusDurableSnapshot) projectedStatuses(
 		if _, duplicate := statuses[taskID]; duplicate {
 			return nil, fmt.Errorf("workflow task status projection returned duplicate task %q", taskID)
 		}
-		status, err := s.projector.DecodeStatus(TaskStatusInput{
+		status, err := p.projector.DecodeStatus(TaskStatusInput{
 			TaskID:             row.TaskID,
 			Kind:               row.Kind,
 			NodeIDsJSON:        row.NodeIdsJson,
@@ -456,18 +343,12 @@ func (s *TaskStatusDurableSnapshot) projectedStatuses(
 	return statuses, nil
 }
 
-func (s *TaskStatusDurableSnapshot) PendingApprovalsByTask(
+func pendingApprovalsByTask(
 	ctx context.Context,
-	taskIDs []workflow.TaskID,
+	queries *sqlitegen.Queries,
+	encodedTaskIDs taskIDsEncoding,
 ) (map[workflow.TaskID][]sqlitegen.ListTaskPendingApprovalsByTasksRow, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
-	encodedTaskIDs, err := encodeTaskIDs(taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.queries.ListTaskPendingApprovalsByTasks(ctx, encodedTaskIDs.json)
+	rows, err := queries.ListTaskPendingApprovalsByTasks(ctx, encodedTaskIDs.json)
 	if err != nil {
 		return nil, err
 	}
@@ -486,13 +367,11 @@ func (s *TaskStatusDurableSnapshot) PendingApprovalsByTask(
 	return approvals, nil
 }
 
-func (s *TaskStatusDurableSnapshot) Definitions(
+func (p *TaskStatusProjection) definitions(
 	ctx context.Context,
+	queries *sqlitegen.Queries,
 	workflowIDs []runtimeids.WorkflowID,
 ) (map[runtimeids.WorkflowID]definitionSnapshot, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
 	definitions := make(map[runtimeids.WorkflowID]definitionSnapshot, len(workflowIDs))
 	for _, workflowID := range workflowIDs {
 		if workflowID.IsZero() {
@@ -501,7 +380,7 @@ func (s *TaskStatusDurableSnapshot) Definitions(
 		if _, exists := definitions[workflowID]; exists {
 			continue
 		}
-		definition, err := s.Definition(ctx, workflowID)
+		definition, err := p.definition(ctx, queries, workflowID)
 		if err != nil {
 			return nil, err
 		}
@@ -510,28 +389,16 @@ func (s *TaskStatusDurableSnapshot) Definitions(
 	return definitions, nil
 }
 
-func (s *TaskStatusDurableSnapshot) CurrentNodesByTask(
+func (p *TaskStatusProjection) definition(
 	ctx context.Context,
-	taskIDs []workflow.TaskID,
-) (map[workflow.TaskID][]workflow.CurrentNode, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
-	return s.workflowStore.ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
-}
-
-func (s *TaskStatusDurableSnapshot) Definition(
-	ctx context.Context,
+	queries *sqlitegen.Queries,
 	workflowID runtimeids.WorkflowID,
 ) (definitionSnapshot, error) {
-	if err := s.validate(); err != nil {
-		return definitionSnapshot{}, err
-	}
-	domain, record, err := workflowstore.GetDefinitionWithQueries(ctx, s.queries, workflowID)
+	domain, record, err := workflowstore.GetDefinitionWithQueries(ctx, queries, workflowID)
 	if err != nil {
 		return definitionSnapshot{}, err
 	}
-	api, nodeKinds := ProjectDefinition(domain, record, s.workflowStore.TargetAgentCatalog())
+	api, nodeKinds := ProjectDefinition(domain, record, p.workflowStore.TargetAgentCatalog())
 	return definitionSnapshot{domain: domain, api: api, nodeKinds: nodeKinds}, nil
 }
 
@@ -540,7 +407,9 @@ type taskIDsEncoding struct {
 	json   string
 }
 
-func encodeTaskIDs(taskIDs []workflow.TaskID) (taskIDsEncoding, error) {
+func encodeTaskIDs(
+	taskIDs []workflow.TaskID,
+) (taskIDsEncoding, error) {
 	ids := make([]string, 0, len(taskIDs))
 	values := make([]workflow.TaskID, 0, len(taskIDs))
 	seen := make(map[workflow.TaskID]struct{}, len(taskIDs))
