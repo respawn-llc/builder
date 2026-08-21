@@ -21,30 +21,18 @@ type PendingPromptSnapshot struct {
 }
 
 type pendingPromptStore struct {
-	mu                  sync.Mutex
-	pending             map[string]map[string]PendingPromptSnapshot
-	sessionReadModels   map[string]*pendingPromptSessionReadModel
-	publishedReadModels atomic.Pointer[pendingPromptReadModels]
+	mu        sync.Mutex
+	pending   map[string]map[string]PendingPromptSnapshot
+	published atomic.Pointer[pendingPromptReadModel]
 }
 
-type pendingPromptSessionReadModel struct {
-	snapshot atomic.Pointer[pendingPromptCatalog]
-}
-
-type pendingPromptCatalog struct {
-	items []PendingPromptSnapshot
-}
-
-type pendingPromptReadModels struct {
-	bySession map[string]*pendingPromptSessionReadModel
+type pendingPromptReadModel struct {
+	bySession map[string][]PendingPromptSnapshot
 }
 
 func newPendingPromptStore() *pendingPromptStore {
-	store := &pendingPromptStore{
-		pending:           make(map[string]map[string]PendingPromptSnapshot),
-		sessionReadModels: make(map[string]*pendingPromptSessionReadModel),
-	}
-	store.publishReadModelIndexLocked()
+	store := &pendingPromptStore{pending: make(map[string]map[string]PendingPromptSnapshot)}
+	store.published.Store(&pendingPromptReadModel{bySession: make(map[string][]PendingPromptSnapshot)})
 	return store
 }
 
@@ -89,26 +77,18 @@ func (s *pendingPromptStore) Complete(sessionID string, resource runtimeids.Sess
 	if !exists {
 		return PendingPromptSnapshot{}, false
 	}
-	return clonePendingPromptSnapshot(entry), true
+	return entry, true
 }
 
 func (s *pendingPromptStore) List(sessionID string) []PendingPromptSnapshot {
 	if s == nil {
 		return nil
 	}
-	readModels := s.publishedReadModels.Load()
-	if readModels == nil {
+	readModel := s.published.Load()
+	if readModel == nil {
 		return nil
 	}
-	session := readModels.bySession[strings.TrimSpace(sessionID)]
-	if session == nil {
-		return nil
-	}
-	catalog := session.snapshot.Load()
-	if catalog == nil {
-		return nil
-	}
-	return clonePendingPromptSnapshots(catalog.items)
+	return clonePendingPromptSnapshots(readModel.bySession[strings.TrimSpace(sessionID)])
 }
 
 func (s *pendingPromptStore) CloseSession(sessionID string, resolve func(PendingPromptSnapshot)) {
@@ -116,34 +96,33 @@ func (s *pendingPromptStore) CloseSession(sessionID string, resolve func(Pending
 	s.mu.Lock()
 	items := listPendingPrompts(s.pending[id])
 	delete(s.pending, id)
-	delete(s.sessionReadModels, id)
-	s.publishReadModelIndexLocked()
+	s.publishSessionLocked(id, nil)
 	s.mu.Unlock()
 	for _, item := range items {
 		if resolve != nil {
-			resolve(clonePendingPromptSnapshot(item))
+			resolve(item)
 		}
 	}
 }
 
 func (s *pendingPromptStore) publishSessionLocked(sessionID string, pending map[string]PendingPromptSnapshot) {
-	readModel := s.sessionReadModels[sessionID]
-	if readModel == nil {
-		readModel = &pendingPromptSessionReadModel{}
-		readModel.snapshot.Store(&pendingPromptCatalog{items: listPendingPrompts(pending)})
-		s.sessionReadModels[sessionID] = readModel
-		s.publishReadModelIndexLocked()
-		return
+	current := s.published.Load()
+	size := 1
+	if current != nil {
+		size += len(current.bySession)
 	}
-	readModel.snapshot.Store(&pendingPromptCatalog{items: listPendingPrompts(pending)})
-}
-
-func (s *pendingPromptStore) publishReadModelIndexLocked() {
-	bySession := make(map[string]*pendingPromptSessionReadModel, len(s.sessionReadModels))
-	for sessionID, readModel := range s.sessionReadModels {
-		bySession[sessionID] = readModel
+	bySession := make(map[string][]PendingPromptSnapshot, size)
+	if current != nil {
+		for id, items := range current.bySession {
+			if id != sessionID {
+				bySession[id] = items
+			}
+		}
 	}
-	s.publishedReadModels.Store(&pendingPromptReadModels{bySession: bySession})
+	if items := listPendingPrompts(pending); len(items) != 0 {
+		bySession[sessionID] = items
+	}
+	s.published.Store(&pendingPromptReadModel{bySession: bySession})
 }
 
 func listPendingPrompts(pending map[string]PendingPromptSnapshot) []PendingPromptSnapshot {
