@@ -51,7 +51,42 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 	}
 	observation.Executions = executions
 	if c.mu.TryLock() {
-		snapshot := c.taskExecutionReadSnapshotLocked(selected)
+		snapshot := &workflowTaskControllerReadSnapshot{
+			concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
+			quiescence:        map[workflow.TaskID]bool{},
+			closed:            c.closed,
+		}
+		if c.agentCapacityActive >= c.agentConcurrency {
+			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+				if entry.start.policy != currentNodeAdmissionAutomaticAgent {
+					continue
+				}
+				taskID := entry.start.reference.TaskID
+				snapshot.concurrencyQueued[taskID] = append(
+					snapshot.concurrencyQueued[taskID],
+					entry.start.reference,
+				)
+			}
+		}
+		for taskID, references := range snapshot.concurrencyQueued {
+			sort.Slice(references, func(i, j int) bool {
+				left := references[i]
+				right := references[j]
+				if left.NodeID != right.NodeID {
+					return left.NodeID < right.NodeID
+				}
+				leftBranch, leftScoped := left.TransitionBranchKey()
+				rightBranch, rightScoped := right.TransitionBranchKey()
+				if leftScoped != rightScoped {
+					return !leftScoped
+				}
+				return leftBranch < rightBranch
+			})
+			snapshot.concurrencyQueued[taskID] = references
+		}
+		for taskID := range selected {
+			snapshot.quiescence[taskID] = !c.closed && c.taskExecutionQuiescentLocked(taskID)
+		}
 		c.mu.Unlock()
 		c.taskExecutionReads.Store(snapshot)
 	}
@@ -74,48 +109,6 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		observation.Quiescence[taskID] = quiescent
 	}
 	return observation, nil
-}
-
-func (c *CurrentNodeController) taskExecutionReadSnapshotLocked(
-	selected map[workflow.TaskID]struct{},
-) *workflowTaskControllerReadSnapshot {
-	snapshot := &workflowTaskControllerReadSnapshot{
-		concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
-		quiescence:        map[workflow.TaskID]bool{},
-		closed:            c.closed,
-	}
-	if c.agentCapacityActive >= c.agentConcurrency {
-		for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
-			if entry.start.policy != currentNodeAdmissionAutomaticAgent {
-				continue
-			}
-			taskID := entry.start.reference.TaskID
-			snapshot.concurrencyQueued[taskID] = append(
-				snapshot.concurrencyQueued[taskID],
-				entry.start.reference,
-			)
-		}
-	}
-	for taskID, references := range snapshot.concurrencyQueued {
-		sort.Slice(references, func(i, j int) bool {
-			left := references[i]
-			right := references[j]
-			if left.NodeID != right.NodeID {
-				return left.NodeID < right.NodeID
-			}
-			leftBranch, leftScoped := left.TransitionBranchKey()
-			rightBranch, rightScoped := right.TransitionBranchKey()
-			if leftScoped != rightScoped {
-				return !leftScoped
-			}
-			return leftBranch < rightBranch
-		})
-		snapshot.concurrencyQueued[taskID] = references
-	}
-	for taskID := range selected {
-		snapshot.quiescence[taskID] = !c.closed && c.taskExecutionQuiescentLocked(taskID)
-	}
-	return snapshot
 }
 
 func cloneConcurrencyQueued(source map[workflow.TaskID][]workflow.CurrentNodeReference) map[workflow.TaskID][]workflow.CurrentNodeReference {
