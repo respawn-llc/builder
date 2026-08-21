@@ -15,13 +15,6 @@ var (
 	fallbackSequence atomic.Uint64
 )
 
-type SnapshotBuilder func() (ResolverSnapshot, error)
-
-type ResponseSnapshot struct {
-	Version  clientui.ReadModelVersion
-	Activity clientui.RuntimeActivity
-}
-
 type VersionSource struct {
 	generation uint64
 	sequence   atomic.Uint64
@@ -35,39 +28,25 @@ func NewVersionSource(generation uint64) *VersionSource {
 }
 
 func (s *VersionSource) Next() clientui.ReadModelVersion {
-	if s == nil {
-		return NextReadModelVersion("unknown")
-	}
 	return mustReadModelVersion(processEpoch, s.generation, s.sequence.Add(1))
 }
 
-func (s *VersionSource) FeedSnapshot(build SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
-	if s == nil {
-		return BuildFeedSnapshot("unknown", build)
-	}
-	return buildFeedSnapshot(s.Next(), build)
-}
-
 func NextReadModelVersion(sessionID string) clientui.ReadModelVersion {
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		id = "unknown"
+	}
 	return mustReadModelVersion(
-		processEpoch+"-"+versionSessionID(sessionID),
+		processEpoch+"-"+id,
 		1,
 		fallbackSequence.Add(1),
 	)
 }
 
-func BuildFeedSnapshot(sessionID string, build SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
-	return buildFeedSnapshot(NextReadModelVersion(sessionID), build)
-}
-
-func buildFeedSnapshot(version clientui.ReadModelVersion, build SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
-	if build == nil {
-		return clientui.RuntimeReadModelUpdate{}, nil
-	}
-	resolver, err := build()
-	if err != nil {
-		return clientui.RuntimeReadModelUpdate{}, err
-	}
+func BuildFeedSnapshot(
+	version clientui.ReadModelVersion,
+	resolver ResolverSnapshot,
+) (clientui.RuntimeReadModelUpdate, error) {
 	activity, err := resolveRuntimeFeedActivity(resolver)
 	if err != nil {
 		return clientui.RuntimeReadModelUpdate{}, err
@@ -77,13 +56,6 @@ func buildFeedSnapshot(version clientui.ReadModelVersion, build SnapshotBuilder)
 		return clientui.RuntimeReadModelUpdate{}, fmt.Errorf("validate runtime feed read-model update: %w", err)
 	}
 	return update, nil
-}
-
-func versionSessionID(sessionID string) string {
-	if id := strings.TrimSpace(sessionID); id != "" {
-		return id
-	}
-	return "unknown"
 }
 
 func mustReadModelVersion(epoch string, generation uint64, sequence uint64) clientui.ReadModelVersion {

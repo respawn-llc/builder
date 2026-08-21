@@ -8,14 +8,7 @@ import (
 )
 
 func (r *RuntimeRegistry) RuntimeMainViewSnapshot(sessionID string) (clientui.RuntimeMainView, bool) {
-	if r == nil {
-		return clientui.RuntimeMainView{}, false
-	}
-	id := strings.TrimSpace(sessionID)
-	if id == "" {
-		return clientui.RuntimeMainView{}, false
-	}
-	entry := r.authorityEntryBySession(id)
+	entry := r.authorityEntryBySession(strings.TrimSpace(sessionID))
 	if entry == nil {
 		return clientui.RuntimeMainView{}, false
 	}
