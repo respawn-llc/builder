@@ -283,6 +283,27 @@ func setOptionalNonblank(target **string, value string) {
 	*target = &copied
 }
 
+func SessionRuntimeAgentSelectionFromProto(
+	message *sessionlaunchpb.SessionRuntimeAgentSelection,
+) (*serverapi.SessionRuntimeAgentSelection, error) {
+	if message == nil {
+		return nil, nil
+	}
+	if err := Validate(message); err != nil {
+		return nil, err
+	}
+	return &serverapi.SessionRuntimeAgentSelection{
+		Agent: message.Agent,
+		Baseline: serverapi.SessionRuntimeChatSettings{
+			Supervisor:     message.Baseline.Supervisor,
+			Thinking:       message.Baseline.Thinking,
+			Fast:           message.Baseline.Fast,
+			Questions:      message.Baseline.Questions,
+			AutoCompaction: message.Baseline.AutoCompaction,
+		},
+	}, nil
+}
+
 func SessionToolIDToProto(toolID toolspec.ID) (sessionlaunchpb.ToolID, error) {
 	switch toolID {
 	case toolspec.ToolExecCommand:

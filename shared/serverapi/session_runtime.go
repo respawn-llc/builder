@@ -10,15 +10,29 @@ import (
 )
 
 type SessionRuntimeActivateRequest struct {
-	ClientRequestID          string              `json:"client_request_id"`
-	SessionID                string              `json:"session_id"`
-	OwnerID                  string              `json:"owner_id,omitempty"`
-	ActiveSettings           config.Settings     `json:"active_settings"`
-	EnabledToolIDs           []string            `json:"enabled_tool_ids"`
-	QuestionsEnabled         *bool               `json:"questions_enabled"`
-	AutoCompactionEnabled    *bool               `json:"auto_compaction_enabled"`
-	ThinkingOverrideExplicit bool                `json:"thinking_override_explicit"`
-	Source                   config.SourceReport `json:"source"`
+	ClientRequestID          string                        `json:"client_request_id"`
+	SessionID                string                        `json:"session_id"`
+	OwnerID                  string                        `json:"owner_id,omitempty"`
+	ActiveSettings           config.Settings               `json:"active_settings"`
+	EnabledToolIDs           []string                      `json:"enabled_tool_ids"`
+	QuestionsEnabled         *bool                         `json:"questions_enabled"`
+	AutoCompactionEnabled    *bool                         `json:"auto_compaction_enabled"`
+	ThinkingOverrideExplicit bool                          `json:"thinking_override_explicit"`
+	AgentSelection           *SessionRuntimeAgentSelection `json:"agent_selection,omitempty"`
+	Source                   config.SourceReport           `json:"source"`
+}
+
+type SessionRuntimeAgentSelection struct {
+	Agent    string                     `json:"agent"`
+	Baseline SessionRuntimeChatSettings `json:"baseline"`
+}
+
+type SessionRuntimeChatSettings struct {
+	Supervisor     string `json:"supervisor"`
+	Thinking       string `json:"thinking"`
+	Fast           bool   `json:"fast"`
+	Questions      bool   `json:"questions"`
+	AutoCompaction bool   `json:"auto_compaction"`
 }
 
 type SessionRuntimeAttachment struct {
@@ -62,6 +76,17 @@ func (r SessionRuntimeActivateRequest) Validate() error {
 	}
 	if r.AutoCompactionEnabled == nil {
 		return errors.New("auto_compaction_enabled is required")
+	}
+	if r.AgentSelection != nil {
+		if strings.TrimSpace(r.AgentSelection.Agent) == "" {
+			return errors.New("agent_selection.agent is required")
+		}
+		if strings.TrimSpace(r.AgentSelection.Baseline.Supervisor) == "" {
+			return errors.New("agent_selection.baseline.supervisor is required")
+		}
+		if strings.TrimSpace(r.AgentSelection.Baseline.Thinking) == "" {
+			return errors.New("agent_selection.baseline.thinking is required")
+		}
 	}
 	return nil
 }

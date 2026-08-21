@@ -24,6 +24,7 @@ type Request struct {
 	QuestionsEnabled         bool
 	AutoCompactionEnabled    bool
 	ThinkingOverrideExplicit bool
+	AgentSelection           *serverapi.SessionRuntimeAgentSelection
 	Source                   config.SourceReport
 }
 
@@ -103,6 +104,7 @@ func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActiva
 		QuestionsEnabled:         textutil.Value(req.QuestionsEnabled),
 		AutoCompactionEnabled:    textutil.Value(req.AutoCompactionEnabled),
 		ThinkingOverrideExplicit: req.ThinkingOverrideExplicit,
+		AgentSelection:           req.AgentSelection,
 		Source:                   req.Source,
 	}
 }

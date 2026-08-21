@@ -576,7 +576,13 @@ func (s *Service) planExistingSession(ctx context.Context, planner launch.Planne
 	if err != nil {
 		return PlanResult{}, err
 	}
-	meta, agentSelectionResolved, err := applyPreparedAgentChatSettings(planner.Config, authState, roleOverride, preparedOverrides, meta)
+	meta, agentSelectionResolved, activationAgentSelection, err := applyPreparedAgentChatSettings(
+		planner.Config,
+		authState,
+		roleOverride,
+		preparedOverrides,
+		meta,
+	)
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -589,6 +595,7 @@ func (s *Service) planExistingSession(ctx context.Context, planner launch.Planne
 	}, meta, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{
 		AgentSelectionPersisted: agentSelectionResolved && strings.TrimSpace(req.Overrides.OpenAIBaseURL) == "",
 	})
+	plan.ActivationAgentSelection = activationAgentSelection
 	return s.finalizeLaunchPlan(ctx, plan, warnings, err)
 }
 
@@ -616,10 +623,16 @@ func authorizePersistedHeadlessRole(
 	return subagentpolicy.Authorize(planner.Config.Settings, caller, subagentpolicy.TargetFromOverride(persistedOverride))
 }
 
-func applyPreparedAgentChatSettings(app config.App, authState auth.State, roleOverride serverapi.RunPromptAgentRoleOverride, preparedOverrides launch.PreparedRunPromptOverrides, meta session.Meta) (session.Meta, bool, error) {
+func applyPreparedAgentChatSettings(
+	app config.App,
+	authState auth.State,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	preparedOverrides launch.PreparedRunPromptOverrides,
+	meta session.Meta,
+) (session.Meta, bool, *session.ChatAgentSelection, error) {
 	state, err := session.ChatSettingsStateFromMeta(meta)
 	if err != nil {
-		return session.Meta{}, false, err
+		return session.Meta{}, false, nil, err
 	}
 	targetAgent := state.Agent
 	selectAgent := roleOverride.Present
@@ -636,10 +649,10 @@ func applyPreparedAgentChatSettings(app config.App, authState auth.State, roleOv
 		}
 	}
 	if !selectAgent {
-		return meta, false, nil
+		return meta, false, nil, nil
 	}
 	if meta.Locked != nil {
-		return meta, false, nil
+		return meta, false, nil, nil
 	}
 	var prepared launch.PreparedChatSettings
 	if roleOverride.Present {
@@ -655,10 +668,10 @@ func applyPreparedAgentChatSettings(app config.App, authState auth.State, roleOv
 			}
 		}
 		if target == nil {
-			return session.Meta{}, false, fmt.Errorf("prepared Chat Agent %q target is required", targetAgent)
+			return session.Meta{}, false, nil, fmt.Errorf("prepared Chat Agent %q target is required", targetAgent)
 		}
 		if preparedOverrides.ProviderCapabilities == nil {
-			return session.Meta{}, false, fmt.Errorf("prepared Chat Agent %q provider capabilities are required", targetAgent)
+			return session.Meta{}, false, nil, fmt.Errorf("prepared Chat Agent %q provider capabilities are required", targetAgent)
 		}
 		prepared, err = launch.PrepareChatSettingsForPreparedTarget(
 			*target,
@@ -668,18 +681,22 @@ func applyPreparedAgentChatSettings(app config.App, authState auth.State, roleOv
 		prepared, err = launch.PrepareChatSettingsForAgent(app, authState, targetAgent)
 	}
 	if err != nil {
-		return session.Meta{}, false, err
+		return session.Meta{}, false, nil, err
 	}
+	selection := session.ChatAgentSelection{Agent: targetAgent, Baseline: prepared.Baseline}
 	projected, result, err := session.ProjectChatSettingsMutation(meta, session.ChatSettingsMutation{
-		Agent: &session.ChatAgentSelection{Agent: targetAgent, Baseline: prepared.Baseline},
+		Agent: &selection,
 	})
 	if errors.Is(err, session.ErrChatAgentLocked) {
-		return meta, false, nil
+		return meta, false, nil, nil
 	}
 	if err != nil {
-		return session.Meta{}, false, err
+		return session.Meta{}, false, nil, err
 	}
-	return projected, result.Changed, nil
+	if !result.Changed {
+		return projected, true, nil, nil
+	}
+	return projected, true, &selection, nil
 }
 
 func preparePromptFacingTarget(
@@ -792,6 +809,19 @@ func sessionPlanSuccessFromResult(result PlanResult) (*sessionlaunchpb.SessionPl
 		AutoCompactionEnabled:    result.Plan.AutoCompactionEnabled,
 		ThinkingOverrideExplicit: result.Plan.ThinkingOverrideExplicit,
 		Source:                   source,
+	}
+	if result.Plan.ActivationAgentSelection != nil {
+		selection := result.Plan.ActivationAgentSelection
+		plan.ActivationAgentSelection = &sessionlaunchpb.SessionRuntimeAgentSelection{
+			Agent: selection.Agent,
+			Baseline: &sessionlaunchpb.SessionRuntimeChatSettings{
+				Supervisor:     selection.Baseline.Supervisor,
+				Thinking:       selection.Baseline.Thinking,
+				Fast:           selection.Baseline.Fast,
+				Questions:      selection.Baseline.Questions,
+				AutoCompaction: selection.Baseline.AutoCompaction,
+			},
+		}
 	}
 	if result.Plan.ConfiguredModelName != "" {
 		plan.ConfiguredModelName = &result.Plan.ConfiguredModelName

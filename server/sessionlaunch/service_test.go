@@ -797,6 +797,37 @@ func TestPlanLaunchSessionAgentSelectionUsesCompletePreparedBaseline(t *testing.
 		!selected.Plan.AutoCompactionEnabled {
 		t.Fatalf("selected plan = %+v, want complete worker baseline", selected.Plan)
 	}
+	wantSelection := session.ChatAgentSelection{
+		Agent: "worker",
+		Baseline: session.ChatSettings{
+			Supervisor:     "all",
+			Thinking:       "high",
+			Fast:           true,
+			Questions:      true,
+			AutoCompaction: true,
+		},
+	}
+	if selected.Plan.ActivationAgentSelection == nil ||
+		!reflect.DeepEqual(*selected.Plan.ActivationAgentSelection, wantSelection) {
+		t.Fatalf(
+			"activation Agent selection = %+v, want %+v",
+			selected.Plan.ActivationAgentSelection,
+			wantSelection,
+		)
+	}
+	generated, err := sessionPlanSuccessFromResult(selected)
+	if err != nil {
+		t.Fatalf("encode Session plan: %v", err)
+	}
+	if generated.Plan.ActivationAgentSelection == nil ||
+		generated.Plan.ActivationAgentSelection.Agent != "worker" ||
+		generated.Plan.ActivationAgentSelection.Baseline == nil ||
+		generated.Plan.ActivationAgentSelection.Baseline.Thinking != "high" {
+		t.Fatalf(
+			"generated activation Agent selection = %+v, want complete worker selection",
+			generated.Plan.ActivationAgentSelection,
+		)
+	}
 }
 
 func TestPlanLaunchSessionProjectsUnavailableAgentWithCompleteDefaultBaseline(t *testing.T) {

@@ -43,6 +43,7 @@ type AgentRuntimePlanOptions struct {
 	OnLoggingFailure                    func(string)
 	StartLogLines                       []string
 	RecoveredWarningProvider            func() (string, bool, error)
+	AgentSelection                      *session.ChatAgentSelection
 }
 
 type AgentRuntimePlan struct {
@@ -69,6 +70,10 @@ func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, err
 	options.FilesystemContext = options.FilesystemContext.Clone()
 	options.QuestionsEnabled = textutil.Pointer(options.QuestionsEnabled)
 	options.AutoCompactionEnabled = textutil.Pointer(options.AutoCompactionEnabled)
+	if options.AgentSelection != nil {
+		selection := *options.AgentSelection
+		options.AgentSelection = &selection
+	}
 	if options.ProviderCapabilitiesOverride != nil {
 		value := *options.ProviderCapabilitiesOverride
 		options.ProviderCapabilitiesOverride = &value
@@ -158,6 +163,9 @@ func (a *Authority) buildAgentResource(
 	}
 	if plan == nil {
 		return nil, errors.New("agent runtime plan is required")
+	}
+	if err := applyAgentSelection(store, plan.options.AgentSelection); err != nil {
+		return nil, err
 	}
 	if err := appendRecoveredWarning(store, plan.options.RecoveredWarningProvider); err != nil {
 		return nil, err

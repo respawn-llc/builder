@@ -69,6 +69,14 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 	return err
 }
 
+func applyAgentSelection(store *session.Store, selection *session.ChatAgentSelection) error {
+	if selection == nil {
+		return nil
+	}
+	_, err := store.MutateChatSettings(session.ChatSettingsMutation{Agent: selection})
+	return err
+}
+
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
@@ -90,6 +98,21 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, error) {
 		if _, err := store.PromoteSubagentToMain(); err != nil {
 			return nil, err
+		}
+		if req.AgentSelection != nil {
+			selection := session.ChatAgentSelection{
+				Agent: req.AgentSelection.Agent,
+				Baseline: session.ChatSettings{
+					Supervisor:     req.AgentSelection.Baseline.Supervisor,
+					Thinking:       req.AgentSelection.Baseline.Thinking,
+					Fast:           req.AgentSelection.Baseline.Fast,
+					Questions:      req.AgentSelection.Baseline.Questions,
+					AutoCompaction: req.AgentSelection.Baseline.AutoCompaction,
+				},
+			}
+			if err := applyAgentSelection(store, &selection); err != nil {
+				return nil, err
+			}
 		}
 		persisted := store.Meta().ChatSettings
 		if persisted != nil && req.ThinkingOverrideExplicit {
