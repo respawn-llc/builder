@@ -166,7 +166,7 @@ export type NativeContext = Readonly<{
   serverEndpoint: string;
   persistenceRoot: string;
   // persistenceRootId is the id a connected server must report
-  // (HandshakeResponse.identity.persistence_root_id) for the GUI to trust it
+  // (HandshakeResult.identity.persistenceRootId) for the GUI to trust it
   // serves this root. Empty when validation should be skipped (default root or
   // KENT_PERSISTENCE_ROOT unset).
   persistenceRootId: string;

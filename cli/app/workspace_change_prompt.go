@@ -8,8 +8,9 @@ import (
 	"strings"
 
 	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/clientui"
-	"core/shared/protocol"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -53,7 +54,7 @@ func newSessionWorkspaceRetargetContext(workspaceRoot string, theme string) (*se
 	}, nil
 }
 
-func sessionWorkspaceRetargetContextFromBinding(binding protocol.ProjectAttachment, theme string) *sessionWorkspaceRetargetContext {
+func sessionWorkspaceRetargetContextFromBinding(binding client.ProjectAttachment, theme string) *sessionWorkspaceRetargetContext {
 	return &sessionWorkspaceRetargetContext{
 		workspaceRoot: normalizeWorkspaceChangeDisplayRoot(binding.WorkspaceRoot),
 		theme:         strings.TrimSpace(theme),
@@ -78,11 +79,15 @@ func resolveSessionWorkspaceRetargetContext(
 	if trimmedWorkspaceID == "" {
 		return nil, errors.New("workspace id is required for workspace retarget context")
 	}
-	overview, err := projectViews.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: trimmedProjectID})
+	overview, err := projectViews.GetProjectOverview(ctx, &projectpb.GetOverviewRequest{ProjectId: trimmedProjectID})
 	if err != nil {
 		return nil, err
 	}
-	for _, workspace := range overview.Overview.Workspaces {
+	workspaces, err := client.ProjectWorkspaceSummariesFromProto(overview.Overview.Workspaces)
+	if err != nil {
+		return nil, err
+	}
+	for _, workspace := range workspaces {
 		if workspace.WorkspaceID == trimmedWorkspaceID {
 			return newSessionWorkspaceRetargetContext(workspace.RootPath, theme)
 		}

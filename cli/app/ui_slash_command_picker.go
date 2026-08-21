@@ -7,7 +7,8 @@ import (
 	"unicode"
 
 	"core/cli/app/commands"
-	"core/shared/serverapi"
+	"core/shared/protoapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -174,18 +175,18 @@ func (m *uiModel) requestAuthSlashCommandRefresh() tea.Cmd {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
 		defer cancel()
-		response, err := loader.GetAuthStatus(ctx, serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
+		response, err := loader.GetStatus(ctx, &authpb.GetStatusRequest{SkipSubscriptionUsage: true})
 		if err != nil {
 			return authSlashCommandRefreshedMsg{token: token, generation: generation, err: err}
 		}
-		if err := response.Validate(); err != nil {
+		if err := protoapi.Validate(response); err != nil {
 			return authSlashCommandRefreshedMsg{token: token, generation: generation, err: err}
 		}
-		if response.Resolution.Kind == serverapi.AuthStatusResolutionUnavailable {
-			return authSlashCommandRefreshedMsg{token: token, generation: generation, err: errors.New(response.Resolution.Failure.Cause)}
+		if unavailable := response.GetResolution().GetUnavailable(); unavailable != nil {
+			return authSlashCommandRefreshedMsg{token: token, generation: generation, err: errors.New(unavailable.GetCause())}
 		}
 		kind := authSlashCommandLogin
-		if response.Resolution.Facts.Method == serverapi.AuthStatusMethodOAuth {
+		if response.GetResolution().GetKnown().GetMethod() == authpb.AuthMethod_AUTH_METHOD_OAUTH {
 			kind = authSlashCommandLogout
 		}
 		return authSlashCommandRefreshedMsg{token: token, generation: generation, kind: kind}

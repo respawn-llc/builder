@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"core/shared/serverapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -91,7 +91,7 @@ func (secretClipboardExitError) ExitCode() int {
 }
 
 func TestClipboardPasteMainReturnsAutocompleteRefreshCommand(t *testing.T) {
-	authStatus := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)}
+	authStatus := &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_NONE)}
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{
 		AuthStatus: authStatus,
 	}))

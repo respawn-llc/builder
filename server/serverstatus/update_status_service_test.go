@@ -7,8 +7,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"core/shared/serverapi"
 )
 
 func TestUpdateStatusServiceIsLazyAndCachesCompletedAttempt(t *testing.T) {
@@ -19,16 +17,16 @@ func TestUpdateStatusServiceIsLazyAndCachesCompletedAttempt(t *testing.T) {
 	if calls := source.calls.Load(); calls != 0 {
 		t.Fatalf("release calls after construction = %d, want 0", calls)
 	}
-	first, err := service.Status(context.Background())
+	first, err := service.status(context.Background())
 	if err != nil {
 		t.Fatalf("first Status: %v", err)
 	}
-	second, err := service.Status(context.Background())
+	second, err := service.status(context.Background())
 	if err != nil {
 		t.Fatalf("second Status: %v", err)
 	}
-	if first.Kind() != serverapi.UpdateStatusAvailable || second.Kind() != serverapi.UpdateStatusAvailable {
-		t.Fatalf("result kinds = %q/%q, want available", first.Kind(), second.Kind())
+	if first.kind != updateStatusAvailable || second.kind != updateStatusAvailable {
+		t.Fatalf("result kinds = %d/%d, want available", first.kind, second.kind)
 	}
 	if calls := source.calls.Load(); calls != 1 {
 		t.Fatalf("release calls = %d, want 1", calls)
@@ -41,12 +39,12 @@ func TestUpdateStatusServiceCachesFailedAttempt(t *testing.T) {
 	t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
 
 	for range 2 {
-		result, err := service.Status(context.Background())
+		result, err := service.status(context.Background())
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if result.Kind() != serverapi.UpdateStatusCheckFailed {
-			t.Fatalf("kind = %q, want check_failed", result.Kind())
+		if result.kind != updateStatusCheckFailed {
+			t.Fatalf("kind = %d, want check_failed", result.kind)
 		}
 	}
 	if calls := source.calls.Load(); calls != 1 {
@@ -61,12 +59,12 @@ func TestUpdateStatusServiceBoundsReleaseAttempt(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), updateStatusTimeout+time.Second)
 	defer cancel()
-	result, err := service.Status(ctx)
+	result, err := service.status(ctx)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if result.Kind() != serverapi.UpdateStatusCheckUnavailable {
-		t.Fatalf("kind = %q, want check_unavailable", result.Kind())
+	if result.kind != updateStatusCheckUnavailable {
+		t.Fatalf("kind = %d, want check_unavailable", result.kind)
 	}
 }
 
@@ -76,28 +74,28 @@ func TestUpdateStatusServiceRefreshesCompletedAttemptAtOneHour(t *testing.T) {
 	service := newUpdateStatusService("1.1.0", false, source, func() time.Time { return now })
 	t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
 
-	first, err := service.Status(context.Background())
+	first, err := service.status(context.Background())
 	if err != nil {
 		t.Fatalf("first Status: %v", err)
 	}
-	if first.Kind() != serverapi.UpdateStatusCurrent {
-		t.Fatalf("first kind = %q, want current", first.Kind())
+	if first.kind != updateStatusCurrent {
+		t.Fatalf("first kind = %d, want current", first.kind)
 	}
 	now = now.Add(updateStatusFreshness - time.Nanosecond)
-	beforeExpiry, err := service.Status(context.Background())
+	beforeExpiry, err := service.status(context.Background())
 	if err != nil {
 		t.Fatalf("Status before expiry: %v", err)
 	}
-	if beforeExpiry.Kind() != serverapi.UpdateStatusCurrent {
-		t.Fatalf("before-expiry kind = %q, want current", beforeExpiry.Kind())
+	if beforeExpiry.kind != updateStatusCurrent {
+		t.Fatalf("before-expiry kind = %d, want current", beforeExpiry.kind)
 	}
 	now = now.Add(time.Nanosecond)
-	afterExpiry, err := service.Status(context.Background())
+	afterExpiry, err := service.status(context.Background())
 	if err != nil {
 		t.Fatalf("Status at expiry: %v", err)
 	}
-	if afterExpiry.Kind() != serverapi.UpdateStatusAvailable {
-		t.Fatalf("at-expiry kind = %q, want available", afterExpiry.Kind())
+	if afterExpiry.kind != updateStatusAvailable {
+		t.Fatalf("at-expiry kind = %d, want available", afterExpiry.kind)
 	}
 	if calls := source.calls.Load(); calls != 2 {
 		t.Fatalf("release calls = %d, want 2", calls)
@@ -109,11 +107,11 @@ func TestUpdateStatusServiceCoalescesConcurrentRequests(t *testing.T) {
 	service := newUpdateStatusService("1.1.0", false, source, time.Now)
 	t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
 
-	results := make(chan serverapi.UpdateStatusResult, 2)
+	results := make(chan updateStatusResult, 2)
 	errs := make(chan error, 2)
 	for range 2 {
 		go func() {
-			result, err := service.Status(context.Background())
+			result, err := service.status(context.Background())
 			results <- result
 			errs <- err
 		}()
@@ -127,8 +125,8 @@ func TestUpdateStatusServiceCoalescesConcurrentRequests(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if result := <-results; result.Kind() != serverapi.UpdateStatusAvailable {
-			t.Fatalf("kind = %q, want available", result.Kind())
+		if result := <-results; result.kind != updateStatusAvailable {
+			t.Fatalf("kind = %d, want available", result.kind)
 		}
 	}
 	if calls := source.calls.Load(); calls != 1 {
@@ -144,7 +142,7 @@ func TestUpdateStatusCallerCancellationIsLocal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancelled := make(chan error, 1)
 	go func() {
-		_, err := service.Status(ctx)
+		_, err := service.status(ctx)
 		cancelled <- err
 	}()
 	<-source.started
@@ -153,10 +151,10 @@ func TestUpdateStatusCallerCancellationIsLocal(t *testing.T) {
 		t.Fatalf("cancelled Status error = %v, want context canceled", err)
 	}
 
-	completed := make(chan serverapi.UpdateStatusResult, 1)
+	completed := make(chan updateStatusResult, 1)
 	completionErrors := make(chan error, 1)
 	go func() {
-		result, err := service.Status(context.Background())
+		result, err := service.status(context.Background())
 		completed <- result
 		completionErrors <- err
 	}()
@@ -167,8 +165,8 @@ func TestUpdateStatusCallerCancellationIsLocal(t *testing.T) {
 	if err := <-completionErrors; err != nil {
 		t.Fatalf("Status after cancellation: %v", err)
 	}
-	if result := <-completed; result.Kind() != serverapi.UpdateStatusAvailable {
-		t.Fatalf("result kind = %q, want available", result.Kind())
+	if result := <-completed; result.kind != updateStatusAvailable {
+		t.Fatalf("result kind = %d, want available", result.kind)
 	}
 }
 
@@ -178,7 +176,7 @@ func TestUpdateStatusServiceCloseWakesPendingCallers(t *testing.T) {
 
 	statusErrors := make(chan error, 1)
 	go func() {
-		_, err := service.Status(context.Background())
+		_, err := service.status(context.Background())
 		statusErrors <- err
 	}()
 	<-source.started
@@ -188,7 +186,7 @@ func TestUpdateStatusServiceCloseWakesPendingCallers(t *testing.T) {
 	if err := <-statusErrors; !errors.Is(err, ErrUpdateStatusServiceClosed) {
 		t.Fatalf("pending Status error = %v, want ErrUpdateStatusServiceClosed", err)
 	}
-	if _, err := service.Status(context.Background()); !errors.Is(err, ErrUpdateStatusServiceClosed) {
+	if _, err := service.status(context.Background()); !errors.Is(err, ErrUpdateStatusServiceClosed) {
 		t.Fatalf("post-close Status error = %v, want ErrUpdateStatusServiceClosed", err)
 	}
 }
@@ -197,28 +195,28 @@ func TestUpdateStatusServiceClassifiesReleaseSourceFailures(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
-		want serverapi.UpdateStatusResultKind
+		want updateStatusKind
 	}{
-		{name: "transport", err: &releaseTransportError{Cause: errors.New("offline")}, want: serverapi.UpdateStatusCheckUnavailable},
-		{name: "timeout", err: context.DeadlineExceeded, want: serverapi.UpdateStatusCheckUnavailable},
-		{name: "http", err: &releaseHTTPStatusError{StatusCode: 503, Status: "503 Service Unavailable"}, want: serverapi.UpdateStatusCheckFailed},
-		{name: "metadata", err: &releaseMetadataError{Cause: errors.New("invalid release metadata")}, want: serverapi.UpdateStatusCheckFailed},
-		{name: "internal", err: errors.New("unexpected release source failure"), want: serverapi.UpdateStatusCheckFailed},
+		{name: "transport", err: &releaseTransportError{Cause: errors.New("offline")}, want: updateStatusCheckUnavailable},
+		{name: "timeout", err: context.DeadlineExceeded, want: updateStatusCheckUnavailable},
+		{name: "http", err: &releaseHTTPStatusError{StatusCode: 503, Status: "503 Service Unavailable"}, want: updateStatusCheckFailed},
+		{name: "metadata", err: &releaseMetadataError{Cause: errors.New("invalid release metadata")}, want: updateStatusCheckFailed},
+		{name: "internal", err: errors.New("unexpected release source failure"), want: updateStatusCheckFailed},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			service := newUpdateStatusService("1.1.0", false, &countingReleaseSource{err: test.err}, time.Now)
 			t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
-			result, err := service.Status(context.Background())
+			result, err := service.status(context.Background())
 			if err != nil {
 				t.Fatalf("Status: %v", err)
 			}
-			if result.Kind() != test.want {
-				t.Fatalf("kind = %q, want %q", result.Kind(), test.want)
+			if result.kind != test.want {
+				t.Fatalf("kind = %d, want %d", result.kind, test.want)
 			}
-			hasFailure := result.Failure() != nil
-			if hasFailure != (test.want == serverapi.UpdateStatusCheckFailed) {
-				t.Fatalf("failure present = %v, want %v", hasFailure, test.want == serverapi.UpdateStatusCheckFailed)
+			hasFailure := result.cause != ""
+			if hasFailure != (test.want == updateStatusCheckFailed) {
+				t.Fatalf("failure present = %v, want %v", hasFailure, test.want == updateStatusCheckFailed)
 			}
 		})
 	}
@@ -228,13 +226,12 @@ func TestUpdateStatusServiceReportsDevelopmentAndInvalidVersions(t *testing.T) {
 	t.Run("development build", func(t *testing.T) {
 		service := newUpdateStatusService("dev", false, &countingReleaseSource{metadata: releaseMetadata{Version: "1.2.0"}}, time.Now)
 		t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
-		result, err := service.Status(context.Background())
+		result, err := service.status(context.Background())
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		versions := result.Versions()
-		if versions == nil || result.Kind() != serverapi.UpdateStatusAvailable || versions.Current != "0.0.0" || versions.Latest != "1.2.0" {
-			t.Fatalf("development result = %#v, versions = %+v", result.Kind(), versions)
+		if result.kind != updateStatusAvailable || result.current != "0.0.0" || result.latest != "1.2.0" {
+			t.Fatalf("development result = %#v", result)
 		}
 	})
 
@@ -242,12 +239,12 @@ func TestUpdateStatusServiceReportsDevelopmentAndInvalidVersions(t *testing.T) {
 		source := &countingReleaseSource{metadata: releaseMetadata{Version: "1.2.0"}}
 		service := newUpdateStatusService("18446744073709551616.0.0", false, source, time.Now)
 		t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
-		result, err := service.Status(context.Background())
+		result, err := service.status(context.Background())
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if result.Kind() != serverapi.UpdateStatusCheckFailed {
-			t.Fatalf("kind = %q, want check_failed", result.Kind())
+		if result.kind != updateStatusCheckFailed {
+			t.Fatalf("kind = %d, want check_failed", result.kind)
 		}
 		if calls := source.calls.Load(); calls != 0 {
 			t.Fatalf("release calls = %d, want 0", calls)
@@ -257,12 +254,12 @@ func TestUpdateStatusServiceReportsDevelopmentAndInvalidVersions(t *testing.T) {
 	t.Run("overflowed release version", func(t *testing.T) {
 		service := newUpdateStatusService("1.1.0", false, &countingReleaseSource{metadata: releaseMetadata{Version: "1.18446744073709551616.0"}}, time.Now)
 		t.Cleanup(func() { requireUpdateStatusServiceClosed(t, service) })
-		result, err := service.Status(context.Background())
+		result, err := service.status(context.Background())
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if result.Kind() != serverapi.UpdateStatusCheckFailed {
-			t.Fatalf("kind = %q, want check_failed", result.Kind())
+		if result.kind != updateStatusCheckFailed {
+			t.Fatalf("kind = %d, want check_failed", result.kind)
 		}
 	})
 }

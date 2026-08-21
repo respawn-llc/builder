@@ -8,7 +8,10 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/shared/config"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type workspaceChatContextAuthReader struct {
@@ -177,8 +180,8 @@ func TestOrdinaryWorkspaceChatDraftOperationsDoNotResolveContextPolicy(t *testin
 	}); err != nil {
 		t.Fatalf("TransformWorkspaceChatDraftAggregate: %v", err)
 	}
-	if _, err := service.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{
-		Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftClear},
+	if _, err := service.WorkspaceChatDraft(t.Context(), &sessionlaunchpb.WorkspaceChatDraftRequest{
+		Operation: &sessionlaunchpb.WorkspaceChatDraftRequest_Clear{Clear: &emptypb.Empty{}},
 	}); err != nil {
 		t.Fatalf("clear WorkspaceChatDraft: %v", err)
 	}

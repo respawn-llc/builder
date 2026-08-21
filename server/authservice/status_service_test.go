@@ -15,7 +15,7 @@ import (
 	"core/server/auth"
 	"core/shared/authstatus"
 	"core/shared/config"
-	"core/shared/serverapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 )
 
 type failingAuthStatusStore struct {
@@ -50,7 +50,7 @@ func TestStatusServiceLoadsAuthStateOnce(t *testing.T) {
 	}}
 	service := NewStatusService(auth.NewManager(store, nil, time.Now), config.Settings{})
 
-	if _, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{}); err != nil {
+	if _, err := service.GetStatus(context.Background(), &authpb.GetStatusRequest{}); err != nil {
 		t.Fatalf("GetAuthStatus: %v", err)
 	}
 	if store.loads != 1 {
@@ -99,14 +99,12 @@ func TestStatusServicePublishesUnavailableWhenInitialLoadFails(t *testing.T) {
 		config.Settings{},
 	)
 
-	response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
+	response, err := service.GetStatus(context.Background(), &authpb.GetStatusRequest{})
 	if err != nil {
 		t.Fatalf("GetAuthStatus: %v", err)
 	}
-	if response.Resolution.Kind != serverapi.AuthStatusResolutionUnavailable ||
-		response.Resolution.Facts != nil ||
-		response.Resolution.Failure == nil ||
-		response.Resolution.Failure.Cause != wantErr.Error() {
+	if response.Resolution.GetUnavailable() == nil ||
+		response.Resolution.GetUnavailable().Cause != wantErr.Error() {
 		t.Fatalf("resolution = %+v", response.Resolution)
 	}
 	if response.Subscription.Applicable {
@@ -140,18 +138,17 @@ func TestStatusServiceReadsOAuthFactsWithoutRefreshingCredentials(t *testing.T) 
 	)
 	service := NewStatusService(auth.NewManager(store, refresher, func() time.Time { return now }), config.Settings{})
 
-	response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
+	response, err := service.GetStatus(context.Background(), &authpb.GetStatusRequest{SkipSubscriptionUsage: true})
 	if err != nil {
 		t.Fatalf("GetAuthStatus: %v", err)
 	}
-	facts := response.Resolution.Facts
-	if response.Resolution.Kind != serverapi.AuthStatusResolutionKnown ||
-		response.Resolution.Failure != nil ||
+	facts := response.Resolution.GetKnown()
+	if response.Resolution.PartialFailure != nil ||
 		facts == nil ||
-		facts.Method != serverapi.AuthStatusMethodOAuth ||
-		facts.OAuth == nil ||
-		facts.OAuth.Email == nil ||
-		*facts.OAuth.Email != "user@example.com" {
+		facts.Method != authpb.AuthMethod_AUTH_METHOD_OAUTH ||
+		facts.GetOauth() == nil ||
+		facts.GetOauth().Email == nil ||
+		*facts.GetOauth().Email != "user@example.com" {
 		t.Fatalf("resolution = %+v", response.Resolution)
 	}
 	if refreshCalled {
@@ -178,16 +175,16 @@ func TestStatusServicePublishesOnlySafeAPIKeyFacts(t *testing.T) {
 				Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: test.key}},
 			}), nil, time.Now), config.Settings{ProviderOverride: "anthropic"})
 
-			response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
+			response, err := service.GetStatus(context.Background(), &authpb.GetStatusRequest{})
 			if err != nil {
 				t.Fatalf("GetAuthStatus: %v", err)
 			}
-			facts := response.Resolution.Facts
-			if facts == nil || facts.APIKey == nil || facts.Provider.Identifier != "anthropic" {
+			facts := response.Resolution.GetKnown()
+			if facts == nil || facts.GetApiKey() == nil || facts.Provider.Identifier != "anthropic" {
 				t.Fatalf("facts = %+v", facts)
 			}
-			if !reflect.DeepEqual(facts.APIKey.Suffix, test.wantSuffix) {
-				t.Fatalf("suffix = %v, want %v", facts.APIKey.Suffix, test.wantSuffix)
+			if !reflect.DeepEqual(facts.GetApiKey().Suffix, test.wantSuffix) {
+				t.Fatalf("suffix = %v, want %v", facts.GetApiKey().Suffix, test.wantSuffix)
 			}
 		})
 	}
@@ -215,7 +212,7 @@ func TestStatusServiceUsesRequestedEffectiveProviderForSubscription(t *testing.T
 		OpenAIBaseURL: "https://daemon.example/v1",
 	})
 
-	global, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
+	global, err := service.GetStatus(context.Background(), &authpb.GetStatusRequest{})
 	if err != nil {
 		t.Fatalf("global GetAuthStatus: %v", err)
 	}
@@ -226,13 +223,13 @@ func TestStatusServiceUsesRequestedEffectiveProviderForSubscription(t *testing.T
 	selection := authstatus.ProviderSelection(config.Settings{
 		OpenAIBaseURL: "https://session.example/v1",
 	})
-	effective, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{Provider: &selection})
+	effective, err := service.GetStatus(context.Background(), &authpb.GetStatusRequest{Provider: selection})
 	if err != nil {
 		t.Fatalf("effective GetAuthStatus: %v", err)
 	}
-	if effective.Resolution.Facts == nil ||
-		effective.Resolution.Facts.Provider.Identifier != "openai-compatible" ||
-		effective.Resolution.Facts.Provider.Kind != serverapi.AuthProviderKindOpenAICompatible ||
+	if effective.Resolution.GetKnown() == nil ||
+		effective.Resolution.GetKnown().Provider.Identifier != "openai-compatible" ||
+		effective.Resolution.GetKnown().Provider.Kind != authpb.ProviderKind_PROVIDER_KIND_OPENAI_COMPATIBLE ||
 		effective.Subscription.Applicable {
 		t.Fatalf("effective subscription response = %+v", effective)
 	}
@@ -248,14 +245,14 @@ func TestStatusServiceSkipsSubscriptionUsageWhenRequested(t *testing.T) {
 		}},
 	}), nil, func() time.Time { return now }), config.Settings{})
 
-	response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{
+	response, err := service.GetStatus(context.Background(), &authpb.GetStatusRequest{
 		SkipSubscriptionUsage: true,
 	})
 	if err != nil {
 		t.Fatalf("GetAuthStatus: %v", err)
 	}
-	if response.Resolution.Facts == nil ||
-		response.Resolution.Facts.Method != serverapi.AuthStatusMethodOAuth ||
+	if response.Resolution.GetKnown() == nil ||
+		response.Resolution.GetKnown().Method != authpb.AuthMethod_AUTH_METHOD_OAUTH ||
 		response.Subscription.Applicable {
 		t.Fatalf("method-only auth status = %+v", response)
 	}
@@ -265,30 +262,30 @@ func TestStatusServiceUsesCanonicalRuntimeProviderResolution(t *testing.T) {
 	tests := []struct {
 		name     string
 		settings config.Settings
-		wantKind serverapi.AuthProviderKind
+		wantKind authpb.ProviderKind
 		wantID   string
 	}{
 		{
 			name:     "explicit OpenAI provider",
 			settings: config.Settings{ProviderOverride: "openai"},
-			wantKind: serverapi.AuthProviderKindOpenAI,
+			wantKind: authpb.ProviderKind_PROVIDER_KIND_OPENAI,
 			wantID:   "openai",
 		},
 		{
 			name:     "model-inferred provider",
 			settings: config.Settings{Model: "claude-3-7-sonnet"},
-			wantKind: serverapi.AuthProviderKindConfiguredProvider,
+			wantKind: authpb.ProviderKind_PROVIDER_KIND_CONFIGURED_PROVIDER,
 			wantID:   "anthropic",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			service := NewStatusService(nil, test.settings)
-			response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
+			response, err := service.GetStatus(context.Background(), &authpb.GetStatusRequest{})
 			if err != nil {
 				t.Fatalf("GetAuthStatus: %v", err)
 			}
-			provider := response.Resolution.Facts.Provider
+			provider := response.Resolution.GetKnown().Provider
 			if provider.Kind != test.wantKind || provider.Identifier != test.wantID {
 				t.Fatalf("provider = %+v, want kind %q identifier %q", provider, test.wantKind, test.wantID)
 			}
@@ -314,8 +311,8 @@ func TestUsageWindowFactsKeepStableDuplicateDurations(t *testing.T) {
 		t.Fatalf("usageWindowFacts: %v", err)
 	}
 	if len(windows) != 2 ||
-		windows[0].Bucket != serverapi.AuthSubscriptionWindowBucketDefault ||
-		windows[1].Bucket != serverapi.AuthSubscriptionWindowBucketAdditional ||
+		windows[0].Bucket != authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_DEFAULT ||
+		windows[1].Bucket != authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_ADDITIONAL ||
 		windows[1].LimitName == nil || *windows[1].LimitName != "vision" ||
 		windows[1].MeteredFeature == nil || *windows[1].MeteredFeature != "images" {
 		t.Fatalf("windows = %+v", windows)

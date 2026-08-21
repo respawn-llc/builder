@@ -25,8 +25,7 @@ describe("Project deletion owner refresh", () => {
         requests += 1;
         if (requests === 1) return { request: requests };
         throw new RpcError({
-          code: -32000,
-          data: { reason: "project_not_found" },
+          code: -32014,
           message: "missing",
           method: "owner.read",
         });

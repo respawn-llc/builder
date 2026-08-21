@@ -10,7 +10,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,7 +27,7 @@ type uiStatusConfig struct {
 	ExecutionTarget clientui.SessionExecutionTarget
 	SessionViews    apicontract.SessionViewService
 	Settings        config.Settings
-	AuthSelection   *serverapi.AuthProviderSelection
+	AuthSelection   *authpb.ProviderSelection
 	Source          config.SourceReport
 	AuthStatus      apicontract.AuthStatusService
 }
@@ -139,7 +139,7 @@ func (m *uiModel) newStatusRequest(now time.Time) uiStatusRequest {
 		SessionName:           strings.TrimSpace(m.sessionName),
 		SessionID:             strings.TrimSpace(m.sessionID),
 		AgentRole:             textutil.Pointer(m.cachedRuntimeMainView().Session.AgentRole),
-		ConfiguredModelName:   strings.TrimSpace(m.configuredModelName),
+		ConfiguredModelName:   textutil.Pointer(m.configuredModelName),
 		ModelName:             strings.TrimSpace(m.modelName),
 		ThinkingLevel:         strings.TrimSpace(m.thinkingLevel),
 		FastModeAvailable:     m.fastModeAvailable,

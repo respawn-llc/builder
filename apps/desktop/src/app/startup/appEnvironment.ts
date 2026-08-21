@@ -7,10 +7,10 @@ import {
   ConnectionStore,
   createJsonRpcTransport,
   protocolVersion,
+  type DescriptorRpcTransport,
   type JsonValue,
   type RpcEventHandler,
   type RpcSubscription,
-  type RpcTransport,
 } from "@/api/composition";
 import type { AppServices, AppStorageNamespace } from "@/app-facade";
 import { readEffectiveTheme, type AppTheme } from "@/ui";
@@ -224,7 +224,7 @@ export function installProductionContextMenuGuard(isProduction: boolean): void {
   });
 }
 
-class BootstrapErrorTransport implements RpcTransport {
+class BootstrapErrorTransport implements DescriptorRpcTransport {
   readonly connection = new ConnectionStore();
   readonly #error: Error;
 
@@ -234,6 +234,10 @@ class BootstrapErrorTransport implements RpcTransport {
   }
 
   async call(): Promise<unknown> {
+    throw this.#error;
+  }
+
+  async callDescriptor(): Promise<never> {
     throw this.#error;
   }
 

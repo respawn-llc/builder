@@ -12,6 +12,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -154,7 +155,9 @@ func (c Collector) CollectAuth(ctx context.Context, req Request, _ Snapshot) Aut
 	if req.AuthStatus == nil {
 		return AuthStageResult{}
 	}
-	response, err := req.AuthStatus.GetAuthStatus(ctx, serverapi.AuthStatusRequest{Provider: req.AuthSelection})
+	response, err := req.AuthStatus.GetStatus(ctx, &authpb.GetStatusRequest{
+		Provider: req.AuthSelection,
+	})
 	if err != nil {
 		return UnavailableAuthStage(err)
 	}

@@ -18,6 +18,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/invariant"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -416,23 +417,33 @@ func (s *Service) resolveAuth(ctx context.Context, model serverapi.SessionExecut
 	if !ok || !sessionExecutionProviderUsesKentManagedAuth(effectiveModel.Provider) {
 		return serverapi.UnavailableSessionExecutionAuth(serverapi.SessionExecutionAuthUnavailableNotApplicable)
 	}
-	status, err := s.auth.GetAuthStatus(ctx, serverapi.AuthStatusRequest{})
+	status, err := s.auth.GetStatus(ctx, &authpb.GetStatusRequest{})
 	if err != nil {
 		return serverapi.FailedSessionExecutionAuth(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: err.Error()})
 	}
-	if err := status.Validate(); err != nil {
-		return serverapi.FailedSessionExecutionAuth(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: err.Error()})
-	}
-	if status.Resolution.Kind == serverapi.AuthStatusResolutionUnavailable {
+	if unavailable := status.GetResolution().GetUnavailable(); unavailable != nil {
 		return serverapi.FailedSessionExecutionAuth(serverapi.SessionExecutionFieldError{
 			Code:    serverapi.SessionExecutionFieldErrorSourceFailure,
-			Message: status.Resolution.Failure.Cause,
+			Message: unavailable.GetCause(),
 		})
 	}
 	return serverapi.AvailableSessionExecutionAuth(serverapi.SessionExecutionAuth{
 		Provider: effectiveModel.Provider,
-		Method:   serverapi.SessionExecutionAuthMethod(status.Resolution.Facts.Method),
+		Method:   sessionExecutionAuthMethodFromProto(status.GetResolution().GetKnown().GetMethod()),
 	})
+}
+
+func sessionExecutionAuthMethodFromProto(method authpb.AuthMethod) serverapi.SessionExecutionAuthMethod {
+	switch method {
+	case authpb.AuthMethod_AUTH_METHOD_NONE:
+		return serverapi.SessionExecutionAuthMethodNone
+	case authpb.AuthMethod_AUTH_METHOD_API_KEY:
+		return serverapi.SessionExecutionAuthMethodAPIKey
+	case authpb.AuthMethod_AUTH_METHOD_OAUTH:
+		return serverapi.SessionExecutionAuthMethodOAuth
+	default:
+		return serverapi.SessionExecutionAuthMethod("")
+	}
 }
 
 func sessionExecutionProviderUsesKentManagedAuth(provider string) bool {

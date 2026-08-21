@@ -9,7 +9,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -27,7 +27,7 @@ func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient apicontr
 	if strings.TrimSpace(cfg.WorkspaceRoot) != "" {
 		workspaceRoot = &cfg.WorkspaceRoot
 	}
-	facts, err := factsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{WorkspaceRoot: workspaceRoot})
+	facts, err := factsClient.GetFacts(ctx, &capabilitypb.GetFactsRequest{WorkspaceRoot: workspaceRoot})
 	if err != nil {
 		return onboardingResult{}, err
 	}

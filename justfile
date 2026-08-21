@@ -96,6 +96,7 @@ _lint-protobuf:
 [private]
 _gen-go:
     GOOS= GOARCH= go tool -modfile=tools.mod buf generate --template buf.gen.go.yaml
+    GOOS= GOARCH= go tool -modfile=tools.mod buf build --as-file-descriptor-set --exclude-source-info --output shared/protoapi/gen/kent_api.binpb
 
 [private]
 _gen-typescript:

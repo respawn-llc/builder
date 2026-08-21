@@ -10,6 +10,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 )
 
@@ -68,14 +69,14 @@ func projectDefaultSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		return exitCode
 	}
 	return runBindingMutationCommand(arguments, stdout, stderr, func(ctx context.Context, remote *client.Remote, selector serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
-		response, err := remote.SetDefaultWorkspace(ctx, serverapi.ProjectDefaultWorkspaceSetRequest{
-			ProjectID:                arguments.ProjectID,
-			ProjectWorkspaceSelector: selector,
+		response, err := remote.SetDefaultWorkspace(ctx, &projectpb.SetDefaultWorkspaceRequest{
+			ProjectId: arguments.ProjectID,
+			Workspace: projectWorkspaceSelectorToGenerated(selector),
 		})
 		if err != nil {
 			return bindingMutationResult{}, err
 		}
-		return bindingMutationResult{Project: &response.Project}, nil
+		return bindingMutationResult{Project: response.Project}, nil
 	}, true)
 }
 
@@ -85,9 +86,9 @@ func detachSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return exitCode
 	}
 	return runBindingMutationCommand(arguments, stdout, stderr, func(ctx context.Context, remote *client.Remote, selector serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
-		response, err := remote.UnlinkWorkspaceFromProject(ctx, serverapi.ProjectWorkspaceUnlinkRequest{
-			ProjectID:                arguments.ProjectID,
-			ProjectWorkspaceSelector: selector,
+		response, err := remote.UnlinkWorkspaceFromProject(ctx, &projectpb.UnlinkWorkspaceRequest{
+			ProjectId: arguments.ProjectID,
+			Workspace: projectWorkspaceSelectorToGenerated(selector),
 		})
 		if err != nil {
 			return bindingMutationResult{}, err
@@ -96,16 +97,16 @@ func detachSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}, false)
 }
 
-func bindingMutationResultFromDetachResponse(response serverapi.ProjectWorkspaceUnlinkResponse) (bindingMutationResult, error) {
+func bindingMutationResultFromDetachResponse(response *projectpb.UnlinkWorkspaceSuccess) (bindingMutationResult, error) {
 	if len(response.Blockers) > 0 {
-		blocked, err := newBindingMutationBlockedError(response.ProjectID, response.WorkspaceID, response.Blockers)
+		blocked, err := newBindingMutationBlockedError(response.ProjectId, response.WorkspaceId, response.Blockers)
 		if err != nil {
 			return bindingMutationResult{}, err
 		}
 		return bindingMutationResult{}, blocked
 	}
-	projectID := strings.TrimSpace(response.ProjectID)
-	workspaceID := strings.TrimSpace(response.WorkspaceID)
+	projectID := strings.TrimSpace(response.ProjectId)
+	workspaceID := strings.TrimSpace(response.WorkspaceId)
 	if projectID == "" || workspaceID == "" {
 		return bindingMutationResult{}, errors.New("workspace detach returned incomplete identity")
 	}
@@ -192,7 +193,7 @@ func bindingMutationSelector(cfg config.App, arguments bindingMutationArguments)
 type bindingMutationResult struct {
 	ProjectID   *string                       `json:"project_id,omitempty"`
 	WorkspaceID *string                       `json:"workspace_id,omitempty"`
-	Project     *serverapi.ProjectHomeSummary `json:"project,omitempty"`
+	Project     *projectpb.ProjectHomeSummary `json:"project,omitempty"`
 }
 
 type bindingMutationBlocker struct {
@@ -220,10 +221,10 @@ type bindingMutationEnvelope struct {
 type bindingMutationBlockedError struct {
 	ProjectID   string
 	WorkspaceID string
-	Blockers    []serverapi.ProjectWorkspaceUnlinkBlocker
+	Blockers    []*projectpb.WorkspaceUnlinkBlocker
 }
 
-func newBindingMutationBlockedError(projectID string, workspaceID string, blockers []serverapi.ProjectWorkspaceUnlinkBlocker) (*bindingMutationBlockedError, error) {
+func newBindingMutationBlockedError(projectID string, workspaceID string, blockers []*projectpb.WorkspaceUnlinkBlocker) (*bindingMutationBlockedError, error) {
 	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(workspaceID) == "" {
 		return nil, errors.New("workspace detach blocker response omitted resolved identity")
 	}
@@ -235,6 +236,16 @@ func newBindingMutationBlockedError(projectID string, workspaceID string, blocke
 		WorkspaceID: strings.TrimSpace(workspaceID),
 		Blockers:    blockers,
 	}, nil
+}
+
+func projectWorkspaceSelectorToGenerated(selector serverapi.ProjectWorkspaceSelector) *projectpb.ProjectWorkspaceSelector {
+	workspace := &projectpb.ProjectWorkspaceSelector{}
+	if workspaceID := selector.WorkspaceIDValue(); workspaceID != nil {
+		workspace.Selector = &projectpb.ProjectWorkspaceSelector_WorkspaceId{WorkspaceId: *workspaceID}
+	} else if workspaceRoot := selector.WorkspaceRootValue(); workspaceRoot != nil {
+		workspace.Selector = &projectpb.ProjectWorkspaceSelector_WorkspaceRoot{WorkspaceRoot: *workspaceRoot}
+	}
+	return workspace
 }
 
 func (e *bindingMutationBlockedError) Error() string {
@@ -447,11 +458,11 @@ func projectWorkspaceMutationErrorProjection(err error, requestedProjectID strin
 			}
 			projected := bindingMutationBlocker{
 				Code:     strings.TrimSpace(blocker.Code),
-				Message:  strings.TrimSpace(blocker.Message),
+				Message:  workspaceUnlinkBlockerMessage(blocker.Code),
 				Guidance: renderBlockerGuidance(guidanceAction),
 			}
-			if blocker.Count > 0 {
-				count := blocker.Count
+			if blocker.Count != nil {
+				count := int(*blocker.Count)
 				projected.Count = &count
 			}
 			projection.Blockers = append(projection.Blockers, projected)
@@ -492,10 +503,10 @@ func projectWorkspaceMutationErrorMessage(err error, projectID string, defaultMu
 		}
 		blocker := blockedErr.Blockers[0]
 		message := fmt.Sprintf("[%s]", strings.TrimSpace(blocker.Code))
-		if blocker.Count > 0 {
-			message += fmt.Sprintf(" (%d)", blocker.Count)
+		if blocker.Count != nil {
+			message += fmt.Sprintf(" (%d)", *blocker.Count)
 		}
-		message += " " + strings.TrimSpace(blocker.Message)
+		message += " " + workspaceUnlinkBlockerMessage(blocker.Code)
 		message += ": " + renderBlockerGuidance(guidanceAction)
 		return message, nil
 	}
@@ -506,6 +517,25 @@ func projectWorkspaceMutationErrorMessage(err error, projectID string, defaultMu
 		return fmt.Sprintf("%s; retry with --workspace <workspace-id>", err), nil
 	}
 	return err.Error(), nil
+}
+
+func workspaceUnlinkBlockerMessage(code string) string {
+	switch strings.TrimSpace(code) {
+	case "default_workspace":
+		return "Workspace is the project default workspace."
+	case "non_terminal_tasks":
+		return "Active or non-terminal tasks still depend on this workspace."
+	case "executable_current_nodes":
+		return "Executable current nodes still depend on this workspace."
+	case "managed_owned_worktrees":
+		return "Worktrees still depend on this workspace."
+	case "missing_history_snapshot":
+		return "Historical task or retained Session references do not have a durable workspace path/name snapshot."
+	case "active_sessions":
+		return "Active runtime sessions still depend on this workspace."
+	default:
+		return "Workspace detach is blocked by a condition this CLI does not recognize."
+	}
 }
 
 var _ apicontract.ProjectViewService = (*client.Remote)(nil)

@@ -4,21 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
-	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 )
 
-type SessionLaunchMode string
-
 const SessionPromptHistoryMaxEntries = 100
-
-const (
-	SessionLaunchModeInteractive SessionLaunchMode = "interactive"
-	SessionLaunchModeHeadless    SessionLaunchMode = "headless"
-)
 
 type SessionLaunchIntentKind string
 type SessionCreateOriginKind string
@@ -228,84 +219,4 @@ func (i *SessionLaunchIntent) UnmarshalJSON(data []byte) error {
 	}
 	*i = decoded
 	return nil
-}
-
-type SessionPlanRequest struct {
-	ClientRequestID string              `json:"client_request_id"`
-	Mode            SessionLaunchMode   `json:"mode"`
-	Intent          SessionLaunchIntent `json:"intent"`
-	CallerSessionID *string             `json:"caller_session_id,omitempty"`
-	Overrides       RunPromptOverrides  `json:"overrides,omitempty"`
-}
-
-func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
-	type wire struct {
-		ClientRequestID string              `json:"client_request_id"`
-		Mode            SessionLaunchMode   `json:"mode"`
-		Intent          SessionLaunchIntent `json:"intent"`
-		CallerSessionID *string             `json:"caller_session_id"`
-		Overrides       RunPromptOverrides  `json:"overrides"`
-	}
-	var decoded wire
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	request := SessionPlanRequest{
-		ClientRequestID: decoded.ClientRequestID,
-		Mode:            decoded.Mode,
-		Intent:          decoded.Intent,
-		CallerSessionID: decoded.CallerSessionID,
-		Overrides:       decoded.Overrides,
-	}
-	if err := request.Validate(); err != nil {
-		return err
-	}
-	*r = request
-	return nil
-}
-
-type SessionPlan struct {
-	SessionID                string              `json:"session_id"`
-	ActiveSettings           config.Settings     `json:"active_settings"`
-	EnabledToolIDs           []string            `json:"enabled_tool_ids,omitempty"`
-	ConfiguredModelName      string              `json:"configured_model_name,omitempty"`
-	SessionName              *string             `json:"session_name"`
-	PromptHistory            []string            `json:"prompt_history,omitempty"`
-	ModelContractLocked      bool                `json:"model_contract_locked,omitempty"`
-	QuestionsEnabled         bool                `json:"questions_enabled"`
-	AutoCompactionEnabled    bool                `json:"auto_compaction_enabled"`
-	ThinkingOverrideExplicit bool                `json:"thinking_override_explicit"`
-	Source                   config.SourceReport `json:"source"`
-}
-
-func (p SessionPlan) Validate() error {
-	if p.SessionName != nil && strings.TrimSpace(*p.SessionName) == "" {
-		return errors.New("session plan name cannot be empty or blank")
-	}
-	return nil
-}
-
-type SessionPlanResponse struct {
-	Plan     SessionPlan `json:"plan"`
-	Warnings []string    `json:"warnings,omitempty"`
-}
-
-func (r SessionPlanRequest) Validate() error {
-	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return errors.New("client_request_id is required")
-	}
-	mode := strings.TrimSpace(string(r.Mode))
-	if mode == "" {
-		return errors.New("mode is required")
-	}
-	if mode != string(SessionLaunchModeInteractive) && mode != string(SessionLaunchModeHeadless) {
-		return errors.New("mode must be interactive or headless")
-	}
-	if err := r.Intent.Validate(); err != nil {
-		return fmt.Errorf("intent: %w", err)
-	}
-	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
-		return err
-	}
-	return r.Overrides.ValidateAgentRoleOverride()
 }

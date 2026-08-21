@@ -44,7 +44,7 @@ type ProjectOverview struct {
 type SessionSummary struct {
 	SessionID          runtimeids.SessionID            `json:"session_id"`
 	Category           sessioncontract.SessionCategory `json:"category"`
-	Name               string                          `json:"name,omitempty"`
-	FirstPromptPreview string                          `json:"first_prompt_preview,omitempty"`
+	Name               *string                         `json:"name,omitempty"`
+	FirstPromptPreview *string                         `json:"first_prompt_preview,omitempty"`
 	UpdatedAt          time.Time                       `json:"updated_at"`
 }

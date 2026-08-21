@@ -85,7 +85,7 @@ type uiInputFeatureState struct {
 	completedStepID             string
 
 	modelName                 string
-	configuredModelName       string
+	configuredModelName       *string
 	thinkingLevel             string
 	fastModeAvailable         bool
 	fastModeEnabled           bool

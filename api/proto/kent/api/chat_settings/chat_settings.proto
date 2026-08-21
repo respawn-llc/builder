@@ -1,0 +1,327 @@
+syntax = "proto3";
+
+package kent.api.chat_settings;
+
+import "buf/validate/validate.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/chat_settings;chatsettingspb";
+
+message LazyTarget {
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  string workspace_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+}
+
+message SessionTarget {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message ReadRequest {
+  oneof target {
+    option (buf.validate.oneof).required = true;
+
+    LazyTarget lazy = 1;
+    SessionTarget session = 2;
+  }
+}
+
+enum Editability {
+  EDITABILITY_UNSPECIFIED = 0;
+  EDITABILITY_EDITABLE = 1;
+  EDITABILITY_WORKFLOW_LOCK = 2;
+  EDITABILITY_CACHING_LOCK = 3;
+  EDITABILITY_POLICY_DISABLED = 4;
+}
+
+enum SupervisorValue {
+  SUPERVISOR_VALUE_UNSPECIFIED = 0;
+  SUPERVISOR_VALUE_OFF = 1;
+  SUPERVISOR_VALUE_AFTER_EDITS = 2;
+  SUPERVISOR_VALUE_ALWAYS = 3;
+}
+
+enum ThinkingKind {
+  THINKING_KIND_UNSPECIFIED = 0;
+  THINKING_KIND_ENUMERATED = 1;
+  THINKING_KIND_CUSTOM = 2;
+}
+
+enum AutoCompactionPolicy {
+  AUTO_COMPACTION_POLICY_UNSPECIFIED = 0;
+  AUTO_COMPACTION_POLICY_OPTIONAL = 1;
+  AUTO_COMPACTION_POLICY_REQUIRED = 2;
+  AUTO_COMPACTION_POLICY_DISABLED = 3;
+}
+
+enum AgentPreparationCategory {
+  AGENT_PREPARATION_CATEGORY_UNSPECIFIED = 0;
+  AGENT_PREPARATION_CATEGORY_INVALID_CONFIGURATION = 1;
+  AGENT_PREPARATION_CATEGORY_PROVIDER_UNAVAILABLE = 2;
+  AGENT_PREPARATION_CATEGORY_INTERNAL_PREPARATION = 3;
+}
+
+message AgentSummary {
+  string role = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  string model = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  string thinking = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+}
+
+message AgentChoice {
+  string role = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  string model = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  string thinking = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  repeated string tools = 4 [
+    (buf.validate.field).repeated = {
+      unique: true
+      items: {
+        string: {min_len: 1}
+      }
+    }
+  ];
+  bool custom_system_prompt = 5;
+  bool custom_capabilities = 6;
+  bool agent_callable = 7;
+}
+
+message Supervisor {
+  SupervisorValue value = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  Editability editability = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message Thinking {
+  ThinkingKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string value = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  string baseline_value = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  repeated string values = 4 [
+    (buf.validate.field).repeated = {
+      unique: true
+      items: {
+        string: {min_len: 1}
+      }
+    }
+  ];
+  Editability editability = 5 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_settings.thinking_values"
+    message: "enumerated thinking must contain value and baseline; custom thinking must not contain values"
+    expression:
+      "this.kind == 1 ? "
+      "(size(this.values) > 0 && this.value in this.values && this.baseline_value in this.values) : "
+      "size(this.values) == 0"
+  };
+}
+
+message Fast {
+  bool value = 1;
+  Editability editability = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message Questions {
+  bool capable = 1;
+  bool enabled = 2;
+  Editability editability = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_settings.questions_capability"
+    message: "questions cannot be enabled when unavailable"
+    expression: "this.capable || !this.enabled"
+  };
+}
+
+message AutoCompaction {
+  AutoCompactionPolicy policy = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  bool stored = 2;
+  bool effective = 3;
+  Editability editability = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_settings.auto_compaction_policy"
+    message: "auto-compaction policy must agree with effective value and editability"
+    expression:
+      "this.policy == 3 ? (!this.effective && this.editability == 4) : "
+      "this.policy == 2 ? (this.effective && this.editability == 2) : "
+      "(this.effective == this.stored && this.editability == 1)"
+  };
+}
+
+message Settings {
+  AgentSummary selected_agent = 1 [(buf.validate.field).required = true];
+  repeated AgentChoice agent_choices = 2;
+  Editability agent_editability = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  Supervisor supervisor = 4 [(buf.validate.field).required = true];
+  optional Thinking thinking = 5;
+  optional Fast fast = 6;
+  Questions questions = 7 [(buf.validate.field).required = true];
+  AutoCompaction auto_compaction = 8 [(buf.validate.field).required = true];
+  bool agent_locked = 9;
+  bool workflow_locked = 10;
+  bool caching_locked = 11;
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_settings.agent_lock"
+    message: "agent lock and editability must agree with workflow and caching locks"
+    expression:
+      "this.agent_locked == (this.workflow_locked || this.caching_locked) && "
+      "(this.workflow_locked ? this.agent_editability == 2 : "
+      "this.caching_locked ? this.agent_editability == 3 : this.agent_editability == 1)"
+  };
+}
+
+message SessionFacts {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  optional string previous_session_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  optional string task_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message ReadSuccess {
+  Settings settings = 1 [(buf.validate.field).required = true];
+  optional SessionFacts session = 2;
+}
+
+message WorkspaceNotRegisteredDetails {}
+
+message AgentPreparationDetails {
+  string agent = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  AgentPreparationCategory category = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message ReadError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    WorkspaceNotRegisteredDetails workspace_not_registered = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workspace_not_registered"
+      }
+    ];
+    AgentPreparationDetails chat_settings_agent_preparation = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "chat_settings_agent_preparation"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message ReadResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    ReadSuccess success = 1 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS
+    ];
+    ReadError error = 2 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR
+    ];
+  }
+}
+
+service ChatSettingsService {
+  rpc Read(ReadRequest) returns (ReadResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "chat.settings.read"
+    };
+  }
+}

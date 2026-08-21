@@ -25,8 +25,12 @@ import (
 	"core/server/transport"
 	"core/shared/apicontract"
 	"core/shared/config"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type ServeServer struct {
@@ -43,7 +47,7 @@ func (s *ServeServer) Config() config.App {
 		return s.Core.Config()
 	}
 	if s.deps != nil {
-		return s.deps.snapshot.Load().cfg
+		return s.deps.snapshotConfig()
 	}
 	return s.cfg
 }
@@ -322,10 +326,20 @@ func buildServerMux(deps transport.GatewayDependencies, identity protocol.Server
 		})
 	})
 	mux.HandleFunc(protocol.ReadinessPath, func(w http.ResponseWriter, r *http.Request) {
-		readiness := serverapi.ServerReadinessResponse{}
 		statusClient := deps.ServerStatusClient()
-		if statusClient != nil {
-			readiness, _ = statusClient.GetServerReadiness(r.Context(), serverapi.ServerReadinessRequest{})
+		if statusClient == nil {
+			writeStatusJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"ready":           false,
+				"transport_ready": true,
+				"server_id":       identity.ServerID,
+				"pid":             identity.PID,
+			})
+			return
+		}
+		response, _ := statusClient.GetReadiness(r.Context(), &emptypb.Empty{})
+		readiness := &serverpb.Readiness{}
+		if response != nil && response.Readiness != nil {
+			readiness = response.Readiness
 		}
 		status := http.StatusServiceUnavailable
 		body := map[string]any{
@@ -342,8 +356,8 @@ func buildServerMux(deps transport.GatewayDependencies, identity protocol.Server
 		if !readiness.Ready && len(readiness.Causes) > 0 {
 			cause := readiness.Causes[0]
 			body["reason"] = cause.Code
-			if cause.DiagnosticID != "" {
-				body["diagnostic"] = cause.DiagnosticID
+			if cause.DiagnosticId != nil {
+				body["diagnostic"] = *cause.DiagnosticId
 			}
 		}
 		writeStatusJSON(w, status, body)
@@ -413,7 +427,7 @@ func (d *startupGatewayDependencies) Close() error {
 	return nil
 }
 
-func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverapi.OnboardingFinalizeResponse) error {
+func (d *startupGatewayDependencies) activate(ctx context.Context, resp *onboardingpb.FinalizeSuccess) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.snapshot.Load().core != nil {
@@ -443,10 +457,11 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	return nil
 }
 
-func (d *startupGatewayDependencies) activationError(resp serverapi.OnboardingFinalizeResponse, err error) error {
+func (d *startupGatewayDependencies) activationError(resp *onboardingpb.FinalizeSuccess, err error) error {
+	snapshot := d.snapshot.Load()
+	d.snapshot.Store(&startupDependencySnapshot{cfg: snapshot.cfg, activation: err})
+	settingsPath := resp.GetSettingsPath()
 	diagnostic := err.Error()
-	d.snapshot.Store(&startupDependencySnapshot{cfg: d.snapshot.Load().cfg, activation: err})
-	settingsPath := resp.SettingsPath
 	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{
 		OnboardingCompleted: true,
 		SettingsPath:        &settingsPath,
@@ -461,57 +476,74 @@ func (d *startupGatewayDependencies) RequireCoreActive() error {
 	if snapshot.core != nil {
 		return nil
 	}
-	if snapshot.activation == nil {
-		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+	if snapshot.activation != nil {
+		diagnostic := snapshot.activation.Error()
+		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{Diagnostic: &diagnostic}, snapshot.activation)
 	}
-	diagnostic := snapshot.activation.Error()
-	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{Diagnostic: &diagnostic}, snapshot.activation)
+	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+
+func (d *startupGatewayDependencies) snapshotConfig() config.App {
+	return d.snapshot.Load().cfg
 }
 
 func (d *startupGatewayDependencies) DebugEnabled() bool { return d.snapshot.Load().cfg.Settings.Debug }
 
-func (d *startupGatewayDependencies) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
+func (d *startupGatewayDependencies) GetReadiness(ctx context.Context, req *emptypb.Empty) (*serverpb.GetReadinessSuccess, error) {
 	snapshot := d.snapshot.Load()
-	resp, err := serverstatus.NewServerStatusService(d.authSupport.AuthManager, snapshot.cfg, nil).GetServerReadiness(ctx, req)
+	resp, err := serverstatus.NewServerStatusService(d.authSupport.AuthManager, snapshot.cfg, nil).GetReadiness(ctx, req)
 	if err != nil {
-		return serverapi.ServerReadinessResponse{}, err
+		return nil, err
 	}
-	if snapshot.core == nil {
-		resp.Ready = false
+	if snapshot.core == nil && resp != nil && resp.Readiness != nil {
+		resp.Readiness.Ready = false
+		diagnosticID := ""
 		reason := serverapi.ServerNotReadyOnboardingRequired
 		if snapshot.activation != nil {
 			reason = serverapi.ServerNotReadyActivationFailed
+			diagnosticID = string(reason) + ":" + snapshot.activation.Error()
+		} else {
+			diagnosticID = string(reason)
 		}
-		cause := serverapi.ServerReadinessCause{Code: string(reason), Severity: "error", DiagnosticID: string(reason)}
-		if snapshot.activation != nil {
-			cause.DiagnosticID += ":" + snapshot.activation.Error()
+		cause := &serverpb.ReadinessCause{
+			Code:     string(reason),
+			Severity: serverpb.ReadinessSeverity_READINESS_SEVERITY_ERROR,
 		}
-		resp.Causes = []serverapi.ServerReadinessCause{cause}
+		if len(resp.Readiness.Causes) > 0 {
+			cause = resp.Readiness.Causes[0]
+			cause.Code = string(reason)
+			cause.Severity = serverpb.ReadinessSeverity_READINESS_SEVERITY_ERROR
+			cause.Summary = nil
+			cause.NextAction = nil
+		}
+		if diagnosticID != "" {
+			cause.DiagnosticId = &diagnosticID
+		}
+		resp.Readiness.Causes = []*serverpb.ReadinessCause{cause}
 	}
 	return resp, nil
 }
 
-func (d *startupGatewayDependencies) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.UpdateStatusResponse{}, err
-	}
+func (d *startupGatewayDependencies) GetUpdateStatus(ctx context.Context, req *emptypb.Empty) (*serverpb.GetUpdateStatusSuccess, error) {
 	snapshot := d.snapshot.Load()
 	if snapshot.core == nil {
-		return serverapi.UpdateStatusResponse{Result: serverapi.CheckUnavailableUpdateStatusResult()}, nil
+		return &serverpb.GetUpdateStatusSuccess{Status: &serverpb.UpdateStatus{
+			Status: &serverpb.UpdateStatus_CheckUnavailable{CheckUnavailable: &emptypb.Empty{}},
+		}}, nil
 	}
 	return snapshot.core.ServerStatusClient().GetUpdateStatus(ctx, req)
 }
 
 type startupFinalizeService struct {
 	service           apicontract.OnboardingFinalizeService
-	activate          func(context.Context, serverapi.OnboardingFinalizeResponse) error
+	activate          func(context.Context, *onboardingpb.FinalizeSuccess) error
 	activationContext context.Context
 }
 
-func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
-	resp, err := s.service.FinalizeOnboarding(ctx, req)
+func (s startupFinalizeService) Finalize(ctx context.Context, req *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
+	resp, err := s.service.Finalize(ctx, req)
 	if err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, err
+		return nil, err
 	}
 	if s.activate != nil {
 		activationCtx := s.activationContext
@@ -519,7 +551,7 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 			activationCtx = context.Background()
 		}
 		if err := s.activate(activationCtx, resp); err != nil {
-			return serverapi.OnboardingFinalizeResponse{}, err
+			return nil, err
 		}
 	}
 	return resp, nil
@@ -527,17 +559,17 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 
 func (d *startupGatewayDependencies) AuthManager() *auth.Manager { return d.authSupport.AuthManager }
 func (d *startupGatewayDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
-	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, d.snapshot.Load().cfg.Settings, apicontract.AllowedPreAuthMethods())
+	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, d.snapshotConfig().Settings)
 }
 func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusService {
-	return authservice.NewStatusService(d.authSupport.AuthManager, d.snapshot.Load().cfg.Settings)
+	return authservice.NewStatusService(d.authSupport.AuthManager, d.snapshotConfig().Settings)
 }
 func (d *startupGatewayDependencies) CapabilityFactsClient() apicontract.CapabilityFactsService {
-	return capabilityfacts.NewService(capabilityfacts.Options{Config: d.snapshot.Load().cfg, AuthManager: d.authSupport.AuthManager})
+	return capabilityfacts.NewService(capabilityfacts.Options{Config: d.snapshotConfig(), AuthManager: d.authSupport.AuthManager})
 }
 func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStatusService { return d }
 func (d *startupGatewayDependencies) ServerAuthRequired() bool {
-	return authservice.StartupAuthRequired(d.snapshot.Load().cfg.Settings)
+	return authservice.StartupAuthRequired(d.snapshotConfig().Settings)
 }
 func (d *startupGatewayDependencies) OnboardingFinalizeClient() apicontract.OnboardingFinalizeService {
 	return d.finalizer

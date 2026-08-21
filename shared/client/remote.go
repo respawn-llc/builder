@@ -12,10 +12,14 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/protoapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/serverjsoncontract"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type InvalidResponseError struct {
@@ -48,8 +52,7 @@ type Remote struct {
 	control                          *remoteControlConn
 	identity                         protocol.ServerIdentity
 	attachIntent                     *remoteAttachmentIntent
-	attachment                       *protocol.AttachResponse
-	updateStatusResponseContract     serverjsoncontract.UpdateStatusResponse
+	attachment                       *remoteAttachment
 	sessionExecutionResponseContract serverjsoncontract.SessionExecutionEnvironmentResponse
 	expectedRootID                   atomic.Value // string; empty disables root validation
 	noAuthAck                        atomic.Bool
@@ -167,7 +170,7 @@ func (c *Remote) EnableNoAuthBootstrapAcknowledgement(ctx context.Context) error
 	if c == nil {
 		return errors.New("remote client is required")
 	}
-	resp, err := c.AcknowledgeNoAuth(ctx, serverapi.AuthAcknowledgeNoAuthRequest{})
+	resp, err := c.AcknowledgeNoAuth(ctx, &emptypb.Empty{})
 	if err != nil {
 		c.noAuthAck.Store(false)
 		return err
@@ -197,13 +200,28 @@ func (c *Remote) acknowledgeNoAuthOnConn(ctx context.Context, conn rpcwire.Conn)
 	if c == nil || !c.noAuthAck.Load() {
 		return nil
 	}
-	var resp serverapi.AuthAcknowledgeNoAuthResponse
-	if err := callRPC(ctx, conn, "auth-acknowledge-no-auth", protocol.MethodAuthAcknowledgeNoAuth, serverapi.AuthAcknowledgeNoAuthRequest{}, &resp); err != nil {
+	result := &authpb.AcknowledgeNoAuthResult{}
+	if err := callBinaryRPC(
+		ctx,
+		conn,
+		"auth-acknowledge-no-auth",
+		bootstrapMethod(authpb.File_kent_api_auth_auth_proto, "AuthService", "AcknowledgeNoAuth"),
+		&emptypb.Empty{},
+		result,
+	); err != nil {
 		if errors.Is(err, serverapi.ErrServerAuthRequired) {
 			c.noAuthAck.Store(false)
 		}
 		return err
 	}
+	if result.GetError() != nil {
+		err := authGeneratedError(result.GetError().Code, result.GetError().GetInternalFailure())
+		if errors.Is(err, serverapi.ErrServerAuthRequired) {
+			c.noAuthAck.Store(false)
+		}
+		return err
+	}
+	resp := result.GetSuccess()
 	if resp.NoAuthSelected {
 		return nil
 	}
@@ -214,16 +232,33 @@ func (c *Remote) acknowledgeNoAuthOnConn(ctx context.Context, conn rpcwire.Conn)
 	return serverapi.ErrServerAuthRequired
 }
 
-func (c *Remote) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
-	return callUnscopedRPC[serverapi.ServerReadinessRequest, serverapi.ServerReadinessResponse](c, ctx, protocol.MethodServerReadinessGet, req)
+func (c *Remote) GetReadiness(ctx context.Context, req *emptypb.Empty) (*serverpb.GetReadinessSuccess, error) {
+	return callGeneratedBinary(c, ctx,
+		bootstrapMethod(serverpb.File_kent_api_server_server_proto, "ServerService", "GetReadiness"),
+		req,
+		&serverpb.GetReadinessResult{},
+		func(failure *serverpb.GetReadinessError) error {
+			return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+		})
 }
 
-func (c *Remote) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	var raw json.RawMessage
-	if err := c.callDedicated(ctx, apicontract.UpdateStatusDedicatedRequestID, protocol.MethodServerUpdateStatusGet, req, &raw); err != nil {
-		return serverapi.UpdateStatusResponse{}, err
-	}
-	return c.updateStatusResponseContract.Decode(raw)
+func (c *Remote) GetUpdateStatus(ctx context.Context, req *emptypb.Empty) (*serverpb.GetUpdateStatusSuccess, error) {
+	return callGeneratedBinary(c, ctx,
+		bootstrapMethod(serverpb.File_kent_api_server_server_proto, "ServerService", "GetUpdateStatus"),
+		req,
+		&serverpb.GetUpdateStatusResult{},
+		func(failure *serverpb.GetUpdateStatusError) error {
+			switch failure.Code {
+			case "auth_required":
+				return serverapi.ErrServerAuthRequired
+			case "server_not_ready":
+				return protoapi.ServerNotReadyFromProto(failure.GetServerNotReady())
+			case "internal_failure":
+				return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
+			default:
+				return generatedOperationFailure(failure.Code)
+			}
+		})
 }
 
 func (c *Remote) ProjectID() string {
@@ -247,13 +282,13 @@ func (c *Remote) WorkspaceID() string {
 	return ""
 }
 
-func (c *Remote) ProjectBinding() (protocol.ProjectAttachment, bool) {
+func (c *Remote) ProjectBinding() (ProjectAttachment, bool) {
 	return c.projectBinding()
 }
 
-func (c *Remote) projectBinding() (protocol.ProjectAttachment, bool) {
+func (c *Remote) projectBinding() (ProjectAttachment, bool) {
 	if c == nil {
-		return protocol.ProjectAttachment{}, false
+		return ProjectAttachment{}, false
 	}
 	return remoteAttachmentProjectBinding(c.attachment)
 }
@@ -273,228 +308,57 @@ func callDedicatedRPC[Req any, Resp any](c *Remote, ctx context.Context, request
 	return resp, c.callDedicated(ctx, requestID, method, req, &resp)
 }
 
-func (c *Remote) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	return callUnscopedRPC[serverapi.AuthGetBootstrapStatusRequest, serverapi.AuthGetBootstrapStatusResponse](c, ctx, protocol.MethodAuthGetBootstrapStatus, req)
+func (c *Remote) GetBootstrapStatus(ctx context.Context, req *emptypb.Empty) (*authpb.BootstrapStatus, error) {
+	return callGeneratedBinary(c, ctx,
+		bootstrapMethod(authpb.File_kent_api_auth_auth_proto, "AuthService", "GetBootstrapStatus"),
+		req,
+		&authpb.GetBootstrapStatusResult{},
+		func(failure *authpb.GetBootstrapStatusError) error {
+			return authGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 }
 
-func (c *Remote) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	resp, err := callUnscopedRPC[serverapi.AuthCompleteBootstrapRequest, serverapi.AuthCompleteBootstrapResponse](c, ctx, protocol.MethodAuthCompleteBootstrap, req)
-	if err == nil {
-		if resp.NoAuthSelected {
-			c.noAuthAck.Store(true)
-		} else if resp.AuthReady {
-			c.noAuthAck.Store(false)
-		}
-	}
-	return resp, err
-}
-
-func (c *Remote) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-	return callUnscopedRPC[serverapi.AuthAcknowledgeNoAuthRequest, serverapi.AuthAcknowledgeNoAuthResponse](c, ctx, protocol.MethodAuthAcknowledgeNoAuth, req)
-}
-
-func (c *Remote) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	response, err := callUnscopedRPC[serverapi.AuthStatusRequest, serverapi.AuthStatusResponse](c, ctx, protocol.MethodAuthGetStatus, req)
+func (c *Remote) CompleteBootstrap(ctx context.Context, req *authpb.CompleteBootstrapRequest) (*authpb.BootstrapCompletion, error) {
+	resp, err := callGeneratedBinary(c, ctx,
+		bootstrapMethod(authpb.File_kent_api_auth_auth_proto, "AuthService", "CompleteBootstrap"),
+		req,
+		&authpb.CompleteBootstrapResult{},
+		func(failure *authpb.CompleteBootstrapError) error {
+			return authGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 	if err != nil {
-		return serverapi.AuthStatusResponse{}, err
+		return nil, err
 	}
-	if err := response.Validate(); err != nil {
-		return serverapi.AuthStatusResponse{}, fmt.Errorf("validate auth status response: %w", err)
+	if resp.GetNoAuthSelected() {
+		c.noAuthAck.Store(true)
+	} else if resp.GetAuthReady() {
+		c.noAuthAck.Store(false)
 	}
-	return response, nil
+	return resp, nil
+}
+
+func (c *Remote) AcknowledgeNoAuth(ctx context.Context, req *emptypb.Empty) (*authpb.NoAuthAcknowledgement, error) {
+	return callGeneratedBinary(c, ctx,
+		bootstrapMethod(authpb.File_kent_api_auth_auth_proto, "AuthService", "AcknowledgeNoAuth"),
+		req,
+		&authpb.AcknowledgeNoAuthResult{},
+		func(failure *authpb.AcknowledgeNoAuthError) error {
+			return authGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
+}
+
+func (c *Remote) GetStatus(ctx context.Context, req *authpb.GetStatusRequest) (*authpb.Status, error) {
+	return callGeneratedBinary(c, ctx,
+		bootstrapMethod(authpb.File_kent_api_auth_auth_proto, "AuthService", "GetStatus"),
+		req,
+		&authpb.GetStatusResult{},
+		func(failure *authpb.GetStatusError) error {
+			return authGeneratedError(failure.Code, failure.GetInternalFailure())
+		})
 }
 
 func (c *Remote) GetChatContext(ctx context.Context, req serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
 	return callValidatedControlRPC[serverapi.ChatContextRequest, serverapi.ChatContextResponse](c, ctx, protocol.MethodChatContextGet, req)
-}
-
-func (c *Remote) ListProjects(ctx context.Context, req serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectListRequest, serverapi.ProjectListResponse](c, ctx, protocol.MethodProjectList, req)
-}
-
-func (c *Remote) ListProjectHome(ctx context.Context, req serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectHomeListRequest, serverapi.ProjectHomeListResponse](c, ctx, protocol.MethodProjectHomeList, req)
-}
-
-func (c *Remote) ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectResolvePathRequest, serverapi.ProjectResolvePathResponse](c, ctx, protocol.MethodProjectResolvePath, req)
-}
-
-func (c *Remote) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectBindingPlanRequest, serverapi.ProjectBindingPlanResponse](c, ctx, protocol.MethodProjectPlanWorkspaceBinding, req)
-}
-
-func (c *Remote) CreateProject(ctx context.Context, req serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectCreateRequest, serverapi.ProjectCreateResponse](c, ctx, protocol.MethodProjectCreate, req)
-}
-
-func (c *Remote) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditGetRequest) (serverapi.ProjectEditGetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
-	}
-	response, err := callUnscopedRPC[serverapi.ProjectEditGetRequest, serverapi.ProjectEditGetResponse](c, ctx, protocol.MethodProjectEditGet, req)
-	if err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
-	}
-	if strings.TrimSpace(response.ProjectID) != req.ProjectID {
-		return serverapi.ProjectEditGetResponse{}, fmt.Errorf(
-			"Project Settings response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
-		)
-	}
-	return response, nil
-}
-
-func (c *Remote) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectUpdateRequest, serverapi.ProjectUpdateResponse](c, ctx, protocol.MethodProjectUpdate, req)
-}
-
-func (c *Remote) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	response, err := callUnscopedRPC[serverapi.ProjectDefaultWorkspaceSetRequest, serverapi.ProjectDefaultWorkspaceSetResponse](c, ctx, protocol.MethodProjectSetDefaultWorkspace, req)
-	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, fmt.Errorf("validate default workspace response: %w", err)
-	}
-	return response, nil
-}
-
-func (c *Remote) ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
-	response, err := callUnscopedRPC[serverapi.ProjectWorkspaceListRequest, serverapi.ProjectWorkspaceListResponse](c, ctx, protocol.MethodProjectWorkspaceList, req)
-	if err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf("project workspace catalog response is invalid: %w", err)
-	}
-	if response.ProjectID != req.ProjectID {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
-			"project workspace catalog response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
-		)
-	}
-	if response.Offset != req.Offset {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
-			"project workspace catalog response offset %d does not match request offset %d",
-			response.Offset,
-			req.Offset,
-		)
-	}
-	if len(response.Workspaces) > req.Limit {
-		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
-			"project workspace catalog response returned %d rows for limit %d",
-			len(response.Workspaces),
-			req.Limit,
-		)
-	}
-	if response.NextOffset != nil {
-		expected := req.Offset + req.Limit
-		if len(response.Workspaces) != req.Limit || *response.NextOffset != expected {
-			return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
-				"project workspace catalog response next_offset %d does not continue request offset %d with limit %d",
-				*response.NextOffset,
-				req.Offset,
-				req.Limit,
-			)
-		}
-	}
-	return response, nil
-}
-
-func (c *Remote) GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, err
-	}
-	response, err := callUnscopedRPC[serverapi.ProjectWorkspaceGetRequest, serverapi.ProjectWorkspaceGetResponse](c, ctx, protocol.MethodProjectWorkspaceGet, req)
-	if err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf("exact Project Workspace response is invalid: %w", err)
-	}
-	if response.ProjectID != req.ProjectID {
-		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf(
-			"exact Project Workspace response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
-		)
-	}
-	return response, nil
-}
-
-func (c *Remote) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	response, err := callUnscopedRPC[serverapi.ProjectWorkspaceUnlinkRequest, serverapi.ProjectWorkspaceUnlinkResponse](c, ctx, protocol.MethodProjectUnlinkWorkspace, req)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, fmt.Errorf("validate workspace unlink response: %w", err)
-	}
-	return response, nil
-}
-
-func (c *Remote) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectDeleteRequest, serverapi.ProjectDeleteResponse](c, ctx, protocol.MethodProjectDelete, req)
-}
-
-func (c *Remote) AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
-	}
-	response, err := callUnscopedRPC[serverapi.ProjectAttachWorkspaceRequest, serverapi.ProjectAttachWorkspaceResponse](c, ctx, protocol.MethodProjectAttachWorkspace, req)
-	if err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf("Project Workspace attach response is invalid: %w", err)
-	}
-	if response.Binding.ProjectID != req.ProjectID {
-		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf(
-			"Project Workspace attach response project %q does not match request project %q",
-			response.Binding.ProjectID,
-			req.ProjectID,
-		)
-	}
-	return response, nil
-}
-
-func (c *Remote) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectRebindWorkspaceRequest, serverapi.ProjectRebindWorkspaceResponse](c, ctx, protocol.MethodProjectRebindWorkspace, req)
-}
-
-func (c *Remote) GetProjectOverview(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectGetOverviewRequest, serverapi.ProjectGetOverviewResponse](c, ctx, protocol.MethodProjectGetOverview, req)
-}
-
-func (c *Remote) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	response, err := callUnscopedRPC[serverapi.SessionPageRequest, serverapi.SessionPageResponse](c, ctx, protocol.MethodSessionPage, req)
-	if err != nil {
-		return serverapi.SessionPageResponse{}, err
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.SessionPageResponse{}, fmt.Errorf("session page response is invalid: %w", err)
-	}
-	if response.ProjectID != req.ProjectID {
-		return serverapi.SessionPageResponse{}, fmt.Errorf(
-			"session page response project %q does not match request project %q",
-			response.ProjectID,
-			req.ProjectID,
-		)
-	}
-	if response.Category != req.Category {
-		return serverapi.SessionPageResponse{}, fmt.Errorf(
-			"session page response category %q does not match request category %q",
-			response.Category,
-			req.Category,
-		)
-	}
-	return response, nil
 }
 
 func (c *Remote) CreateWorkflow(ctx context.Context, req serverapi.WorkflowCreateRequest) (serverapi.WorkflowCreateResponse, error) {
@@ -760,33 +624,6 @@ func normalizeWorkflowTaskObservationRPCError(err error) error {
 		return fmt.Errorf("%w: workflow task observation RPC stream closed: %v", serverapi.ErrStreamFailed, err)
 	}
 	return err
-}
-
-func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-	var resp serverapi.SessionPlanResponse
-	return resp, c.call(ctx, protocol.MethodSessionPlan, req, &resp)
-}
-
-func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
-	var resp serverapi.WorkspaceChatDraftResponse
-	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp); err != nil {
-		return resp, err
-	}
-	if err := resp.Validate(); err != nil {
-		return serverapi.WorkspaceChatDraftResponse{}, invalidResponseError("workspace Chat draft", err)
-	}
-	return resp, nil
-}
-
-func (c *Remote) MaterializeWorkspaceChat(ctx context.Context, req serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
-	var resp serverapi.WorkspaceChatMaterializeResponse
-	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatMaterialize, req, &resp); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, err
-	}
-	if err := resp.Validate(); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, invalidResponseError("workspace Chat materialization", err)
-	}
-	return resp, nil
 }
 
 func (c *Remote) ReadChatSettings(
@@ -1143,49 +980,18 @@ func (c *Remote) ensureControl(ctx context.Context) (*remoteControlConn, error) 
 		_ = c.control.Close()
 		c.control = nil
 	}
-	conn, identity, err := c.openControlRPCConn(ctx)
+	conn, cleanup, state, err := c.openSetupRPCConn(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	if c.closed.Load() {
-		_ = conn.Close()
+		cleanup()
 		return nil, errors.New("remote client is closed")
 	}
 	control := newRemoteControlConn(conn)
 	c.control = control
-	c.identity = identity
+	c.identity = state.identity
 	return control, nil
-}
-
-func (c *Remote) openControlRPCConn(ctx context.Context) (rpcwire.Conn, protocol.ServerIdentity, error) {
-	conn, err := c.plan.dial(ctx, c.transport)
-	if err != nil {
-		return nil, protocol.ServerIdentity{}, err
-	}
-	cleanup := func() { _ = conn.Close() }
-	identity, err := handshakeRPC(ctx, conn)
-	if err != nil {
-		cleanup()
-		return nil, protocol.ServerIdentity{}, err
-	}
-	if err := validateIdentityRoot(c.rootID(), identity); err != nil {
-		cleanup()
-		return nil, protocol.ServerIdentity{}, err
-	}
-	if err := c.acknowledgeNoAuthOnConn(ctx, conn); err != nil {
-		cleanup()
-		return nil, protocol.ServerIdentity{}, err
-	}
-	attachment, err := attachRemoteRPC(ctx, conn, c.attachIntent)
-	if err != nil {
-		cleanup()
-		return nil, protocol.ServerIdentity{}, err
-	}
-	if err := validateReattachedBinding(c.attachment, attachment); err != nil {
-		cleanup()
-		return nil, protocol.ServerIdentity{}, err
-	}
-	return conn, identity, nil
 }
 
 func dialRemoteURL(ctx context.Context, rpcURL string, intent *remoteAttachmentIntent) (*Remote, error) {

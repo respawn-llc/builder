@@ -9,9 +9,16 @@ import (
 	"time"
 
 	"core/shared/client"
+	"core/shared/protoapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
-	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestBindProjectWorkspaceFailuresKeepCurrentUsableAndCloseCreatedSuccessor(t *testing.T) {
@@ -148,28 +155,20 @@ func newRemoteBindingServer(t *testing.T, options remoteBindingServerOptions) *r
 			if event.Err != nil {
 				return
 			}
-			request := event.Frame.Request()
+			if event.Frame.Kind == rpcwire.FrameBinary {
+				handshakeCompleted, err := serveRemoteBindingBinary(ctx, conn, event.Frame, handshaken, options)
+				if err != nil {
+					return
+				}
+				handshaken = handshaken || handshakeCompleted
+				continue
+			}
+			request, err := event.Frame.DecodeRequest()
+			if err != nil {
+				return
+			}
 			var response protocol.Response
 			switch {
-			case !handshaken && request.Method == protocol.MethodHandshake:
-				handshaken = true
-				response = protocol.NewSuccessResponse(request.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{
-					ProtocolVersion: protocol.Version, ServerID: "binding-test", PersistenceRootID: options.rootID,
-				}})
-			case handshaken && request.Method == protocol.MethodServerReadinessGet:
-				response = protocol.NewSuccessResponse(request.ID, serverapi.ServerReadinessResponse{Ready: true})
-			case handshaken && request.Method == protocol.MethodAuthAcknowledgeNoAuth:
-				if options.ackStarted != nil {
-					close(options.ackStarted)
-				}
-				if options.releaseAck != nil {
-					<-options.releaseAck
-				}
-				if options.ackErr != nil {
-					response = protocol.NewErrorResponse(request.ID, protocol.ErrCodeInternalError, options.ackErr.Error())
-				} else {
-					response = protocol.NewSuccessResponse(request.ID, serverapi.AuthAcknowledgeNoAuthResponse{NoAuthSelected: true})
-				}
 			default:
 				response = protocol.NewErrorResponse(request.ID, protocol.ErrCodeMethodNotFound, "unexpected test method")
 			}
@@ -180,6 +179,127 @@ func newRemoteBindingServer(t *testing.T, options remoteBindingServerOptions) *r
 	}))
 	t.Cleanup(server.Server.Close)
 	return server
+}
+
+func serveRemoteBindingBinary(
+	ctx context.Context,
+	conn rpcwire.Conn,
+	frame rpcwire.Frame,
+	handshaken bool,
+	options remoteBindingServerOptions,
+) (bool, error) {
+	envelope, err := protoapi.DecodeEnvelope(frame.Payload)
+	if err != nil {
+		return false, err
+	}
+	call := envelope.GetCall()
+	if call == nil || call.Correlation == nil {
+		return false, errors.New("correlated binary call is required")
+	}
+	handshakeMethod := connectionpb.File_kent_api_connection_connection_proto.Services().
+		ByName("ConnectionService").Methods().ByName("Handshake")
+	handshakeOperation, err := protoapi.OperationFromDescriptor(handshakeMethod)
+	if err != nil {
+		return false, err
+	}
+	if call.Operation == handshakeOperation.Name {
+		if handshaken {
+			return false, errors.New("Handshake may only be called once")
+		}
+		var request connectionpb.HandshakeRequest
+		if err := protoapi.Decode(call.Payload, &request); err != nil {
+			return false, err
+		}
+		identity := &connectionpb.ServerIdentity{
+			ProtocolVersion: protocol.Version,
+			ServerId:        "binding-test",
+			Pid:             1,
+		}
+		if options.rootID != "" {
+			identity.PersistenceRootId = &options.rootID
+		}
+		result := &connectionpb.HandshakeResult{
+			Outcome: &connectionpb.HandshakeResult_Success{
+				Success: &connectionpb.HandshakeSuccess{Identity: identity},
+			},
+		}
+		return true, sendRemoteBindingBinaryResult(ctx, conn, call, result)
+	}
+	if !handshaken {
+		return false, errors.New("Handshake must be the first binary operation")
+	}
+
+	readinessMethod := serverpb.File_kent_api_server_server_proto.Services().
+		ByName("ServerService").Methods().ByName("GetReadiness")
+	readinessOperation, err := protoapi.OperationFromDescriptor(readinessMethod)
+	if err != nil {
+		return false, err
+	}
+	if call.Operation == readinessOperation.Name {
+		result := &serverpb.GetReadinessResult{
+			Outcome: &serverpb.GetReadinessResult_Success{Success: &serverpb.GetReadinessSuccess{
+				Readiness: &serverpb.Readiness{
+					Ready:           true,
+					ServerId:        "binding-test",
+					ServerVersion:   "test",
+					ServerBuild:     "test",
+					ProtocolVersion: protocol.Version,
+				},
+			}},
+		}
+		return false, sendRemoteBindingBinaryResult(ctx, conn, call, result)
+	}
+
+	ackMethod := authpb.File_kent_api_auth_auth_proto.Services().
+		ByName("AuthService").Methods().ByName("AcknowledgeNoAuth")
+	ackOperation, err := protoapi.OperationFromDescriptor(ackMethod)
+	if err != nil {
+		return false, err
+	}
+	if call.Operation == ackOperation.Name {
+		if options.ackStarted != nil {
+			close(options.ackStarted)
+		}
+		if options.releaseAck != nil {
+			<-options.releaseAck
+		}
+		var result *authpb.AcknowledgeNoAuthResult
+		if options.ackErr != nil {
+			cause := options.ackErr.Error()
+			result = &authpb.AcknowledgeNoAuthResult{
+				Outcome: &authpb.AcknowledgeNoAuthResult_Error{Error: &authpb.AcknowledgeNoAuthError{
+					Code: "internal_failure",
+					Detail: &authpb.AcknowledgeNoAuthError_InternalFailure{
+						InternalFailure: &sharedpb.InternalFailureDetails{Cause: &cause},
+					},
+				}},
+			}
+		} else {
+			result = &authpb.AcknowledgeNoAuthResult{
+				Outcome: &authpb.AcknowledgeNoAuthResult_Success{
+					Success: &authpb.NoAuthAcknowledgement{NoAuthSelected: true},
+				},
+			}
+		}
+		return false, sendRemoteBindingBinaryResult(ctx, conn, call, result)
+	}
+	return false, errors.New("unexpected binary test operation")
+}
+
+func sendRemoteBindingBinaryResult(ctx context.Context, conn rpcwire.Conn, call *sharedpb.Call, result proto.Message) error {
+	payload, err := protoapi.Encode(result)
+	if err != nil {
+		return err
+	}
+	encoded, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
+		Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+			Operation: call.Operation, Correlation: call.Correlation, Payload: payload,
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	return conn.Send(ctx, rpcwire.Frame{Kind: rpcwire.FrameBinary, Payload: encoded})
 }
 
 func (s *remoteBindingServer) dial(t *testing.T) *client.Remote {
@@ -205,11 +325,11 @@ func (s *remoteBindingServer) requireClosed(t *testing.T) {
 
 func requireRemoteUsable(t *testing.T, remote *client.Remote) {
 	t.Helper()
-	response, err := remote.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	response, err := remote.GetReadiness(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("remote is not usable: %v", err)
 	}
-	if !response.Ready {
+	if !response.GetReadiness().GetReady() {
 		t.Fatal("remote readiness = false")
 	}
 }

@@ -110,11 +110,12 @@ func TestSessionTranscriptSubscriptionPublishesLiveRunFinishedWithoutRewritingSe
 
 	var messages []clientui.TranscriptMessage
 	for _, frame := range conn.frames {
-		if frame.Method != protocol.MethodSessionTranscriptEvent {
+		request := frame.Request()
+		if request.Method != protocol.MethodSessionTranscriptEvent {
 			continue
 		}
 		var params protocol.SessionTranscriptEventParams
-		if err := json.Unmarshal(frame.Params, &params); err != nil {
+		if err := json.Unmarshal(request.Params, &params); err != nil {
 			t.Fatalf("decode transcript event: %v", err)
 		}
 		messages = append(messages, params.Message)

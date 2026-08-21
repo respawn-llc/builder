@@ -41,7 +41,7 @@ export type ServerCause = Readonly<{
   severity: string;
   summary?: string;
   nextAction?: string;
-  diagnosticID: string;
+  diagnosticID?: string;
 }>;
 
 export type SubagentRoleSummary = Readonly<{
@@ -78,7 +78,7 @@ export type ProjectSummary = Readonly<{
   name: string;
   primaryWorkspace: WorkspaceSummary;
   defaultWorkflowID: string | null;
-  defaultWorkflowName: string;
+  defaultWorkflowName: string | null;
   defaultWorkflowValid: boolean;
   updatedAt: number;
   taskCount: number;
@@ -88,7 +88,7 @@ export type ProjectSummary = Readonly<{
 
 export type ProjectPage = Readonly<{
   projects: readonly ProjectSummary[];
-  nextPageToken: string;
+  nextPageToken: string | null;
   generatedAt: number;
 }>;
 
@@ -112,7 +112,7 @@ export type ProjectWorkspaceResult =
 export type ProjectWorkspaceAttachOutcome = "attached" | "already_attached";
 
 export type ProjectWorkspaceAttachResponse = Readonly<{
-  binding: ProjectBinding;
+  binding: ProjectMutationBinding;
   outcome: ProjectWorkspaceAttachOutcome;
 }>;
 
@@ -147,7 +147,7 @@ export type ProjectMutationResponse = Readonly<{
 export type WorkspaceUnlinkBlocker = Readonly<{
   code: string;
   message: string;
-  count: number;
+  count?: number;
 }>;
 
 export type WorkspaceUnlinkResponse = Readonly<{
@@ -178,6 +178,8 @@ export type ProjectBinding = Readonly<{
   workspaceName: string;
   workspaceStatus: string;
 }>;
+
+export type ProjectMutationBinding = Readonly<Omit<ProjectBinding, "canonicalRoot">>;
 
 export type BindingPlan = Readonly<{
   kind: string;

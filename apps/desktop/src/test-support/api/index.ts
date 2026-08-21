@@ -1,23 +1,44 @@
 import {
+  decode,
+  encode,
+  operationName,
+  type DescMethod,
+  type Message,
+  type MessageShape,
+} from "@app/server-api-contract";
+import {
   ConnectionStore,
+  type DescriptorRpcTransport,
   type JsonValue,
   type RpcCallOptions,
   type RpcDedicatedCallOptions,
   type RpcEventHandler,
   type RpcSubscription,
-  type RpcTransport,
 } from "@/api/composition";
 
-export type FakeRoute = Readonly<{
+type FakeJsonRoute = Readonly<{
   method: string;
   result?: unknown;
   error?: Error;
   handler?: (params: JsonValue, callIndex: number) => unknown;
 }>;
 
-export class FakeRpcTransport implements RpcTransport {
+type FakeDescriptorRoute = Readonly<{
+  descriptor: DescMethod;
+  result?: Message;
+  error?: Error;
+}>;
+
+export type FakeRoute = FakeJsonRoute | FakeDescriptorRoute;
+
+export class FakeRpcTransport implements DescriptorRpcTransport {
   readonly connection = new ConnectionStore();
   readonly calls: Readonly<{ method: string; params: JsonValue; options?: RpcCallOptions }>[] = [];
+  readonly descriptorCalls: Readonly<{
+    descriptor: DescMethod;
+    request: Message;
+    options?: RpcCallOptions;
+  }>[] = [];
   readonly dedicatedCalls: Readonly<{
     method: string;
     params: JsonValue;
@@ -30,13 +51,18 @@ export class FakeRpcTransport implements RpcTransport {
     options?: RpcDedicatedCallOptions;
   }>[] = [];
   readonly subscriptionStarts: Readonly<{ method: string; params: JsonValue }>[] = [];
-  #routes = new Map<string, FakeRoute>();
+  #routes = new Map<string, FakeJsonRoute>();
+  #descriptorRoutes = new Map<string, FakeDescriptorRoute>();
   #callCounts = new Map<string, number>();
   #subscribers: Readonly<{ method: string; params: JsonValue; handler: RpcEventHandler }>[] = [];
 
   constructor(routes: readonly FakeRoute[]) {
     for (const route of routes) {
-      this.#routes.set(route.method, route);
+      if ("descriptor" in route) {
+        this.#descriptorRoutes.set(operationName(route.descriptor), route);
+      } else {
+        this.#routes.set(route.method, route);
+      }
     }
     this.connection.set("connected");
   }
@@ -44,6 +70,29 @@ export class FakeRpcTransport implements RpcTransport {
   async call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
     this.calls.push(options === undefined ? { method, params } : { method, params, options });
     return this.#dispatch(method, params);
+  }
+
+  async callDescriptor<Method extends DescMethod>(
+    descriptor: Method,
+    request: MessageShape<Method["input"]>,
+    options?: RpcCallOptions,
+  ): Promise<MessageShape<Method["output"]>> {
+    this.descriptorCalls.push(
+      options === undefined ? { descriptor, request } : { descriptor, request, options },
+    );
+    const operation = operationName(descriptor);
+    const route = this.#descriptorRoutes.get(operation);
+    if (route === undefined) {
+      throw new Error(`Missing fake descriptor route: ${operation}`);
+    }
+    if (route.error !== undefined) {
+      throw route.error;
+    }
+    if (route.result === undefined) {
+      throw new Error(`Missing fake descriptor result: ${operation}`);
+    }
+    const payload = encode(route.descriptor.output, route.result);
+    return decode<Method["output"]>(descriptor.output, payload);
   }
 
   async callDedicated(

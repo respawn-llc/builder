@@ -4,22 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"core/shared/protocol"
-	"core/shared/toolspec"
 
 	"github.com/google/uuid"
 )
 
-type OnboardingTheme string
-type OnboardingModelKind string
-type OnboardingContextWindowKind string
-type OnboardingThinkingKind string
-type OnboardingVerbosity string
-type OnboardingSupervisorFrequency string
-type OnboardingCompactionMode string
 type OnboardingImportMode string
 type OnboardingImportKind string
 type OnboardingFinalizeErrorCode string
@@ -29,34 +20,6 @@ type OnboardingImportOperation string
 type ServerNotReadyReason string
 
 const (
-	OnboardingThemeAuto  OnboardingTheme = "auto"
-	OnboardingThemeLight OnboardingTheme = "light"
-	OnboardingThemeDark  OnboardingTheme = "dark"
-
-	OnboardingModelKnown  OnboardingModelKind = "known"
-	OnboardingModelCustom OnboardingModelKind = "custom"
-
-	OnboardingContextWindowDefault OnboardingContextWindowKind = "default"
-	OnboardingContextWindowLarge   OnboardingContextWindowKind = "large"
-	OnboardingContextWindowCustom  OnboardingContextWindowKind = "custom"
-
-	OnboardingThinkingDefault  OnboardingThinkingKind = "default"
-	OnboardingThinkingDisabled OnboardingThinkingKind = "disabled"
-	OnboardingThinkingLevel    OnboardingThinkingKind = "level"
-	OnboardingThinkingCustom   OnboardingThinkingKind = "custom"
-
-	OnboardingVerbosityLow    OnboardingVerbosity = "low"
-	OnboardingVerbosityMedium OnboardingVerbosity = "medium"
-	OnboardingVerbosityHigh   OnboardingVerbosity = "high"
-
-	OnboardingSupervisorOff   OnboardingSupervisorFrequency = "off"
-	OnboardingSupervisorEdits OnboardingSupervisorFrequency = "edits"
-	OnboardingSupervisorAll   OnboardingSupervisorFrequency = "all"
-
-	OnboardingCompactionNative OnboardingCompactionMode = "native"
-	OnboardingCompactionLocal  OnboardingCompactionMode = "local"
-	OnboardingCompactionNone   OnboardingCompactionMode = "none"
-
 	OnboardingImportModeNone          OnboardingImportMode = "none"
 	OnboardingImportModeSymlinkSource OnboardingImportMode = "symlink_source"
 
@@ -85,178 +48,9 @@ const (
 	ServerNotReadyActivationFailed   ServerNotReadyReason = "activation_failed"
 )
 
-type OnboardingFinalizeRequest struct {
-	Theme               *OnboardingTheme               `json:"theme,omitempty"`
-	MainProvider        *OnboardingProviderChoice      `json:"main_provider,omitempty"`
-	Model               *OnboardingModelChoice         `json:"model,omitempty"`
-	ContextWindow       *OnboardingContextWindowChoice `json:"context_window,omitempty"`
-	Thinking            *OnboardingThinkingChoice      `json:"thinking,omitempty"`
-	Verbosity           *OnboardingVerbosity           `json:"verbosity,omitempty"`
-	ModelTimeoutSeconds *int                           `json:"model_timeout_seconds,omitempty"`
-	AskQuestion         *bool                          `json:"ask_question,omitempty"`
-	ToolOverrides       []OnboardingToolOverride       `json:"tool_overrides,omitempty"`
-	Supervisor          *OnboardingSupervisorChoice    `json:"supervisor,omitempty"`
-	Compaction          *OnboardingCompactionMode      `json:"compaction,omitempty"`
-	SkillsImport        *OnboardingImportSelection     `json:"skills_import,omitempty"`
-	CommandsImport      *OnboardingImportSelection     `json:"commands_import,omitempty"`
-	DisabledSkillNames  []string                       `json:"disabled_skill_names,omitempty"`
-}
-
-type OnboardingFinalizeRequestWire struct {
-	Theme               *OnboardingTheme               `json:"theme,omitempty" jsonschema:"nullable"`
-	MainProvider        *OnboardingProviderChoice      `json:"main_provider,omitempty" jsonschema:"nullable"`
-	Model               *OnboardingModelChoice         `json:"model,omitempty" jsonschema:"nullable"`
-	ContextWindow       *OnboardingContextWindowChoice `json:"context_window,omitempty" jsonschema:"nullable"`
-	Thinking            *OnboardingThinkingChoice      `json:"thinking,omitempty" jsonschema:"nullable"`
-	Verbosity           *OnboardingVerbosity           `json:"verbosity,omitempty" jsonschema:"nullable"`
-	ModelTimeoutSeconds *int                           `json:"model_timeout_seconds,omitempty" jsonschema:"nullable"`
-	AskQuestion         *bool                          `json:"ask_question,omitempty" jsonschema:"nullable"`
-	ToolOverrides       []OnboardingToolOverride       `json:"tool_overrides,omitempty" jsonschema:"nullable"`
-	Supervisor          *OnboardingSupervisorChoice    `json:"supervisor,omitempty" jsonschema:"nullable"`
-	Compaction          *OnboardingCompactionMode      `json:"compaction,omitempty" jsonschema:"nullable"`
-	SkillsImport        *OnboardingImportSelectionWire `json:"skills_import,omitempty" jsonschema:"nullable"`
-	CommandsImport      *OnboardingImportSelectionWire `json:"commands_import,omitempty" jsonschema:"nullable"`
-	DisabledSkillNames  []string                       `json:"disabled_skill_names,omitempty" jsonschema:"nullable"`
-}
-
-type OnboardingImportSelectionWire struct {
-	Mode             OnboardingImportMode `json:"mode"`
-	ProviderUUID     *string              `json:"provider_uuid,omitempty" jsonschema:"nullable"`
-	ImportProviderID *string              `json:"import_provider_id,omitempty" jsonschema:"nullable"`
-	SourceRootPath   *string              `json:"source_root_path,omitempty" jsonschema:"nullable"`
-}
-
-func (w OnboardingFinalizeRequestWire) Request() OnboardingFinalizeRequest {
-	return OnboardingFinalizeRequest{
-		Theme:               w.Theme,
-		MainProvider:        w.MainProvider,
-		Model:               w.Model,
-		ContextWindow:       w.ContextWindow,
-		Thinking:            w.Thinking,
-		Verbosity:           w.Verbosity,
-		ModelTimeoutSeconds: w.ModelTimeoutSeconds,
-		AskQuestion:         w.AskQuestion,
-		ToolOverrides:       w.ToolOverrides,
-		Supervisor:          w.Supervisor,
-		Compaction:          w.Compaction,
-		SkillsImport:        w.SkillsImport.Selection(),
-		CommandsImport:      w.CommandsImport.Selection(),
-		DisabledSkillNames:  w.DisabledSkillNames,
-	}
-}
-
-func (w *OnboardingImportSelectionWire) Selection() *OnboardingImportSelection {
-	if w == nil {
-		return nil
-	}
-	selection := OnboardingImportSelectionFromWire(
-		w.Mode,
-		w.ProviderUUID,
-		w.ImportProviderID,
-		w.SourceRootPath,
-	)
-	return &selection
-}
-
-type OnboardingModelChoice struct {
-	Kind    OnboardingModelKind `json:"kind"`
-	ModelID string              `json:"model_id,omitempty"`
-	Alias   string              `json:"alias,omitempty"`
-}
-
-type OnboardingProviderChoice struct {
-	ProviderOverride *string `json:"provider_override,omitempty"`
-	OpenAIBaseURL    *string `json:"openai_base_url,omitempty"`
-}
-
-type OnboardingToolOverride struct {
-	ID      toolspec.ID `json:"id"`
-	Enabled bool        `json:"enabled"`
-}
-
-type OnboardingContextWindowChoice struct {
-	Kind   OnboardingContextWindowKind `json:"kind"`
-	Tokens int                         `json:"tokens,omitempty"`
-}
-
-type OnboardingThinkingChoice struct {
-	Kind  OnboardingThinkingKind `json:"kind"`
-	Level string                 `json:"level,omitempty"`
-	Value string                 `json:"value,omitempty"`
-}
-
-type OnboardingSupervisorChoice struct {
-	Frequency OnboardingSupervisorFrequency `json:"frequency"`
-	Model     *OnboardingModelChoice        `json:"model,omitempty"`
-	Thinking  *OnboardingThinkingChoice     `json:"thinking,omitempty"`
-}
-
-type OnboardingImportSelection struct {
-	Mode              OnboardingImportMode `json:"mode"`
-	ProviderUUID      *uuid.UUID           `json:"provider_uuid,omitempty"`
-	ImportProviderID  *string              `json:"import_provider_id,omitempty"`
-	SourceRootPath    *string              `json:"source_root_path,omitempty"`
-	providerBad       bool
-	importProviderBad bool
-	sourceRootBad     bool
-}
-
-func OnboardingImportSelectionFromWire(
-	mode OnboardingImportMode,
-	providerUUID *string,
-	importProviderID *string,
-	sourceRootPath *string,
-) OnboardingImportSelection {
-	selection := OnboardingImportSelection{Mode: mode}
-	if providerUUID != nil {
-		providerRaw := strings.TrimSpace(*providerUUID)
-		parsed, err := uuid.Parse(providerRaw)
-		if err != nil {
-			selection.providerBad = true
-		} else {
-			selection.ProviderUUID = &parsed
-		}
-	}
-	selection.ImportProviderID, selection.importProviderBad = onboardingImportSelectionString(importProviderID)
-	selection.SourceRootPath, selection.sourceRootBad = onboardingImportSelectionString(sourceRootPath)
-	return selection
-}
-
-func onboardingImportSelectionString(value *string) (*string, bool) {
-	if value == nil {
-		return nil, false
-	}
-	trimmed := strings.TrimSpace(*value)
-	if trimmed == "" {
-		return nil, true
-	}
-	return &trimmed, false
-}
-
-func (s OnboardingImportSelection) MarshalJSON() ([]byte, error) {
-	type wire struct {
-		Mode             OnboardingImportMode `json:"mode"`
-		ProviderUUID     *uuid.UUID           `json:"provider_uuid,omitempty"`
-		ImportProviderID *string              `json:"import_provider_id,omitempty"`
-		SourceRootPath   *string              `json:"source_root_path,omitempty"`
-	}
-	return json.Marshal(wire{Mode: s.Mode, ProviderUUID: s.ProviderUUID, ImportProviderID: s.ImportProviderID, SourceRootPath: s.SourceRootPath})
-}
-
-type OnboardingFinalizeResponse struct {
-	Completed    bool   `json:"completed"`
-	SettingsPath string `json:"settings_path"`
-}
-
 type OnboardingFinalizeFieldError struct {
 	Field string `json:"field"`
 	Code  string `json:"code"`
-}
-
-type OnboardingFinalizeErrorEnvelope struct {
-	Type    string                      `json:"type"`
-	Code    OnboardingFinalizeErrorCode `json:"code"`
-	Details any                         `json:"details,omitempty"`
 }
 
 type OnboardingInvalidRequestDetails struct {
@@ -291,9 +85,28 @@ type OnboardingConfigWriteFailedDetails struct {
 	Cause        string `json:"cause"`
 }
 
+type OnboardingInternalFailureDetails struct {
+	Cause *string
+}
+
+type OnboardingRollbackPrimaryFailure struct {
+	InvalidRequest      *OnboardingInvalidRequestDetails
+	ConfigAlreadyExists *OnboardingConfigAlreadyExistsDetails
+	ImportUnavailable   *OnboardingImportUnavailableDetails
+	ImportFailed        *OnboardingImportFailedDetails
+	ConfigWriteFailed   *OnboardingConfigWriteFailedDetails
+	Canceled            *OnboardingCanceledDetails
+	InternalFailure     *OnboardingInternalFailureDetails
+}
+
+type OnboardingRollbackFailureFact struct {
+	Operation string
+	Cause     string
+}
+
 type OnboardingRollbackFailedDetails struct {
-	Primary  any `json:"primary"`
-	Rollback any `json:"rollback"`
+	Primary  OnboardingRollbackPrimaryFailure
+	Rollback OnboardingRollbackFailureFact
 }
 
 type OnboardingCanceledDetails struct {
@@ -369,11 +182,6 @@ func (e *OnboardingFinalizeError) Is(target error) bool {
 	return ok && e != nil && e.Code == codeTarget.code
 }
 
-func (e *OnboardingFinalizeError) RPCErrorCode() int { return protocol.ErrCodeOnboardingFinalizeFailed }
-func (e *OnboardingFinalizeError) RPCErrorData() json.RawMessage {
-	return marshalRPCErrorData(OnboardingFinalizeErrorEnvelope{Type: "onboarding_finalize_error", Code: e.Code, Details: e.Details})
-}
-
 type ServerNotReadyError struct {
 	Reason  ServerNotReadyReason
 	Details any
@@ -428,22 +236,6 @@ func NewServerNotReadyError(reason ServerNotReadyReason, details any, cause erro
 	return &ServerNotReadyError{Reason: reason, Details: details, cause: cause}
 }
 
-func DecodeOnboardingFinalizeError(data json.RawMessage, message string) error {
-	var envelope struct {
-		Type    string                      `json:"type"`
-		Code    OnboardingFinalizeErrorCode `json:"code"`
-		Details json.RawMessage             `json:"details,omitempty"`
-	}
-	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "onboarding_finalize_error" || envelope.Code == "" {
-		return errors.New(strings.TrimSpace(message))
-	}
-	err := &OnboardingFinalizeError{Code: envelope.Code, Details: decodeOnboardingFinalizeDetails(envelope.Code, envelope.Details)}
-	if envelope.Code == OnboardingFinalizeCanceled {
-		err.cause = context.Canceled
-	}
-	return err
-}
-
 func DecodeServerNotReadyError(data json.RawMessage, message string) error {
 	var envelope struct {
 		Type    string               `json:"type"`
@@ -454,27 +246,6 @@ func DecodeServerNotReadyError(data json.RawMessage, message string) error {
 		return errors.New(strings.TrimSpace(message))
 	}
 	return &ServerNotReadyError{Reason: envelope.Reason, Details: decodeJSONDetails[ServerNotReadyDetails](envelope.Details)}
-}
-
-func decodeOnboardingFinalizeDetails(code OnboardingFinalizeErrorCode, data json.RawMessage) any {
-	switch code {
-	case OnboardingFinalizeInvalidRequest:
-		return decodeJSONDetails[OnboardingInvalidRequestDetails](data)
-	case OnboardingFinalizeConfigAlreadyExists:
-		return decodeJSONDetails[OnboardingConfigAlreadyExistsDetails](data)
-	case OnboardingFinalizeImportUnavailable:
-		return decodeJSONDetails[OnboardingImportUnavailableDetails](data)
-	case OnboardingFinalizeImportFailed:
-		return decodeJSONDetails[OnboardingImportFailedDetails](data)
-	case OnboardingFinalizeConfigWriteFailed:
-		return decodeJSONDetails[OnboardingConfigWriteFailedDetails](data)
-	case OnboardingFinalizeRollbackFailed:
-		return decodeJSONDetails[OnboardingRollbackFailedDetails](data)
-	case OnboardingFinalizeCanceled:
-		return decodeJSONDetails[OnboardingCanceledDetails](data)
-	default:
-		return decodeJSONDetails[map[string]any](data)
-	}
 }
 
 func decodeJSONDetails[T any](data json.RawMessage) any {
@@ -493,211 +264,4 @@ func decodeJSONDetails[T any](data json.RawMessage) any {
 		return nil
 	}
 	return *value
-}
-
-func ValidateOnboardingFinalizeRequest(req OnboardingFinalizeRequest) error {
-	var fieldErrors []OnboardingFinalizeFieldError
-	add := func(field, code string) {
-		fieldErrors = append(fieldErrors, OnboardingFinalizeFieldError{Field: field, Code: code})
-	}
-	if req.Theme != nil && !oneOf(string(*req.Theme), "auto", "light", "dark") {
-		add("theme", "unsupported_value")
-	}
-	validateProviderChoice(req.MainProvider, "main_provider", add)
-	validateModelChoice(req.Model, "model", add)
-	validateContextWindowChoice(req.ContextWindow, "context_window", add)
-	validateThinkingChoice(req.Thinking, "thinking", add)
-	if req.Verbosity != nil && !oneOf(string(*req.Verbosity), "low", "medium", "high") {
-		add("verbosity", "unsupported_value")
-	}
-	if req.ModelTimeoutSeconds != nil && *req.ModelTimeoutSeconds <= 0 {
-		add("model_timeout_seconds", "positive_required")
-	}
-	validateToolOverrides(req.ToolOverrides, add)
-	if req.Supervisor != nil {
-		if !oneOf(string(req.Supervisor.Frequency), "off", "edits", "all") {
-			add("supervisor.frequency", "unsupported_value")
-		}
-		validateModelChoice(req.Supervisor.Model, "supervisor.model", add)
-		validateThinkingChoice(req.Supervisor.Thinking, "supervisor.thinking", add)
-	}
-	if req.Compaction != nil && !oneOf(string(*req.Compaction), "native", "local", "none") {
-		add("compaction", "unsupported_value")
-	}
-	validateImportSelection(req.SkillsImport, "skills_import", add)
-	validateImportSelection(req.CommandsImport, "commands_import", add)
-	for index, name := range req.DisabledSkillNames {
-		if strings.TrimSpace(name) == "" {
-			add(fmt.Sprintf("disabled_skill_names.%d", index), "required")
-		}
-	}
-	if len(fieldErrors) > 0 {
-		return NewOnboardingFinalizeError(OnboardingFinalizeInvalidRequest, OnboardingInvalidRequestDetails{FieldErrors: fieldErrors}, nil)
-	}
-	return nil
-}
-
-func validateToolOverrides(overrides []OnboardingToolOverride, add func(string, string)) {
-	if overrides == nil {
-		return
-	}
-	if len(overrides) == 0 {
-		add("tool_overrides", "choice_required")
-		return
-	}
-	seen := map[toolspec.ID]struct{}{}
-	for index, override := range overrides {
-		field := fmt.Sprintf("tool_overrides.%d.id", index)
-		parsed, known := toolspec.ParseID(string(override.ID))
-		if !known || parsed != override.ID {
-			add(field, "unsupported_value")
-			continue
-		}
-		if override.ID == toolspec.ToolAskQuestion {
-			add(field, "forbidden")
-			continue
-		}
-		if _, duplicate := seen[override.ID]; duplicate {
-			add(field, "duplicate")
-			continue
-		}
-		seen[override.ID] = struct{}{}
-	}
-}
-
-func validateProviderChoice(choice *OnboardingProviderChoice, field string, add func(string, string)) {
-	if choice == nil {
-		return
-	}
-	if choice.ProviderOverride == nil && choice.OpenAIBaseURL == nil {
-		add(field, "choice_required")
-		return
-	}
-	provider := ""
-	if choice.ProviderOverride != nil {
-		provider = strings.ToLower(strings.TrimSpace(*choice.ProviderOverride))
-		switch provider {
-		case "":
-			add(field+".provider_override", "required")
-		case "openai", "anthropic":
-		default:
-			add(field+".provider_override", "unsupported_value")
-		}
-	}
-	if choice.OpenAIBaseURL != nil {
-		if strings.TrimSpace(*choice.OpenAIBaseURL) == "" {
-			add(field+".openai_base_url", "required")
-		}
-		if provider != "" && provider != "openai" {
-			add(field+".openai_base_url", "conflicts_with_provider_override")
-		}
-	}
-}
-
-func validateModelChoice(choice *OnboardingModelChoice, field string, add func(string, string)) {
-	if choice == nil {
-		return
-	}
-	switch choice.Kind {
-	case OnboardingModelKnown:
-		if strings.TrimSpace(choice.ModelID) == "" {
-			add(field+".model_id", "required")
-		}
-	case OnboardingModelCustom:
-		if strings.TrimSpace(choice.Alias) == "" {
-			add(field+".alias", "required")
-		}
-	default:
-		add(field+".kind", "unsupported_value")
-	}
-}
-
-func validateContextWindowChoice(choice *OnboardingContextWindowChoice, field string, add func(string, string)) {
-	if choice == nil {
-		return
-	}
-	switch choice.Kind {
-	case OnboardingContextWindowDefault, OnboardingContextWindowLarge:
-	case OnboardingContextWindowCustom:
-		if choice.Tokens <= 0 {
-			add(field+".tokens", "positive_required")
-		}
-	default:
-		add(field+".kind", "unsupported_value")
-	}
-}
-
-func validateThinkingChoice(choice *OnboardingThinkingChoice, field string, add func(string, string)) {
-	if choice == nil {
-		return
-	}
-	switch choice.Kind {
-	case OnboardingThinkingDefault, OnboardingThinkingDisabled:
-	case OnboardingThinkingLevel:
-		if strings.TrimSpace(choice.Level) == "" {
-			add(field+".level", "required")
-		}
-	case OnboardingThinkingCustom:
-		if strings.TrimSpace(choice.Value) == "" {
-			add(field+".value", "required")
-		}
-	default:
-		add(field+".kind", "unsupported_value")
-	}
-}
-
-func validateImportSelection(selection *OnboardingImportSelection, field string, add func(string, string)) {
-	if selection == nil {
-		return
-	}
-	switch selection.Mode {
-	case OnboardingImportModeNone:
-		if selection.ProviderUUID != nil || selection.providerBad {
-			add(field+".provider_uuid", "forbidden")
-		}
-		if selection.ImportProviderID != nil || selection.importProviderBad {
-			add(field+".import_provider_id", "forbidden")
-		}
-		if selection.SourceRootPath != nil || selection.sourceRootBad {
-			add(field+".source_root_path", "forbidden")
-		}
-	case OnboardingImportModeSymlinkSource:
-		hasUUID := selection.ProviderUUID != nil || selection.providerBad
-		hasRef := selection.ImportProviderID != nil || selection.SourceRootPath != nil || selection.importProviderBad || selection.sourceRootBad
-		if hasUUID && hasRef {
-			add(field+".provider_uuid", "conflicts_with_choice_ref")
-			break
-		}
-		if selection.providerBad {
-			add(field+".provider_uuid", "uuid_v4_required")
-			break
-		}
-		if selection.ProviderUUID != nil {
-			if selection.ProviderUUID.Version() != 4 {
-				add(field+".provider_uuid", "uuid_v4_required")
-			}
-			break
-		}
-		if !hasRef {
-			add(field+".provider_uuid", "required")
-			break
-		}
-		if selection.importProviderBad || selection.ImportProviderID == nil {
-			add(field+".import_provider_id", "required")
-		}
-		if selection.sourceRootBad || selection.SourceRootPath == nil {
-			add(field+".source_root_path", "required")
-		}
-	default:
-		add(field+".mode", "unsupported_value")
-	}
-}
-
-func oneOf(value string, allowed ...string) bool {
-	for _, candidate := range allowed {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
 }

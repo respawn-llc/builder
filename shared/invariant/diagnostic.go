@@ -14,6 +14,7 @@ const (
 	ScopeSessionPersistence   Scope = "session_persistence"
 	ScopeWorkflowExecution    Scope = "workflow_execution"
 	ScopeWorktreeContract     Scope = "worktree_contract"
+	ScopeServerAPIContract    Scope = "server_api_contract"
 )
 
 type Field string

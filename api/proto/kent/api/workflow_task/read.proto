@@ -112,6 +112,13 @@ enum DependencySatisfaction {
   DEPENDENCY_SATISFACTION_UNSATISFIED = 2;
 }
 
+enum ProjectTaskGroup {
+  PROJECT_TASK_GROUP_UNSPECIFIED = 0;
+  PROJECT_TASK_GROUP_ACTIVE = 1;
+  PROJECT_TASK_GROUP_BACKLOG = 2;
+  PROJECT_TASK_GROUP_DONE = 3;
+}
+
 message LabelFilter {
   oneof filter {
     option (buf.validate.oneof).required = true;
@@ -1152,6 +1159,71 @@ message LabelsGetResult {
   }
 }
 
+message ProjectTaskGroupCountsRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ProjectTaskGroupDefinition {
+  ProjectTaskGroup group = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  repeated TaskStatusKind status_kinds = 2 [
+    (buf.validate.field).repeated = {
+      min_items: 1
+      unique: true
+    },
+    (buf.validate.field).repeated.items.enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+}
+
+message ProjectTaskGroupCounts {
+  int32 active = 1 [(buf.validate.field).int32.gte = 0];
+  int32 backlog = 2 [(buf.validate.field).int32.gte = 0];
+  int32 done = 3 [(buf.validate.field).int32.gte = 0];
+}
+
+message ProjectTaskGroupCountsSuccess {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated ProjectTaskGroupDefinition definitions = 2 [
+    (buf.validate.field).repeated = {min_items: 3 max_items: 3}
+  ];
+  ProjectTaskGroupCounts counts = 3 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp generated_at = 4 [(buf.validate.field).required = true];
+}
+
+message ProjectTaskGroupCountsError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.workflow_definition.RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    kent.api.project.ProjectNotFoundDetails project_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectTaskGroupCountsResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ProjectTaskGroupCountsSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectTaskGroupCountsError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
 service TaskReadService {
   rpc List(ListRequest) returns (ListResult) {
     option (kent.api.shared.kent_method) = {
@@ -1181,6 +1253,16 @@ service TaskReadService {
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
       legacy_wire_name: "workflow.task.get"
+    };
+  }
+  rpc GetProjectGroupCounts(ProjectTaskGroupCountsRequest) returns (ProjectTaskGroupCountsResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.task.groupCounts"
     };
   }
 }

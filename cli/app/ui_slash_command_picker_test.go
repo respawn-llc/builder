@@ -8,7 +8,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/clientui"
-	"core/shared/serverapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,12 +18,12 @@ type deadlineAuthStatusClient struct {
 	remaining time.Duration
 }
 
-func (c *deadlineAuthStatusClient) GetAuthStatus(ctx context.Context, _ serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+func (c *deadlineAuthStatusClient) GetStatus(ctx context.Context, _ *authpb.GetStatusRequest) (*authpb.Status, error) {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		c.remaining = time.Until(deadline)
 	}
-	return authStatusResponse(serverapi.AuthStatusMethodNone), nil
+	return authStatusResponse(authpb.AuthMethod_AUTH_METHOD_NONE), nil
 }
 
 func refreshSlashCommandFilterForTest(t *testing.T, m *uiModel) {
@@ -130,14 +130,14 @@ func TestSlashCommandPickerShowsResumeWhenCurrentSessionIsOnlyKnownSession(t *te
 func TestSlashCommandPickerProjectsAuthCommand(t *testing.T) {
 	cases := []struct {
 		name      string
-		method    serverapi.AuthStatusMethod
+		method    authpb.AuthMethod
 		visible   string
 		hidden    string
 		wantTyped authSlashCommandKind
 	}{
-		{name: "no auth", method: serverapi.AuthStatusMethodNone, visible: "login", hidden: "logout", wantTyped: authSlashCommandLogin},
-		{name: "api key", method: serverapi.AuthStatusMethodAPIKey, visible: "login", hidden: "logout", wantTyped: authSlashCommandLogin},
-		{name: "oauth", method: serverapi.AuthStatusMethodOAuth, visible: "logout", hidden: "login", wantTyped: authSlashCommandLogout},
+		{name: "no auth", method: authpb.AuthMethod_AUTH_METHOD_NONE, visible: "login", hidden: "logout", wantTyped: authSlashCommandLogin},
+		{name: "api key", method: authpb.AuthMethod_AUTH_METHOD_API_KEY, visible: "login", hidden: "logout", wantTyped: authSlashCommandLogin},
+		{name: "oauth", method: authpb.AuthMethod_AUTH_METHOD_OAUTH, visible: "logout", hidden: "login", wantTyped: authSlashCommandLogout},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -210,9 +210,9 @@ func TestSlashCommandPickerHidesAuthCommandsWhenAuthStateCannotLoad(t *testing.T
 }
 
 func TestSlashCommandPickerRefreshesAuthStateAfterModelInit(t *testing.T) {
-	client := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodAPIKey)}
+	client := &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_API_KEY)}
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: client}))
-	client.response = authStatusResponse(serverapi.AuthStatusMethodOAuth)
+	client.response = authStatusResponse(authpb.AuthMethod_AUTH_METHOD_OAUTH)
 
 	testSetMainInput(m, "/")
 	refreshSlashCommandFilterForTest(t, m)
@@ -226,7 +226,7 @@ func TestSlashCommandPickerRefreshesAuthStateAfterModelInit(t *testing.T) {
 }
 
 func TestSlashCommandPickerLoadsAuthStateOncePerSlashSession(t *testing.T) {
-	client := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)}
+	client := &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_OAUTH)}
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: client}))
 	callsAfterInit := client.calls
 
@@ -248,7 +248,7 @@ func TestSlashCommandPickerLoadsAuthStateOncePerSlashSession(t *testing.T) {
 }
 
 func TestSlashCommandPickerTypingSlashDefersAuthLoadToCommand(t *testing.T) {
-	client := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)}
+	client := &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_OAUTH)}
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: client}))
 	callsAfterInit := client.calls
 
@@ -273,7 +273,7 @@ func TestSlashCommandPickerTypingSlashDefersAuthLoadToCommand(t *testing.T) {
 }
 
 func TestSlashCommandPickerAuthRefreshSingleFlightsAfterScheduledCommand(t *testing.T) {
-	client := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)}
+	client := &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_OAUTH)}
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: client}))
 	m.replaceMainInputAtEnd("/")
 	if m.authSlashLoading {

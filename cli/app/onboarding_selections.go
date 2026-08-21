@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"core/shared/config"
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	"core/shared/toolspec"
 )
 
@@ -155,14 +155,14 @@ type onboardingSelections struct {
 	preserved               onboardingPreservedInputs
 }
 
-func modelFactForFacts(facts serverapi.CapabilityFactsResponse, model string) serverapi.ModelCapabilityFact {
+func modelFactForFacts(facts *capabilitypb.Facts, model string) *capabilitypb.ModelFact {
 	trimmed := strings.TrimSpace(model)
-	for _, fact := range facts.Models.KnownModels {
-		if fact.ModelID != nil && strings.EqualFold(strings.TrimSpace(*fact.ModelID), trimmed) {
+	for _, fact := range facts.GetModels().GetKnownModels() {
+		if fact.ModelId != nil && strings.EqualFold(strings.TrimSpace(*fact.ModelId), trimmed) {
 			return fact
 		}
 	}
-	return facts.Models.UnknownFallback
+	return facts.GetModels().GetUnknownFallback()
 }
 
 func (selections onboardingSelections) themeValue() string {
@@ -204,17 +204,17 @@ func (selections onboardingSelections) reviewerThinkingValue() string {
 	return selections.thinkingValue()
 }
 
-func (selections onboardingSelections) contextWindowTokens(fact serverapi.ModelCapabilityFact) int {
+func (selections onboardingSelections) contextWindowTokens(fact *capabilitypb.ModelFact) int {
 	switch selections.contextWindow.kind {
 	case onboardingContextLarge:
 		if fact.LargeWindow != nil {
-			return fact.LargeWindow.Tokens
+			return int(fact.LargeWindow.Tokens)
 		}
 	case onboardingContextCustom:
 		return selections.contextWindow.tokens
 	default:
 		if fact.ContextWindowTokens != nil {
-			return *fact.ContextWindowTokens
+			return int(*fact.ContextWindowTokens)
 		}
 	}
 	if selections.preserved.baselineModelContextWindow != nil {

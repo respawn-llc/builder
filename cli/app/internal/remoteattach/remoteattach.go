@@ -10,6 +10,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 )
@@ -86,20 +87,23 @@ func DialHeadless(ctx context.Context, req HeadlessRequest) (*client.Remote, boo
 		return nil, true, err
 	}
 	discoveryCtx, discoveryCancel := context.WithTimeout(ctx, req.DiscoveryTimeout)
-	plan, err := projectViews.PlanWorkspaceBinding(discoveryCtx, serverapi.ProjectBindingPlanRequest{Path: req.Config.WorkspaceRoot, Mode: serverapi.ProjectBindingPlanModeHeadless})
+	plan, err := projectViews.PlanWorkspaceBinding(discoveryCtx, &projectpb.PlanWorkspaceBindingRequest{
+		Path: req.Config.WorkspaceRoot,
+		Mode: projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_HEADLESS,
+	})
 	discoveryCancel()
 	if err != nil {
 		_ = projectViews.Close()
 		return nil, true, err
 	}
 	switch plan.Kind {
-	case serverapi.ProjectBindingPlanKindBound:
+	case projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_BOUND:
 		if plan.Binding == nil {
 			_ = projectViews.Close()
 			return nil, true, errors.New("resolved project binding is required")
 		}
 		_ = projectViews.Close()
-		remote, err := dialWorkspaceWithTimeout(ctx, req.Config, req.AttachTimeout, req.DialWorkspace, plan.Binding.ProjectID, plan.Binding.WorkspaceID)
+		remote, err := dialWorkspaceWithTimeout(ctx, req.Config, req.AttachTimeout, req.DialWorkspace, plan.Binding.ProjectId, plan.Binding.WorkspaceId)
 		if err != nil {
 			return nil, true, err
 		}
@@ -108,19 +112,19 @@ func DialHeadless(ctx context.Context, req HeadlessRequest) (*client.Remote, boo
 			return nil, true, err
 		}
 		return remote, true, nil
-	case serverapi.ProjectBindingPlanKindLocalUnbound:
+	case projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND:
 		_ = projectViews.Close()
 		return nil, true, HeadlessWorkspaceRegistrationError(req.Config.WorkspaceRoot)
-	case serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous:
+	case projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_AMBIGUOUS:
 		_ = projectViews.Close()
 		return nil, true, errors.New("remote server could not resolve the current workspace and no single server workspace could be chosen automatically. Run `kent project list`, `kent project create --path <server-path> --name <project-name>`, or `kent attach --project <project-id> <server-path>` against the configured server, or start interactive Kent to choose an existing server project/workspace")
-	case serverapi.ProjectBindingPlanKindHeadlessRemoteSelected:
+	case projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_SELECTED:
 		if plan.Workspace == nil {
 			_ = projectViews.Close()
 			return nil, true, errors.New("resolved remote workspace is required")
 		}
 		_ = projectViews.Close()
-		remote, err := dialWorkspaceWithTimeout(ctx, req.Config, req.AttachTimeout, req.DialWorkspace, plan.Workspace.ProjectID, plan.Workspace.WorkspaceID)
+		remote, err := dialWorkspaceWithTimeout(ctx, req.Config, req.AttachTimeout, req.DialWorkspace, plan.Workspace.ProjectId, plan.Workspace.WorkspaceId)
 		if err != nil {
 			return nil, true, err
 		}
@@ -196,14 +200,18 @@ func HeadlessWorkspaceRegistrationError(workspaceRoot string) error {
 }
 
 func resolveInteractiveBinding(ctx context.Context, projectViews apicontract.ProjectViewService, workspaceRoot string) (*serverapi.ProjectBinding, error) {
-	resp, err := projectViews.PlanWorkspaceBinding(ctx, serverapi.ProjectBindingPlanRequest{Path: workspaceRoot, Mode: serverapi.ProjectBindingPlanModeInteractive})
+	resp, err := projectViews.PlanWorkspaceBinding(ctx, &projectpb.PlanWorkspaceBindingRequest{
+		Path: workspaceRoot,
+		Mode: projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_INTERACTIVE,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if resp.Kind != serverapi.ProjectBindingPlanKindBound {
+	if resp.Kind != projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_BOUND {
 		return nil, nil
 	}
-	return resp.Binding, nil
+	binding, err := client.ProjectBindingFromProto(resp.Binding)
+	return &binding, err
 }
 
 func dialWorkspaceWithTimeout(ctx context.Context, cfg config.App, timeout time.Duration, dial DialWorkspace, projectID string, workspaceID string) (*client.Remote, error) {

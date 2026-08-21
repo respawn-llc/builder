@@ -30,7 +30,7 @@ import type {
   CommentPage,
   CreatedTaskSummary,
   PendingAsk,
-  ProjectBinding,
+  ProjectMutationBinding,
   ProjectDeleteResponse,
   ProjectEdit,
   ProjectMutationResponse,
@@ -93,7 +93,7 @@ export interface ApiService {
   readonly connection: ApiConnectionSource;
 
   getReadiness(): Promise<ServerReadiness>;
-  listProjects(pageToken: string): Promise<ProjectPage>;
+  listProjects(pageToken: string | null): Promise<ProjectPage>;
   listSessionPage(projectID: string, category: SessionCategory, offset: number): Promise<SessionCatalogPage>;
   listWorkspaces(projectID: string, offset: number): Promise<WorkspaceCatalogPage>;
   getProjectWorkspace(
@@ -102,7 +102,11 @@ export interface ApiService {
   ): Promise<ProjectWorkspaceResult>;
   getProjectEdit(projectID: string): Promise<ProjectEdit>;
   planWorkspace(path: string): Promise<BindingPlan>;
-  createProject(displayName: string, projectKey: string, workspaceRoot: string): Promise<ProjectBinding>;
+  createProject(
+    displayName: string,
+    projectKey: string,
+    workspaceRoot: string,
+  ): Promise<ProjectMutationBinding>;
   attachWorkspace(projectID: string, workspaceRoot: string): Promise<ProjectWorkspaceAttachResponse>;
   updateProject(
     projectID: string,

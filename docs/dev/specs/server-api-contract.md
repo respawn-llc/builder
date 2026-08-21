@@ -1,4 +1,3 @@
-- On August 13, 2026, the user superseded checked-in generated output and generation-free normal builds. Generated Go and TypeScript contract sources are ignored disposable build outputs. Repository build, test, typecheck, and CI entry points lazily regenerate only the required target when schema, configuration, generator, or generated-output content differs from the recorded content fingerprint. Cache metadata lives under repository-root `.generated/protobuf`; `.kent` remains agent-only state.
 - KENT-192 must not modify, regenerate, build, or test Rust code. Rust remains frozen.
 - The centralized contract must be designed so a future Rust client can consume it easily through generated Rust code or Protobuf.
 - KENT-192 must generate the complete Go and TypeScript contract without activating it. Dependent vertical tasks adopt that generated contract in Desktop and every Go remote client, including CLI/TUI callers.
@@ -10,8 +9,7 @@
 - Binary Protobuf performance is a secondary measurable benefit. KENT-192 must not claim a user-visible performance improvement without benchmark evidence.
 - The Protobuf contract must permit future standard Rust code generation without changing contract ownership. KENT-192 must not generate or adopt Rust output.
 - The repository must contain one neutral top-level Protobuf schema tree organized by stable Kent API domains. No client or server owns this tree.
-- KENT-192 must check generated Go and TypeScript sources into this repository. Server, Go clients, and Desktop must compile those generated packages into their own binaries or bundles; applications must not load `.proto` files at runtime.
-- Normal application builds must not require Protobuf generation. CI must regenerate in a controlled environment and fail when checked-in output is stale or hand-edited.
+- Server, Go clients, and Desktop compile generated Protobuf contract code into their artifacts. Applications never load `.proto` files at runtime.
 - A future Kotlin mobile client must be able to generate its contract code from the same schema tree. Kotlin output is not part of KENT-192.
 - KENT-192 must not redesign or modify request concurrency handling.
 - KENT-192 must preserve the existing per-operation connection isolation that implements cancellation without application request IDs. At the approved baseline and the inspected KENT-345 implementation state, dedicated unary connections are used by Server Update Status, Workflow Task Search, Runtime Submit User Turn, Runtime Submit User Shell Command, Runtime Compact Context, Runtime Interrupt, Runtime Live Stop, Runtime Live Wait, and Runtime Live Watch. KENT-345 removes their generic application request IDs but does not authorize moving them onto a multiplexed connection or adding correlated cancel frames.
@@ -74,4 +72,4 @@
 - Malformed Protobuf bytes, unknown operations, wrong frame direction, invalid envelopes, and known-operation validation failures must reject only that frame and keep an established connection alive so unrelated valid traffic can continue. Return or publish a typed protocol/validation failure when the frame can be correlated safely.
 - Protocol-version mismatch and invalid handshake/authentication establishment reject setup and close because no valid connection contract was established. KENT-192 must not add a strike counter, rate limiter, or repeated-invalid-frame disconnect state machine.
 - Debug builds fail fast only when Kent itself attempts to emit a generated message that violates its declared contract. Malformed peer input is external data and must be robustly rejected in debug and production. Production must surface the internal contract error and not send the invalid frame.
-- The authoritative schema tree is `api/proto/`. Checked-in generated Go and TypeScript output must remain outside that source tree so generated artifacts cannot be mistaken for editable contract source.
+- The Protobuf schema is the sole editable API contract. Generated code must not become a second editable authority.

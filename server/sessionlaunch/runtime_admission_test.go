@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
@@ -107,10 +108,9 @@ func TestServiceOpenExistingSessionDoesNotWaitForActiveRuntime(t *testing.T) {
 
 	planned := make(chan error, 1)
 	go func() {
-		_, planErr := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-			ClientRequestID: "plan-during-active-runtime",
-			Mode:            serverapi.SessionLaunchModeInteractive,
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		_, planErr := service.PlanLaunchSession(context.Background(), PlanRequest{
+			Mode:   launch.ModeInteractive,
+			Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
 		})
 		planned <- planErr
 	}()

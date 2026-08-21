@@ -10,6 +10,7 @@ import (
 
 	"core/server/onboarding"
 	"core/shared/config"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 
@@ -21,13 +22,13 @@ func TestFinalizerDefaultEqualChoicesRenderLikeDefaults(t *testing.T) {
 	nullHome := t.TempDir()
 	defaultRoot := t.TempDir()
 	defaultHome := t.TempDir()
-	defaultModel := serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5.6-sol"}
-	defaultTheme := serverapi.OnboardingThemeAuto
+	defaultModel := onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_KNOWN, ModelId: ptr("gpt-5.6-sol")}
+	defaultTheme := onboardingpb.Theme_THEME_AUTO
 
-	if _, err := newTestFinalizer(t, nullRoot, nullHome).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{}); err != nil {
+	if _, err := newTestFinalizer(t, nullRoot, nullHome).Finalize(context.Background(), &onboardingpb.FinalizeRequest{}); err != nil {
 		t.Fatalf("null finalize: %v", err)
 	}
-	if _, err := newTestFinalizer(t, defaultRoot, defaultHome).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+	if _, err := newTestFinalizer(t, defaultRoot, defaultHome).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
 		Model: &defaultModel,
 		Theme: &defaultTheme,
 	}); err != nil {
@@ -62,34 +63,35 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 	providerOverride := "openai"
 	openAIBaseURL := "https://api.openai.com/v1"
 	modelTimeout := 123
+	requestModelTimeout := uint32(modelTimeout)
 	reviewerModel := "gpt-5.4"
 	reviewerThinking := "xhigh"
 	disabledSkill := "api result"
 	tests := []struct {
 		name string
-		req  serverapi.OnboardingFinalizeRequest
+		req  *onboardingpb.FinalizeRequest
 		want want
 	}{
 		{
 			name: "known model large context level thinking verbosity true ask supervisor override native compaction",
-			req: serverapi.OnboardingFinalizeRequest{
-				MainProvider:  &serverapi.OnboardingProviderChoice{ProviderOverride: &providerOverride, OpenAIBaseURL: &openAIBaseURL},
-				Model:         &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5.4-mini"},
-				ContextWindow: &serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowLarge},
-				Thinking:      &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: "high"},
-				Verbosity:     ptr(serverapi.OnboardingVerbosityHigh),
+			req: &onboardingpb.FinalizeRequest{
+				MainProvider:  &onboardingpb.ProviderChoice{ProviderOverride: &providerOverride, OpenaiBaseUrl: &openAIBaseURL},
+				Model:         &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_KNOWN, ModelId: ptr("gpt-5.4-mini")},
+				ContextWindow: &onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_LARGE},
+				Thinking:      &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_LEVEL, Level: ptr("high")},
+				Verbosity:     ptr(onboardingpb.Verbosity_VERBOSITY_HIGH),
 				AskQuestion:   &trueValue,
-				ToolOverrides: []serverapi.OnboardingToolOverride{
-					{ID: toolspec.ToolEdit, Enabled: true},
-					{ID: toolspec.ToolPatch, Enabled: false},
+				ToolOverrides: []*onboardingpb.ToolOverride{
+					{Id: onboardingpb.ToolID_TOOL_ID_EDIT, Enabled: true},
+					{Id: onboardingpb.ToolID_TOOL_ID_PATCH, Enabled: false},
 				},
-				Supervisor: &serverapi.OnboardingSupervisorChoice{
-					Frequency: serverapi.OnboardingSupervisorAll,
-					Model:     &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5.4"},
-					Thinking:  &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingCustom, Value: "xhigh"},
+				Supervisor: &onboardingpb.SupervisorChoice{
+					Frequency: onboardingpb.SupervisorFrequency_SUPERVISOR_FREQUENCY_ALL,
+					Model:     &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_KNOWN, ModelId: ptr("gpt-5.4")},
+					Thinking:  &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_CUSTOM, Value: ptr("xhigh")},
 				},
-				Compaction:          ptr(serverapi.OnboardingCompactionNative),
-				ModelTimeoutSeconds: &modelTimeout,
+				Compaction:          ptr(onboardingpb.CompactionMode_COMPACTION_MODE_NATIVE),
+				ModelTimeoutSeconds: &requestModelTimeout,
 				DisabledSkillNames:  []string{" API   Result "},
 			},
 			want: want{
@@ -111,13 +113,13 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 		},
 		{
 			name: "custom model custom context disabled thinking false ask supervisor inheritance none compaction",
-			req: serverapi.OnboardingFinalizeRequest{
-				Model:         &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: "custom-openai-model"},
-				ContextWindow: &serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowCustom, Tokens: 123_456},
-				Thinking:      &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDisabled},
+			req: &onboardingpb.FinalizeRequest{
+				Model:         &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_CUSTOM, Alias: ptr("custom-openai-model")},
+				ContextWindow: &onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_CUSTOM, Tokens: ptr(uint32(123_456))},
+				Thinking:      &onboardingpb.ThinkingChoice{Kind: onboardingpb.ThinkingKind_THINKING_KIND_DISABLED},
 				AskQuestion:   &falseValue,
-				Supervisor:    &serverapi.OnboardingSupervisorChoice{Frequency: serverapi.OnboardingSupervisorOff},
-				Compaction:    ptr(serverapi.OnboardingCompactionNone),
+				Supervisor:    &onboardingpb.SupervisorChoice{Frequency: onboardingpb.SupervisorFrequency_SUPERVISOR_FREQUENCY_OFF},
+				Compaction:    ptr(onboardingpb.CompactionMode_COMPACTION_MODE_NONE),
 			},
 			want: want{
 				model:     "custom-openai-model",
@@ -138,8 +140,8 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			home := t.TempDir()
-			if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), tc.req); err != nil {
-				t.Fatalf("FinalizeOnboarding: %v", err)
+			if _, err := newTestFinalizer(t, root, home).Finalize(context.Background(), tc.req); err != nil {
+				t.Fatalf("Finalize: %v", err)
 			}
 			cfg := loadFinalizedConfig(t, root)
 			if cfg.Settings.Model != tc.want.model {
@@ -181,10 +183,10 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 func TestFinalizerAcceptsMinimumCustomContextWindow(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		ContextWindow: &serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowCustom, Tokens: 50_000},
+	if _, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		ContextWindow: &onboardingpb.ContextWindowChoice{Kind: onboardingpb.ContextWindowKind_CONTEXT_WINDOW_KIND_CUSTOM, Tokens: ptr(uint32(50_000))},
 	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 	cfg := loadFinalizedConfig(t, root)
 	if cfg.Settings.ModelContextWindow != 50_000 {
@@ -198,10 +200,10 @@ func TestFinalizerAcceptsMinimumCustomContextWindow(t *testing.T) {
 func TestFinalizerAcceptsKnownModelWithoutContextMetadata(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		Model: &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5"},
+	if _, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		Model: &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_KNOWN, ModelId: ptr("gpt-5")},
 	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 	cfg := loadFinalizedConfig(t, root)
 	if cfg.Settings.Model != "gpt-5" {
@@ -215,9 +217,9 @@ func TestFinalizerAcceptsKnownModelWithoutContextMetadata(t *testing.T) {
 func TestFinalizerRejectsUnsupportedVerbosityForSelectedModel(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
-	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		Model:     &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: "claude-3-7-sonnet"},
-		Verbosity: ptr(serverapi.OnboardingVerbosityHigh),
+	_, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		Model:     &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_CUSTOM, Alias: ptr("claude-3-7-sonnet")},
+		Verbosity: ptr(onboardingpb.Verbosity_VERBOSITY_HIGH),
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeInvalidRequest) {
 		t.Fatalf("error = %v, want invalid_request", err)
@@ -227,12 +229,12 @@ func TestFinalizerRejectsUnsupportedVerbosityForSelectedModel(t *testing.T) {
 func TestFinalizerAcceptsProviderDefaultVerbosityForCustomOpenAIModel(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
-	verbosity := serverapi.OnboardingVerbosityHigh
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		Model:     &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: "custom-openai-model"},
+	verbosity := onboardingpb.Verbosity_VERBOSITY_HIGH
+	if _, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		Model:     &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_CUSTOM, Alias: ptr("custom-openai-model")},
 		Verbosity: &verbosity,
 	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 	cfg := loadFinalizedConfig(t, root)
 	if cfg.Settings.ModelVerbosity != config.ModelVerbosityHigh {
@@ -246,12 +248,12 @@ func TestFinalizerImportsSkillsAndCommandsBeforeConfigWrite(t *testing.T) {
 	skillUUID := createProviderSkillSource(t, home, ".claude")
 	commandUUID := createProviderCommandSource(t, home, ".claude")
 
-	resp, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport:   &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &skillUUID},
-		CommandsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &commandUUID},
+	resp, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		SkillsImport:   &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(skillUUID.String())},
+		CommandsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(commandUUID.String())},
 	})
 	if err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 	if !resp.Completed {
 		t.Fatal("expected finalize completion")
@@ -267,15 +269,15 @@ func TestFinalizerImportsSelectedCapabilityFactSkillRoot(t *testing.T) {
 	createSkillDirectory(t, filepath.Join(regularRoot, "regular-example"))
 	providerID := "codex"
 
-	resp, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport: &serverapi.OnboardingImportSelection{
-			Mode:             serverapi.OnboardingImportModeSymlinkSource,
-			ImportProviderID: &providerID,
+	resp, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		SkillsImport: &onboardingpb.ImportSelection{
+			Mode:             onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE,
+			ImportProviderId: &providerID,
 			SourceRootPath:   &regularRoot,
 		},
 	})
 	if err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 	if !resp.Completed {
 		t.Fatal("expected finalize completion")
@@ -300,8 +302,8 @@ func TestFinalizerReturnsSelectedProviderDiscoveryError(t *testing.T) {
 		t.Fatalf("write selected provider blocker: %v", err)
 	}
 
-	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	_, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		SkillsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(providerUUID.String())},
 	})
 	var finalizeErr *serverapi.OnboardingFinalizeError
 	if !errors.As(err, &finalizeErr) {
@@ -333,8 +335,8 @@ func TestFinalizerRollsBackImportsWhenConfigWriteFails(t *testing.T) {
 		t.Fatalf("NewFinalizer: %v", err)
 	}
 
-	_, err = finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	_, err = finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		SkillsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(providerUUID.String())},
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeConfigWriteFailed) {
 		t.Fatalf("error = %v, want config_write_failed", err)
@@ -350,12 +352,12 @@ func TestFinalizerExistingConfigWinsBeforeValidationAndSideEffects(t *testing.T)
 	if _, _, err := config.WriteDefaultSettingsFileAt(filepath.Join(root, "config.toml")); err != nil {
 		t.Fatalf("write existing config: %v", err)
 	}
-	badTheme := serverapi.OnboardingTheme("blue")
+	badTheme := onboardingpb.Theme(999)
 	providerUUID := createProviderSkillSource(t, home, ".claude")
 
-	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+	_, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
 		Theme:        &badTheme,
-		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+		SkillsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(providerUUID.String())},
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
 		t.Fatalf("error = %v, want config_already_exists", err)
@@ -375,7 +377,7 @@ func TestFinalizerConcurrentFinalizeSerializesAndRechecksConfig(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
+			_, err := finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{})
 			errs <- err
 		}()
 	}
@@ -406,9 +408,9 @@ func TestFinalizerSkipsImportDiscoveryWhenNoImportsRequested(t *testing.T) {
 	}
 	finalizer := newTestFinalizer(t, root, home)
 
-	resp, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
+	resp, err := finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{})
 	if err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 	if !resp.Completed {
 		t.Fatal("expected finalize completion")
@@ -426,11 +428,11 @@ func TestFinalizerMissingHomeMakesRequestedImportUnavailable(t *testing.T) {
 		t.Fatalf("NewFinalizer: %v", err)
 	}
 	providerUUID := providerUUIDForHomeEntry(t, ".claude")
-	_, err = finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	_, err = finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		SkillsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(providerUUID.String())},
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeImportUnavailable) {
-		t.Fatalf("FinalizeOnboarding error = %v, want import_unavailable", err)
+		t.Fatalf("Finalize error = %v, want import_unavailable", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("config should remain absent, stat err=%v", statErr)
@@ -482,8 +484,8 @@ func TestFinalizerReturnsTargetExistsForRequestedImportBlockedByTarget(t *testin
 	}
 	finalizer := newTestFinalizer(t, root, home)
 
-	_, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	_, err := finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		SkillsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(providerUUID.String())},
 	})
 	var finalizeErr *serverapi.OnboardingFinalizeError
 	if !errors.As(err, &finalizeErr) {
@@ -508,9 +510,9 @@ func TestFinalizerRollsBackEarlierImportWhenLaterImportSelectionFails(t *testing
 	missingCommandsUUID := providerUUID
 	finalizer := newTestFinalizer(t, root, home)
 
-	_, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport:   &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
-		CommandsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &missingCommandsUUID},
+	_, err := finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		SkillsImport:   &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(providerUUID.String())},
+		CommandsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(missingCommandsUUID.String())},
 	})
 	var finalizeErr *serverapi.OnboardingFinalizeError
 	if !errors.As(err, &finalizeErr) {
@@ -535,9 +537,9 @@ func TestFinalizerRestoresPreexistingEmptyTargetDirectoryOnRollback(t *testing.T
 		t.Fatalf("mkdir empty target: %v", err)
 	}
 
-	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport:   &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
-		CommandsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	_, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		SkillsImport:   &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(providerUUID.String())},
+		CommandsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(providerUUID.String())},
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeImportUnavailable) {
 		t.Fatalf("error = %v, want import_unavailable", err)
@@ -563,8 +565,8 @@ func TestFinalizerRejectsNonV4ProviderUUID(t *testing.T) {
 	home := t.TempDir()
 	v1UUID := uuid.MustParse("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
-	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &v1UUID},
+	_, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		SkillsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(v1UUID.String())},
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeInvalidRequest) {
 		t.Fatalf("error = %v, want invalid_request", err)
@@ -575,7 +577,7 @@ func TestFinalizerRejectsDuplicateNormalizedDisabledSkillNames(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
 
-	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+	_, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
 		DisabledSkillNames: []string{"API Result", " api   result "},
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeInvalidRequest) {
@@ -598,10 +600,10 @@ func TestFinalizerRejectsNativeCompactionForSelectedNonOpenAIModel(t *testing.T)
 	root := t.TempDir()
 	home := t.TempDir()
 	finalizer := newTestFinalizer(t, root, home)
-	native := serverapi.OnboardingCompactionNative
+	native := onboardingpb.CompactionMode_COMPACTION_MODE_NATIVE
 
-	_, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		Model:      &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: "claude-3-7-sonnet"},
+	_, err := finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		Model:      &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_CUSTOM, Alias: ptr("claude-3-7-sonnet")},
 		Compaction: &native,
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeInvalidRequest) {
@@ -621,13 +623,13 @@ func TestFinalizerAcceptsNativeCompactionForDefaultOpenAICustomModel(t *testing.
 	root := t.TempDir()
 	home := t.TempDir()
 	finalizer := newTestFinalizer(t, root, home)
-	native := serverapi.OnboardingCompactionNative
+	native := onboardingpb.CompactionMode_COMPACTION_MODE_NATIVE
 
-	if _, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		Model:      &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: "unknown-custom-model"},
+	if _, err := finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		Model:      &onboardingpb.ModelChoice{Kind: onboardingpb.ModelKind_MODEL_KIND_CUSTOM, Alias: ptr("unknown-custom-model")},
 		Compaction: &native,
 	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 	cfg := loadFinalizedConfig(t, root)
 	if cfg.Settings.CompactionMode != config.CompactionModeNative {
@@ -643,11 +645,11 @@ func TestFinalizerCommandsImportBlocksLegacyCommandsDirectory(t *testing.T) {
 		t.Fatalf("mkdir legacy commands: %v", err)
 	}
 
-	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		CommandsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	_, err := newTestFinalizer(t, root, home).Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		CommandsImport: &onboardingpb.ImportSelection{Mode: onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE, ProviderUuid: ptr(providerUUID.String())},
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeImportUnavailable) {
-		t.Fatalf("FinalizeOnboarding error = %v, want import_unavailable", err)
+		t.Fatalf("Finalize error = %v, want import_unavailable", err)
 	}
 	if _, statErr := os.Lstat(filepath.Join(root, "prompts")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("prompts import should not run when legacy commands exist, stat err=%v", statErr)
@@ -672,22 +674,6 @@ func TestProductionProviderCatalogUUIDsAreStableV4Values(t *testing.T) {
 			t.Fatalf("duplicate provider uuid %s", first[index].UUID)
 		}
 		seen[first[index].UUID] = true
-	}
-}
-
-func TestFinalizeErrorSentinelsSurviveRemoteDecode(t *testing.T) {
-	encoded := serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: "/tmp/config.toml"}, nil)
-	decoded := serverapi.DecodeOnboardingFinalizeError(encoded.RPCErrorData(), encoded.Error())
-
-	if !errors.Is(decoded, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
-		t.Fatalf("decoded error = %v, want config_already_exists sentinel", decoded)
-	}
-	var finalizeErr *serverapi.OnboardingFinalizeError
-	if !errors.As(decoded, &finalizeErr) {
-		t.Fatalf("decoded error = %T %v, want OnboardingFinalizeError", decoded, decoded)
-	}
-	if _, ok := finalizeErr.Details.(serverapi.OnboardingConfigAlreadyExistsDetails); !ok {
-		t.Fatalf("decoded details = %T, want OnboardingConfigAlreadyExistsDetails", finalizeErr.Details)
 	}
 }
 

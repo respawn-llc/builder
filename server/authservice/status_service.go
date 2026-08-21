@@ -13,11 +13,13 @@ import (
 	"core/server/auth"
 	"core/server/httpcompression"
 	"core/server/llm"
-	servicecontract "core/shared/apicontract"
 	"core/shared/authstatus"
 	"core/shared/config"
-	"core/shared/serverapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/textutil"
+
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const usageBaseURL = "https://chatgpt.com/backend-api"
@@ -31,46 +33,51 @@ func NewStatusService(manager *auth.Manager, settings config.Settings) *StatusSe
 	return &StatusService{manager: manager, settings: settings}
 }
 
-func (s *StatusService) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.AuthStatusResponse{}, err
+func (s *StatusService) GetStatus(ctx context.Context, req *authpb.GetStatusRequest) (*authpb.Status, error) {
+	if req == nil {
+		return nil, errors.New("auth status request is required")
 	}
 	state := auth.EmptyState()
 	if s != nil && s.manager != nil {
 		loaded, err := s.manager.Load(ctx)
 		if err != nil {
-			return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
-				Resolution: serverapi.UnavailableAuthStatusResolution(authStatusFailure(err)),
-			})
+			return &authpb.Status{
+				Resolution: &authpb.StatusResolution{
+					Resolution: &authpb.StatusResolution_Unavailable{Unavailable: authStatusFailure(err)},
+				},
+				Subscription: &authpb.SubscriptionFacts{},
+			}, nil
 		}
 		state = loaded
 	}
 	provider, subscriptionUsageSupported, err := s.resolveProvider(state, req.Provider)
 	if err != nil {
-		return serverapi.AuthStatusResponse{}, err
+		return nil, err
 	}
 	subscriptionUsageSupported = subscriptionUsageSupported && !req.SkipSubscriptionUsage
-	return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
-		Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), nil),
+	return &authpb.Status{
+		Resolution: &authpb.StatusResolution{
+			Resolution: &authpb.StatusResolution_Known{Known: authFacts(state, provider)},
+		},
 		Subscription: subscriptionStatus(ctx, state, nil, subscriptionUsageSupported),
-	})
+	}, nil
 }
 
 func (s *StatusService) resolveProvider(
 	state auth.State,
-	requested *serverapi.AuthProviderSelection,
-) (serverapi.AuthProviderFacts, bool, error) {
+	requested *authpb.ProviderSelection,
+) (*authpb.ProviderFacts, bool, error) {
 	settings := config.Settings{}
 	if s != nil {
 		settings = s.settings
 	}
 	requestedSelection := requested != nil
 	if requested != nil {
-		settings = authstatus.ProviderSettings(*requested)
+		settings = authstatus.ProviderSettings(requested)
 	}
 	capabilities, err := llm.ResolveRuntimeProviderCapabilities(state, settings)
 	if err != nil {
-		return serverapi.AuthProviderFacts{}, false, fmt.Errorf("resolve auth status provider: %w", err)
+		return nil, false, fmt.Errorf("resolve auth status provider: %w", err)
 	}
 	provider := authstatus.ProviderFacts(capabilities.ProviderID, capabilities.IsOpenAIFirstParty, settings)
 	if requestedSelection {
@@ -79,56 +86,52 @@ func (s *StatusService) resolveProvider(
 	return provider, authstatus.SupportsSubscriptionUsage(settings, capabilities.IsOpenAIFirstParty), nil
 }
 
-func validatedAuthStatusResponse(response serverapi.AuthStatusResponse) (serverapi.AuthStatusResponse, error) {
-	if err := response.Validate(); err != nil {
-		return serverapi.AuthStatusResponse{}, fmt.Errorf("validate auth status response: %w", err)
-	}
-	return response, nil
-}
-
-func authFacts(state auth.State, provider serverapi.AuthProviderFacts) serverapi.AuthStatusFacts {
-	facts := serverapi.AuthStatusFacts{
+func authFacts(state auth.State, provider *authpb.ProviderFacts) *authpb.StatusFacts {
+	facts := &authpb.StatusFacts{
 		Method:        authStatusMethod(state.Method.Type),
 		Provider:      provider,
 		EnvPreference: authStatusEnvPreference(state.EnvAPIKeyPreference),
 	}
 	switch state.Method.Type {
 	case auth.MethodOAuth:
-		facts.OAuth = &serverapi.AuthOAuthFacts{}
+		oauthFacts := &authpb.OAuthFacts{}
 		if state.Method.OAuth != nil {
-			facts.OAuth.AccountID = textutil.OptionalTrimmedString(state.Method.OAuth.AccountID)
-			facts.OAuth.Email = textutil.OptionalTrimmedString(state.Method.OAuth.Email)
+			oauthFacts.AccountId = textutil.OptionalTrimmedString(state.Method.OAuth.AccountID)
+			oauthFacts.Email = textutil.OptionalTrimmedString(state.Method.OAuth.Email)
 		}
+		facts.MethodFacts = &authpb.StatusFacts_Oauth{Oauth: oauthFacts}
 	case auth.MethodAPIKey:
-		facts.APIKey = apiKeyFacts(state.Method.APIKey)
+		facts.MethodFacts = &authpb.StatusFacts_ApiKey{ApiKey: apiKeyFacts(state.Method.APIKey)}
+	default:
+		facts.MethodFacts = &authpb.StatusFacts_NoAuth{NoAuth: &emptypb.Empty{}}
 	}
 	return facts
 }
 
-func authStatusMethod(method auth.MethodType) serverapi.AuthStatusMethod {
+func authStatusMethod(method auth.MethodType) authpb.AuthMethod {
 	switch method {
 	case auth.MethodOAuth:
-		return serverapi.AuthStatusMethodOAuth
+		return authpb.AuthMethod_AUTH_METHOD_OAUTH
 	case auth.MethodAPIKey:
-		return serverapi.AuthStatusMethodAPIKey
+		return authpb.AuthMethod_AUTH_METHOD_API_KEY
 	default:
-		return serverapi.AuthStatusMethodNone
+		return authpb.AuthMethod_AUTH_METHOD_NONE
 	}
 }
 
-func authStatusEnvPreference(preference auth.EnvAPIKeyPreference) serverapi.AuthStatusEnvPreference {
+func authStatusEnvPreference(preference auth.EnvAPIKeyPreference) authpb.EnvironmentPreference {
 	switch preference {
 	case auth.EnvAPIKeyPreferencePreferSaved:
-		return serverapi.AuthStatusEnvPreferencePreferSaved
+		return authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_PREFER_SAVED_AUTH
 	case auth.EnvAPIKeyPreferencePreferEnv:
-		return serverapi.AuthStatusEnvPreferencePreferEnv
+		return authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_PREFER_ENV_API_KEY
 	default:
-		return serverapi.AuthStatusEnvPreferenceUnspecified
+		return authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_UNSPECIFIED
 	}
 }
 
-func apiKeyFacts(method *auth.APIKeyMethod) *serverapi.AuthAPIKeyFacts {
-	facts := &serverapi.AuthAPIKeyFacts{}
+func apiKeyFacts(method *auth.APIKeyMethod) *authpb.APIKeyFacts {
+	facts := &authpb.APIKeyFacts{}
 	if method == nil {
 		return facts
 	}
@@ -146,25 +149,22 @@ func subscriptionStatus(
 	state auth.State,
 	authStateErr error,
 	subscriptionUsageSupported bool,
-) serverapi.AuthSubscriptionFacts {
+) *authpb.SubscriptionFacts {
 	if !shouldFetchSubscriptionUsage(state, subscriptionUsageSupported) {
-		return serverapi.AuthSubscriptionFacts{}
+		return &authpb.SubscriptionFacts{}
 	}
 	if authStateErr != nil {
-		failure := authStatusFailure(authStateErr)
-		return serverapi.AuthSubscriptionFacts{Applicable: true, Failure: &failure}
+		return &authpb.SubscriptionFacts{Applicable: true, Failure: authStatusFailure(authStateErr)}
 	}
 	payload, err := fetchUsagePayload(ctx, usageBaseURL, state)
 	if err != nil {
-		failure := authStatusFailure(err)
-		return serverapi.AuthSubscriptionFacts{Applicable: true, Failure: &failure}
+		return &authpb.SubscriptionFacts{Applicable: true, Failure: authStatusFailure(err)}
 	}
 	windows, err := usageWindowFacts(payload)
 	if err != nil {
-		failure := authStatusFailure(err)
-		return serverapi.AuthSubscriptionFacts{Applicable: true, Failure: &failure}
+		return &authpb.SubscriptionFacts{Applicable: true, Failure: authStatusFailure(err)}
 	}
-	return serverapi.AuthSubscriptionFacts{
+	return &authpb.SubscriptionFacts{
 		Applicable: true,
 		Plan:       textutil.OptionalTrimmedString(payload.PlanType),
 		Windows:    windows,
@@ -172,12 +172,9 @@ func subscriptionStatus(
 }
 
 func shouldFetchSubscriptionUsage(state auth.State, subscriptionUsageSupported bool) bool {
-	if state.Method.Type != auth.MethodOAuth ||
-		state.Method.OAuth == nil ||
-		!subscriptionUsageSupported {
-		return false
-	}
-	return true
+	return state.Method.Type == auth.MethodOAuth &&
+		state.Method.OAuth != nil &&
+		subscriptionUsageSupported
 }
 
 type usagePayload struct {
@@ -239,31 +236,29 @@ func fetchUsagePayload(ctx context.Context, baseURL string, state auth.State) (u
 	return payload, nil
 }
 
-func usageWindowFacts(payload usagePayload) ([]serverapi.AuthSubscriptionWindowFacts, error) {
+func usageWindowFacts(payload usagePayload) ([]*authpb.SubscriptionWindowFacts, error) {
 	type orderedWindow struct {
-		facts         serverapi.AuthSubscriptionWindowFacts
+		facts         *authpb.SubscriptionWindowFacts
 		discoveryRank int
 	}
 	ordered := make([]orderedWindow, 0, 2+len(payload.AdditionalRateLimits)*2)
 	discoveryRank := 0
-	addWindow := func(window *usageWindow, bucket serverapi.AuthSubscriptionWindowBucket, limitName, feature string) error {
+	addWindow := func(window *usageWindow, bucket authpb.SubscriptionWindowBucket, limitName, feature string) error {
 		if window == nil {
 			return nil
 		}
-		durationSecs := window.LimitWindowSeconds
-		if durationSecs <= 0 {
-			return fmt.Errorf("usage window duration must be positive: %d", durationSecs)
+		if window.LimitWindowSeconds <= 0 {
+			return fmt.Errorf("usage window duration must be positive: %d", window.LimitWindowSeconds)
 		}
-		facts := serverapi.AuthSubscriptionWindowFacts{
-			Bucket:       bucket,
-			DurationSecs: durationSecs,
-			UsedPercent:  window.UsedPercent,
+		facts := &authpb.SubscriptionWindowFacts{
+			Bucket:          bucket,
+			DurationSeconds: uint32(window.LimitWindowSeconds),
+			UsedPercent:     window.UsedPercent,
 		}
 		if window.ResetAt > 0 {
-			resetAt := time.Unix(window.ResetAt, 0).UTC()
-			facts.ResetAt = &resetAt
+			facts.ResetAt = timestamppb.New(time.Unix(window.ResetAt, 0).UTC())
 		}
-		if bucket == serverapi.AuthSubscriptionWindowBucketAdditional {
+		if bucket == authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_ADDITIONAL {
 			facts.LimitName = textutil.OptionalTrimmedString(limitName)
 			facts.MeteredFeature = textutil.OptionalTrimmedString(feature)
 		}
@@ -272,10 +267,10 @@ func usageWindowFacts(payload usagePayload) ([]serverapi.AuthSubscriptionWindowF
 		return nil
 	}
 	if payload.RateLimit != nil {
-		if err := addWindow(payload.RateLimit.PrimaryWindow, serverapi.AuthSubscriptionWindowBucketDefault, "", ""); err != nil {
+		if err := addWindow(payload.RateLimit.PrimaryWindow, authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_DEFAULT, "", ""); err != nil {
 			return nil, err
 		}
-		if err := addWindow(payload.RateLimit.SecondaryWindow, serverapi.AuthSubscriptionWindowBucketDefault, "", ""); err != nil {
+		if err := addWindow(payload.RateLimit.SecondaryWindow, authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_DEFAULT, "", ""); err != nil {
 			return nil, err
 		}
 	}
@@ -283,28 +278,26 @@ func usageWindowFacts(payload usagePayload) ([]serverapi.AuthSubscriptionWindowF
 		if extra.RateLimit == nil {
 			continue
 		}
-		if err := addWindow(extra.RateLimit.PrimaryWindow, serverapi.AuthSubscriptionWindowBucketAdditional, extra.LimitName, extra.MeteredFeature); err != nil {
+		if err := addWindow(extra.RateLimit.PrimaryWindow, authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_ADDITIONAL, extra.LimitName, extra.MeteredFeature); err != nil {
 			return nil, err
 		}
-		if err := addWindow(extra.RateLimit.SecondaryWindow, serverapi.AuthSubscriptionWindowBucketAdditional, extra.LimitName, extra.MeteredFeature); err != nil {
+		if err := addWindow(extra.RateLimit.SecondaryWindow, authpb.SubscriptionWindowBucket_SUBSCRIPTION_WINDOW_BUCKET_ADDITIONAL, extra.LimitName, extra.MeteredFeature); err != nil {
 			return nil, err
 		}
 	}
 	sort.SliceStable(ordered, func(i, j int) bool {
-		if ordered[i].facts.DurationSecs != ordered[j].facts.DurationSecs {
-			return ordered[i].facts.DurationSecs < ordered[j].facts.DurationSecs
+		if ordered[i].facts.DurationSeconds != ordered[j].facts.DurationSeconds {
+			return ordered[i].facts.DurationSeconds < ordered[j].facts.DurationSeconds
 		}
 		return ordered[i].discoveryRank < ordered[j].discoveryRank
 	})
-	windows := make([]serverapi.AuthSubscriptionWindowFacts, 0, len(ordered))
+	windows := make([]*authpb.SubscriptionWindowFacts, 0, len(ordered))
 	for _, window := range ordered {
 		windows = append(windows, window.facts)
 	}
 	return windows, nil
 }
 
-func authStatusFailure(err error) serverapi.AuthStatusFailure {
-	return serverapi.AuthStatusFailure{Cause: strings.TrimSpace(err.Error())}
+func authStatusFailure(err error) *authpb.StatusFailure {
+	return &authpb.StatusFailure{Cause: strings.TrimSpace(err.Error())}
 }
-
-var _ servicecontract.AuthStatusService = (*StatusService)(nil)

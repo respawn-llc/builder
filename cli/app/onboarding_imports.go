@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	"core/shared/textutil"
 
 	"github.com/google/uuid"
@@ -16,7 +16,7 @@ type onboardingImportChoice struct {
 	OptionID string
 	Mode     onboardingImportMode
 	Count    int
-	Ref      serverapi.ImportChoiceRef
+	Ref      *capabilitypb.ImportChoiceRef
 }
 
 type onboardingImportDiscovery struct {
@@ -51,35 +51,35 @@ type onboardingImportDiscoveryDoneMsg struct {
 	discovery onboardingImportDiscovery
 }
 
-func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) onboardingImportDiscovery {
+func onboardingImportDiscoveryFromFacts(facts *capabilitypb.ImportFacts) onboardingImportDiscovery {
 	discovery := onboardingImportDiscovery{
 		fromFacts:               true,
 		skillSymlinkItems:       map[onboardingImportProviderID][]onboardingSkillImportItem{},
 		skillEnablementByChoice: map[string][]onboardingSkillImportItem{},
 		existingSkillNames:      map[string]bool{},
 	}
-	discovery.skipSkills = facts.Skills.Target.Skip
-	discovery.skipCommands = facts.Commands.Target.Skip
-	if importErr, ok := firstImportError(facts.Errors, serverapi.ImportErrorItemKindSkill, true); ok {
-		discovery.err = errors.New(importErr.Message)
+	discovery.skipSkills = facts.GetSkills().GetTarget().GetSkip()
+	discovery.skipCommands = facts.GetCommands().GetTarget().GetSkip()
+	if importErr, ok := firstImportError(facts.GetErrors(), capabilitypb.ImportItemKind_IMPORT_ITEM_KIND_SKILL, true); ok {
+		discovery.err = errors.New(importErr.GetMessage())
 	}
-	if importErr, ok := firstImportError(facts.Errors, serverapi.ImportErrorItemKindCommand, false); ok {
-		discovery.commandErr = errors.New(importErr.Message)
+	if importErr, ok := firstImportError(facts.GetErrors(), capabilitypb.ImportItemKind_IMPORT_ITEM_KIND_COMMAND, false); ok {
+		discovery.commandErr = errors.New(importErr.GetMessage())
 	}
-	discovery.skillChoices = importChoicesFromFacts(facts.Skills.Choices)
+	discovery.skillChoices = importChoicesFromFacts(facts.GetSkills().GetChoices())
 	discovery.skillChoices = ensureNoneImportChoice(discovery.skillChoices)
-	discovery.commandChoices = ensureNoneImportChoice(importChoicesFromFacts(facts.Commands.Choices))
-	if id, ok := importChoiceIDFromRecommendation(facts.Recommendations.Skills, discovery.skillChoices); ok {
+	discovery.commandChoices = ensureNoneImportChoice(importChoicesFromFacts(facts.GetCommands().GetChoices()))
+	if id, ok := importChoiceIDFromRecommendation(facts.GetRecommendations().GetSkills(), discovery.skillChoices); ok {
 		discovery.skillRecommendationID = id
 	} else if id, ok := noneChoiceID(discovery.skillChoices); ok {
 		discovery.skillRecommendationID = id
 	}
-	if id, ok := importChoiceIDFromRecommendation(facts.Recommendations.Commands, discovery.commandChoices); ok {
+	if id, ok := importChoiceIDFromRecommendation(facts.GetRecommendations().GetCommands(), discovery.commandChoices); ok {
 		discovery.commandRecommendationID = textutil.Value(id)
 	} else if id, ok := noneChoiceID(discovery.commandChoices); ok {
 		discovery.commandRecommendationID = textutil.Value(id)
 	}
-	for _, item := range facts.Skills.Items {
+	for _, item := range facts.GetSkills().GetItems() {
 		converted := skillImportItemFromFact(item)
 		if converted.Provider == nil {
 			discovery.generatedSkillItems = append(discovery.generatedSkillItems, converted)
@@ -87,8 +87,8 @@ func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) o
 		}
 		discovery.skillSymlinkItems[*converted.Provider] = append(discovery.skillSymlinkItems[*converted.Provider], converted)
 	}
-	for _, projection := range facts.SkillEnablement {
-		id, ok := optionIDForChoiceRef(discovery.skillChoices, projection.ChoiceRef)
+	for _, projection := range facts.GetSkillEnablement() {
+		id, ok := optionIDForChoiceRef(discovery.skillChoices, projection.GetChoiceRef())
 		if !ok {
 			continue
 		}
@@ -101,7 +101,7 @@ func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) o
 	return discovery
 }
 
-func firstImportError(errors []serverapi.ImportErrorFact, wanted serverapi.ImportErrorItemKind, includeUnscoped bool) (serverapi.ImportErrorFact, bool) {
+func firstImportError(errors []*capabilitypb.ImportErrorFact, wanted capabilitypb.ImportItemKind, includeUnscoped bool) (*capabilitypb.ImportErrorFact, bool) {
 	for _, importErr := range errors {
 		if importErr.ItemKind == nil {
 			if includeUnscoped {
@@ -113,24 +113,24 @@ func firstImportError(errors []serverapi.ImportErrorFact, wanted serverapi.Impor
 			return importErr, true
 		}
 	}
-	return serverapi.ImportErrorFact{}, false
+	return nil, false
 }
 
-func importChoiceIDFromRecommendation(recommendation *serverapi.ImportModeRecommendationFact, choices []onboardingImportChoice) (string, bool) {
+func importChoiceIDFromRecommendation(recommendation *capabilitypb.ImportModeRecommendationFact, choices []onboardingImportChoice) (string, bool) {
 	if recommendation == nil {
 		return "", false
 	}
-	return optionIDForChoiceRef(choices, recommendation.ChoiceRef)
+	return optionIDForChoiceRef(choices, recommendation.GetChoiceRef())
 }
 
-func importChoicesFromFacts(facts []serverapi.ImportChoiceFact) []onboardingImportChoice {
+func importChoicesFromFacts(facts []*capabilitypb.ImportChoiceFact) []onboardingImportChoice {
 	choices := make([]onboardingImportChoice, 0, len(facts))
 	for _, fact := range facts {
 		choices = append(choices, onboardingImportChoice{
 			OptionID: uuid.NewString(),
-			Mode:     onboardingImportMode(fact.Ref.Mode),
-			Count:    fact.ItemCount,
-			Ref:      fact.Ref,
+			Mode:     onboardingImportModeFromProto(fact.GetRef().GetMode()),
+			Count:    int(fact.GetItemCount()),
+			Ref:      fact.GetRef(),
 		})
 	}
 	return choices
@@ -140,13 +140,13 @@ func ensureNoneImportChoice(choices []onboardingImportChoice) []onboardingImport
 	if _, ok := noneChoiceID(choices); ok {
 		return choices
 	}
-	none := onboardingImportChoice{OptionID: uuid.NewString(), Mode: onboardingImportModeNone, Ref: serverapi.ImportChoiceRef{Mode: string(onboardingImportModeNone)}}
+	none := onboardingImportChoice{OptionID: uuid.NewString(), Mode: onboardingImportModeNone, Ref: &capabilitypb.ImportChoiceRef{Mode: capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_NONE}}
 	return append([]onboardingImportChoice{none}, choices...)
 }
 
-func skillImportItemFromFact(item serverapi.ImportItemFact) onboardingSkillImportItem {
-	ref := item.Ref
-	provider := providerIDFromPtr(ref.ImportProviderID)
+func skillImportItemFromFact(item *capabilitypb.ImportItemFact) onboardingSkillImportItem {
+	ref := item.GetRef()
+	provider := providerIDFromPtr(ref.ImportProviderId)
 	name := ref.TargetName
 	if ref.Name != nil && strings.TrimSpace(*ref.Name) != "" {
 		name = *ref.Name
@@ -159,7 +159,7 @@ func skillImportItemFromFact(item serverapi.ImportItemFact) onboardingSkillImpor
 	return onboardingSkillImportItem{
 		ID:             uuid.NewString(),
 		Provider:       provider,
-		ProviderLabel:  importProviderDisplayLabel(provider, ref.SourceKind),
+		ProviderLabel:  importProviderDisplayLabel(provider, importSourceKindFromProto(ref.GetSourceKind())),
 		SourceDir:      sourceDir,
 		TargetDirName:  ref.TargetName,
 		SkillName:      name,
@@ -187,7 +187,7 @@ func importProviderDisplayLabel(provider *onboardingImportProviderID, sourceKind
 	}
 }
 
-func importConflictWarning(conflicts []serverapi.ImportConflictFact) string {
+func importConflictWarning(conflicts []*capabilitypb.ImportConflictFact) string {
 	if len(conflicts) == 0 {
 		return ""
 	}
@@ -195,9 +195,9 @@ func importConflictWarning(conflicts []serverapi.ImportConflictFact) string {
 	if conflict.Path != nil && strings.TrimSpace(*conflict.Path) != "" {
 		return "Duplicated in " + filepath.Base(*conflict.Path)
 	}
-	if conflict.ImportProviderID != nil {
-		provider := onboardingImportProviderID(*conflict.ImportProviderID)
-		return "Duplicated in " + importProviderDisplayLabel(&provider, conflict.SourceKind)
+	if conflict.ImportProviderId != nil {
+		provider := onboardingImportProviderID(*conflict.ImportProviderId)
+		return "Duplicated in " + importProviderDisplayLabel(&provider, importSourceKindFromProto(conflict.GetSourceKind()))
 	}
 	return "Duplicated"
 }
@@ -219,7 +219,7 @@ func hasImportChoices(choices []onboardingImportChoice) bool {
 	return false
 }
 
-func optionIDForChoiceRef(choices []onboardingImportChoice, ref serverapi.ImportChoiceRef) (string, bool) {
+func optionIDForChoiceRef(choices []onboardingImportChoice, ref *capabilitypb.ImportChoiceRef) (string, bool) {
 	for _, choice := range choices {
 		if importChoiceRefsEqual(choice.Ref, ref) {
 			return choice.OptionID, true
@@ -261,11 +261,40 @@ func importSelectionsEqual(left, right onboardingImportSelection) bool {
 	}
 }
 
-func importChoiceRefsEqual(left, right serverapi.ImportChoiceRef) bool {
+func importChoiceRefsEqual(left, right *capabilitypb.ImportChoiceRef) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
 	return left.Mode == right.Mode &&
 		textutil.EqualOptional(left.SourceKind, right.SourceKind) &&
-		textutil.EqualOptional(left.ImportProviderID, right.ImportProviderID) &&
+		textutil.EqualOptional(left.ImportProviderId, right.ImportProviderId) &&
 		textutil.EqualOptional(left.SourceRootPath, right.SourceRootPath)
+}
+
+func onboardingImportModeFromProto(mode capabilitypb.ImportChoiceMode) onboardingImportMode {
+	switch mode {
+	case capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_NONE:
+		return onboardingImportModeNone
+	case capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_SYMLINK_SOURCE:
+		return onboardingImportModeSymlinkSource
+	default:
+		return ""
+	}
+}
+
+func importSourceKindFromProto(kind capabilitypb.ImportSourceKind) string {
+	switch kind {
+	case capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_EXTERNAL_PROVIDER:
+		return "external_provider"
+	case capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_GENERATED:
+		return "generated"
+	case capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_GLOBAL:
+		return "global"
+	case capabilitypb.ImportSourceKind_IMPORT_SOURCE_KIND_WORKSPACE:
+		return "workspace"
+	default:
+		return ""
+	}
 }
 
 func applyImportChoice(selection *onboardingImportSelection, choiceID string, choices []onboardingImportChoice) error {
@@ -306,7 +335,7 @@ func buildSkillImportScreen(state *onboardingFlowState) onboardingScreen {
 			if choice.Count == 0 {
 				continue
 			}
-			options = append(options, onboardingOption{ID: choice.OptionID, Title: fmt.Sprintf("Symlink to %s (%d found)", importProviderDisplayLabel(providerIDFromPtr(choice.Ref.ImportProviderID), "external_provider"), choice.Count)})
+			options = append(options, onboardingOption{ID: choice.OptionID, Title: fmt.Sprintf("Symlink to %s (%d found)", importProviderDisplayLabel(providerIDFromPtr(choice.Ref.ImportProviderId), "external_provider"), choice.Count)})
 		}
 	}
 	if len(options) == 0 {
@@ -345,7 +374,7 @@ func buildCommandImportScreen(state *onboardingFlowState) onboardingScreen {
 			options = append(options, onboardingOption{ID: choice.OptionID, Title: "Do not import"})
 		case onboardingImportModeSymlinkSource:
 			if choice.Count > 0 {
-				providerLabel := importProviderDisplayLabel(providerIDFromPtr(choice.Ref.ImportProviderID), "external_provider")
+				providerLabel := importProviderDisplayLabel(providerIDFromPtr(choice.Ref.ImportProviderId), "external_provider")
 				options = append(options, onboardingOption{ID: choice.OptionID, Title: fmt.Sprintf("Import slash commands from %s (%d found)", providerLabel, choice.Count)})
 			}
 		}
@@ -388,7 +417,7 @@ func importSkillsBody(discovery onboardingImportDiscovery) string {
 	providers := make([]string, 0)
 	for _, choice := range discovery.skillChoices {
 		if choice.Mode == onboardingImportModeSymlinkSource && choice.Count > 0 {
-			providers = append(providers, importProviderDisplayLabel(providerIDFromPtr(choice.Ref.ImportProviderID), "external_provider"))
+			providers = append(providers, importProviderDisplayLabel(providerIDFromPtr(choice.Ref.ImportProviderId), "external_provider"))
 		}
 	}
 	return "Kent found importable skills from " + strings.Join(providers, ", ") + ". Would you like to symlink to the other provider's directories?"
@@ -455,7 +484,7 @@ func skillImportSummary(state *onboardingFlowState) string {
 	return fmt.Sprintf(
 		"Symlink %d skills from %s",
 		len(skillSelectionCandidates(state)),
-		importProviderDisplayLabel(providerIDFromPtr(state.selections.skillImport.ChoiceRef.ImportProviderID), "external_provider"),
+		importProviderDisplayLabel(providerIDFromPtr(state.selections.skillImport.ChoiceRef.ImportProviderId), "external_provider"),
 	)
 }
 
@@ -467,7 +496,7 @@ func commandImportSummary(state *onboardingFlowState) string {
 	case onboardingImportModeNone:
 		return "disabled"
 	case onboardingImportModeSymlinkSource:
-		return "from " + importProviderDisplayLabel(providerIDFromPtr(state.selections.commandImport.ChoiceRef.ImportProviderID), "external_provider")
+		return "from " + importProviderDisplayLabel(providerIDFromPtr(state.selections.commandImport.ChoiceRef.ImportProviderId), "external_provider")
 	default:
 		panic(fmt.Sprintf("invalid command import mode %q", state.selections.commandImport.Mode))
 	}

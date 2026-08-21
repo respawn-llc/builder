@@ -8,7 +8,7 @@ import {
 } from "@tanstack/react-query";
 
 import { ContractError, errorMessage } from "@/api";
-import type { ProjectBinding, WorkflowProjectEvent } from "@/api";
+import type { WorkflowProjectEvent } from "@/api";
 import type { AppServices } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -30,9 +30,9 @@ export function useProjectPages() {
   );
   return useInfiniteQuery({
     queryKey: queryKeys.projects,
-    queryFn: async ({ pageParam }) => api.listProjects(pageParam),
-    initialPageParam: "",
-    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
+    queryFn: async ({ pageParam }: Readonly<{ pageParam: string | null }>) => api.listProjects(pageParam),
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
     placeholderData: keepPreviousData,
   });
 }
@@ -175,7 +175,7 @@ export function useWorkspaceAttach() {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (input: WorkspaceAttachInput): Promise<ProjectBinding> =>
+    mutationFn: async (input: WorkspaceAttachInput) =>
       (await api.attachWorkspace(input.projectID, input.workspaceRoot)).binding,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.projects });

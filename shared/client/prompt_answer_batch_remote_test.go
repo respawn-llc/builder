@@ -113,20 +113,18 @@ func TestRemoteAnswerPromptBatchDoesNotReconnectOrReplayAfterConnectionLoss(t *t
 			if event.Err != nil {
 				return
 			}
+			if kind, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{}); handled {
+				if err != nil {
+					reportHandlerError(handlerErrs, "connection %d setup: %v", connectionIndex, err)
+					return
+				}
+				handshaken = handshaken || kind == remoteTestSetupHandshake
+				continue
+			}
 			request := event.Frame.Request()
 			if !handshaken {
-				if request.Method != protocol.MethodHandshake {
-					reportHandlerError(handlerErrs, "connection %d first method = %q, want handshake", connectionIndex, request.Method)
-					return
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(request.ID, protocol.HandshakeResponse{
-					Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
-				}))); err != nil {
-					reportHandlerError(handlerErrs, "connection %d send handshake: %v", connectionIndex, err)
-					return
-				}
-				handshaken = true
-				continue
+				reportHandlerError(handlerErrs, "connection %d sent application traffic before handshake", connectionIndex)
+				return
 			}
 			if request.Method != protocol.MethodPromptAnswerBatch {
 				reportHandlerError(handlerErrs, "connection %d method = %q, want prompt answer batch", connectionIndex, request.Method)

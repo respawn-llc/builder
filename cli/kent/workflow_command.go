@@ -14,6 +14,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/workflowkey"
@@ -1447,14 +1448,14 @@ func resolveWorkflowProjectID(ctx context.Context, cfg config.App, remote apicon
 		}
 		rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.ResolveProjectPath(rpcCtx, serverapi.ProjectResolvePathRequest{Path: abs})
+		resp, err := remote.ResolveProjectPath(rpcCtx, &projectpb.ResolvePathRequest{Path: abs})
 		if err != nil {
 			return "", err
 		}
 		if resp.Binding == nil {
 			return "", errWorkspaceNotRegistered
 		}
-		return strings.TrimSpace(resp.Binding.ProjectID), nil
+		return strings.TrimSpace(resp.Binding.ProjectId), nil
 	}
 	return trimmed, nil
 }
@@ -1479,14 +1480,14 @@ func resolveWorkflowSourceWorkspaceID(ctx context.Context, cfg config.App, remot
 		}
 		rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.ResolveProjectPath(rpcCtx, serverapi.ProjectResolvePathRequest{Path: abs})
+		resp, err := remote.ResolveProjectPath(rpcCtx, &projectpb.ResolvePathRequest{Path: abs})
 		if err != nil {
 			return "", err
 		}
-		if resp.Binding == nil || strings.TrimSpace(resp.Binding.WorkspaceID) == "" {
+		if resp.Binding == nil || strings.TrimSpace(resp.Binding.WorkspaceId) == "" {
 			return "", errWorkspaceNotRegistered
 		}
-		return strings.TrimSpace(resp.Binding.WorkspaceID), nil
+		return strings.TrimSpace(resp.Binding.WorkspaceId), nil
 	}
 	return trimmed, nil
 }

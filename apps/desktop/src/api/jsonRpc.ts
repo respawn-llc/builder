@@ -1,25 +1,33 @@
 import { ConnectionStore } from "./connectionStore";
+import {
+  binaryFrameBytes,
+  binaryFramePayload,
+  completeDescriptorResponse,
+  decodeDescriptorResponse,
+  descriptorResponseCorrelation,
+  encodeDescriptorCall,
+} from "./descriptorRpc";
 import { TransportError } from "./errors";
 import type { JsonValue } from "./json";
+import { unaryConnectionPolicy, type DescMethod, type MessageShape } from "@app/server-api-contract";
 import { z } from "zod";
 import {
-  assertHandshakeRoot,
   delay,
   handleSubscriptionMessage,
-  handshakeMethod,
-  handshakeSubscription,
   jsonRpcVersion,
   openSocket,
   parseFrame,
-  protocolVersion,
   responseSchema,
+  sendSocketDescriptorRequest,
   sendSocketRequest,
+  setupSocket,
   socketRequestError,
   subscriptionCompleteMethod,
   waitForSubscriptionEnd,
 } from "./jsonRpcSocket";
 import type {
   RpcCallOptions,
+  DescriptorRpcTransport,
   RpcDedicatedCallOptions,
   RpcEventHandler,
   RpcSubscription,
@@ -32,14 +40,22 @@ const subscriptionReconnectBaseMs = 500;
 const subscriptionReconnectMaxMs = 5_000;
 const textFrameSchema = z.string();
 
-type PendingRequest = Readonly<{
-  method: string;
+type PendingRequestBase = Readonly<{
+  label: string;
   timeout: ReturnType<typeof setTimeout> | null;
-  resolve(value: unknown): void;
   reject(error: Error): void;
 }>;
 
-export function createJsonRpcTransport(endpoint: string, expectedRootId = ""): RpcTransport {
+type PendingRequest = PendingRequestBase &
+  Readonly<
+    | { kind: "json"; resolve(value: unknown): void }
+    | {
+        kind: "descriptor";
+        complete(response: ReturnType<typeof decodeDescriptorResponse>): void;
+      }
+  >;
+
+export function createJsonRpcTransport(endpoint: string, expectedRootId = ""): DescriptorRpcTransport {
   return new JsonRpcWebSocketTransport(endpoint, expectedRootId);
 }
 
@@ -62,6 +78,23 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     return this.#send(socket, method, params, options);
   }
 
+  async callDescriptor<Method extends DescMethod>(
+    method: Method,
+    request: MessageShape<Method["input"]>,
+    options?: RpcCallOptions,
+  ): Promise<MessageShape<Method["output"]>> {
+    switch (unaryConnectionPolicy(method)) {
+      case "multiplexed": {
+        const socket = await this.#open();
+        return this.#sendDescriptor(socket, method, request, options);
+      }
+      case "dedicated":
+        return this.#withDedicatedSocket(options, async (socket, requestOptions) =>
+          sendSocketDescriptorRequest(socket, method, request, requestOptions),
+        );
+    }
+  }
+
   async callDedicated(
     method: string,
     params: JsonValue,
@@ -82,10 +115,11 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     if (attachedSessionID.length === 0) {
       throw new TransportError("Session attachment requires a Session ID.");
     }
-    return this.#withDedicatedSocket(options, async (socket, requestOptions) => {
-      await sendSocketRequest(socket, "session.attach", { session_id: attachedSessionID }, requestOptions);
-      return sendSocketRequest(socket, method, params, requestOptions);
-    });
+    return this.#withDedicatedSocket(
+      options,
+      async (socket, requestOptions) => sendSocketRequest(socket, method, params, requestOptions),
+      attachedSessionID,
+    );
   }
 
   async #withDedicatedSocket<Result>(
@@ -94,10 +128,16 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       socket: WebSocket,
       requestOptions: Readonly<{ timeoutMilliseconds: number | null; signal?: AbortSignal }>,
     ) => Promise<Result>,
+    sessionID?: string,
   ): Promise<Result> {
     const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs, options?.signal);
     try {
-      await handshakeSubscription(socket, rpcRequestTimeoutMs, this.#expectedRootId, options?.signal);
+      await setupSocket(socket, {
+        timeoutMilliseconds: rpcRequestTimeoutMs,
+        expectedRootId: this.#expectedRootId,
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
+        ...(sessionID === undefined ? {} : { sessionID }),
+      });
       const timeoutMs = options?.timeoutMs === undefined ? rpcRequestTimeoutMs : options.timeoutMs;
       const requestOptions =
         options?.signal === undefined
@@ -147,8 +187,10 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       this.#handleControlError();
     });
     try {
-      const result = await this.#send(socket, handshakeMethod, { protocol_version: protocolVersion });
-      assertHandshakeRoot(result, this.#expectedRootId);
+      await setupSocket(socket, {
+        timeoutMilliseconds: rpcRequestTimeoutMs,
+        expectedRootId: this.#expectedRootId,
+      });
     } catch (error) {
       socket.close();
       throw error;
@@ -181,7 +223,7 @@ class JsonRpcWebSocketTransport implements RpcTransport {
               }
               reject(new TransportError(`${method} request timed out.`));
             }, timeoutMs);
-      this.#pending.set(id, { method, timeout, resolve, reject });
+      this.#pending.set(id, { kind: "json", label: method, timeout, resolve, reject });
       try {
         socket.send(frame);
       } catch (error) {
@@ -194,18 +236,100 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     });
   }
 
+  async #sendDescriptor<Method extends DescMethod>(
+    socket: WebSocket,
+    method: Method,
+    request: MessageShape<Method["input"]>,
+    options?: RpcCallOptions,
+  ): Promise<MessageShape<Method["output"]>> {
+    if (socket.readyState !== WebSocket.OPEN) {
+      throw new TransportError("WebSocket is not open.");
+    }
+    const id = `gui-${this.#nextID.toString()}`;
+    this.#nextID += 1;
+    const { operation, bytes } = encodeDescriptorCall(method, request, id);
+    return new Promise<MessageShape<Method["output"]>>((resolve, reject) => {
+      const timeoutMs = options?.timeoutMs === undefined ? rpcRequestTimeoutMs : options.timeoutMs;
+      const timeout =
+        timeoutMs === null
+          ? null
+          : setTimeout(() => {
+              if (!this.#pending.delete(id)) {
+                return;
+              }
+              reject(new TransportError(`${operation} request timed out.`));
+            }, timeoutMs);
+      this.#pending.set(id, {
+        kind: "descriptor",
+        label: operation,
+        timeout,
+        complete: (response) => {
+          resolve(completeDescriptorResponse(method, id, response));
+        },
+        reject,
+      });
+      try {
+        socket.send(binaryFramePayload(bytes));
+      } catch (error) {
+        if (timeout !== null) {
+          clearTimeout(timeout);
+        }
+        this.#pending.delete(id);
+        reject(error instanceof Error ? error : new TransportError(`${operation} request failed to send.`));
+      }
+    });
+  }
+
   #handleControlMessage(event: MessageEvent<unknown>): void {
     const textFrame = textFrameSchema.safeParse(event.data);
-    if (!textFrame.success) {
+    if (textFrame.success) {
+      const parsed = parseFrame(textFrame.data);
+      const response = responseSchema.safeParse(parsed);
+      if (!response.success || response.data.id === undefined) {
+        return;
+      }
+      this.#resolveResponse(response.data.id, response.data.result, response.data.error);
+      return;
+    }
+    const bytes = binaryFrameBytes(event.data);
+    if (bytes === undefined) {
       this.#rejectAll(new TransportError("Unsupported WebSocket frame type."));
       return;
     }
-    const parsed = parseFrame(textFrame.data);
-    const response = responseSchema.safeParse(parsed);
-    if (!response.success || response.data.id === undefined) {
-      return;
+    this.#handleBinaryControlMessage(bytes);
+  }
+
+  #handleBinaryControlMessage(bytes: Uint8Array): void {
+    try {
+      const response = decodeDescriptorResponse(bytes);
+      const pending = this.#pending.get(response.correlation);
+      if (pending === undefined) {
+        return;
+      }
+      if (pending.kind !== "descriptor") {
+        this.#takePending(response.correlation);
+        pending.reject(new TransportError(`${pending.label} received a binary response.`));
+        return;
+      }
+      try {
+        pending.complete(response);
+        this.#takePending(response.correlation);
+      } catch (error) {
+        this.#takePending(response.correlation);
+        pending.reject(
+          error instanceof Error ? error : new TransportError("Binary response completion failed."),
+        );
+      }
+    } catch (error) {
+      const correlation = descriptorResponseCorrelation(bytes);
+      if (correlation === undefined) {
+        return;
+      }
+      const pending = this.#takePending(correlation);
+      pending?.reject(
+        error instanceof Error ? error : new TransportError("Binary response decoding failed."),
+      );
     }
-    this.#resolveResponse(response.data.id, response.data.result, response.data.error);
   }
 
   #resolveResponse(
@@ -217,15 +341,28 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     if (pending === undefined) {
       return;
     }
+    this.#takePending(id);
+    if (pending.kind !== "json") {
+      pending.reject(new TransportError(`${pending.label} received a JSON response.`));
+      return;
+    }
+    if (error !== undefined) {
+      pending.reject(socketRequestError(pending.label, error));
+      return;
+    }
+    pending.resolve(result);
+  }
+
+  #takePending(id: string): PendingRequest | undefined {
+    const pending = this.#pending.get(id);
+    if (pending === undefined) {
+      return undefined;
+    }
     this.#pending.delete(id);
     if (pending.timeout !== null) {
       clearTimeout(pending.timeout);
     }
-    if (error !== undefined) {
-      pending.reject(socketRequestError(pending.method, error));
-      return;
-    }
-    pending.resolve(result);
+    return pending;
   }
 
   #handleControlClose(): void {
@@ -306,7 +443,10 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       // The handshake must stay inside this scope: a rejected handshake (e.g. a
       // server reporting a different persistence root) would otherwise leave the
       // socket connected to the wrong server while the reconnect loop opens more.
-      await handshakeSubscription(socket, rpcRequestTimeoutMs, this.#expectedRootId);
+      await setupSocket(socket, {
+        timeoutMilliseconds: rpcRequestTimeoutMs,
+        expectedRootId: this.#expectedRootId,
+      });
       socket.addEventListener("message", subscriptionListener);
       await sendSocketRequest(socket, method, params, {
         timeoutMilliseconds: rpcRequestTimeoutMs,

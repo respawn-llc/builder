@@ -14,21 +14,24 @@ import (
 	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type sessionExecutionEnvironmentAuthClient struct {
-	response serverapi.AuthStatusResponse
+	response *authpb.Status
 	err      error
 	calls    int
 }
 
-func (c *sessionExecutionEnvironmentAuthClient) GetAuthStatus(
+func (c *sessionExecutionEnvironmentAuthClient) GetStatus(
 	context.Context,
-	serverapi.AuthStatusRequest,
-) (serverapi.AuthStatusResponse, error) {
+	*authpb.GetStatusRequest,
+) (*authpb.Status, error) {
 	c.calls++
 	return c.response, c.err
 }
@@ -93,12 +96,19 @@ func TestSessionExecutionEnvironmentCompleteResponseIsReadOnly(t *testing.T) {
 	fixture := newSessionExecutionEnvironmentFixture(t)
 	markSessionExecutionEnvironmentGitRepository(t, fixture.workspaceRoot)
 	authClient := &sessionExecutionEnvironmentAuthClient{
-		response: serverapi.AuthStatusResponse{
-			Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
-				Method:        serverapi.AuthStatusMethodNone,
-				Provider:      serverapi.OpenAIAuthProviderFacts(),
-				EnvPreference: serverapi.AuthStatusEnvPreferenceUnspecified,
-			}, nil),
+		response: &authpb.Status{
+			Resolution: &authpb.StatusResolution{
+				Resolution: &authpb.StatusResolution_Known{Known: &authpb.StatusFacts{
+					Method: authpb.AuthMethod_AUTH_METHOD_NONE,
+					Provider: &authpb.ProviderFacts{
+						Kind:       authpb.ProviderKind_PROVIDER_KIND_OPENAI,
+						Identifier: "openai",
+					},
+					EnvPreference: authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_UNSPECIFIED,
+					MethodFacts:   &authpb.StatusFacts_NoAuth{NoAuth: &emptypb.Empty{}},
+				}},
+			},
+			Subscription: &authpb.SubscriptionFacts{},
 		},
 	}
 	service := NewService(newTestSessionResolver(fixture.store), nil, fixture.metadata).

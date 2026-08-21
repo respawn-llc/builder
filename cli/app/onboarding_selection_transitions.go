@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"core/shared/config"
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	"core/shared/theme"
 )
 
@@ -168,14 +168,14 @@ func (selections *onboardingSelections) chooseTheme(choiceID string) error {
 	return nil
 }
 
-func (selections *onboardingSelections) submitPrimaryModel(value string, facts serverapi.CapabilityFactsResponse) error {
+func (selections *onboardingSelections) submitPrimaryModel(value string, facts *capabilitypb.Facts) error {
 	model, err := onboardingModelSelectionFromValue(value, facts)
 	if err != nil {
 		return err
 	}
 	selections.model = model
 	fact := modelFactForFacts(facts, model.value)
-	if !fact.Verbosity.Supported {
+	if !fact.GetVerbosity().GetSupported() {
 		selections.verbosity = onboardingVerbositySelection{kind: onboardingVerbosityOmitted}
 	} else if selections.verbosity.kind == onboardingVerbosityOmitted {
 		selections.verbosity = onboardingVerbositySelection{kind: onboardingVerbosityLevel, value: string(config.ModelVerbosityLow)}
@@ -194,7 +194,7 @@ func (selections *onboardingSelections) submitPrimaryModel(value string, facts s
 	return nil
 }
 
-func (selections *onboardingSelections) chooseContextWindow(choiceID string, facts serverapi.CapabilityFactsResponse) error {
+func (selections *onboardingSelections) chooseContextWindow(choiceID string, facts *capabilitypb.Facts) error {
 	fact := modelFactForFacts(facts, selections.model.value)
 	switch choiceID {
 	case "large":
@@ -220,7 +220,7 @@ func (selections *onboardingSelections) chooseContextWindow(choiceID string, fac
 	return nil
 }
 
-func (selections *onboardingSelections) choosePrimaryThinking(choiceID string, facts serverapi.CapabilityFactsResponse) error {
+func (selections *onboardingSelections) choosePrimaryThinking(choiceID string, facts *capabilitypb.Facts) error {
 	switch choiceID {
 	case "disable":
 		selections.thinking = onboardingThinkingSelection{kind: onboardingThinkingDisabled}
@@ -243,7 +243,7 @@ func (selections *onboardingSelections) choosePrimaryThinking(choiceID string, f
 	return nil
 }
 
-func (selections *onboardingSelections) commitPrimaryCustomThinking(value string, facts serverapi.CapabilityFactsResponse) error {
+func (selections *onboardingSelections) commitPrimaryCustomThinking(value string, facts *capabilitypb.Facts) error {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return conversionError("thinking_custom", value, "must not be blank")
@@ -254,9 +254,9 @@ func (selections *onboardingSelections) commitPrimaryCustomThinking(value string
 	return nil
 }
 
-func (selections *onboardingSelections) chooseVerbosity(choiceID string, facts serverapi.CapabilityFactsResponse) error {
+func (selections *onboardingSelections) chooseVerbosity(choiceID string, facts *capabilitypb.Facts) error {
 	fact := modelFactForFacts(facts, selections.model.value)
-	if !fact.Verbosity.Supported || !slices.Contains(fact.Verbosity.Levels, choiceID) {
+	if !fact.GetVerbosity().GetSupported() || !slices.Contains(fact.GetVerbosity().GetLevels(), choiceID) {
 		return conversionError("verbosity", choiceID, "unsupported verbosity choice")
 	}
 	selections.verbosity = onboardingVerbositySelection{kind: onboardingVerbosityLevel, value: choiceID}
@@ -275,7 +275,7 @@ func (selections *onboardingSelections) chooseAskQuestion(choiceID string) error
 	return nil
 }
 
-func (selections *onboardingSelections) chooseSupervisorFrequency(choiceID string, facts serverapi.CapabilityFactsResponse) error {
+func (selections *onboardingSelections) chooseSupervisorFrequency(choiceID string, facts *capabilitypb.Facts) error {
 	switch choiceID {
 	case string(onboardingSupervisorOff):
 		selections.supervisor.frequency = onboardingSupervisorOff
@@ -291,7 +291,7 @@ func (selections *onboardingSelections) chooseSupervisorFrequency(choiceID strin
 	return nil
 }
 
-func (selections *onboardingSelections) submitReviewerModel(value string, facts serverapi.CapabilityFactsResponse) error {
+func (selections *onboardingSelections) submitReviewerModel(value string, facts *capabilitypb.Facts) error {
 	model, err := onboardingModelSelectionFromValue(value, facts)
 	if err != nil {
 		return conversionError("reviewer.model", value, err.Error())
@@ -312,7 +312,7 @@ func (selections *onboardingSelections) submitReviewerModel(value string, facts 
 	return nil
 }
 
-func (selections *onboardingSelections) chooseReviewerThinking(choiceID string, facts serverapi.CapabilityFactsResponse) error {
+func (selections *onboardingSelections) chooseReviewerThinking(choiceID string, facts *capabilitypb.Facts) error {
 	switch choiceID {
 	case "disable":
 		selections.supervisor.thinking = onboardingReviewerThinkingSelection{
@@ -402,7 +402,7 @@ func (selections *onboardingSelections) chooseSkillEnablement(
 	return nil
 }
 
-func (selections *onboardingSelections) normalizeReviewerThinking(facts serverapi.CapabilityFactsResponse) {
+func (selections *onboardingSelections) normalizeReviewerThinking(facts *capabilitypb.Facts) {
 	reviewerModel := selections.reviewerModelValue()
 	fact := modelFactForFacts(facts, reviewerModel)
 	if !fact.SupportsThinking {

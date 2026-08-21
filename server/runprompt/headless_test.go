@@ -903,9 +903,8 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	}
 	substitutedCaller := selectedBefore.SessionID
 	substitutedCallerID := mustRunPromptSessionID(t, substitutedCaller)
-	substitutedPlan, err := sessionLauncher.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
-		ClientRequestID: "substituted-ordinary-caller",
-		Mode:            serverapi.SessionLaunchModeHeadless,
+	substitutedPlan, err := sessionLauncher.PlanLaunchSession(ctx, sessionlaunch.PlanRequest{
+		Mode:            launch.ModeHeadless,
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(substitutedCallerID)),
 		CallerSessionID: &substitutedCaller,
 		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
