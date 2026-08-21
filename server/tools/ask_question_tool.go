@@ -46,18 +46,9 @@ func (r AskQuestionRequest) Clone() AskQuestionRequest {
 	}
 	if r.AttentionTarget != nil {
 		target := *r.AttentionTarget
-		if target.WorkflowID != nil {
-			workflowID := *target.WorkflowID
-			target.WorkflowID = &workflowID
-		}
-		if target.CurrentNodeID != nil {
-			currentNodeID := *target.CurrentNodeID
-			target.CurrentNodeID = &currentNodeID
-		}
-		if target.CurrentNodeBranchKey != nil {
-			branchKey := *target.CurrentNodeBranchKey
-			target.CurrentNodeBranchKey = &branchKey
-		}
+		target.WorkflowID = textutil.Pointer(target.WorkflowID)
+		target.CurrentNodeID = textutil.Pointer(target.CurrentNodeID)
+		target.CurrentNodeBranchKey = textutil.Pointer(target.CurrentNodeBranchKey)
 		if target.Focus != nil {
 			focus := *target.Focus
 			focus.AskIDs = append([]string(nil), focus.AskIDs...)
