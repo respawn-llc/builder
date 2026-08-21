@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,7 +86,8 @@ func newSessionLifecycleServiceWithOptions(root string, authManager *auth.Manage
 		PersistenceRoot: root,
 		StoreOptions:    storeOptions,
 	})
-	return NewSessionLifecycleService(root, authority, authManager)
+	return NewSessionLifecycleService(root, authority, authManager).
+		WithPersistedSessionResolver(sessionServiceTestPersistence)
 }
 
 func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.Manager, storeOptions []session.StoreOption) *SessionLifecycleService {
@@ -93,7 +95,8 @@ func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.
 		PersistenceRoot: root,
 		StoreOptions:    storeOptions,
 	})
-	return NewGlobalSessionLifecycleService(root, authority, authManager)
+	return NewGlobalSessionLifecycleService(root, authority, authManager).
+		WithPersistedSessionResolver(sessionServiceTestPersistence)
 }
 
 var sessionServiceTestPersistence = sessiontest.NewPersistence()
@@ -113,6 +116,26 @@ type sessionNavigationTargetResolverStub struct {
 func (s *sessionNavigationTargetResolverStub) ResolveSessionNavigationBinding(_ context.Context, sessionID string) (serverapi.SessionNavigationBinding, error) {
 	s.calls = append(s.calls, sessionID)
 	return s.target, s.err
+}
+
+type firstBlockingSessionNavigationTargetResolver struct {
+	target  serverapi.SessionNavigationBinding
+	started chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	calls   int
+}
+
+func (s *firstBlockingSessionNavigationTargetResolver) ResolveSessionNavigationBinding(context.Context, string) (serverapi.SessionNavigationBinding, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+	if call == 1 {
+		close(s.started)
+		<-s.release
+	}
+	return s.target, nil
 }
 
 func (s *sessionLifecycleRetargeterStub) RetargetWorkspace(_ context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error) {
@@ -462,6 +485,69 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	}
 	if len(resolver.calls) != 1 || resolver.calls[0] != parent.Meta().SessionID {
 		t.Fatalf("target resolver calls = %#v, want parent once", resolver.calls)
+	}
+}
+
+func TestServiceResolveTransitionOpenSessionDoesNotWaitForDuplicateRead(t *testing.T) {
+	_, containerDir, parent := createPersistedSession(t)
+	child, err := session.NewLazy(
+		containerDir,
+		"workspace-x",
+		"/tmp/work",
+		sessioncontract.SessionCategoryMain,
+		sessionServiceTestPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}); err != nil {
+		t.Fatalf("InitializeCreationContext: %v", err)
+	}
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable child: %v", err)
+	}
+	resolver := &firstBlockingSessionNavigationTargetResolver{
+		target: serverapi.SessionNavigationBinding{
+			ProjectID:   "project-target",
+			WorkspaceID: "workspace-target",
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	service := newTestSessionLifecycleService(containerDir, nil).WithNavigationTargetResolver(resolver)
+	request := serverapi.SessionResolveTransitionRequest{
+		ClientRequestID: "duplicate-navigation-read",
+		SessionID:       child.Meta().SessionID,
+		Transition: serverapi.SessionTransition{
+			Action:          serverapi.SessionTransitionActionOpenSession,
+			TargetSessionID: parent.Meta().SessionID,
+		},
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, resolveErr := service.ResolveTransition(t.Context(), request)
+		firstDone <- resolveErr
+	}()
+	<-resolver.started
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, resolveErr := service.ResolveTransition(t.Context(), request)
+		secondDone <- resolveErr
+	}()
+	select {
+	case resolveErr := <-secondDone:
+		if resolveErr != nil {
+			t.Fatalf("duplicate open-Session transition read: %v", resolveErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("duplicate open-Session transition read waited for the earlier read")
+	}
+
+	close(resolver.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first open-Session transition read: %v", err)
 	}
 }
 

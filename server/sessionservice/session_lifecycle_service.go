@@ -202,6 +202,9 @@ func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req ser
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
 	}
+	if req.Transition.Action != serverapi.SessionTransitionActionForkRollback {
+		return s.resolveTransitionOnce(ctx, req)
+	}
 	memoReq := sessionTransitionMemoRequest{
 		SessionID:  strings.TrimSpace(req.SessionID),
 		Transition: req.Transition,
@@ -299,13 +302,11 @@ func (s *SessionLifecycleService) resolveForkRollbackTransition(
 		TargetSessionID:              req.Transition.TargetSessionID,
 		PreviousSessionID:            req.Transition.PreviousSessionID,
 	}
-	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback {
-		forkUserMessageSeq, err := rollbacktarget.DecodeUserMessageSeq(req.Transition.ForkRollbackTargetID)
-		if err != nil {
-			return serverapi.SessionResolveTransitionResponse{}, err
-		}
-		transition.ForkUserMessageSeq = forkUserMessageSeq
+	forkUserMessageSeq, err := rollbacktarget.DecodeUserMessageSeq(req.Transition.ForkRollbackTargetID)
+	if err != nil {
+		return serverapi.SessionResolveTransitionResponse{}, err
 	}
+	transition.ForkUserMessageSeq = forkUserMessageSeq
 	resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{
 		Store:      store,
 		Transition: transition,
