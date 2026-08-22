@@ -309,7 +309,7 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	fixture.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
 		StoreOptions:    storeOptions,
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			finalizationMu.Lock()
 			if finalizationClosed {
 				finalizationMu.Unlock()
@@ -318,7 +318,7 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 			finalizationWG.Add(1)
 			finalizationMu.Unlock()
 			defer finalizationWG.Done()
-			controller.WorkflowExecutionRetired(outcome)
+			controller.ExecutionFinalized(scope)
 		}),
 		PromptFeed: fixture.runtimes,
 		EventFeed: func(resource runtimeids.SessionResourceRef, event agentruntime.Event) {
@@ -476,8 +476,8 @@ func (f *currentNodeRunnerFixture) restartRuntime(t *testing.T) {
 	f.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: f.cfg.PersistenceRoot,
 		StoreOptions:    storeOptions,
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
-			f.controller.WorkflowExecutionRetired(outcome)
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			f.controller.ExecutionFinalized(scope)
 		}),
 		PromptFeed: f.runtimes,
 		EventFeed: func(resource runtimeids.SessionResourceRef, event agentruntime.Event) {

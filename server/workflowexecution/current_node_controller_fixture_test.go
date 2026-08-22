@@ -82,11 +82,10 @@ type workflowExecutionStart struct {
 }
 
 type workflowExecutionStartState struct {
-	reference   workflow.CurrentNodeReference
-	operationID runtimeids.CurrentNodeOperationID
-	admit       func() error
-	published   func(sessionruntime.ExecutionHandle)
-	handle      sessionruntime.ExecutionHandle
+	reference workflow.CurrentNodeReference
+	admit     func() error
+	published func(sessionruntime.ExecutionHandle)
+	handle    sessionruntime.ExecutionHandle
 }
 
 type currentNodeTestRunner interface {
@@ -116,11 +115,10 @@ type currentNodeTestPublicationRunner struct {
 func (r currentNodeTestPublicationRunner) PrepareScriptPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-	operationID runtimeids.CurrentNodeOperationID,
 	controller workflowruntime.Controller,
 ) (CurrentNodeScriptPublication, error) {
 	if preparation, ok := r.runner.(CurrentNodeScriptPublicationPreparation); ok {
-		return preparation.PrepareScriptPublication(ctx, reference, operationID, controller)
+		return preparation.PrepareScriptPublication(ctx, reference, controller)
 	}
 	if scriptRunner, ok := r.runner.(currentNodeTestScriptRunner); ok && scriptRunner.UsesScriptPublication(reference) {
 		if preparation, ok := r.runner.(currentNodeTestPreparation); ok {
@@ -134,7 +132,7 @@ func (r currentNodeTestPublicationRunner) PrepareScriptPublication(
 		}
 		return &currentNodeTestScriptPublication{
 			runner: r.runner, authority: r.authority, reference: reference,
-			operationID: operationID, controller: controller,
+			controller: controller,
 		}, nil
 	}
 	return nil, nil
@@ -143,9 +141,9 @@ func (r currentNodeTestPublicationRunner) PrepareScriptPublication(
 func (r currentNodeTestPublicationRunner) PrepareAgentPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-	operationID runtimeids.CurrentNodeOperationID,
 	delivery workflowruntime.TaskPromptDelivery,
 	assignment CurrentNodeAssignmentSteer,
+	_ func(),
 	controller workflowruntime.Controller,
 ) (CurrentNodeAgentPublication, error) {
 	if preparation, ok := r.runner.(currentNodeTestPreparation); ok {
@@ -155,26 +153,24 @@ func (r currentNodeTestPublicationRunner) PrepareAgentPublication(
 	}
 	return &currentNodeTestPublication{
 		runner: r.runner, authority: r.authority, reference: reference,
-		operationID: operationID, delivery: delivery, assignment: assignment, controller: controller,
+		delivery: delivery, assignment: assignment, controller: controller,
 	}, nil
 }
 
 type currentNodeTestPublication struct {
-	runner      currentNodeTestRunner
-	authority   *sessionruntime.Authority
-	reference   workflow.CurrentNodeReference
-	operationID runtimeids.CurrentNodeOperationID
-	delivery    workflowruntime.TaskPromptDelivery
-	assignment  CurrentNodeAssignmentSteer
-	controller  workflowruntime.Controller
+	runner     currentNodeTestRunner
+	authority  *sessionruntime.Authority
+	reference  workflow.CurrentNodeReference
+	delivery   workflowruntime.TaskPromptDelivery
+	assignment CurrentNodeAssignmentSteer
+	controller workflowruntime.Controller
 }
 
 type currentNodeTestScriptPublication struct {
-	runner      currentNodeTestRunner
-	authority   *sessionruntime.Authority
-	reference   workflow.CurrentNodeReference
-	operationID runtimeids.CurrentNodeOperationID
-	controller  workflowruntime.Controller
+	runner     currentNodeTestRunner
+	authority  *sessionruntime.Authority
+	reference  workflow.CurrentNodeReference
+	controller workflowruntime.Controller
 }
 
 func (p *currentNodeTestScriptPublication) Publish(
@@ -186,8 +182,8 @@ func (p *currentNodeTestScriptPublication) Publish(
 		return nil, nil, err
 	}
 	state := &workflowExecutionStartState{
-		reference: p.reference, operationID: p.operationID,
-		admit: func() error { return nil }, published: published,
+		reference: p.reference,
+		admit:     func() error { return nil }, published: published,
 	}
 	if err := p.runner.PublishCurrentNode(
 		context.Background(), p.reference, workflowruntime.TaskPromptDeliveryAssignment, nil,
@@ -212,8 +208,8 @@ func (p *currentNodeTestPublication) Publish(
 		return nil, nil, err
 	}
 	state := &workflowExecutionStartState{
-		reference: p.reference, operationID: p.operationID,
-		admit: func() error { return nil }, published: published,
+		reference: p.reference,
+		admit:     func() error { return nil }, published: published,
 	}
 	if err := p.runner.PublishCurrentNode(
 		context.Background(), p.reference, p.delivery, p.assignment,
@@ -248,7 +244,6 @@ func startTestWorkflowScript(
 	detached, err := authority.PrepareDetachedScriptExecution(context.Background(), sessionruntime.DetachedScriptExecutionRequest{
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID,
-			OperationID: start.state.operationID,
 			CurrentNode: start.state.reference,
 		},
 		Command: request.Command, Finalize: request.Finalize,
@@ -272,11 +267,9 @@ func startLiveTestWorkflowScript(
 	request sessionruntime.ScriptExecutionRequest,
 ) sessionruntime.ExecutionHandle {
 	t.Helper()
-	operationID := runtimeids.NewCurrentNodeOperationID()
 	detached, err := authority.PrepareDetachedScriptExecution(context.Background(), sessionruntime.DetachedScriptExecutionRequest{
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID,
-			OperationID: operationID,
 			CurrentNode: reference,
 		},
 		Command: request.Command, Finalize: request.Finalize,
@@ -284,22 +277,7 @@ func startLiveTestWorkflowScript(
 	if err != nil {
 		t.Fatalf("prepare detached Script execution: %v", err)
 	}
-	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, func(published sessionruntime.ExecutionHandle) {
-		key, keyErr := reference.Key()
-		if keyErr != nil {
-			t.Fatalf("Current Node key: %v", keyErr)
-		}
-		controller.mu.Lock()
-		workflowRef, _ := published.Scope().Workflow()
-		controller.operations[key] = &currentNodeOperation{
-			ref: workflow.CurrentNodeOperationRef{
-				OperationID: operationID,
-				CurrentNode: reference,
-			},
-			workflow: &workflowRef,
-		}
-		controller.mu.Unlock()
-	})
+	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("publish detached Script execution: %v", err)
 	}
@@ -326,34 +304,17 @@ func completeCurrentNodeLifecycleForTest(
 	scopeID runtimeids.ExecutionScopeID,
 	transitionID string,
 ) (workflowstore.CurrentNodeCompletionResult, error) {
-	result, _, _, err := controller.completeLiveCurrentNode(
+	result, err := controller.completeLiveCurrentNode(
 		ctx,
 		scopeID,
 		transitionID,
 		nil,
 		"",
-		func(commit func() (workflowruntime.CompletionDecision, error)) (workflowruntime.CompletionDecision, error) {
+		func(commit func() (workflowruntime.CompletionResult, error)) (workflowruntime.CompletionResult, error) {
 			return commit()
 		},
 	)
-	return result, err
-}
-
-func workflowOperationForScopeForTest(
-	t *testing.T,
-	authority *sessionruntime.Authority,
-	scopeID runtimeids.ExecutionScopeID,
-) workflow.CurrentNodeOperationRef {
-	t.Helper()
-	handle, live := authority.ExecutionByScope(scopeID)
-	if !live {
-		t.Fatalf("Workflow scope %s is not live", scopeID)
-	}
-	ref, workflowScoped := handle.Scope().Workflow()
-	if !workflowScoped {
-		t.Fatalf("scope %s has no Workflow metadata", scopeID)
-	}
-	return ref.Operation()
+	return result.CommittedResult, err
 }
 
 func (s completedCurrentNodeAssignmentSteer) Wait(context.Context) (session.CommitReceipt, error) {
@@ -1026,9 +987,9 @@ func newCurrentNodeQuestionFixtureWithPromptFeed(
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			if controller != nil {
-				controller.WorkflowExecutionRetired(outcome)
+				controller.ExecutionFinalized(scope)
 			}
 		}),
 		PersistenceRoot: appCfg.PersistenceRoot,
@@ -1132,7 +1093,6 @@ func (f currentNodeQuestionFixture) startAgentExecutionWithClient(
 		Runtime:    &plan,
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID,
-			OperationID: runtimeids.NewCurrentNodeOperationID(),
 			CurrentNode: reference,
 		},
 		Resource: sessionruntime.OpenAgentResource{},
@@ -1157,19 +1117,7 @@ func (f currentNodeQuestionFixture) startAgentExecutionWithClient(
 	if !ok {
 		t.Fatal("detached Agent execution has no Session Resource")
 	}
-	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, func(published sessionruntime.ExecutionHandle) {
-		key, keyErr := reference.Key()
-		if keyErr != nil {
-			t.Fatalf("current node key: %v", keyErr)
-		}
-		f.controller.mu.Lock()
-		workflowRef, _ := published.Scope().Workflow()
-		f.controller.operations[key] = &currentNodeOperation{
-			ref:      workflowRef.Operation(),
-			workflow: &workflowRef,
-		}
-		f.controller.mu.Unlock()
-	})
+	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("publish detached Agent execution: %v", err)
 	}
@@ -1251,7 +1199,6 @@ func (p *controlledScriptPublication) Cancel() {
 func (r *controlledScriptRunner) PrepareScriptPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-	operationID runtimeids.CurrentNodeOperationID,
 	_ workflowruntime.Controller,
 ) (CurrentNodeScriptPublication, error) {
 	close(r.entered)
@@ -1260,7 +1207,6 @@ func (r *controlledScriptRunner) PrepareScriptPublication(
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID:   "project-test",
 			WorkflowID:  currentNodeControllerTestWorkflowID,
-			OperationID: operationID,
 			CurrentNode: reference,
 		},
 		Command: r.command,
@@ -1323,38 +1269,6 @@ type countingCurrentNodeRunner struct {
 	mu         sync.Mutex
 	count      int
 	deliveries []workflowruntime.TaskPromptDelivery
-}
-
-func (r *countingCurrentNodeRunner) PrepareAgentPublication(
-	ctx context.Context,
-	reference workflow.CurrentNodeReference,
-	operationID runtimeids.CurrentNodeOperationID,
-	delivery workflowruntime.TaskPromptDelivery,
-	assignment CurrentNodeAssignmentSteer,
-	controller workflowruntime.Controller,
-) (CurrentNodeAgentPublication, error) {
-	return currentNodeTestPublicationRunner{runner: r}.PrepareAgentPublication(
-		ctx,
-		reference,
-		operationID,
-		delivery,
-		assignment,
-		controller,
-	)
-}
-
-func (r *countingCurrentNodeRunner) PrepareScriptPublication(
-	ctx context.Context,
-	reference workflow.CurrentNodeReference,
-	operationID runtimeids.CurrentNodeOperationID,
-	controller workflowruntime.Controller,
-) (CurrentNodeScriptPublication, error) {
-	return currentNodeTestPublicationRunner{runner: r}.PrepareScriptPublication(
-		ctx,
-		reference,
-		operationID,
-		controller,
-	)
 }
 
 func (r *countingCurrentNodeRunner) PublishCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, delivery workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, _ workflowExecutionStart, _ workflowruntime.Controller) error {

@@ -20,7 +20,6 @@ import (
 	"core/server/workflowstore"
 	"core/shared/apicontract"
 	"core/shared/protocol"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"golang.org/x/net/websocket"
@@ -108,9 +107,9 @@ type gatewayFailingRunner struct {
 func (r gatewayFailingRunner) PrepareAgentPublication(
 	context.Context,
 	workflow.CurrentNodeReference,
-	runtimeids.CurrentNodeOperationID,
 	workflowruntime.TaskPromptDelivery,
 	workflowexecution.CurrentNodeAssignmentSteer,
+	func(),
 	workflowruntime.Controller,
 ) (workflowexecution.CurrentNodeAgentPublication, error) {
 	return gatewayFailingAgentPublication{cause: r.cause}, nil
@@ -119,7 +118,6 @@ func (r gatewayFailingRunner) PrepareAgentPublication(
 func (gatewayFailingRunner) PrepareScriptPublication(
 	context.Context,
 	workflow.CurrentNodeReference,
-	runtimeids.CurrentNodeOperationID,
 	workflowruntime.Controller,
 ) (workflowexecution.CurrentNodeScriptPublication, error) {
 	return nil, nil

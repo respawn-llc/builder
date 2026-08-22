@@ -129,7 +129,6 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 	workflowRef := sessionruntime.WorkflowExecutionRef{
 		ProjectID:   "project-exact-scope",
 		WorkflowID:  runtimeids.NewWorkflowID(),
-		OperationID: runtimeids.NewCurrentNodeOperationID(),
 		CurrentNode: node,
 	}
 	request := askquestion.AskQuestionRequest{

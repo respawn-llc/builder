@@ -8,7 +8,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -79,7 +78,6 @@ func TestBoardDoesNotResolveLiveSessionLabelsForMultipleCards(t *testing.T) {
 				Ref: sessionruntime.WorkflowExecutionRef{
 					ProjectID:   fixture.binding.ProjectID,
 					WorkflowID:  fixture.workflowID,
-					OperationID: runtimeids.NewCurrentNodeOperationID(),
 					CurrentNode: task.currentNode,
 				},
 				Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},

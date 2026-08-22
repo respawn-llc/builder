@@ -10,7 +10,6 @@ import (
 	"core/internal/testharness/testsetup"
 	askquestion "core/server/tools"
 	"core/server/workflow"
-	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -25,7 +24,6 @@ func TestAuthorityManualMoveSelectionCancelsPendingQuestionsAndClosesPromptAdmis
 	ref := WorkflowExecutionRef{
 		ProjectID:   "project-manual-move",
 		WorkflowID:  testsetup.WorkflowID(t, "workflow-manual-move"),
-		OperationID: runtimeids.NewCurrentNodeOperationID(),
 		CurrentNode: mustWorkflowCurrentNodeReference(t, taskID, "node-running"),
 	}
 	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
@@ -122,7 +120,6 @@ func TestAuthorityManualMoveSelectionClassifiesPendingApproval(t *testing.T) {
 	ref := WorkflowExecutionRef{
 		ProjectID:   "project-manual-move",
 		WorkflowID:  testsetup.WorkflowID(t, "workflow-manual-move-approval"),
-		OperationID: runtimeids.NewCurrentNodeOperationID(),
 		CurrentNode: mustWorkflowCurrentNodeReference(t, taskID, "node-running"),
 	}
 	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{

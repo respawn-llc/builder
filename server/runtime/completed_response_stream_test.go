@@ -11,6 +11,7 @@ import (
 	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -918,9 +919,9 @@ type failingWorkflowCompletionController struct {
 func (c *failingWorkflowCompletionController) CompleteAgentCurrentNode(
 	context.Context,
 	workflowruntime.AgentCompletionRequest,
-) (workflowruntime.CompletionOutcome, error) {
+) (workflowruntime.CompletionResult, error) {
 	err := errors.New("workflow completion unavailable")
-	return workflowruntime.RejectedCompletionOutcome(err), err
+	return workflowruntime.CompletionResult{}, err
 }
 
 func (c *failingWorkflowCompletionController) RecordProtocolViolation(
@@ -939,16 +940,25 @@ func (c *failingWorkflowCompletionController) RecordProtocolViolation(
 func (c *externallyCompletedWorkflowController) CompleteAgentCurrentNode(
 	_ context.Context,
 	req workflowruntime.AgentCompletionRequest,
-) (workflowruntime.CompletionOutcome, error) {
-	return applyAcceptedWorkflowCompletionForTest(c.engine, req, workflowruntime.AcceptedCompletion{})
+) (workflowruntime.CompletionResult, error) {
+	return applyWorkflowCompletionForTest(c.engine, req, workflowruntime.CompletionResult{
+		State: workflowruntime.CompletionStateApplied,
+	})
 }
 
 func (c *externallyCompletedWorkflowController) CompleteScriptCurrentNode(
 	context.Context,
 	workflowruntime.ScriptCompletionRequest,
-) (workflowruntime.CompletionOutcome, error) {
+) (workflowruntime.CompletionResult, error) {
 	err := errors.New("unexpected Script completion")
-	return workflowruntime.RejectedCompletionOutcome(err), err
+	return workflowruntime.CompletionResult{}, err
+}
+
+func (c *externallyCompletedWorkflowController) ContinueCurrentNode(
+	context.Context,
+	workflowstore.CurrentNodeCompletionResult,
+) error {
+	return nil
 }
 
 func (c *externallyCompletedWorkflowController) RecordProtocolViolation(

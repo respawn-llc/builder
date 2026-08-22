@@ -14,7 +14,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -612,7 +611,6 @@ func startTaskSearchScript(
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID:   fixture.binding.ProjectID,
 			WorkflowID:  fixture.workflowID,
-			OperationID: runtimeids.NewCurrentNodeOperationID(),
 			CurrentNode: started.currentNode,
 		},
 		Command: sessionruntime.ScriptCommand{

@@ -53,7 +53,7 @@ func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t
 	}
 }
 
-func TestCompleteWorkflowTaskReturnsAcceptedCompletionDespitePostCommitDiagnostic(t *testing.T) {
+func TestCompleteWorkflowTaskReturnsResultDespitePostCommitDiagnostic(t *testing.T) {
 	source := currentNodeCompletionReference(t, "task-accepted-diagnostic", "node-agent")
 	publicationErr := errors.New("completion event publication failed")
 	execution := &currentNodeCompletionExecutionStub{
@@ -407,13 +407,14 @@ func (s *currentNodeCompletionExecutionStub) CompleteSessionCurrentNode(
 	_ string,
 	_ map[string]string,
 	_ string,
-) (workflowruntime.CompletionOutcome, error) {
+) (workflowruntime.CompletionResult, error) {
 	s.sessionID = sessionID
 	if s.sessionErr != nil {
-		return workflowruntime.RejectedCompletionOutcome(s.sessionErr), s.sessionErr
+		return workflowruntime.CompletionResult{}, s.sessionErr
 	}
-	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{
-		Result:     workflowruntime.CompletionResult{CommittedResult: s.sessionResult},
-		Diagnostic: s.sessionDiagnostic,
-	}), nil
+	return workflowruntime.CompletionResult{
+		State:           workflowruntime.CompletionStateApplied,
+		CommittedResult: s.sessionResult,
+		Diagnostic:      s.sessionDiagnostic,
+	}, nil
 }

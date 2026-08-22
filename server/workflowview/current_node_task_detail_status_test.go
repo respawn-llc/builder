@@ -11,7 +11,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -158,7 +157,6 @@ func TestTaskDetailMaterializesAndOrdersLiveScripts(t *testing.T) {
 			Ref: sessionruntime.WorkflowExecutionRef{
 				ProjectID:   fixture.binding.ProjectID,
 				WorkflowID:  fixture.workflowID,
-				OperationID: runtimeids.NewCurrentNodeOperationID(),
 				CurrentNode: currentNode.Reference,
 			},
 			Script: &sessionruntime.TaskScriptExecutionTarget{Path: path},
@@ -212,7 +210,6 @@ func TestTaskDetailProjectsLiveAgentStates(t *testing.T) {
 				Ref: sessionruntime.WorkflowExecutionRef{
 					ProjectID:   fixture.binding.ProjectID,
 					WorkflowID:  fixture.workflowID,
-					OperationID: runtimeids.NewCurrentNodeOperationID(),
 					CurrentNode: started.currentNode,
 				},
 				Agent:  &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
@@ -595,7 +592,6 @@ func TestTaskListPreservesAllLiveAttentionThroughCanonicalStatus(t *testing.T) {
 							Ref: sessionruntime.WorkflowExecutionRef{
 								ProjectID:   fixture.binding.ProjectID,
 								WorkflowID:  fixture.workflowID,
-								OperationID: runtimeids.NewCurrentNodeOperationID(),
 								CurrentNode: started.currentNode,
 							},
 							Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
@@ -649,7 +645,6 @@ func TestTaskListProjectsDurableDoneRunningAndQueued(t *testing.T) {
 			Ref: sessionruntime.WorkflowExecutionRef{
 				ProjectID:   fixture.binding.ProjectID,
 				WorkflowID:  fixture.workflowID,
-				OperationID: runtimeids.NewCurrentNodeOperationID(),
 				CurrentNode: task.currentNode,
 			},
 			Agent:  &sessionruntime.TaskAgentExecutionTarget{SessionID: fixture.bindCurrentNodeSession(t, task)},

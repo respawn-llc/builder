@@ -99,13 +99,6 @@ func TestWorkflowCanUseAutomaticToolChoice(t *testing.T) {
 				t.Fatalf("workflow tool choice mode = %q, want automatic", request.ToolChoiceMode)
 			}
 
-			countRequest, err := engine.buildRequestWithoutPromptRefresh(context.Background())
-			if err != nil {
-				t.Fatalf("build workflow token-count request: %v", err)
-			}
-			if countRequest.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
-				t.Fatalf("workflow token-count tool choice mode = %q, want automatic", countRequest.ToolChoiceMode)
-			}
 		})
 	}
 }
@@ -600,24 +593,24 @@ type workflowCompletionAccountingController struct {
 func (c *workflowCompletionAccountingController) CompleteAgentCurrentNode(
 	_ context.Context,
 	request workflowruntime.AgentCompletionRequest,
-) (workflowruntime.CompletionOutcome, error) {
+) (workflowruntime.CompletionResult, error) {
 	c.completionMu.Lock()
 	c.completionRequests = append(c.completionRequests, request)
 	c.completionMu.Unlock()
 	c.completions.Add(1)
-	return applyAcceptedWorkflowCompletionForTest(
+	return applyWorkflowCompletionForTest(
 		c.externallyCompletedWorkflowController.engine,
 		request,
-		workflowruntime.AcceptedCompletion{},
+		workflowruntime.CompletionResult{State: workflowruntime.CompletionStateApplied},
 	)
 }
 
 func (c *workflowCompletionAccountingController) CompleteScriptCurrentNode(
 	context.Context,
 	workflowruntime.ScriptCompletionRequest,
-) (workflowruntime.CompletionOutcome, error) {
+) (workflowruntime.CompletionResult, error) {
 	err := errors.New("unexpected Script completion")
-	return workflowruntime.RejectedCompletionOutcome(err), err
+	return workflowruntime.CompletionResult{}, err
 }
 
 func (c *workflowCompletionAccountingController) CompletionRequests() []workflowruntime.AgentCompletionRequest {

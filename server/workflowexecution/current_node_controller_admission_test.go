@@ -17,7 +17,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -32,8 +31,8 @@ func TestCurrentNodeControllerAdmitsScriptBeforeDetachedPublication(t *testing.T
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
-			controller.WorkflowExecutionRetired(outcome)
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
 		}),
 	})
 	runner := &controlledScriptRunner{
@@ -71,16 +70,6 @@ func TestCurrentNodeControllerAdmitsScriptBeforeDetachedPublication(t *testing.T
 	if store.admitCount() != 0 {
 		t.Fatalf("admitted current nodes before publication validation = %d, want 0", store.admitCount())
 	}
-	key, err := reference.Key()
-	if err != nil {
-		t.Fatalf("Current Node key: %v", err)
-	}
-	controller.mu.Lock()
-	_, operationBeforeCommit := controller.operations[key]
-	controller.mu.Unlock()
-	if operationBeforeCommit {
-		t.Fatal("Current Node operation existed before durable admission committed")
-	}
 	close(runner.returnStart)
 	handle := <-runner.handles
 	if store.admitCount() != 1 {
@@ -90,15 +79,8 @@ func TestCurrentNodeControllerAdmitsScriptBeforeDetachedPublication(t *testing.T
 		t.Fatalf("start current node: %v", err)
 	}
 	workflowRef, workflowScoped := handle.Scope().Workflow()
-	if !workflowScoped || workflowRef.OperationID.IsZero() {
-		t.Fatalf("published Workflow metadata = %+v, want typed operation correlation", workflowRef)
-	}
-	controller.mu.Lock()
-	operation := controller.operations[key]
-	controller.mu.Unlock()
-	if operation == nil || operation.ref.OperationID != workflowRef.OperationID ||
-		!operation.ref.CurrentNode.Equal(reference) {
-		t.Fatalf("admitted operation = %+v, Workflow metadata = %+v", operation, workflowRef)
+	if !workflowScoped || !workflowRef.CurrentNode.Equal(reference) {
+		t.Fatalf("published Workflow metadata = %+v, want Current Node %v", workflowRef, reference)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		_, err := os.Stat(outputPath)
@@ -124,8 +106,8 @@ func TestCurrentNodeControllerCloseDoesNotCancelStartedDurableAdmission(t *testi
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
-			controller.WorkflowExecutionRetired(outcome)
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -309,8 +291,8 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 	attention := &currentNodeAttentionRecorder{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
-			controller.WorkflowExecutionRetired(outcome)
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
 		}),
 	})
 	runner := &finalizerFailureScriptRunner{
@@ -392,8 +374,8 @@ func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesI
 	}}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
-			controller.WorkflowExecutionRetired(outcome)
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
 		}),
 	})
 	runner := &parallelExplicitRunner{
@@ -555,7 +537,7 @@ func TestCurrentNodeControllerSteersUnclassifiedAutomaticAgentBeforeStartingIt(t
 	steerer := &recordingCurrentNodeAssignmentSteerer{}
 	controller, err := NewCurrentNodeController(
 		store,
-		runner,
+		currentNodeTestPublicationRunner{runner: runner, authority: authority},
 		authority,
 		NewTaskMutationCoordinator(),
 		CurrentNodeControllerConfig{
@@ -575,10 +557,10 @@ func TestCurrentNodeControllerSteersUnclassifiedAutomaticAgentBeforeStartingIt(t
 		}
 	})
 
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+	controller.enqueueStarts(automaticQueuedStarts([]CurrentNodeAutomaticIntent{{
 		CurrentNode: reference,
 		NodeKind:    workflow.NodeKindAgent,
-	}})
+	}}))
 
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		return runner.starts() == 1
@@ -659,8 +641,8 @@ func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
-			controller.WorkflowExecutionRetired(outcome)
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
 		}),
 	})
 	runner := &firstAdmissionBlockingScriptRunner{
@@ -686,10 +668,10 @@ func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(
 		}
 	})
 
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
+	controller.enqueueStarts(automaticQueuedStarts([]CurrentNodeAutomaticIntent{
 		{CurrentNode: first, NodeKind: workflow.NodeKindAgent},
 		{CurrentNode: second, NodeKind: workflow.NodeKindAgent},
-	})
+	}))
 	select {
 	case entered := <-runner.entered:
 		first = entered
@@ -749,10 +731,10 @@ func TestCurrentNodeControllerPromotesConcurrencyQueuedTaskToExplicitAdmission(t
 		}
 	})
 
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
+	controller.enqueueStarts(automaticQueuedStarts([]CurrentNodeAutomaticIntent{
 		{CurrentNode: first, NodeKind: workflow.NodeKindAgent},
 		{CurrentNode: queued, NodeKind: workflow.NodeKindAgent},
-	})
+	}))
 	select {
 	case entered := <-runner.entered:
 		if !entered.Equal(first) {
@@ -807,8 +789,8 @@ func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *test
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
-			controller.WorkflowExecutionRetired(outcome)
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -833,10 +815,10 @@ func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *test
 		}
 	})
 
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+	controller.enqueueStarts(automaticQueuedStarts([]CurrentNodeAutomaticIntent{{
 		CurrentNode: agent,
 		NodeKind:    workflow.NodeKindAgent,
-	}})
+	}}))
 	select {
 	case started := <-runner.started:
 		if !started.Equal(agent) {
@@ -847,11 +829,11 @@ func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *test
 	}
 	waitForRunningCurrentNode(t, authority, agent)
 
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
+	controller.enqueueStarts(automaticQueuedStarts([]CurrentNodeAutomaticIntent{
 		{CurrentNode: queuedAgent, NodeKind: workflow.NodeKindAgent},
 		{CurrentNode: firstScript, NodeKind: workflow.NodeKindScript},
 		{CurrentNode: secondScript, NodeKind: workflow.NodeKindScript},
-	})
+	}))
 	seenScripts := map[workflow.CurrentNodeReference]bool{}
 	for len(seenScripts) < 2 {
 		select {
@@ -900,8 +882,8 @@ func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
-			controller.WorkflowExecutionRetired(outcome)
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -932,7 +914,7 @@ func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing
 			NodeKind:    workflow.NodeKindScript,
 		})
 	}
-	controller.enqueueAutomaticIntents(intents)
+	controller.enqueueStarts(automaticQueuedStarts(intents))
 	started := make(map[workflow.CurrentNodeReference]struct{}, scriptCount)
 	for len(started) < scriptCount {
 		select {
@@ -1310,37 +1292,6 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 					t.Fatalf("reference key: %v", err)
 				}
 				controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
-			},
-		},
-		{
-			name: "retirement held intent",
-			apply: func(controller *CurrentNodeController) {
-				key, err := reference.Key()
-				if err != nil {
-					t.Fatalf("reference key: %v", err)
-				}
-				controller.operations[key] = &currentNodeOperation{
-					ref: workflow.CurrentNodeOperationRef{
-						OperationID: runtimeids.NewCurrentNodeOperationID(),
-						CurrentNode: reference,
-					},
-					heldStarts: []currentNodeQueuedStart{{reference: reference, policy: currentNodeAdmissionAutomaticAgent}},
-				}
-			},
-		},
-		{
-			name: "admitted operation",
-			apply: func(controller *CurrentNodeController) {
-				key, err := reference.Key()
-				if err != nil {
-					t.Fatalf("reference key: %v", err)
-				}
-				controller.operations[key] = &currentNodeOperation{
-					ref: workflow.CurrentNodeOperationRef{
-						OperationID: runtimeids.NewCurrentNodeOperationID(),
-						CurrentNode: reference,
-					},
-				}
 			},
 		},
 	}

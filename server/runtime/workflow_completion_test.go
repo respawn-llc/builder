@@ -17,6 +17,7 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -28,7 +29,6 @@ type fakeWorkflowController struct {
 	completed              atomic.Int64
 	completeErr            error
 	completionDiagnostic   error
-	completionOperation    workflow.CurrentNodeOperationRef
 	violations             atomic.Int64
 	protocolBudgetResets   atomic.Int64
 	protocolBudgetResetErr error
@@ -41,63 +41,57 @@ func (c *fakeWorkflowController) bindWorkflowCompletionEngine(engine *Engine) {
 	c.engine = engine
 }
 
-func (c *fakeWorkflowController) CompleteAgentCurrentNode(_ context.Context, req workflowruntime.AgentCompletionRequest) (workflowruntime.CompletionOutcome, error) {
-	accepted, err := c.acceptCompletionForTest(req)
+func (c *fakeWorkflowController) CompleteAgentCurrentNode(_ context.Context, req workflowruntime.AgentCompletionRequest) (workflowruntime.CompletionResult, error) {
+	result, err := c.acceptCompletionForTest(req)
 	if err != nil {
-		return workflowruntime.RejectedCompletionOutcome(err), err
+		return workflowruntime.CompletionResult{}, err
 	}
-	return applyAcceptedWorkflowCompletionForTest(c.engine, req, accepted)
+	return applyWorkflowCompletionForTest(c.engine, req, result)
 }
 
 func (c *fakeWorkflowController) acceptCompletionForTest(
 	req workflowruntime.AgentCompletionRequest,
-) (workflowruntime.AcceptedCompletion, error) {
+) (workflowruntime.CompletionResult, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, req)
 	c.mu.Unlock()
 	if c.completeErr != nil {
-		return workflowruntime.AcceptedCompletion{}, c.completeErr
+		return workflowruntime.CompletionResult{}, c.completeErr
 	}
 	c.completed.Add(1)
-	return workflowruntime.AcceptedCompletion{
-		Result: workflowruntime.CompletionResult{
-			TransitionID: "transition-applied",
-			State:        "applied",
-			Operation:    c.completionOperation,
-		},
-		Diagnostic: c.completionDiagnostic,
+	return workflowruntime.CompletionResult{
+		TransitionID: "transition-applied",
+		State:        workflowruntime.CompletionStateApplied,
+		Diagnostic:   c.completionDiagnostic,
 	}, nil
 }
 
-func applyAcceptedWorkflowCompletionForTest(
+func applyWorkflowCompletionForTest(
 	engine *Engine,
 	req workflowruntime.AgentCompletionRequest,
-	accepted workflowruntime.AcceptedCompletion,
-) (workflowruntime.CompletionOutcome, error) {
+	result workflowruntime.CompletionResult,
+) (workflowruntime.CompletionResult, error) {
 	if engine == nil {
 		err := errors.New("test Workflow completion controller is not bound to an Engine")
-		return workflowruntime.RejectedCompletionOutcome(err), err
+		return workflowruntime.CompletionResult{}, err
 	}
-	decision, err := engine.ApplyWorkflowAgentCompletion(
+	return engine.ApplyWorkflowAgentCompletion(
 		req.Provenance.ScopeID,
 		req.Provenance.RunID,
 		req.Provenance.StepID,
-		func() (workflowruntime.CompletionDecision, error) {
-			return workflowruntime.CompletionDecision{
-				CommitReceipt: session.CommitReceipt{Committed: true},
-				Accepted:      &accepted,
-			}, nil
+		func() (workflowruntime.CompletionResult, error) {
+			return result, nil
 		},
 	)
-	if err != nil {
-		return workflowruntime.RejectedCompletionOutcome(err), err
-	}
-	return workflowruntime.AcceptedCompletionOutcome(*decision.Accepted), nil
 }
 
-func (c *fakeWorkflowController) CompleteScriptCurrentNode(context.Context, workflowruntime.ScriptCompletionRequest) (workflowruntime.CompletionOutcome, error) {
+func (c *fakeWorkflowController) CompleteScriptCurrentNode(context.Context, workflowruntime.ScriptCompletionRequest) (workflowruntime.CompletionResult, error) {
 	err := errors.New("unexpected Script completion")
-	return workflowruntime.RejectedCompletionOutcome(err), err
+	return workflowruntime.CompletionResult{}, err
+}
+
+func (c *fakeWorkflowController) ContinueCurrentNode(context.Context, workflowstore.CurrentNodeCompletionResult) error {
+	return nil
 }
 
 func (c *fakeWorkflowController) RecordProtocolViolation(_ context.Context, req workflowruntime.ViolationRequest) (workflowruntime.ViolationResult, error) {
@@ -173,7 +167,7 @@ func TestSubmitWorkflowTurnFlushesTerminalBackgroundNotice(t *testing.T) {
 	t.Fatalf("workflow request omitted terminal background notice: %+v", client.calls[0])
 }
 
-func TestSubmitWorkflowTurnReturnsAcceptedCompletionDiagnosticWithoutTurnFailure(t *testing.T) {
+func TestSubmitWorkflowTurnReturnsCompletionDiagnosticWithoutTurnFailure(t *testing.T) {
 	diagnostic := errors.New("completion event publication failed")
 	controller := &fakeWorkflowController{completionDiagnostic: diagnostic}
 	engine := mustNewWorkflowTestEngine(
@@ -235,13 +229,8 @@ func TestWorkflowCompletionSourcesReturnCanonicalExactTerminalSnapshot(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := testWorkflowConfig(nil, test.mode)
-			operation := workflow.CurrentNodeOperationRef{
-				OperationID: runtimeids.NewCurrentNodeOperationID(),
-				CurrentNode: cfg.Instructions.CurrentNode,
-			}
 			controller := &fakeWorkflowController{
 				completionDiagnostic: diagnostic,
-				completionOperation:  operation,
 			}
 			cfg.Controller = controller
 			engine := mustNewWorkflowTestEngine(
@@ -258,14 +247,14 @@ func TestWorkflowCompletionSourcesReturnCanonicalExactTerminalSnapshot(t *testin
 			}
 			terminal := engine.WorkflowTerminalState()
 			if terminal.Generation != 1 || terminal.Source != test.source ||
-				terminal.Completion.Result.Operation.OperationID != operation.OperationID ||
-				!terminal.Completion.Result.Operation.CurrentNode.Equal(operation.CurrentNode) ||
+				terminal.Completion.TransitionID != "transition-applied" ||
+				terminal.Completion.State != workflowruntime.CompletionStateApplied ||
 				!errors.Is(terminal.Completion.Diagnostic, diagnostic) {
 				t.Fatalf("terminal snapshot = %+v, want one exact %s completion", terminal, test.source)
 			}
 			if result.Completion == nil ||
-				result.Completion.Result.Operation.OperationID != terminal.Completion.Result.Operation.OperationID ||
-				!result.Completion.Result.Operation.CurrentNode.Equal(terminal.Completion.Result.Operation.CurrentNode) ||
+				result.Completion.TransitionID != terminal.Completion.TransitionID ||
+				result.Completion.State != terminal.Completion.State ||
 				!errors.Is(result.Completion.Diagnostic, terminal.Completion.Diagnostic) {
 				t.Fatalf("turn result = %+v, want canonical terminal snapshot %+v", result, terminal)
 			}
@@ -355,8 +344,8 @@ func bindExternalAgentCompletion(
 		if err != nil {
 			return err
 		}
-		_, completionErr := engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, func() (workflowruntime.CompletionDecision, error) {
-			accepted, err := controller.acceptCompletionForTest(workflowruntime.AgentCompletionRequest{
+		_, completionErr := engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, func() (workflowruntime.CompletionResult, error) {
+			return controller.acceptCompletionForTest(workflowruntime.AgentCompletionRequest{
 				Provenance: workflowruntime.AgentCompletionProvenance{
 					ScopeID: scopeID,
 					RunID:   runID,
@@ -364,10 +353,6 @@ func bindExternalAgentCompletion(
 				},
 				SessionID: runtimeids.NewSessionID(),
 			})
-			return workflowruntime.CompletionDecision{
-				CommitReceipt: session.CommitReceipt{Committed: err == nil},
-				Accepted:      &accepted,
-			}, err
 		})
 		return completionErr
 	}
@@ -1285,9 +1270,9 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for commentary response")
 	}
-	_, err := eng.AcceptHumanSteering("accepted steering", nil)
+	_, _, err := eng.SubmitUserMessageOrSteerWithAcceptance(context.Background(), "accepted steering", nil)
 	if err != nil {
-		t.Fatalf("AcceptHumanSteering: %v", err)
+		t.Fatalf("SubmitUserMessageOrSteerWithAcceptance: %v", err)
 	}
 	releaseRun()
 	if err := <-submitDone; err != nil {
@@ -1392,10 +1377,6 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 		OnEvent: events.accept,
 	})
 	workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand)
-	controller.completionOperation = workflow.CurrentNodeOperationRef{
-		OperationID: runtimeids.NewCurrentNodeOperationID(),
-		CurrentNode: workflowConfig.Instructions.CurrentNode,
-	}
 	publishTestWorkflowExecution(t, eng, workflowConfig)
 	shellTool.complete = bindExternalAgentCompletion(t, eng, controller, workflowConfig.ScopeID)
 
@@ -1413,10 +1394,12 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 	terminal := eng.WorkflowTerminalState()
 	if terminal.Generation != 1 ||
 		terminal.Source != WorkflowCompletionSourceShellCommand ||
-		terminal.Completion.Result.Operation.OperationID != controller.completionOperation.OperationID ||
+		terminal.Completion.TransitionID != "transition-applied" ||
+		terminal.Completion.State != workflowruntime.CompletionStateApplied ||
 		!errors.Is(terminal.Completion.Diagnostic, diagnostic) ||
 		turn.Completion == nil ||
-		turn.Completion.Result.Operation.OperationID != terminal.Completion.Result.Operation.OperationID {
+		turn.Completion.TransitionID != terminal.Completion.TransitionID ||
+		turn.Completion.State != terminal.Completion.State {
 		t.Fatalf("shell completion turn/terminal = %+v / %+v, want one canonical exact snapshot", turn, terminal)
 	}
 	assertToolMessageWithCallID(t, eng, "call_shell")

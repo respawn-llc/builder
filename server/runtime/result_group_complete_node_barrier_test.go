@@ -24,28 +24,26 @@ type completeNodeBarrierController struct {
 func (c *completeNodeBarrierController) CompleteAgentCurrentNode(
 	_ context.Context,
 	req workflowruntime.AgentCompletionRequest,
-) (workflowruntime.CompletionOutcome, error) {
+) (workflowruntime.CompletionResult, error) {
 	c.completeCalls.Add(1)
 	if c.beforeComplete != nil {
 		c.beforeComplete()
 	}
 	if c.completeError != nil {
-		return workflowruntime.RejectedCompletionOutcome(c.completeError), c.completeError
+		return workflowruntime.CompletionResult{}, c.completeError
 	}
-	return applyAcceptedWorkflowCompletionForTest(c.engine, req, workflowruntime.AcceptedCompletion{
-		Result: workflowruntime.CompletionResult{
-			TransitionID: "done",
-			State:        "applied",
-		},
+	return applyWorkflowCompletionForTest(c.engine, req, workflowruntime.CompletionResult{
+		TransitionID: "done",
+		State:        workflowruntime.CompletionStateApplied,
 	})
 }
 
 func (c *completeNodeBarrierController) CompleteScriptCurrentNode(
 	context.Context,
 	workflowruntime.ScriptCompletionRequest,
-) (workflowruntime.CompletionOutcome, error) {
+) (workflowruntime.CompletionResult, error) {
 	err := errors.New("unexpected Script completion")
-	return workflowruntime.RejectedCompletionOutcome(err), err
+	return workflowruntime.CompletionResult{}, err
 }
 
 func completeNodeBarrierAcceptedCalls(input json.RawMessage) acceptedResponseCalls {

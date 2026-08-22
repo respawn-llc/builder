@@ -504,112 +504,6 @@ func TestOpenRuntimeReturnsRunLoggerCreationError(t *testing.T) {
 	}
 }
 
-func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) {
-	truePath, err := exec.LookPath("true")
-	if err != nil {
-		t.Skipf("true executable unavailable: %v", err)
-	}
-	sleepPath, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skipf("sleep executable unavailable: %v", err)
-	}
-
-	predecessor := workflowExecutionRefForTest(t, workflow.TaskID(uuid.NewString()), workflow.NodeID(uuid.NewString()), nil)
-	successor := predecessor
-	successor.OperationID = runtimeids.NewCurrentNodeOperationID()
-	type startResult struct {
-		handle ExecutionHandle
-		err    error
-	}
-	successorStarted := make(chan startResult, 1)
-	successorCancellationGrace := 50 * time.Millisecond
-	var authority *Authority
-	authority = NewAuthority(AuthorityOptions{
-		WorkflowExecutionRetired: WorkflowExecutionRetiredFunc(func(outcome WorkflowRetirementOutcome) {
-			if outcome.Operation.OperationID != predecessor.OperationID ||
-				!outcome.Operation.CurrentNode.Equal(predecessor.CurrentNode) {
-				return
-			}
-			handle, startErr := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
-				Workflow: successor,
-				Command: ScriptCommand{
-					Path:              sleepPath,
-					Args:              []string{"30"},
-					CancellationGrace: &successorCancellationGrace,
-				},
-			})
-			successorStarted <- startResult{handle: handle, err: startErr}
-		}),
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	predecessorDetached, err := authority.PrepareDetachedScriptExecution(context.Background(), DetachedScriptExecutionRequest{
-		Workflow: predecessor,
-		Command:  ScriptCommand{Path: truePath},
-	})
-	if err != nil {
-		t.Fatalf("prepare predecessor: %v", err)
-	}
-	predecessorHandle, launchPredecessor, err := predecessorDetached.Publish(context.Background(), func() error { return nil }, nil)
-	if err != nil {
-		t.Fatalf("publish predecessor: %v", err)
-	}
-	launchPredecessor()
-	waitCtx, cancelWait := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelWait()
-	if _, err := predecessorHandle.Wait(waitCtx); err != nil {
-		t.Fatalf("wait predecessor: %v", err)
-	}
-
-	var successorResult startResult
-	select {
-	case successorResult = <-successorStarted:
-	case <-waitCtx.Done():
-		t.Fatal("successor was not admitted from predecessor finalization")
-	}
-	if successorResult.err != nil {
-		t.Fatalf("start successor: %v", successorResult.err)
-	}
-	if successorResult.handle == nil {
-		t.Fatal("successor handle is nil")
-	}
-
-	assertSuccessorCurrent := func(stage string) {
-		t.Helper()
-		current, ok := authority.ExecutionByWorkflow(successor)
-		if !ok {
-			t.Fatalf("%s: successor execution is not indexed", stage)
-		}
-		if current.Scope().ID() != successorResult.handle.Scope().ID() {
-			t.Fatalf(
-				"%s: indexed scope = %q, want successor scope %q",
-				stage,
-				current.Scope().ID(),
-				successorResult.handle.Scope().ID(),
-			)
-		}
-	}
-	assertSuccessorCurrent("after predecessor wait")
-
-	if err := predecessorHandle.Close(waitCtx); err != nil {
-		t.Fatalf("close predecessor: %v", err)
-	}
-	if err := predecessorHandle.Close(waitCtx); err != nil {
-		t.Fatalf("close predecessor again: %v", err)
-	}
-	assertSuccessorCurrent("after predecessor close")
-
-	if err := successorResult.handle.Stop(waitCtx); err != nil {
-		t.Fatalf("stop successor: %v", err)
-	}
-	if err := successorResult.handle.Close(waitCtx); err != nil {
-		t.Fatalf("close successor: %v", err)
-	}
-}
-
 func TestNewLazyWithIDUsesExactCanonicalSessionIdentity(t *testing.T) {
 	containerDir := t.TempDir()
 	sessionID := runtimeids.NewSessionID()
@@ -1980,46 +1874,6 @@ func TestExecutionCleanupAlwaysReleasesWorkflowBinding(t *testing.T) {
 	}
 }
 
-func TestOrdinaryExecutionCannotStartWithRetainedWorkflowActivation(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	attachment, err := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
-		SessionID: sessionID,
-		OwnerID:   "retained-workflow-activation-test",
-		Runtime:   &plan,
-	})
-	if err != nil {
-		t.Fatalf("open workflow runtime: %v", err)
-	}
-	t.Cleanup(func() {
-		if _, releaseErr := attachment.Release(context.Background(), RuntimeReleaseClose); releaseErr != nil {
-			t.Errorf("release retained workflow runtime: %v", releaseErr)
-		}
-	})
-	if err := fixture.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.EnterRetainedWorkflowControl()
-		return nil
-	}); err != nil {
-		t.Fatalf("enter retained Workflow control: %v", err)
-	}
-
-	ordinary, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Resource:   CurrentAgentResource{},
-		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
-	})
-	if ordinary != nil {
-		_ = ordinary.Close(context.Background())
-	}
-	if !errors.Is(err, ErrSessionWorkflowActivationActive) {
-		t.Fatalf("ordinary execution error = %v, want %v", err, ErrSessionWorkflowActivationActive)
-	}
-}
-
 func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
@@ -2153,15 +2007,6 @@ func TestBackgroundCompletionAfterFinalStepStartsContinuationAfterExecutionRetir
 	if !fixture.authority.routeBackgroundEvent(event) {
 		t.Fatal("terminal background event was not delivered")
 	}
-	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		if !engine.HasPendingBackgroundShellContinuation() {
-			t.Fatal("terminal notice was not retained after the final Agent Step")
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("inspect pending background continuation: %v", err)
-	}
-
 	close(releaseExecution)
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait initial execution: %v", err)
@@ -3193,7 +3038,7 @@ func workflowExecutionRefForTest(
 	}
 	return WorkflowExecutionRef{
 		ProjectID: "project-test", WorkflowID: authorityWorkflowID(t, "test"),
-		OperationID: runtimeids.NewCurrentNodeOperationID(), CurrentNode: reference,
+		CurrentNode: reference,
 	}
 }
 
