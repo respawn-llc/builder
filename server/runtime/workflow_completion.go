@@ -164,6 +164,9 @@ func (e *Engine) ApplyWorkflowAgentCompletion(
 	}
 	var result workflowruntime.CompletionResult
 	err := e.ApplyForActiveStep(stepID.String(), func() error {
+		if e.WorkflowTerminalState().Completed {
+			return ErrActiveStepInactive
+		}
 		var err error
 		result, err = commit()
 		if err != nil {
