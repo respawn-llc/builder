@@ -9,11 +9,12 @@ import (
 
 func TestClientActiveKindFromRuntimeMapsEveryRuntimeKind(t *testing.T) {
 	tests := map[runtime.ActiveKind]clientui.RuntimeActivityActiveKind{
-		runtime.ActiveKindUserTurn:     clientui.RuntimeActivityActiveKindUserTurn,
-		runtime.ActiveKindWorkflowTurn: clientui.RuntimeActivityActiveKindWorkflowTurn,
-		runtime.ActiveKindGoalLoop:     clientui.RuntimeActivityActiveKindGoalLoop,
-		runtime.ActiveKindCompaction:   clientui.RuntimeActivityActiveKindCompaction,
-		runtime.ActiveKindBackground:   clientui.RuntimeActivityActiveKindBackground,
+		runtime.ActiveKindUserTurn:            clientui.RuntimeActivityActiveKindUserTurn,
+		runtime.ActiveKindWorkflowTurn:        clientui.RuntimeActivityActiveKindWorkflowTurn,
+		runtime.ActiveKindGoalLoop:            clientui.RuntimeActivityActiveKindGoalLoop,
+		runtime.ActiveKindCompaction:          clientui.RuntimeActivityActiveKindCompaction,
+		runtime.ActiveKindPreSubmitCompaction: clientui.RuntimeActivityActiveKindPreSubmitCompaction,
+		runtime.ActiveKindBackground:          clientui.RuntimeActivityActiveKindBackground,
 	}
 	for kind, want := range tests {
 		got, err := ClientActiveKindFromRuntime(kind)
