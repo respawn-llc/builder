@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"core/shared/clientui"
-	"core/shared/serverapi"
 )
 
 func TestSessionPickerRelativeAgeUsesSemanticBucketsAndControlledClock(t *testing.T) {
@@ -47,7 +46,7 @@ func TestSessionPickerRejectsInvalidRecencyBeforeRendering(t *testing.T) {
 		time.Unix(-1, 0).UTC(),
 	} {
 		summary := pickerTestSummary(t, "invalid-recency", updatedAt)
-		response := serverapi.SessionPageResponse{
+		response := sessionPageResponse{
 			ProjectID: "picker-project",
 			Category:  summary.Category,
 			Sessions:  []clientui.SessionSummary{summary},

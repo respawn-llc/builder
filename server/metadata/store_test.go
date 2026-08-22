@@ -507,9 +507,8 @@ func TestWorkspaceUnlinkReturnsStaticAndRuntimeBlockers(t *testing.T) {
 		nil,
 		func(context.Context, []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
 			return []serverapi.ProjectWorkspaceUnlinkBlocker{{
-				Code:    "active_sessions",
-				Message: "Active runtime sessions still depend on this workspace.",
-				Count:   1,
+				Code:  "active_sessions",
+				Count: 1,
 			}}, func() {}, nil
 		},
 	)

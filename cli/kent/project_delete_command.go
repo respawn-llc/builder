@@ -10,13 +10,14 @@ import (
 
 	"core/shared/client"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
 
 type projectDeleteOperations interface {
 	ListWorkflowTasks(context.Context, serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error)
-	DeleteProject(context.Context, serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error)
+	DeleteProject(context.Context, *projectpb.DeleteProjectRequest) (*projectpb.DeleteProjectSuccess, error)
 }
 
 type projectDeleteError struct {
@@ -113,11 +114,11 @@ func runProjectDeleteUseCase(
 			fmt.Errorf("Project deletion was not confirmed. Rerun with --confirm to delete project %s.", projectID),
 		)
 	}
-	response, err := operations.DeleteProject(ctx, serverapi.ProjectDeleteRequest{ProjectID: projectID})
+	response, err := operations.DeleteProject(ctx, &projectpb.DeleteProjectRequest{ProjectId: projectID})
 	if err != nil {
 		return projectDeleteFailure(projectID, projectDeleteErrorCode(err), err)
 	}
-	if response.ProjectID != projectID {
+	if response.ProjectId != projectID {
 		return projectDeleteFailure(projectID, "request_failed", errors.New("project deletion returned a mismatched project identity"))
 	}
 	if response.Deleted {
@@ -212,27 +213,35 @@ func projectDeleteErrorCode(err error) string {
 	return "request_failed"
 }
 
-func projectDeleteBlockersForCLI(blockers []serverapi.ProjectDeleteBlocker) ([]projectDeleteBlocker, error) {
+func projectDeleteBlockersForCLI(blockers []*projectpb.ProjectDeleteBlocker) ([]projectDeleteBlocker, error) {
 	output := make([]projectDeleteBlocker, 0, len(blockers))
 	for _, blocker := range blockers {
-		if strings.TrimSpace(blocker.Code) == "" || strings.TrimSpace(blocker.Message) == "" {
-			return nil, errors.New("project deletion returned an incomplete blocker")
+		message, err := projectDeleteBlockerMessage(blocker.Code)
+		if err != nil {
+			return nil, err
 		}
-		if blocker.Count < 0 {
-			return nil, errors.New("project deletion returned a negative blocker count")
+		if blocker.Count <= 0 {
+			return nil, errors.New("project deletion returned a non-positive blocker count")
 		}
-		var count *int
-		if blocker.Count > 0 {
-			value := blocker.Count
-			count = &value
-		}
+		count := int(blocker.Count)
 		output = append(output, projectDeleteBlocker{
-			Code:    blocker.Code,
-			Message: blocker.Message,
-			Count:   count,
+			Code:    strings.TrimSpace(blocker.Code),
+			Message: message,
+			Count:   &count,
 		})
 	}
 	return output, nil
+}
+
+func projectDeleteBlockerMessage(code string) (string, error) {
+	switch strings.TrimSpace(code) {
+	case "non_terminal_tasks":
+		return "Project has active or non-terminal tasks.", nil
+	case "active_sessions":
+		return "Project has active runtime sessions.", nil
+	default:
+		return "", fmt.Errorf("project deletion returned unsupported blocker code %q", code)
+	}
 }
 
 func writeProjectDeleteOutcome(stdout io.Writer, stderr io.Writer, outcome projectDeleteOutcome, jsonOut bool) int {

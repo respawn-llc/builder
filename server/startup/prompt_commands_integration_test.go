@@ -15,8 +15,12 @@ import (
 	"core/server/onboarding"
 	"core/shared/client"
 	"core/shared/config"
+	"core/shared/protoapi"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -55,18 +59,18 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 	if providerIndex < 0 {
 		t.Fatal("Claude Code provider UUID is missing")
 	}
-	providerUUID := providers[providerIndex].UUID
+	providerUUID := providers[providerIndex].UUID.String()
 	finalizer, err := onboarding.NewFinalizer(onboarding.Options{PersistenceRoot: cfg.PersistenceRoot, WorkspaceRoot: workspaceA, HomeDir: os.Getenv("HOME"), SettingsPath: cfg.Source.HomeSettingsPath})
 	if err != nil {
 		t.Fatalf("NewFinalizer: %v", err)
 	}
-	if _, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		CommandsImport: &serverapi.OnboardingImportSelection{
-			Mode:         serverapi.OnboardingImportModeSymlinkSource,
-			ProviderUUID: &providerUUID,
+	if _, err := finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		CommandsImport: &onboardingpb.ImportSelection{
+			Mode:         onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE,
+			ProviderUuid: &providerUUID,
 		},
 	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 
 	output := "accepted"
@@ -119,24 +123,48 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		t.Fatalf("catalog = %+v", catalog.Commands)
 	}
 
-	plan, err := remote.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		Mode:   serverapi.SessionLaunchModeInteractive,
-		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	intent, err := protoapi.SessionLaunchIntentToProto(
+		serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	)
+	if err != nil {
+		t.Fatalf("convert Session launch intent: %v", err)
+	}
+	plan, err := remote.PlanSession(context.Background(), &sessionlaunchpb.SessionPlanRequest{
+		Mode:   sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+		Intent: intent,
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
+	activeSettings, err := protoapi.SessionSettingsFromProto(plan.Plan.ActiveSettings)
+	if err != nil {
+		t.Fatalf("convert active settings: %v", err)
+	}
+	source, err := protoapi.SessionSourceReportFromProto(plan.Plan.Source)
+	if err != nil {
+		t.Fatalf("convert source report: %v", err)
+	}
+	enabledToolIDs := make([]string, 0, len(plan.Plan.EnabledToolIds))
+	for _, generatedToolID := range plan.Plan.EnabledToolIds {
+		toolID, conversionErr := protoapi.SessionToolIDFromProto(generatedToolID)
+		if conversionErr != nil {
+			t.Fatalf("convert enabled tool ID: %v", conversionErr)
+		}
+		enabledToolIDs = append(enabledToolIDs, string(toolID))
+	}
 	attachment, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		SessionID:      plan.Plan.SessionID,
-		ActiveSettings: plan.Plan.ActiveSettings,
-		EnabledToolIDs: plan.Plan.EnabledToolIDs,
-		Source:         plan.Plan.Source,
+		SessionID:             plan.Plan.SessionId,
+		ActiveSettings:        activeSettings,
+		EnabledToolIDs:        enabledToolIDs,
+		QuestionsEnabled:      textutil.Value(plan.Plan.QuestionsEnabled),
+		AutoCompactionEnabled: textutil.Value(plan.Plan.AutoCompactionEnabled),
+		Source:                source,
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
 	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
-		SessionID: plan.Plan.SessionID,
+		SessionID: plan.Plan.SessionId,
 		Input:     runtimeinput.Command("prompt:remote_demo", "hello world"),
 	}); err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)

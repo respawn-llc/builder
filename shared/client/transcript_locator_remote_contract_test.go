@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"errors"
-	"io"
 	"testing"
 
 	"core/shared/clientui"
@@ -59,16 +58,11 @@ func TestRemoteTranscriptPageRejectsMalformedLocatorPayload(t *testing.T) {
 
 func TestRemoteTranscriptSubscriptionRejectsMalformedLocatorPayload(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			if errors.Is(err, io.EOF) {
-				return
-			}
-			t.Fatalf("receive attach request: %v", err)
+		acceptRemoteHandshake(t, ws)
+		if acceptRemoteSessionAttachmentOrClosed(t, ws, "project-1", "workspace-1", "/workspace") == nil {
+			return
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", "session-1"))); err != nil {
-			t.Fatalf("send attach response: %v", err)
-		}
+		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive subscribe request: %v", err)
 		}
@@ -111,16 +105,11 @@ func TestRemoteTranscriptSubscriptionRejectsMalformedLocatorPayload(t *testing.T
 
 func TestRemoteTranscriptSubscriptionDecodesProviderModelMismatchNotice(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			if errors.Is(err, io.EOF) {
-				return
-			}
-			t.Fatalf("receive attach request: %v", err)
+		acceptRemoteHandshake(t, ws)
+		if acceptRemoteSessionAttachmentOrClosed(t, ws, "project-1", "workspace-1", "/workspace") == nil {
+			return
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", "session-1"))); err != nil {
-			t.Fatalf("send attach response: %v", err)
-		}
+		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive subscribe request: %v", err)
 		}

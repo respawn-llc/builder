@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"core/shared/apicontract"
-	"core/shared/serverapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	"core/shared/sessioncontract"
 )
 
 type contextObservingProjectViewClient struct {
@@ -17,11 +18,11 @@ type contextObservingProjectViewClient struct {
 
 func (c *contextObservingProjectViewClient) ListSessionPage(
 	ctx context.Context,
-	_ serverapi.SessionPageRequest,
-) (serverapi.SessionPageResponse, error) {
+	_ *projectpb.SessionPageRequest,
+) (*projectpb.SessionPageSuccess, error) {
 	c.received <- ctx
 	<-ctx.Done()
-	return serverapi.SessionPageResponse{}, ctx.Err()
+	return nil, ctx.Err()
 }
 
 func TestProjectScopedSessionPageLoaderHonorsRequestContext(t *testing.T) {
@@ -36,7 +37,10 @@ func TestProjectScopedSessionPageLoaderHonorsRequestContext(t *testing.T) {
 	requestContext, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "request-owned"))
 	completed := make(chan error, 1)
 	go func() {
-		_, err := loader.ListSessionPage(requestContext, serverapi.SessionPageRequest{})
+		_, err := loader.ListSessionPage(requestContext, sessionPageRequest{
+			ProjectID: "request-context-project",
+			Category:  sessioncontract.SessionCategoryMain,
+		})
 		completed <- err
 	}()
 

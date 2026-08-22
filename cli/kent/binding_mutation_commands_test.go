@@ -8,9 +8,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestBindingMutationArgumentsAndSelector(t *testing.T) {
@@ -60,7 +64,7 @@ func TestBindingMutationResultValidation(t *testing.T) {
 	project := validBindingMutationProject()
 	valid := []bindingMutationResult{
 		{ProjectID: &projectID, WorkspaceID: &workspaceID},
-		{Project: &project},
+		{Project: project},
 	}
 	for _, result := range valid {
 		if err := result.validate(); err != nil {
@@ -70,7 +74,7 @@ func TestBindingMutationResultValidation(t *testing.T) {
 	invalid := []bindingMutationResult{
 		{},
 		{ProjectID: &projectID},
-		{ProjectID: &projectID, WorkspaceID: &workspaceID, Project: &project},
+		{ProjectID: &projectID, WorkspaceID: &workspaceID, Project: project},
 	}
 	for _, result := range invalid {
 		if err := result.validate(); err == nil {
@@ -80,9 +84,10 @@ func TestBindingMutationResultValidation(t *testing.T) {
 }
 
 func TestBindingMutationTypedErrorProjection(t *testing.T) {
-	blocked, err := newBindingMutationBlockedError(" project-1 ", " workspace-1 ", []serverapi.ProjectWorkspaceUnlinkBlocker{
-		{Code: "default_workspace", Message: "default", Count: 1},
-		{Code: "active_sessions", Message: "active"},
+	count := int32(1)
+	blocked, err := newBindingMutationBlockedError(" project-1 ", " workspace-1 ", []*projectpb.WorkspaceUnlinkBlocker{
+		{Code: "future_blocker", Count: &count},
+		{Code: "default_workspace"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -99,9 +104,14 @@ func TestBindingMutationTypedErrorProjection(t *testing.T) {
 		projection.Blockers[1].Count != nil {
 		t.Fatalf("projection=%+v", projection)
 	}
-	if strings.TrimSpace(projection.Blockers[0].Guidance) == "" ||
+	if projection.Blockers[0].Code != "future_blocker" ||
+		strings.TrimSpace(projection.Blockers[0].Message) == "" ||
+		strings.TrimSpace(projection.Blockers[0].Guidance) == "" ||
 		strings.TrimSpace(projection.Blockers[1].Guidance) == "" {
 		t.Fatalf("guidance=%+v", projection.Blockers)
+	}
+	if message, err := projectWorkspaceMutationErrorMessage(blocked, "ignored", false); err != nil || strings.TrimSpace(message) == "" {
+		t.Fatalf("plain unknown blocker message=%q err=%v", message, err)
 	}
 	guidance, err := blockerGuidanceFor("default_workspace", "project-1")
 	if err != nil ||
@@ -168,7 +178,7 @@ func TestBindingMutationJSONShapesAndOutputFailure(t *testing.T) {
 	project := validBindingMutationProject()
 	if code := writeBindingMutationEnvelope(&stdout, &stderr, bindingMutationEnvelope{
 		Status: "ok",
-		Result: &bindingMutationResult{Project: &project},
+		Result: &bindingMutationResult{Project: project},
 	}); code != 0 {
 		t.Fatalf("write project exit=%d stderr=%q", code, stderr.String())
 	}
@@ -180,8 +190,8 @@ func TestBindingMutationJSONShapesAndOutputFailure(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if raw, present := decoded.Result.Project["default_workflow_id"]; !present || string(raw) != "null" {
-		t.Fatalf("default_workflow_id=%s present=%t", raw, present)
+	if _, present := decoded.Result.Project["default_workflow_id"]; present {
+		t.Fatal("absent default_workflow_id was encoded")
 	}
 	if _, present := decoded.Result.Project["default_workflow_name"]; present {
 		t.Fatal("absent default_workflow_name was encoded")
@@ -201,11 +211,17 @@ func (failingCLIWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
 }
 
-func validBindingMutationProject() serverapi.ProjectHomeSummary {
-	return serverapi.ProjectHomeSummary{
-		ProjectID: "project-1", ProjectKey: "PROJECT", DisplayName: "Project",
-		PrimaryWorkspace: serverapi.ProjectWorkspaceSummary{
-			WorkspaceID: "workspace-1", DisplayName: "Workspace", RootPath: "/workspace", Availability: "available",
+func validBindingMutationProject() *projectpb.ProjectHomeSummary {
+	updatedAt := timestamppb.New(time.UnixMilli(1))
+	return &projectpb.ProjectHomeSummary{
+		ProjectId: "project-1", ProjectKey: "PROJECT", DisplayName: "Project",
+		PrimaryWorkspace: &projectpb.ProjectHomeWorkspaceSummary{
+			WorkspaceId:  "workspace-1",
+			DisplayName:  "Workspace",
+			RootPath:     "/workspace",
+			Availability: projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE,
+			UpdatedAt:    updatedAt,
 		},
+		UpdatedAt: updatedAt,
 	}
 }

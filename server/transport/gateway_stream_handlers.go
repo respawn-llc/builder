@@ -8,6 +8,7 @@ import (
 
 	rpccontract "core/shared/apicontract"
 	"core/shared/clientui"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
@@ -25,7 +26,7 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 	if !state.handshakeDone {
 		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 	}
-	if err := g.preflightStartup(req.Method); err != nil {
+	if err := g.requireCoreActive(); err != nil {
 		return sendResponse(ctx, conn, responseForError(req.ID, err))
 	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
@@ -80,29 +81,29 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 		return
 	}
-	route, ok := rpccontract.RouteByMethod(req.Method)
-	if !ok {
+	operation, route, ok := g.registration.LegacyOperation(req.Method)
+	if !ok || operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION {
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
 		return
 	}
-	if err := g.preflightStartup(req.Method); err != nil {
+	if err := g.requireCoreActive(); err != nil {
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 		return
 	}
-	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
+	if err := newRoutePolicyExecutor(g).requireAuthenticationStage(
+		ctx,
+		state,
+		operation.Options.AuthenticationStage,
+	); err != nil {
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 		return
 	}
-	handler, ok := gatewaySubscriptionHandlers[req.Method]
-	if !ok {
-		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
-		return
-	}
+	route.Scope = routeScopePolicy(operation.Options.ScopePolicy)
 	if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {
 		_ = sendResponse(ctx, conn, resp)
 		return
 	}
-	handler(g, conn, ctx, state, route, req)
+	gatewaySubscriptionHandlers[req.Method](g, conn, ctx, state, route, req)
 }
 
 func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {

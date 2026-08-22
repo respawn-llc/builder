@@ -1,8 +1,10 @@
 package rpcwire
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,24 +17,34 @@ func TestWebSocketTransportRoundTrip(t *testing.T) {
 	transport := NewWebSocketTransport()
 	serverErr := make(chan error, 1)
 	server := httptest.NewServer(transport.Handler(func(ctx context.Context, conn Conn) {
-		select {
-		case event, ok := <-conn.Events():
-			if !ok {
-				serverErr <- context.Canceled
+		for _, want := range []Frame{
+			{Kind: FrameText, Payload: []byte("hello")},
+			{Kind: FrameBinary, Payload: []byte{0, 1, 2, 255}},
+		} {
+			select {
+			case event, ok := <-conn.Events():
+				if !ok {
+					serverErr <- context.Canceled
+					return
+				}
+				if event.Err != nil {
+					serverErr <- event.Err
+					return
+				}
+				if event.Frame.Kind != want.Kind || !bytes.Equal(event.Frame.Payload, want.Payload) {
+					serverErr <- errors.New("received frame differs from sent frame")
+					return
+				}
+				if err := conn.Send(ctx, event.Frame); err != nil {
+					serverErr <- err
+					return
+				}
+			case <-ctx.Done():
+				serverErr <- ctx.Err()
 				return
 			}
-			if event.Err != nil {
-				serverErr <- event.Err
-				return
-			}
-			request := event.Frame.Request()
-			response := protocol.NewSuccessResponse(request.ID, struct {
-				Status string `json:"status"`
-			}{Status: "ok"})
-			serverErr <- conn.Send(ctx, FrameFromResponse(response))
-		case <-ctx.Done():
-			serverErr <- ctx.Err()
 		}
+		serverErr <- nil
 	}))
 	defer server.Close()
 
@@ -50,34 +62,27 @@ func TestWebSocketTransportRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	request := protocol.Request{JSONRPC: protocol.JSONRPCVersion, ID: "req-1", Method: "test.ping"}
-	if err := conn.Send(ctx, FrameFromRequest(request)); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
-
-	select {
-	case event, ok := <-conn.Events():
-		if !ok {
-			t.Fatal("Events closed before response")
+	for _, want := range []Frame{
+		{Kind: FrameText, Payload: []byte("hello")},
+		{Kind: FrameBinary, Payload: []byte{0, 1, 2, 255}},
+	} {
+		if err := conn.Send(ctx, want); err != nil {
+			t.Fatalf("Send: %v", err)
 		}
-		if event.Err != nil {
-			t.Fatalf("Events error: %v", event.Err)
+		select {
+		case event, ok := <-conn.Events():
+			if !ok {
+				t.Fatal("Events closed before response")
+			}
+			if event.Err != nil {
+				t.Fatalf("Events error: %v", event.Err)
+			}
+			if event.Frame.Kind != want.Kind || !bytes.Equal(event.Frame.Payload, want.Payload) {
+				t.Fatalf("Received frame = %#v, want %#v", event.Frame, want)
+			}
+		case <-ctx.Done():
+			t.Fatalf("Timed out waiting for response: %v", ctx.Err())
 		}
-		response := event.Frame.Response()
-		if response.ID != request.ID {
-			t.Fatalf("Response ID = %q, want %q", response.ID, request.ID)
-		}
-		var payload struct {
-			Status string `json:"status"`
-		}
-		if err := json.Unmarshal(response.Result, &payload); err != nil {
-			t.Fatalf("Unmarshal response: %v", err)
-		}
-		if payload.Status != "ok" {
-			t.Fatalf("Response payload = %#v, want status ok", payload)
-		}
-	case <-ctx.Done():
-		t.Fatalf("Timed out waiting for response: %v", ctx.Err())
 	}
 
 	if err := <-serverErr; err != nil {

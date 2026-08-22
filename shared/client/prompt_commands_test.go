@@ -11,6 +11,7 @@ import (
 	"core/server/onboarding"
 	"core/server/promptcommands"
 	"core/shared/clientui"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -23,24 +24,9 @@ import (
 
 func TestRemotePromptCommandCatalogUsesAttachedWorkspaceAndValidatesResponse(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			t.Fatalf("receive attach request: %v", err)
-		}
-		if req.Method != protocol.MethodAttachProject {
-			t.Fatalf("first post-handshake method = %q, want attach-project", req.Method)
-		}
-		var attach protocol.AttachProjectRequest
-		if err := json.Unmarshal(req.Params, &attach); err != nil {
-			t.Fatalf("decode attach request: %v", err)
-		}
-		response, err := protocol.ProjectAttachResponseForRequest(attach, "workspace-b", "/workspace-b")
-		if err != nil {
-			t.Fatalf("attach response: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
-			t.Fatalf("send attach response: %v", err)
-		}
+		acceptRemoteHandshake(t, ws)
+		acceptRemoteProjectAttachment(t, ws, "workspace-b", "/workspace-b")
+		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive catalog request: %v", err)
 		}
@@ -138,48 +124,30 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 	if err != nil {
 		t.Fatalf("NewFinalizer: %v", err)
 	}
-	if _, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		CommandsImport: &serverapi.OnboardingImportSelection{
-			Mode:         serverapi.OnboardingImportModeSymlinkSource,
-			ProviderUUID: &providerUUID,
+	providerUUIDText := providerUUID.String()
+	if _, err := finalizer.Finalize(context.Background(), &onboardingpb.FinalizeRequest{
+		CommandsImport: &onboardingpb.ImportSelection{
+			Mode:         onboardingpb.ImportMode_IMPORT_MODE_SYMLINK_SOURCE,
+			ProviderUuid: &providerUUIDText,
 		},
 	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+		t.Fatalf("Finalize: %v", err)
 	}
 	service := promptcommands.New(serverRoot, serverWorkspace)
 	resolvedContent := make(chan string, 1)
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
+		acceptRemoteHandshake(t, ws)
+		attach := acceptRemoteProjectAttachment(t, ws, "workspace-server", serverWorkspace)
+		if attach.GetWorkspaceRoot() != clientRoot {
+			t.Errorf("client workspace root = %q, want %q", attach.GetWorkspaceRoot(), clientRoot)
+			return
+		}
+		var req protocol.Request
 		for {
 			if err := websocket.JSON.Receive(ws, &req); err != nil {
 				return
 			}
 			switch req.Method {
-			case protocol.MethodAttachProject:
-				var attach protocol.AttachProjectRequest
-				if err := json.Unmarshal(req.Params, &attach); err != nil {
-					t.Errorf("decode attach request: %v", err)
-					return
-				}
-				selector, present := attach.Workspace()
-				if !present {
-					t.Error("attach request omitted workspace selector")
-					return
-				}
-				attachedRoot, present := selector.WorkspaceRoot()
-				if !present || attachedRoot != clientRoot {
-					t.Errorf("client workspace root = %q, want %q", attachedRoot, clientRoot)
-					return
-				}
-				attachResponse, err := protocol.ProjectAttachResponseForRequest(attach, "workspace-server", serverWorkspace)
-				if err != nil {
-					t.Errorf("attach response: %v", err)
-					return
-				}
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, attachResponse)); err != nil {
-					t.Errorf("send attach response: %v", err)
-					return
-				}
 			case protocol.MethodPromptCommandCatalogGet:
 				entries, err := service.Catalog()
 				if err != nil {

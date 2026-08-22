@@ -2,7 +2,7 @@ package app
 
 import (
 	"core/shared/config"
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	"runtime"
 	"strings"
 	"testing"
@@ -326,26 +326,29 @@ func findWorkflowStep(t *testing.T, state *onboardingFlowState, id onboardingSte
 	return onboardingStepDefinition{}
 }
 
-func testOnboardingCapabilityFacts() serverapi.CapabilityFactsResponse {
-	contextWindow := 272_000
-	largeWindow := 400_000
-	models := []serverapi.ModelCapabilityFact{
-		{ModelID: ptrString("gpt-5.6-sol"), Known: true, ContextWindowTokens: &contextWindow, LargeWindow: &serverapi.ModelLargeWindowFact{Tokens: largeWindow}, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
-		{ModelID: ptrString("gpt-5.3-codex"), Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
-		{ModelID: ptrString("gpt-4.1"), Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
+func testOnboardingCapabilityFacts() *capabilitypb.Facts {
+	contextWindow := uint32(272_000)
+	models := []*capabilitypb.ModelFact{
+		{ModelId: ptrString("gpt-5.6-sol"), Known: true, ContextWindowTokens: &contextWindow, LargeWindow: &capabilitypb.ModelLargeWindowFact{Tokens: 400_000}, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: &capabilitypb.ModelVerbosityFact{Supported: true, Source: "catalog", Levels: []string{"low", "medium", "high"}}},
+		{ModelId: ptrString("gpt-5.3-codex"), Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: &capabilitypb.ModelVerbosityFact{Supported: true, Source: "catalog", Levels: []string{"low", "medium", "high"}}},
+		{ModelId: ptrString("gpt-4.1"), Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: &capabilitypb.ModelVerbosityFact{Supported: true, Source: "catalog", Levels: []string{"low", "medium", "high"}}},
 	}
-	return serverapi.CapabilityFactsResponse{
-		Models: serverapi.ModelCapabilityFacts{
-			KnownModels: models,
-			UnknownFallback: serverapi.ModelCapabilityFact{
-				Known:                   false,
-				SupportsThinking:        true,
-				SupportedThinkingLevels: []string{"low", "medium", "high"},
-				Verbosity:               serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}},
-			},
+	facts := emptyOnboardingCapabilityFacts()
+	facts.Models = &capabilitypb.ModelFacts{
+		KnownModels: models,
+		UnknownFallback: &capabilitypb.ModelFact{
+			Known:                   false,
+			SupportsThinking:        true,
+			SupportedThinkingLevels: []string{"low", "medium", "high"},
+			Verbosity:               &capabilitypb.ModelVerbosityFact{Supported: true, Source: "catalog", Levels: []string{"low", "medium", "high"}},
 		},
-		Providers: serverapi.ProviderCapabilityFacts{CurrentEffective: &serverapi.LLMProviderCapabilityFact{SupportsNativeCompaction: true}},
 	}
+	facts.Providers.CurrentEffective = &capabilitypb.ProviderFact{
+		LlmProviderId:            "openai",
+		Role:                     "main",
+		SupportsNativeCompaction: true,
+	}
+	return facts
 }
 
 func ptrString(value string) *string {

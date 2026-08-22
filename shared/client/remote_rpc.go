@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"core/shared/config"
+	"core/shared/jsoncontract"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+	"core/shared/serverjsoncontract"
 )
 
 var errRemoteClosed = errors.New("remote client is closed")
@@ -81,12 +83,18 @@ type remoteDialPlan struct {
 type remoteControlConn struct {
 	conn      rpcwire.Conn
 	pendingMu sync.Mutex
-	pending   map[string]chan rpcwire.Frame
+	pending   map[string]chan remoteControlResponse
 	requestID atomic.Uint64
 	failOnce  sync.Once
 	done      chan struct{}
 	errMu     sync.Mutex
 	err       error
+}
+
+type remoteControlResponse struct {
+	legacy *protocol.Response
+	binary *remoteBinaryResponse
+	err    error
 }
 
 func configuredRemoteDialPlan(cfg config.App) (remoteDialPlan, error) {
@@ -135,29 +143,33 @@ func hasExplicitTCPServerTarget(cfg config.App) bool {
 }
 
 func dialRemoteWithTransport(ctx context.Context, plan remoteDialPlan, transport rpcwire.ClientTransport, attachIntent *remoteAttachmentIntent) (*Remote, error) {
+	preparer := jsoncontract.NewPreparer(false)
+	sessionExecutionResponseContract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentResponse(preparer)
+	if err != nil {
+		return nil, err
+	}
 	conn, err := plan.dial(ctx, transport)
 	if err != nil {
 		return nil, err
 	}
 	cleanup := func() { _ = conn.Close() }
-	identity, err := handshakeRPC(ctx, conn)
-	if err != nil {
-		cleanup()
-		return nil, err
+	setup := remoteConnectionSetup{
+		attachmentIntent: attachIntent,
 	}
-	attachment, err := attachRemoteRPC(ctx, conn, attachIntent)
+	state, err := setup.run(ctx, conn)
 	if err != nil {
 		cleanup()
 		return nil, err
 	}
 	control := newRemoteControlConn(conn)
 	return &Remote{
-		plan:         plan,
-		transport:    transport,
-		control:      control,
-		identity:     identity,
-		attachIntent: attachIntent,
-		attachment:   attachment,
+		plan:                             plan,
+		transport:                        transport,
+		control:                          control,
+		identity:                         state.identity,
+		attachIntent:                     attachIntent,
+		attachment:                       state.attachment,
+		sessionExecutionResponseContract: sessionExecutionResponseContract,
 	}, nil
 }
 
@@ -209,37 +221,44 @@ func endpointDialContext(ctx context.Context, endpoint rpcwire.Endpoint, hasFall
 }
 
 func (c *Remote) openRPCConn(ctx context.Context) (rpcwire.Conn, func(), error) {
+	return c.openRPCConnWithAdditionalAttachment(ctx, nil)
+}
+
+func (c *Remote) openRPCConnWithAdditionalAttachment(
+	ctx context.Context,
+	additionalAttachmentIntent *remoteAttachmentIntent,
+) (rpcwire.Conn, func(), error) {
+	conn, cleanup, _, err := c.openSetupRPCConn(ctx, additionalAttachmentIntent)
+	return conn, cleanup, err
+}
+
+func (c *Remote) openSetupRPCConn(
+	ctx context.Context,
+	additionalAttachmentIntent *remoteAttachmentIntent,
+) (rpcwire.Conn, func(), remoteConnectionState, error) {
 	if err := c.ensureOpen(); err != nil {
-		return nil, nil, err
+		return nil, nil, remoteConnectionState{}, err
 	}
 	conn, err := c.plan.dial(ctx, c.transport)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, remoteConnectionState{}, err
 	}
 	cleanup := func() { _ = conn.Close() }
-	identity, err := handshakeRPC(ctx, conn)
+	setup := remoteConnectionSetup{
+		attachmentIntent:           c.attachIntent,
+		additionalAttachmentIntent: additionalAttachmentIntent,
+		expectation: &remoteConnectionExpectation{
+			rootID:     c.rootID(),
+			attachment: c.attachment,
+		},
+		acknowledgeNoAuth: c.acknowledgeNoAuthOnConn,
+	}
+	state, err := setup.run(ctx, conn)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, remoteConnectionState{}, err
 	}
-	if err := validateIdentityRoot(c.rootID(), identity); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	if err := c.acknowledgeNoAuthOnConn(ctx, conn); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	attachment, err := attachRemoteRPC(ctx, conn, c.attachIntent)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	if err := validateReattachedBinding(c.attachment, attachment); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	return conn, cleanup, nil
+	return conn, cleanup, state, nil
 }
 
 func (c *Remote) callDedicated(ctx context.Context, requestID string, method string, params any, out any) error {
@@ -254,7 +273,7 @@ func (c *Remote) callDedicated(ctx context.Context, requestID string, method str
 func newRemoteControlConn(conn rpcwire.Conn) *remoteControlConn {
 	control := &remoteControlConn{
 		conn:    conn,
-		pending: map[string]chan rpcwire.Frame{},
+		pending: map[string]chan remoteControlResponse{},
 		done:    make(chan struct{}),
 	}
 	go control.readLoop()
@@ -273,7 +292,7 @@ func (c *remoteControlConn) call(ctx context.Context, method string, params any,
 		return err
 	}
 	id := fmt.Sprintf("rpc-%d", c.requestID.Add(1))
-	responseCh := make(chan rpcwire.Frame, 1)
+	responseCh := make(chan remoteControlResponse, 1)
 	if err := c.registerPending(id, responseCh); err != nil {
 		return err
 	}
@@ -283,8 +302,14 @@ func (c *remoteControlConn) call(ctx context.Context, method string, params any,
 		return err
 	}
 	select {
-	case frame := <-responseCh:
-		return decodeResponseFrame(frame.Response(), out)
+	case response := <-responseCh:
+		if response.err != nil {
+			return response.err
+		}
+		if response.legacy == nil {
+			return fmt.Errorf("legacy operation %s received a binary response", method)
+		}
+		return decodeResponseFrame(*response.legacy, out)
 	case <-ctx.Done():
 		c.removePending(id)
 		return ctx.Err()
@@ -317,22 +342,47 @@ func (c *remoteControlConn) readLoop() {
 			c.fail(event.Err)
 			return
 		}
-		if strings.TrimSpace(event.Frame.ID) == "" {
+		var (
+			correlation string
+			response    remoteControlResponse
+		)
+		switch event.Frame.Kind {
+		case rpcwire.FrameText:
+			legacy, err := event.Frame.DecodeResponse()
+			if err != nil {
+				c.fail(err)
+				return
+			}
+			correlation = legacy.ID
+			response.legacy = &legacy
+		case rpcwire.FrameBinary:
+			binary, id, err := decodeBinaryEnvelope(event.Frame.Payload)
+			correlation = id
+			if err != nil {
+				response.err = err
+			} else {
+				response.binary = binary
+			}
+		default:
+			c.fail(fmt.Errorf("unsupported rpc frame kind %d", event.Frame.Kind))
+			return
+		}
+		if strings.TrimSpace(correlation) == "" {
 			continue
 		}
 		c.pendingMu.Lock()
-		responseCh := c.pending[event.Frame.ID]
-		delete(c.pending, event.Frame.ID)
+		responseCh := c.pending[correlation]
+		delete(c.pending, correlation)
 		c.pendingMu.Unlock()
 		if responseCh == nil {
 			continue
 		}
-		responseCh <- event.Frame
+		responseCh <- response
 	}
 	c.fail(io.EOF)
 }
 
-func (c *remoteControlConn) registerPending(id string, responseCh chan rpcwire.Frame) error {
+func (c *remoteControlConn) registerPending(id string, responseCh chan remoteControlResponse) error {
 	select {
 	case <-c.done:
 		return c.currentErr()
@@ -365,7 +415,7 @@ func (c *remoteControlConn) fail(err error) {
 		c.errMu.Unlock()
 		close(c.done)
 		c.pendingMu.Lock()
-		c.pending = map[string]chan rpcwire.Frame{}
+		c.pending = map[string]chan remoteControlResponse{}
 		c.pendingMu.Unlock()
 	})
 }
@@ -399,63 +449,6 @@ func validateIdentityRoot(expectedRootID string, identity protocol.ServerIdentit
 	return nil
 }
 
-func handshakeRPC(ctx context.Context, conn rpcwire.Conn) (protocol.ServerIdentity, error) {
-	var resp protocol.HandshakeResponse
-	if err := callRPC(ctx, conn, "handshake", protocol.MethodHandshake, protocol.HandshakeRequest{
-		ProtocolVersion: protocol.Version,
-	}, &resp); err != nil {
-		return protocol.ServerIdentity{}, err
-	}
-	return resp.Identity, nil
-}
-
-func attachProjectRPC(ctx context.Context, conn rpcwire.Conn, intent *remoteAttachmentIntent) (*protocol.AttachResponse, error) {
-	request, present := intent.projectRequest()
-	if !present {
-		return nil, errors.New("project attachment intent is required")
-	}
-	var resp protocol.AttachResponse
-	if err := callRPC(ctx, conn, "attach-project", protocol.MethodAttachProject, request, &resp); err != nil {
-		return nil, err
-	}
-	if err := intent.validateResponse(resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func attachSessionRPC(ctx context.Context, conn rpcwire.Conn, intent *remoteAttachmentIntent) (*protocol.AttachResponse, error) {
-	request, present := intent.sessionRequest()
-	if !present {
-		return nil, errors.New("session attachment intent is required")
-	}
-	var resp protocol.AttachResponse
-	if err := callRPC(
-		ctx,
-		conn,
-		"attach-session",
-		protocol.MethodAttachSession,
-		request,
-		&resp,
-	); err != nil {
-		return nil, err
-	}
-	if err := intent.validateResponse(resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func attachRemoteRPC(ctx context.Context, conn rpcwire.Conn, intent *remoteAttachmentIntent) (*protocol.AttachResponse, error) {
-	if intent == nil {
-		return nil, nil
-	}
-	if _, present := intent.sessionRequest(); present {
-		return attachSessionRPC(ctx, conn, intent)
-	}
-	return attachProjectRPC(ctx, conn, intent)
-}
-
 func callRPC(ctx context.Context, conn rpcwire.Conn, requestID string, method string, params any, out any) error {
 	data, err := json.Marshal(params)
 	if err != nil {
@@ -478,10 +471,14 @@ func receiveRPCResponse(ctx context.Context, conn rpcwire.Conn, requestID string
 		if err != nil {
 			return protocol.Response{}, err
 		}
-		if frame.ID != requestID {
+		response, err := frame.DecodeResponse()
+		if err != nil {
+			return protocol.Response{}, err
+		}
+		if response.ID != requestID {
 			continue
 		}
-		return frame.Response(), nil
+		return response, nil
 	}
 }
 
@@ -520,17 +517,6 @@ func protocolError(resp *protocol.ResponseError) error {
 	message := strings.TrimSpace(resp.Message)
 	if resp.Code == protocol.ErrCodeRuntimeCommandNotAccepted {
 		return decodeRuntimeCommandNotAcceptedError(resp.Data)
-	}
-	switch resp.Code {
-	case protocol.ErrCodeWorkspacePathIdentity:
-		return serverapi.DecodeWorkspacePathIdentityError(resp.Data, message)
-	case protocol.ErrCodeWorkspaceDetachConflict:
-		return serverapi.DecodeWorkspaceDetachConflictError(resp.Data, message)
-	case protocol.ErrCodeWorkspaceMutationFailed:
-		return serverapi.DecodeWorkspaceMutationError(resp.Data, message)
-	}
-	if resp.Code == protocol.ErrCodeOnboardingFinalizeFailed && len(resp.Data) > 0 {
-		return serverapi.DecodeOnboardingFinalizeError(resp.Data, message)
 	}
 	if resp.Code == protocol.ErrCodeServerNotReady && len(resp.Data) > 0 {
 		return serverapi.DecodeServerNotReadyError(resp.Data, message)
@@ -614,8 +600,6 @@ func protocolError(resp *protocol.ResponseError) error {
 		return errors.Join(serverapi.ErrServerAuthRequired, errors.New(message))
 	case protocol.ErrCodeModelStreamStalled:
 		return errors.Join(llmerrors.ErrModelStreamStalled, errors.New(message))
-	case protocol.ErrCodeUnsupportedProvider:
-		return errors.Join(serverapi.ErrUnsupportedProvider, errors.New(message))
 	case protocol.ErrCodeStreamGap:
 		return errors.Join(serverapi.ErrStreamGap, errors.New(message))
 	case protocol.ErrCodeWorkspaceNotRegistered:

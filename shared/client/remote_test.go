@@ -10,23 +10,19 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"core/internal/testharness/testsetup"
 	"core/shared/clientui"
 	"core/shared/llmerrors"
+	"core/shared/protoapi"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
-	"core/shared/sessioncontract"
 	"core/shared/transcript"
 	"golang.org/x/net/websocket"
 )
-
-type capturedRunPromptService struct {
-	request serverapi.RunPromptRequest
-}
 
 func TestNormalizeWorkflowTaskObservationRPCErrorClassifiesConnectionEOF(t *testing.T) {
 	err := normalizeWorkflowTaskObservationRPCError(io.EOF)
@@ -36,11 +32,6 @@ func TestNormalizeWorkflowTaskObservationRPCErrorClassifiesConnectionEOF(t *test
 	if errors.Is(err, io.EOF) {
 		t.Fatalf("normalized error = %v, must not remain raw EOF", err)
 	}
-}
-
-func (s *capturedRunPromptService) RunPrompt(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-	s.request = req
-	return serverapi.RunPromptResponse{SessionID: "session-1", Result: "done"}, nil
 }
 
 func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
@@ -226,331 +217,10 @@ func TestRemotePreviewWorktreeDeleteRejectsMismatchedResponseSelector(t *testing
 	}
 }
 
-func TestRemoteProjectWorkspaceMutationDecodesTypedErrors(t *testing.T) {
-	tests := []struct {
-		name   string
-		source error
-		wantAs func(error) bool
-	}{
-		{
-			name:   "path identity",
-			source: serverapi.WorkspacePathIdentityError{WorkspaceRoot: "/missing", Cause: errors.New("inaccessible")},
-			wantAs: func(err error) bool { var typed serverapi.WorkspacePathIdentityError; return errors.As(err, &typed) },
-		},
-		{
-			name:   "detach conflict",
-			source: &serverapi.WorkspaceDetachConflictError{ProjectID: "project-1", WorkspaceID: "workspace-1"},
-			wantAs: func(err error) bool { var typed *serverapi.WorkspaceDetachConflictError; return errors.As(err, &typed) },
-		},
-		{
-			name:   "post-resolution mutation",
-			source: &serverapi.WorkspaceMutationError{ProjectID: "project-1", WorkspaceID: "workspace-1", Cause: errors.New("write failed")},
-			wantAs: func(err error) bool { var typed *serverapi.WorkspaceMutationError; return errors.As(err, &typed) },
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				acceptRemoteHandshake(t, ws)
-				var request protocol.Request
-				if err := websocket.JSON.Receive(ws, &request); err != nil {
-					t.Errorf("receive request: %v", err)
-					return
-				}
-				structured := test.source.(interface {
-					RPCErrorCode() int
-					RPCErrorData() json.RawMessage
-				})
-				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(request.ID, structured.RPCErrorCode(), test.source.Error(), structured.RPCErrorData())); err != nil {
-					t.Errorf("send typed error: %v", err)
-				}
-			})
-			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-			if err != nil {
-				t.Fatalf("DialRemoteURL: %v", err)
-			}
-			defer func() { _ = remote.Close() }()
-			selector, err := serverapi.NewProjectWorkspaceSelectorForID("workspace-1")
-			if test.name == "path identity" {
-				selector, err = serverapi.NewProjectWorkspaceSelectorForRoot("/missing")
-			}
-			if err != nil {
-				t.Fatalf("workspace selector: %v", err)
-			}
-			_, err = remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-				ProjectID:                "project-1",
-				ProjectWorkspaceSelector: selector,
-			})
-			if !test.wantAs(err) {
-				t.Fatalf("remote error = %T %v, want typed error", err, err)
-			}
-		})
-	}
-}
-
-func remoteProjectHomeSummaryJSON(projectKey string) map[string]any {
-	return map[string]any{
-		"project_id":   "project-1",
-		"project_key":  projectKey,
-		"display_name": "Project",
-		"primary_workspace": map[string]any{
-			"workspace_id": "workspace-1",
-			"display_name": "Workspace",
-			"root_path":    "/workspace",
-			"availability": "available",
-		},
-	}
-}
-
-func TestRemoteProjectWorkspaceMutationsValidateSuccessResponses(t *testing.T) {
-	tests := []struct {
-		name    string
-		method  string
-		result  any
-		wantErr bool
-		call    func(*Remote, serverapi.ProjectWorkspaceSelector) error
-	}{
-		{
-			name:    "default workspace summary",
-			method:  protocol.MethodProjectSetDefaultWorkspace,
-			result:  map[string]any{"project": map[string]any{}},
-			wantErr: true,
-			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
-				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
-					ProjectID:                "project-1",
-					ProjectWorkspaceSelector: selector,
-				})
-				return err
-			},
-		},
-		{
-			name:    "default blank workflow ID",
-			method:  protocol.MethodProjectSetDefaultWorkspace,
-			result:  remoteDefaultBlankWorkflowIDResponse(),
-			wantErr: true,
-			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
-				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
-					ProjectID:                "project-1",
-					ProjectWorkspaceSelector: selector,
-				})
-				return err
-			},
-		},
-		{
-			name:   "unlink blocker",
-			method: protocol.MethodProjectUnlinkWorkspace,
-			result: map[string]any{
-				"project_id":   "project-1",
-				"workspace_id": "workspace-1",
-				"unlinked":     false,
-				"blockers":     []any{map[string]any{"message": "malformed"}},
-			},
-			wantErr: true,
-			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
-				_, err := remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-					ProjectID:                "project-1",
-					ProjectWorkspaceSelector: selector,
-				})
-				return err
-			},
-		},
-		{
-			name:   "default legacy empty project key",
-			method: protocol.MethodProjectSetDefaultWorkspace,
-			result: map[string]any{"project": remoteProjectHomeSummaryJSON("")},
-			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
-				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
-					ProjectID:                "project-1",
-					ProjectWorkspaceSelector: selector,
-				})
-				return err
-			},
-		},
-		{
-			name:   "unlink legacy empty project key",
-			method: protocol.MethodProjectUnlinkWorkspace,
-			result: map[string]any{
-				"project_id":   "project-1",
-				"workspace_id": "workspace-1",
-				"unlinked":     true,
-				"project":      remoteProjectHomeSummaryJSON(""),
-			},
-			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
-				_, err := remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-					ProjectID:                "project-1",
-					ProjectWorkspaceSelector: selector,
-				})
-				return err
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				acceptRemoteHandshake(t, ws)
-				var request protocol.Request
-				if err := websocket.JSON.Receive(ws, &request); err != nil {
-					t.Errorf("receive mutation request: %v", err)
-					return
-				}
-				if request.Method != test.method {
-					t.Errorf("method = %q, want %q", request.Method, test.method)
-					return
-				}
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, test.result)); err != nil {
-					t.Errorf("send malformed mutation response: %v", err)
-				}
-			})
-			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-			if err != nil {
-				t.Fatalf("DialRemoteURL: %v", err)
-			}
-			defer func() { _ = remote.Close() }()
-			selector, err := serverapi.NewProjectWorkspaceSelectorForID("workspace-1")
-			if err != nil {
-				t.Fatalf("workspace selector: %v", err)
-			}
-			err = test.call(remote, selector)
-			if test.wantErr && err == nil {
-				t.Fatal("malformed mutation response was accepted")
-			}
-			if !test.wantErr && err != nil {
-				t.Fatalf("valid mutation response rejected: %v", err)
-			}
-		})
-	}
-}
-
-func remoteDefaultBlankWorkflowIDResponse() map[string]any {
-	summary := remoteProjectHomeSummaryJSON("project")
-	summary["default_workflow_id"] = ""
-	summary["default_workflow_name"] = "Workflow"
-	summary["default_workflow_valid"] = true
-	return map[string]any{"project": summary}
-}
-
 func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
 	if _, err := newRemoteSessionAttachmentIntent(" \t "); !errors.Is(err, errRemoteSessionIDRequired) {
 		t.Fatalf("intent error = %v, want required session ID error", err)
 	}
-}
-
-func TestRemoteGetAuthStatusRoundTripsTypedFactsAndRejectsMalformedResponse(t *testing.T) {
-	tests := []struct {
-		name     string
-		response serverapi.AuthStatusResponse
-		wantErr  bool
-	}{}
-	for _, fixture := range testsetup.AuthStatusTransportCases() {
-		tests = append(tests, struct {
-			name     string
-			response serverapi.AuthStatusResponse
-			wantErr  bool
-		}{name: fixture.Name, response: fixture.Response})
-	}
-	tests = append(tests, struct {
-		name     string
-		response serverapi.AuthStatusResponse
-		wantErr  bool
-	}{
-		name: "malformed response",
-		response: serverapi.AuthStatusResponse{
-			Resolution: serverapi.AuthStatusResolution{Kind: serverapi.AuthStatusResolutionKnown},
-		},
-		wantErr: true,
-	})
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if !test.wantErr {
-				if err := test.response.Validate(); err != nil {
-					t.Fatalf("test auth status: %v", err)
-				}
-			}
-			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				acceptRemoteHandshake(t, ws)
-				var request protocol.Request
-				if err := websocket.JSON.Receive(ws, &request); err != nil {
-					t.Errorf("receive auth status request: %v", err)
-					return
-				}
-				if request.Method != protocol.MethodAuthGetStatus {
-					t.Errorf("method = %q, want %q", request.Method, protocol.MethodAuthGetStatus)
-					return
-				}
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, test.response)); err != nil {
-					t.Errorf("send auth status response: %v", err)
-				}
-			})
-			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-			if err != nil {
-				t.Fatalf("DialRemoteURL: %v", err)
-			}
-			defer func() { _ = remote.Close() }()
-			got, err := remote.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("malformed auth status was accepted")
-				}
-				return
-			}
-			if err != nil || !reflect.DeepEqual(got, test.response) {
-				t.Fatalf("GetAuthStatus = %+v, %v; want %+v", got, err, test.response)
-			}
-		})
-	}
-}
-
-func TestRemoteGetUpdateStatusRejectsMalformedResponse(t *testing.T) {
-	handlerErrs := make(chan error, 4)
-	malformedSent := make(chan struct{}, 1)
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		var handshake protocol.Request
-		if err := websocket.JSON.Receive(ws, &handshake); err != nil {
-			return
-		}
-		if handshake.Method != protocol.MethodHandshake {
-			reportHandlerError(handlerErrs, "handshake method = %q", handshake.Method)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(handshake.ID, protocol.HandshakeResponse{
-			Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
-		})); err != nil {
-			reportHandlerError(handlerErrs, "send handshake response: %v", err)
-			return
-		}
-		var request protocol.Request
-		if err := websocket.JSON.Receive(ws, &request); err != nil {
-			return
-		}
-		if request.Method != protocol.MethodServerUpdateStatusGet {
-			reportHandlerError(handlerErrs, "method = %q, want update status", request.Method)
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, map[string]any{
-			"result": map[string]any{"kind": "available"},
-		})); err != nil {
-			reportHandlerError(handlerErrs, "send malformed update response: %v", err)
-			return
-		}
-		malformedSent <- struct{}{}
-	})
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	if _, err := remote.GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{}); err == nil {
-		t.Fatal("malformed update response was accepted")
-	}
-	select {
-	case <-malformedSent:
-	case err := <-handlerErrs:
-		t.Fatal(err)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for malformed update response")
-	}
-	requireNoHandlerError(t, handlerErrs)
 }
 
 func TestRemoteLiveWatchRejectsMalformedResponse(t *testing.T) {
@@ -743,24 +413,62 @@ func newRemoteTestServer(t *testing.T, handle func(*websocket.Conn)) *httptest.S
 
 func acceptRemoteHandshake(t *testing.T, ws *websocket.Conn) protocol.Request {
 	t.Helper()
-	var req protocol.Request
-	if err := websocket.JSON.Receive(ws, &req); err != nil {
+	var encoded []byte
+	if err := websocket.Message.Receive(ws, &encoded); err != nil {
 		t.Fatalf("receive handshake: %v", err)
 	}
-	if req.Method != protocol.MethodHandshake {
-		t.Fatalf("handshake method = %q", req.Method)
+	envelope, err := protoapi.DecodeEnvelope(encoded)
+	if err != nil {
+		t.Fatalf("decode handshake envelope: %v", err)
 	}
-	var params protocol.HandshakeRequest
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		t.Fatalf("decode handshake params: %v", err)
+	call := envelope.GetCall()
+	if call == nil {
+		t.Fatal("handshake call is required")
 	}
-	if params.ProtocolVersion != protocol.Version {
-		t.Fatalf("handshake protocol version = %q, want %q", params.ProtocolVersion, protocol.Version)
+	method := connectionpb.File_kent_api_connection_connection_proto.Services().
+		ByName("ConnectionService").
+		Methods().
+		ByName("Handshake")
+	operation, err := protoapi.OperationFromDescriptor(method)
+	if err != nil {
+		t.Fatalf("Handshake operation: %v", err)
 	}
-	if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
+	if call.Operation != operation.Name {
+		t.Fatalf("handshake operation = %q, want %q", call.Operation, operation.Name)
+	}
+	var request connectionpb.HandshakeRequest
+	if err := protoapi.Decode(call.Payload, &request); err != nil {
+		t.Fatalf("decode handshake request: %v", err)
+	}
+	result := &connectionpb.HandshakeResult{
+		Outcome: &connectionpb.HandshakeResult_Success{
+			Success: &connectionpb.HandshakeSuccess{
+				Identity: &connectionpb.ServerIdentity{
+					ProtocolVersion: protocol.Version,
+					ServerId:        "server-1",
+					Pid:             1,
+				},
+			},
+		},
+	}
+	payload, err := protoapi.Encode(result)
+	if err != nil {
+		t.Fatalf("encode handshake result: %v", err)
+	}
+	response, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
+		Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+			Operation:   operation.Name,
+			Correlation: call.Correlation,
+			Payload:     payload,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode handshake result envelope: %v", err)
+	}
+	if err := websocket.Message.Send(ws, response); err != nil {
 		t.Fatalf("send handshake response: %v", err)
 	}
-	return req
+	return protocol.Request{}
 }
 
 func TestRemotePersistInputDraftSendsComposerInput(t *testing.T) {
@@ -801,270 +509,6 @@ func TestRemotePersistInputDraftSendsComposerInput(t *testing.T) {
 	}
 }
 
-func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			if errors.Is(err, io.EOF) {
-				return
-			}
-			t.Fatalf("receive run prompt: %v", err)
-		}
-		if req.Method != protocol.MethodRunPrompt {
-			t.Fatalf("run prompt method = %q", req.Method)
-		}
-		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodRunPromptProgress, Params: mustJSON(t, serverapi.RunPromptProgress{
-			Kind: serverapi.RunPromptProgressKindAssistantMessage,
-			AssistantMessage: &serverapi.RunPromptVisibleResponse{
-				Phase:   clientui.MessagePhaseCommentary,
-				Content: "Checking the repository.",
-			},
-		})}); err != nil {
-			t.Fatalf("send progress: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodRunPromptProgress, Params: mustJSON(t, serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindCompactionStarted})}); err != nil {
-			t.Fatalf("send progress: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RunPromptResponse{SessionID: "session-1", SessionName: "Session 1", Result: "done"})); err != nil {
-			t.Fatalf("send response: %v", err)
-		}
-	})
-
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemote: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	var updates []serverapi.RunPromptProgress
-	resp, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
-		updates = append(updates, progress)
-	}))
-	if err != nil {
-		t.Fatalf("RunPrompt: %v", err)
-	}
-	if resp.SessionID != "session-1" || resp.Result != "done" {
-		t.Fatalf("unexpected run prompt response: %+v", resp)
-	}
-	if len(updates) != 2 ||
-		updates[0].AssistantMessage == nil ||
-		updates[0].AssistantMessage.Content != "Checking the repository." ||
-		updates[1].Kind != serverapi.RunPromptProgressKindCompactionStarted {
-		t.Fatalf("unexpected progress updates: %+v", updates)
-	}
-}
-
-func TestRemoteRunPromptCarriesTypedParentAgentOriginAndExplicitDefault(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		acceptRemoteHandshake(t, ws)
-		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			if errors.Is(err, io.EOF) {
-				return
-			}
-			t.Fatalf("receive run prompt: %v", err)
-		}
-		if req.Method != protocol.MethodRunPrompt {
-			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodRunPrompt)
-		}
-		var decoded serverapi.RunPromptRequest
-		if err := json.Unmarshal(req.Params, &decoded); err != nil {
-			t.Fatalf("decode run prompt params: %v", err)
-		}
-		origin, present := decoded.Intent.CreateOrigin()
-		sourceID, hasSource := origin.SessionID()
-		if decoded.CallerSessionID == nil || *decoded.CallerSessionID != "caller-session" ||
-			!present || origin.Kind() != serverapi.SessionCreateOriginParentAgent ||
-			!hasSource || sourceID.String() != "parent-session" ||
-			decoded.Overrides.AgentRole == nil || *decoded.Overrides.AgentRole != "default" {
-			t.Fatalf("decoded request = %+v, want caller/parent-agent origin/default selector", decoded)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RunPromptResponse{SessionID: "session-1", Result: "done"})); err != nil {
-			t.Fatalf("send response: %v", err)
-		}
-	})
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	caller := "caller-session"
-	parent := "parent-session"
-	role := "default"
-	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))),
-		CallerSessionID: &caller,
-		Prompt:          "hello",
-		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
-	}, nil); err != nil {
-		t.Fatalf("RunPrompt present provenance: %v", err)
-	}
-}
-
-func TestLoopbackAndRemoteRunPromptPreserveTypedIntentCallerAndSelectors(t *testing.T) {
-	caller := "caller-session"
-	parent := "parent-session"
-	defaultRole := "default"
-	worker := "worker"
-	cases := []struct {
-		name string
-		req  serverapi.RunPromptRequest
-	}{
-		{name: "human independent", req: serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}},
-		{name: "new child omitted selector", req: serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))), CallerSessionID: &caller, Prompt: "hello"}},
-		{name: "selected explicit default", req: serverapi.RunPromptRequest{Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}}},
-		{name: "selected custom", req: serverapi.RunPromptRequest{Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &worker}}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			inProcess := &capturedRunPromptService{}
-			if _, err := inProcess.RunPrompt(context.Background(), tc.req, nil); err != nil {
-				t.Fatalf("in-process RunPrompt: %v", err)
-			}
-			assertSameRunPromptWireContract(t, inProcess.request, tc.req)
-
-			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				acceptRemoteHandshake(t, ws)
-				var request protocol.Request
-				if err := websocket.JSON.Receive(ws, &request); err != nil {
-					if errors.Is(err, io.EOF) {
-						return
-					}
-					t.Fatalf("receive run prompt: %v", err)
-				}
-				var decoded serverapi.RunPromptRequest
-				if err := json.Unmarshal(request.Params, &decoded); err != nil {
-					t.Fatalf("decode run prompt: %v", err)
-				}
-				assertSameRunPromptWireContract(t, decoded, tc.req)
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.RunPromptResponse{SessionID: "session-1", Result: "done"})); err != nil {
-					t.Fatalf("send response: %v", err)
-				}
-			})
-			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-			if err != nil {
-				t.Fatalf("DialRemoteURL: %v", err)
-			}
-			defer func() { _ = remote.Close() }()
-			if _, err := remote.RunPrompt(context.Background(), tc.req, nil); err != nil {
-				t.Fatalf("remote RunPrompt: %v", err)
-			}
-		})
-	}
-}
-
-func TestRemoteRunPromptDecodesTypedPolicyDenial(t *testing.T) {
-	target := "hidden"
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		acceptRemoteHandshake(t, ws)
-		var request protocol.Request
-		if err := websocket.JSON.Receive(ws, &request); err != nil {
-			if errors.Is(err, io.EOF) {
-				return
-			}
-			t.Fatalf("receive run prompt: %v", err)
-		}
-		data, err := json.Marshal(serverapi.SubagentLaunchDeniedError{
-			Kind:   serverapi.SubagentLaunchDenialNotCallable,
-			Target: &target,
-		})
-		if err != nil {
-			t.Fatalf("marshal typed denial: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(request.ID, protocol.ErrCodeSubagentLaunchDenied, "denied", data)); err != nil {
-			t.Fatalf("send typed denial: %v", err)
-		}
-	})
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	_, err = remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, nil)
-	var denied *serverapi.SubagentLaunchDeniedError
-	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable || denied.Target == nil || *denied.Target != target {
-		t.Fatalf("RunPrompt error = %T %v, want typed hidden-target denial", err, err)
-	}
-}
-
-func TestRemoteRunPromptPreservesTypedSubagentDepthPolicyWithoutProgress(t *testing.T) {
-	source := protocol.NewMaxDepthExceededSubagentLaunchPolicyError(1, 0)
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		acceptRemoteHandshake(t, ws)
-		var request protocol.Request
-		if err := websocket.JSON.Receive(ws, &request); err != nil {
-			if errors.Is(err, io.EOF) {
-				return
-			}
-			t.Fatalf("receive run prompt: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(
-			request.ID,
-			source.RPCErrorCode(),
-			source.Error(),
-			mustRPCErrorData(t, source),
-		)); err != nil {
-			t.Fatalf("send typed policy error: %v", err)
-		}
-	})
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	var progresses []serverapi.RunPromptProgress
-	_, err = remote.RunPrompt(
-		context.Background(),
-		serverapi.RunPromptRequest{
-			Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-			Prompt: "delegate",
-		},
-		serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
-			progresses = append(progresses, progress)
-		}),
-	)
-	var decoded *protocol.SubagentLaunchPolicyError
-	if !errors.As(err, &decoded) ||
-		decoded.Kind != protocol.SubagentLaunchPolicyMaxDepthExceeded ||
-		decoded.AttemptedDepth == nil || *decoded.AttemptedDepth != 1 ||
-		decoded.MaxDepth == nil || *decoded.MaxDepth != 0 {
-		t.Fatalf("RunPrompt error = %T %+v, want typed maximum-depth policy", err, decoded)
-	}
-	if len(progresses) != 0 {
-		t.Fatalf("rejected remote run published progress: %+v", progresses)
-	}
-}
-
-func assertSameRunPromptWireContract(t *testing.T, got serverapi.RunPromptRequest, want serverapi.RunPromptRequest) {
-	t.Helper()
-	if !got.Intent.Equal(want.Intent) ||
-		got.Prompt != want.Prompt ||
-		serverapi.CanonicalOptionalString(got.CallerSessionID) != serverapi.CanonicalOptionalString(want.CallerSessionID) {
-		t.Fatalf("provenance request = %+v, want %+v", got, want)
-	}
-	gotOverrides, err := got.Overrides.CanonicalKey()
-	if err != nil {
-		t.Fatalf("got overrides canonical key: %v", err)
-	}
-	wantOverrides, err := want.Overrides.CanonicalKey()
-	if err != nil {
-		t.Fatalf("want overrides canonical key: %v", err)
-	}
-	if !reflect.DeepEqual(gotOverrides, wantOverrides) {
-		t.Fatalf("selector/overrides = %+v, want %+v", gotOverrides, wantOverrides)
-	}
-}
-
-func mustRemoteSessionID(t *testing.T, raw string) runtimeids.SessionID {
-	t.Helper()
-	id, err := runtimeids.ParseSessionID(raw)
-	if err != nil {
-		t.Fatalf("ParseSessionID(%q): %v", raw, err)
-	}
-	return id
-}
-
 func TestRemoteGetsLatestCommittedAssistantFinalAnswer(t *testing.T) {
 	answer := "durable answer"
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
@@ -1097,20 +541,15 @@ func TestRemoteGetsLatestCommittedAssistantFinalAnswer(t *testing.T) {
 
 func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
+		acceptRemoteHandshake(t, ws)
+		if acceptRemoteSessionAttachmentOrClosed(t, ws, "project-1", "workspace-1", "/workspace") == nil {
+			return
+		}
+		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			if errors.Is(err, io.EOF) {
 				return
 			}
-			t.Fatalf("receive attach session: %v", err)
-		}
-		if req.Method != protocol.MethodAttachSession {
-			t.Fatalf("expected attach-session before transcript subscribe, got %q", req.Method)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", "session-1"))); err != nil {
-			t.Fatalf("send attach response: %v", err)
-		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive transcript subscribe: %v", err)
 		}
 		if req.Method != protocol.MethodSessionSubscribeTranscript {
@@ -1159,19 +598,11 @@ func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(
 func TestRemoteQuestionHistorySubscriptionAttachesAndDecodesTerminalStream(t *testing.T) {
 	at := transcript.CommittedAtUnixMs(1_723_456_789_012)
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			if errors.Is(err, io.EOF) {
-				return
-			}
-			t.Fatalf("receive attach session: %v", err)
+		acceptRemoteHandshake(t, ws)
+		if acceptRemoteSessionAttachmentOrClosed(t, ws, "project-1", "workspace-1", "/workspace") == nil {
+			return
 		}
-		if req.Method != protocol.MethodAttachSession {
-			t.Fatalf("expected attach-session before Question-history subscribe, got %q", req.Method)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", "session-1"))); err != nil {
-			t.Fatalf("send attach response: %v", err)
-		}
+		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive Question-history subscribe: %v", err)
 		}
@@ -1260,17 +691,15 @@ func TestRemoteQuestionHistorySubscriptionAttachesAndDecodesTerminalStream(t *te
 
 func TestRemoteSessionTranscriptSubscriptionPreservesTypedCloseReason(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
+		acceptRemoteHandshake(t, ws)
+		if acceptRemoteSessionAttachmentOrClosed(t, ws, "project-1", "workspace-1", "/workspace") == nil {
+			return
+		}
+		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			if errors.Is(err, io.EOF) {
 				return
 			}
-			t.Fatalf("receive attach session: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", "session-1"))); err != nil {
-			t.Fatalf("send attach response: %v", err)
-		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive transcript subscribe: %v", err)
 		}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
@@ -1652,341 +1081,6 @@ func remoteTestRegisteredWorktreeEntry(t *testing.T, sessionScoped bool) servera
 	return entry
 }
 
-func TestDialRemoteURLForProjectAttachesProjectAndReturnsRemote(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			return
-		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if req.Method != protocol.MethodAttachProject {
-			t.Fatalf("expected attach-project during dial, got %q", req.Method)
-		}
-		var attach protocol.AttachProjectRequest
-		if err := json.Unmarshal(req.Params, &attach); err != nil {
-			t.Fatalf("decode attach-project: %v", err)
-		}
-		if attach.ProjectID != "project-1" {
-			t.Fatalf("attach project id = %q, want project-1", attach.ProjectID)
-		}
-		_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, attach.ProjectID, "workspace-1", "/server/workspace")))
-	})
-
-	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
-	if err != nil {
-		t.Fatalf("DialRemoteURLForProject: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	if got := remote.ProjectID(); got != "project-1" {
-		t.Fatalf("ProjectID = %q, want project-1", got)
-	}
-	if got := remote.WorkspaceID(); got != "workspace-1" {
-		t.Fatalf("WorkspaceID = %q, want workspace-1", got)
-	}
-	if got := remote.WorkspaceRoot(); got != "/server/workspace" {
-		t.Fatalf("WorkspaceRoot = %q, want /server/workspace", got)
-	}
-	if got := remote.Identity().ServerID; got != "server-1" {
-		t.Fatalf("server id = %q, want server-1", got)
-	}
-}
-
-func TestDialRemoteURLForSessionAttachesSessionBeforeUnaryCalls(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			t.Fatalf("receive attach session: %v", err)
-		}
-		if req.Method != protocol.MethodAttachSession {
-			t.Fatalf("expected attach-session during dial, got %q", req.Method)
-		}
-		var attach protocol.AttachSessionRequest
-		if err := json.Unmarshal(req.Params, &attach); err != nil {
-			t.Fatalf("decode attach-session: %v", err)
-		}
-		if attach.SessionID != "session-1" {
-			t.Fatalf("attach session id = %q, want session-1", attach.SessionID)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", attach.SessionID))); err != nil {
-			t.Fatalf("send attach response: %v", err)
-		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			t.Fatalf("receive worktree status: %v", err)
-		}
-		if req.Method != protocol.MethodWorktreeStatus {
-			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeStatus)
-		}
-		var statusRequest serverapi.WorktreeStatusRequest
-		if err := json.Unmarshal(req.Params, &statusRequest); err != nil {
-			t.Fatalf("decode worktree status: %v", err)
-		}
-		if statusRequest.SessionID != attach.SessionID {
-			t.Fatalf("status session id = %q, want %q", statusRequest.SessionID, attach.SessionID)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{})); err != nil {
-			t.Fatalf("send worktree status response: %v", err)
-		}
-	})
-
-	remote, err := DialRemoteURLForSession(
-		context.Background(),
-		"ws"+server.URL[len("http"):],
-		"session-1",
-	)
-	if err != nil {
-		t.Fatalf("DialRemoteURLForSession: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	if _, err := remote.GetWorktreeStatus(
-		context.Background(),
-		serverapi.WorktreeStatusRequest{SessionID: "session-1"},
-	); err != nil {
-		t.Fatalf("GetWorktreeStatus: %v", err)
-	}
-}
-
-func TestDialRemoteURLForProjectValidatesAttachProject(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			return
-		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if req.Method != protocol.MethodAttachProject {
-			t.Fatalf("expected attach-project during dial, got %q", req.Method)
-		}
-		_ = websocket.JSON.Send(ws, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, "project not available"))
-	})
-
-	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-missing")
-	if err == nil {
-		if remote != nil {
-			_ = remote.Close()
-		}
-		t.Fatal("expected dial to fail when project attach is rejected")
-	}
-	if remote != nil {
-		t.Fatalf("expected nil remote on attach failure, got %v", remote)
-	}
-}
-
-func TestDialRemoteURLForProjectRejectsMalformedAttachmentResponse(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if req.Method != protocol.MethodAttachProject {
-			t.Fatalf("method = %q, want attach project", req.Method)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, map[string]any{
-			"kind":           "project",
-			"project_id":     "project-1",
-			"workspace_id":   "workspace-1",
-			"workspace_root": "",
-		})); err != nil {
-			t.Fatalf("send malformed attach response: %v", err)
-		}
-	})
-
-	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
-	if err == nil {
-		if remote != nil {
-			_ = remote.Close()
-		}
-		t.Fatal("expected malformed attachment response error")
-	}
-}
-
-func TestDialRemoteURLForProjectRejectsMismatchedAttachmentResponse(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if req.Method != protocol.MethodAttachProject {
-			t.Fatalf("method = %q, want attach project", req.Method)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "other-project", "workspace-1", "/workspace"))); err != nil {
-			t.Fatalf("send mismatched attach response: %v", err)
-		}
-	})
-
-	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
-	if err == nil {
-		if remote != nil {
-			_ = remote.Close()
-		}
-		t.Fatal("expected mismatched attachment response error")
-	}
-}
-
-func TestDialRemoteURLForProjectWorkspaceRejectsDifferentRootAttachment(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		var attach protocol.AttachProjectRequest
-		if err := json.Unmarshal(req.Params, &attach); err != nil {
-			t.Fatalf("decode attach-project: %v", err)
-		}
-		wrongRequest, err := protocol.AttachProjectRequestForWorkspaceRoot("project-1", "/workspace-b")
-		if err != nil {
-			t.Fatalf("wrong attach request: %v", err)
-		}
-		response, err := protocol.ProjectAttachResponseForRequest(wrongRequest, "workspace-b", "/workspace-b")
-		if err != nil {
-			t.Fatalf("wrong attach response: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
-			t.Fatalf("send mismatched attach response: %v", err)
-		}
-	})
-
-	remote, err := DialRemoteURLForProjectWorkspace(
-		context.Background(),
-		"ws"+server.URL[len("http"):],
-		"project-1",
-		"/workspace-a",
-	)
-	if err == nil {
-		if remote != nil {
-			_ = remote.Close()
-		}
-		t.Fatal("expected mismatched workspace root response error")
-	}
-}
-
-func TestDialRemoteURLForProjectWorkspaceAcceptsServerCanonicalRoot(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		var attach protocol.AttachProjectRequest
-		if err := json.Unmarshal(req.Params, &attach); err != nil {
-			t.Fatalf("decode attach-project: %v", err)
-		}
-		response, err := protocol.ProjectAttachResponseForRequest(attach, "workspace-1", "/canonical/workspace")
-		if err != nil {
-			t.Fatalf("attach response: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
-			t.Fatalf("send attach response: %v", err)
-		}
-	})
-
-	remote, err := DialRemoteURLForProjectWorkspace(
-		context.Background(),
-		"ws"+server.URL[len("http"):],
-		"project-1",
-		"/workspace-alias",
-	)
-	if err != nil {
-		t.Fatalf("DialRemoteURLForProjectWorkspace: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	if got := remote.WorkspaceRoot(); got != "/canonical/workspace" {
-		t.Fatalf("WorkspaceRoot = %q, want canonical root", got)
-	}
-}
-
-func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
-	var attachCount atomic.Int32
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		for {
-			if err := websocket.JSON.Receive(ws, &req); err != nil {
-				if errors.Is(err, io.EOF) {
-					return
-				}
-				t.Fatalf("receive project view request: %v", err)
-			}
-			switch req.Method {
-			case protocol.MethodAttachProject:
-				attachCount.Add(1)
-				var attach protocol.AttachProjectRequest
-				if err := json.Unmarshal(req.Params, &attach); err != nil {
-					t.Fatalf("decode attach-project: %v", err)
-				}
-				response, err := protocol.ProjectAttachResponseForRequest(attach, "workspace-1", "/tmp/attached")
-				if err != nil {
-					t.Fatalf("attach response: %v", err)
-				}
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response))
-			case protocol.MethodProjectResolvePath:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectResolvePathResponse{CanonicalRoot: "/tmp/workspace-a"}))
-			case protocol.MethodProjectPlanWorkspaceBinding:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindBound, Binding: &serverapi.ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"}}))
-			case protocol.MethodProjectCreate:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectCreateResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1"}}))
-			case protocol.MethodProjectAttachWorkspace:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectAttachWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1"}}))
-			case protocol.MethodProjectRebindWorkspace:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectRebindWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"}}))
-			case protocol.MethodProjectGetOverview:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectGetOverviewResponse{}))
-			case protocol.MethodSessionPage:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.SessionPageResponse{ProjectID: "project-1", Category: sessioncontract.SessionCategoryMain}))
-			case protocol.MethodProjectList:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectListResponse{}))
-			default:
-				t.Fatalf("unexpected project view method %q", req.Method)
-			}
-		}
-	})
-
-	remote, err := DialRemoteURLForProjectWorkspace(context.Background(), "ws"+server.URL[len("http"):], "project-1", "/tmp/attached")
-	if err != nil {
-		t.Fatalf("DialRemoteURLForProjectWorkspace: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	if _, err := remote.ResolveProjectPath(context.Background(), serverapi.ProjectResolvePathRequest{Path: "/tmp/workspace-a"}); err != nil {
-		t.Fatalf("ResolveProjectPath: %v", err)
-	}
-	if _, err := remote.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: "/tmp/workspace-a", Mode: serverapi.ProjectBindingPlanModeInteractive}); err != nil {
-		t.Fatalf("PlanWorkspaceBinding: %v", err)
-	}
-	if _, err := remote.CreateProject(context.Background(), serverapi.ProjectCreateRequest{DisplayName: "demo", WorkspaceRoot: "/tmp/workspace-a"}); err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-	if _, err := remote.AttachWorkspaceToProject(context.Background(), serverapi.ProjectAttachWorkspaceRequest{ProjectID: "project-1", WorkspaceRoot: "/tmp/workspace-b"}); err != nil {
-		t.Fatalf("AttachWorkspaceToProject: %v", err)
-	}
-	if _, err := remote.RebindWorkspace(context.Background(), serverapi.ProjectRebindWorkspaceRequest{OldWorkspaceRoot: "/tmp/workspace-a", NewWorkspaceRoot: "/tmp/workspace-b"}); err != nil {
-		t.Fatalf("RebindWorkspace: %v", err)
-	}
-	if _, err := remote.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: "project-1"}); err != nil {
-		t.Fatalf("GetProjectOverview: %v", err)
-	}
-	limit := 20
-	if _, err := remote.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-		ProjectID: "project-1",
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     &limit,
-	}); err != nil {
-		t.Fatalf("ListSessionPage: %v", err)
-	}
-	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
-		t.Fatalf("ListProjects: %v", err)
-	}
-	if got := attachCount.Load(); got != 1 {
-		t.Fatalf("attachCount = %d, want 1", got)
-	}
-}
-
 func TestProtocolErrorMapsSentinelCodes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -2232,7 +1326,7 @@ func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
 	}
 }
 
-func remoteTestWorktreeStructuredErrors(_ serverapi.WorktreeOperationID) []protocol.StructuredRPCError {
+func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationID) []protocol.StructuredRPCError {
 	return []protocol.StructuredRPCError{
 		&serverapi.WorktreeSelectorError{
 			Kind:  serverapi.WorktreeSelectorErrorKindAmbiguous,
@@ -2274,7 +1368,7 @@ func remoteTestWorktreeStructuredErrors(_ serverapi.WorktreeOperationID) []proto
 	}
 }
 
-func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protocol.StructuredRPCError, _ serverapi.WorktreeOperationID) {
+func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protocol.StructuredRPCError, operationID serverapi.WorktreeOperationID) {
 	t.Helper()
 	switch source.(type) {
 	case *serverapi.WorktreeSelectorError:
@@ -2396,6 +1490,11 @@ func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 		{name: "manual compaction active", cause: serverapi.ErrManualCompactionActive, check: func(t *testing.T, err error) {
 			if !errors.Is(err, serverapi.ErrManualCompactionActive) {
 				t.Fatalf("decoded cause = %v, want manual compaction active", err)
+			}
+		}},
+		{name: "runtime unavailable", cause: serverapi.ErrRuntimeUnavailable, check: func(t *testing.T, err error) {
+			if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+				t.Fatalf("decoded cause = %v, want runtime unavailable", err)
 			}
 		}},
 	} {

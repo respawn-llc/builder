@@ -24,8 +24,12 @@ import (
 	"core/server/transport"
 	"core/shared/apicontract"
 	"core/shared/config"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type ServeServer struct {
@@ -420,7 +424,7 @@ func (d *startupGatewayDependencies) Close() error {
 	return nil
 }
 
-func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverapi.OnboardingFinalizeResponse) error {
+func (d *startupGatewayDependencies) activate(ctx context.Context, resp *onboardingpb.FinalizeSuccess) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.core != nil {
@@ -452,9 +456,9 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	return nil
 }
 
-func (d *startupGatewayDependencies) activationError(resp serverapi.OnboardingFinalizeResponse, err error) error {
+func (d *startupGatewayDependencies) activationError(resp *onboardingpb.FinalizeSuccess, err error) error {
 	d.activation = err
-	settingsPath := resp.SettingsPath
+	settingsPath := resp.GetSettingsPath()
 	diagnostic := err.Error()
 	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{
 		OnboardingCompleted: true,
@@ -521,16 +525,16 @@ type startupServerStatusService struct {
 	activeCore func() *core.Core
 }
 
-func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
-	resp, err := s.base.GetServerReadiness(ctx, req)
+func (s startupServerStatusService) GetReadiness(ctx context.Context, req *emptypb.Empty) (*serverpb.GetReadinessSuccess, error) {
+	resp, err := s.base.GetReadiness(ctx, req)
 	if err != nil {
-		return serverapi.ServerReadinessResponse{}, err
+		return nil, err
 	}
-	if s.readiness == nil {
+	if s.readiness == nil || resp == nil || resp.Readiness == nil {
 		return resp, nil
 	}
 	if state := s.readiness.ServerReadinessState(); !state.Ready {
-		resp.Ready = false
+		resp.Readiness.Ready = false
 		diagnosticID := ""
 		if state.Reason != nil {
 			diagnosticID = string(*state.Reason)
@@ -542,27 +546,26 @@ func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req 
 		if state.Reason != nil {
 			code = string(*state.Reason)
 		}
-		cause := serverapi.ServerReadinessCause{
+		cause := &serverpb.ReadinessCause{
 			Code:     code,
-			Severity: "error",
+			Severity: serverpb.ReadinessSeverity_READINESS_SEVERITY_ERROR,
 		}
-		if len(resp.Causes) > 0 {
-			cause = resp.Causes[0]
+		if len(resp.Readiness.Causes) > 0 {
+			cause = resp.Readiness.Causes[0]
 			cause.Code = code
-			cause.Severity = "error"
+			cause.Severity = serverpb.ReadinessSeverity_READINESS_SEVERITY_ERROR
 			cause.Summary = nil
 			cause.NextAction = nil
 		}
-		cause.DiagnosticID = diagnosticID
-		resp.Causes = []serverapi.ServerReadinessCause{cause}
+		if diagnosticID != "" {
+			cause.DiagnosticId = &diagnosticID
+		}
+		resp.Readiness.Causes = []*serverpb.ReadinessCause{cause}
 	}
 	return resp, nil
 }
 
-func (s startupServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.UpdateStatusResponse{}, err
-	}
+func (s startupServerStatusService) GetUpdateStatus(ctx context.Context, req *emptypb.Empty) (*serverpb.GetUpdateStatusSuccess, error) {
 	if s.readiness != nil {
 		if state := s.readiness.ServerReadinessState(); !state.Ready {
 			reason := serverapi.ServerNotReadyOnboardingRequired
@@ -573,29 +576,29 @@ func (s startupServerStatusService) GetUpdateStatus(ctx context.Context, req ser
 			if state.Diagnostic != nil {
 				details = serverapi.ServerNotReadyDetails{Diagnostic: state.Diagnostic}
 			}
-			return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(reason, details, nil)
+			return nil, serverapi.NewServerNotReadyError(reason, details, nil)
 		}
 	}
 	if s.activeCore == nil {
-		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+		return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 	}
 	activeCore := s.activeCore()
 	if activeCore == nil {
-		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+		return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 	}
 	return activeCore.ServerStatusClient().GetUpdateStatus(ctx, req)
 }
 
 type startupFinalizeService struct {
 	service           apicontract.OnboardingFinalizeService
-	activate          func(context.Context, serverapi.OnboardingFinalizeResponse) error
+	activate          func(context.Context, *onboardingpb.FinalizeSuccess) error
 	activationContext context.Context
 }
 
-func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
-	resp, err := s.service.FinalizeOnboarding(ctx, req)
+func (s startupFinalizeService) Finalize(ctx context.Context, req *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
+	resp, err := s.service.Finalize(ctx, req)
 	if err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, err
+		return nil, err
 	}
 	if s.activate != nil {
 		activationCtx := s.activationContext
@@ -603,7 +606,7 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 			activationCtx = context.Background()
 		}
 		if err := s.activate(activationCtx, resp); err != nil {
-			return serverapi.OnboardingFinalizeResponse{}, err
+			return nil, err
 		}
 	}
 	return resp, nil
@@ -611,7 +614,7 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 
 func (d *startupGatewayDependencies) AuthManager() *auth.Manager { return d.authSupport.AuthManager }
 func (d *startupGatewayDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
-	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, d.snapshotConfig().Settings, apicontract.AllowedPreAuthMethods())
+	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, d.snapshotConfig().Settings)
 }
 func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusService {
 	return authservice.NewStatusService(d.authSupport.AuthManager, d.snapshotConfig().Settings)

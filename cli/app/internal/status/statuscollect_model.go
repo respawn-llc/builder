@@ -3,6 +3,7 @@ package status
 import (
 	"core/server/llm"
 	"core/shared/config"
+	"core/shared/textutil"
 	"strings"
 )
 
@@ -27,7 +28,7 @@ func ConfigOverrideSources(src config.SourceReport) []string {
 
 func ModelSummary(req Request) string {
 	resolved := strings.TrimSpace(req.ModelName)
-	configured := strings.TrimSpace(req.ConfiguredModelName)
+	configured, _ := textutil.OptionalTrimmed(req.ConfiguredModelName)
 	modelName := resolved
 	if modelName == "" {
 		modelName = configured

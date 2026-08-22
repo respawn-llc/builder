@@ -13,6 +13,8 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
 	"core/shared/config"
+	"core/shared/protoapi"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -66,9 +68,6 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseRun()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		if r.URL.Path != "/responses" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 			return
@@ -128,14 +127,20 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	plan, err := launchClient.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		Mode:   serverapi.SessionLaunchModeInteractive,
-		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	intent, err := protoapi.SessionLaunchIntentToProto(
+		serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	)
+	if err != nil {
+		t.Fatalf("convert Session launch intent: %v", err)
+	}
+	plan, err := launchClient.PlanSession(context.Background(), &sessionlaunchpb.SessionPlanRequest{
+		Mode:   sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+		Intent: intent,
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
-	sessionID := plan.Plan.SessionID
+	sessionID := plan.Plan.SessionId
 	if sessionID == "" {
 		t.Fatal("PlanSession returned empty session id")
 	}

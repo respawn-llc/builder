@@ -1,44 +1,92 @@
-import type { z } from "zod";
-
 import { CatalogContractError, ContractError } from "./errors";
-import { parseRpcResponse } from "./clientParse";
-import type { JsonObject } from "./json";
-import { sessionCatalogPageSize, type SessionCategory } from "./models";
-import { canonicalProjectIDSchema, sessionCategorySchema, sessionPageOffsetSchema } from "./schemas/catalog";
-
-export function parseCatalogInput<T>(operation: string, schema: z.ZodType<T>, value: unknown): T {
-  const result = schema.safeParse(value);
-  if (result.success) return result.data;
-  throw new ContractError(
-    `${operation} did not match the catalog contract.`,
-    result.error.issues.map((issue) => ({
-      code: issue.code,
-      path: issue.path.map(String),
-    })),
-  );
-}
-
-export function parseCatalogResponse<T>(method: string, schema: z.ZodType<T>, value: unknown): T {
-  try {
-    return parseRpcResponse(method, schema, value);
-  } catch (error) {
-    throw error instanceof ContractError ? CatalogContractError.malformedResponse(method, error) : error;
-  }
-}
+import { create, operationName } from "@app/server-api-contract";
+import {
+  SessionCatalogService,
+  SessionCategory as GeneratedSessionCategory,
+  type SessionSummary,
+} from "@app/server-api-contract/gen/kent/api/project/session_catalog_pb";
+import {
+  sessionCatalogPageSize,
+  type SessionCatalogPage,
+  type SessionCatalogSummary,
+  type SessionCategory,
+} from "./models";
+import { requireUnarySuccess } from "./protobufRpc";
+import type { DescriptorRpcTransport } from "./transport";
+import { timestampMillis } from "./clientTime";
 
 export function requireCatalogProject(method: string, expected: string, actual: string): void {
   if (actual !== expected) throw CatalogContractError.projectMismatch(method, expected, actual);
 }
 
-export function sessionPageCall(projectID: string, category: SessionCategory, offset: number) {
-  const expectedProjectID = parseCatalogInput("session.page project ID", canonicalProjectIDSchema, projectID);
-  const expectedCategory = parseCatalogInput("session.page category", sessionCategorySchema, category);
-  const expectedOffset = parseCatalogInput("session.page offset", sessionPageOffsetSchema, offset);
-  const params: JsonObject = {
-    project_id: expectedProjectID,
-    category: expectedCategory,
-    offset: expectedOffset,
-    limit: sessionCatalogPageSize,
+export async function listSessionPage(
+  transport: DescriptorRpcTransport,
+  projectID: string,
+  category: SessionCategory,
+  offset: number,
+): Promise<SessionCatalogPage> {
+  const method = SessionCatalogService.method.page;
+  const operation = operationName(method);
+  const success = requireUnarySuccess(
+    method,
+    await transport.callDescriptor(
+      method,
+      create(method.input, {
+        projectId: projectID,
+        category: sessionCategoryToGenerated(category),
+        offset,
+        limit: sessionCatalogPageSize,
+      }),
+    ),
+  );
+  if (success.sessions.length > sessionCatalogPageSize) {
+    throw CatalogContractError.malformedResponse(
+      operation,
+      new ContractError(`Session page exceeds the requested ${String(sessionCatalogPageSize)} rows.`),
+    );
+  }
+  const response: SessionCatalogPage = {
+    projectID: success.projectId,
+    category: sessionCategoryFromGenerated(success.category),
+    sessions: success.sessions.map(sessionSummary),
+    nextOffset: success.nextOffset ?? null,
   };
-  return { expectedProjectID, expectedCategory, params };
+  requireCatalogProject(operation, projectID, response.projectID);
+  if (response.category !== category) {
+    throw CatalogContractError.sessionCategoryMismatch(operation, category, response.category);
+  }
+  return response;
+}
+
+function sessionSummary(summary: SessionSummary): SessionCatalogSummary {
+  if (summary.updatedAt === undefined) {
+    throw new ContractError("Session catalog summary timestamp is required.");
+  }
+  return {
+    id: summary.sessionId,
+    category: sessionCategoryFromGenerated(summary.category),
+    name: summary.name ?? null,
+    firstPromptPreview: summary.firstPromptPreview ?? null,
+    updatedAt: timestampMillis(summary.updatedAt),
+  };
+}
+
+function sessionCategoryToGenerated(category: SessionCategory): GeneratedSessionCategory {
+  switch (category) {
+    case "main":
+      return GeneratedSessionCategory.MAIN;
+    case "subagent":
+      return GeneratedSessionCategory.SUBAGENT;
+  }
+}
+
+function sessionCategoryFromGenerated(category: GeneratedSessionCategory): SessionCategory {
+  switch (category) {
+    case GeneratedSessionCategory.MAIN:
+      return "main";
+    case GeneratedSessionCategory.SUBAGENT:
+      return "subagent";
+    case GeneratedSessionCategory.UNSPECIFIED:
+      throw new ContractError("Session category is unspecified.");
+  }
 }

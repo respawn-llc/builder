@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -50,7 +51,9 @@ func TestGatewayPromptAnswerBatchRoundTripReturnsTypedAllSkippedSet(t *testing.T
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	if result := attachGatewayProject(t, conn, "attach-project", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()}); result.GetSuccess() == nil {
+		t.Fatalf("attach Project failed: %+v", result.GetError())
+	}
 	var response serverapi.PromptAnswerBatchResponse
 	callGateway(t, conn, "prompt-answer-batch", protocol.MethodPromptAnswerBatch, request, &response)
 	if err := serverapi.ValidatePromptAnswerBatchResponse(request, response); err != nil {

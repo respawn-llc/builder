@@ -9,6 +9,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 )
@@ -16,7 +17,7 @@ import (
 type projectViewRemoteStub struct {
 	apicontract.ProjectViewService
 	identity     protocol.ServerIdentity
-	plan         func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error)
+	plan         func(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error)
 	requireRoot  func(string) error
 	pinnedRootID string
 	rootPinned   bool
@@ -41,11 +42,11 @@ func (s *projectViewRemoteStub) Identity() protocol.ServerIdentity {
 	return s.identity
 }
 
-func (s *projectViewRemoteStub) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
+func (s *projectViewRemoteStub) PlanWorkspaceBinding(ctx context.Context, req *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
 	if s.plan != nil {
 		return s.plan(ctx, req)
 	}
-	return serverapi.ProjectBindingPlanResponse{}, errors.New("unexpected PlanWorkspaceBinding call")
+	return &projectpb.PlanWorkspaceBindingSuccess{}, errors.New("unexpected PlanWorkspaceBinding call")
 }
 
 func TestDialHeadlessPinsProjectViewRootBeforeDiscovery(t *testing.T) {
@@ -53,9 +54,9 @@ func TestDialHeadlessPinsProjectViewRootBeforeDiscovery(t *testing.T) {
 	pinErr := errors.New("root mismatch")
 	projectViews := &projectViewRemoteStub{
 		requireRoot: func(string) error { return pinErr },
-		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
+		plan: func(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
 			t.Fatal("discovery must not run when the project-view root pin fails")
-			return serverapi.ProjectBindingPlanResponse{}, nil
+			return &projectpb.PlanWorkspaceBindingSuccess{}, nil
 		},
 	}
 	remote, ok, err := DialHeadless(context.Background(), HeadlessRequest{
@@ -90,20 +91,20 @@ func TestDialHeadlessUsesWorkspaceDiscoveryAndFreshWorkspaceDialTimeout(t *testi
 	cfg := config.App{WorkspaceRoot: "/workspace"}
 	attachTimeout := 20 * time.Millisecond
 	projectViews := &projectViewRemoteStub{
-		plan: func(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
+		plan: func(ctx context.Context, req *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
 			if req.Path != cfg.WorkspaceRoot {
 				t.Fatalf("path = %q, want %q", req.Path, cfg.WorkspaceRoot)
 			}
-			if req.Mode != serverapi.ProjectBindingPlanModeHeadless {
+			if req.Mode != projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_HEADLESS {
 				t.Fatalf("mode = %q, want headless", req.Mode)
 			}
 			time.Sleep(attachTimeout + 10*time.Millisecond)
 			if err := ctx.Err(); err != nil {
-				return serverapi.ProjectBindingPlanResponse{}, err
+				return &projectpb.PlanWorkspaceBindingSuccess{}, err
 			}
-			return serverapi.ProjectBindingPlanResponse{
-				Kind:      serverapi.ProjectBindingPlanKindHeadlessRemoteSelected,
-				Workspace: &serverapi.ProjectWorkspacePlanSelected{ProjectID: "project-1", WorkspaceID: "workspace-1"},
+			return &projectpb.PlanWorkspaceBindingSuccess{
+				Kind:      projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_SELECTED,
+				Workspace: &projectpb.SelectedProjectWorkspace{ProjectId: "project-1", WorkspaceId: "workspace-1"},
 			}, nil
 		},
 	}
@@ -170,8 +171,8 @@ func TestDialHeadlessRejectsNilDialers(t *testing.T) {
 func TestDialHeadlessClosesAndReturnsPlanFailure(t *testing.T) {
 	wantErr := errors.New("plan failed")
 	projectViews := &projectViewRemoteStub{
-		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-			return serverapi.ProjectBindingPlanResponse{}, wantErr
+		plan: func(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
+			return &projectpb.PlanWorkspaceBindingSuccess{}, wantErr
 		},
 	}
 	remote, ok, err := DialHeadless(context.Background(), HeadlessRequest{
@@ -203,10 +204,14 @@ func TestDialHeadlessClosesAndReturnsPlanFailure(t *testing.T) {
 func TestDialHeadlessReturnsWorkspaceDialFailure(t *testing.T) {
 	wantErr := errors.New("workspace dial failed")
 	projectViews := &projectViewRemoteStub{
-		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-			return serverapi.ProjectBindingPlanResponse{
-				Kind:    serverapi.ProjectBindingPlanKindBound,
-				Binding: &serverapi.ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"},
+		plan: func(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
+			return &projectpb.PlanWorkspaceBindingSuccess{
+				Kind: projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_BOUND,
+				Binding: &projectpb.ProjectBinding{
+					ProjectId:       "project-1",
+					WorkspaceId:     "workspace-1",
+					WorkspaceStatus: projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE,
+				},
 			}, nil
 		},
 	}
@@ -245,16 +250,20 @@ func TestDialInteractiveRejectsNilDialers(t *testing.T) {
 func TestDialInteractiveBoundWorkspaceDialsWorkspaceAndClosesProjectView(t *testing.T) {
 	cfg := config.App{WorkspaceRoot: "/workspace"}
 	projectViews := &projectViewRemoteStub{
-		plan: func(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
+		plan: func(ctx context.Context, req *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
 			if err := ctx.Err(); err != nil {
-				return serverapi.ProjectBindingPlanResponse{}, err
+				return &projectpb.PlanWorkspaceBindingSuccess{}, err
 			}
-			if req.Mode != serverapi.ProjectBindingPlanModeInteractive {
+			if req.Mode != projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_INTERACTIVE {
 				t.Fatalf("mode = %q, want interactive", req.Mode)
 			}
-			return serverapi.ProjectBindingPlanResponse{
-				Kind:    serverapi.ProjectBindingPlanKindBound,
-				Binding: &serverapi.ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"},
+			return &projectpb.PlanWorkspaceBindingSuccess{
+				Kind: projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_BOUND,
+				Binding: &projectpb.ProjectBinding{
+					ProjectId:       "project-1",
+					WorkspaceId:     "workspace-1",
+					WorkspaceStatus: projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE,
+				},
 			}, nil
 		},
 	}
@@ -287,8 +296,8 @@ func TestDialInteractiveBoundWorkspaceDialsWorkspaceAndClosesProjectView(t *test
 
 func TestDialInteractiveClosesNonRemoteUnboundFallback(t *testing.T) {
 	projectViews := &projectViewRemoteStub{
-		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-			return serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindLocalUnbound}, nil
+		plan: func(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
+			return &projectpb.PlanWorkspaceBindingSuccess{Kind: projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND}, nil
 		},
 	}
 	remote, ok := DialInteractive(context.Background(), InteractiveRequest{

@@ -7,14 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/serverapi"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type updateStatusCompletion struct {
-	response serverapi.UpdateStatusResponse
+	response *serverpb.GetUpdateStatusSuccess
 	err      error
 }
 
@@ -34,8 +35,8 @@ func newBlockingUpdateStatusClient() *blockingUpdateStatusClient {
 
 func (c *blockingUpdateStatusClient) GetUpdateStatus(
 	ctx context.Context,
-	_ serverapi.UpdateStatusRequest,
-) (serverapi.UpdateStatusResponse, error) {
+	_ *emptypb.Empty,
+) (*serverpb.GetUpdateStatusSuccess, error) {
 	c.mu.Lock()
 	c.calls++
 	c.mu.Unlock()
@@ -44,15 +45,15 @@ func (c *blockingUpdateStatusClient) GetUpdateStatus(
 	case completion := <-c.completion:
 		return completion.response, completion.err
 	case <-ctx.Done():
-		return serverapi.UpdateStatusResponse{}, ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
-func (*blockingUpdateStatusClient) GetServerReadiness(
+func (*blockingUpdateStatusClient) GetReadiness(
 	context.Context,
-	serverapi.ServerReadinessRequest,
-) (serverapi.ServerReadinessResponse, error) {
-	return serverapi.ServerReadinessResponse{}, errors.New("unexpected readiness request")
+	*emptypb.Empty,
+) (*serverpb.GetReadinessSuccess, error) {
+	return nil, errors.New("unexpected readiness request")
 }
 
 func (c *blockingUpdateStatusClient) callCount() int {
@@ -65,7 +66,7 @@ func TestSessionPickerUpdateStatusRunsIndependentlyOfInitialPageLoads(t *testing
 	t.Parallel()
 
 	updates := newBlockingUpdateStatusClient()
-	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+	loader := &recordingSessionPageLoader{responses: func(request sessionPageRequest) sessionPageLoadResult {
 		return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 	}}
 	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{
@@ -100,9 +101,7 @@ func TestSessionPickerUpdateStatusRunsIndependentlyOfInitialPageLoads(t *testing
 	headerHeight := lipgloss.Height(model.renderHeader())
 
 	updates.completion <- updateStatusCompletion{
-		response: serverapi.UpdateStatusResponse{
-			Result: serverapi.AvailableUpdateStatusResult("1.0.0", "1.1.0"),
-		},
+		response: availableUpdateStatusSuccess("1.0.0", "1.1.0"),
 	}
 	select {
 	case message := <-completed:
@@ -131,7 +130,7 @@ func TestSessionPickerRequestsUpdateStatusForEachOpen(t *testing.T) {
 			t.Fatal("picker did not request update status")
 		}
 		updates.completion <- updateStatusCompletion{
-			response: serverapi.UpdateStatusResponse{Result: serverapi.CheckUnavailableUpdateStatusResult()},
+			response: checkUnavailableUpdateStatusSuccess(),
 		}
 		select {
 		case message := <-completed:
@@ -143,6 +142,36 @@ func TestSessionPickerRequestsUpdateStatusForEachOpen(t *testing.T) {
 	if got := updates.callCount(); got != 2 {
 		t.Fatalf("update requests = %d, want one per picker open", got)
 	}
+}
+
+func currentUpdateStatusSuccess(current, latest string) *serverpb.GetUpdateStatusSuccess {
+	return &serverpb.GetUpdateStatusSuccess{Status: &serverpb.UpdateStatus{
+		Status: &serverpb.UpdateStatus_Current{Current: &serverpb.UpdateVersions{
+			CurrentVersion: current,
+			LatestVersion:  latest,
+		}},
+	}}
+}
+
+func availableUpdateStatusSuccess(current, latest string) *serverpb.GetUpdateStatusSuccess {
+	return &serverpb.GetUpdateStatusSuccess{Status: &serverpb.UpdateStatus{
+		Status: &serverpb.UpdateStatus_Available{Available: &serverpb.UpdateVersions{
+			CurrentVersion: current,
+			LatestVersion:  latest,
+		}},
+	}}
+}
+
+func checkUnavailableUpdateStatusSuccess() *serverpb.GetUpdateStatusSuccess {
+	return &serverpb.GetUpdateStatusSuccess{Status: &serverpb.UpdateStatus{
+		Status: &serverpb.UpdateStatus_CheckUnavailable{CheckUnavailable: &emptypb.Empty{}},
+	}}
+}
+
+func failedUpdateStatusSuccess(cause string) *serverpb.GetUpdateStatusSuccess {
+	return &serverpb.GetUpdateStatusSuccess{Status: &serverpb.UpdateStatus{
+		Status: &serverpb.UpdateStatus_CheckFailed{CheckFailed: &serverpb.UpdateCheckFailed{Cause: cause}},
+	}}
 }
 
 func TestSessionPickerUpdateOperationFailureStaysLocalToUpdateRow(t *testing.T) {

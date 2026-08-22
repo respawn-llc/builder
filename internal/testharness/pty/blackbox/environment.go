@@ -20,7 +20,7 @@ import (
 
 	"core/internal/testharness/pty/analyzer"
 	"core/shared/client"
-	"core/shared/serverapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 )
 
 const cleanupRetryWait = 500 * time.Millisecond
@@ -193,7 +193,7 @@ func (e *IsolatedEnvironment) BindProject() (returnErr error) {
 		return fmt.Errorf("acknowledge standalone no-auth setup: %w", err)
 	}
 	createContext, cancelCreate := context.WithTimeout(context.Background(), controlRequestWait)
-	created, err := remote.CreateProject(createContext, serverapi.ProjectCreateRequest{
+	created, err := remote.CreateProject(createContext, &projectpb.CreateProjectRequest{
 		DisplayName:   "PTY Harness",
 		WorkspaceRoot: e.Workspace,
 	})
@@ -202,15 +202,15 @@ func (e *IsolatedEnvironment) BindProject() (returnErr error) {
 		return fmt.Errorf("create isolated project: %w", err)
 	}
 	planContext, cancelPlan := context.WithTimeout(context.Background(), controlRequestWait)
-	plan, err := remote.PlanWorkspaceBinding(planContext, serverapi.ProjectBindingPlanRequest{
+	plan, err := remote.PlanWorkspaceBinding(planContext, &projectpb.PlanWorkspaceBindingRequest{
 		Path: e.Workspace,
-		Mode: serverapi.ProjectBindingPlanModeInteractive,
+		Mode: projectpb.WorkspaceBindingPlanMode_WORKSPACE_BINDING_PLAN_MODE_INTERACTIVE,
 	})
 	cancelPlan()
 	if err != nil {
 		return fmt.Errorf("verify isolated project binding: %w", err)
 	}
-	if plan.Kind != serverapi.ProjectBindingPlanKindBound || plan.Binding == nil || plan.Binding.WorkspaceID != created.Binding.WorkspaceID {
+	if plan.Kind != projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_BOUND || plan.Binding == nil || plan.Binding.WorkspaceId != created.Binding.WorkspaceId {
 		return fmt.Errorf("isolated project binding is not bound: kind=%s", plan.Kind)
 	}
 	return nil

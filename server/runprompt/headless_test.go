@@ -229,7 +229,6 @@ func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T
 		name string
 		req  serverapi.RunPromptRequest
 	}{
-		{name: "missing request id", req: serverapi.RunPromptRequest{Intent: validIntent, Prompt: "work"}},
 		{name: "blank prompt", req: serverapi.RunPromptRequest{Intent: validIntent, Prompt: " \n "}},
 		{name: "invalid intent", req: serverapi.RunPromptRequest{Prompt: "work"}},
 		{name: "reserved role", req: serverapi.RunPromptRequest{
@@ -452,9 +451,6 @@ func TestHeadlessSiblingWorkspacePatchUsesProjectBoundary(t *testing.T) {
 	}
 	var providerCalls atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		switch providerCalls.Add(1) {
 		case 1:
 			writeRunPromptFunctionCallResponse(w, "fc-sibling-patch", "call-sibling-patch", toolspec.ToolPatch, patchArgs)
@@ -601,9 +597,6 @@ func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsum
 	patchOutput := make(chan string, 1)
 	var providerCalls atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		switch providerCalls.Add(1) {
 		case 1:
 			writeRunPromptFunctionCallResponse(w, "fc-patch-target", "call-patch-target", toolspec.ToolPatch, patchArgs)
@@ -903,8 +896,8 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	}
 	substitutedCaller := selectedBefore.SessionID
 	substitutedCallerID := mustRunPromptSessionID(t, substitutedCaller)
-	substitutedPlan, err := sessionLauncher.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
-		Mode:            serverapi.SessionLaunchModeHeadless,
+	substitutedPlan, err := sessionLauncher.PlanLaunchSession(ctx, sessionlaunch.PlanRequest{
+		Mode:            launch.ModeHeadless,
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(substitutedCallerID)),
 		CallerSessionID: &substitutedCaller,
 		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
@@ -962,9 +955,6 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 
 	var responseCount int
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		responseCount++
 		modelstub.WriteCompletedResponseStream(w, "workflow response", 1, 1)
 	}))
@@ -1124,9 +1114,6 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 
 	var providerCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -1138,7 +1125,7 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	}))
 	defer server.Close()
 
-	if err := store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: &server.URL}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: textutil.Value(server.URL)}); err != nil {
 		t.Fatalf("set continuation context: %v", err)
 	}
 
@@ -1213,9 +1200,6 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 	t.Run("prompt history", func(t *testing.T) {
 		providerCalls := 0
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if modelstub.HandleInputTokenCount(w, r, 1) {
-				return
-			}
 			providerCalls++
 			modelstub.WriteCompletedResponseStream(w, "unexpected", 1, 1)
 		}))
@@ -1242,9 +1226,6 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		release := make(chan struct{})
 		var startedOnce sync.Once
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if modelstub.HandleInputTokenCount(w, r, 1) {
-				return
-			}
 			startedOnce.Do(func() { close(started) })
 			<-release
 		}))
@@ -1295,9 +1276,6 @@ func TestInProcessRunPromptPublishesCommentaryBeforeHeadlessAskFollowupFails(t *
 	var calls atomic.Int32
 	var sawAskResult atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		switch calls.Add(1) {
 		case 1:
 			writeRunPromptAskQuestionResponse(w, "partial progress")
@@ -1386,9 +1364,6 @@ func TestInProcessRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgro
 	var responseCount int
 	var responseMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -1658,9 +1633,6 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -1740,9 +1712,6 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 
 	requestBodies := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}

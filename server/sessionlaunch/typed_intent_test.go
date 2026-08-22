@@ -14,7 +14,7 @@ import (
 	"core/shared/sessioncontract"
 )
 
-func TestServiceMapsTypedLaunchIntentsWithoutRequestReplay(t *testing.T) {
+func TestServiceMapsTypedLaunchIntents(t *testing.T) {
 	containerDir := t.TempDir()
 	persistenceRoot := t.TempDir()
 	persistence := sessiontest.NewPersistence()
@@ -54,29 +54,33 @@ func TestServiceMapsTypedLaunchIntentsWithoutRequestReplay(t *testing.T) {
 		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: "/tmp/workspace-a"},
 	}).WithRuntimeAuthority(authority)
 
-	createRequest := serverapi.SessionPlanRequest{
-		Mode:   serverapi.SessionLaunchModeInteractive,
+	createRequest := PlanRequest{
+		Mode:   launch.ModeInteractive,
 		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}
-	created, err := service.PlanSession(context.Background(), createRequest)
+	created, err := service.PlanLaunchSession(context.Background(), createRequest)
 	if err != nil {
 		t.Fatalf("plan create-new session: %v", err)
 	}
 
-	repeated, err := service.PlanSession(context.Background(), createRequest)
+	secondCreated, err := service.PlanLaunchSession(context.Background(), createRequest)
 	if err != nil {
-		t.Fatalf("repeat create-new session: %v", err)
+		t.Fatalf("plan second create-new session: %v", err)
 	}
-	if repeated.Plan.SessionID == created.Plan.SessionID {
-		t.Fatalf("repeated session ID = %q, want a new operation after %q", repeated.Plan.SessionID, created.Plan.SessionID)
+	if secondCreated.Plan.Descriptor.SessionID() == created.Plan.Descriptor.SessionID() {
+		t.Fatalf("second create-new session reused session ID %q", created.Plan.Descriptor.SessionID())
 	}
 
-	openRequest := serverapi.SessionPlanRequest{
-		Mode:   serverapi.SessionLaunchModeInteractive,
+	openRequest := PlanRequest{
+		Mode:   launch.ModeInteractive,
 		Intent: serverapi.OpenExistingSessionLaunchIntent(targetID),
 	}
-	if _, err := service.PlanSession(context.Background(), openRequest); err != nil {
-		t.Fatalf("open existing session with repeated request ID: %v", err)
+	opened, err := service.PlanLaunchSession(context.Background(), openRequest)
+	if err != nil {
+		t.Fatalf("plan open-existing session: %v", err)
+	}
+	if opened.Plan.Descriptor.SessionID() != targetID {
+		t.Fatalf("open-existing session ID = %q, want %q", opened.Plan.Descriptor.SessionID(), targetID)
 	}
 }
 

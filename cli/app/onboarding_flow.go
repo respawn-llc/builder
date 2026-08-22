@@ -5,7 +5,7 @@ import (
 	"maps"
 	"strings"
 
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 )
 
 type onboardingScreenKind string
@@ -70,12 +70,12 @@ const (
 
 type onboardingImportSelection struct {
 	Mode      onboardingImportMode
-	ChoiceRef serverapi.ImportChoiceRef
+	ChoiceRef *capabilitypb.ImportChoiceRef
 }
 
 type onboardingFlowState struct {
 	selections    onboardingSelections
-	facts         serverapi.CapabilityFactsResponse
+	facts         *capabilitypb.Facts
 	pendingAction onboardingPendingAction
 	imports       onboardingImportDiscovery
 	debug         bool
@@ -92,7 +92,7 @@ func reviewerEnabled(state *onboardingFlowState) bool {
 	return state.selections.supervisor.frequency != onboardingSupervisorOff
 }
 
-func modelFactFor(state *onboardingFlowState, model string) serverapi.ModelCapabilityFact {
+func modelFactFor(state *onboardingFlowState, model string) *capabilitypb.ModelFact {
 	return modelFactForFacts(state.facts, model)
 }
 
@@ -110,11 +110,11 @@ func modelThinkingLevels(state *onboardingFlowState, model string) []string {
 }
 
 func modelSupportsVerbosity(state *onboardingFlowState, model string) bool {
-	return modelFactFor(state, model).Verbosity.Supported
+	return modelFactFor(state, model).GetVerbosity().GetSupported()
 }
 
 func modelVerbosityLevels(state *onboardingFlowState, model string) []string {
-	return append([]string(nil), modelFactFor(state, model).Verbosity.Levels...)
+	return append([]string(nil), modelFactFor(state, model).GetVerbosity().GetLevels()...)
 }
 
 func titleCaseASCII(value string) string {

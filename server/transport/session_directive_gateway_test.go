@@ -53,7 +53,7 @@ func TestGatewaySessionLifecycleResultRoundTrip(t *testing.T) {
 		Core:      appCore,
 		lifecycle: service,
 	}
-	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(deps, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}

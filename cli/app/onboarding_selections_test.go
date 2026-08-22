@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"core/shared/config"
-	"core/shared/serverapi"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	"core/shared/theme"
 	"core/shared/toolspec"
 )
@@ -134,33 +134,34 @@ func TestNewOnboardingFlowStateRejectsMalformedStructuralInputsInBothModes(t *te
 func TestNewOnboardingFlowStateRejectsMalformedProvenanceAndCapabilityFacts(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*config.App, *serverapi.CapabilityFactsResponse)
+		mutate func(*config.App, *capabilitypb.Facts)
 	}{
 		{
 			name: "unknown provenance",
-			mutate: func(cfg *config.App, _ *serverapi.CapabilityFactsResponse) {
+			mutate: func(cfg *config.App, _ *capabilitypb.Facts) {
 				cfg.Source.Sources["thinking_level"] = "mystery"
 			},
 		},
 		{
 			name: "non-positive model fact",
-			mutate: func(_ *config.App, facts *serverapi.CapabilityFactsResponse) {
-				facts.Models.KnownModels[0].ContextWindowTokens = ptr(-1)
+			mutate: func(_ *config.App, facts *capabilitypb.Facts) {
+				zero := uint32(0)
+				facts.Models.KnownModels[0].ContextWindowTokens = &zero
 			},
 		},
 		{
 			name: "malformed import choice",
-			mutate: func(_ *config.App, facts *serverapi.CapabilityFactsResponse) {
-				facts.Imports.Skills.Choices = []serverapi.ImportChoiceFact{{
-					Ref: serverapi.ImportChoiceRef{Mode: string(onboardingImportModeSymlinkSource)},
+			mutate: func(_ *config.App, facts *capabilitypb.Facts) {
+				facts.Imports.Skills.Choices = []*capabilitypb.ImportChoiceFact{{
+					Ref: &capabilitypb.ImportChoiceRef{Mode: capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_SYMLINK_SOURCE},
 				}}
 			},
 		},
 		{
 			name: "malformed command import choice",
-			mutate: func(_ *config.App, facts *serverapi.CapabilityFactsResponse) {
-				facts.Imports.Commands.Choices = []serverapi.ImportChoiceFact{{
-					Ref: serverapi.ImportChoiceRef{Mode: string(onboardingImportModeSymlinkSource)},
+			mutate: func(_ *config.App, facts *capabilitypb.Facts) {
+				facts.Imports.Commands.Choices = []*capabilitypb.ImportChoiceFact{{
+					Ref: &capabilitypb.ImportChoiceRef{Mode: capabilitypb.ImportChoiceMode_IMPORT_CHOICE_MODE_SYMLINK_SOURCE},
 				}}
 			},
 		},
@@ -169,7 +170,7 @@ func TestNewOnboardingFlowStateRejectsMalformedProvenanceAndCapabilityFacts(t *t
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := onboardingSeedConfig()
 			facts := testOnboardingCapabilityFacts()
-			tt.mutate(&cfg, &facts)
+			tt.mutate(&cfg, facts)
 			_, err := newOnboardingFlowState(cfg, facts)
 			var conversionErr *onboardingSelectionConversionError
 			if !errors.As(err, &conversionErr) {
@@ -241,7 +242,7 @@ func TestOnboardingSelectionInvariantDiagnosticReportsInvalidImportReferenceValu
 			invalidProviderID := " \t"
 			selection := test.selectImport(&state.selections)
 			*selection = testImportSelection(onboardingImportProviderCodex, "/tmp/import")
-			selection.ChoiceRef.ImportProviderID = &invalidProviderID
+			selection.ChoiceRef.ImportProviderId = &invalidProviderID
 
 			violation, ok := state.selections.invariantViolation()
 			if !ok {
@@ -303,11 +304,9 @@ func onboardingSeedConfig() config.App {
 func TestNewOnboardingFlowStateDoesNotApplyProviderCompatibilityPolicy(t *testing.T) {
 	cfg := onboardingSeedConfig()
 	cfg.Settings.ProviderOverride = "anthropic"
-	facts := serverapi.CapabilityFactsResponse{
-		Models: testOnboardingCapabilityFacts().Models,
-		Providers: serverapi.ProviderCapabilityFacts{CurrentEffective: &serverapi.LLMProviderCapabilityFact{
-			LLMProviderID: "openai",
-		}},
+	facts := testOnboardingCapabilityFacts()
+	facts.Providers = &capabilitypb.ProviderFacts{
+		CurrentEffective: &capabilitypb.ProviderFact{LlmProviderId: "openai"},
 	}
 	if _, err := newOnboardingFlowState(cfg, facts); err != nil {
 		t.Fatalf("constructor must not reject pre-existing provider/facts drift: %v", err)

@@ -109,8 +109,8 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 		t.Fatalf("model = %q, want gpt-5.3-codex", plan.ActiveSettings.Model)
 	}
 	if plan.StatusConfig.AuthSelection == nil ||
-		plan.StatusConfig.AuthSelection.OpenAIBaseURL == nil ||
-		!strings.HasPrefix(*plan.StatusConfig.AuthSelection.OpenAIBaseURL, "http://127.0.0.1:") {
+		plan.StatusConfig.AuthSelection.OpenaiBaseUrl == nil ||
+		!strings.HasPrefix(*plan.StatusConfig.AuthSelection.OpenaiBaseUrl, "http://127.0.0.1:") {
 		t.Fatalf("status auth selection = %+v, want invocation override", plan.StatusConfig.AuthSelection)
 	}
 	if len(plan.EnabledTools) != 1 || plan.EnabledTools[0] != toolspec.ToolExecCommand {

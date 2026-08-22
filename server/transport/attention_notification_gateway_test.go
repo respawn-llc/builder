@@ -77,7 +77,9 @@ func TestGatewaySessionAttentionRouteRequiresAttachedSession(t *testing.T) {
 	conn = dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-session-one", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: sessionOne.Meta().SessionID}, nil)
+	if result := attachGatewaySession(t, conn, "attach-session-one", sessionOne.Meta().SessionID); result.GetSuccess() == nil {
+		t.Fatalf("attach Session one failed: %+v", result.GetError())
+	}
 	errResp = callGatewayExpectError(t, conn, "attention-wrong-session", protocol.MethodAttentionSessionNotificationSubscribe, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: sessionTwo.Meta().SessionID})
 	if errResp.Code != protocol.ErrCodeInvalidRequest {
 		t.Fatalf("wrong attach error = %+v", errResp)
@@ -123,7 +125,7 @@ func newGatewayAttentionTestServer(t *testing.T) (*core.Core, *registry.RuntimeR
 	prompts := registry.NewRuntimeRegistry().WithAttentionNotifications(broker)
 	gateway, err := NewGateway(
 		&gatewayAttentionDependencies{Core: appCore, attention: prompts},
-		protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+		gatewayTestIdentity(),
 	)
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)

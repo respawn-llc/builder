@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"core/shared/serverapi"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 
 	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
@@ -19,38 +19,30 @@ func TestSessionPickerUpdateHeaderProjectsResponsiveRowPolicy(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		response      serverapi.UpdateStatusResponse
+		response      *serverpb.GetUpdateStatusSuccess
 		applyResponse bool
 		additionalRow bool
 	}{
 		{name: "pending"},
 		{
-			name: "current",
-			response: serverapi.UpdateStatusResponse{
-				Result: serverapi.CurrentUpdateStatusResult("1.2.3", "1.2.3"),
-			},
+			name:          "current",
+			response:      currentUpdateStatusSuccess("1.2.3", "1.2.3"),
 			applyResponse: true,
 		},
 		{
-			name: "check unavailable",
-			response: serverapi.UpdateStatusResponse{
-				Result: serverapi.CheckUnavailableUpdateStatusResult(),
-			},
+			name:          "check unavailable",
+			response:      checkUnavailableUpdateStatusSuccess(),
 			applyResponse: true,
 		},
 		{
-			name: "available",
-			response: serverapi.UpdateStatusResponse{
-				Result: serverapi.AvailableUpdateStatusResult("1.2.3", "123456789.123456789.123456789"),
-			},
+			name:          "available",
+			response:      availableUpdateStatusSuccess("1.2.3", "123456789.123456789.123456789"),
 			applyResponse: true,
 			additionalRow: true,
 		},
 		{
-			name: "check failed",
-			response: serverapi.UpdateStatusResponse{
-				Result: serverapi.FailedUpdateStatusResult("release metadata could not be decoded from the remote response"),
-			},
+			name:          "check failed",
+			response:      failedUpdateStatusSuccess("release metadata could not be decoded from the remote response"),
 			applyResponse: true,
 			additionalRow: true,
 		},

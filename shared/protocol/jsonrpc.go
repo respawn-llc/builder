@@ -38,9 +38,7 @@ const (
 	ErrCodeModelStreamStalled                = -32028
 	ErrCodeRuntimeNoActiveRun                = -32029
 	ErrCodeRuntimeNoFinalAnswer              = -32030
-	ErrCodeUnsupportedProvider               = -32031
 	ErrCodeServerNotReady                    = -32032
-	ErrCodeOnboardingFinalizeFailed          = -32033
 	ErrCodeWorkflowTaskListScope             = -32034
 	ErrCodeWorkflowExecutionTargetResolution = -32035
 	ErrCodeWorkflowLockedExecutionTarget     = -32036
@@ -54,9 +52,6 @@ const (
 	ErrCodeWorkflowTaskCreateConflict        = -32046
 	ErrCodeWorkflowLabel                     = -32047
 	ErrCodeWorktreeBlocked                   = -32048
-	ErrCodeWorkspacePathIdentity             = -32049
-	ErrCodeWorkspaceDetachConflict           = -32050
-	ErrCodeWorkspaceMutationFailed           = -32051
 	ErrCodeWorkflowTaskSearch                = -32052
 	ErrCodeWorkflowTaskDependency            = -32053
 	ErrCodeManualCompactionTooSoon           = -32054

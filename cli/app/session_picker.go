@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"core/shared/clientui"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,7 +21,48 @@ const sessionPickerPageSize = 50
 
 type sessionPageLoader interface {
 	ProjectID() string
-	ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error)
+	ListSessionPage(context.Context, sessionPageRequest) (sessionPageResponse, error)
+}
+
+type sessionPageRequest struct {
+	ProjectID string
+	Category  sessioncontract.SessionCategory
+	Offset    *int
+	Limit     *int
+}
+
+type sessionPageResponse struct {
+	ProjectID  string
+	Category   sessioncontract.SessionCategory
+	Sessions   []clientui.SessionSummary
+	NextOffset *int
+}
+
+func (r sessionPageResponse) Validate() error {
+	if strings.TrimSpace(r.ProjectID) == "" || strings.TrimSpace(r.ProjectID) != r.ProjectID {
+		return errors.New("project_id is invalid")
+	}
+	if _, err := sessioncontract.ParseSessionCategory(string(r.Category)); err != nil {
+		return err
+	}
+	if len(r.Sessions) > sessionPickerPageSize {
+		return fmt.Errorf("session page exceeds maximum size %d", sessionPickerPageSize)
+	}
+	for index, summary := range r.Sessions {
+		if summary.SessionID.IsZero() {
+			return fmt.Errorf("sessions[%d].session_id is required", index)
+		}
+		if summary.Category != r.Category {
+			return fmt.Errorf("sessions[%d].category does not match page category", index)
+		}
+		if !summary.UpdatedAt.After(time.Unix(0, 0).UTC()) {
+			return fmt.Errorf("sessions[%d].updated_at is invalid", index)
+		}
+	}
+	if r.NextOffset != nil && *r.NextOffset <= 0 {
+		return errors.New("next_offset must be positive when present")
+	}
+	return nil
 }
 
 type sessionPickerResult interface {
@@ -68,7 +111,7 @@ type sessionPickerModel struct {
 	spinnerSequence            uint64
 	scheduledSpinnerGeneration *uint64
 	startupStatus              *startupPickerStatusModel
-	updateStatus               *serverapi.UpdateStatusResult
+	updateStatus               *serverpb.UpdateStatus
 	clock                      func() time.Time
 }
 
@@ -76,7 +119,7 @@ type sessionPickerPageLoadedMsg struct {
 	category        sessioncontract.SessionCategory
 	generation      uint64
 	requestedOffset int
-	response        serverapi.SessionPageResponse
+	response        sessionPageResponse
 	err             error
 }
 
@@ -391,7 +434,7 @@ func (m *sessionPickerModel) startDirectionalRequest(tab *sessionPickerTab, requ
 func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategory, generation uint64, requestedOffset int) tea.Cmd {
 	offset := requestedOffset
 	limit := sessionPickerPageSize
-	request := serverapi.SessionPageRequest{
+	request := sessionPageRequest{
 		ProjectID: m.loader.ProjectID(),
 		Category:  category,
 		Offset:    &offset,
@@ -410,7 +453,7 @@ func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategor
 }
 
 func validateSessionPickerPage(
-	response serverapi.SessionPageResponse,
+	response sessionPageResponse,
 	expectedProjectID string,
 	expectedCategory sessioncontract.SessionCategory,
 ) error {

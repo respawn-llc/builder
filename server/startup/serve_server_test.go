@@ -22,9 +22,14 @@ import (
 	"core/server/workflowstore"
 	"core/shared/client"
 	"core/shared/config"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type envAuthHandler struct {
@@ -481,18 +486,22 @@ func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
 	if server.Core != nil || server.deps == nil {
 		t.Fatal("expected missing-config serve startup surface without configured core")
 	}
-	readiness, err := server.deps.ServerStatusClient().GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	readinessResponse, err := server.deps.ServerStatusClient().GetReadiness(context.Background(), &emptypb.Empty{})
 	if err != nil {
-		t.Fatalf("GetServerReadiness: %v", err)
+		t.Fatalf("GetReadiness: %v", err)
 	}
+	readiness := readinessResponse.Readiness
 	if readiness.Ready || len(readiness.Causes) == 0 {
 		t.Fatalf("readiness = %+v, want not ready with onboarding cause", readiness)
 	}
 	cause := readiness.Causes[0]
-	if cause.Code != string(serverapi.ServerNotReadyOnboardingRequired) || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
+	if cause.Code != string(serverapi.ServerNotReadyOnboardingRequired) ||
+		cause.Severity != serverpb.ReadinessSeverity_READINESS_SEVERITY_ERROR ||
+		cause.Summary != nil ||
+		cause.NextAction != nil {
 		t.Fatalf("unexpected onboarding readiness cause: %+v", cause)
 	}
-	if _, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{}); !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+	if _, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), &emptypb.Empty{}); !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
 		t.Fatalf("GetUpdateStatus before activation error = %v, want onboarding not ready", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
@@ -530,8 +539,8 @@ func TestServeOnboardingHandlerReceivesCapabilityFactsClient(t *testing.T) {
 		if req.CapabilityFactsClient == nil {
 			t.Fatal("capability facts client was not threaded into serve onboarding")
 		}
-		if _, err := req.CapabilityFactsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{}); err != nil {
-			t.Fatalf("GetCapabilityFacts: %v", err)
+		if _, err := req.CapabilityFactsClient.GetFacts(ctx, &capabilitypb.GetFactsRequest{}); err != nil {
+			t.Fatalf("GetFacts: %v", err)
 		}
 		receivedFacts = true
 		return req.Config, ErrOnboardingRequired
@@ -578,14 +587,15 @@ model = "blocked-model"
 	}
 	defer func() { _ = remote.Close() }()
 
-	readiness, err := remote.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	readinessResponse, err := remote.GetReadiness(context.Background(), &emptypb.Empty{})
 	if err != nil {
-		t.Fatalf("GetServerReadiness: %v", err)
+		t.Fatalf("GetReadiness: %v", err)
 	}
+	readiness := readinessResponse.Readiness
 	if readiness.Ready {
 		t.Fatalf("ready = true, want false: %+v", readiness)
 	}
-	if readiness.ServerID == "" || readiness.ProtocolVersion != protocol.Version || readiness.ServerVersion == "" {
+	if readiness.ServerId == "" || readiness.ProtocolVersion != protocol.Version || readiness.ServerVersion == "" {
 		t.Fatalf("missing readiness identity fields: %+v", readiness)
 	}
 	if readiness.AuthReady || !readiness.AuthRequired {
@@ -599,7 +609,10 @@ model = "blocked-model"
 	}
 	assertReadinessRoles(t, readiness.SubagentRoles, []string{"default", "fast", "blocked", "coder"})
 	cause := readiness.Causes[0]
-	if cause.Code != "server_not_ready" || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
+	if cause.Code != "server_not_ready" ||
+		cause.Severity != serverpb.ReadinessSeverity_READINESS_SEVERITY_ERROR ||
+		cause.Summary != nil ||
+		cause.NextAction != nil {
 		t.Fatalf("unexpected generic readiness cause: %+v", cause)
 	}
 }
@@ -619,7 +632,7 @@ func TestMissingConfigFinalizeActivationFailureIsTypedAndRetryConflicts(t *testi
 		t.Fatalf("write metadata blocker: %v", err)
 	}
 
-	_, err := server.deps.OnboardingFinalizeClient().FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
+	_, err := server.deps.OnboardingFinalizeClient().Finalize(context.Background(), &onboardingpb.FinalizeRequest{})
 	if !errors.Is(err, serverapi.ErrServerNotReadyActivationFailed) {
 		t.Fatalf("finalize error = %v, want activation_failed", err)
 	}
@@ -644,22 +657,23 @@ func TestMissingConfigFinalizeActivationFailureIsTypedAndRetryConflicts(t *testi
 	if state := server.deps.ServerReadinessState(); state.Ready || state.Reason == nil || *state.Reason != serverapi.ServerNotReadyActivationFailed || state.Diagnostic == nil || *state.Diagnostic == "" {
 		t.Fatalf("readiness = %+v, want activation_failed diagnostic", state)
 	}
-	readiness, statusErr := server.deps.ServerStatusClient().GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	readinessResponse, statusErr := server.deps.ServerStatusClient().GetReadiness(context.Background(), &emptypb.Empty{})
 	if statusErr != nil {
-		t.Fatalf("GetServerReadiness after activation failure: %v", statusErr)
+		t.Fatalf("GetReadiness after activation failure: %v", statusErr)
 	}
-	if readiness.Ready || len(readiness.Causes) == 0 || readiness.Causes[0].DiagnosticID == "" {
+	readiness := readinessResponse.Readiness
+	if readiness.Ready || len(readiness.Causes) == 0 || readiness.Causes[0].DiagnosticId == nil || *readiness.Causes[0].DiagnosticId == "" {
 		t.Fatalf("readiness response after activation failure = %+v", readiness)
 	}
-	_, retryErr := server.deps.OnboardingFinalizeClient().FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
+	_, retryErr := server.deps.OnboardingFinalizeClient().Finalize(context.Background(), &onboardingpb.FinalizeRequest{})
 	if !errors.Is(retryErr, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
 		t.Fatalf("retry error = %v, want config_already_exists", retryErr)
 	}
 }
 
-type finalizeServiceFunc func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+type finalizeServiceFunc func(context.Context, *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error)
 
-func (f finalizeServiceFunc) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+func (f finalizeServiceFunc) Finalize(ctx context.Context, req *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
 	return f(ctx, req)
 }
 
@@ -668,17 +682,17 @@ func TestStartupFinalizeActivationUsesServerOwnedContext(t *testing.T) {
 	cancel()
 	activationCtxCanceled := true
 	service := startupFinalizeService{
-		service: finalizeServiceFunc(func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
-			return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
+		service: finalizeServiceFunc(func(context.Context, *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
+			return &onboardingpb.FinalizeSuccess{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
 		}),
 		activationContext: context.Background(),
-		activate: func(ctx context.Context, _ serverapi.OnboardingFinalizeResponse) error {
+		activate: func(ctx context.Context, _ *onboardingpb.FinalizeSuccess) error {
 			activationCtxCanceled = ctx.Err() != nil
 			return nil
 		},
 	}
-	if _, err := service.FinalizeOnboarding(requestCtx, serverapi.OnboardingFinalizeRequest{}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+	if _, err := service.Finalize(requestCtx, &onboardingpb.FinalizeRequest{}); err != nil {
+		t.Fatalf("Finalize: %v", err)
 	}
 	if activationCtxCanceled {
 		t.Fatal("activation used canceled request context")
@@ -696,7 +710,7 @@ func writeServeSettings(t *testing.T, home string, contents string) {
 	}
 }
 
-func assertReadinessRoles(t *testing.T, roles []serverapi.SubagentRoleSummary, want []string) {
+func assertReadinessRoles(t *testing.T, roles []*serverpb.SubagentRoleSummary, want []string) {
 	t.Helper()
 	got := make([]string, 0, len(roles))
 	for _, role := range roles {

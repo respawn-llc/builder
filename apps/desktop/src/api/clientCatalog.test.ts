@@ -1,230 +1,192 @@
 import { describe, expect, it } from "vitest";
+import { create } from "@app/server-api-contract";
+import {
+  ProjectAvailability,
+  ProjectCatalogService,
+} from "@app/server-api-contract/gen/kent/api/project/project_pb";
+import {
+  SessionCatalogService,
+  SessionCategory,
+} from "@app/server-api-contract/gen/kent/api/project/session_catalog_pb";
 import { FakeRpcTransport } from "@/test-support/api";
 import { ApiClient } from "./client";
-import { CatalogContractError, ContractError, RpcError } from "./index";
-const sessionResponse = {
-  project_id: "project-1",
-  category: "main",
-  sessions: [],
-} as const;
-const workspaceRow = {
-  workspace_id: "workspace-1",
-  display_name: "Kent",
-  root_path: "/workspace/kent",
-  is_default: true,
-} as const;
-const workspaceResponse = {
-  project_id: "project-1",
-  offset: 0,
-  workspaces: [workspaceRow],
-  next_offset: 100,
-} as const;
-describe("ApiClient catalog boundary", () => {
-  it.each([{ category: "main" as const }, { category: "subagent" as const }])(
-    "requests an explicit offset with a fixed 50-row Session page for $category",
-    async ({ category }) => {
-      const transport = new FakeRpcTransport([
-        { method: "session.page", result: { ...sessionResponse, category, next_offset: 100 } },
-      ]);
-      const client = new ApiClient(transport);
+import { ContractError, isProjectMissingError, RpcError } from "./index";
 
-      await expect(client.listSessionPage("project-1", category, 50)).resolves.toMatchObject({
-        projectID: "project-1",
-        category,
-        nextOffset: 100,
-      });
-      expect(transport.calls).toEqual([
-        {
-          method: "session.page",
-          params: {
-            project_id: "project-1",
-            category,
-            offset: 50,
-            limit: 50,
-          },
-        },
-      ]);
-    },
-  );
-  it.each([-1, 0.5, Number.NaN])("rejects invalid Session offset %j", async (offset) => {
-    const transport = new FakeRpcTransport([]);
-    await expect(
-      new ApiClient(transport).listSessionPage("project-1", "main", offset),
-    ).rejects.toBeInstanceOf(ContractError);
-    expect(transport.calls).toHaveLength(0);
-  });
-  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "rejects invalid workspace offsets %j",
-    async (offset) => {
-      const transport = new FakeRpcTransport([]);
-      await expect(new ApiClient(transport).listWorkspaces("project-1", offset)).rejects.toBeInstanceOf(
-        ContractError,
-      );
-      expect(transport.calls).toHaveLength(0);
-    },
-  );
-  it.each(["", " ", " project-1", "project-1 "])(
-    "rejects invalid catalog Project IDs %j",
-    async (projectID) => {
-      const transport = new FakeRpcTransport([]);
-      const client = new ApiClient(transport);
-      await expect(client.listSessionPage(projectID, "main", 0)).rejects.toBeInstanceOf(ContractError);
-      await expect(client.listWorkspaces(projectID, 0)).rejects.toBeInstanceOf(ContractError);
-      expect(transport.calls).toHaveLength(0);
-    },
-  );
+describe("ApiClient catalog boundary", () => {
   it.each([
-    { name: "omitted", response: sessionResponse },
-    { name: "null", response: { ...sessionResponse, next_offset: null } },
-  ])("maps $name Session next offset to null", async ({ response }) => {
-    await expect(
-      new ApiClient(new FakeRpcTransport([{ method: "session.page", result: response }])).listSessionPage(
-        "project-1",
-        "main",
-        0,
-      ),
-    ).resolves.toMatchObject({ nextOffset: null });
-  });
-  it("validates Session page identity and preserves RPC failures", async () => {
-    const projectMismatch = new ApiClient(
-      new FakeRpcTransport([
-        { method: "session.page", result: { ...sessionResponse, project_id: "project-2" } },
-      ]),
+    { category: SessionCategory.MAIN, expected: "main" as const },
+    { category: SessionCategory.SUBAGENT, expected: "subagent" as const },
+  ])("projects a $expected Session page", async ({ category, expected }) => {
+    const client = clientWith(
+      SessionCatalogService.method.page,
+      sessionResult({ category, nextOffset: 100 }),
     );
-    await expect(projectMismatch.listSessionPage("project-1", "main", 0)).rejects.toMatchObject({
+
+    await expect(client.listSessionPage("project-1", expected, 50)).resolves.toMatchObject({
+      projectID: "project-1",
+      category: expected,
+      sessions: [],
+      nextOffset: 100,
+    });
+  });
+
+  it("rejects a Session page for another Project", async () => {
+    const client = clientWith(SessionCatalogService.method.page, sessionResult({ projectId: "project-2" }));
+
+    await expect(client.listSessionPage("project-1", "main", 0)).rejects.toMatchObject({
       reason: "project_mismatch",
       expectedProjectID: "project-1",
       actualProjectID: "project-2",
     });
-    const categoryMismatch = new ApiClient(
-      new FakeRpcTransport([
-        { method: "session.page", result: { ...sessionResponse, category: "subagent" } },
-      ]),
-    );
-    await expect(categoryMismatch.listSessionPage("project-1", "main", 0)).rejects.toMatchObject({
-      reason: "session_category_mismatch",
-      expectedCategory: "main",
-      actualCategory: "subagent",
-    });
-    const rpcError = new RpcError({ code: -32000, message: "unavailable", method: "session.page" });
-    const failed = new ApiClient(new FakeRpcTransport([{ method: "session.page", error: rpcError }]));
-    await expect(failed.listSessionPage("project-1", "main", 0)).rejects.toBe(rpcError);
   });
-  it("validates the numeric-offset workspace page", async () => {
-    const fullWorkspaceResponse = {
-      ...workspaceResponse,
-      workspaces: Array.from({ length: 100 }, (_, index) => ({
-        ...workspaceRow,
-        workspace_id: `workspace-${String(index)}`,
-      })),
-    };
-    const transport = new FakeRpcTransport([
-      { method: "project.workspace.list", result: fullWorkspaceResponse },
-    ]);
-    const client = new ApiClient(transport);
 
-    await expect(client.listWorkspaces("project-1", 0)).resolves.toMatchObject({
+  it("projects terminal Project Home and full Workspace pages", async () => {
+    const terminalProjectPage = clientWith(
+      ProjectCatalogService.method.listHome,
+      create(ProjectCatalogService.method.listHome.output, {
+        outcome: {
+          case: "success",
+          value: {
+            projects: [
+              {
+                projectId: "project-1",
+                projectKey: "PRJ",
+                displayName: "Project",
+                primaryWorkspace: {
+                  workspaceId: "workspace-1",
+                  displayName: "Workspace",
+                  rootPath: "/workspace",
+                  availability: ProjectAvailability.AVAILABLE,
+                  isPrimary: true,
+                  updatedAt: { seconds: 1n, nanos: 0 },
+                },
+                updatedAt: { seconds: 1n, nanos: 0 },
+              },
+            ],
+            generatedAt: { seconds: 1n, nanos: 0 },
+          },
+        },
+      }),
+    );
+    await expect(terminalProjectPage.listProjects(null)).resolves.toMatchObject({
+      projects: [{ defaultWorkflowID: null, defaultWorkflowName: null }],
+      nextPageToken: null,
+    });
+
+    const client = clientWith(
+      ProjectCatalogService.method.listWorkspaces,
+      workspaceResult({ workspaceCount: 100, nextOffset: 100 }),
+    );
+
+    const page = await client.listWorkspaces("project-1", 0);
+    expect(page).toMatchObject({
       projectID: "project-1",
       offset: 0,
       nextOffset: 100,
     });
-    expect(transport.calls).toEqual([
-      {
-        method: "project.workspace.list",
-        params: { project_id: "project-1", offset: 0, limit: 100 },
-      },
-    ]);
-    await expect(
-      new ApiClient(
-        new FakeRpcTransport([
-          { method: "project.workspace.list", result: { ...workspaceResponse, project_id: "project-2" } },
-        ]),
-      ).listWorkspaces("project-1", 0),
-    ).rejects.toMatchObject({
-      reason: "project_mismatch",
-      expectedProjectID: "project-1",
-      actualProjectID: "project-2",
-    });
+    expect(page.workspaces[0]).toMatchObject({ id: "workspace-0", rootPath: "/workspace/0" });
   });
+
   it.each([
-    {
-      name: "short page continuation",
-      response: workspaceResponse,
-    },
-    {
-      name: "non-progressing continuation",
-      response: {
-        ...workspaceResponse,
-        workspaces: Array.from({ length: 100 }, (_, index) => ({
-          ...workspaceRow,
-          workspace_id: `workspace-${String(index)}`,
-        })),
-        next_offset: 50,
-      },
-    },
-  ])("rejects $name in a Workspace page", async ({ response }) => {
-    const client = new ApiClient(
-      new FakeRpcTransport([{ method: "project.workspace.list", result: response }]),
-    );
+    { workspaceCount: 1, nextOffset: 100 },
+    { workspaceCount: 100, nextOffset: 50 },
+  ])("rejects a malformed Workspace continuation %#", async (response) => {
+    const client = clientWith(ProjectCatalogService.method.listWorkspaces, workspaceResult(response));
+
     await expect(client.listWorkspaces("project-1", 0)).rejects.toMatchObject({
       reason: "malformed_response",
     });
   });
-  it("reports malformed successful catalog payloads as typed errors", async () => {
-    const client = new ApiClient(
-      new FakeRpcTransport([
-        {
-          method: "session.page",
-          result: {
-            ...sessionResponse,
-            sessions: Array.from({ length: 51 }, (_, index) => ({
-              session_id: `session-${String(index)}`,
-              category: "main",
-              updated_at: "2026-08-09T10:00:00Z",
-            })),
+
+  it("preserves typed protobuf failures as RpcError", async () => {
+    const client = clientWith(
+      ProjectCatalogService.method.listWorkspaces,
+      create(ProjectCatalogService.method.listWorkspaces.output, {
+        outcome: {
+          case: "error",
+          value: {
+            code: "project_not_found",
+            detail: {
+              case: "projectNotFound",
+              value: { projectId: "project-1" },
+            },
           },
         },
-      ]),
-    );
-    const error = await catchError(client.listSessionPage("project-1", "main", 0));
-    expect(error).toBeInstanceOf(CatalogContractError);
-    expect(error).toBeInstanceOf(ContractError);
-    expect(error).toMatchObject({ reason: "malformed_response" });
-  });
-  it.each([
-    {
-      name: "old only",
-      result: { ...sessionResponse, older: "opaque" },
-    },
-    {
-      name: "mixed continuation and offset",
-      result: { ...sessionResponse, next_offset: 50, newer: "opaque" },
-    },
-  ])("rejects $name Session response fields", async ({ result }) => {
-    const client = new ApiClient(new FakeRpcTransport([{ method: "session.page", result }]));
-    await expect(client.listSessionPage("project-1", "main", 0)).rejects.toBeInstanceOf(CatalogContractError);
-  });
-  it("preserves the complete diagnostic count when wrapping malformed responses", () => {
-    const source = new ContractError(
-      "source contract failure",
-      Array.from({ length: 12 }, (_, index) => ({
-        code: "invalid_type",
-        path: [`field-${String(index)}`],
-      })),
+      }),
     );
 
-    const error = CatalogContractError.malformedResponse("session.page", source);
+    const error = await client.listWorkspaces("project-1", 0).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(RpcError);
+    expect(isProjectMissingError(error)).toBe(true);
+    expect(error).toMatchObject({
+      method: "kent.api.project.project_catalog_service.list_workspaces",
+      data: { code: "project_not_found" },
+    });
 
-    expect(error.diagnostics).toHaveLength(8);
-    expect(error.totalDiagnosticCount).toBe(12);
-    expect(error.message).toContain("+4 more");
+    const malformedClient = clientWith(
+      ProjectCatalogService.method.listWorkspaces,
+      create(ProjectCatalogService.method.listWorkspaces.output, {
+        outcome: {
+          case: "error",
+          value: {
+            code: "internal_failure",
+            detail: {
+              case: "projectNotFound",
+              value: { projectId: "project-1" },
+            },
+          },
+        },
+      }),
+    );
+    await expect(malformedClient.listWorkspaces("project-1", 0)).rejects.toBeInstanceOf(ContractError);
   });
 });
-async function catchError(operation: Promise<unknown>): Promise<unknown> {
-  try {
-    await operation;
-  } catch (error) {
-    return error;
-  }
-  throw new Error("operation did not fail");
+
+function clientWith(
+  descriptor:
+    | typeof SessionCatalogService.method.page
+    | typeof ProjectCatalogService.method.listHome
+    | typeof ProjectCatalogService.method.listWorkspaces,
+  result: ReturnType<typeof create>,
+): ApiClient {
+  return new ApiClient(new FakeRpcTransport([{ descriptor, result }]));
+}
+
+function sessionResult(
+  response: Readonly<{
+    projectId?: string;
+    category?: SessionCategory;
+    nextOffset?: number;
+  }> = {},
+) {
+  return create(SessionCatalogService.method.page.output, {
+    outcome: {
+      case: "success",
+      value: {
+        projectId: response.projectId ?? "project-1",
+        category: response.category ?? SessionCategory.MAIN,
+        sessions: [],
+        ...(response.nextOffset === undefined ? {} : { nextOffset: response.nextOffset }),
+      },
+    },
+  });
+}
+
+function workspaceResult(response: Readonly<{ workspaceCount: number; nextOffset: number }>) {
+  return create(ProjectCatalogService.method.listWorkspaces.output, {
+    outcome: {
+      case: "success",
+      value: {
+        projectId: "project-1",
+        offset: 0,
+        workspaces: Array.from({ length: response.workspaceCount }, (_, index) => ({
+          workspaceId: `workspace-${String(index)}`,
+          displayName: `Workspace ${String(index)}`,
+          rootPath: `/workspace/${String(index)}`,
+          isDefault: index === 0,
+        })),
+        nextOffset: response.nextOffset,
+      },
+    },
+  });
 }

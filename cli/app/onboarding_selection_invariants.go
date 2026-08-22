@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"math"
 	"runtime/debug"
 	"strings"
 
@@ -112,8 +113,10 @@ func (selections onboardingSelections) invariantViolation() (onboardingInvariant
 	if strings.TrimSpace(selections.model.value) == "" {
 		return onboardingInvariantViolation{VariantType: "model.value", VariantTag: selections.model.value}, true
 	}
-	if selections.contextWindow.kind == onboardingContextCustom && selections.contextWindow.tokens <= 0 {
-		return onboardingInvariantViolation{VariantType: "context_window.tokens", VariantTag: fmt.Sprint(selections.contextWindow.tokens)}, true
+	if selections.contextWindow.kind == onboardingContextCustom {
+		if selections.contextWindow.tokens <= 0 || uint64(selections.contextWindow.tokens) > math.MaxUint32 {
+			return onboardingInvariantViolation{VariantType: "context_window.tokens", VariantTag: fmt.Sprint(selections.contextWindow.tokens)}, true
+		}
 	}
 	if selections.thinking.requiresValue() && strings.TrimSpace(selections.thinking.value) == "" {
 		return onboardingInvariantViolation{VariantType: "thinking.value", VariantTag: selections.thinking.value}, true
@@ -143,8 +146,11 @@ func (selections onboardingSelections) invariantViolation() (onboardingInvariant
 	if selections.preserved.openAIBaseURL != nil && strings.TrimSpace(*selections.preserved.openAIBaseURL) == "" {
 		return onboardingInvariantViolation{VariantType: "preserved.openai_base_url", VariantTag: *selections.preserved.openAIBaseURL}, true
 	}
-	if selections.preserved.modelTimeoutSeconds != nil && *selections.preserved.modelTimeoutSeconds <= 0 {
-		return onboardingInvariantViolation{VariantType: "preserved.model_timeout_seconds", VariantTag: fmt.Sprint(*selections.preserved.modelTimeoutSeconds)}, true
+	if selections.preserved.modelTimeoutSeconds != nil {
+		value := *selections.preserved.modelTimeoutSeconds
+		if value <= 0 || uint64(value) > math.MaxUint32 {
+			return onboardingInvariantViolation{VariantType: "preserved.model_timeout_seconds", VariantTag: fmt.Sprint(value)}, true
+		}
 	}
 	if selections.preserved.baselineModelContextWindow != nil && *selections.preserved.baselineModelContextWindow <= 0 {
 		return onboardingInvariantViolation{VariantType: "preserved.baseline_model_context_window", VariantTag: fmt.Sprint(*selections.preserved.baselineModelContextWindow)}, true
@@ -165,12 +171,12 @@ func importSelectionInvariantViolation(
 		return onboardingInvariantViolation{}, false
 	}
 	ref := selection.ChoiceRef
-	if onboardingImportMode(ref.Mode) != onboardingImportModeSymlinkSource {
-		return onboardingInvariantViolation{VariantType: variantPrefix + ".choice_ref.mode", VariantTag: ref.Mode}, true
+	if onboardingImportModeFromProto(ref.GetMode()) != onboardingImportModeSymlinkSource {
+		return onboardingInvariantViolation{VariantType: variantPrefix + ".choice_ref.mode", VariantTag: ref.GetMode().String()}, true
 	}
 	if violation, ok := requiredStringReferenceViolation(
 		variantPrefix+".choice_ref.import_provider_id",
-		ref.ImportProviderID,
+		ref.ImportProviderId,
 	); ok {
 		return violation, true
 	}

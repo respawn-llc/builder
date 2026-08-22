@@ -1,5 +1,6 @@
 import type { ConnectionStore } from "./connectionStore";
 import type { JsonValue } from "./json";
+import type { DescMethod, MessageShape } from "@app/server-api-contract";
 
 export type RpcEventHandler = Readonly<{
   onOpen?(): void;
@@ -33,3 +34,12 @@ export type RpcTransport = Readonly<{
   ): Promise<unknown>;
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription;
 }>;
+
+export type DescriptorRpcTransport = RpcTransport &
+  Readonly<{
+    callDescriptor<Method extends DescMethod>(
+      method: Method,
+      request: MessageShape<Method["input"]>,
+      options?: RpcCallOptions,
+    ): Promise<MessageShape<Method["output"]>>;
+  }>;

@@ -3,14 +3,16 @@ package status
 import (
 	"context"
 	"core/shared/apicontract"
-	"core/shared/authstatus"
 	"core/shared/clientui"
 	"core/shared/config"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/serverapi"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type statusSessionViewStub struct {
@@ -20,26 +22,26 @@ type statusSessionViewStub struct {
 }
 
 type statusAuthStatusStub struct {
-	response serverapi.AuthStatusResponse
+	response *authpb.Status
 	err      error
 }
 
-func (s statusAuthStatusStub) GetAuthStatus(
+func (s statusAuthStatusStub) GetStatus(
 	context.Context,
-	serverapi.AuthStatusRequest,
-) (serverapi.AuthStatusResponse, error) {
+	*authpb.GetStatusRequest,
+) (*authpb.Status, error) {
 	return s.response, s.err
 }
 
 type recordingStatusAuthStatusStub struct {
-	request  serverapi.AuthStatusRequest
-	response serverapi.AuthStatusResponse
+	request  *authpb.GetStatusRequest
+	response *authpb.Status
 }
 
-func (s *recordingStatusAuthStatusStub) GetAuthStatus(
+func (s *recordingStatusAuthStatusStub) GetStatus(
 	_ context.Context,
-	request serverapi.AuthStatusRequest,
-) (serverapi.AuthStatusResponse, error) {
+	request *authpb.GetStatusRequest,
+) (*authpb.Status, error) {
 	s.request = request
 	return s.response, nil
 }
@@ -91,14 +93,19 @@ func TestCollectorUsesTypedAuthStatusService(t *testing.T) {
 	collector := Collector{}
 	snapshot, err := collector.Collect(context.Background(), Request{
 		WorkspaceRoot: t.TempDir(),
-		AuthStatus: statusAuthStatusStub{response: serverapi.AuthStatusResponse{
-			Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
-				Method:        serverapi.AuthStatusMethodOAuth,
-				Provider:      serverapi.OpenAIAuthProviderFacts(),
-				EnvPreference: serverapi.AuthStatusEnvPreferencePreferSaved,
-				OAuth:         &serverapi.AuthOAuthFacts{Email: &email},
-			}, nil),
-			Subscription: serverapi.AuthSubscriptionFacts{Applicable: true, Plan: &plan},
+		AuthStatus: statusAuthStatusStub{response: &authpb.Status{
+			Resolution: &authpb.StatusResolution{
+				Resolution: &authpb.StatusResolution_Known{Known: &authpb.StatusFacts{
+					Method: authpb.AuthMethod_AUTH_METHOD_OAUTH,
+					Provider: &authpb.ProviderFacts{
+						Kind:       authpb.ProviderKind_PROVIDER_KIND_OPENAI,
+						Identifier: "openai",
+					},
+					EnvPreference: authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_PREFER_SAVED_AUTH,
+					MethodFacts:   &authpb.StatusFacts_Oauth{Oauth: &authpb.OAuthFacts{Email: &email}},
+				}},
+			},
+			Subscription: &authpb.SubscriptionFacts{Applicable: true, Plan: &plan},
 		}},
 	})
 	if err != nil {
@@ -113,32 +120,37 @@ func TestCollectorUsesTypedAuthStatusService(t *testing.T) {
 }
 
 func TestCollectorRequestsEffectiveSessionAuthProvider(t *testing.T) {
-	provider := serverapi.AuthProviderFacts{
-		Kind:       serverapi.AuthProviderKindOpenAICompatible,
+	provider := &authpb.ProviderFacts{
+		Kind:       authpb.ProviderKind_PROVIDER_KIND_OPENAI_COMPATIBLE,
 		Identifier: "openai-compatible",
-		DisplayOrigin: &serverapi.AuthProviderDisplayOrigin{
+		DisplayOrigin: &authpb.ProviderDisplayOrigin{
 			Scheme:   "https",
 			Hostname: "session.example",
 		},
 	}
 	authStatus := &recordingStatusAuthStatusStub{
-		response: serverapi.AuthStatusResponse{
-			Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
-				Method:        serverapi.AuthStatusMethodNone,
-				Provider:      provider,
-				EnvPreference: serverapi.AuthStatusEnvPreferenceUnspecified,
-			}, nil),
+		response: &authpb.Status{
+			Resolution: &authpb.StatusResolution{
+				Resolution: &authpb.StatusResolution_Known{Known: &authpb.StatusFacts{
+					Method:        authpb.AuthMethod_AUTH_METHOD_NONE,
+					Provider:      provider,
+					EnvPreference: authpb.EnvironmentPreference_ENVIRONMENT_PREFERENCE_UNSPECIFIED,
+					MethodFacts:   &authpb.StatusFacts_NoAuth{NoAuth: &emptypb.Empty{}},
+				}},
+			},
+			Subscription: &authpb.SubscriptionFacts{},
 		},
 	}
-	selection := authstatus.ProviderSelection(config.Settings{OpenAIBaseURL: "https://session.example/v1"})
+	baseURL := "https://session.example/v1"
+	selection := authpb.ProviderSelection{OpenaiBaseUrl: &baseURL}
 
 	result := (Collector{}).CollectAuth(context.Background(), Request{
 		AuthStatus:    authStatus,
 		AuthSelection: &selection,
 	}, Snapshot{})
 
-	if authStatus.request.Provider == nil ||
-		!reflect.DeepEqual(*authStatus.request.Provider, selection) ||
+	if authStatus.request.GetProvider() == nil ||
+		!proto.Equal(authStatus.request.GetProvider(), &selection) ||
 		result.Auth.Provider != "https://session.example" {
 		t.Fatalf("effective provider request/result = %+v / %+v", authStatus.request, result)
 	}

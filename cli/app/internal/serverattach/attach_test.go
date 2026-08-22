@@ -12,9 +12,16 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
+	"core/shared/protoapi"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type ProjectViewRemote = remoteattach.ProjectViewRemote
@@ -22,7 +29,7 @@ type ProjectViewRemote = remoteattach.ProjectViewRemote
 type projectViewRemoteStub struct {
 	apicontract.ProjectViewService
 	identity     protocol.ServerIdentity
-	plan         func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error)
+	plan         func(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error)
 	pinnedRootID string
 	closed       bool
 }
@@ -46,21 +53,25 @@ func (s *projectViewRemoteStub) Identity() protocol.ServerIdentity {
 	return s.identity
 }
 
-func (s *projectViewRemoteStub) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
+func (s *projectViewRemoteStub) PlanWorkspaceBinding(ctx context.Context, req *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
 	if s.plan != nil {
 		return s.plan(ctx, req)
 	}
-	return serverapi.ProjectBindingPlanResponse{}, errors.New("unexpected PlanWorkspaceBinding call")
+	return &projectpb.PlanWorkspaceBindingSuccess{}, errors.New("unexpected PlanWorkspaceBinding call")
 }
 
-func boundPlanResponse() serverapi.ProjectBindingPlanResponse {
-	return serverapi.ProjectBindingPlanResponse{
-		Kind:    serverapi.ProjectBindingPlanKindBound,
-		Binding: &serverapi.ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"},
+func boundPlanResponse() *projectpb.PlanWorkspaceBindingSuccess {
+	return &projectpb.PlanWorkspaceBindingSuccess{
+		Kind: projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_BOUND,
+		Binding: &projectpb.ProjectBinding{
+			ProjectId:       "project-1",
+			WorkspaceId:     "workspace-1",
+			WorkspaceStatus: projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE,
+		},
 	}
 }
 
-func boundProjectView(plan func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error)) *projectViewRemoteStub {
+func boundProjectView(plan func(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error)) *projectViewRemoteStub {
 	return &projectViewRemoteStub{
 		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version},
 		plan:     plan,
@@ -79,9 +90,9 @@ func unavailableProjectDial(context.Context, config.App) (ProjectViewRemote, err
 	return nil, errors.New("configured remote unavailable")
 }
 
-func planProjectDial(response serverapi.ProjectBindingPlanResponse) func(context.Context, config.App) (ProjectViewRemote, error) {
+func planProjectDial(response *projectpb.PlanWorkspaceBindingSuccess) func(context.Context, config.App) (ProjectViewRemote, error) {
 	return func(context.Context, config.App) (ProjectViewRemote, error) {
-		return boundProjectView(func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
+		return boundProjectView(func(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
 			return response, nil
 		}), nil
 	}
@@ -113,7 +124,7 @@ func TestAttachRunPromptWithoutReachableServer(t *testing.T) {
 func boundProjectViewWithRoot(rootID string) *projectViewRemoteStub {
 	return &projectViewRemoteStub{
 		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, PersistenceRootID: rootID},
-		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
+		plan: func(context.Context, *projectpb.PlanWorkspaceBindingRequest) (*projectpb.PlanWorkspaceBindingSuccess, error) {
 			return boundPlanResponse(), nil
 		},
 	}
@@ -175,17 +186,10 @@ func dialWorkspaceServerWithRoot(t *testing.T, rootID string, attachProject bool
 			if event.Err != nil {
 				return
 			}
-			req := event.Frame.Request()
-			switch req.Method {
-			case protocol.MethodHandshake:
-				_ = conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1", PersistenceRootID: rootID}})))
-			case protocol.MethodAttachProject:
-				attachment, err := protocol.ProjectAttachResponse("project-1", "workspace-1", "/workspace")
-				if err != nil {
-					return
-				}
-				_ = conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, attachment)))
-			default:
+			if event.Frame.Kind != rpcwire.FrameBinary {
+				return
+			}
+			if err := serveWorkspaceConnectionSetup(ctx, conn, event.Frame, rootID); err != nil {
 				return
 			}
 		}
@@ -200,6 +204,81 @@ func dialWorkspaceServerWithRoot(t *testing.T, rootID string, attachProject bool
 	return dial, server.Close, disconnected
 }
 
+func serveWorkspaceConnectionSetup(ctx context.Context, conn rpcwire.Conn, frame rpcwire.Frame, rootID string) error {
+	envelope, err := protoapi.DecodeEnvelope(frame.Payload)
+	if err != nil {
+		return err
+	}
+	call := envelope.GetCall()
+	if call == nil || call.Correlation == nil {
+		return errors.New("correlated Connection call is required")
+	}
+	service := connectionpb.File_kent_api_connection_connection_proto.Services().ByName("ConnectionService")
+	for _, setup := range []struct {
+		name   string
+		result func() (proto.Message, error)
+	}{
+		{name: "Handshake", result: func() (proto.Message, error) {
+			identity := &connectionpb.ServerIdentity{
+				ProtocolVersion: protocol.Version,
+				ServerId:        "server-1",
+				Pid:             1,
+			}
+			if rootID != "" {
+				identity.PersistenceRootId = &rootID
+			}
+			return &connectionpb.HandshakeResult{
+				Outcome: &connectionpb.HandshakeResult_Success{
+					Success: &connectionpb.HandshakeSuccess{Identity: identity},
+				},
+			}, nil
+		}},
+		{name: "AttachProject", result: func() (proto.Message, error) {
+			var request connectionpb.AttachProjectRequest
+			if err := protoapi.Decode(call.Payload, &request); err != nil {
+				return nil, err
+			}
+			return &connectionpb.AttachProjectResult{
+				Outcome: &connectionpb.AttachProjectResult_Success{
+					Success: &connectionpb.AttachmentSuccess{
+						Attachment: &connectionpb.AttachmentSuccess_Project{
+							Project: &connectionpb.ProjectAttachment{
+								ProjectId: request.ProjectId, WorkspaceId: "workspace-1", WorkspaceRoot: "/workspace",
+							},
+						},
+					},
+				},
+			}, nil
+		}},
+	} {
+		method := service.Methods().ByName(protoreflect.Name(setup.name))
+		operation, err := protoapi.OperationFromDescriptor(method)
+		if err != nil {
+			return err
+		}
+		if call.Operation != operation.Name {
+			continue
+		}
+		result, err := setup.result()
+		if err != nil {
+			return err
+		}
+		payload, err := protoapi.Encode(result)
+		if err != nil {
+			return err
+		}
+		encoded, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
+			Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+				Operation: operation.Name, Correlation: call.Correlation, Payload: payload,
+			}},
+		})
+		if err != nil {
+			return err
+		}
+		return conn.Send(ctx, rpcwire.Frame{Kind: rpcwire.FrameBinary, Payload: encoded})
+	}
+	return errors.New("unsupported Connection setup operation")
+}
 func TestAttachRunPromptPropagatesHeadlessWorkspaceFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -208,12 +287,12 @@ func TestAttachRunPromptPropagatesHeadlessWorkspaceFailures(t *testing.T) {
 	}{
 		{
 			name:        "headless unregistered workspace fails fast",
-			dialProject: planProjectDial(serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindLocalUnbound}),
+			dialProject: planProjectDial(&projectpb.PlanWorkspaceBindingSuccess{Kind: projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_LOCAL_UNBOUND}),
 			wantErr:     serverapi.ErrWorkspaceNotRegistered,
 		},
 		{
 			name:        "headless ambiguous remote workspace fails",
-			dialProject: planProjectDial(serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous}),
+			dialProject: planProjectDial(&projectpb.PlanWorkspaceBindingSuccess{Kind: projectpb.WorkspaceBindingPlanKind_WORKSPACE_BINDING_PLAN_KIND_HEADLESS_REMOTE_AMBIGUOUS}),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

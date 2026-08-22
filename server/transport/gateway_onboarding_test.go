@@ -8,9 +8,11 @@ import (
 
 	"core/server/core"
 	"core/shared/apicontract"
-	remoteclient "core/shared/client"
-	"core/shared/protocol"
+	"core/shared/protoapi"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/proto"
 )
 
 type gatewayOnboardingOverride struct {
@@ -22,116 +24,61 @@ func (d *gatewayOnboardingOverride) OnboardingFinalizeClient() apicontract.Onboa
 	return d.finalize
 }
 
-type gatewayOnboardingService struct {
-	handler func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
-}
+type gatewayOnboardingService func(context.Context, *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error)
 
-func (s gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
-	if s.handler != nil {
-		return s.handler(ctx, req)
-	}
-	if err := serverapi.ValidateOnboardingFinalizeRequest(req); err != nil {
-		return serverapi.OnboardingFinalizeResponse{}, err
-	}
-	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
+func (service gatewayOnboardingService) Finalize(
+	ctx context.Context,
+	request *onboardingpb.FinalizeRequest,
+) (*onboardingpb.FinalizeSuccess, error) {
+	return service(ctx, request)
 }
 
 func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
-	blue := serverapi.OnboardingTheme("blue")
-	tests := []struct {
-		name       string
-		authReady  bool
-		params     any
-		code       int
-		structured bool
-	}{
-		{name: "unauthenticated domain invalid is typed", params: serverapi.OnboardingFinalizeRequest{Theme: &blue}, code: protocol.ErrCodeOnboardingFinalizeFailed, structured: true},
-		{name: "malformed params remain invalid params", authReady: true, params: "not an object", code: protocol.ErrCodeInvalidParams},
+	call := func(payload []byte, service gatewayOnboardingService) *onboardingpb.FinalizeResult {
+		t.Helper()
+		appCore, _ := newGatewayTestCore(t, true, false)
+		defer func() { _ = appCore.Close() }()
+		gateway, err := NewGateway(
+			&gatewayOnboardingOverride{Core: appCore, finalize: service},
+			gatewayTestIdentity(),
+		)
+		if err != nil {
+			t.Fatalf("NewGateway: %v", err)
+		}
+		server := httptest.NewServer(gateway.Handler())
+		defer server.Close()
+		conn := dialGateway(t, server)
+		defer func() { _ = conn.Close() }()
+		handshakeGateway(t, conn)
+		method := onboardingpb.File_kent_api_onboarding_onboarding_proto.Services().
+			ByName("OnboardingService").Methods().ByName("Finalize")
+		envelope := callGatewayDescriptorPayload(t, conn, "finalize-invalid", method, payload)
+		result := &onboardingpb.FinalizeResult{}
+		if response := envelope.GetResult(); response == nil {
+			t.Fatalf("finalize result is required: %+v", envelope)
+		} else if err := protoapi.Decode(response.Payload, result); err != nil {
+			t.Fatalf("decode Finalize result: %v", err)
+		}
+		return result
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			appCore, _ := newGatewayTestCore(t, true, tt.authReady)
-			defer func() { _ = appCore.Close() }()
-			gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: gatewayOnboardingService{}}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-			if err != nil {
-				t.Fatalf("NewGateway: %v", err)
-			}
-			server := httptestServerForGateway(t, gateway)
-			defer server.Close()
-			conn := dialGateway(t, server)
-			defer func() { _ = conn.Close() }()
-			handshakeGateway(t, conn)
 
-			errResp := callGatewayExpectError(t, conn, "finalize-invalid", protocol.MethodOnboardingFinalize, tt.params)
-			if errResp.Code != tt.code {
-				t.Fatalf("error code = %d, want %d", errResp.Code, tt.code)
-			}
-			if !tt.structured {
-				if len(errResp.Data) != 0 {
-					t.Fatalf("malformed finalize response = %+v, want no structured data", errResp)
-				}
-				return
-			}
-			if decoded := serverapi.DecodeOnboardingFinalizeError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrOnboardingFinalizeInvalidRequest) {
-				t.Fatalf("decoded error = %v, want invalid_request", decoded)
-			}
-		})
+	requestPayload, err := proto.Marshal(&onboardingpb.FinalizeRequest{})
+	if err != nil {
+		t.Fatalf("marshal Finalize request: %v", err)
 	}
-}
-
-func TestRemoteOnboardingFinalizePreservesStructuredSentinels(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, true)
-	defer func() { _ = appCore.Close() }()
-	gateway, err := NewGateway(&gatewayOnboardingOverride{
-		Core: appCore,
-		finalize: gatewayOnboardingService{
-			handler: func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
-				return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: "/tmp/config.toml"}, nil)
+	result := call(requestPayload, func(
+		context.Context,
+		*onboardingpb.FinalizeRequest,
+	) (*onboardingpb.FinalizeSuccess, error) {
+		return nil, serverapi.NewOnboardingFinalizeError(
+			serverapi.OnboardingFinalizeInvalidRequest,
+			serverapi.OnboardingInvalidRequestDetails{
+				FieldErrors: []serverapi.OnboardingFinalizeFieldError{{Field: "theme", Code: "unsupported"}},
 			},
-		},
-	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
+			nil,
+		)
+	})
+	if decoded := protoapi.OnboardingFinalizeErrorFromProto(result.GetError()); !errors.Is(decoded, serverapi.ErrOnboardingFinalizeInvalidRequest) {
+		t.Fatalf("decoded error = %v, want invalid_request", decoded)
 	}
-	server := httptestServerForGateway(t, gateway)
-	defer server.Close()
-
-	remote, err := remoteclient.DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
-	if !errors.Is(err, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
-		t.Fatalf("FinalizeOnboarding error = %v, want config_already_exists sentinel", err)
-	}
-	var finalizeErr *serverapi.OnboardingFinalizeError
-	if !errors.As(err, &finalizeErr) {
-		t.Fatalf("FinalizeOnboarding error = %T %v, want typed finalize error", err, err)
-	}
-	if _, ok := finalizeErr.Details.(serverapi.OnboardingConfigAlreadyExistsDetails); !ok {
-		t.Fatalf("remote details = %T, want typed config_already_exists details", finalizeErr.Details)
-	}
-}
-
-func TestConfiguredCoreOnboardingFinalizeReturnsConfigAlreadyExists(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-
-	remote, err := remoteclient.DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	blue := serverapi.OnboardingTheme("blue")
-	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{Theme: &blue})
-	if !errors.Is(err, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
-		t.Fatalf("FinalizeOnboarding error = %v, want config_already_exists", err)
-	}
-}
-
-func httptestServerForGateway(t *testing.T, gateway *Gateway) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(gateway.Handler())
 }

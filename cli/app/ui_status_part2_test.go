@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
@@ -145,6 +146,9 @@ func TestStatusRequestCarriesCachedRuntimeAgentRole(t *testing.T) {
 	if request.AgentRole == nil || *request.AgentRole != role {
 		t.Fatalf("status request agent role = %v, want %q", request.AgentRole, role)
 	}
+	if request.ConfiguredModelName != nil {
+		t.Fatalf("status request configured model = %q, want absent", *request.ConfiguredModelName)
+	}
 }
 
 func TestStatusRefreshUsesCurrentSessionAgentRoleWhenRuntimeCacheIsCold(t *testing.T) {
@@ -225,7 +229,7 @@ func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testi
 }
 
 func TestStatusRefreshDefersRuntimeAndAuthReadsToCommands(t *testing.T) {
-	authStatus := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)}
+	authStatus := &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_NONE)}
 	runtimeClient := &statusRefreshRuntimeClient{}
 	model := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: authStatus}))
 	model.engine = runtimeClient
@@ -244,7 +248,7 @@ func TestStatusRefreshDefersRuntimeAndAuthReadsToCommands(t *testing.T) {
 }
 
 func TestStatusRefreshAlwaysReloadsRemotelyMutableAuth(t *testing.T) {
-	authStatus := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)}
+	authStatus := &staticAuthStatusClient{response: authStatusResponse(authpb.AuthMethod_AUTH_METHOD_NONE)}
 	model := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: authStatus}))
 
 	for refresh := 1; refresh <= 2; refresh++ {

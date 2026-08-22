@@ -7,7 +7,6 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"database/sql"
 	"errors"
@@ -536,6 +535,7 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 		mutate      func(*testing.T, *Store, config.App, Binding, *session.Store)
 		wantVisible bool
 		wantName    string
+		wantPreview string
 	}{
 		{
 			name:        "name makes session launch-visible",
@@ -561,6 +561,7 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 		{
 			name:        "first user prompt makes session launch-visible",
 			wantVisible: true,
+			wantPreview: "Investigate broken startup flow",
 			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
 				t.Helper()
 				appendMetadataMessage(
@@ -603,8 +604,18 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 			if listed[0].SessionID.String() != sess.Meta().SessionID {
 				t.Fatalf("listed session id = %q, want %q", listed[0].SessionID, sess.Meta().SessionID)
 			}
-			if tc.wantName != "" && listed[0].Name != tc.wantName {
-				t.Fatalf("listed session name = %q, want %q", listed[0].Name, tc.wantName)
+			if tc.wantName == "" && listed[0].Name != nil {
+				t.Fatalf("listed session name = %q, want absent", *listed[0].Name)
+			}
+			if tc.wantName != "" && (listed[0].Name == nil || *listed[0].Name != tc.wantName) {
+				t.Fatalf("listed session name = %v, want %q", listed[0].Name, tc.wantName)
+			}
+			if tc.wantPreview == "" && listed[0].FirstPromptPreview != nil {
+				t.Fatalf("listed first prompt preview = %q, want absent", *listed[0].FirstPromptPreview)
+			}
+			if tc.wantPreview != "" &&
+				(listed[0].FirstPromptPreview == nil || *listed[0].FirstPromptPreview != tc.wantPreview) {
+				t.Fatalf("listed first prompt preview = %v, want %q", listed[0].FirstPromptPreview, tc.wantPreview)
 			}
 		})
 	}
@@ -622,11 +633,7 @@ func assertProjectSessionListingCount(t *testing.T, ctx context.Context, store *
 	if projects[0].SessionCount != want {
 		t.Fatalf("project session count = %d, want %d", projects[0].SessionCount, want)
 	}
-	page, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: projectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     sessionPageInt(20),
-	})
+	page, err := store.ListSessionPage(ctx, projectID, sessioncontract.SessionCategoryMain, 0, 20)
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}

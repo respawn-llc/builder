@@ -10,6 +10,8 @@ import (
 	"core/shared/serverapi"
 )
 
+const MaxProjectWorkspacePageSize = 100
+
 type ProjectWorkspaceCatalogRow struct {
 	WorkspaceID   string
 	DisplayName   string
@@ -39,10 +41,10 @@ func (s *Store) ListProjectWorkspaceCatalogPage(
 	if offset < 0 {
 		return ProjectWorkspaceCatalogPage{}, errors.New("offset must be non-negative")
 	}
-	if limit < 1 || limit > serverapi.MaxProjectWorkspacePageSize {
+	if limit < 1 || limit > MaxProjectWorkspacePageSize {
 		return ProjectWorkspaceCatalogPage{}, fmt.Errorf(
 			"limit must be between 1 and %d",
-			serverapi.MaxProjectWorkspacePageSize,
+			MaxProjectWorkspacePageSize,
 		)
 	}
 	rows, err := s.queries.ListProjectWorkspaceCatalogPage(ctx, sqlitegen.ListProjectWorkspaceCatalogPageParams{

@@ -8,7 +8,9 @@ import (
 
 	"core/server/auth"
 	"core/shared/config"
-	"core/shared/serverapi"
+
+	serverpb "core/shared/protoapi/gen/kent/api/server"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestGetServerReadinessIncludesWorkflowAssigneeRoles(t *testing.T) {
@@ -109,7 +111,7 @@ func TestGetServerReadinessSurfacesAuthStoreErrorWhenStartupAuthRequired(t *test
 	manager := auth.NewManager(failingAuthStore{}, nil, nil)
 	service := NewServerStatusService(manager, config.App{Settings: config.Settings{ProviderOverride: "openai"}}, nil)
 
-	if _, err := service.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{}); err == nil {
+	if _, err := service.GetReadiness(context.Background(), &emptypb.Empty{}); err == nil {
 		t.Fatal("expected auth store error to surface when startup auth is required")
 	}
 }
@@ -124,30 +126,30 @@ func TestServerStatusSeparatesReadinessFromLazyUpdateStatus(t *testing.T) {
 	})
 	service := NewServerStatusService(nil, config.App{Settings: config.Settings{ProviderOverride: "anthropic"}}, updates)
 
-	if _, err := service.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{}); err != nil {
-		t.Fatalf("GetServerReadiness: %v", err)
+	if _, err := service.GetReadiness(context.Background(), &emptypb.Empty{}); err != nil {
+		t.Fatalf("GetReadiness: %v", err)
 	}
 	if calls := source.calls.Load(); calls != 0 {
 		t.Fatalf("release checks after readiness = %d, want 0", calls)
 	}
 
-	response, err := service.GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{})
+	response, err := service.GetUpdateStatus(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("GetUpdateStatus: %v", err)
 	}
-	if response.Result.Kind() != serverapi.UpdateStatusAvailable {
-		t.Fatalf("update result kind = %q, want available", response.Result.Kind())
+	if response.Status.GetAvailable() == nil {
+		t.Fatalf("update status = %T, want available", response.Status.GetStatus())
 	}
 	if calls := source.calls.Load(); calls != 1 {
 		t.Fatalf("release checks after update request = %d, want 1", calls)
 	}
 }
 
-func requireServerReadiness(t *testing.T, manager *auth.Manager, app config.App) serverapi.ServerReadinessResponse {
+func requireServerReadiness(t *testing.T, manager *auth.Manager, app config.App) *serverpb.Readiness {
 	t.Helper()
-	readiness, err := NewServerStatusService(manager, app, nil).GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	response, err := NewServerStatusService(manager, app, nil).GetReadiness(context.Background(), &emptypb.Empty{})
 	if err != nil {
-		t.Fatalf("GetServerReadiness: %v", err)
+		t.Fatalf("GetReadiness: %v", err)
 	}
-	return readiness
+	return response.Readiness
 }

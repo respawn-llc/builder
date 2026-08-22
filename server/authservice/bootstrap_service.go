@@ -2,99 +2,108 @@ package authservice
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/server/auth"
 
-	servicecontract "core/shared/apicontract"
 	"core/shared/config"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	"core/shared/serverapi"
+	"core/shared/textutil"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type BootstrapService struct {
 	manager        *auth.Manager
 	oauthOptions   auth.OpenAIOAuthOptions
 	authRequired   bool
-	allowedPreAuth []string
-	supportedModes []serverapi.AuthBootstrapMode
+	supportedModes []authpb.BootstrapMode
 }
 
-func NewBootstrapService(manager *auth.Manager, oauthOptions auth.OpenAIOAuthOptions, settings config.Settings, allowedPreAuthMethods []string) *BootstrapService {
+func NewBootstrapService(manager *auth.Manager, oauthOptions auth.OpenAIOAuthOptions, settings config.Settings) *BootstrapService {
 	return &BootstrapService{
-		manager:        manager,
-		oauthOptions:   oauthOptions,
-		authRequired:   StartupAuthRequired(settings),
-		allowedPreAuth: append([]string(nil), allowedPreAuthMethods...),
-		supportedModes: []serverapi.AuthBootstrapMode{
-			serverapi.AuthBootstrapModeNone,
-			serverapi.AuthBootstrapModeBrowserCallbackURL,
-			serverapi.AuthBootstrapModeBrowserCallbackCode,
-			serverapi.AuthBootstrapModeDeviceCode,
-			serverapi.AuthBootstrapModeAPIKey,
+		manager:      manager,
+		oauthOptions: oauthOptions,
+		authRequired: StartupAuthRequired(settings),
+		supportedModes: []authpb.BootstrapMode{
+			authpb.BootstrapMode_BOOTSTRAP_MODE_NONE,
+			authpb.BootstrapMode_BOOTSTRAP_MODE_BROWSER_CALLBACK_URL,
+			authpb.BootstrapMode_BOOTSTRAP_MODE_BROWSER_CALLBACK_CODE,
+			authpb.BootstrapMode_BOOTSTRAP_MODE_DEVICE_CODE,
+			authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY,
 		},
 	}
 }
 
-func (s *BootstrapService) GetAuthBootstrapStatus(ctx context.Context, _ serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
+func (s *BootstrapService) GetBootstrapStatus(ctx context.Context, _ *emptypb.Empty) (*authpb.BootstrapStatus, error) {
 	ready, err := s.authReady(ctx)
 	if err != nil {
-		return serverapi.AuthGetBootstrapStatusResponse{}, err
+		return nil, err
 	}
 	stored, err := s.storedState(ctx)
 	if err != nil {
-		return serverapi.AuthGetBootstrapStatusResponse{}, err
+		return nil, err
 	}
-	return serverapi.AuthGetBootstrapStatusResponse{
+	issuer := strings.TrimSpace(s.oauthOptions.Issuer)
+	clientID := strings.TrimSpace(s.oauthOptions.ClientID)
+	status := &authpb.BootstrapStatus{
 		AuthReady:              ready,
 		AuthRequired:           s.authRequired,
 		NoAuthSelected:         stored.IsNoAuthSelected(),
 		AuthBootstrapSupported: true,
-		AllowedPreAuthMethods:  append([]string(nil), s.allowedPreAuth...),
-		SupportedModes:         append([]serverapi.AuthBootstrapMode(nil), s.supportedModes...),
-		OAuth: serverapi.AuthBootstrapOAuthConfig{
-			Issuer:   strings.TrimSpace(s.oauthOptions.Issuer),
-			ClientID: strings.TrimSpace(s.oauthOptions.ClientID),
-		},
-	}, nil
+		SupportedModes:         append([]authpb.BootstrapMode(nil), s.supportedModes...),
+	}
+	if issuer != "" || clientID != "" {
+		status.Oauth = &authpb.BootstrapOAuthConfig{}
+		if issuer != "" {
+			status.Oauth.Issuer = &issuer
+		}
+		if clientID != "" {
+			status.Oauth.ClientId = &clientID
+		}
+	}
+	return status, nil
 }
 
-func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, _ serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, _ *emptypb.Empty) (*authpb.NoAuthAcknowledgement, error) {
 	if s == nil || s.manager == nil {
-		return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
+		return nil, serverapi.ErrServerAuthRequired
 	}
 	stored, err := s.manager.StoredState(ctx)
 	if err != nil {
-		return serverapi.AuthAcknowledgeNoAuthResponse{}, err
+		return nil, err
 	}
 	current, err := s.manager.Load(ctx)
 	if err != nil {
-		return serverapi.AuthAcknowledgeNoAuthResponse{}, err
+		return nil, err
 	}
 	ready := !s.authRequired || auth.EvaluateStartupGate(current).Ready
 	if stored.IsNoAuthSelected() {
-		return serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: ready, NoAuthSelected: true}, nil
+		return &authpb.NoAuthAcknowledgement{AuthReady: ready, NoAuthSelected: true}, nil
 	}
 	if ready {
-		return serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: true}, nil
+		return &authpb.NoAuthAcknowledgement{AuthReady: true}, nil
 	}
-	return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
+	return nil, serverapi.ErrServerAuthRequired
 }
 
-func (s *BootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.AuthCompleteBootstrapResponse{}, err
+func (s *BootstrapService) CompleteBootstrap(ctx context.Context, req *authpb.CompleteBootstrapRequest) (*authpb.BootstrapCompletion, error) {
+	if req == nil {
+		return nil, errors.New("complete bootstrap request is required")
 	}
 	if s == nil || s.manager == nil {
-		return serverapi.AuthCompleteBootstrapResponse{}, serverapi.ErrServerAuthRequired
+		return nil, serverapi.ErrServerAuthRequired
 	}
 	state, err := s.manager.Load(ctx)
 	if err != nil {
-		return serverapi.AuthCompleteBootstrapResponse{}, err
+		return nil, err
 	}
-	if req.Mode == serverapi.AuthBootstrapModeNone {
+	if req.Mode == authpb.BootstrapMode_BOOTSTRAP_MODE_NONE {
 		state, err = s.manager.SwitchMethodAndSetEnvAPIKeyPreference(ctx, auth.Method{Type: auth.MethodNone}, auth.EnvAPIKeyPreferencePreferSaved, true, true)
 		if err != nil {
-			return serverapi.AuthCompleteBootstrapResponse{}, err
+			return nil, err
 		}
 		return s.bootstrapResponseFromState(state), nil
 	}
@@ -106,25 +115,25 @@ func (s *BootstrapService) CompleteAuthBootstrap(ctx context.Context, req server
 		completeErr error
 	)
 	switch req.Mode {
-	case serverapi.AuthBootstrapModeAPIKey:
-		method = auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: strings.TrimSpace(req.APIKey)}}
-	case serverapi.AuthBootstrapModeBrowserCallbackURL, serverapi.AuthBootstrapModeBrowserCallbackCode:
+	case authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY:
+		method = auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: strings.TrimSpace(req.GetApiKey())}}
+	case authpb.BootstrapMode_BOOTSTRAP_MODE_BROWSER_CALLBACK_URL, authpb.BootstrapMode_BOOTSTRAP_MODE_BROWSER_CALLBACK_CODE:
 		method, completeErr = auth.CompleteOpenAIBrowserFlow(ctx, s.oauthOptions, auth.BrowserAuthSession{
-			RedirectURI:  strings.TrimSpace(req.RedirectURI),
-			State:        strings.TrimSpace(req.OAuthState),
-			CodeVerifier: strings.TrimSpace(req.OAuthCodeVerifier),
-		}, req.CallbackInput)
-	case serverapi.AuthBootstrapModeDeviceCode:
-		method, completeErr = auth.CompleteOpenAIDeviceAuthorizationGrant(ctx, s.oauthOptions, strings.TrimSpace(req.DeviceAuthorizationCode), strings.TrimSpace(req.DeviceCodeVerifier))
+			RedirectURI:  strings.TrimSpace(req.GetRedirectUri()),
+			State:        strings.TrimSpace(req.GetOauthState()),
+			CodeVerifier: strings.TrimSpace(req.GetOauthCodeVerifier()),
+		}, req.GetCallbackInput())
+	case authpb.BootstrapMode_BOOTSTRAP_MODE_DEVICE_CODE:
+		method, completeErr = auth.CompleteOpenAIDeviceAuthorizationGrant(ctx, s.oauthOptions, strings.TrimSpace(req.GetDeviceAuthorizationCode()), strings.TrimSpace(req.GetDeviceCodeVerifier()))
 	default:
-		return serverapi.AuthCompleteBootstrapResponse{}, req.Validate()
+		return nil, errors.New("validated auth bootstrap request has unsupported mode")
 	}
 	if completeErr != nil {
-		return serverapi.AuthCompleteBootstrapResponse{}, completeErr
+		return nil, completeErr
 	}
 	state, err = s.manager.SwitchMethodAndSetEnvAPIKeyPreference(ctx, method, auth.EnvAPIKeyPreferencePreferSaved, true, true)
 	if err != nil {
-		return serverapi.AuthCompleteBootstrapResponse{}, err
+		return nil, err
 	}
 	return s.bootstrapResponseFromState(state), nil
 }
@@ -150,20 +159,22 @@ func (s *BootstrapService) storedState(ctx context.Context) (auth.State, error) 
 	return s.manager.StoredState(ctx)
 }
 
-func (s *BootstrapService) bootstrapResponseFromState(state auth.State) serverapi.AuthCompleteBootstrapResponse {
-	accountID := ""
-	email := ""
+func (s *BootstrapService) bootstrapResponseFromState(state auth.State) *authpb.BootstrapCompletion {
+	var accountID *string
+	var email *string
 	if state.Method.Type == auth.MethodOAuth && state.Method.OAuth != nil {
-		accountID = strings.TrimSpace(state.Method.OAuth.AccountID)
-		email = strings.TrimSpace(state.Method.OAuth.Email)
+		if value := strings.TrimSpace(state.Method.OAuth.AccountID); value != "" {
+			accountID = &value
+		}
+		if value := strings.TrimSpace(state.Method.OAuth.Email); value != "" {
+			email = &value
+		}
 	}
-	return serverapi.AuthCompleteBootstrapResponse{
+	return &authpb.BootstrapCompletion{
 		AuthReady:      !s.authRequired || auth.EvaluateStartupGate(state).Ready,
 		NoAuthSelected: state.IsNoAuthSelected(),
-		MethodType:     strings.TrimSpace(string(state.Method.Type)),
-		AccountID:      accountID,
+		MethodType:     textutil.OptionalTrimmedString(string(state.Method.Type)),
+		AccountId:      accountID,
 		Email:          email,
 	}
 }
-
-var _ servicecontract.AuthBootstrapService = (*BootstrapService)(nil)

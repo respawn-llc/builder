@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/clientui"
-	"core/shared/protocol"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,11 +42,56 @@ type sessionWorkspaceRetargetContextProvider interface {
 	workspaceRetargetContext() *sessionWorkspaceRetargetContext
 }
 
-func sessionWorkspaceRetargetContextFromBinding(binding protocol.ProjectAttachment, theme string) *sessionWorkspaceRetargetContext {
+func newSessionWorkspaceRetargetContext(workspaceRoot string, theme string) (*sessionWorkspaceRetargetContext, error) {
+	normalizedRoot := normalizeWorkspaceChangeDisplayRoot(workspaceRoot)
+	if normalizedRoot == "" {
+		return nil, errors.New("workspace retarget root is required")
+	}
+	return &sessionWorkspaceRetargetContext{
+		workspaceRoot: normalizedRoot,
+		theme:         strings.TrimSpace(theme),
+	}, nil
+}
+
+func sessionWorkspaceRetargetContextFromBinding(binding client.ProjectAttachment, theme string) *sessionWorkspaceRetargetContext {
 	return &sessionWorkspaceRetargetContext{
 		workspaceRoot: normalizeWorkspaceChangeDisplayRoot(binding.WorkspaceRoot),
 		theme:         strings.TrimSpace(theme),
 	}
+}
+
+func resolveSessionWorkspaceRetargetContext(
+	ctx context.Context,
+	projectViews apicontract.ProjectViewService,
+	projectID string,
+	workspaceID string,
+	theme string,
+) (*sessionWorkspaceRetargetContext, error) {
+	if projectViews == nil {
+		return nil, errors.New("project view client is required for workspace retarget context")
+	}
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if trimmedProjectID == "" {
+		return nil, errors.New("project id is required for workspace retarget context")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return nil, errors.New("workspace id is required for workspace retarget context")
+	}
+	overview, err := projectViews.GetProjectOverview(ctx, &projectpb.GetOverviewRequest{ProjectId: trimmedProjectID})
+	if err != nil {
+		return nil, err
+	}
+	workspaces, err := client.ProjectWorkspaceSummariesFromProto(overview.Overview.Workspaces)
+	if err != nil {
+		return nil, err
+	}
+	for _, workspace := range workspaces {
+		if workspace.WorkspaceID == trimmedWorkspaceID {
+			return newSessionWorkspaceRetargetContext(workspace.RootPath, theme)
+		}
+	}
+	return nil, fmt.Errorf("workspace %q is not attached to project %q", trimmedWorkspaceID, trimmedProjectID)
 }
 
 type workspaceChangePromptModel struct {

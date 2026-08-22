@@ -3,10 +3,14 @@ package client
 import (
 	"context"
 
-	"core/shared/protocol"
-	"core/shared/serverapi"
+	"core/shared/protoapi"
+	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 )
 
-func (c *Remote) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
-	return callUnscopedRPC[serverapi.OnboardingFinalizeRequest, serverapi.OnboardingFinalizeResponse](c, ctx, protocol.MethodOnboardingFinalize, req)
+func (c *Remote) Finalize(ctx context.Context, req *onboardingpb.FinalizeRequest) (*onboardingpb.FinalizeSuccess, error) {
+	return callGeneratedBinary(c, ctx,
+		bootstrapMethod(onboardingpb.File_kent_api_onboarding_onboarding_proto, "OnboardingService", "Finalize"),
+		req,
+		&onboardingpb.FinalizeResult{},
+		protoapi.OnboardingFinalizeErrorFromProto)
 }

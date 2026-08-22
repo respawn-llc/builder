@@ -3,16 +3,21 @@ package client
 import (
 	"errors"
 	"fmt"
-
-	"core/shared/protocol"
+	"strings"
 )
 
+type remoteProjectWorkspaceSelection struct {
+	workspaceID   *string
+	workspaceRoot *string
+}
+
 type remoteProjectAttachmentIntent struct {
-	request protocol.AttachProjectRequest
+	projectID string
+	workspace *remoteProjectWorkspaceSelection
 }
 
 type remoteSessionAttachmentIntent struct {
-	request protocol.AttachSessionRequest
+	sessionID string
 }
 
 type remoteAttachmentIntent struct {
@@ -20,91 +25,123 @@ type remoteAttachmentIntent struct {
 	session *remoteSessionAttachmentIntent
 }
 
+type remoteAttachment struct {
+	project *ProjectAttachment
+	session *remoteSessionAttachment
+}
+
+// ProjectAttachment is the caller-facing binding established by Connection
+// setup. The generated Connection messages remain confined to the wire edge.
+type ProjectAttachment struct {
+	ProjectID     string
+	WorkspaceID   string
+	WorkspaceRoot string
+	selection     *remoteProjectAttachmentSelection
+}
+
+type remoteSessionAttachment struct {
+	projectID     string
+	workspaceID   string
+	workspaceRoot string
+	sessionID     string
+}
+
+type remoteProjectAttachmentSelection struct {
+	workspaceID   *string
+	requestedRoot *string
+	canonicalRoot *string
+}
+
 func newRemoteDefaultProjectAttachmentIntent(projectID string) (*remoteAttachmentIntent, error) {
-	request, err := protocol.AttachProjectRequestForDefaultWorkspace(projectID)
-	if err != nil {
+	if err := validateRemoteAttachmentField("project ID", projectID); err != nil {
 		return nil, err
 	}
-	return newRemoteProjectAttachmentIntent(request), nil
+	return newRemoteProjectAttachmentIntent(remoteProjectAttachmentIntent{projectID: projectID}), nil
 }
 
 func newRemoteProjectWorkspaceIDAttachmentIntent(projectID string, workspaceID string) (*remoteAttachmentIntent, error) {
-	request, err := protocol.AttachProjectRequestForWorkspaceID(projectID, workspaceID)
-	if err != nil {
+	if err := validateRemoteAttachmentField("project ID", projectID); err != nil {
 		return nil, err
 	}
-	return newRemoteProjectAttachmentIntent(request), nil
+	if err := validateRemoteAttachmentField("workspace ID", workspaceID); err != nil {
+		return nil, err
+	}
+	return newRemoteProjectAttachmentIntent(remoteProjectAttachmentIntent{
+		projectID: projectID,
+		workspace: &remoteProjectWorkspaceSelection{workspaceID: &workspaceID},
+	}), nil
 }
 
 func newRemoteProjectWorkspaceRootAttachmentIntent(projectID string, workspaceRoot string) (*remoteAttachmentIntent, error) {
-	request, err := protocol.AttachProjectRequestForWorkspaceRoot(projectID, workspaceRoot)
-	if err != nil {
+	if err := validateRemoteAttachmentField("project ID", projectID); err != nil {
 		return nil, err
 	}
-	return newRemoteProjectAttachmentIntent(request), nil
+	if err := validateRemoteAttachmentField("workspace root", workspaceRoot); err != nil {
+		return nil, err
+	}
+	return newRemoteProjectAttachmentIntent(remoteProjectAttachmentIntent{
+		projectID: projectID,
+		workspace: &remoteProjectWorkspaceSelection{workspaceRoot: &workspaceRoot},
+	}), nil
 }
 
-func newRemoteProjectAttachmentIntent(request protocol.AttachProjectRequest) *remoteAttachmentIntent {
-	return &remoteAttachmentIntent{project: &remoteProjectAttachmentIntent{request: request}}
+func newRemoteProjectAttachmentIntent(request remoteProjectAttachmentIntent) *remoteAttachmentIntent {
+	return &remoteAttachmentIntent{project: &request}
 }
 
 func newRemoteSessionAttachmentIntent(sessionID string) (*remoteAttachmentIntent, error) {
-	request := protocol.AttachSessionRequest{SessionID: sessionID}
-	if err := request.Validate(); err != nil {
+	if err := validateRemoteAttachmentField("session ID", sessionID); err != nil {
 		return nil, errRemoteSessionIDRequired
 	}
-	return &remoteAttachmentIntent{session: &remoteSessionAttachmentIntent{request: request}}, nil
+	return &remoteAttachmentIntent{session: &remoteSessionAttachmentIntent{sessionID: sessionID}}, nil
 }
 
-func (i *remoteAttachmentIntent) projectRequest() (protocol.AttachProjectRequest, bool) {
+func (i *remoteAttachmentIntent) projectRequest() (remoteProjectAttachmentIntent, bool) {
 	if i == nil || i.project == nil || i.session != nil {
-		return protocol.AttachProjectRequest{}, false
+		return remoteProjectAttachmentIntent{}, false
 	}
-	return i.project.request, true
+	return *i.project, true
 }
 
-func (i *remoteAttachmentIntent) sessionRequest() (protocol.AttachSessionRequest, bool) {
+func (i *remoteAttachmentIntent) sessionRequest() (remoteSessionAttachmentIntent, bool) {
 	if i == nil || i.session == nil || i.project != nil {
-		return protocol.AttachSessionRequest{}, false
+		return remoteSessionAttachmentIntent{}, false
 	}
-	return i.session.request, true
+	return *i.session, true
 }
 
 func (i *remoteAttachmentIntent) sessionID() (string, bool) {
 	request, present := i.sessionRequest()
-	return request.SessionID, present
+	return request.sessionID, present
 }
 
-func (i *remoteAttachmentIntent) validateResponse(response protocol.AttachResponse) error {
+func (i *remoteAttachmentIntent) validateResponse(response remoteAttachment) error {
 	if request, present := i.projectRequest(); present {
-		binding, projectResponse := response.Project()
-		if !projectResponse {
+		if response.project == nil || response.session != nil {
 			return errors.New("project attach returned a non-project attachment")
 		}
-		if binding.ProjectID != request.ProjectID {
-			return fmt.Errorf("project attach returned project %q, want %q", binding.ProjectID, request.ProjectID)
+		binding := response.project
+		if binding.ProjectID != request.projectID {
+			return fmt.Errorf("project attach returned project %q, want %q", binding.ProjectID, request.projectID)
 		}
-		requestedWorkspace, requested := request.Workspace()
-		responseWorkspace, returned := binding.WorkspaceSelection()
-		if requested != returned {
+		if (request.workspace == nil) != (binding.selection == nil) {
 			return errors.New("project attach returned a different workspace selection")
 		}
-		if !requested {
+		if request.workspace == nil {
 			return nil
 		}
-		if requestedID, selectedByID := requestedWorkspace.WorkspaceID(); selectedByID {
-			responseID, returnedByID := responseWorkspace.WorkspaceID()
-			if !returnedByID || responseID != requestedID {
-				return fmt.Errorf("project attach returned workspace %q, want %q", responseID, requestedID)
+		if request.workspace.workspaceID != nil {
+			if binding.selection.workspaceID == nil || *binding.selection.workspaceID != *request.workspace.workspaceID {
+				return fmt.Errorf("project attach returned workspace %q, want %q", binding.WorkspaceID, *request.workspace.workspaceID)
 			}
 			return nil
 		}
-		requestedRoot, _ := requestedWorkspace.WorkspaceRoot()
-		returnedRoot, canonicalRoot, returnedByRoot := responseWorkspace.WorkspaceRoot()
-		if !returnedByRoot || returnedRoot != requestedRoot {
-			return fmt.Errorf("project attach returned workspace root %q, want %q", returnedRoot, requestedRoot)
+		if binding.selection.requestedRoot == nil ||
+			binding.selection.canonicalRoot == nil ||
+			*binding.selection.requestedRoot != *request.workspace.workspaceRoot {
+			return fmt.Errorf("project attach returned a different requested workspace root")
 		}
-		if canonicalRoot != binding.WorkspaceRoot {
+		if *binding.selection.canonicalRoot != binding.WorkspaceRoot {
 			return errors.New("project attach returned inconsistent canonical workspace root")
 		}
 		return nil
@@ -113,34 +150,33 @@ func (i *remoteAttachmentIntent) validateResponse(response protocol.AttachRespon
 	if !present {
 		return errors.New("remote attachment intent is invalid")
 	}
-	binding, sessionResponse := response.Session()
-	if !sessionResponse {
+	if response.session == nil || response.project != nil {
 		return errors.New("session attach returned a non-session attachment")
 	}
-	if binding.SessionID != request.SessionID {
-		return fmt.Errorf("session attach returned session %q, want %q", binding.SessionID, request.SessionID)
+	if response.session.sessionID != request.sessionID {
+		return fmt.Errorf("session attach returned session %q, want %q", response.session.sessionID, request.sessionID)
 	}
 	return nil
 }
 
-func remoteAttachmentProjectBinding(response *protocol.AttachResponse) (protocol.ProjectAttachment, bool) {
+func remoteAttachmentProjectBinding(response *remoteAttachment) (ProjectAttachment, bool) {
 	if response == nil {
-		return protocol.ProjectAttachment{}, false
+		return ProjectAttachment{}, false
 	}
-	if project, present := response.Project(); present {
-		return project, true
+	if response.project != nil && response.session == nil {
+		return *response.project, true
 	}
-	if session, present := response.Session(); present {
-		return protocol.ProjectAttachment{
-			ProjectID:     session.ProjectID,
-			WorkspaceID:   session.WorkspaceID,
-			WorkspaceRoot: session.WorkspaceRoot,
+	if response.session != nil && response.project == nil {
+		return ProjectAttachment{
+			ProjectID:     response.session.projectID,
+			WorkspaceID:   response.session.workspaceID,
+			WorkspaceRoot: response.session.workspaceRoot,
 		}, true
 	}
-	return protocol.ProjectAttachment{}, false
+	return ProjectAttachment{}, false
 }
 
-func validateReattachedBinding(expected *protocol.AttachResponse, actual *protocol.AttachResponse) error {
+func validateReattachedBinding(expected *remoteAttachment, actual *remoteAttachment) error {
 	switch {
 	case expected == nil && actual == nil:
 		return nil
@@ -148,9 +184,55 @@ func validateReattachedBinding(expected *protocol.AttachResponse, actual *protoc
 		return errors.New("unscoped remote reconnect unexpectedly attached")
 	case actual == nil:
 		return errors.New("attached remote reconnect omitted attachment")
-	case expected.Equal(*actual):
+	case expected.equal(*actual):
 		return nil
 	default:
 		return errors.New("remote reconnect attachment changed")
 	}
+}
+
+func (a remoteAttachment) equal(other remoteAttachment) bool {
+	switch {
+	case a.project != nil && a.session == nil && other.project != nil && other.session == nil:
+		return a.project.equal(*other.project)
+	case a.session != nil && a.project == nil && other.session != nil && other.project == nil:
+		return *a.session == *other.session
+	default:
+		return false
+	}
+}
+
+func (a ProjectAttachment) equal(other ProjectAttachment) bool {
+	if a.ProjectID != other.ProjectID ||
+		a.WorkspaceID != other.WorkspaceID ||
+		a.WorkspaceRoot != other.WorkspaceRoot {
+		return false
+	}
+	switch {
+	case a.selection == nil && other.selection == nil:
+		return true
+	case a.selection == nil || other.selection == nil:
+		return false
+	case a.selection.workspaceID != nil || other.selection.workspaceID != nil:
+		return a.selection.workspaceID != nil &&
+			other.selection.workspaceID != nil &&
+			*a.selection.workspaceID == *other.selection.workspaceID
+	default:
+		return a.selection.requestedRoot != nil &&
+			other.selection.requestedRoot != nil &&
+			a.selection.canonicalRoot != nil &&
+			other.selection.canonicalRoot != nil &&
+			*a.selection.requestedRoot == *other.selection.requestedRoot &&
+			*a.selection.canonicalRoot == *other.selection.canonicalRoot
+	}
+}
+
+func validateRemoteAttachmentField(name string, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if strings.TrimSpace(value) != value {
+		return fmt.Errorf("%s must not have leading or trailing whitespace", name)
+	}
+	return nil
 }

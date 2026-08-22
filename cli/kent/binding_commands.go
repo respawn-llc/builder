@@ -15,7 +15,10 @@ import (
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var bindingCommandRPCTimeout = 5 * time.Second
@@ -93,7 +96,7 @@ func projectCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	_, _ = fmt.Fprintln(stdout, binding.ProjectID)
+	_, _ = fmt.Fprintln(stdout, binding.ProjectId)
 	return 0
 }
 
@@ -201,31 +204,31 @@ func attachWorkspace(ctx context.Context, explicitProjectID string, targetPath s
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(resp.Binding.ProjectID), nil
+	return strings.TrimSpace(resp.Binding.ProjectId), nil
 }
 
-func attachWorkspaceToProject(ctx context.Context, remote apicontract.ProjectViewService, projectID string, workspaceRoot string) (serverapi.ProjectAttachWorkspaceResponse, error) {
+func attachWorkspaceToProject(ctx context.Context, remote apicontract.ProjectViewService, projectID string, workspaceRoot string) (*projectpb.AttachWorkspaceSuccess, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, bindingCommandRPCTimeout)
 	defer cancel()
-	return remote.AttachWorkspaceToProject(rpcCtx, serverapi.ProjectAttachWorkspaceRequest{ProjectID: projectID, WorkspaceRoot: workspaceRoot})
+	return remote.AttachWorkspaceToProject(rpcCtx, &projectpb.AttachWorkspaceRequest{ProjectId: projectID, WorkspaceRoot: workspaceRoot})
 }
 
-func listProjectsWithTimeout(ctx context.Context, remote apicontract.ProjectViewService) (serverapi.ProjectListResponse, error) {
+func listProjectsWithTimeout(ctx context.Context, remote apicontract.ProjectViewService) (*projectpb.ProjectListSuccess, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, bindingCommandRPCTimeout)
 	defer cancel()
-	return remote.ListProjects(rpcCtx, serverapi.ProjectListRequest{})
+	return remote.ListProjects(rpcCtx, &emptypb.Empty{})
 }
 
-func createProjectWithTimeout(ctx context.Context, remote apicontract.ProjectViewService, displayName string, workspaceRoot string) (serverapi.ProjectCreateResponse, error) {
+func createProjectWithTimeout(ctx context.Context, remote apicontract.ProjectViewService, displayName string, workspaceRoot string) (*projectpb.CreateProjectSuccess, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, bindingCommandRPCTimeout)
 	defer cancel()
-	return remote.CreateProject(rpcCtx, serverapi.ProjectCreateRequest{DisplayName: displayName, WorkspaceRoot: workspaceRoot})
+	return remote.CreateProject(rpcCtx, &projectpb.CreateProjectRequest{DisplayName: displayName, WorkspaceRoot: workspaceRoot})
 }
 
-func rebindWorkspaceWithTimeout(ctx context.Context, remote apicontract.ProjectViewService, oldWorkspaceRoot string, newWorkspaceRoot string) (serverapi.ProjectRebindWorkspaceResponse, error) {
+func rebindWorkspaceWithTimeout(ctx context.Context, remote apicontract.ProjectViewService, oldWorkspaceRoot string, newWorkspaceRoot string) (*projectpb.RebindWorkspaceSuccess, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, bindingCommandRPCTimeout)
 	defer cancel()
-	return remote.RebindWorkspace(rpcCtx, serverapi.ProjectRebindWorkspaceRequest{OldWorkspaceRoot: oldWorkspaceRoot, NewWorkspaceRoot: newWorkspaceRoot})
+	return remote.RebindWorkspace(rpcCtx, &projectpb.RebindWorkspaceRequest{OldWorkspaceRoot: oldWorkspaceRoot, NewWorkspaceRoot: newWorkspaceRoot})
 }
 
 func retargetSessionWorkspace(ctx context.Context, remote apicontract.SessionLifecycleService, sessionID string, workspaceRoot string, projectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
@@ -242,26 +245,34 @@ func listProjects(ctx context.Context) ([]clientui.ProjectSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return resp.Projects, nil
+	projects := make([]clientui.ProjectSummary, 0, len(resp.Projects))
+	for _, project := range resp.Projects {
+		summary, err := client.ProjectSummaryFromProto(project)
+		if err != nil {
+			return nil, err
+		}
+		projects = append(projects, summary)
+	}
+	return projects, nil
 }
 
-func createProject(ctx context.Context, displayName string, workspaceRoot string) (serverapi.ProjectBinding, error) {
+func createProject(ctx context.Context, displayName string, workspaceRoot string) (*projectpb.ProjectMutationBinding, error) {
 	trimmedDisplayName := strings.TrimSpace(displayName)
 	if trimmedDisplayName == "" {
-		return serverapi.ProjectBinding{}, errors.New("project name is required")
+		return nil, errors.New("project name is required")
 	}
 	normalizedWorkspaceRoot, err := normalizeBindingCommandPath(workspaceRoot)
 	if err != nil {
-		return serverapi.ProjectBinding{}, err
+		return nil, err
 	}
 	_, remote, err := openBindingCommandRemote(ctx, ".")
 	if err != nil {
-		return serverapi.ProjectBinding{}, err
+		return nil, err
 	}
 	defer func() { _ = remote.Close() }()
 	resp, err := createProjectWithTimeout(ctx, remote, trimmedDisplayName, normalizedWorkspaceRoot)
 	if err != nil {
-		return serverapi.ProjectBinding{}, err
+		return nil, err
 	}
 	return resp.Binding, nil
 }
@@ -323,14 +334,14 @@ func normalizeBindingCommandPath(path string) (string, error) {
 func resolveWorkspaceBinding(ctx context.Context, projectViews apicontract.ProjectViewService, workspaceRoot string) (serverapi.ProjectBinding, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, bindingCommandRPCTimeout)
 	defer cancel()
-	resp, err := projectViews.ResolveProjectPath(rpcCtx, serverapi.ProjectResolvePathRequest{Path: workspaceRoot})
+	resp, err := projectViews.ResolveProjectPath(rpcCtx, &projectpb.ResolvePathRequest{Path: workspaceRoot})
 	if err != nil {
 		return serverapi.ProjectBinding{}, err
 	}
 	if resp.Binding == nil {
 		return serverapi.ProjectBinding{}, errWorkspaceNotRegistered
 	}
-	return *resp.Binding, nil
+	return client.ProjectBindingFromProto(resp.Binding)
 }
 
 func loadBindingCommandConfig(path string) (config.App, error) {

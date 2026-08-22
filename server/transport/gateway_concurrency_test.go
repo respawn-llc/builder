@@ -333,7 +333,7 @@ func TestGatewayConcurrentUnaryResponsesAreCorrelated(t *testing.T) {
 		GatewayDependencies: appCore,
 		workflow:            workflow,
 	}
-	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(deps, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestGatewayOrdinaryHandlerPanicPropagates(t *testing.T) {
 		workflow:            workflow,
 		debug:               true,
 	}
-	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(deps, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -522,7 +522,7 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 			}
 			gateway, err := NewGateway(
 				&gatewayConcurrencyDependencies{GatewayDependencies: appCore, workflow: workflowClient},
-				protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+				gatewayTestIdentity(),
 			)
 			if err != nil {
 				t.Fatalf("NewGateway: %v", err)
@@ -584,7 +584,7 @@ func TestGatewayCloseCancelsAndDrainsHandlersBeforeRuntimeCleanup(t *testing.T) 
 		workflow:            workflow,
 		runtime:             runtime,
 	}
-	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(deps, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -696,7 +696,7 @@ func TestGatewayAdmissionCapsOrdinaryUnaryRequests(t *testing.T) {
 		GatewayDependencies: appCore,
 		workflow:            workflow,
 	}
-	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	gateway, err := NewGateway(deps, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}

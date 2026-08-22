@@ -25,15 +25,15 @@ func TestListProjectWorkspaceCatalogPageOrderingAndFormerLimit(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, "UPDATE workspaces SET created_at_unix_ms = 1 WHERE id = ?", oldest.WorkspaceID); err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.ListProjectWorkspaceCatalogPage(ctx, source.ProjectID, 0, serverapi.MaxProjectWorkspacePageSize)
+	first, err := store.ListProjectWorkspaceCatalogPage(ctx, source.ProjectID, 0, MaxProjectWorkspacePageSize)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Workspaces) != serverapi.MaxProjectWorkspacePageSize || !first.Workspaces[0].IsDefault ||
-		first.NextOffset == nil || *first.NextOffset != serverapi.MaxProjectWorkspacePageSize {
+	if len(first.Workspaces) != MaxProjectWorkspacePageSize || !first.Workspaces[0].IsDefault ||
+		first.NextOffset == nil || *first.NextOffset != MaxProjectWorkspacePageSize {
 		t.Fatalf("first page = %+v", first)
 	}
-	last, err := store.ListProjectWorkspaceCatalogPage(ctx, source.ProjectID, formerLimit, serverapi.MaxProjectWorkspacePageSize)
+	last, err := store.ListProjectWorkspaceCatalogPage(ctx, source.ProjectID, formerLimit, MaxProjectWorkspacePageSize)
 	if err != nil {
 		t.Fatal(err)
 	}

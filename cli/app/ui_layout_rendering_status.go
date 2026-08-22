@@ -7,6 +7,7 @@ import (
 
 	"core/cli/tui"
 	"core/server/llm"
+	"core/shared/textutil"
 	sharedtheme "core/shared/theme"
 
 	bubbleprogress "github.com/charmbracelet/bubbles/progress"
@@ -321,7 +322,7 @@ func (l uiViewLayout) statusModelLabel() string {
 	)
 }
 
-func statusModelLabelText(modelName string, thinkingLevel string, fastModeAvailable bool, fastModeEnabled bool, modelContractLocked bool, configuredModelName string) string {
+func statusModelLabelText(modelName string, thinkingLevel string, fastModeAvailable bool, fastModeEnabled bool, modelContractLocked bool, configuredModelName *string) string {
 	label := llm.ModelDisplayLabel(modelName, thinkingLevel)
 	if fastModeAvailable && fastModeEnabled {
 		label += " fast"
@@ -329,7 +330,8 @@ func statusModelLabelText(modelName string, thinkingLevel string, fastModeAvaila
 	if !modelContractLocked {
 		return label
 	}
-	if strings.TrimSpace(modelName) == strings.TrimSpace(configuredModelName) {
+	configured, present := textutil.OptionalTrimmed(configuredModelName)
+	if !present || strings.TrimSpace(modelName) == configured {
 		return label
 	}
 	return label + " (model locked)"
