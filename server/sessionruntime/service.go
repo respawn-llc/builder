@@ -69,12 +69,12 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 	return err
 }
 
-func applyAgentSelection(store *session.Store, selection *session.ChatAgentSelection) error {
+func applyAgentSelection(store *session.Store, selection *session.ChatAgentSelection) (bool, error) {
 	if selection == nil {
-		return nil
+		return false, nil
 	}
-	_, err := store.MutateChatSettings(session.ChatSettingsMutation{Agent: selection})
-	return err
+	result, err := store.MutateChatSettings(session.ChatSettingsMutation{Agent: selection})
+	return result.Changed, err
 }
 
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
@@ -95,10 +95,11 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 	attachment, err := s.authority.openRuntime(ctx, RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   ownerID,
-	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, error) {
+	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, AgentResourceSelection, error) {
 		if _, err := store.PromoteSubagentToMain(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		agentSelectionChanged := false
 		if req.AgentSelection != nil {
 			selection := session.ChatAgentSelection{
 				Agent: req.AgentSelection.Agent,
@@ -110,8 +111,10 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 					AutoCompaction: req.AgentSelection.Baseline.AutoCompaction,
 				},
 			}
-			if err := applyAgentSelection(store, &selection); err != nil {
-				return nil, err
+			var selectionErr error
+			agentSelectionChanged, selectionErr = applyAgentSelection(store, &selection)
+			if selectionErr != nil {
+				return nil, nil, selectionErr
 			}
 		}
 		persisted := store.Meta().ChatSettings
@@ -139,7 +142,7 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 			},
 		)
 		if resolveErr != nil {
-			return nil, resolveErr
+			return nil, nil, resolveErr
 		}
 		req.ActiveSettings.Reviewer.Frequency = effective.Supervisor
 		req.ActiveSettings.ThinkingLevel = effective.Thinking
@@ -150,9 +153,12 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		req.AutoCompactionEnabled = &autoCompaction
 		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())
 		if planErr != nil {
-			return nil, planErr
+			return nil, nil, planErr
 		}
-		return &plan, nil
+		if agentSelectionChanged {
+			return &plan, ReplaceAgentResource{}, nil
+		}
+		return &plan, OpenAgentResource{}, nil
 	})
 	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err

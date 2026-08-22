@@ -96,12 +96,16 @@ func (failingAuthStore) Load(context.Context) (auth.State, error) {
 
 func (failingAuthStore) Save(context.Context, auth.State) error { return nil }
 
-func TestGetServerReadinessLoadsAuthStateWhenStartupAuthNotRequired(t *testing.T) {
+func TestGetServerReadinessSkipsAuthStateWhenStartupAuthNotRequired(t *testing.T) {
 	manager := auth.NewManager(failingAuthStore{}, nil, nil)
 	service := NewServerStatusService(manager, config.App{Settings: config.Settings{ProviderOverride: "anthropic"}}, nil)
 
-	if _, err := service.GetReadiness(context.Background(), &emptypb.Empty{}); err == nil {
-		t.Fatal("expected request-owned auth store error")
+	response, err := service.GetReadiness(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		t.Fatalf("GetReadiness: %v", err)
+	}
+	if !response.Readiness.Ready || response.Readiness.AuthRequired {
+		t.Fatalf("readiness = %+v, want ready without required auth", response.Readiness)
 	}
 }
 

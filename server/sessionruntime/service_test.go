@@ -389,6 +389,55 @@ func TestActivateSessionRuntimeCommitsPlannedAgentSelection(t *testing.T) {
 	releaseSessionRuntimeForFastTest(t, fixture.api, response.Attachment, "planned-agent-selection")
 }
 
+func TestActivateSessionRuntimeReplacesReadyRuntimeAfterAgentSelection(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return &sessionRuntimeTestLLMClient{}, nil
+		}),
+	})
+	first := activateSessionRuntimeForFastTest(
+		t,
+		fixture.api,
+		fixture.store.Meta().SessionID,
+		"first-agent",
+		sessionRuntimeFastSettings(false),
+	)
+
+	settings := sessionRuntimeFastSettings(true)
+	second, err := fixture.api.ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:       "replacement-agent",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "replacement-agent",
+		ActiveSettings:        settings,
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		AgentSelection: &serverapi.SessionRuntimeAgentSelection{
+			Agent: "worker",
+			Baseline: serverapi.SessionRuntimeChatSettings{
+				Supervisor:     settings.Reviewer.Frequency,
+				Thinking:       settings.ThinkingLevel,
+				Fast:           true,
+				Questions:      true,
+				AutoCompaction: true,
+			},
+		},
+		Source: config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	if second.Attachment.Generation == first.Generation {
+		t.Fatalf("replacement generation = %d, want a generation after %d", second.Attachment.Generation, first.Generation)
+	}
+	if !currentSessionRuntimeEngine(t, fixture.authority, fixture.store.Meta().SessionID).FastModeEnabled() {
+		t.Fatal("replacement runtime Fast = false, want selected Agent baseline true")
+	}
+
+	releaseSessionRuntimeForFastTest(t, fixture.api, first, "first-agent")
+	releaseSessionRuntimeForFastTest(t, fixture.api, second.Attachment, "replacement-agent")
+}
+
 func TestActivateSessionRuntimeUsesLatestPersistedQuestionAndAutoCompactionSettings(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{

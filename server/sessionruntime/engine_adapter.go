@@ -164,7 +164,7 @@ func (a *Authority) buildAgentResource(
 	if plan == nil {
 		return nil, errors.New("agent runtime plan is required")
 	}
-	if err := applyAgentSelection(store, plan.options.AgentSelection); err != nil {
+	if _, err := applyAgentSelection(store, plan.options.AgentSelection); err != nil {
 		return nil, err
 	}
 	if err := appendRecoveredWarning(store, plan.options.RecoveredWarningProvider); err != nil {

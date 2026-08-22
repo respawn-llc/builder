@@ -501,7 +501,7 @@ func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest)
 func (a *Authority) openRuntime(
 	ctx context.Context,
 	request RuntimeOpenRequest,
-	resolvePlan func(context.Context, *session.Store) (*AgentRuntimePlan, error),
+	resolvePlan func(context.Context, *session.Store) (*AgentRuntimePlan, AgentResourceSelection, error),
 ) (RuntimeAttachment, error) {
 	if a == nil {
 		return RuntimeAttachment{}, errors.New("session runtime authority is required")
@@ -536,12 +536,13 @@ func (a *Authority) openRuntime(
 		return RuntimeAttachment{}, err
 	}
 	var admittedStore *runtimeStoreAdmission
+	var resourceSelection AgentResourceSelection = OpenAgentResource{}
 	if resolvePlan != nil {
 		admittedStore, err = a.materializeRuntimeStore(descriptor)
 		if err != nil {
 			return RuntimeAttachment{}, err
 		}
-		request.Runtime, err = resolvePlan(ctx, admittedStore.store)
+		request.Runtime, resourceSelection, err = resolvePlan(ctx, admittedStore.store)
 		if err != nil {
 			return RuntimeAttachment{}, err
 		}
@@ -549,7 +550,15 @@ func (a *Authority) openRuntime(
 			return RuntimeAttachment{}, errors.New("resolved runtime plan is required")
 		}
 	}
-	resource, err := a.openResource(ctx, descriptor, request.Runtime, &ownerID, admittedStore)
+	var resource *agentResource
+	switch resourceSelection.(type) {
+	case OpenAgentResource:
+		resource, err = a.openResource(ctx, descriptor, request.Runtime, &ownerID, admittedStore)
+	case ReplaceAgentResource:
+		resource, err = a.replaceResource(ctx, descriptor, request.Runtime, &ownerID, admittedStore)
+	default:
+		return RuntimeAttachment{}, fmt.Errorf("unsupported runtime open resource selection %T", resourceSelection)
+	}
 	if err != nil {
 		return RuntimeAttachment{}, err
 	}
@@ -1181,7 +1190,7 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 		resource, err := a.openResource(ctx, descriptor, plan, nil, nil)
 		return resource, true, err
 	case ReplaceAgentResource:
-		resource, err := a.replaceResource(ctx, descriptor, plan)
+		resource, err := a.replaceResource(ctx, descriptor, plan, nil, nil)
 		return resource, true, err
 	default:
 		return nil, false, fmt.Errorf("unsupported agent resource selection %T", selection)
@@ -1254,7 +1263,13 @@ func (a *Authority) openResource(
 	return resource, nil
 }
 
-func (a *Authority) replaceResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan) (*agentResource, error) {
+func (a *Authority) replaceResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	ownerID *string,
+	admittedStore *runtimeStoreAdmission,
+) (*agentResource, error) {
 	sessionID := descriptor.SessionID()
 	a.mu.Lock()
 	existing := a.resources[sessionID]
@@ -1264,7 +1279,7 @@ func (a *Authority) replaceResource(ctx context.Context, descriptor session.Sess
 			return nil, err
 		}
 	}
-	return a.openResource(ctx, descriptor, plan, nil, nil)
+	return a.openResource(ctx, descriptor, plan, ownerID, admittedStore)
 }
 
 func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *agentResource) error {

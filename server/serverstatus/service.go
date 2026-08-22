@@ -31,7 +31,7 @@ func (s *ServerStatusService) GetReadiness(ctx context.Context, _ *emptypb.Empty
 		settings = s.settings
 	}
 	authRequired := authservice.StartupAuthRequired(settings)
-	if s != nil && s.authManager != nil {
+	if authRequired && s != nil && s.authManager != nil {
 		state, err := s.authManager.Load(ctx)
 		if err != nil {
 			return nil, err
