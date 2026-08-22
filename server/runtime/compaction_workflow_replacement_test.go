@@ -252,7 +252,7 @@ func TestWorkflowAssignmentApplicationPreservesPostCompletionBoundary(t *testing
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set post-completion replacement mode: %v", err)
 	}
-	message, err := buildWorkflowAssignmentMessage(workflowAssignmentForCommitReceiptTest())
+	message, err := buildWorkflowAssignmentMessage(workflowAssignmentForCompactionTest())
 	if err != nil {
 		t.Fatalf("build workflow assignment: %v", err)
 	}
@@ -265,6 +265,26 @@ func TestWorkflowAssignmentApplicationPreservesPostCompletionBoundary(t *testing
 	}
 	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("workflow assignment steering consumed the post-completion boundary")
+	}
+}
+
+func workflowAssignmentForCompactionTest() WorkflowAssignment {
+	reference := workflow.CurrentNodeReference{
+		TaskID: "task-assignment-receipt",
+		NodeID: "node-assignment-receipt",
+	}
+	return WorkflowAssignment{
+		ContextMode:    workflow.ContextModeNewSession,
+		CompletionMode: workflowruntime.CompletionModeTool,
+		Prompt: workflowruntime.PromptContract{
+			Identity:       workflowruntime.CurrentNodePromptIdentity(reference),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode:      reference,
+				WorkflowID:       runtimeids.NewWorkflowID(),
+				TransitionPrompt: "Perform the assigned workflow step.",
+			},
+		},
 	}
 }
 
