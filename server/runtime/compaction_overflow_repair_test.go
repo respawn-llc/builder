@@ -145,7 +145,7 @@ func TestCompactionOverflowRepairUsesCumulativeAttemptCapOldestFirst(t *testing.
 		t.Fatalf("expected third output to remain for first attempt")
 	}
 
-	second, secondStats := collapseCompactionOverflowToolPayloadsAfterSavings(first, compactionOverflowRepairTargetTokens(defaultContextWindowTokens, 2), firstStats.EstimatedSavedTokens)
+	second, secondStats := collapseCompactionOverflowToolPayloadsAfterSavings(first, compactionOverflowRepairTargetTokens(200_000, 2), firstStats.EstimatedSavedTokens)
 	if secondStats.ShellOutputsCollapsed != 1 {
 		t.Fatalf("second attempt newly collapsed %d shell outputs, want 1", secondStats.ShellOutputsCollapsed)
 	}
@@ -184,17 +184,17 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 		ID:    "call-shell",
 		Name:  string(toolspec.ToolExecCommand),
 		Input: json.RawMessage(`{"cmd":"go test ./..."}`),
 	}}}})); err != nil {
 		t.Fatalf("append assistant tool call: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:       llm.RoleTool,
 		ToolCallID: textutil.Value("call-shell"),
 		Name:       textutil.Value(string(toolspec.ToolExecCommand)),
@@ -243,10 +243,10 @@ func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *test
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 		ID:               "rs-heavy",
 		EncryptedContent: strings.Repeat("reasoning-heavy-history", 12_000),
 	}}}})); err != nil {
@@ -279,10 +279,10 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local", ContextWindowTokens: 100_000})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 		ID:               "rs-keep",
 		EncryptedContent: strings.Repeat("reasoning", 2_000),
 	}}}})); err != nil {
@@ -290,14 +290,14 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 	}
 	for idx := 0; idx < 5; idx++ {
 		callID := fmt.Sprintf("call-shell-%d", idx)
-		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 			ID:    callID,
 			Name:  string(toolspec.ToolExecCommand),
 			Input: json.RawMessage(`{"cmd":"echo hi"}`),
 		}}}})); err != nil {
 			t.Fatalf("append assistant tool call %d: %v", idx, err)
 		}
-		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{
+		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 			Role:       llm.RoleTool,
 			ToolCallID: textutil.Value(callID),
 			Name:       textutil.Value(string(toolspec.ToolExecCommand)),
@@ -369,7 +369,7 @@ func shellOutputRepairItem(callID string, output string) llm.ResponseItem {
 }
 
 func collapseCompactionOverflowToolPayloadsForDefaultWindowRepairAttempt(items []llm.ResponseItem, repairAttempt int) ([]llm.ResponseItem, compactionOverflowRepairStats) {
-	return collapseCompactionOverflowToolPayloadsAfterSavings(items, compactionOverflowRepairTargetTokens(defaultContextWindowTokens, repairAttempt), 0)
+	return collapseCompactionOverflowToolPayloadsAfterSavings(items, compactionOverflowRepairTargetTokens(200_000, repairAttempt), 0)
 }
 
 func mustMarshalItemsForRepairTest(t *testing.T, items []llm.ResponseItem) string {

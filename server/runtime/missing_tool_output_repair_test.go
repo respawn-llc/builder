@@ -180,7 +180,7 @@ func TestMissingToolOutputRepairRetryPreservesQueuedSteeringBoundary(t *testing.
 				return nil
 			}
 			queued = true
-			if _, err := eng.AcceptHumanSteering("queued steering", nil); err != nil {
+			if _, err := eng.QueueUserMessage("queued steering"); err != nil {
 				return err
 			}
 			return nil
@@ -327,10 +327,7 @@ func steerDanglingToolCall(t *testing.T, engine *Engine, stepID string, call llm
 	t.Helper()
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
-	if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
 		t.Fatalf("append dangling tool call: %v", err)
 	}
 }
@@ -373,7 +370,11 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 
 	restoreStep := setTestActiveStep(eng, "step")
 	defer restoreStep()
-	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), "step", client, request); err != nil {
+	dispatchFactory, err := eng.activeDispatchRequestFactory(runtimeTestStepID("step"), nil)
+	if err != nil {
+		t.Fatalf("create compaction dispatch: %v", err)
+	}
+	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), runtimeTestStepID("step"), client, request, dispatchFactory); err != nil {
 		t.Fatalf("compact with repair retry: %v", err)
 	}
 	if len(client.compactionCalls) != 2 {
@@ -404,35 +405,26 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 		},
 	}
 	eng := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
-			ID:    "call-shell",
-			Name:  "exec_command",
-			Input: json.RawMessage(`{}`),
-		}}}},
-	)); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+		ID:    "call-shell",
+		Name:  "exec_command",
+		Input: json.RawMessage(`{}`),
+	}}}})); err != nil {
 		t.Fatalf("append shell tool call: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{
-			Role:       llm.RoleTool,
-			ToolCallID: textutil.Value("call-shell"),
-			Name:       textutil.Value("exec_command"),
-			Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`),
-		}},
-	)); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+		Role:       llm.RoleTool,
+		ToolCallID: textutil.Value("call-shell"),
+		Name:       textutil.Value("exec_command"),
+		Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`),
+	}})); err != nil {
 		t.Fatalf("append shell tool output: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
-			ID:    "call-missing",
-			Name:  "exec_command",
-			Input: json.RawMessage(`{}`),
-		}}}},
-	)); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+		ID:    "call-missing",
+		Name:  "exec_command",
+		Input: json.RawMessage(`{}`),
+	}}}})); err != nil {
 		t.Fatalf("append dangling tool call: %v", err)
 	}
 	request := llm.CompactionRequest{
@@ -446,7 +438,11 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 			t.Fatal("expected a missing-output provider error after collapse to violate the invariant")
 		}
 	}()
-	_, _, _, _ = eng.compactWithContextRepairRetry(context.Background(), "step", client, request)
+	dispatchFactory, err := eng.activeDispatchRequestFactory(runtimeTestStepID("step"), nil)
+	if err != nil {
+		t.Fatalf("create compaction dispatch: %v", err)
+	}
+	_, _, _, _ = eng.compactWithContextRepairRetry(context.Background(), runtimeTestStepID("step"), client, request, dispatchFactory)
 }
 
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {

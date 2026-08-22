@@ -1297,7 +1297,7 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(
 		provenance := cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
 		if _, projected := transcriptCommittedRowFactFromChatEntry(copyEntry); projected && (provenance == nil || provenance.ProjectedOrdinal == nil) {
 			return fmt.Errorf(
-				"history replacement projected row %d lacks filtered ordinal (step_id=%q role=%q)",
+				"history replacement projected row %d lacks filtered ordinal (step_id=%v role=%q)",
 				idx,
 				copyEntry.StepID,
 				copyEntry.Role,

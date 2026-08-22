@@ -137,10 +137,7 @@ func TestConflictingAssistantToolCallStepReturnsError(t *testing.T) {
 	t.Run("before persistence", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-		intent := steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-			true,
-			[]llm.Message{message},
-		)
+		intent := steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})
 		if err := steerTestActiveStep(engine, chatStoreTestStepID, intent); err != nil {
 			t.Fatalf("append initial tool call: %v", err)
 		}

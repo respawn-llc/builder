@@ -88,10 +88,7 @@ func persistAcceptedToolCallIntents(
 			t.Fatalf("unsupported accepted response call source %d", ref.source)
 		}
 	}
-	if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: ordered}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: ordered}})); err != nil {
 		t.Fatalf("persist accepted tool-call intents: %v", err)
 	}
 }

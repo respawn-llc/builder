@@ -23,10 +23,7 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 		})
 		mustBlockTestEventLogAppends(t, store)
 
-		err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("uncommitted")}},
-		))
+		err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("uncommitted")}}))
 		if err == nil {
 			t.Fatal("persisted message did not surface the event-log append failure")
 		}
@@ -49,10 +46,7 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 		})
 		gate.FailNext(observerErr)
 
-		err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("committed")}},
-		))
+		err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("committed")}}))
 		if !errors.Is(err, observerErr) {
 			t.Fatalf("persisted message error = %v, want observer error", err)
 		}

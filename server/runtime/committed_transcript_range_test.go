@@ -56,11 +56,7 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 			{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 		},
 	}
-	if err := engine.steer(runtimeTestStepID("step"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{assistant},
-	),
-	); err != nil {
+	if err := engine.steer(runtimeTestStepID("step"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistant})); err != nil {
 		t.Fatalf("persist assistant message: %v", err)
 	}
 	assistantEntries := TranscriptEntriesFromEvent(Event{Kind: EventAssistantMessage, Message: assistant})
@@ -128,6 +124,7 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 				index:  0,
 			}},
 		},
+		stepLoopOptions{},
 	); err != nil {
 		t.Fatalf("materialize final-answer tool call: %v", err)
 	}

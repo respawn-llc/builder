@@ -41,7 +41,7 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}},
 		{Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`{"output":"/tmp"}`)},
 	} {
-		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 			t.Fatalf("append transcript message: %v", err)
 		}
 	}
@@ -126,19 +126,19 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	reasoningPayload := strings.Repeat("encrypted-reasoning", 4_000)
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 		ID: "rs-preserve", EncryptedContent: reasoningPayload,
 	}}}})); err != nil {
 		t.Fatalf("append reasoning message: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}})); err != nil {
 		t.Fatalf("append tool call: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`)}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`)}})); err != nil {
 		t.Fatalf("append tool output: %v", err)
 	}
 
@@ -232,15 +232,15 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 		ID: "call-view-image-1", Name: string(toolspec.ToolViewImage), Input: json.RawMessage(`{"path":"doc.pdf"}`),
 	}}}})); err != nil {
 		t.Fatalf("append view-image tool call: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role: llm.RoleTool, ToolCallID: textutil.Value("call-view-image-1"), Name: textutil.Value(string(toolspec.ToolViewImage)),
 		Content: textutil.Value(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
 	}})); err != nil {
@@ -294,10 +294,10 @@ func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *tes
 	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 		ID: "rs-heavy", EncryptedContent: strings.Repeat("reasoning-heavy-history", 12_000),
 	}}}})); err != nil {
 		t.Fatalf("append reasoning message: %v", err)
@@ -334,7 +334,7 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 	if err := eng.steerBaseMetaContextIfNeeded(stepID); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	restoreStep()

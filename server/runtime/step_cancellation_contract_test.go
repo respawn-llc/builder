@@ -16,10 +16,7 @@ func TestRunStepLoopCancellationPreventsModelDispatch(t *testing.T) {
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("unused")},
 	}}}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist input: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

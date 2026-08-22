@@ -25,10 +25,7 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set active goal: %v", err)
 	}
-	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 	engine.setLastUsage(llm.Usage{InputTokens: autoCompactLimit, WindowTokens: 200_000})

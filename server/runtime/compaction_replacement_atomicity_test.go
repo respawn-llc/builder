@@ -29,10 +29,7 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 		t.TempDir(),
 		t.TempDir(),
 	))
-	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 

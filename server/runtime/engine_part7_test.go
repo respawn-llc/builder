@@ -259,8 +259,8 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for reviewer request")
 	}
-	if _, err := eng.AcceptHumanSteering("steer reviewer follow-up", nil); err != nil {
-		t.Fatalf("AcceptHumanSteering: %v", err)
+	if _, err := eng.QueueUserMessage("steer reviewer follow-up"); err != nil {
+		t.Fatalf("QueueUserMessage: %v", err)
 	}
 	releaseReviewer()
 	waitEngineLifecycleTasks(t, eng)

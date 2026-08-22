@@ -28,13 +28,10 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})
-	if err := steerTestActiveStep(engine, "before", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
-			ID:               preBoundaryID,
-			EncryptedContent: "before",
-		}}}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "before", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+		ID:               preBoundaryID,
+		EncryptedContent: "before",
+	}}}})); err != nil {
 		t.Fatalf("persist pre-boundary reasoning: %v", err)
 	}
 	restoreStep := setTestActiveStep(engine, "checkpoint")
@@ -53,13 +50,10 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 	if err != nil || !receipt.Committed {
 		t.Fatalf("persist compaction checkpoint: receipt=%+v error=%v", receipt, err)
 	}
-	if err := steerTestActiveStep(engine, "after", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
-			ID:               postBoundaryID,
-			EncryptedContent: "after",
-		}}}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "after", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+		ID:               postBoundaryID,
+		EncryptedContent: "after",
+	}}}})); err != nil {
 		t.Fatalf("persist post-boundary reasoning: %v", err)
 	}
 
@@ -115,10 +109,7 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 		}),
 		Config{Model: "gpt-5", CompactionMode: "local"},
 	)
-	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
@@ -153,10 +144,7 @@ func TestManualCompactionDisabledWhenModeNone(t *testing.T) {
 		Model:          "gpt-5",
 		CompactionMode: "none",
 	})
-	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 

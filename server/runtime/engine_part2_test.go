@@ -4,7 +4,6 @@ import (
 	"context"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/sessioncontract"
@@ -576,8 +575,8 @@ func TestFastModeEnabledReportsFalseWhenProviderIsUnavailable(t *testing.T) {
 		}},
 		tools.NewRegistry(),
 		Config{
-			Model:         "gpt-5.3-codex",
-			FastModeState: NewFastModeState(true),
+			Model:           "gpt-5.3-codex",
+			FastModeEnabled: true,
 		},
 	)
 
@@ -704,105 +703,12 @@ func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestFastModeSharedStateAppliesAcrossEngines(t *testing.T) {
-	dir := t.TempDir()
-	state := NewFastModeState(false)
-	storeA := mustCreateNamedTestSessionAt(t, dir, "ws-a", dir)
-	engA := mustNewExecTestEngine(t, storeA, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
-		Model:         "gpt-5.3-codex",
-		FastModeState: state,
-	})
-
-	changed, err := engA.SetFastModeEnabled(true)
-	if err != nil {
-		t.Fatalf("enable fast mode: %v", err)
-	}
-	if !changed || !state.Enabled() {
-		t.Fatalf("expected shared fast mode enabled, changed=%v enabled=%v", changed, state.Enabled())
-	}
-
-	storeB := mustCreateNamedTestSessionAt(t, dir, "ws-b", dir)
-	engB := mustNewExecTestEngine(t, storeB, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
-		Model:         "gpt-5.3-codex",
-		FastModeState: state,
-	})
-	if !engB.FastModeEnabled() {
-		t.Fatal("expected shared fast mode to carry into next engine")
-	}
-}
-
-func TestSharedFastModeCommittedFeedbackSerializesAcrossEngines(t *testing.T) {
-	dir := t.TempDir()
-	state := NewFastModeState(false)
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	storeA := mustCreateNamedTestSessionAt(t, dir, "ws-a", dir, session.WithPersistenceObserver(gate))
-	engA := mustNewExecTestEngine(t, storeA, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
-		Model:         "gpt-5.3-codex",
-		FastModeState: state,
-	})
-	storeB := mustCreateNamedTestSessionAt(t, dir, "ws-b", dir)
-	engB := mustNewExecTestEngine(t, storeB, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
-		Model:         "gpt-5.3-codex",
-		FastModeState: state,
-	})
-	blockAppend, releaseAppend := gate.BlockNext()
-	feedback := func(changed bool) string {
-		if changed {
-			return "Fast mode enabled"
-		}
-		return "Fast mode already enabled"
-	}
-
-	type result struct {
-		changed bool
-		err     error
-	}
-	firstDone := make(chan result, 1)
-	go func() {
-		changed, _, err := engA.SetFastModeEnabledWithCommittedFeedback(true, feedback)
-		firstDone <- result{changed: changed, err: err}
-	}()
-	<-blockAppend
-
-	secondDone := make(chan result, 1)
-	go func() {
-		changed, _, err := engB.SetFastModeEnabledWithCommittedFeedback(true, feedback)
-		secondDone <- result{changed: changed, err: err}
-	}()
-	select {
-	case result := <-secondDone:
-		t.Fatalf("second shared-state mutation completed before first feedback persisted: %+v", result)
-	case <-time.After(25 * time.Millisecond):
-	}
-	releaseAppend()
-
-	first := <-firstDone
-	second := <-secondDone
-	if first.err != nil || second.err != nil {
-		t.Fatalf("shared fast mode committed feedback errors: first=%v second=%v", first.err, second.err)
-	}
-	if !first.changed || second.changed {
-		t.Fatalf("expected serialized changed values true,false; got %v,%v", first.changed, second.changed)
-	}
-	snapshotA := engA.ChatSnapshot()
-	snapshotB := engB.ChatSnapshot()
-	if len(snapshotA.Entries) != 1 || snapshotA.Entries[0].Text != "Fast mode enabled" {
-		t.Fatalf("expected first engine success feedback, got %+v", snapshotA.Entries)
-	}
-	if len(snapshotB.Entries) != 1 || snapshotB.Entries[0].Text != "Fast mode already enabled" {
-		t.Fatalf("expected second engine already-enabled feedback, got %+v", snapshotB.Entries)
-	}
-}
-
 func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	store := mustCreateTestSession(t)
 	cfg := Config{Model: "gpt-5"}
 	eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
 
-	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
-	if err != nil {
-		t.Fatalf("SetAutoCompactionEnabled: %v", err)
-	}
+	changed, enabled := eng.SetAutoCompactionEnabled(false)
 	if !changed || enabled {
 		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
 	}
@@ -867,7 +773,7 @@ func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) 
 	}
 	settingDone := make(chan settingResult, 1)
 	go func() {
-		changed, enabled, _ := eng.SetAutoCompactionEnabled(false)
+		changed, enabled := eng.SetAutoCompactionEnabled(false)
 		settingDone <- settingResult{changed: changed, enabled: enabled}
 	}()
 	select {

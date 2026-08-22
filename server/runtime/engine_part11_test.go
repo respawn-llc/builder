@@ -225,7 +225,7 @@ func TestRequestMessagesPreserveANSIEscapes(t *testing.T) {
 
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(seedContent)}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(seedContent)}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -376,7 +376,7 @@ func TestContextUsageUsesLastUsageWhenAvailable(t *testing.T) {
 func TestContextUsageFallsBackToEstimatedTokens(t *testing.T) {
 	t.Parallel()
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("estimate me")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("estimate me")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -414,7 +414,7 @@ func TestContextUsageUsesEstimatedTokensWhenLastUsageIsStale(t *testing.T) {
 	t.Parallel()
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
 	eng.setLastUsage(llm.Usage{InputTokens: 100, OutputTokens: 0, WindowTokens: 410_000})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("x", 1600))}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("x", 1600))}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -433,12 +433,12 @@ func TestContextUsageUsesEstimatedTokensWhenLastUsageIsStale(t *testing.T) {
 func TestContextUsageAddsOnlyPostCheckpointEstimateDelta(t *testing.T) {
 	t.Parallel()
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("seed-", 100))}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("seed-", 100))}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	checkpointEstimate := estimateItemsTokens(eng.transcriptRuntimeState().SnapshotItems())
 	eng.setLastUsage(llm.Usage{InputTokens: 900, OutputTokens: 120, WindowTokens: 410_000})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("delta-", 40))}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("delta-", 40))}})); err != nil {
 		t.Fatalf("append delta message: %v", err)
 	}
 
@@ -481,7 +481,7 @@ func TestContextUsageDoesNotInflateInlineImagePayloadByBase64Length(t *testing.T
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 410_000})
 	eng.setLastUsage(llm.Usage{InputTokens: 100, OutputTokens: 0, WindowTokens: 410_000})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:       llm.RoleTool,
 		ToolCallID: textutil.Value("call-1"),
 		Name:       textutil.Value(string(toolspec.ToolViewImage)),

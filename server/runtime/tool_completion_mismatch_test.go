@@ -214,13 +214,10 @@ func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 		CustomInput: textutil.Value("*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"),
 	}
 	normalized := normalizeToolCallForTranscript(call, engine.transcriptWorkingDir())
-	if err := engine.steer(runtimeTestStepID("step-delete"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{
-			Role:      llm.RoleAssistant,
-			ToolCalls: []llm.ToolCall{normalized},
-		}},
-	),
+	if err := engine.steer(runtimeTestStepID("step-delete"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{normalized},
+	}}),
 	); err != nil {
 		t.Fatalf("persist deletion call: %v", err)
 	}

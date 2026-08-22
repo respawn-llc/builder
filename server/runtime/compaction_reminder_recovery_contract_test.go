@@ -71,10 +71,7 @@ func TestForkBeforeReminderDoesNotInheritReminderAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
-	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist fork anchor: %v", err)
 	}
 	if err := engine.persistCompactionSoonReminderIssued(true); err != nil {
@@ -99,10 +96,7 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
-	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("before")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("before")}})); err != nil {
 		t.Fatalf("persist seed: %v", err)
 	}
 	seedReminderUsage(t, engine)
@@ -111,10 +105,7 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
-	if err := steerTestActiveStep(engine, "anchor", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "anchor", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after")}})); err != nil {
 		t.Fatalf("persist fork anchor: %v", err)
 	}
 

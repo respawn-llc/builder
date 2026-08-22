@@ -457,10 +457,10 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	}
 	restoreStep()
 	restoreStep = setTestActiveStep(engine, "turn-1")
-	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Need a prompt cache continuity test that survives a server restart.")}})); err != nil {
+	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Need a prompt cache continuity test that survives a server restart.")}})); err != nil {
 		t.Fatalf("append first user message: %v", err)
 	}
-	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), Content: textutil.Value("I am reconstructing the live runtime state before comparing serialized OpenAI payloads.")}})); err != nil {
+	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), Content: textutil.Value("I am reconstructing the live runtime state before comparing serialized OpenAI payloads.")}})); err != nil {
 		t.Fatalf("append assistant commentary: %v", err)
 	}
 	toolCall := llm.ToolCall{
@@ -471,7 +471,7 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 			"workdir": ".",
 		}),
 	}
-	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), ToolCalls: []llm.ToolCall{toolCall}}})); err != nil {
+	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), ToolCalls: []llm.ToolCall{toolCall}}})); err != nil {
 		t.Fatalf("append tool call: %v", err)
 	}
 	toolResult := tools.Result{
@@ -485,10 +485,10 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	if err := engine.steer(runtimeTestStepID("turn-1"), steerToolCompletionIntent(toolResult)); err != nil {
 		t.Fatalf("persist tool completion: %v", err)
 	}
-	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(toolResult.CallID), Name: textutil.Value(string(toolResult.Name)), Content: textutil.Value(string(toolResult.Output))}})); err != nil {
+	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(toolResult.CallID), Name: textutil.Value(string(toolResult.Name)), Content: textutil.Value(string(toolResult.Output))}})); err != nil {
 		t.Fatalf("append tool result message: %v", err)
 	}
-	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("Keep the persisted transcript byte-stable across hydrate and restart before sending the next model request.")}})); err != nil {
+	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("Keep the persisted transcript byte-stable across hydrate and restart before sending the next model request.")}})); err != nil {
 		t.Fatalf("append developer entry: %v", err)
 	}
 	if err := engine.steer(runtimeTestStepID("turn-1"), steerLocalEntryIntent(storedLocalEntry{
@@ -499,11 +499,11 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	})); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
-	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("The runtime state is seeded. I only need the post-restart payload comparison now.")}})); err != nil {
+	if err := engine.steer(runtimeTestStepID("turn-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("The runtime state is seeded. I only need the post-restart payload comparison now.")}})); err != nil {
 		t.Fatalf("append assistant final answer: %v", err)
 	}
 	restoreStep()
-	if err := steerTestActiveStep(engine, "turn-2", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Continue after restart and compare the exact OpenAI payload bytes.")}})); err != nil {
+	if err := steerTestActiveStep(engine, "turn-2", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("Continue after restart and compare the exact OpenAI payload bytes.")}})); err != nil {
 		t.Fatalf("append second user message: %v", err)
 	}
 }

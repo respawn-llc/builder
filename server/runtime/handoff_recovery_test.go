@@ -17,10 +17,7 @@ func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *t
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist seed message: %v", err)
 	}
 
@@ -201,10 +198,7 @@ func TestReopenedSessionAfterTriggerHandoffDoesNotRequeueWhenAnyCompactionAlread
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist seed message: %v", err)
 	}
 	handoffCall := persistSuccessfulTriggerHandoff(t, engine, "satisfied-handoff-call")
@@ -246,10 +240,7 @@ func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t 
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist seed message: %v", err)
 	}
 	restoreStep := setTestActiveStep(engine, "handoff")
@@ -261,15 +252,12 @@ func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t 
 			"future_agent_message": "continue",
 		}),
 	}
-	if err := engine.steer(runtimeTestStepID("handoff"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{
-			Role:      llm.RoleAssistant,
-			Phase:     textutil.Value(llm.MessagePhaseCommentary),
-			Content:   textutil.Value("handoff"),
-			ToolCalls: []llm.ToolCall{handoffCall},
-		}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("handoff"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
+		Role:      llm.RoleAssistant,
+		Phase:     textutil.Value(llm.MessagePhaseCommentary),
+		Content:   textutil.Value("handoff"),
+		ToolCalls: []llm.ToolCall{handoffCall},
+	}})); err != nil {
 		t.Fatalf("persist trigger-handoff call: %v", err)
 	}
 	if err := engine.steer(runtimeTestStepID("handoff"), steerToolCompletionIntent(tools.Result{
@@ -316,10 +304,7 @@ func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 		},
 	}}
 	engine := mustNewHandoffTestEngine(t, store, client, Config{})
-	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist seed message: %v", err)
 	}
 	engine.compactionRuntimeState().SetSoonReminderIssued(true)
@@ -437,10 +422,7 @@ func TestReopenedSessionAfterTriggerHandoffUsesStableRequestSessionAndOmitsLinge
 		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
 	}}}
 	engine := mustNewHandoffTestEngine(t, store, client, Config{})
-	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist seed message: %v", err)
 	}
 	persistSuccessfulTriggerHandoff(t, engine, "reopened-handoff-call")
@@ -555,15 +537,12 @@ func persistSuccessfulTriggerHandoff(t *testing.T, engine *Engine, callID string
 			"future_agent_message": "continue",
 		}),
 	}
-	if err := engine.steer(runtimeTestStepID("handoff"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{
-			Role:      llm.RoleAssistant,
-			Phase:     textutil.Value(llm.MessagePhaseCommentary),
-			Content:   textutil.Value("handoff"),
-			ToolCalls: []llm.ToolCall{handoffCall},
-		}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("handoff"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
+		Role:      llm.RoleAssistant,
+		Phase:     textutil.Value(llm.MessagePhaseCommentary),
+		Content:   textutil.Value("handoff"),
+		ToolCalls: []llm.ToolCall{handoffCall},
+	}})); err != nil {
 		t.Fatalf("persist trigger-handoff call: %v", err)
 	}
 	if err := engine.steer(runtimeTestStepID("handoff"), steerToolCompletionIntent(tools.Result{

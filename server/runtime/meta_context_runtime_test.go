@@ -122,14 +122,14 @@ func TestFreshWorkflowMetaContextRetriesCommittedObserverFailureWithoutDuplicate
 	)
 	gate.FailNext(observerErr)
 
-	if err := engine.ensureMetaContextForRequest(context.Background(), "fresh"); !errors.Is(err, observerErr) {
+	if err := engine.ensureMetaContextForRequest(context.Background(), runtimeTestStepID("fresh")); !errors.Is(err, observerErr) {
 		t.Fatalf("first fresh meta-context error = %v, want %v", err, observerErr)
 	}
 	if engine.baseMetaInjected {
 		t.Fatal("fresh meta-context marked injected before the complete projection committed")
 	}
 
-	if err := engine.ensureMetaContextForRequest(context.Background(), "retry"); err != nil {
+	if err := engine.ensureMetaContextForRequest(context.Background(), runtimeTestStepID("retry")); err != nil {
 		t.Fatalf("retry fresh meta-context: %v", err)
 	}
 	if !engine.baseMetaInjected {

@@ -15,17 +15,11 @@ import (
 func TestForkedSessionRecoversCompletedTriggerHandoff(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first")}})); err != nil {
 		t.Fatalf("persist first user message: %v", err)
 	}
 	handoffCall := persistSuccessfulTriggerHandoff(t, engine, "fork-handoff")
-	if err := steerTestActiveStep(engine, "anchor", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("fork anchor")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "anchor", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("fork anchor")}})); err != nil {
 		t.Fatalf("persist fork anchor: %v", err)
 	}
 

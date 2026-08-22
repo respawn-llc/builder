@@ -25,10 +25,7 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 		{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 		{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 	}
-	if err := engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: calls}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: calls}})); err != nil {
 		t.Fatalf("append assistant tool calls: %v", err)
 	}
 	results := []tools.Result{
@@ -57,10 +54,7 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 			Name:       textutil.Value(string(result.Name)),
 			Content:    textutil.Value(string(result.Output)),
 		}
-		if err := engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-			true,
-			[]llm.Message{mirror},
-		)); err != nil {
+		if err := engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{mirror})); err != nil {
 			t.Fatalf("materialize tool mirror %s: %v", result.CallID, err)
 		}
 	}

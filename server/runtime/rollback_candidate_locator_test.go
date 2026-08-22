@@ -20,10 +20,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 
 	if err := steerTestActiveStep(eng,
 		"user-step",
-		steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("candidate before several compactions")}},
-		),
+		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("candidate before several compactions")}}),
 	); err != nil {
 		t.Fatalf("persist rollback candidate: %v", err)
 	}
@@ -101,10 +98,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 
 	if err := steerTestActiveStep(reopened,
 		"fork-target-step",
-		steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("new prompt to replace in fork")}},
-		),
+		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("new prompt to replace in fork")}}),
 	); err != nil {
 		t.Fatalf("persist fork target: %v", err)
 	}

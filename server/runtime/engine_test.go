@@ -419,10 +419,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReminderEntries(t *testin
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value("heads up")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value("heads up")}})); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 
@@ -440,7 +440,7 @@ func TestLastCommittedAssistantFinalAnswerClearsAtBlankFinal(t *testing.T) {
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")},
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("")},
 	} {
-		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 			t.Fatalf("append assistant final: %v", err)
 		}
 	}
@@ -455,10 +455,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingErrorFeedback(t *testing.
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value("phase mismatch")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value("phase mismatch")}})); err != nil {
 		t.Fatalf("append warning: %v", err)
 	}
 
@@ -472,10 +472,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingHandoffFutureMessage(t *t
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHandoffFutureMessage), Content: textutil.Value("resume with tests")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHandoffFutureMessage), Content: textutil.Value("resume with tests")}})); err != nil {
 		t.Fatalf("append handoff future message: %v", err)
 	}
 
@@ -489,10 +489,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReviewerFeedback(t *testi
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value("reviewer suggestions")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value("reviewer suggestions")}})); err != nil {
 		t.Fatalf("append reviewer feedback: %v", err)
 	}
 
@@ -506,10 +506,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingGoalFeedback(t *testing.T
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeGoal), Content: textutil.Value(prompts.RenderGoalSetPrompt("ship goal mode")), CompactContent: textutil.Value("Goal set: \"ship goal mode\"")}, eng.transcriptWorkingDir())})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeGoal), Content: textutil.Value(prompts.RenderGoalSetPrompt("ship goal mode")), CompactContent: textutil.Value("Goal set: \"ship goal mode\"")}, eng.transcriptWorkingDir())})); err != nil {
 		t.Fatalf("append goal feedback: %v", err)
 	}
 
@@ -523,10 +523,10 @@ func TestLastCommittedAssistantFinalAnswerDoesNotSkipTrailingUntypedDeveloperMes
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("User ran shell command directly:\npwd")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("User ran shell command directly:\npwd")}})); err != nil {
 		t.Fatalf("append developer message: %v", err)
 	}
 

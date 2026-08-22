@@ -106,7 +106,7 @@ func TestShouldCompactBeforeUserMessageUsesEstimatedPromptGrowth(t *testing.T) {
 
 func TestShouldAutoCompactPrefersConfiguredThresholdOverResolvedContextWindow(t *testing.T) {
 	t.Parallel()
-	client := &contextWindowClient{contextWindow: 1_000}
+	client := &preciseCompactionClient{contextWindow: 1_000}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   400_000,

@@ -79,11 +79,7 @@ func prepareSimpleResultGroupCall(
 		Name:  string(toolspec.ToolExecCommand),
 		Input: []byte(`{"cmd":"true"}`),
 	}, engine.transcriptWorkingDir())
-	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
-	),
-	); err != nil {
+	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
 		t.Fatalf("persist result group call %s: %v", callID, err)
 	}
 	if err := engine.transcriptRuntimeState().RecordLiveToolStart(stepID, call); err != nil {
@@ -283,11 +279,7 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 	for index, call := range calls {
 		normalized[index] = normalizeToolCallForTranscript(call, engine.transcriptWorkingDir())
 	}
-	if err := engine.steer(runtimeTestStepID("step"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: normalized}},
-	),
-	); err != nil {
+	if err := engine.steer(runtimeTestStepID("step"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: normalized}})); err != nil {
 		t.Fatalf("persist result group calls: %v", err)
 	}
 	for _, call := range normalized {

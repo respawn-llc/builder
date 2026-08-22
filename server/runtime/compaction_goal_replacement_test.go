@@ -82,10 +82,7 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 func assertInactiveGoalCompaction(t *testing.T, engine *Engine, name string) {
 	t.Helper()
 	stepID := engine.stepLifecycle.Snapshot().StepID
-	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input " + name)}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input " + name)}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 	_, receipt, err := engine.compactNow(

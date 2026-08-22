@@ -140,10 +140,10 @@ func (e *Engine) steerMetaContextIfChangedWithReceipt(stepID string, messages []
 	if len(pending) == 0 {
 		return session.CommitReceipt{}, nil
 	}
-	return e.steerWithCommitReceipt(
-		stepID,
-		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, pending),
-	)
+	intent := steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, pending)
+	receipt := session.CommitReceipt{}
+	intent.items[len(intent.items)-1].commitReceipt = &receipt
+	return receipt, e.steer(stepID, intent)
 }
 
 func latestActiveMetaContextMatches(items []llm.ResponseItem, desired llm.Message) bool {
@@ -431,31 +431,39 @@ func (e *Engine) steerMetaContextBuildResult(stepID string, metaResult metaConte
 	if e == nil || e.closed.Load() {
 		return session.CommitReceipt{}, ErrEngineClosed
 	}
-	provenance, err := exactSteeringProvenance(stepID)
-	if err != nil {
-		return session.CommitReceipt{}, err
+	if warning := strings.TrimSpace(strings.Join(metaResult.SkillWarnings, "\n")); warning != "" {
+		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Role:       string(transcript.EntryRoleWarning),
+			Text:       warning,
+		})); err != nil {
+			return session.CommitReceipt{}, err
+		}
 	}
-	return e.steerMetaContextBuildResultRaw(provenance, metaResult)
+	return e.steerMetaContextIfChangedWithReceipt(
+		stepID,
+		metaResult.Projection().Messages(),
+	)
 }
 
 func (e *Engine) steerDormantMetaContextBuildResult(metaResult metaContextBuildResult) (session.CommitReceipt, error) {
 	if e == nil || e.closed.Load() {
 		return session.CommitReceipt{}, ErrEngineClosed
 	}
-	return e.steerMetaContextBuildResultRaw(sessionSteeringProvenance(), metaResult)
-}
-
-func (e *Engine) steerMetaContextBuildResultRaw(provenance steeringProvenance, metaResult metaContextBuildResult) (session.CommitReceipt, error) {
 	intents := metaContextSteeringIntents(metaResult)
 	if len(intents) == 0 {
 		return session.CommitReceipt{}, nil
 	}
+	provenance := sessionSteeringProvenance()
 	for _, intent := range intents[:len(intents)-1] {
 		if err := e.steerOrdered(provenance, intent); err != nil {
 			return session.CommitReceipt{}, err
 		}
 	}
-	return e.steerWithCommitReceiptRaw(provenance, intents[len(intents)-1])
+	last := intents[len(intents)-1]
+	receipt := session.CommitReceipt{}
+	last.items[len(last.items)-1].commitReceipt = &receipt
+	return receipt, e.steerOrdered(provenance, last)
 }
 
 func metaContextSteeringIntents(metaResult metaContextBuildResult) []steeringIntent {

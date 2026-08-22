@@ -54,7 +54,7 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "local",
 	})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -64,14 +64,11 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 	}
 	restoreStep()
 
-	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
-	if err != nil {
-		t.Fatalf("SetAutoCompactionEnabled: %v", err)
-	}
+	changed, enabled := eng.SetAutoCompactionEnabled(false)
 	if !changed || enabled {
 		t.Fatalf("expected auto compaction toggle off, changed=%v enabled=%v", changed, enabled)
 	}
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("continue")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("continue")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 
@@ -117,7 +114,7 @@ func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testi
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 1_000,
 	})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 860, WindowTokens: 2_000})
@@ -135,7 +132,7 @@ func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testi
 	}
 
 	client.inputTokenCount = 860
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("mutation")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("mutation")}})); err != nil {
 		t.Fatalf("append mutation: %v", err)
 	}
 	restoreStep = setTestActiveStep(eng, "step-2")
@@ -158,7 +155,7 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutPreserve
 		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}}},
 	}
 	eng := mustNewHandoffTestEngine(t, store, client, Config{})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
@@ -256,7 +253,7 @@ func TestPrepareModelTurnSkipsAutoCompactionAfterPendingHandoffCompaction(t *tes
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 1_000,
 	})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 1_900, WindowTokens: 2_000})
@@ -295,7 +292,7 @@ func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompacti
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 1_000,
 	})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 1_900, WindowTokens: 2_000})
@@ -347,7 +344,7 @@ func TestPendingTriggerHandoffFailsToolCallsAndRetriesLocalSummary(t *testing.T)
 		CompactionMode: "local",
 		EnabledTools:   []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch, toolspec.ToolTriggerHandoff},
 	})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
@@ -411,7 +408,7 @@ func TestPendingTriggerHandoffFailsMalformedToolCallWithEmptyID(t *testing.T) {
 		Usage: llm.Usage{InputTokens: 100, WindowTokens: 2_000},
 	}}}
 	eng := mustNewHandoffTestEngine(t, store, client, Config{})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
@@ -480,7 +477,7 @@ func TestPendingTriggerHandoffRetriesCustomToolCallOutput(t *testing.T) {
 		CompactionMode: "local",
 		EnabledTools:   []toolspec.ID{toolspec.ToolPatch, toolspec.ToolTriggerHandoff},
 	}, toolspec.ToolPatch)
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
@@ -562,7 +559,7 @@ func TestPendingTriggerHandoffLeavesRequestPendingWhenSummaryRetryStillToolCalls
 		},
 	}}
 	eng := mustNewHandoffTestEngine(t, store, client, Config{})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
@@ -609,7 +606,7 @@ func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
 		},
 	}}
 	eng := mustNewHandoffTestEngine(t, store, client, Config{})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
@@ -696,7 +693,7 @@ func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsF
 		CompactionMode: "local",
 		EnabledTools:   []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolTriggerHandoff},
 	})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
@@ -778,7 +775,7 @@ func TestRunStepLoopInjectsReminderBeforeTriggerHandoff(t *testing.T) {
 		AutoCompactTokenLimit: 10_000,
 		EnabledTools:          []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolTriggerHandoff},
 	})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 8_900, WindowTokens: 20_000})
@@ -823,20 +820,15 @@ func TestCacheWarningSteeringPropagatesCommittedAppendError(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir, withRuntimeTestPersistenceObserver(observer))
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
 	observer.armed = true
-	restoreStep := setTestActiveStep(eng, "step-1")
-	err := eng.steer(runtimeTestStepID("step-1"), steeringIntent{items: []steeringMutation{&steeringCacheWarning{
-		warning: transcript.CacheWarning{
-			Scope:  transcript.CacheWarningScopeConversation,
-			Reason: transcript.CacheWarningReasonCompaction,
-		},
-		visibility: transcript.EntryVisibilityAuto,
-	}}})
-	restoreStep()
+	err := eng.steer(runtimeTestStepID("step-1"), steerCacheWarningIntent(transcript.CacheWarning{
+		Scope:  transcript.CacheWarningScopeConversation,
+		Reason: transcript.CacheWarningReasonCompaction,
+	}, transcript.EntryVisibilityAuto, false))
 	if !errors.Is(err, errProbeCommittedObserverFailure) {
 		t.Fatalf("cache-warning steer err = %v, want committed append observer error propagated", err)
 	}
@@ -850,7 +842,7 @@ func TestRunStepLoopBailsOnCanceledContextWithoutModelCall(t *testing.T) {
 		},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 

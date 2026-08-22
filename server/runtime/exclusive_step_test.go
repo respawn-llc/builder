@@ -25,6 +25,7 @@ type stubExclusiveStepLifecycle struct {
 	runCalls     int
 	runFn        func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
 	snapshot     *RunSnapshot
+	snapshotFn   func() *RunSnapshot
 	activeStepID string
 }
 
@@ -129,11 +130,7 @@ func TestExclusiveStepLifecycleEagerCompactsAfterSuccessfulFinalAtConsumedThresh
 		context.Background(),
 		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
 		func(_ context.Context, stepID string) error {
-			if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(
-				steeringMessageEventNone,
-				true,
-				[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-			)); err != nil {
+			if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 				return err
 			}
 			engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
@@ -172,11 +169,7 @@ func TestExclusiveStepLifecycleEagerCompactsEligibleAgentKinds(t *testing.T) {
 				context.Background(),
 				exclusiveStepOptions{EmitRunState: true, ActiveKind: kind},
 				func(_ context.Context, stepID string) error {
-					if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(
-						steeringMessageEventNone,
-						true,
-						[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("input")}},
-					)); err != nil {
+					if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("input")}})); err != nil {
 						return err
 					}
 					engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
@@ -268,8 +261,9 @@ func TestExclusiveStepLifecycleEagerCompactionExcludesIneligibleResults(t *testi
 		kind ActiveKind
 	}{
 		{name: "workflow", kind: ActiveKindWorkflowTurn},
+		{name: "user shell", kind: ActiveKindUserShell},
 		{name: "compaction", kind: ActiveKindCompaction},
-		{name: "inspection", kind: ActiveKindInspection},
+		{name: "runtime maintenance", kind: ActiveKindRuntimeMaintenance},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -446,11 +440,7 @@ func TestExclusiveStepLifecycleFailedEagerCompactionDoesNotRetry(t *testing.T) {
 		context.Background(),
 		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
 		func(_ context.Context, stepID string) error {
-			if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(
-				steeringMessageEventNone,
-				true,
-				[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-			)); err != nil {
+			if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 				return err
 			}
 			engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
@@ -467,76 +457,6 @@ func TestExclusiveStepLifecycleFailedEagerCompactionDoesNotRetry(t *testing.T) {
 	waitEngineLifecycleTasks(t, engine)
 	if got := len(client.compactionCalls); got != 1 {
 		t.Fatalf("eager compaction calls = %d, want one attempt", got)
-	}
-}
-
-func TestEagerCompactionRevalidatesCurrentPolicyBeforeDispatch(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name         string
-		mutate       func(*Engine)
-		wantCompacts int
-	}{
-		{name: "disabled", mutate: func(engine *Engine) {
-			engine.SetAutoCompactionEnabled(false)
-		}},
-		{name: "below threshold", mutate: func(engine *Engine) {
-			engine.setLastUsage(llm.Usage{InputTokens: 100, WindowTokens: 2_000})
-		}},
-		{name: "still eligible", wantCompacts: 1},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			client := &fakeCompactionClient{
-				compactionResponses: []llm.CompactionResponse{
-					remoteCompactionReplacement(100, 10, 2_000),
-				},
-			}
-			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
-				Model:                 "gpt-5",
-				ContextWindowTokens:   2_000,
-				AutoCompactTokenLimit: 1_900,
-			})
-			if err := engine.steerRuntime(steerMessagesWithPersistenceIntent(
-				steeringMessageEventNone,
-				true,
-				[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}},
-			)); err != nil {
-				t.Fatalf("seed transcript: %v", err)
-			}
-			engine.ensureOrchestrationCollaborators()
-			lifecycle := engine.stepLifecycle.(*defaultExclusiveStepLifecycle)
-			started := make(chan struct{})
-			release := make(chan struct{})
-			done := make(chan error, 1)
-			go func() {
-				done <- lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
-					close(started)
-					<-release
-					return nil
-				})
-			}()
-			select {
-			case <-started:
-			case <-time.After(runtimeTestSynchronizationTimeout):
-				t.Fatal("timed out waiting for active step")
-			}
-			engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
-			engine.maybeQueueEagerCompaction(ActiveKindUserTurn, LiveRunResultAssistantFinalAnswer, llm.Message{
-				Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final"),
-			})
-			if test.mutate != nil {
-				test.mutate(engine)
-			}
-			close(release)
-			if err := <-done; err != nil {
-				t.Fatalf("blocking step: %v", err)
-			}
-			waitEngineLifecycleTasks(t, engine)
-			if got := len(client.compactionCalls); got != test.wantCompacts {
-				t.Fatalf("compaction calls = %d, want %d", got, test.wantCompacts)
-			}
-		})
 	}
 }
 
@@ -598,8 +518,13 @@ func (s *stubExclusiveStepLifecycle) IsBusy() bool {
 
 func (s *stubExclusiveStepLifecycle) Snapshot() *RunSnapshot {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return cloneRunSnapshot(s.snapshot)
+	snapshotFn := s.snapshotFn
+	snapshot := cloneRunSnapshot(s.snapshot)
+	s.mu.Unlock()
+	if snapshotFn != nil {
+		return snapshotFn()
+	}
+	return snapshot
 }
 
 func (s *stubExclusiveStepLifecycle) WithActiveStep(fn func(stepID string) error) (bool, error) {
@@ -740,32 +665,6 @@ func TestExclusiveStepLifecycleRejectsCanceledContextBeforeActiveRun(t *testing.
 	if snapshot := lifecycle.Snapshot(); snapshot != nil {
 		t.Fatalf("canceled pre-active run left active snapshot: %+v", snapshot)
 	}
-}
-
-func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-	stepCtx, stepID, err := lifecycle.begin(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn})
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	if stepCtx == nil || stepID == "" {
-		t.Fatalf("begin returned ctx=%v stepID=%q, want active step", stepCtx, stepID)
-	}
-
-	activeStepID, err := lifecycle.ResolveActiveOutputStep(nil)
-	if err != nil || activeStepID == nil || *activeStepID != stepID {
-		t.Fatalf("ResolveActiveOutputStep before close = %v/%v, want %q", activeStepID, err, stepID)
-	}
-
-	lifecycle.closeActiveStepQueue(stepID)
-	activeStepID, err = lifecycle.ResolveActiveOutputStep(nil)
-	if activeStepID != nil || !errors.Is(err, ErrActiveStepInactive) {
-		t.Fatalf("ResolveActiveOutputStep after close = %v/%v, want inactive", activeStepID, err)
-	}
-	lifecycle.end()
 }
 
 func TestExclusiveStepAuthorityRejectsInterruptedStepBeforeFinalDrain(t *testing.T) {
@@ -967,7 +866,6 @@ func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testin
 		{name: string(ActiveKindGoalLoop), kind: ActiveKindGoalLoop, wantMatch: true},
 		{name: "closing_user_turn", kind: ActiveKindUserTurn, closing: true},
 		{name: string(ActiveKindCompaction), kind: ActiveKindCompaction},
-		{name: string(ActiveKindInspection), kind: ActiveKindInspection},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := mustCreateTestSession(t)
@@ -1224,7 +1122,7 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 

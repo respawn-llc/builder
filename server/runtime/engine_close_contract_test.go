@@ -22,10 +22,7 @@ func TestCloseRejectsUserTurnsAndSteeringWithoutNewWork(t *testing.T) {
 	if _, err := engine.SubmitUserMessage(context.Background(), "after-close"); !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("submit after close error = %v, want ErrEngineClosed", err)
 	}
-	if err := engine.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after-close")}},
-	)); !errors.Is(err, ErrEngineClosed) {
+	if err := engine.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after-close")}})); !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("steer after close error = %v, want ErrEngineClosed", err)
 	}
 	if calls := len(client.calls); calls != 0 {

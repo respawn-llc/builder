@@ -139,14 +139,14 @@ func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 					events = append(events, evt)
 				},
 			})
-			if err := steerTestActiveStep(eng, "cache-step", steeringIntent{items: []steeringMutation{&steeringCacheWarning{
-				warning: transcript.CacheWarning{
+			if err := steerTestActiveStep(eng, "cache-step", steerCacheWarningIntent(
+				transcript.CacheWarning{
 					Scope:  transcript.CacheWarningScopeConversation,
 					Reason: transcript.CacheWarningReasonReuseDropped,
 				},
-				visibility: cacheWarningEntryVisibility(tt.mode),
-				emit:       true,
-			}}}); err != nil {
+				cacheWarningEntryVisibility(tt.mode),
+				true,
+			)); err != nil {
 				t.Fatalf("steer cache warning: %v", err)
 			}
 			snapshot := eng.ChatSnapshot()

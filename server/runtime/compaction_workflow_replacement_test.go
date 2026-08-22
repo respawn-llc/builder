@@ -40,25 +40,19 @@ func TestWorkflowPostCompletionCompactionKeepsCompletedOutputAndDormantMetaConte
 		Config{Model: "gpt-5"},
 	)
 	workflowIdentity := workflowruntime.CurrentNodePromptIdentity(currentNode)
-	if err := steerTestActiveStep(engine, "assignment", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{
-			Role:        llm.RoleDeveloper,
-			MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
-			SourcePath:  textutil.Value(workflowIdentity),
-			Content:     textutil.Value("previous assignment"),
-		}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "assignment", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+		SourcePath:  textutil.Value(workflowIdentity),
+		Content:     textutil.Value("previous assignment"),
+	}})); err != nil {
 		t.Fatalf("persist previous workflow assignment: %v", err)
 	}
-	if err := steerTestActiveStep(engine, "terminal", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{
-			Role:    llm.RoleAssistant,
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-			Content: textutil.Value("completed terminal output"),
-		}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "terminal", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+		Role:    llm.RoleAssistant,
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("completed terminal output"),
+	}})); err != nil {
 		t.Fatalf("persist terminal output: %v", err)
 	}
 
@@ -210,12 +204,12 @@ func TestWorkflowPostCompletionCompactionKeepsCommittedReceiptAfterFinalizationD
 		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
 	}, diagnostic)
 
-	workflowResult := fixture.engine.CompactContextForWorkflowPostCompletion(context.Background())
-	if !workflowResult.CommitReceipt.Committed || !errors.Is(workflowResult.Diagnostic, diagnostic) {
+	receipt, compactErr := fixture.engine.CompactContextForWorkflowPostCompletion(context.Background())
+	if !receipt.Committed || !errors.Is(compactErr, diagnostic) {
 		t.Fatalf(
 			"workflow post-completion result = receipt:%+v diagnostic:%v",
-			workflowResult.CommitReceipt,
-			workflowResult.Diagnostic,
+			receipt,
+			compactErr,
 		)
 	}
 	if !fixture.engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
@@ -236,9 +230,9 @@ func TestWorkflowPostCompletionCompactionPreCommitFailureDoesNotCreateBoundary(t
 		}
 	})
 
-	result := fixture.engine.CompactContextForWorkflowPostCompletion(context.Background())
-	if result.CommitReceipt.Committed || result.Diagnostic == nil {
-		t.Fatalf("pre-commit workflow post-completion result = %+v", result)
+	receipt, compactErr := fixture.engine.CompactContextForWorkflowPostCompletion(context.Background())
+	if receipt.Committed || compactErr == nil {
+		t.Fatalf("pre-commit workflow post-completion result = receipt:%+v diagnostic:%v", receipt, compactErr)
 	}
 	if fixture.engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("failed workflow replacement created a post-completion boundary")
@@ -256,10 +250,7 @@ func TestWorkflowAssignmentApplicationPreservesPostCompletionBoundary(t *testing
 	if err != nil {
 		t.Fatalf("build workflow assignment: %v", err)
 	}
-	receipt, err := engine.steerRuntimeWithCommitReceipt(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{message},
-	))
+	receipt, err := engine.steerRuntimeWithCommitReceipt(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message}))
 	if err != nil || !receipt.Committed {
 		t.Fatalf("workflow assignment application: %+v error=%v", receipt, err)
 	}
@@ -351,10 +342,7 @@ func TestWorkflowContinuationPreservesBoundaryAcrossFailedCACAttempt(t *testing.
 		t.Fatalf("set post-completion replacement mode: %v", err)
 	}
 	headlessType := llm.MessageTypeHeadlessMode
-	if err := steerTestActiveStep(engine, "meta", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{Role: llm.RoleDeveloper, MessageType: &headlessType}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "meta", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: &headlessType}})); err != nil {
 		t.Fatalf("steer canonical meta context: %v", err)
 	}
 
@@ -475,14 +463,14 @@ func TestWorkflowPostCompletionActivityPolicyPreservesMetaAndConsumesActivity(t 
 		state.WorkflowPostCompletionBoundary() {
 		t.Fatal("ordinary activity did not consume the boundary exactly once")
 	}
-	if activity := workflowPostCompletionActivityForSteeringMutation(
-		&steeringQueuedUserMessageRestore{},
-	); activity != workflowPostCompletionNoActivity {
+	if activity := workflowPostCompletionActivityForSteeringItem(steeringItem{
+		queuedRestore: &steeringQueuedUserMessageRestore{},
+	}); activity != workflowPostCompletionNoActivity {
 		t.Fatalf("queued restore activity = %d, want no activity", activity)
 	}
-	if activity := workflowPostCompletionActivityForSteeringMutation(
-		&steeringGoalNoticeAndStatus{},
-	); activity != workflowPostCompletionDurableActivity {
+	if activity := workflowPostCompletionActivityForSteeringItem(steeringItem{
+		goalNoticeAndStatus: &steeringGoalNoticeAndStatus{},
+	}); activity != workflowPostCompletionDurableActivity {
 		t.Fatalf("goal notice activity = %d, want durable activity", activity)
 	}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
@@ -519,20 +507,17 @@ func TestWorkflowPostCompletionCompactionUsesLocalGenerateClient(t *testing.T) {
 		tools.NewRegistry(),
 		Config{Model: "gpt-5", CompactionMode: "local"},
 	)
-	if err := steerTestActiveStep(engine, "terminal", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
-		true,
-		[]llm.Message{{
-			Role:    llm.RoleAssistant,
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-			Content: textutil.Value("completed terminal output"),
-		}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "terminal", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+		Role:    llm.RoleAssistant,
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("completed terminal output"),
+	}})); err != nil {
 		t.Fatalf("persist terminal output: %v", err)
 	}
 
-	result := engine.CompactContextForWorkflowPostCompletion(context.Background())
-	if !result.CommitReceipt.Committed || result.Diagnostic != nil {
-		t.Fatalf("local workflow post-completion result = %+v", result)
+	receipt, compactErr := engine.CompactContextForWorkflowPostCompletion(context.Background())
+	if !receipt.Committed || compactErr != nil {
+		t.Fatalf("local workflow post-completion result = receipt:%+v diagnostic:%v", receipt, compactErr)
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("local Generate calls = %d, want one", len(client.calls))
@@ -566,21 +551,15 @@ func TestRemoteCompactionRefreshesWorkflowTaskAwareness(t *testing.T) {
 		},
 		Config{Model: "gpt-5"},
 	)
-	if err := steerTestActiveStep(engine, "stale", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{
-			Role:        llm.RoleDeveloper,
-			MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
-			SourcePath:  textutil.Value("stale-workflow"),
-			Content:     textutil.Value("stale"),
-		}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "stale", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+		SourcePath:  textutil.Value("stale-workflow"),
+		Content:     textutil.Value("stale"),
+	}})); err != nil {
 		t.Fatalf("persist stale workflow context: %v", err)
 	}
-	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
@@ -694,18 +673,15 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 					mustTestCurrentNodeReference(t, "task", "node", test.existingBranchKey),
 				)
 			}
-			if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-				true,
-				[]llm.Message{
-					{
-						Role:        llm.RoleDeveloper,
-						MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
-						SourcePath:  textutil.Value(existingIdentity),
-						Content:     textutil.Value("existing workflow instructions"),
-					},
-					{Role: llm.RoleUser, Content: textutil.Value("input")},
+			if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{
+				{
+					Role:        llm.RoleDeveloper,
+					MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+					SourcePath:  textutil.Value(existingIdentity),
+					Content:     textutil.Value("existing workflow instructions"),
 				},
-			)); err != nil {
+				{Role: llm.RoleUser, Content: textutil.Value("input")},
+			})); err != nil {
 				t.Fatalf("persist compaction input: %v", err)
 			}
 
@@ -756,10 +732,7 @@ func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
 		},
 		Config{Model: "gpt-5"},
 	)
-	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 	for want := int64(1); want <= 2; want++ {

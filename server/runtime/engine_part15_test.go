@@ -110,7 +110,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 	))
 	restoreStep := setTestActiveStep(eng, "step-1")
 	defer restoreStep()
-	if err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -234,7 +234,7 @@ func newCommittedCompactionFixture(t *testing.T, observer session.PersistenceObs
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { fixture.events = append(fixture.events, event) },
 	})
-	if err := fixture.engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := fixture.engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	fixture.engine.compactionRuntimeState().SetSoonReminderIssued(true)

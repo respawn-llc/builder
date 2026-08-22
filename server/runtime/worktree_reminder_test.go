@@ -30,7 +30,7 @@ func TestPersistedWorktreeContextRejectsDuplicateSourcePath(t *testing.T) {
 		"/tmp/worktree",
 	))
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
-	err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{
+	err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:            llm.RoleDeveloper,
 		MessageType:     textutil.Value(llm.MessageTypeWorktreeMode),
 		SourcePath:      textutil.Value(target.EffectiveCwd),
@@ -249,7 +249,7 @@ func TestRunStepLoopCountsPendingWorktreeReminderBeforeAutoCompaction(t *testing
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "native",
 	})
-	if err := steerTestActiveStep(eng, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := steerTestActiveStep(eng, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 999, WindowTokens: 2_000})

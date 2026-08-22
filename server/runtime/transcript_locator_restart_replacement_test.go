@@ -136,7 +136,7 @@ func TestHistoryReplacementLocatorsSkipFilteredToolCallEntries(t *testing.T) {
 func TestHistoryReplacementEmissionReturnsMissingOrdinalError(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	err := engine.emitProjectedHistoryReplacementEntriesRaw(
-		textutil.OptionalExactString("step-1"),
+		runtimeTestStepID("step-1"),
 		0,
 		[]ChatEntry{{
 			StepID:     exactStepIDPointer(runtimeTestStepID("step-1")),

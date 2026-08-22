@@ -35,31 +35,22 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 		ContextWindowTokens: 2_500,
 	})
 	restoreStep := setTestActiveStep(engine, "input")
-	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
-			ID:    "call-1",
-			Name:  string(toolspec.ToolExecCommand),
-			Input: json.RawMessage(`{"command":"pwd"}`),
-		}}}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+		ID:    "call-1",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"pwd"}`),
+	}}}})); err != nil {
 		t.Fatalf("persist tool call: %v", err)
 	}
-	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{
-			Role:       llm.RoleTool,
-			ToolCallID: textutil.Value("call-1"),
-			Name:       textutil.Value(string(toolspec.ToolExecCommand)),
-			Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 4_000) + `"}`),
-		}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
+		Role:       llm.RoleTool,
+		ToolCallID: textutil.Value("call-1"),
+		Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+		Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 4_000) + `"}`),
+	}})); err != nil {
 		t.Fatalf("persist tool output: %v", err)
 	}
 	restoreStep()
@@ -168,10 +159,7 @@ func newRemoteCompactionFixture(
 		CompactionMode: "native",
 	})
 	restoreStep := setTestActiveStep(engine, "input")
-	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 	restoreStep()
