@@ -514,16 +514,10 @@ func (s *Service) interrupt(ctx context.Context, sessionID string) (serverapi.Ru
 	if err != nil {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
-	err = s.authority.WithInterruptibleAgentTurn(ctx, id, nil, func(_ context.Context, engine *runtime.Engine) error {
-		interrupted, err := engine.TryInterruptActiveAgentTurn()
-		if err != nil {
-			return err
-		}
-		if !interrupted {
-			return serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn"))
-		}
-		return nil
-	})
+	interrupted, err := s.authority.InterruptCurrentAgentTurn(ctx, id, nil)
+	if err == nil && !interrupted {
+		err = serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn"))
+	}
 	switch {
 	case errors.Is(err, sessionruntime.ErrExecutionNoLongerLive):
 		err = serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn"))

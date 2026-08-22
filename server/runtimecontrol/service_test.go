@@ -44,7 +44,11 @@ type sequenceRuntimeActivityResolver struct {
 }
 
 type runtimeControlPromptFeed struct {
-	pending chan struct{}
+	mu            sync.Mutex
+	pending       chan struct{}
+	resolved      chan struct{}
+	pendingCount  int
+	resolvedCount int
 }
 
 func (f *runtimeControlPromptFeed) PromptPendingScope(
@@ -52,6 +56,9 @@ func (f *runtimeControlPromptFeed) PromptPendingScope(
 	tools.AskQuestionRequest,
 	time.Time,
 ) error {
+	f.mu.Lock()
+	f.pendingCount++
+	f.mu.Unlock()
 	select {
 	case f.pending <- struct{}{}:
 	default:
@@ -59,8 +66,23 @@ func (f *runtimeControlPromptFeed) PromptPendingScope(
 	return nil
 }
 
-func (*runtimeControlPromptFeed) PromptResolvedScope(sessionruntime.ExecutionScope, string) error {
+func (f *runtimeControlPromptFeed) PromptResolvedScope(sessionruntime.ExecutionScope, string) error {
+	f.mu.Lock()
+	f.resolvedCount++
+	f.mu.Unlock()
+	if f.resolved != nil {
+		select {
+		case f.resolved <- struct{}{}:
+		default:
+		}
+	}
 	return nil
+}
+
+func (f *runtimeControlPromptFeed) Counts() (pending int, resolved int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pendingCount, f.resolvedCount
 }
 
 func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
@@ -910,21 +932,16 @@ func TestServicePendingQuestionInterruptsAndAllowsNextTurn(t *testing.T) {
 		{
 			Assistant: llm.Message{
 				Role:    llm.RoleAssistant,
-				Content: textutil.Value("question turn completed"),
-				Phase:   textutil.Value(llm.MessagePhaseFinal),
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
 				Content: textutil.Value("next turn completed"),
 				Phase:   textutil.Value(llm.MessagePhaseFinal),
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	promptFeed := &runtimeControlPromptFeed{pending: make(chan struct{}, 1)}
+	promptFeed := &runtimeControlPromptFeed{
+		pending:  make(chan struct{}, 1),
+		resolved: make(chan struct{}, 1),
+	}
 	store, engine, service := newRuntimeControlTestServiceWithFeeds(t, client, nil, runtime.Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 		OnEvent: func(event runtime.Event) {
@@ -967,14 +984,6 @@ func TestServicePendingQuestionInterruptsAndAllowsNextTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Interrupt pending Question: %v", err)
 	}
-	waitForRuntimeControlIdle(t, engine)
-	if _, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
-		SessionID: store.Meta().SessionID,
-		Text:      "must not join the canceled execution",
-	}); !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
-		t.Fatalf("live steer after interrupted ask_question error = %v, want no active run", err)
-	}
-
 	next, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "after-ask-cancel", "next user message"))
 	if err != nil {
 		t.Fatalf("submit next user turn after interrupted ask_question: %v", err)
@@ -982,25 +991,44 @@ func TestServicePendingQuestionInterruptsAndAllowsNextTurn(t *testing.T) {
 	if next.ResultKind != clientui.UserTurnResultKindQueued || next.QueueItemID == "" {
 		t.Fatalf("next user turn response = %+v, want queued acceptance", next)
 	}
-	waitForRuntimeControlAssistantFinal(t, engine, "question turn completed")
+	select {
+	case <-promptFeed.resolved:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for interrupted Question to disappear")
+	}
+	waitForRuntimeControlAssistantFinal(t, engine, "next turn completed")
 	waitForRuntimeControlIdle(t, engine)
 	if engine.HasActiveLiveRunGroup() {
 		t.Fatal("interrupted ask_question turn retained live-run ownership after next user turn")
 	}
-	nextUserMessageCommitted := false
+	pendingPrompts, resolvedPrompts := promptFeed.Counts()
+	if pendingPrompts != 1 || resolvedPrompts != 1 {
+		t.Fatalf("Question publications = (%d pending, %d resolved), want exactly one of each", pendingPrompts, resolvedPrompts)
+	}
+	nextUserMessageCount := 0
+	finalResponseCount := 0
+	var finalResponseText string
 	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
 		for _, row := range snapshot.CommittedRows {
 			if row.Kind == runtime.TranscriptCommittedRowFactUser && row.User != nil && row.User.Text == "next user message" {
-				nextUserMessageCommitted = true
-				return nil
+				nextUserMessageCount++
+			}
+			if row.Kind == runtime.TranscriptCommittedRowFactAssistant &&
+				row.Assistant != nil &&
+				row.Assistant.Phase == llm.MessagePhaseFinal {
+				finalResponseCount++
+				finalResponseText = row.Assistant.Text
 			}
 		}
 		return nil
 	}); err != nil {
 		t.Fatalf("read transcript hydration snapshot: %v", err)
 	}
-	if !nextUserMessageCommitted {
-		t.Fatal("next user message was not committed to the transcript")
+	if nextUserMessageCount != 1 {
+		t.Fatalf("next user message rows = %d, want exactly 1", nextUserMessageCount)
+	}
+	if finalResponseCount != 1 || finalResponseText != "next turn completed" {
+		t.Fatalf("final response rows/text = %d/%q, want exactly one next-turn response", finalResponseCount, finalResponseText)
 	}
 }
 

@@ -1178,6 +1178,17 @@ func (a *Authority) RunCurrentHumanTurn(
 	current := resource.current
 	resource.mu.Unlock()
 	if current != nil {
+		_, workflowExecution := current.scope.Workflow()
+		interruptedHumanExecution := current.scope.Kind() == ExecutionScopeAgent &&
+			!workflowExecution &&
+			context.Cause(current.ctx) != nil
+		if interruptedHumanExecution {
+			releaseGate()
+			if err := current.awaitDone(ctx); err != nil {
+				return err
+			}
+			return a.RunCurrentHumanTurn(ctx, descriptor, accept, run)
+		}
 		runErr := resource.withEngineUnderAdmission(ctx, func(runCtx context.Context, engine *runtime.Engine) error {
 			return run(runCtx, engine, admit)
 		})
@@ -1241,6 +1252,15 @@ func (a *Authority) RunCurrentHumanTurn(
 		return nil
 	}
 	_, err = handle.Wait(context.Background())
+	acceptedFresh := false
+	select {
+	case <-accepted:
+		acceptedFresh = true
+	default:
+	}
+	if !acceptedFresh && context.Cause(ctx) == nil && errors.Is(err, context.Canceled) {
+		return a.RunCurrentHumanTurn(ctx, descriptor, accept, run)
+	}
 	return err
 }
 
@@ -1376,12 +1396,11 @@ func (a *Authority) WithRetainedWorkflowRuntime(
 	})
 }
 
-// WithInterruptibleAgentTurn prevents Question admission across one exact current-execution mutation.
-func (a *Authority) WithInterruptibleAgentTurn(
+func (a *Authority) withInterruptibleAgentTurn(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	withoutExecution func() error,
-	callback func(context.Context, *runtime.Engine) error,
+	callback func(context.Context, *runtime.Engine, *execution) error,
 ) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
@@ -1429,7 +1448,49 @@ func (a *Authority) WithInterruptibleAgentTurn(
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	return callback(ctx, resource.engine)
+	return callback(ctx, resource.engine, execution)
+}
+
+// WithInterruptibleAgentTurn prevents Question admission across one exact current-execution mutation.
+func (a *Authority) WithInterruptibleAgentTurn(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	withoutExecution func() error,
+	callback func(context.Context, *runtime.Engine) error,
+) error {
+	if callback == nil {
+		return errors.New("interruptible Agent Turn mutation is required")
+	}
+	return a.withInterruptibleAgentTurn(
+		ctx,
+		sessionID,
+		withoutExecution,
+		func(ctx context.Context, engine *runtime.Engine, _ *execution) error {
+			return callback(ctx, engine)
+		},
+	)
+}
+
+func (a *Authority) InterruptCurrentAgentTurn(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	withoutExecution func() error,
+) (bool, error) {
+	var interrupted bool
+	err := a.withInterruptibleAgentTurn(
+		ctx,
+		sessionID,
+		withoutExecution,
+		func(_ context.Context, engine *runtime.Engine, execution *execution) error {
+			var err error
+			interrupted, err = engine.TryInterruptActiveAgentTurn()
+			if err == nil && interrupted {
+				execution.cancel()
+			}
+			return err
+		},
+	)
+	return interrupted, err
 }
 
 func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {
