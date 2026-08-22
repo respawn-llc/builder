@@ -502,7 +502,10 @@ func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *
 	if err != nil {
 		t.Fatalf("build compaction instructions input: %v", err)
 	}
-	if _, err := eng.localCompactionSummary(context.Background(), input, compactionInstructions(instructionsInput), compactionModeManual); err != nil {
+	if err := runTestActiveStep(eng, "local-compaction", func() error {
+		_, summaryErr := eng.localCompactionSummary(context.Background(), input, compactionInstructions(instructionsInput), compactionModeManual)
+		return summaryErr
+	}); err != nil {
 		t.Fatalf("local compaction summary: %v", err)
 	}
 	if len(client.calls) != 1 {

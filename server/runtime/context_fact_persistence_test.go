@@ -124,9 +124,7 @@ func TestFailedCompactionContextFactWriteDoesNotFailCompactionOrRetryLater(t *te
 	)
 	engine.compactionRuntimeState().SetManualCompactionEligible(true)
 
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("CompactContext: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 	if writer.countWrites != 1 {
 		t.Fatalf("count writes = %d, want one failed best-effort write", writer.countWrites)
 	}
@@ -190,9 +188,7 @@ func TestSuccessfulCompactionEstablishesBothAbsentContextFacts(t *testing.T) {
 	)
 	engine.compactionRuntimeState().SetManualCompactionEligible(true)
 
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("CompactContext: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 	facts := reopened.ContextFacts()
 	if facts.CompletedCompactionCount == nil || *facts.CompletedCompactionCount != 1 ||
 		facts.ManualCompactEligible == nil || *facts.ManualCompactEligible {

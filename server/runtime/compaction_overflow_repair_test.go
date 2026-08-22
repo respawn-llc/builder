@@ -203,9 +203,7 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 		t.Fatalf("append tool output: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if len(client.calls) != 2 {
 		t.Fatalf("local compaction model calls = %d, want 2", len(client.calls))
 	}
@@ -253,10 +251,13 @@ func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *test
 		t.Fatalf("append reasoning message: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err == nil {
-		t.Fatal("expected ordinary-history overflow to fail without retry")
-	} else if !llm.IsContextLengthOverflowError(err) {
-		t.Fatalf("expected context overflow error, got %v", err)
+	var events []Event
+	eng.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	scheduleManualCompactionAndWait(t, eng)
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("ordinary-history overflow events = %+v, want failed event", events)
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("expected no retry without collapsible tool payloads, got %d local compaction model calls", len(client.calls))
@@ -307,9 +308,7 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 		}
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if len(client.calls) != 4 {
 		t.Fatalf("local compaction model calls = %d, want 4", len(client.calls))
 	}

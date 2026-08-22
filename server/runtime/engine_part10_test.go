@@ -450,9 +450,7 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 				}
 			}
 			completeManualEligibilityAgentStep(t, eng)
-			if err := eng.CompactContext(context.Background(), ""); err != nil {
-				t.Fatalf("compact: %v", err)
-			}
+			scheduleManualCompactionAndWait(t, eng)
 
 			headlessCount := 0
 			exitCount := 0

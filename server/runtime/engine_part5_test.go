@@ -94,9 +94,7 @@ func TestReviewerSystemPromptRefreshesIndependentlyAfterCompaction(t *testing.T)
 		t.Fatalf("reviewer before compaction = %q, want reviewer A", reviewerReq.SystemPrompt)
 	}
 	writeTestFile(t, reviewerPromptPath, "reviewer B")
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	mainLocked := store.Meta().Locked
 	if mainLocked == nil || mainLocked.HasSystemPrompt || mainLocked.HasReviewerPrompt {
 		t.Fatalf("locked prompts after compaction = %+v, want both stale", mainLocked)

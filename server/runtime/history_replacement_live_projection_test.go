@@ -42,9 +42,7 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 	); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact remote context: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 
 	liveFacts := make([]TranscriptCommittedRowFact, 0)
 	for _, event := range events {

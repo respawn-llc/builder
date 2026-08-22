@@ -327,9 +327,7 @@ func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 	}
 
 	completeManualEligibilityAgentStep(t, engine)
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("manual compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 	if generation := engine.CompactionCount(); generation != 1 {
 		t.Fatalf("manual compaction generation = %d, want 1", generation)
 	}

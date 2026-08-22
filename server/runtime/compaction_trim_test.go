@@ -151,8 +151,9 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	if err != nil {
 		t.Fatalf("build seed request: %v", err)
 	}
-	if err := runTestActiveStep(eng, "seed-cache", func() error {
-		_, err := eng.generateWithRetryClient(context.Background(), "seed-cache", &fakeClient{responses: []llm.Response{{
+	cacheStepID := runtimeTestStepID("seed-cache")
+	if err := runTestActiveStep(eng, cacheStepID, func() error {
+		_, err := eng.generateWithRetryClient(context.Background(), cacheStepID, &fakeClient{responses: []llm.Response{{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded")},
 			Usage:     llm.Usage{CachedInputTokens: textutil.Value(512)},
 		}}}, seedRequest, nil, nil, nil)
@@ -161,9 +162,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 		t.Fatalf("seed cache lineage: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("compaction calls = %d, want overflow repair retry", len(client.compactionCalls))
 	}
@@ -261,8 +260,13 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 	if err != nil {
 		t.Fatalf("marshal initial input: %v", err)
 	}
-	if err := eng.CompactContext(context.Background(), ""); err == nil {
-		t.Fatal("expected unsupported view-image payload to fail compaction repair")
+	var events []Event
+	eng.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	scheduleManualCompactionAndWait(t, eng)
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("unsupported view-image compaction events = %+v, want failed event", events)
 	}
 	if len(client.compactionCalls) != 1 {
 		t.Fatalf("compaction calls = %d, want no retry for unsupported payload", len(client.compactionCalls))
@@ -303,10 +307,13 @@ func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *tes
 		t.Fatalf("append reasoning message: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err == nil {
-		t.Fatal("expected ordinary-history overflow to fail without repair retry")
-	} else if !llm.IsContextLengthOverflowError(err) {
-		t.Fatalf("expected context overflow error, got %v", err)
+	var events []Event
+	eng.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	scheduleManualCompactionAndWait(t, eng)
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("ordinary-history overflow events = %+v, want failed event", events)
 	}
 	if len(client.compactionCalls) != 1 {
 		t.Fatalf("compaction calls = %d, want no retry without supported payload", len(client.compactionCalls))
@@ -339,9 +346,7 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 	}
 	restoreStep()
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("compaction calls = %d, want one transient retry", len(client.compactionCalls))
 	}

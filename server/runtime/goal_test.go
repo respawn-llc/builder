@@ -1042,9 +1042,20 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	var eventsMu sync.Mutex
+	var events []Event
+	engine.cfg.OnEvent = func(event Event) {
+		eventsMu.Lock()
+		events = append(events, event)
+		eventsMu.Unlock()
+	}
+	goalStatusDone := make(chan error, 1)
 	client.beforeReturn = func(call int) {
 		if call == 3 {
-			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+			go func() {
+				_, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+				goalStatusDone <- err
+			}()
 		}
 	}
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
@@ -1067,16 +1078,39 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	}
 	client.releaseCall(2)
 	first, second := <-compactDone, <-compactDone
-	if (first == nil) == (second == nil) || (!errors.Is(first, ErrManualCompactionTooSoon) && !errors.Is(second, ErrManualCompactionTooSoon)) {
-		t.Fatalf("duplicate compact errors = (%v, %v), want one success and one too-soon result", first, second)
-	}
-	if got := engine.CompactionCount(); got != 1 {
-		t.Fatalf("compaction count = %d, want 1", got)
+	if first != nil || second != nil {
+		t.Fatalf("duplicate compact scheduling errors = (%v, %v), want both accepted", first, second)
 	}
 
 	client.waitStarted(t, 3)
 	client.releaseCall(3)
 	waitGoalLoopRunning(t, engine, false)
+	select {
+	case err := <-goalStatusDone:
+		if err != nil {
+			t.Fatalf("complete Goal after protected Step: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out completing Goal after protected Step")
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if got := engine.CompactionCount(); got != 1 {
+		t.Fatalf("compaction count = %d, want 1", got)
+	}
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	completed, failed := 0, 0
+	for _, event := range events {
+		switch event.Kind {
+		case EventCompactionCompleted:
+			completed++
+		case EventCompactionFailed:
+			failed++
+		}
+	}
+	if completed != 1 || failed != 1 {
+		t.Fatalf("compaction completion/failure events = %d/%d, want 1/1", completed, failed)
+	}
 }
 
 func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {

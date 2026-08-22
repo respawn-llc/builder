@@ -41,10 +41,11 @@ func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.
 	})
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(engine, "compact", func() error {
+	compactionStepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(engine, compactionStepID, func() error {
 		var replaceErr error
 		receipt, replaceErr = newCompactionPersistence(engine).replaceHistory(
-			"compact",
+			compactionStepID,
 			"local",
 			compactionModeManual,
 			llm.ItemsFromMessages([]llm.Message{{
@@ -130,9 +131,10 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	diagnosticKey := "test_diagnostic"
-	if err := runTestActiveStep(engine, "before-compaction", func() error {
+	beforeStepID := runtimeTestStepID("before-compaction")
+	if err := runTestActiveStep(engine, beforeStepID, func() error {
 		return engine.steerPersistedDiagnosticEntry(
-			"before-compaction",
+			beforeStepID,
 			diagnosticKey,
 			string(transcript.EntryRoleDeveloperErrorFeedback),
 			"before",
@@ -142,10 +144,11 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	}
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(engine, "compaction", func() error {
+	compactionStepID := runtimeTestStepID("compaction")
+	err := runTestActiveStep(engine, compactionStepID, func() error {
 		var replaceErr error
 		receipt, replaceErr = newCompactionPersistence(engine).replaceHistory(
-			"compaction",
+			compactionStepID,
 			"local",
 			compactionModeManual,
 			llm.ItemsFromMessages([]llm.Message{{
@@ -160,9 +163,10 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 		t.Fatalf("persist compaction replacement: receipt=%+v error=%v", receipt, err)
 	}
 
-	if err := runTestActiveStep(engine, "after-compaction", func() error {
+	afterStepID := runtimeTestStepID("after-compaction")
+	if err := runTestActiveStep(engine, afterStepID, func() error {
 		return engine.steerPersistedDiagnosticEntry(
-			"after-compaction",
+			afterStepID,
 			diagnosticKey,
 			string(transcript.EntryRoleDeveloperErrorFeedback),
 			"after",
@@ -312,10 +316,11 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 	}, observerErr)
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(engine, "compact", func() error {
+	compactionStepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(engine, compactionStepID, func() error {
 		var replaceErr error
 		receipt, replaceErr = newCompactionPersistence(engine).replaceHistory(
-			"compact",
+			compactionStepID,
 			"local",
 			compactionModeManual,
 			llm.ItemsFromMessages([]llm.Message{{
@@ -362,10 +367,11 @@ func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn
 	}, observerErr)
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(engine, "compact", func() error {
+	compactionStepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(engine, compactionStepID, func() error {
 		var replaceErr error
 		receipt, replaceErr = newCompactionPersistence(engine).replaceHistory(
-			"compact",
+			compactionStepID,
 			"local",
 			compactionModeManual,
 			llm.ItemsFromMessages([]llm.Message{{
@@ -494,11 +500,12 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 	}, observerErr)
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(fixture.engine, "compact", func() error {
+	compactionStepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(fixture.engine, compactionStepID, func() error {
 		var compactErr error
 		_, receipt, compactErr = fixture.engine.compactNow(
 			context.Background(),
-			"compact",
+			compactionStepID,
 			compactionModeManual,
 			compactionInstructionsInput{},
 			false,
@@ -558,11 +565,12 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	}, observerErr)
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(fixture.engine, "compact", func() error {
+	compactionStepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(fixture.engine, compactionStepID, func() error {
 		var compactErr error
 		_, receipt, compactErr = fixture.engine.compactNow(
 			context.Background(),
-			"compact",
+			compactionStepID,
 			compactionModeManual,
 			compactionInstructionsInput{},
 			false,
@@ -574,11 +582,12 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	}
 
 	liveUsage := fixture.engine.ContextUsage()
-	if liveUsage.UsedTokens != fixture.client.inputTokenCount {
-		t.Fatalf("live compacted usage = %+v, want input tokens %d", liveUsage, fixture.client.inputTokenCount)
+	expectedInputTokens := estimateItemsTokens(fixture.engine.transcriptRuntimeState().SnapshotItems())
+	if liveUsage.UsedTokens != expectedInputTokens {
+		t.Fatalf("live compacted usage = %+v, want estimated input tokens %d", liveUsage, expectedInputTokens)
 	}
 	if persisted := fixture.store.Meta().UsageState; persisted == nil ||
-		persisted.InputTokens != fixture.client.inputTokenCount ||
+		persisted.InputTokens != expectedInputTokens ||
 		persisted.WindowTokens != fixture.previousUsage.WindowTokens {
 		t.Fatalf("persisted compacted usage = %+v", persisted)
 	}
@@ -616,11 +625,12 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 	}, observerErr)
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(fixture.engine, "compact", func() error {
+	compactionStepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(fixture.engine, compactionStepID, func() error {
 		var compactErr error
 		_, receipt, compactErr = fixture.engine.compactNow(
 			context.Background(),
-			"compact",
+			compactionStepID,
 			compactionModeManual,
 			compactionInstructionsInput{},
 			false,
@@ -838,11 +848,12 @@ func TestRemoteCompactionTaskAwarenessErrorDoesNotReplaceHistory(t *testing.T) {
 	before := engine.transcriptRuntimeState().SnapshotItems()
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(engine, "compact", func() error {
+	compactionStepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(engine, compactionStepID, func() error {
 		var compactErr error
 		_, receipt, compactErr = engine.compactNow(
 			context.Background(),
-			"compact",
+			compactionStepID,
 			compactionModeManual,
 			compactionInstructionsInput{},
 			false,
@@ -898,10 +909,11 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 	}, replacementErr)
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(engine, "compact", func() error {
+	compactionStepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(engine, compactionStepID, func() error {
 		var replaceErr error
 		receipt, replaceErr = newCompactionPersistence(engine).replaceHistory(
-			"compact",
+			compactionStepID,
 			"local",
 			compactionModeManual,
 			llm.ItemsFromMessages([]llm.Message{{
@@ -959,10 +971,11 @@ func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
 	}
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(engine, "compact", func() error {
+	compactionStepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(engine, compactionStepID, func() error {
 		var replaceErr error
 		receipt, replaceErr = newCompactionPersistence(engine).replaceHistory(
-			"compact",
+			compactionStepID,
 			"local",
 			compactionModeManual,
 			llm.ItemsFromMessages([]llm.Message{{

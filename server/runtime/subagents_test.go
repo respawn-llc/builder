@@ -596,9 +596,7 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 	}
 
 	completeManualEligibilityAgentStep(t, eng)
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
 		t.Fatalf("expected in-memory canonical transcript to keep subagent catalog, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
 	}

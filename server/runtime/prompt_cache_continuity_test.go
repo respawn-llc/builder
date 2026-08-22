@@ -281,9 +281,7 @@ func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
 		t.Fatal("disabled reviewer reconstruction mutated the main transcript")
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact with live-reloaded per-skill policy: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	postCompactionSkills, found := skillMessageContent(eng.transcriptRuntimeState().SnapshotMessages())
 	if !found || postCompactionSkills == generationSkills {
 		t.Fatalf("post-compaction active transcript did not apply live-reloaded per-skill policy: %+v", eng.transcriptRuntimeState().SnapshotMessages())

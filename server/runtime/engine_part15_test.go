@@ -108,13 +108,14 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 		t.TempDir(),
 		t.TempDir(),
 	))
-	restoreStep := setTestActiveStep(eng, "step-1")
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
-	if err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, compactionInstructionsInput{}, true); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), stepID, compactionModeManual, compactionInstructionsInput{}, true); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 

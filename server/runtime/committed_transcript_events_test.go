@@ -611,7 +611,8 @@ func TestHistoryReplacementPublishesCompactionPreservedUserMessageBeforeLocalEnt
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
-	restoreStep := setTestActiveStep(eng, "compact-step")
+	compactionStepID := runtimeTestStepID("compact-step")
+	restoreStep := setTestActiveStep(eng, compactionStepID)
 	defer restoreStep()
 
 	carryover, ok := compactionPreservedUserMessage("keep the active requirement")
@@ -619,7 +620,7 @@ func TestHistoryReplacementPublishesCompactionPreservedUserMessageBeforeLocalEnt
 		t.Fatal("expected non-empty compaction-preserved user message")
 	}
 	receipt, err := newCompactionPersistence(eng).replaceHistory(
-		"compact-step",
+		compactionStepID,
 		"local",
 		compactionModeManual,
 		llm.ItemsFromMessages([]llm.Message{
@@ -630,7 +631,7 @@ func TestHistoryReplacementPublishesCompactionPreservedUserMessageBeforeLocalEnt
 	if err != nil || !receipt.Committed {
 		t.Fatalf("replace history receipt=%+v error=%v", receipt, err)
 	}
-	if err := eng.steer(runtimeTestStepID("compact-step"), steerLocalEntryIntent(storedLocalEntry{Role: "compaction_summary", Text: "summary"})); err != nil {
+	if err := eng.steer(compactionStepID, steerLocalEntryIntent(storedLocalEntry{Role: "compaction_summary", Text: "summary"})); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
 

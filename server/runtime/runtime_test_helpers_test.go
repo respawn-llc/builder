@@ -20,6 +20,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/config"
 	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
@@ -122,6 +123,14 @@ func waitEngineLifecycleTasks(t *testing.T, eng *Engine) {
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for engine lifecycle tasks")
 	}
+}
+
+func scheduleManualCompactionAndWait(t *testing.T, eng *Engine) {
+	t.Helper()
+	if err := eng.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("schedule manual compaction: %v", err)
+	}
+	waitEngineLifecycleTasks(t, eng)
 }
 
 func backgroundShellEventTypeForTest(eventType shelltool.EventType) BackgroundShellEventType {
@@ -275,6 +284,19 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	t.Helper()
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
+	}
+	if cfg.ContextWindowTokens <= 0 {
+		settings := config.DefaultOnboardingSettings()
+		if meta, ok := llm.LookupModelMetadata(cfg.Model); ok && meta.ContextWindowTokens > 0 {
+			settings.ModelContextWindow = meta.ContextWindowTokens
+		}
+		cfg.ContextWindowTokens = settings.ModelContextWindow
+	}
+	if cfg.AutoCompactTokenLimit <= 0 {
+		cfg.AutoCompactTokenLimit = cfg.ContextWindowTokens * 95 / 100
+	}
+	if cfg.EffectiveContextWindowPercent <= 0 || cfg.EffectiveContextWindowPercent > 100 {
+		cfg.EffectiveContextWindowPercent = 95
 	}
 	eventLog := mustMaterializeTestEventLog(t, store)
 	engine, err := New(store, eventLog, client, registry, cfg)

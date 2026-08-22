@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
@@ -56,8 +55,9 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 	restoreStep()
 
 	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact context after overflow: %v", err)
+		t.Fatalf("schedule compaction after overflow: %v", err)
 	}
+	waitEngineLifecycleTasks(t, engine)
 	if len(client.compactionCalls) != 2 || len(client.calls) != 0 {
 		t.Fatalf(
 			"remote/local compaction calls = %d/%d, want two/zero",
@@ -83,11 +83,19 @@ func TestRemoteCompactionFailureAndCheckpointFallback(t *testing.T) {
 			StatusCode: 400,
 			Code:       llm.UnifiedErrorCodeUnknown,
 		})
+		var events []Event
+		engine.cfg.OnEvent = func(event Event) {
+			events = append(events, event)
+		}
+		if err := engine.CompactContext(context.Background(), ""); err != nil {
+			t.Fatalf("schedule compaction: %v", err)
+		}
+		waitEngineLifecycleTasks(t, engine)
 		assertRemoteCompactionFailureWithoutReplacementOrFallback(
 			t,
 			store,
 			client,
-			engine.CompactContext(context.Background(), ""),
+			events,
 			1,
 		)
 	})
@@ -98,22 +106,23 @@ func TestRemoteCompactionFailureAndCheckpointFallback(t *testing.T) {
 			StatusCode: 404,
 			Code:       llm.UnifiedErrorCodeUnknown,
 		})
-		err := engine.CompactContext(context.Background(), "")
-		var providerErr *llm.ProviderAPIError
-		if !errors.As(err, &providerErr) {
-			t.Fatalf("compaction error type = %T, want ProviderAPIError", err)
+		var events []Event
+		engine.cfg.OnEvent = func(event Event) {
+			events = append(events, event)
 		}
-		if providerErr.StatusCode != 404 {
-			t.Fatalf("provider error status = %d, want 404", providerErr.StatusCode)
+		if err := engine.CompactContext(context.Background(), ""); err != nil {
+			t.Fatalf("schedule compaction: %v", err)
 		}
-		assertRemoteCompactionFailureWithoutReplacementOrFallback(t, store, client, err, 1)
+		waitEngineLifecycleTasks(t, engine)
+		assertRemoteCompactionFailureWithoutReplacementOrFallback(t, store, client, events, 1)
 	})
 
 	t.Run("missing checkpoint falls back to local", func(t *testing.T) {
 		_, client, engine := newRemoteCompactionFixture(t, nil)
 		if err := engine.CompactContext(context.Background(), ""); err != nil {
-			t.Fatalf("compact context: %v", err)
+			t.Fatalf("schedule compaction: %v", err)
 		}
+		waitEngineLifecycleTasks(t, engine)
 		summaries := 0
 		for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
 			if item.Type == llm.ResponseItemTypeMessage &&
@@ -170,12 +179,12 @@ func assertRemoteCompactionFailureWithoutReplacementOrFallback(
 	t *testing.T,
 	store *session.Store,
 	client *fakeCompactionClient,
-	err error,
+	events []Event,
 	wantRemoteCalls int,
 ) {
 	t.Helper()
-	if err == nil {
-		t.Fatal("compact context succeeded after provider failure")
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("compaction events = %+v, want failed event", events)
 	}
 	if len(client.compactionCalls) != wantRemoteCalls || len(client.calls) != 0 {
 		t.Fatalf(

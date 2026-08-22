@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"testing"
 
 	"core/server/llm"
@@ -33,9 +32,7 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact context: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {

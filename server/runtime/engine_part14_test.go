@@ -87,9 +87,7 @@ func TestManualCompactionPreservesLastVisibleUserMessage(t *testing.T) {
 	}
 
 	completeManualEligibilityAgentStep(t, eng)
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	if len(messages) == 0 {
@@ -154,9 +152,7 @@ func TestManualLocalCompactionRebuildsCanonicalContextOrder(t *testing.T) {
 	}
 
 	completeManualEligibilityAgentStep(t, eng)
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	if len(messages) < 6 {
@@ -263,9 +259,7 @@ func TestManualLocalCompactionOmitsCarryoverWithoutNewUserMessageSincePreviousCo
 		t.Fatalf("append previous compaction summary: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 
 	for _, message := range eng.transcriptRuntimeState().SnapshotMessages() {
 		if message.MessageType != nil && *message.MessageType == llm.MessageTypeCompactionPreservedUserMessage {
@@ -292,9 +286,7 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("please keep tests green")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 
 	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {

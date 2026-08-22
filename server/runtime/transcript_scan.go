@@ -59,21 +59,19 @@ func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions ma
 	}
 }
 
-func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID *string, owners ...map[string]*TranscriptCommittedRowProvenance) {
+func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, provenance *TranscriptCommittedRowProvenance, stepID *string, owners ...map[string]*TranscriptCommittedRowProvenance) {
 	if s == nil {
 		return
 	}
 	entries := visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls)
 	for index := range entries {
 		entry := &entries[index]
-		if strings.TrimSpace(entry.Role) == "user" && seq > 0 {
-			targetID := rollbacktarget.EncodeUserMessageSeq(seq)
+		if strings.TrimSpace(entry.Role) == "user" && provenance != nil && provenance.EventSequence > 0 {
+			targetID := rollbacktarget.EncodeUserMessageSeq(provenance.EventSequence)
 			entry.RollbackTargetID = &targetID
 		}
 		entry.StepID = cloneOptionalStepID(stepID)
-		if seq > 0 {
-			entry.CommittedProvenance = &TranscriptCommittedRowProvenance{EventSequence: seq}
-		}
+		entry.CommittedProvenance = cloneTranscriptCommittedRowProvenance(provenance)
 		if len(owners) > 0 && entry.ToolCallID != "" {
 			if owner := owners[0][entry.ToolCallID]; owner != nil {
 				entry.CommittedProvenance = cloneTranscriptCommittedRowProvenance(owner)

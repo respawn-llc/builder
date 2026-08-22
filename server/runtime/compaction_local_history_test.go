@@ -34,9 +34,10 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 	}}}})); err != nil {
 		t.Fatalf("persist pre-boundary reasoning: %v", err)
 	}
-	restoreStep := setTestActiveStep(engine, "checkpoint")
+	checkpointStepID := runtimeTestStepID("checkpoint")
+	restoreStep := setTestActiveStep(engine, checkpointStepID)
 	receipt, err := newCompactionPersistence(engine).replaceHistory(
-		"checkpoint",
+		checkpointStepID,
 		"local",
 		compactionModeManual,
 		llm.ItemsFromMessages([]llm.Message{{
@@ -58,9 +59,7 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 	}
 
 	completeManualEligibilityAgentStep(t, engine)
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact active segment: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 	if len(client.calls) != 1 {
 		t.Fatalf("local compaction calls = %d, want one", len(client.calls))
 	}
@@ -114,9 +113,13 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 	}
 
 	completeManualEligibilityAgentStep(t, engine)
-	err := engine.CompactContext(context.Background(), "")
-	if !errors.Is(err, errLocalCompactionAttemptedToolCalls) {
-		t.Fatalf("manual local compaction error = %v, want tool-call rejection", err)
+	var events []Event
+	engine.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	scheduleManualCompactionAndWait(t, engine)
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("manual local compaction events = %+v, want failed event", events)
 	}
 	if probe.called || len(client.calls) != 1 {
 		t.Fatalf(
