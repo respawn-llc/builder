@@ -1874,6 +1874,69 @@ func TestExecutionCleanupAlwaysReleasesWorkflowBinding(t *testing.T) {
 	}
 }
 
+func TestOrdinaryExecutionCannotStartWithRetainedWorkflowActivation(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	attachment, err := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "retained-workflow-activation-test",
+		Runtime:   &plan,
+	})
+	if err != nil {
+		t.Fatalf("open workflow runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, releaseErr := attachment.Release(context.Background(), RuntimeReleaseClose); releaseErr != nil {
+			t.Errorf("release retained workflow runtime: %v", releaseErr)
+		}
+	})
+	workflowRef := workflowExecutionRefForTest(
+		t,
+		workflow.TaskID(uuid.NewString()),
+		workflow.NodeID(uuid.NewString()),
+		nil,
+	)
+	if err := fixture.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
+		publication, publicationErr := engine.PrepareCurrentNodeExecutionPublication(&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: runtimeids.NewExecutionScopeID(),
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: workflowRef.CurrentNode,
+			},
+		})
+		if publicationErr != nil {
+			return publicationErr
+		}
+		if publicationErr = publication.Begin(); publicationErr != nil {
+			return publicationErr
+		}
+		binding := publication.Commit()
+		t.Cleanup(func() {
+			if closeErr := binding.Close(); closeErr != nil {
+				t.Errorf("close retained Workflow binding: %v", closeErr)
+			}
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("publish retained Workflow activation: %v", err)
+	}
+
+	ordinary, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+	})
+	if ordinary != nil {
+		_ = ordinary.Close(context.Background())
+	}
+	if !errors.Is(err, ErrSessionWorkflowActivationActive) {
+		t.Fatalf("ordinary execution error = %v, want %v", err, ErrSessionWorkflowActivationActive)
+	}
+}
+
 func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
