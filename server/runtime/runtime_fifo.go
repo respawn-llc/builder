@@ -2,13 +2,10 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"sync"
 )
 
 const maxPendingRuntimeOperations = 9_999
-
-var errRuntimeOperationFIFORequired = errors.New("active Runtime Engine requires a Runtime operation FIFO")
 
 type runtimeDeferred[T any] struct {
 	state *runtimeDeferredState[T]
@@ -124,11 +121,7 @@ func submitEngineRuntimeOperation[T any](
 	if engine == nil || engine.closed.Load() || operation == nil {
 		return completedRuntimeDeferred[T](ErrEngineClosed)
 	}
-	fifo, err := engine.requiredRuntimeOperationFIFO()
-	if err != nil {
-		return completedRuntimeDeferred[T](err)
-	}
-	return submitRuntimeOperation(fifo, operation)
+	return submitRuntimeOperation(engine.runtimeFIFO, operation)
 }
 
 func awaitEngineRuntimeOperation[T any](
@@ -140,40 +133,24 @@ func awaitEngineRuntimeOperation[T any](
 }
 
 func (e *Engine) pauseRuntimeOperations(ctx context.Context) error {
-	fifo, err := e.requiredRuntimeOperationFIFO()
-	if err != nil {
-		return err
+	if e == nil {
+		return ErrEngineClosed
 	}
-	return fifo.Pause(ctx)
+	return e.runtimeFIFO.Pause(ctx)
 }
 
 func (e *Engine) drainRuntimeOperations(ctx context.Context) error {
-	fifo, err := e.requiredRuntimeOperationFIFO()
-	if err != nil {
-		return err
+	if e == nil {
+		return ErrEngineClosed
 	}
-	return fifo.Drain(ctx)
+	return e.runtimeFIFO.Drain(ctx)
 }
 
 func (e *Engine) hasPendingRuntimeOperations() bool {
 	if e == nil {
 		return false
 	}
-	fifo, err := e.requiredRuntimeOperationFIFO()
-	if err != nil {
-		panic(err)
-	}
-	return fifo.Pending()
-}
-
-func (e *Engine) requiredRuntimeOperationFIFO() (*runtimeOperationFIFO, error) {
-	if e == nil {
-		return nil, ErrEngineClosed
-	}
-	if e.runtimeFIFO == nil {
-		return nil, errRuntimeOperationFIFORequired
-	}
-	return e.runtimeFIFO, nil
+	return e.runtimeFIFO.Pending()
 }
 
 func (f *runtimeOperationFIFO) submit(operation runtimeOperation) bool {

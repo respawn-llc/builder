@@ -53,31 +53,6 @@ func TestRuntimeOperationFIFOCompletesTypedOperationsInAcceptanceOrder(t *testin
 	}
 }
 
-func TestEngineRuntimeMutationRequiresFIFO(t *testing.T) {
-	engine := mustNewTestEngine(
-		t,
-		mustCreateTestSession(t),
-		&fakeClient{},
-		tools.NewRegistry(),
-		Config{Model: "gpt-5"},
-	)
-	fifo := engine.runtimeFIFO
-	engine.runtimeFIFO = nil
-	defer func() {
-		engine.runtimeFIFO = fifo
-	}()
-
-	if err := engine.steerRuntime(steerEventIntent(Event{Kind: EventStreamingErrorUpdated})); !errors.Is(err, errRuntimeOperationFIFORequired) {
-		t.Fatalf("Runtime mutation without FIFO error = %v, want FIFO invariant failure", err)
-	}
-	if err := engine.pauseRuntimeOperations(t.Context()); !errors.Is(err, errRuntimeOperationFIFORequired) {
-		t.Fatalf("pause without FIFO error = %v, want FIFO invariant failure", err)
-	}
-	if err := engine.drainRuntimeOperations(t.Context()); !errors.Is(err, errRuntimeOperationFIFORequired) {
-		t.Fatalf("drain without FIFO error = %v, want FIFO invariant failure", err)
-	}
-}
-
 func TestRuntimeOperationFIFODefersAcceptedOperationsUntilTheProtectedStepBoundary(t *testing.T) {
 	fifo := newRuntimeOperationFIFO()
 	t.Cleanup(fifo.Close)
