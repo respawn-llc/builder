@@ -86,6 +86,7 @@ type workflowExecutionStartState struct {
 	admit     func() error
 	published func(sessionruntime.ExecutionHandle)
 	handle    sessionruntime.ExecutionHandle
+	onRetire  func()
 }
 
 type currentNodeTestRunner interface {
@@ -143,7 +144,7 @@ func (r currentNodeTestPublicationRunner) PrepareAgentPublication(
 	reference workflow.CurrentNodeReference,
 	delivery workflowruntime.TaskPromptDelivery,
 	assignment CurrentNodeAssignmentSteer,
-	_ func(),
+	onRetire func(),
 	controller workflowruntime.Controller,
 ) (CurrentNodeAgentPublication, error) {
 	if preparation, ok := r.runner.(currentNodeTestPreparation); ok {
@@ -153,7 +154,7 @@ func (r currentNodeTestPublicationRunner) PrepareAgentPublication(
 	}
 	return &currentNodeTestPublication{
 		runner: r.runner, authority: r.authority, reference: reference,
-		delivery: delivery, assignment: assignment, controller: controller,
+		delivery: delivery, assignment: assignment, onRetire: onRetire, controller: controller,
 	}, nil
 }
 
@@ -163,6 +164,7 @@ type currentNodeTestPublication struct {
 	reference  workflow.CurrentNodeReference
 	delivery   workflowruntime.TaskPromptDelivery
 	assignment CurrentNodeAssignmentSteer
+	onRetire   func()
 	controller workflowruntime.Controller
 }
 
@@ -209,7 +211,7 @@ func (p *currentNodeTestPublication) Publish(
 	}
 	state := &workflowExecutionStartState{
 		reference: p.reference,
-		admit:     func() error { return nil }, published: published,
+		admit:     func() error { return nil }, published: published, onRetire: p.onRetire,
 	}
 	if err := p.runner.PublishCurrentNode(
 		context.Background(), p.reference, p.delivery, p.assignment,
@@ -227,6 +229,12 @@ func (p *currentNodeTestPublication) Publish(
 		}); err != nil {
 			return nil, nil, err
 		}
+	}
+	if state.onRetire != nil {
+		go func() {
+			_, _ = state.handle.Wait(context.Background())
+			state.onRetire()
+		}()
 	}
 	return state.handle, func() {}, nil
 }

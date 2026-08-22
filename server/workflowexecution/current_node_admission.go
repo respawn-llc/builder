@@ -297,8 +297,9 @@ func (c *CurrentNodeController) admit(
 	if start.nodeKind == "" {
 		start.nodeKind = workflow.NodeKindAgent
 	}
-	if start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment &&
-		start.assignmentSteer == nil {
+	if start.assignmentSteer == nil &&
+		(start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment ||
+			start.policy.isAutomatic()) {
 		assignment, err := c.steerAssignment(ctx, reference)
 		if err != nil {
 			return nil, err
