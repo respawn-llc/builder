@@ -268,12 +268,14 @@ func TestFlushPendingUserInjectionsRestoresOnlyLaterNoticeAfterCommittedObserver
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	scheduler := &defaultBackgroundNoticeScheduler{engine: engine}
-	engine.stepLifecycle = &stubExclusiveStepLifecycle{
+	stepID := runtimeTestStepID("background-notice-observer-failure")
+	steps := &stubExclusiveStepLifecycle{
 		busy:         true,
-		snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: "step"},
-		activeStepID: "step",
+		snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: stepID},
+		activeStepID: stepID,
 	}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	engine.stepLifecycle = steps
 	engine.backgroundFlow = scheduler
 	lifecycle := newDefaultMessageLifecycle(engine, scheduler)
 	for _, sessionID := range []string{"first", "second"} {
@@ -285,7 +287,7 @@ func TestFlushPendingUserInjectionsRestoresOnlyLaterNoticeAfterCommittedObserver
 	}
 	gate.FailNext(observerErr)
 
-	_, err := lifecycle.FlushPendingUserInjections("step", allPendingUserInjectionSelection{})
+	_, err := lifecycle.FlushPendingUserInjections(stepID, allPendingUserInjectionSelection{})
 	if !errors.Is(err, observerErr) {
 		t.Fatalf("flush error = %v, want observer failure", err)
 	}

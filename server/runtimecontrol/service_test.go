@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,13 +75,20 @@ func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Conte
 type missingMetadataPersistedSessionResolver struct{}
 
 type runtimeControlPromptCommandResolver struct {
-	content string
-	err     error
-	calls   int
+	content  string
+	err      error
+	calls    atomic.Int32
+	resolved chan struct{}
 }
 
 func (r *runtimeControlPromptCommandResolver) ResolvePromptCommand(context.Context, string, string, string) (string, error) {
-	r.calls++
+	r.calls.Add(1)
+	if r.resolved != nil {
+		select {
+		case r.resolved <- struct{}{}:
+		default:
+		}
+	}
 	if r.err != nil {
 		return "", r.err
 	}
@@ -230,9 +238,47 @@ func waitForRuntimeControlIdle(t *testing.T, engine *runtime.Engine) {
 	}
 }
 
+func waitForRuntimeControlQueuedStatus(
+	t *testing.T,
+	statuses <-chan runtime.QueuedUserMessageStatusEvent,
+	queueItemID string,
+	status runtime.QueuedUserMessageStatus,
+) runtime.QueuedUserMessageStatusEvent {
+	t.Helper()
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case event := <-statuses:
+			if event.QueueItemID == queueItemID && event.Status == status {
+				return event
+			}
+		case <-timeout.C:
+			t.Fatalf("timed out waiting for queue item %q status %q", queueItemID, status)
+		}
+	}
+}
+
 type runtimeControlLiveSteerResult struct {
 	response serverapi.RuntimeLiveSteerResponse
 	err      error
+}
+
+type runtimeControlSubmitUserTurnResult struct {
+	response serverapi.RuntimeSubmitUserTurnResponse
+	err      error
+}
+
+func submitUserTurnRuntimeControlAsync(
+	service *Service,
+	request serverapi.RuntimeSubmitUserTurnRequest,
+) <-chan runtimeControlSubmitUserTurnResult {
+	done := make(chan runtimeControlSubmitUserTurnResult, 1)
+	go func() {
+		response, err := service.SubmitUserTurn(context.Background(), request)
+		done <- runtimeControlSubmitUserTurnResult{response: response, err: err}
+	}()
+	return done
 }
 
 func liveSteerRuntimeControlAsync(
@@ -1956,8 +2002,8 @@ func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHist
 		t.Fatalf("SubmitUserTurn response = %+v, want queued acceptance", resp)
 	}
 	waitForRuntimeControlAssistantFinal(t, engine, "done")
-	if resolver.calls != 1 {
-		t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+	if calls := resolver.calls.Load(); calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", calls)
 	}
 	if got := countUserMessagesWithContent(t, store, "expanded current body"); got != 1 {
 		t.Fatalf("expanded user message count = %d, want 1", got)
@@ -2061,14 +2107,17 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 			}
 		},
 	})
-	submitDone := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserTurn(
-			context.Background(),
-			runtimeControlUserTurnRequest(store, "active-turn", "start"),
-		)
-		submitDone <- err
-	}()
+	submission, err := service.SubmitUserTurn(
+		context.Background(),
+		runtimeControlUserTurnRequest(store, "active-turn", "start"),
+	)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn active turn: %v", err)
+	}
+	if submission.ResultKind != clientui.UserTurnResultKindQueued || submission.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn active turn = %+v, want queued acceptance", submission)
+	}
+	waitForRuntimeControlQueuedStatus(t, queuedStatuses, submission.QueueItemID, runtime.QueuedUserMessageAccepted)
 	select {
 	case <-client.firstStarted:
 	case <-time.After(5 * time.Second):
@@ -2076,25 +2125,27 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	}
 	queuedText := "use the existing lld installation"
 	steeringReq := runtimeControlUserTurnRequest(store, "queued-steering", queuedText)
-	steered, err := service.SubmitUserTurn(
-		context.Background(),
-		steeringReq,
-	)
-	if err != nil {
-		t.Fatalf("SubmitUserTurn while model was thinking: %v", err)
-	}
-	if !steered.Steered || steered.QueueItemID == "" {
-		t.Fatalf("SubmitUserTurn while model was thinking = %+v, want accepted steering", steered)
-	}
+	steeringDone := submitUserTurnRuntimeControlAsync(service, steeringReq)
 	select {
-	case status := <-queuedStatuses:
-		if status.QueueItemID != steered.QueueItemID {
-			t.Fatalf("accepted steering queue item id = %q, want %q", status.QueueItemID, steered.QueueItemID)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("accepted steering emitted no queue status")
+	case result := <-steeringDone:
+		t.Fatalf("SubmitUserTurn completed before the protected Step boundary: %+v", result)
+	case <-time.After(25 * time.Millisecond):
 	}
 	close(client.releaseFirst)
+	var steeringResult runtimeControlSubmitUserTurnResult
+	select {
+	case steeringResult = <-steeringDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SubmitUserTurn did not complete after the protected Step boundary")
+	}
+	if steeringResult.err != nil {
+		t.Fatalf("SubmitUserTurn while model was thinking: %v", steeringResult.err)
+	}
+	steered := steeringResult.response
+	if steered.ResultKind != clientui.UserTurnResultKindQueued || !steered.Steered || steered.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn while model was thinking = %+v, want accepted steering", steered)
+	}
+	waitForRuntimeControlQueuedStatus(t, queuedStatuses, steered.QueueItemID, runtime.QueuedUserMessageAccepted)
 	select {
 	case <-client.secondStarted:
 	case <-time.After(5 * time.Second):
@@ -2124,16 +2175,22 @@ func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission
 			}
 		},
 	})
-	resolver := &runtimeControlPromptCommandResolver{content: "expanded prompt body"}
+	resolver := &runtimeControlPromptCommandResolver{
+		content:  "expanded prompt body",
+		resolved: make(chan struct{}, 1),
+	}
 	service.WithPromptCommandResolver(resolver)
-	submitDone := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserTurn(
-			context.Background(),
-			runtimeControlUserTurnRequest(store, "active-prompt-turn", "start"),
-		)
-		submitDone <- err
-	}()
+	submission, err := service.SubmitUserTurn(
+		context.Background(),
+		runtimeControlUserTurnRequest(store, "active-prompt-turn", "start"),
+	)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn active prompt turn: %v", err)
+	}
+	if submission.ResultKind != clientui.UserTurnResultKindQueued || submission.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn active prompt turn = %+v, want queued acceptance", submission)
+	}
+	waitForRuntimeControlQueuedStatus(t, queuedStatuses, submission.QueueItemID, runtime.QueuedUserMessageAccepted)
 	select {
 	case <-client.firstStarted:
 	case <-time.After(5 * time.Second):
@@ -2142,23 +2199,38 @@ func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission
 
 	steeringReq := runtimeControlUserTurnRequest(store, "queued-prompt-command", "unused")
 	steeringReq.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "src")
-	steered, err := service.SubmitUserTurn(context.Background(), steeringReq)
-	if err != nil {
-		t.Fatalf("SubmitUserTurn prompt command while model was thinking: %v", err)
+	steeringDone := submitUserTurnRuntimeControlAsync(service, steeringReq)
+	select {
+	case <-resolver.resolved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prompt command was not resolved before Runtime queue admission")
 	}
-	if !steered.Steered || steered.QueueItemID == "" {
-		t.Fatalf("SubmitUserTurn prompt command while model was thinking = %+v, want accepted steering", steered)
-	}
-	if resolver.calls != 1 {
-		t.Fatalf("resolver calls before queue admission = %d, want 1", resolver.calls)
+	if calls := resolver.calls.Load(); calls != 1 {
+		t.Fatalf("resolver calls before queue admission = %d, want 1", calls)
 	}
 	select {
-	case status := <-queuedStatuses:
-		if status.QueueItemID != steered.QueueItemID || status.Text != "expanded prompt body" {
-			t.Fatalf("accepted prompt-command queue status = %+v", status)
-		}
+	case result := <-steeringDone:
+		t.Fatalf("SubmitUserTurn completed before the protected Step boundary: %+v", result)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(client.releaseFirst)
+	var steeringResult runtimeControlSubmitUserTurnResult
+	select {
+	case steeringResult = <-steeringDone:
 	case <-time.After(5 * time.Second):
-		t.Fatal("accepted prompt-command steering emitted no queue status")
+		t.Fatal("SubmitUserTurn prompt command did not complete after the protected Step boundary")
+	}
+	if steeringResult.err != nil {
+		t.Fatalf("SubmitUserTurn prompt command while model was thinking: %v", steeringResult.err)
+	}
+	steered := steeringResult.response
+	if steered.ResultKind != clientui.UserTurnResultKindQueued || !steered.Steered || steered.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn prompt command while model was thinking = %+v, want accepted steering", steered)
+	}
+	status := waitForRuntimeControlQueuedStatus(t, queuedStatuses, steered.QueueItemID, runtime.QueuedUserMessageAccepted)
+	if status.Text != "expanded prompt body" {
+		t.Fatalf("accepted prompt-command queue status = %+v", status)
 	}
 	if got := countPromptHistoryEvents(t, store, "/review src"); got != 1 {
 		t.Fatalf("canonical prompt history count = %d, want 1", got)
@@ -2167,15 +2239,14 @@ func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission
 		t.Fatalf("expanded prompt history count = %d, want 0", got)
 	}
 
-	close(client.releaseFirst)
 	select {
 	case <-client.secondStarted:
 	case <-time.After(5 * time.Second):
 		t.Fatal("active turn did not reach the prompt-command safe-boundary request")
 	}
 	defer close(client.releaseSecond)
-	if resolver.calls != 1 {
-		t.Fatalf("resolver calls after queue drain = %d, want 1", resolver.calls)
+	if calls := resolver.calls.Load(); calls != 1 {
+		t.Fatalf("resolver calls after queue drain = %d, want 1", calls)
 	}
 
 	for _, message := range llm.MessagesFromItems(client.request(1).Items) {
@@ -2193,7 +2264,7 @@ func TestServiceSubmitUserTurnPromptResolutionFailureDuringActiveRunReturnsWitho
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			client := newSteeringDrainRuntimeControlClient()
-			queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 1)
+			queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
 			registry := newTestToolRegistry(t, tools.HandlerRegistration{
 				ID:      toolspec.ToolExecCommand,
 				Handler: fakeShellHandler{},
@@ -2209,29 +2280,33 @@ func TestServiceSubmitUserTurnPromptResolutionFailureDuringActiveRunReturnsWitho
 			resolutionErr := &serverapi.PromptCommandError{Kind: kind, Command: &command}
 			resolver := &runtimeControlPromptCommandResolver{err: resolutionErr}
 			service.WithPromptCommandResolver(resolver)
-			submitDone := make(chan error, 1)
-			go func() {
-				_, err := service.SubmitUserTurn(
-					context.Background(),
-					runtimeControlUserTurnRequest(store, "active-before-failed-prompt", "start"),
-				)
-				submitDone <- err
-			}()
+			submission, err := service.SubmitUserTurn(
+				context.Background(),
+				runtimeControlUserTurnRequest(store, "active-before-failed-prompt", "start"),
+			)
+			if err != nil {
+				t.Fatalf("SubmitUserTurn active turn: %v", err)
+			}
+			if submission.ResultKind != clientui.UserTurnResultKindQueued || submission.QueueItemID == "" {
+				t.Fatalf("SubmitUserTurn active turn = %+v, want queued acceptance", submission)
+			}
+			waitForRuntimeControlQueuedStatus(t, queuedStatuses, submission.QueueItemID, runtime.QueuedUserMessageAccepted)
 			select {
 			case <-client.firstStarted:
 			case <-time.After(5 * time.Second):
 				t.Fatal("active turn did not reach the first model request")
 			}
+			waitForRuntimeControlQueuedStatus(t, queuedStatuses, submission.QueueItemID, runtime.QueuedUserMessageSubmitted)
 
 			req := runtimeControlUserTurnRequest(store, "failed-prompt-during-active-run", "unused")
 			req.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "")
-			_, err := service.SubmitUserTurn(context.Background(), req)
+			_, err = service.SubmitUserTurn(context.Background(), req)
 			var typed *serverapi.PromptCommandError
 			if !errors.As(err, &typed) || typed.Kind != kind {
 				t.Fatalf("SubmitUserTurn prompt resolution error = %T %v, want typed %s", err, err, kind)
 			}
-			if resolver.calls != 1 {
-				t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+			if calls := resolver.calls.Load(); calls != 1 {
+				t.Fatalf("resolver calls = %d, want 1", calls)
 			}
 			if engine.HasQueuedUserWork() {
 				t.Fatal("failed prompt command was admitted to the runtime queue")
@@ -2252,9 +2327,7 @@ func TestServiceSubmitUserTurnPromptResolutionFailureDuringActiveRunReturnsWitho
 				t.Fatal("active turn did not reach its second model request")
 			}
 			close(client.releaseSecond)
-			if err := <-submitDone; err != nil {
-				t.Fatalf("active SubmitUserTurn: %v", err)
-			}
+			waitForRuntimeControlIdle(t, engine)
 		})
 	}
 }
@@ -2298,17 +2371,14 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 		t.Fatalf("seed runtime transcript: %v", err)
 	}
 
-	compactDone := make(chan error, 1)
-	go func() {
-		compactDone <- service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
-			SessionID: store.Meta().SessionID,
-			Args:      "compact",
-		})
-	}()
+	if err := service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		Args:      "compact",
+	}); err != nil {
+		t.Fatalf("CompactContext scheduling: %v", err)
+	}
 	select {
 	case <-client.started:
-	case err := <-compactDone:
-		t.Fatalf("compaction ended before provider call: %v", err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("compaction did not start")
 	}
@@ -2318,28 +2388,24 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	}); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
 		t.Fatalf("targeted Interrupt while compacting error = %v, want Runtime Command not accepted", err)
 	}
-	select {
-	case err := <-compactDone:
-		t.Fatalf("ordinary Interrupt ended compaction: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
 
 	queuedText := "queue after compaction"
-	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "queue-while-compacting", queuedText))
+	response, err := service.SubmitUserTurn(
+		context.Background(),
+		runtimeControlUserTurnRequest(store, "queue-while-compacting", queuedText),
+	)
 	if err != nil {
 		t.Fatalf("SubmitUserTurn while compacting: %v", err)
 	}
-	if !resp.Steered || resp.QueueItemID == "" {
-		t.Fatalf("SubmitUserTurn while compacting = %+v, want queued response", resp)
+	if response.ResultKind != clientui.UserTurnResultKindQueued || !response.Steered || response.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn while compacting = %+v, want queued acceptance", response)
 	}
 	if !engine.HasQueuedUserWork() {
 		t.Fatal("human Steering was not retained while compaction was active")
 	}
 
 	releaseCompaction()
-	if err := <-compactDone; err != nil {
-		t.Fatalf("CompactContext: %v", err)
-	}
+	waitForRuntimeControlAssistantFinal(t, engine, "queued message handled")
 	if got := countUserMessagesWithContent(t, store, queuedText); got != 1 {
 		t.Fatalf("steered user message count = %d, want 1", got)
 	}

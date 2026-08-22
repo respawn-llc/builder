@@ -142,6 +142,37 @@ type fakeCompactionClient struct {
 	caps llm.ProviderCapabilities
 }
 
+type contextWindowClient struct {
+	contextWindow int
+
+	resolveCalls int
+}
+
+func (c *contextWindowClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+	return llm.Response{}, nil
+}
+
+func (c *contextWindowClient) ResolveModelContextWindow(_ context.Context, _ string) (int, error) {
+	c.resolveCalls++
+	if c.contextWindow <= 0 {
+		return 0, nil
+	}
+	return c.contextWindow, nil
+}
+
+func (c *contextWindowClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{
+		ProviderID:                    "openai",
+		SupportsResponsesAPI:          true,
+		SupportsResponsesCompact:      true,
+		SupportsPromptCacheKey:        true,
+		SupportsNativeWebSearch:       true,
+		SupportsReasoningEncrypted:    true,
+		SupportsServerSideContextEdit: true,
+		IsOpenAIFirstParty:            true,
+	}, nil
+}
+
 type preciseCompactionClient struct {
 	inputTokenCount int
 	contextWindow   int

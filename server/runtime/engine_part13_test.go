@@ -23,7 +23,7 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 			{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("checking"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 				ToolCalls: []llm.ToolCall{{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
-				Usage:     llm.Usage{InputTokens: 100, WindowTokens: 2_000},
+				Usage:     llm.Usage{InputTokens: 890, WindowTokens: 2_000},
 			},
 			{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
@@ -33,19 +33,6 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("next"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 				Usage:     llm.Usage{InputTokens: 930, WindowTokens: 2_000},
 			},
-		},
-		inputTokenCountFn: func(req llm.Request) int {
-			hasToolResult := false
-			for _, msg := range requestMessages(req) {
-				if msg.Role == llm.RoleTool {
-					hasToolResult = true
-					break
-				}
-			}
-			if hasToolResult {
-				return 890
-			}
-			return 930
 		},
 	}
 
@@ -106,10 +93,10 @@ func countCompactionSoonReminderWarnings(_ *Engine, snapshot ChatSnapshot) int {
 	return count
 }
 
-func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testing.T) {
+func TestCompactionSoonReminderUsesResponseBaselineAfterTranscriptMutation(t *testing.T) {
 	store := mustCreateTestSession(t)
 
-	client := &preciseCompactionClient{inputTokenCount: 840, contextWindow: 2_000}
+	client := &contextWindowClient{contextWindow: 2_000}
 	eng := mustNewHandoffTestEngine(t, store, client, Config{
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 1_000,
@@ -120,31 +107,24 @@ func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testi
 	eng.setLastUsage(llm.Usage{InputTokens: 860, WindowTokens: 2_000})
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-1"); err != nil {
-		t.Fatalf("reminder below exact threshold: %v", err)
+	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), runtimeTestStepID("step-1")); err != nil {
+		t.Fatalf("reminder from response baseline: %v", err)
 	}
 	restoreStep()
-	if client.countCalls != 1 {
-		t.Fatalf("expected first reminder probe to count precisely once, got %d", client.countCalls)
-	}
-	if eng.compactionRuntimeState().SoonReminderIssued() {
-		t.Fatal("did not expect handoff tool to become enabled below the exact reminder threshold")
+	if !eng.compactionRuntimeState().SoonReminderIssued() {
+		t.Fatal("expected response-derived usage to issue the reminder")
 	}
 
-	client.inputTokenCount = 860
 	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("mutation")}})); err != nil {
 		t.Fatalf("append mutation: %v", err)
 	}
 	restoreStep = setTestActiveStep(eng, "step-2")
-	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-2"); err != nil {
-		t.Fatalf("reminder above exact threshold after mutation: %v", err)
+	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), runtimeTestStepID("step-2")); err != nil {
+		t.Fatalf("reminder after transcript mutation: %v", err)
 	}
 	restoreStep()
-	if client.countCalls != 2 {
-		t.Fatalf("expected transcript mutation to force a fresh precise reminder check, got %d calls", client.countCalls)
-	}
 	if !eng.compactionRuntimeState().SoonReminderIssued() {
-		t.Fatal("expected reminder to enable trigger_handoff after exact recount")
+		t.Fatal("expected reminder to remain issued after transcript growth")
 	}
 }
 
@@ -162,7 +142,7 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutPreserve
 	activeCall := llm.ToolCall{ID: "call-handoff-1", Name: string(toolspec.ToolTriggerHandoff), Input: json.RawMessage(`{"summarizer_prompt":"keep API details","future_agent_message":"resume with tests"}`)}
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	summary, futureAdded, err := eng.TriggerHandoff(context.Background(), "step-1", activeCall, "keep API details", "resume with tests")
+	summary, futureAdded, err := eng.TriggerHandoff(context.Background(), runtimeTestStepID("step-1"), activeCall, "keep API details", "resume with tests")
 	if err != nil {
 		t.Fatalf("trigger handoff: %v", err)
 	}
@@ -172,7 +152,7 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutPreserve
 	if len(client.calls) != 0 {
 		t.Fatalf("expected handoff scheduling to avoid immediate compaction model call, got %d", len(client.calls))
 	}
-	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err != nil {
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("apply pending handoff: %v", err)
 	}
 	restoreStep()
@@ -216,7 +196,7 @@ func TestTriggerHandoffWithBlankFutureMessageAppendsNoFutureMessage(t *testing.T
 	restoreStep := setTestActiveStep(eng, "step-1")
 	_, futureAdded, err := eng.TriggerHandoff(
 		context.Background(),
-		"step-1",
+		runtimeTestStepID("step-1"),
 		llm.ToolCall{ID: "call-handoff-blank", Name: string(toolspec.ToolTriggerHandoff)},
 		"keep API details",
 		" \n\t ",
@@ -227,7 +207,7 @@ func TestTriggerHandoffWithBlankFutureMessageAppendsNoFutureMessage(t *testing.T
 	if futureAdded {
 		t.Fatal("blank future-agent message was reported as appended")
 	}
-	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err != nil {
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("apply pending handoff: %v", err)
 	}
 	restoreStep()
@@ -261,7 +241,7 @@ func TestPrepareModelTurnSkipsAutoCompactionAfterPendingHandoffCompaction(t *tes
 
 	executor := &defaultStepExecutor{engine: eng}
 	restoreStep := setTestActiveStep(eng, "step-1")
-	if err := executor.prepareModelTurn(context.Background(), "step-1"); err != nil {
+	if err := executor.prepareModelTurn(context.Background(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("prepare model turn: %v", err)
 	}
 	restoreStep()
@@ -300,7 +280,7 @@ func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompacti
 
 	executor := &defaultStepExecutor{engine: eng}
 	restoreStep := setTestActiveStep(eng, "step-1")
-	if err := executor.prepareModelTurn(context.Background(), "step-1"); err != nil {
+	if err := executor.prepareModelTurn(context.Background(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("prepare model turn: %v", err)
 	}
 	restoreStep()
@@ -350,11 +330,11 @@ func TestPendingTriggerHandoffFailsToolCallsAndRetriesLocalSummary(t *testing.T)
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call_handoff_tool_retry", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "")
+	_, _, err := eng.TriggerHandoff(context.Background(), runtimeTestStepID("step-1"), llm.ToolCall{ID: "call_handoff_tool_retry", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "")
 	if err != nil {
 		t.Fatalf("trigger handoff: %v", err)
 	}
-	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err != nil {
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("apply pending handoff: %v", err)
 	}
 	restoreStep()
@@ -414,11 +394,11 @@ func TestPendingTriggerHandoffFailsMalformedToolCallWithEmptyID(t *testing.T) {
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call_handoff_empty_id", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "resume with tests")
+	_, _, err := eng.TriggerHandoff(context.Background(), runtimeTestStepID("step-1"), llm.ToolCall{ID: "call_handoff_empty_id", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "resume with tests")
 	if err != nil {
 		t.Fatalf("trigger handoff: %v", err)
 	}
-	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); !errors.Is(err, errLocalCompactionToolCallEmptyID) {
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), runtimeTestStepID("step-1")); !errors.Is(err, errLocalCompactionToolCallEmptyID) {
 		t.Fatalf("expected errLocalCompactionToolCallEmptyID, got %v", err)
 	}
 	restoreStep()
@@ -483,11 +463,11 @@ func TestPendingTriggerHandoffRetriesCustomToolCallOutput(t *testing.T) {
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call_handoff_custom_tool_retry", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "")
+	_, _, err := eng.TriggerHandoff(context.Background(), runtimeTestStepID("step-1"), llm.ToolCall{ID: "call_handoff_custom_tool_retry", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "")
 	if err != nil {
 		t.Fatalf("trigger handoff: %v", err)
 	}
-	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err != nil {
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("apply pending handoff: %v", err)
 	}
 	restoreStep()
@@ -565,11 +545,11 @@ func TestPendingTriggerHandoffLeavesRequestPendingWhenSummaryRetryStillToolCalls
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call_handoff_second_failure", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "resume with tests")
+	_, _, err := eng.TriggerHandoff(context.Background(), runtimeTestStepID("step-1"), llm.ToolCall{ID: "call_handoff_second_failure", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "resume with tests")
 	if err != nil {
 		t.Fatalf("trigger handoff: %v", err)
 	}
-	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); !errors.Is(err, errLocalCompactionAttemptedToolCalls) {
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), runtimeTestStepID("step-1")); !errors.Is(err, errLocalCompactionAttemptedToolCalls) {
 		t.Fatalf("expected errLocalCompactionAttemptedToolCalls, got %v", err)
 	}
 	restoreStep()
@@ -612,7 +592,7 @@ func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
 	restoreStep := setTestActiveStep(eng, "step-1")
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call_handoff_retry", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "resume with tests")
+	_, _, err := eng.TriggerHandoff(context.Background(), runtimeTestStepID("step-1"), llm.ToolCall{ID: "call_handoff_retry", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", "resume with tests")
 	if err != nil {
 		t.Fatalf("trigger handoff: %v", err)
 	}
@@ -621,7 +601,7 @@ func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
 	}
 
 	client.responses = nil
-	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err == nil {
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), runtimeTestStepID("step-1")); err == nil {
 		t.Fatal("expected first pending handoff attempt to fail when compaction summary response is missing")
 	}
 	if eng.handoffRuntimeState().RequestSnapshot() == nil {
@@ -638,7 +618,7 @@ func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("condensed summary")},
 		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
 	}}
-	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err != nil {
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), runtimeTestStepID("step-1")); err != nil {
 		t.Fatalf("retry pending handoff: %v", err)
 	}
 	restoreStep()

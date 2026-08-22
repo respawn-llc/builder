@@ -928,6 +928,20 @@ func (s *Store) SetGoal(objective string, actor GoalActor) (GoalState, CommitRec
 	return goal, receipt, err
 }
 
+func (s *Store) ValidateGoalSet(objective string, actor GoalActor) error {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := prepareActiveGoalState(
+		GoalState{Objective: objective},
+		actor,
+		s.meta.Goal,
+		storeTimestamp(s.options),
+	)
+	return err
+}
+
 func (s *Store) SetGoalStatus(status GoalStatus, actor GoalActor) (GoalState, bool, CommitReceipt, error) {
 	return s.transitionGoalStatus(status, actor, nil)
 }

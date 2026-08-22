@@ -273,6 +273,13 @@ func (e *Engine) SetGoal(objective string, actor session.GoalActor) (GoalCommand
 	)
 }
 
+func (e *Engine) ValidateGoalSet(objective string, actor session.GoalActor) error {
+	if e == nil || e.store == nil {
+		return fmt.Errorf("runtime engine is required")
+	}
+	return e.store.ValidateGoalSet(objective, actor)
+}
+
 func (e *Engine) setGoalForStep(stepID string, objective string, actor session.GoalActor) (GoalCommandResult, error) {
 	provenance, err := exactSteeringProvenance(stepID)
 	if err != nil {

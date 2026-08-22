@@ -59,17 +59,33 @@ func (e *Engine) SteerBackgroundContinuationFailure(err error) error {
 }
 
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
-	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
+	_, err := awaitEngineRuntimeOperation(
+		context.Background(),
+		b.engine,
+		func(context.Context) (struct{}, error) {
+			if err := b.recordBackgroundShellUpdateRaw(evt); err != nil {
+				return struct{}{}, err
+			}
+			if queueNotice {
+				b.QueueBackgroundShellContinuation(evt)
+			}
+			return struct{}{}, nil
+		},
+	)
+	if err != nil {
 		b.engine.surfaceRunError(err)
-		return
-	}
-	if queueNotice {
-		b.QueueBackgroundShellContinuation(evt)
 	}
 }
 
 func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
 	return b.engine.steerRuntime(steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
+}
+
+func (b *defaultBackgroundNoticeScheduler) recordBackgroundShellUpdateRaw(evt BackgroundShellEvent) error {
+	return b.engine.steerOrderedRaw(
+		sessionSteeringProvenance(),
+		steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}),
+	)
 }
 
 func (b *defaultBackgroundNoticeScheduler) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {

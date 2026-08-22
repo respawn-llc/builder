@@ -28,12 +28,13 @@ func runReviewerPrompt(t *testing.T, eng *Engine) llm.Request {
 	if _, err := eng.ensureLocked(); err != nil {
 		t.Fatalf("ensure locked: %v", err)
 	}
-	restoreStep := setTestActiveStep(eng, "review")
+	stepID := runtimeTestStepID("review")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
 	}}}
-	if _, err := eng.runReviewerSuggestions(context.Background(), "review", client); err != nil {
+	if _, err := eng.runReviewerSuggestions(context.Background(), stepID, client); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
@@ -134,7 +135,7 @@ func TestReviewerSystemPromptFileMissingFailsWithoutSnapshot(t *testing.T) {
 	if _, err := eng.ensureLocked(); err != nil {
 		t.Fatalf("ensure locked: %v", err)
 	}
-	_, err := eng.runReviewerSuggestions(context.Background(), "step-1", &fakeClient{})
+	_, err := eng.runReviewerSuggestions(context.Background(), runtimeTestStepID("missing-reviewer-prompt"), &fakeClient{})
 	if !errors.Is(err, errReadReviewerSystemPromptFile) {
 		t.Fatalf("expected errReadReviewerSystemPromptFile, got %v", err)
 	}

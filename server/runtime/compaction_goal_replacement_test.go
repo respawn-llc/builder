@@ -21,9 +21,10 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}}
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	inputStepID := runtimeTestStepID("inactive-goal-compaction-input")
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{
-		activeStepID: "input",
-		snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: "input"},
+		activeStepID: inputStepID,
+		snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: inputStepID},
 	}
 
 	t.Run("inactive goal transition sequence", func(t *testing.T) {
@@ -68,9 +69,10 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 			},
 			Config{Model: "gpt-5"},
 		)
+		workflowInputStepID := runtimeTestStepID("inactive-workflow-goal-compaction-input")
 		workflowEngine.stepLifecycle = &stubExclusiveStepLifecycle{
-			activeStepID: "input",
-			snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: "input"},
+			activeStepID: workflowInputStepID,
+			snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: workflowInputStepID},
 		}
 		if _, err := workflowEngine.SetGoal("goal", session.GoalActorUser); err != nil {
 			t.Fatalf("set workflow goal: %v", err)
@@ -82,7 +84,7 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 func assertInactiveGoalCompaction(t *testing.T, engine *Engine, name string) {
 	t.Helper()
 	stepID := engine.stepLifecycle.Snapshot().StepID
-	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input " + name)}})); err != nil {
+	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input " + name)}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 	_, receipt, err := engine.compactNow(

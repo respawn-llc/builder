@@ -151,12 +151,21 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 		t.Fatal("timed out waiting for tool call to start")
 	}
 
-	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       BackgroundShellEventCompleted,
-		ID:         "1000",
-		State:      "completed",
-		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
-	}, true)
+	updateDone := make(chan struct{})
+	go func() {
+		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+			Type:       BackgroundShellEventCompleted,
+			ID:         "1000",
+			State:      "completed",
+			NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
+		}, true)
+		close(updateDone)
+	}()
+	select {
+	case <-updateDone:
+		t.Fatal("background terminal update completed before the protected Step boundary")
+	case <-time.After(25 * time.Millisecond):
+	}
 
 	client.mu.Lock()
 	callCountWhileBusy := len(client.calls)
@@ -172,6 +181,11 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 	}
 	if messageContent(result.assistant) != "foreground done" {
 		t.Fatalf("assistant content = %q, want foreground done", messageContent(result.assistant))
+	}
+	select {
+	case <-updateDone:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background terminal update did not complete at the Step boundary")
 	}
 
 	client.mu.Lock()
