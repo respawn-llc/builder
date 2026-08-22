@@ -361,7 +361,7 @@ func TestLiveWatchTerminalCompletionWinsWhileRunIsBlocked(t *testing.T) {
 
 func TestLiveWatchReturnsInterruptedOutcomeWhenRunStops(t *testing.T) {
 	client := newLiveWatchBlockingClient()
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	runDone := make(chan error, 1)
 	go func() {
 		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-interrupt", "hello"))
@@ -385,9 +385,14 @@ func TestLiveWatchReturnsInterruptedOutcomeWhenRunStops(t *testing.T) {
 	}()
 	<-observed.subscribed
 
-	stopped, err := engine.TryInterruptActiveRun()
-	if err != nil || !stopped {
-		t.Fatalf("TryInterruptActiveRun stopped=%t err=%v", stopped, err)
+	stopResponse, err := service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
+		SessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("LiveStop: %v", err)
+	}
+	if stopResponse.Status != serverapi.RuntimeLiveStopStatusStopped {
+		t.Fatalf("LiveStop status = %q, want %q", stopResponse.Status, serverapi.RuntimeLiveStopStatusStopped)
 	}
 	if err := <-watchErr; err != nil {
 		t.Fatalf("LiveWatch: %v", err)

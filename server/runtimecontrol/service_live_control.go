@@ -87,21 +87,18 @@ func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopReq
 	if err != nil {
 		return serverapi.RuntimeLiveStopResponse{}, err
 	}
-	resp := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
-	err = s.withLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		stopped, err := engine.TryInterruptActiveRun()
-		if err != nil {
-			return err
-		}
-		if stopped {
-			resp.Status = serverapi.RuntimeLiveStopStatusStopped
-		}
-		return nil
-	})
-	if errors.Is(err, serverapi.ErrRuntimeUnavailable) || errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
-		return resp, nil
+	if s == nil || s.authority == nil {
+		return serverapi.RuntimeLiveStopResponse{}, errors.New("session runtime authority is required")
 	}
-	return resp, err
+	resp := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
+	stopped, err := s.authority.InterruptCurrentLiveRun(ctx, sessionID)
+	if err != nil {
+		return serverapi.RuntimeLiveStopResponse{}, err
+	}
+	if stopped {
+		resp.Status = serverapi.RuntimeLiveStopStatusStopped
+	}
+	return resp, nil
 }
 
 func (s *Service) captureLiveRun(ctx context.Context, id runtimeids.SessionID) (*runtime.LiveRunWaitHandle, string, error) {

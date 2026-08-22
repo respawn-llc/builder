@@ -1476,6 +1476,39 @@ func (a *Authority) InterruptCurrentAgentTurn(
 	sessionID runtimeids.SessionID,
 	withoutExecution func() error,
 ) (bool, error) {
+	return a.interruptCurrentAgentExecution(
+		ctx,
+		sessionID,
+		withoutExecution,
+		func(engine *runtime.Engine) (bool, error) {
+			return engine.TryInterruptActiveAgentTurn()
+		},
+	)
+}
+
+func (a *Authority) InterruptCurrentLiveRun(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) (bool, error) {
+	return a.interruptCurrentAgentExecution(
+		ctx,
+		sessionID,
+		func() error { return nil },
+		func(engine *runtime.Engine) (bool, error) {
+			return engine.TryInterruptActiveRun()
+		},
+	)
+}
+
+func (a *Authority) interruptCurrentAgentExecution(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	withoutExecution func() error,
+	interrupt func(*runtime.Engine) (bool, error),
+) (bool, error) {
+	if interrupt == nil {
+		return false, errors.New("Agent execution interrupt operation is required")
+	}
 	var interrupted bool
 	err := a.withInterruptibleAgentTurn(
 		ctx,
@@ -1483,7 +1516,7 @@ func (a *Authority) InterruptCurrentAgentTurn(
 		withoutExecution,
 		func(_ context.Context, engine *runtime.Engine, execution *execution) error {
 			var err error
-			interrupted, err = engine.TryInterruptActiveAgentTurn()
+			interrupted, err = interrupt(engine)
 			if err == nil && interrupted {
 				execution.cancel()
 			}
