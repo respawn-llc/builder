@@ -314,6 +314,15 @@ func (s *Service) acquireDeleteTargetActivity(
 			}
 			if active {
 				activeBlockers = append(activeBlockers, target.blocker)
+				continue
+			}
+			retired, err := s.authority.RetireIdleRuntime(lease.ctx, target.id.String())
+			if err != nil {
+				lease.Close()
+				return deleteTargetActivityLease{}, err
+			}
+			if !retired {
+				activeBlockers = append(activeBlockers, target.blocker)
 			}
 		}
 		if len(activeBlockers) > 0 {

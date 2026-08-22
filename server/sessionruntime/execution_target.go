@@ -211,15 +211,62 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 		return false, nil
 	}
 	resource.mu.Lock()
-	active := resource.state != AgentResourceReady ||
-		resource.current != nil ||
-		resource.steps != 0
+	state := resource.state
+	current := resource.current
+	steps := resource.steps
 	engine := resource.engine
 	resource.mu.Unlock()
+	snapshot := engine.ActiveRun()
+	maintenanceStep := steps != 0 && snapshot != nil && snapshot.ActiveKind == runtime.ActiveKindRuntimeMaintenance
+	active := state != AgentResourceReady ||
+		current != nil ||
+		(steps != 0 && !maintenanceStep)
 	if !active && engine != nil {
-		active = engine.HasActiveLiveRunGroup()
+		liveRun := engine.HasActiveLiveRunGroup()
+		if snapshot != nil && snapshot.ActiveKind == runtime.ActiveKindRuntimeMaintenance {
+			liveRun = false
+		}
+		active = liveRun ||
+			engine.HasPendingRuntimeOperations() ||
+			engine.HasQueuedUserWork() ||
+			engine.HasScheduledQueuedUserWork() ||
+			engine.CurrentNodeExecutionConfigured()
 	}
 	return active, nil
+}
+
+func (a *Authority) RetireIdleRuntime(ctx context.Context, sessionID string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return false, err
+	}
+	gate := a.gateFor(id)
+	if err := gate.lock.LockContext(ctx); err != nil {
+		return false, err
+	}
+	defer gate.lock.Unlock()
+	a.mu.Lock()
+	resource := a.resources[id]
+	a.mu.Unlock()
+	if resource == nil {
+		return true, nil
+	}
+	resource.mu.Lock()
+	if resource.state != AgentResourceReady ||
+		resource.current != nil ||
+		resource.pins != 0 ||
+		resource.callbacks != 0 ||
+		resource.steps != 0 ||
+		resource.engine == nil ||
+		!resource.engine.BeginRetirement() {
+		resource.mu.Unlock()
+		return false, nil
+	}
+	closed, err := a.closeAdmittedResourceLocked(ctx, resource)
+	return closed, err
 }
 
 func (a *Authority) routeBackgroundEvent(event shelltool.Event) bool {

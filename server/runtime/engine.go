@@ -393,6 +393,27 @@ func (e *Engine) Close() error {
 	return errors.Join(interruptErr, abortErr)
 }
 
+func (e *Engine) BeginRetirement() bool {
+	if e == nil {
+		return true
+	}
+	e.ensureOrchestrationCollaborators()
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.lifecycleClosed || e.closed.Load() {
+		return true
+	}
+	if e.stepLifecycle.IsBusy() ||
+		e.HasQueuedUserWork() ||
+		e.HasScheduledQueuedUserWork() ||
+		e.CurrentNodeExecutionConfigured() ||
+		!e.runtimeFIFO.beginCloseIfIdle() {
+		return false
+	}
+	e.closed.Store(true)
+	return true
+}
+
 func (e *Engine) closeAdmissionAfterRuntimeAbort() {
 	if e == nil {
 		return

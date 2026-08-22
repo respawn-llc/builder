@@ -85,6 +85,24 @@ type deleteActivityResult struct {
 	err    error
 }
 
+type deleteRemovalBarrierRunner struct {
+	delegate gitCommandRunner
+	barrier  *testsetup.StartBarrier
+}
+
+func (r *deleteRemovalBarrierRunner) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	if len(args) >= 2 && args[0] == "worktree" && args[1] == "remove" {
+		if err := r.barrier.ArriveAndWait(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return r.delegate.Output(ctx, dir, args...)
+}
+
+func (r *deleteRemovalBarrierRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, int, error) {
+	return r.delegate.Run(ctx, dir, args...)
+}
+
 func openDeleteActivitySessionDescriptor(t *testing.T, sessionID string) session.SessionDescriptor {
 	t.Helper()
 	id, err := runtimeids.ParseSessionID(sessionID)
@@ -344,6 +362,65 @@ func TestDeleteWorktreeRejectsLiveRunAndCompletesUnrelatedWorktree(t *testing.T)
 	}
 	if _, err := attachment.Release(waitCtx, sessionruntime.RuntimeReleaseClose); err != nil {
 		t.Fatalf("release runtime attachment: %v", err)
+	}
+}
+
+func TestDeleteWorktreeRetiresIdleRuntimeAndRetargetsSessionBeforePhysicalRemoval(t *testing.T) {
+	env := newServiceTestEnv(t)
+	target := mustCreateWorktree(t, env, "feature/delete-idle-runtime")
+	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
+	descriptor := openDeleteActivitySessionDescriptor(t, otherSession.Meta().SessionID)
+	plan := deleteActivityTestRuntimePlan(t, env, target.CanonicalRoot)
+	attachment, err := env.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: descriptor.SessionID(),
+		OwnerID:   "delete-idle-runtime",
+		Runtime:   &plan,
+	})
+	if err != nil {
+		t.Fatalf("OpenRuntime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, releaseErr := attachment.Release(context.Background(), sessionruntime.RuntimeReleaseClose)
+		if releaseErr != nil && !errors.Is(releaseErr, serverapi.ErrRuntimeUnavailable) {
+			t.Errorf("release idle Runtime: %v", releaseErr)
+		}
+	})
+
+	barrier := testsetup.NewStartBarrier()
+	env.service.git = NewGitInspector(&deleteRemovalBarrierRunner{
+		delegate: env.service.git.runner,
+		barrier:  barrier,
+	})
+	deleted := testsetup.Start(func() (serverapi.WorktreeDeleteResult, error) {
+		return env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, target.WorktreeID))
+	})
+	select {
+	case <-barrier.Entered():
+	case result := <-deleted:
+		t.Fatalf("DeleteWorktree completed before physical-removal boundary: result=%+v error=%v", result.Value, result.Err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for physical Worktree removal")
+	}
+	defer barrier.Unblock()
+
+	if err := env.authority.WithRuntime(context.Background(), attachment.Resource(), func(context.Context, *runtime.Engine) error {
+		return nil
+	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("idle Runtime remained available before physical Worktree removal: %v", err)
+	}
+	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
+	if _, err := os.Stat(target.CanonicalRoot); err != nil {
+		t.Fatalf("Worktree root changed before physical removal: %v", err)
+	}
+
+	barrier.Unblock()
+	result := <-deleted
+	if result.Err != nil || result.Value.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+		t.Fatalf("DeleteWorktree = %+v, %v; want completed", result.Value, result.Err)
+	}
+	if _, err := os.Stat(target.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Worktree root still exists after delete: %v", err)
 	}
 }
 

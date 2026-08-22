@@ -147,6 +147,10 @@ func (e *Engine) drainRuntimeOperations(ctx context.Context) error {
 }
 
 func (e *Engine) hasPendingRuntimeOperations() bool {
+	return e.HasPendingRuntimeOperations()
+}
+
+func (e *Engine) HasPendingRuntimeOperations() bool {
 	if e == nil {
 		return false
 	}
@@ -247,6 +251,23 @@ func (f *runtimeOperationFIFO) Pending() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.pendingCount > 0
+}
+
+func (f *runtimeOperationFIFO) beginCloseIfIdle() bool {
+	if f == nil {
+		return true
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return true
+	}
+	if f.pendingCount != 0 {
+		return false
+	}
+	f.closed = true
+	f.ready.Broadcast()
+	return true
 }
 
 func (f *runtimeOperationFIFO) Close() {
