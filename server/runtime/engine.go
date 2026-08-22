@@ -157,6 +157,7 @@ type Engine struct {
 	// pending steering/user injections once a busy run releases.
 	queuedUserWorkMu           sync.Mutex
 	queuedUserWorkScheduled    bool
+	queuedUserWorkCompletion   runtimeDeferred[struct{}]
 	queuedUserWorkPauseCount   int
 	queuedUserWorkAutoDrainIDs map[string]struct{}
 	liveRun                    *liveRunCoordinator

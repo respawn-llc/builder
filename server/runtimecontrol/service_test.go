@@ -667,7 +667,32 @@ func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting
 		nil,
 		runtime.Config{Model: "gpt-5"},
 	)
-	engine.EnterRetainedWorkflowControl()
+	config := runtimeControlExactExecution(t)
+	workflowRef := sessionruntime.WorkflowExecutionRef{
+		ProjectID:   "runtime-control-test-project",
+		WorkflowID:  runtimeids.NewWorkflowID(),
+		CurrentNode: config.Instructions.CurrentNode,
+	}
+	config.Instructions.WorkflowID = workflowRef.WorkflowID
+	publication, err := engine.PrepareCurrentNodeExecutionPublication(config)
+	if err != nil {
+		t.Fatalf("prepare retained Workflow activation: %v", err)
+	}
+	if err := publication.Begin(); err != nil {
+		t.Fatalf("begin retained Workflow activation: %v", err)
+	}
+	binding := publication.Commit()
+	bindingClosed := false
+	var execution sessionruntime.ExecutionHandle
+	t.Cleanup(func() {
+		if execution != nil {
+			execution.RequestStop()
+			_ = execution.Close(context.Background())
+		}
+		if !bindingClosed {
+			_ = binding.Close()
+		}
+	})
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
@@ -679,7 +704,36 @@ func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting
 			if got != sessionID {
 				t.Fatalf("reactivated session = %s, want %s", got, sessionID)
 			}
-			engine.ExitRetainedWorkflowControl()
+			bindingClosed = true
+			if err := binding.Close(); err != nil {
+				return err
+			}
+			descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+			if err != nil {
+				return err
+			}
+			detached, err := service.authority.PrepareDetachedAgentExecution(
+				context.Background(),
+				sessionruntime.DetachedAgentExecutionRequest{
+					Descriptor: descriptor,
+					Workflow:   workflowRef,
+					Resource:   sessionruntime.CurrentAgentResource{},
+					Config:     config,
+					Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+						<-ctx.Done()
+						return context.Cause(ctx)
+					},
+				},
+			)
+			if err != nil {
+				return err
+			}
+			handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
+			if err != nil {
+				return err
+			}
+			execution = handle
+			launch()
 			return nil
 		},
 	))
@@ -694,8 +748,11 @@ func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting
 	if reactivations != 1 {
 		t.Fatalf("workflow reactivations = %d, want 1", reactivations)
 	}
-	if response.ResultKind != clientui.UserTurnResultKindAssistantFinal {
-		t.Fatalf("SubmitUserTurn response = %+v, want assistant final", response)
+	if response.ResultKind != clientui.UserTurnResultKindQueued || response.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn response = %+v, want queued acceptance", response)
+	}
+	if !engine.HasQueuedUserWork() {
+		t.Fatal("original input was not accepted by the reactivated Workflow execution")
 	}
 }
 

@@ -319,19 +319,26 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 		e.queuedUserWorkMu.Unlock()
 		return true
 	}
+	completion := newRuntimeDeferred[struct{}]()
 	e.queuedUserWorkScheduled = true
+	e.queuedUserWorkCompletion = completion
 	e.queuedUserWorkMu.Unlock()
-	if !e.launchLifecycleTask(e.processQueuedUserWork) {
-		e.clearQueuedUserWorkScheduled()
+	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
+		return e.processQueuedUserWork(ctx, completion)
+	}) {
+		e.clearQueuedUserWorkScheduled(completion, ErrEngineClosed)
 		return false
 	}
 	return true
 }
 
-func (e *Engine) processQueuedUserWork(ctx context.Context) (runtimeAbort *resultGroupFatal) {
+func (e *Engine) processQueuedUserWork(
+	ctx context.Context,
+	completion runtimeDeferred[struct{}],
+) (runtimeAbort *resultGroupFatal) {
 	completed := false
 	defer func() {
-		e.clearQueuedUserWorkScheduled()
+		e.clearQueuedUserWorkScheduled(completion, nil)
 		if !completed {
 			return
 		}
@@ -370,10 +377,35 @@ func (e *Engine) HasScheduledQueuedUserWork() bool {
 	return e.queuedUserWorkScheduled
 }
 
-func (e *Engine) clearQueuedUserWorkScheduled() {
+func (e *Engine) WaitForScheduledQueuedUserWork(ctx context.Context) error {
+	if e == nil {
+		return ErrEngineClosed
+	}
 	e.queuedUserWorkMu.Lock()
-	e.queuedUserWorkScheduled = false
+	if !e.queuedUserWorkScheduled {
+		e.queuedUserWorkMu.Unlock()
+		return nil
+	}
+	completion := e.queuedUserWorkCompletion
 	e.queuedUserWorkMu.Unlock()
+	_, err := completion.Await(ctx)
+	return err
+}
+
+func (e *Engine) clearQueuedUserWorkScheduled(
+	completion runtimeDeferred[struct{}],
+	err error,
+) {
+	e.queuedUserWorkMu.Lock()
+	if e.queuedUserWorkCompletion.state != completion.state {
+		e.queuedUserWorkMu.Unlock()
+		completion.complete(struct{}{}, err)
+		return
+	}
+	e.queuedUserWorkScheduled = false
+	e.queuedUserWorkCompletion = runtimeDeferred[struct{}]{}
+	e.queuedUserWorkMu.Unlock()
+	completion.complete(struct{}{}, err)
 }
 
 func (e *Engine) hasQueuedUserAutoDrainIDs() bool {

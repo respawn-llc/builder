@@ -13,6 +13,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/transcript"
 )
 
 func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.T) {
@@ -40,6 +41,7 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 	defer closeRuntimeLaunchPlan(t, runtimePlan)
 
 	submissionDone, submissionFailed := startAppTestRuntimeSubmission(t, runtimePlan.Wiring.runtimeClient, "start prompt snapshot")
+	requireQueuedAppTestRuntimeSubmission(t, submissionDone)
 	prompts := waitForRemoteTranscriptPrompts(t, runtimePlan.Wiring.eventDispatcher.transcriptEvents, 2, "", submissionFailed)
 	for _, prompt := range prompts {
 		switch prompt.Kind {
@@ -61,17 +63,12 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 		}
 	}
 
-	select {
-	case result := <-submissionDone:
-		if result.err != nil {
-			t.Fatalf("SubmitUserMessage: %v", result.err)
-		}
-		if result.submission.Message == nil || *result.submission.Message != "remote prompt snapshot complete" {
-			t.Fatalf("assistant message = %v", result.submission.Message)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for remote prompt snapshot completion")
-	}
+	waitForRemoteTranscriptAssistantFinal(
+		t,
+		runtimePlan.Wiring.eventDispatcher.transcriptEvents,
+		"remote prompt snapshot complete",
+		submissionFailed,
+	)
 
 }
 
@@ -188,6 +185,80 @@ func waitForRemoteTranscriptPrompts(t *testing.T, events <-chan ongoingTranscrip
 		case <-deadline:
 			t.Fatalf("timed out waiting for %d transcript prompt(s) %q after messages %+v", count, promptID, seen)
 			return nil
+		}
+	}
+}
+
+func requireQueuedAppTestRuntimeSubmission(t *testing.T, done <-chan appTestRuntimeSubmissionResult) {
+	t.Helper()
+	select {
+	case result := <-done:
+		requireQueuedAppTestUserTurn(t, result.submission, result.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for queued user-turn acceptance")
+	}
+}
+
+func requireQueuedAppTestUserTurn(
+	t *testing.T,
+	submission clientui.UserTurnSubmission,
+	err error,
+) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	if submission.ResultKind != clientui.UserTurnResultKindQueued ||
+		submission.Message != nil {
+		t.Fatalf("SubmitUserMessage = %+v, want queued acceptance", submission)
+	}
+}
+
+func waitForRemoteTranscriptAssistantFinal(
+	t *testing.T,
+	events <-chan ongoingTranscriptEvent,
+	want string,
+	earlyFailures ...<-chan error,
+) {
+	t.Helper()
+	var earlyFailure <-chan error
+	if len(earlyFailures) > 0 {
+		earlyFailure = earlyFailures[0]
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case evt, ok := <-events:
+			if !ok {
+				t.Fatal("transcript event channel closed")
+			}
+			if evt.Kind == ongoingTranscriptEventLoss {
+				t.Fatalf("transcript subscription lost while waiting for assistant final: %v", evt.Err)
+			}
+			if evt.Kind != ongoingTranscriptEventMessage {
+				continue
+			}
+			var rows []clientui.TranscriptCommittedRow
+			switch evt.Message.Kind() {
+			case clientui.TranscriptMessageHydration:
+				rows = evt.Message.Payload().(clientui.TranscriptHydration).CommittedRows
+			case clientui.TranscriptMessageCommittedRow:
+				rows = []clientui.TranscriptCommittedRow{
+					evt.Message.Payload().(clientui.TranscriptCommittedRow),
+				}
+			}
+			for _, row := range rows {
+				if row.Kind == clientui.TranscriptRowAssistant &&
+					row.Assistant != nil &&
+					row.Assistant.Phase == transcript.AssistantPhaseFinal &&
+					row.Assistant.Text == want {
+					return
+				}
+			}
+		case err := <-earlyFailure:
+			t.Fatalf("assistant final failed before publication: %v", err)
+		case <-deadline:
+			t.Fatalf("timed out waiting for assistant final %q", want)
 		}
 	}
 }

@@ -1196,12 +1196,22 @@ func (a *Authority) RunCurrentHumanTurn(
 				runCtx, stop := MergeContexts(executionCtx, ctx)
 				err := run(runCtx, engine, admit)
 				stop()
-				goalLoopActive := err == nil && engine.GoalLoopRunning()
-				operationContinues <- goalLoopActive
-				if err != nil || !goalLoopActive {
+				if err != nil {
+					operationContinues <- false
 					return err
 				}
-				return engine.WaitForGoalLoop(executionCtx)
+				queuedWorkScheduled := engine.HasScheduledQueuedUserWork()
+				goalLoopActive := engine.GoalLoopRunning()
+				operationContinues <- queuedWorkScheduled || goalLoopActive
+				if queuedWorkScheduled {
+					if err := engine.WaitForScheduledQueuedUserWork(executionCtx); err != nil {
+						return err
+					}
+				}
+				if engine.GoalLoopRunning() {
+					return engine.WaitForGoalLoop(executionCtx)
+				}
+				return nil
 			})
 			if !callbackRan {
 				operationContinues <- false

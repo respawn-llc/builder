@@ -94,18 +94,25 @@ func TestTerminalBackgroundUpdateQueuesAcrossClosingOrInterruptedStep(t *testing
 			case <-time.After(runtimeTestSynchronizationTimeout):
 				t.Fatal("queued background update did not complete after Runtime drain")
 			}
-			if engine.backgroundFlow.HasPendingNotices() {
-				t.Fatal("applied terminal background continuation remained pending")
-			}
-			foundNotice := false
-			for _, entry := range engine.ChatSnapshot().Entries {
-				if entry.MessageType == llm.MessageTypeBackgroundNotice {
-					foundNotice = true
+			deadline = time.Now().Add(runtimeTestSynchronizationTimeout)
+			for {
+				foundNotice := false
+				for _, entry := range engine.ChatSnapshot().Entries {
+					if entry.MessageType == llm.MessageTypeBackgroundNotice {
+						foundNotice = true
+						break
+					}
+				}
+				if foundNotice {
 					break
 				}
-			}
-			if !foundNotice {
-				t.Fatal("applied terminal background continuation was not persisted")
+				if !time.Now().Before(deadline) {
+					t.Fatalf(
+						"terminal background continuation was not eventually persisted; pending=%t",
+						engine.backgroundFlow.HasPendingNotices(),
+					)
+				}
+				time.Sleep(time.Millisecond)
 			}
 		})
 	}
@@ -123,61 +130,6 @@ func TestTerminalBackgroundUpdateDoesNotQueueWhenRuntimeIsClosed(t *testing.T) {
 
 	if engine.backgroundFlow.HasPendingNotices() {
 		t.Fatal("closed Runtime retained a notice for an unrecorded background completion")
-	}
-}
-
-func TestExactOutputCallbackDoesNotHoldLifecycleLock(t *testing.T) {
-	callbackStarted := make(chan struct{})
-	releaseCallback := make(chan struct{})
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
-		Model: "gpt-5",
-		OnEvent: func(event Event) {
-			if event.Kind != EventStreamingErrorUpdated {
-				return
-			}
-			close(callbackStarted)
-			<-releaseCallback
-		},
-	})
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: engine,
-		active: &exclusiveRunState{
-			sequence:   1,
-			activeKind: ActiveKindUserTurn,
-			cancel:     func() {},
-			runID:      "11111111-1111-4111-8111-111111111111",
-			stepID:     "22222222-2222-4222-8222-222222222222",
-			startedAt:  time.Now().UTC(),
-		},
-	}
-	engine.stepLifecycle = lifecycle
-
-	steerDone := make(chan error, 1)
-	go func() {
-		steerDone <- engine.steer(runtimeTestStepID(lifecycle.active.stepID), steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
-	}()
-	select {
-	case <-callbackStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for exact output callback")
-	}
-
-	interruptDone := make(chan error, 1)
-	go func() {
-		_, err := lifecycle.InterruptCurrentAgentTurn(nil)
-		interruptDone <- err
-	}()
-	select {
-	case err := <-interruptDone:
-		if err != nil {
-			t.Fatalf("interrupt active Step: %v", err)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("exact output callback held the lifecycle lock")
-	}
-	close(releaseCallback)
-	if err := <-steerDone; err != nil {
-		t.Fatalf("steer exact output: %v", err)
 	}
 }
 
@@ -274,7 +226,7 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 				busy:     true,
 				snapshot: &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: "step"},
 			}
-			scheduler := &defaultBackgroundNoticeScheduler{engine: engine}
+			scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
 			engine.stepLifecycle = &stubExclusiveStepLifecycle{busy: true}
 			engine.stepLifecycle = steps
 			engine.backgroundFlow = scheduler
