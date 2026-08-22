@@ -261,6 +261,87 @@ func TestWorktreeTransitionRunsBeforeQueuedHumanProviderTurn(t *testing.T) {
 	}
 }
 
+func TestWorktreeTransitionWaitsForActiveAgentStepBoundary(t *testing.T) {
+	toolCall := llm.ToolCall{
+		ID:    "hold-active-step",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"pwd"}`),
+	}
+	client := &fakeClient{responses: []llm.Response{
+		commentaryResponse("working", toolCall),
+		finalTextResponse("done"),
+	}}
+	toolStarted := make(chan struct{})
+	releaseTool := make(chan struct{})
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		newTestToolRegistry(t, tools.HandlerRegistration{
+			ID: toolspec.ToolExecCommand,
+			Handler: blockingTool{
+				name:    toolspec.ToolExecCommand,
+				started: toolStarted,
+				release: releaseTool,
+			},
+		}),
+		Config{Model: "gpt-5"},
+	)
+
+	initialDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(t.Context(), "start")
+		initialDone <- err
+	}()
+	select {
+	case <-toolStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("active Agent Step did not reach its held tool")
+	}
+
+	transitionStarted := make(chan struct{})
+	releaseTransition := make(chan struct{})
+	transitionDone := make(chan error, 1)
+	go func() {
+		transitionDone <- engine.RunWorktreeTransition(t.Context(), func() error {
+			close(transitionStarted)
+			<-releaseTransition
+			return nil
+		})
+	}()
+	waitForAcceptedRuntimeOperationCount(t, engine, 1)
+	select {
+	case <-transitionStarted:
+		t.Fatal("Worktree transition preempted the active Agent Step")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(releaseTool)
+	select {
+	case <-transitionStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("Worktree transition did not receive the next Agent Step Boundary")
+	}
+	if got := fakeClientCallCount(client); got != 1 {
+		t.Fatalf("ordinary provider continuation started before Worktree: calls=%d", got)
+	}
+
+	close(releaseTransition)
+	if err := <-transitionDone; err != nil {
+		t.Fatalf("Worktree transition: %v", err)
+	}
+	deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
+	for fakeClientCallCount(client) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := fakeClientCallCount(client); got != 2 {
+		t.Fatalf("ordinary provider continuation calls=%d, want 2 after Worktree", got)
+	}
+	if err := <-initialDone; err != nil {
+		t.Fatalf("active Agent turn: %v", err)
+	}
+}
+
 func TestRuntimeOperationFIFOPropagatesTypedFailure(t *testing.T) {
 	fifo := newRuntimeOperationFIFO()
 	t.Cleanup(fifo.Close)
