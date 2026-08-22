@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"sync"
@@ -13,6 +14,24 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
+
+func waitForAcceptedRuntimeOperationCount(t *testing.T, engine *Engine, want int) {
+	t.Helper()
+	deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
+	for time.Now().Before(deadline) {
+		engine.runtimeFIFO.mu.Lock()
+		got := engine.runtimeFIFO.pendingCount
+		engine.runtimeFIFO.mu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	engine.runtimeFIFO.mu.Lock()
+	got := engine.runtimeFIFO.pendingCount
+	engine.runtimeFIFO.mu.Unlock()
+	t.Fatalf("accepted Runtime operation count = %d, want %d", got, want)
+}
 
 func TestRuntimeOperationFIFOCompletesTypedOperationsInAcceptanceOrder(t *testing.T) {
 	fifo := newRuntimeOperationFIFO()
@@ -134,6 +153,111 @@ func TestRuntimeOperationFIFOLongOwnerReentersAtTheCurrentTail(t *testing.T) {
 	mu.Unlock()
 	if want := []string{"scheduled", "later", "terminal"}; !slices.Equal(got, want) {
 		t.Fatalf("Runtime operation order = %v, want %v", got, want)
+	}
+}
+
+func TestWorktreeTransitionRunsBeforeQueuedHumanProviderTurn(t *testing.T) {
+	toolCall := llm.ToolCall{
+		ID:    "hold-preceding-step",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"pwd"}`),
+	}
+	client := &fakeClient{responses: []llm.Response{
+		commentaryResponse("working", toolCall),
+		finalTextResponse("done"),
+	}}
+	toolStarted := make(chan struct{})
+	releaseTool := make(chan struct{})
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		newTestToolRegistry(t, tools.HandlerRegistration{
+			ID: toolspec.ToolExecCommand,
+			Handler: blockingTool{
+				name:    toolspec.ToolExecCommand,
+				started: toolStarted,
+				release: releaseTool,
+			},
+		}),
+		Config{Model: "gpt-5"},
+	)
+
+	initialDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(t.Context(), "start")
+		initialDone <- err
+	}()
+	select {
+	case <-toolStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("preceding Agent Step did not reach its held tool")
+	}
+
+	humanApplying := make(chan struct{})
+	releaseHumanApplication := make(chan struct{})
+	humanDone := make(chan error, 1)
+	go func() {
+		_, accepted, err := engine.QueueUserMessageForActiveRun(
+			t.Context(),
+			"queued human turn",
+			func() error {
+				close(humanApplying)
+				<-releaseHumanApplication
+				return nil
+			},
+		)
+		if err == nil && !accepted {
+			err = errors.New("queued Human input was not accepted")
+		}
+		humanDone <- err
+	}()
+	waitForAcceptedRuntimeOperationCount(t, engine, 1)
+	close(releaseTool)
+	select {
+	case <-humanApplying:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("queued Human input did not apply at the preceding Step Boundary")
+	}
+
+	transitionStarted := make(chan struct{})
+	releaseTransition := make(chan struct{})
+	transitionDone := make(chan error, 1)
+	go func() {
+		transitionDone <- engine.RunWorktreeTransition(t.Context(), func() error {
+			close(transitionStarted)
+			<-releaseTransition
+			return nil
+		})
+	}()
+	waitForAcceptedRuntimeOperationCount(t, engine, 2)
+	close(releaseHumanApplication)
+	if err := <-humanDone; err != nil {
+		t.Fatalf("accept queued Human input: %v", err)
+	}
+
+	select {
+	case <-transitionStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("Worktree transition did not start at the preceding Step Boundary")
+	}
+	if got := fakeClientCallCount(client); got != 1 {
+		t.Fatal("queued Human provider turn started while the Worktree transition held eligibility")
+	}
+
+	close(releaseTransition)
+	if err := <-transitionDone; err != nil {
+		t.Fatalf("Worktree transition: %v", err)
+	}
+	deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
+	for fakeClientCallCount(client) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := fakeClientCallCount(client); got != 2 {
+		t.Fatal("queued Human provider turn did not start after the Worktree transition")
+	}
+	if err := <-initialDone; err != nil {
+		t.Fatalf("preceding Agent turn: %v", err)
 	}
 }
 
