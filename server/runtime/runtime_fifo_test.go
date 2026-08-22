@@ -768,10 +768,11 @@ func TestForegroundShellTerminalEffectReentersAtTheCurrentRuntimeTail(t *testing
 }
 
 func TestWorktreeTransitionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{finalTextResponse("done")}}
 	engine := mustNewTestEngine(
 		t,
 		mustCreateTestSession(t),
-		&fakeClient{},
+		client,
 		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
@@ -813,12 +814,22 @@ func TestWorktreeTransitionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 		t.Fatal("timed out waiting for Worktree transition")
 	}
 
+	if _, err := engine.QueueUserMessageForAutoDrain("accepted while Worktree holds eligibility"); err != nil {
+		t.Fatalf("accept Human input while Worktree transition is held: %v", err)
+	}
 	if err := engine.SetThinkingLevel("low"); err != nil {
 		t.Fatalf("apply setting while Worktree transition is held: %v", err)
+	}
+	if got := fakeClientCallCount(client); got != 0 {
+		t.Fatalf("Human provider work started while Worktree held eligibility: calls=%d", got)
 	}
 	close(releaseTransition)
 	if err := <-transitionDone; err != nil {
 		t.Fatalf("Worktree transition: %v", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if got := fakeClientCallCount(client); got != 1 {
+		t.Fatalf("Human provider work after Worktree transition: calls=%d, want 1", got)
 	}
 }
 
