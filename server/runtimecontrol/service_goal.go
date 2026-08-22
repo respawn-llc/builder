@@ -221,6 +221,9 @@ func (s *Service) applyExactAgentGoalMutation(
 func applyLiveGoalMutation(engine *runtime.Engine, mutation goalMutation) (runtime.GoalCommandResult, error) {
 	switch mutation.kind {
 	case goalMutationSet:
+		if err := engine.RequireGoalLoopStartAllowed(); err != nil {
+			return runtime.GoalCommandResult{}, err
+		}
 		result, err := engine.SetGoal(mutation.Objective, mutation.Actor)
 		if err == nil && result.MetadataReceipt.Committed {
 			err = engine.StartGoalLoop()

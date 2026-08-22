@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"core/server/chatcontext"
 	"core/server/llm"
@@ -481,7 +480,6 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		ID:      runtimeids.NewQueueItemID().String(),
 		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
 	}
-	waitedForLiveRunStep := false
 	for {
 		var item QueuedUserMessage
 		livePublication := false
@@ -522,20 +520,16 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		if livePublication {
 			return QueuedUserMessage{}, context.Canceled
 		}
-		if !e.waitingForLiveRunStepStart() {
-			break
+		if e.waitingForLiveRunStepStart() {
+			if accept != nil {
+				return QueuedUserMessage{}, context.Canceled
+			}
+			e.outputMutationMu.Lock()
+			e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+			e.outputMutationMu.Unlock()
+			return liveItem, nil
 		}
-		waitedForLiveRunStep = true
-		time.Sleep(time.Millisecond)
-	}
-	if waitedForLiveRunStep {
-		if accept != nil {
-			return QueuedUserMessage{}, context.Canceled
-		}
-		e.outputMutationMu.Lock()
-		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
-		e.outputMutationMu.Unlock()
-		return liveItem, nil
+		break
 	}
 	var item QueuedUserMessage
 	committed, err := runCommandAcceptance(accept, func() (bool, error) {
