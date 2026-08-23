@@ -40,19 +40,77 @@ func (l *deleteInFlightStartLifecycle) ResourceDraining(context.Context, session
 type deleteActivityTestLLMClient struct{}
 
 func (deleteActivityTestLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return llm.Response{}, nil
+	return llm.Response{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("finished"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}, nil
 }
 
 func (deleteActivityTestLLMClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	return llm.InferProviderCapabilities("openai")
 }
 
+type deleteActivityReviewerClient struct {
+	started     chan struct{}
+	release     chan struct{}
+	startedOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func newDeleteActivityReviewerClient() *deleteActivityReviewerClient {
+	return &deleteActivityReviewerClient{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (c *deleteActivityReviewerClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	c.startedOnce.Do(func() { close(c.started) })
+	select {
+	case <-c.release:
+		return llm.Response{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value(`{"suggestions":[]}`),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		}, nil
+	case <-ctx.Done():
+		return llm.Response{}, context.Cause(ctx)
+	}
+}
+
+func (*deleteActivityReviewerClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
+func (c *deleteActivityReviewerClient) Release() {
+	c.releaseOnce.Do(func() { close(c.release) })
+}
+
 func deleteActivityTestRuntimePlan(t *testing.T, env *serviceTestEnv, workdir string) sessionruntime.AgentRuntimePlan {
+	return deleteActivityRuntimePlan(t, env, workdir, deleteActivityTestLLMClient{}, "off", nil)
+}
+
+func deleteActivityRuntimePlan(
+	t *testing.T,
+	env *serviceTestEnv,
+	workdir string,
+	client llm.Client,
+	reviewerFrequency string,
+	reviewerClientFactory runtimewire.RuntimeClientFactory,
+) sessionruntime.AgentRuntimePlan {
 	t.Helper()
 	settings := env.cfg.Settings
 	settings.Model = "gpt-5"
 	settings.ModelContextWindow = 200000
-	settings.Reviewer.Frequency = "off"
+	settings.Reviewer.Frequency = reviewerFrequency
+	settings.Reviewer.Model = "gpt-5"
+	settings.Reviewer.ThinkingLevel = "low"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings:              settings,
 		QuestionsEnabled:      textutil.Value(true),
@@ -64,7 +122,8 @@ func deleteActivityTestRuntimePlan(t *testing.T, env *serviceTestEnv, workdir st
 			}
 			return context
 		}(),
-		Client: deleteActivityTestLLMClient{},
+		Client:                client,
+		ReviewerClientFactory: reviewerClientFactory,
 	})
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)
@@ -363,6 +422,89 @@ func TestDeleteWorktreeRejectsLiveRunAndCompletesUnrelatedWorktree(t *testing.T)
 	if _, err := attachment.Release(waitCtx, sessionruntime.RuntimeReleaseClose); err != nil {
 		t.Fatalf("release runtime attachment: %v", err)
 	}
+}
+
+func TestDeleteWorktreeRejectsRunningReviewer(t *testing.T) {
+	env := newServiceTestEnv(t)
+	busy := mustCreateWorktree(t, env, "feature/delete-running-reviewer-busy")
+	busySession := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	updateServiceTestSessionTarget(t, env, busySession.Meta().SessionID, env.binding.WorkspaceID, busy.WorktreeID, ".")
+	state := captureDeleteTargetState(t, env, busySession.Meta().SessionID, busy)
+	descriptor := openDeleteActivitySessionDescriptor(t, busySession.Meta().SessionID)
+	reviewer := newDeleteActivityReviewerClient()
+	t.Cleanup(reviewer.Release)
+	plan := deleteActivityRuntimePlan(
+		t,
+		env,
+		busy.CanonicalRoot,
+		deleteActivityTestLLMClient{},
+		"all",
+		runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return reviewer, nil
+		}),
+	)
+	attachment, err := env.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: descriptor.SessionID(),
+		OwnerID:   "delete-running-reviewer",
+		Runtime:   &plan,
+	})
+	if err != nil {
+		t.Fatalf("OpenRuntime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, releaseErr := attachment.Release(context.Background(), sessionruntime.RuntimeReleaseClose)
+		if releaseErr != nil && !errors.Is(releaseErr, serverapi.ErrRuntimeUnavailable) {
+			t.Errorf("release Reviewer Runtime: %v", releaseErr)
+		}
+	})
+	handle, err := env.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor,
+		Resource:   sessionruntime.CurrentAgentResource{},
+		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			return bridge.WithEngine(ctx, func(engineCtx context.Context, engine *runtime.Engine) error {
+				_, submitErr := engine.SubmitUserMessage(engineCtx, "finish before Reviewer")
+				return submitErr
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartAgentExecution: %v", err)
+	}
+	select {
+	case <-reviewer.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Reviewer provider request")
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("wait for originating execution: %v", err)
+	}
+	active, err := env.authority.HasBlockingRuntimeActivity(context.Background(), busySession.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("HasBlockingRuntimeActivity: %v", err)
+	}
+	if !active {
+		t.Fatal("running Reviewer was not reported as blocking Runtime activity")
+	}
+	retired, err := env.authority.RetireIdleRuntime(context.Background(), busySession.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("RetireIdleRuntime: %v", err)
+	}
+	if retired {
+		t.Fatal("Runtime retired while its Reviewer provider request was running")
+	}
+
+	busyDeleted := deleteServiceTestWorktree(env, busy.WorktreeID)
+	select {
+	case result := <-busyDeleted:
+		if !errors.Is(result.err, serverapi.ErrWorktreeBlocked) {
+			t.Fatalf("DeleteWorktree busy target = %+v, %v; want ErrWorktreeBlocked", result.result, result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("busy delete waited for the Reviewer provider request")
+	}
+	state.assertUnchanged(t, env, busySession.Meta().SessionID, busy.WorktreeID)
 }
 
 func TestDeleteWorktreeRetiresIdleRuntimeAndRetargetsSessionBeforePhysicalRemoval(t *testing.T) {

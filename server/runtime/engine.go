@@ -407,6 +407,7 @@ func (e *Engine) BeginRetirement() bool {
 		e.HasQueuedUserWork() ||
 		e.HasScheduledQueuedUserWork() ||
 		e.CurrentNodeExecutionConfigured() ||
+		e.ReviewerRunning() ||
 		!e.runtimeFIFO.beginCloseIfIdle() {
 		return false
 	}

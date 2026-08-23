@@ -230,7 +230,8 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 			engine.HasPendingRuntimeOperations() ||
 			engine.HasQueuedUserWork() ||
 			engine.HasScheduledQueuedUserWork() ||
-			engine.CurrentNodeExecutionConfigured()
+			engine.CurrentNodeExecutionConfigured() ||
+			engine.ReviewerRunning()
 	}
 	return active, nil
 }
