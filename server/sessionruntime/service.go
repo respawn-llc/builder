@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"strings"
 
+	"core/server/chatcontext"
+	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runlog"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
 	servicecontract "core/shared/apicontract"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -77,6 +80,15 @@ func applyAgentSelection(store *session.Store, selection *session.ChatAgentSelec
 	return result.Changed, err
 }
 
+func applyActivationContextPolicy(ctx context.Context, store *session.Store, settings config.Settings) (config.Settings, error) {
+	meta := store.Meta()
+	provider, err := llm.ResolveEffectiveProviderCapabilities(ctx, meta.Locked, settings, nil)
+	if err != nil {
+		return config.Settings{}, err
+	}
+	return chatcontext.ApplyPolicy(settings, chatcontext.ResolvePolicy(settings, provider.Capabilities, meta.Locked)), nil
+}
+
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
@@ -95,7 +107,7 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 	attachment, err := s.authority.openRuntime(ctx, RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   ownerID,
-	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, AgentResourceSelection, error) {
+	}, func(activationCtx context.Context, store *session.Store) (*AgentRuntimePlan, AgentResourceSelection, error) {
 		if _, err := store.PromoteSubagentToMain(); err != nil {
 			return nil, nil, err
 		}
@@ -151,6 +163,10 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		autoCompaction := effective.AutoCompaction
 		req.QuestionsEnabled = &questions
 		req.AutoCompactionEnabled = &autoCompaction
+		req.ActiveSettings, resolveErr = applyActivationContextPolicy(activationCtx, store, req.ActiveSettings)
+		if resolveErr != nil {
+			return nil, nil, resolveErr
+		}
 		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())
 		if planErr != nil {
 			return nil, nil, planErr

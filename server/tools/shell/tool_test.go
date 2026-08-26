@@ -137,6 +137,7 @@ func TestExecCommandSilentSuccessIsTerminalAndUnambiguous(t *testing.T) {
 	if result.PresentationDelta != nil && result.PresentationDelta.MovedToBackground {
 		t.Fatalf("silent foreground completion must not be marked backgrounded: %+v", result.PresentationDelta)
 	}
+	waitForManagerCount(t, manager, 0, time.Second)
 }
 
 func TestExecCommandEmptyDefaultWorkdirReturnsManagerErrorWithoutExecuting(t *testing.T) {

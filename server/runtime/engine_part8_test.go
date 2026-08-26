@@ -146,7 +146,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	}
 }
 
-func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T) {
+func TestWriteStdinCompletionDuringGuardedPollDoesNotQueueDuplicateBackgroundNotice(t *testing.T) {
 	store := mustCreateTestSession(t)
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
 	if err != nil {
@@ -162,7 +162,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_exec_1",
 				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"cmd":"read line; echo done","shell":"/bin/sh","login":false,"tty":true,"yield_time_ms":1}`),
+				Input: json.RawMessage(`{"cmd":"read line; printf '12345678901234567890123456789012345678901234567890123456789012345678901234567890'","shell":"/bin/sh","login":false,"tty":true,"yield_time_ms":1}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -171,7 +171,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_poll_1",
 				Name:  string(toolspec.ToolWriteStdin),
-				Input: json.RawMessage(`{"session_id":1000,"chars":"\n","yield_time_ms":15000}`),
+				Input: json.RawMessage(`{"session_id":1000,"chars":"\n","yield_time_ms":15000,"max_output_tokens":21}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -185,8 +185,8 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 		},
 	}}
 	registry := newTestToolRegistry(t,
-		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, 200_000, manager, store.Meta().SessionID)},
-		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, 200_000, manager)},
+		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, 40, manager, store.Meta().SessionID)},
+		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, 40, manager)},
 	)
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
 	manager.SetEventHandler(func(evt shelltool.Event) bool {

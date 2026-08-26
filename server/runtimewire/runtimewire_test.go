@@ -1254,18 +1254,11 @@ func TestRuntimeWiringExecCommandUsesEffectiveBuiltinInsteadOfBootstrapNone(t *t
 	}
 }
 
-func TestRuntimeWiringUsesLockedSessionContextWindowForShell(t *testing.T) {
+func TestRuntimeWiringPassesActiveSessionContextWindowToShell(t *testing.T) {
 	root := t.TempDir()
 	store := newRuntimeWireSession(t, root, "shell-context-window")
 	active := runtimeWireShellSettings(config.ShellPostprocessingModeNone, nil)
-	active.ModelContextWindow = 40
-	if err := store.MarkModelDispatchLocked(session.LockedContract{
-		Model:          active.Model,
-		ContextWindow:  20,
-		ContextPercent: 95,
-	}); err != nil {
-		t.Fatalf("lock Session context window: %v", err)
-	}
+	active.ModelContextWindow = 20
 
 	wiring, err := NewRuntimeWiringWithBackground(
 		store,
@@ -1378,9 +1371,28 @@ func newRuntimeWireShellManager(t *testing.T, runner *postprocess.Runner) *shell
 }
 
 func callRuntimeWireExec(t *testing.T, registry *tools.Registry, command string) string {
-	result := callRuntimeWireTool(t, registry, toolspec.ToolExecCommand, map[string]any{
-		"cmd": command, "shell": "/bin/sh", "login": false, "yield_time_ms": 1_000,
+	t.Helper()
+	handler, ok := registry.Get(toolspec.ToolExecCommand)
+	if !ok {
+		t.Fatal("expected exec_command handler")
+	}
+	input, err := json.Marshal(map[string]any{
+		"cmd":           command,
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 1_000,
 	})
+	if err != nil {
+		t.Fatalf("marshal exec_command input: %v", err)
+	}
+	result, err := handler.Call(context.Background(), tools.Call{
+		ID:    "runtimewire-exec",
+		Name:  toolspec.ToolExecCommand,
+		Input: input,
+	})
+	if err != nil {
+		t.Fatalf("exec_command call: %v", err)
+	}
 	if result.IsError {
 		t.Fatalf("exec_command result error: %s", string(result.Output))
 	}

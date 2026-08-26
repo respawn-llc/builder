@@ -100,21 +100,17 @@ func NewRuntimeWiringWithBackground(
 	if err := validateFilesystemContext(filesystemContext); err != nil {
 		return nil, err
 	}
-	meta := store.Meta()
-	if meta.Locked != nil && meta.Locked.ContextWindow > 0 {
-		active.ModelContextWindow = meta.Locked.ContextWindow
-	}
 	workingDirectory := filesystemContext.Access.WorkingDirectory.LexicalPath
 	var eng *runtime.Engine
 	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		FilesystemContext:        filesystemContext,
-		OwnerSessionID:           meta.SessionID,
+		OwnerSessionID:           store.Meta().SessionID,
 		Enabled:                  enabledTools,
 		MinimumExecToBgTime:      time.Duration(active.MinimumExecToBgSeconds) * time.Second,
 		ShellOutputMaxChars:      active.ShellOutputMaxChars,
 		ModelContextWindow:       active.ModelContextWindow,
 		AllowNonCwdEdits:         active.AllowNonCwdEdits,
-		SupportsVision:           llm.LockedContractSupportsVisionInputs(meta.Locked, active.Model),
+		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
 		Logger:                   logger,
 		Background:               background,
 		ShellPostprocessor:       shellPostprocessor,
@@ -138,14 +134,14 @@ func NewRuntimeWiringWithBackground(
 	}
 
 	mainProvider := mainProviderRuntimeSettings(active)
-	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLockedOrOverride(meta.Locked, active.ProviderCapabilities); ok {
+	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLockedOrOverride(store.Meta().Locked, active.ProviderCapabilities); ok {
 		mainProvider.ProviderCapabilitiesOverride = &resolvedCapabilities
 	}
 	var client llm.Client
 	if opts.Client != nil {
 		client = opts.Client
 	} else if opts.ClientFactory != nil {
-		client, err = newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeMain, meta.SessionID, active, enabledTools, filesystemContext.Access.WorkingDirectory.LexicalPath, opts.Sources, mainProvider)
+		client, err = newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeMain, store.Meta().SessionID, active, enabledTools, filesystemContext.Access.WorkingDirectory.LexicalPath, opts.Sources, mainProvider)
 		if err != nil {
 			return nil, err
 		}
@@ -174,10 +170,10 @@ func NewRuntimeWiringWithBackground(
 	reviewerProvider := reviewerProviderRuntimeSettings(active)
 	newReviewerClient := func() (llm.Client, error) {
 		if opts.ClientFactory != nil {
-			return newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeReviewer, meta.SessionID, active, enabledTools, workingDirectory, opts.Sources, reviewerProvider)
+			return newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workingDirectory, opts.Sources, reviewerProvider)
 		}
 		if opts.ReviewerClientFactory != nil {
-			return newRuntimeClientFromFactory(factoryContext, opts.ReviewerClientFactory, RuntimeClientPurposeReviewer, meta.SessionID, active, enabledTools, workingDirectory, opts.Sources, reviewerProvider)
+			return newRuntimeClientFromFactory(factoryContext, opts.ReviewerClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workingDirectory, opts.Sources, reviewerProvider)
 		}
 		var reviewerAuth llm.AuthHeaderProvider
 		if mgr != nil && !strings.EqualFold(strings.TrimSpace(reviewerProvider.Auth), "none") {

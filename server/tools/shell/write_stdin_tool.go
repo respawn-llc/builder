@@ -111,6 +111,9 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 		return tools.Result{}, marshalErr
 	}
 	if guarded, ok := t.oversizedOutputGuard.FailedResult(c, in.MaxOutputTokens, string(body), result.OutputPath, presentation); ok {
+		if result.Backgrounded && !result.Running {
+			guarded.BackgroundSessionID = textutil.OptionalTrimmedString(result.SessionID)
+		}
 		return guarded, nil
 	}
 	toolResult := tools.Result{

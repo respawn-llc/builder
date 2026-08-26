@@ -255,7 +255,15 @@ type harvestedBackgroundCompletion struct {
 }
 
 func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
-	if res.IsError || res.Name != toolspec.ToolWriteStdin {
+	if res.Name != toolspec.ToolWriteStdin {
+		return "", false
+	}
+	if res.BackgroundSessionID != nil {
+		if sessionID := strings.TrimSpace(*res.BackgroundSessionID); sessionID != "" {
+			return sessionID, true
+		}
+	}
+	if res.IsError {
 		return "", false
 	}
 	var out harvestedBackgroundCompletion
