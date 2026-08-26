@@ -403,6 +403,127 @@ func TestWorktreeTransitionRunsWhileReviewerIsActive(t *testing.T) {
 	}
 }
 
+type nonOverlappingStepLifecycleSink struct {
+	mu     sync.Mutex
+	active bool
+}
+
+func (s *nonOverlappingStepLifecycleSink) StepBegan(context.Context, StepLifecycleSnapshot) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active {
+		return errors.New("overlapping external Engine Step")
+	}
+	s.active = true
+	return nil
+}
+
+func (s *nonOverlappingStepLifecycleSink) StepEnded(context.Context, StepLifecycleSnapshot) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return errors.New("external Engine Step ended while idle")
+	}
+	s.active = false
+	return nil
+}
+
+func TestWorktreeTransitionUsesReviewerFollowUpStepAtToolBoundary(t *testing.T) {
+	toolCall := llm.ToolCall{
+		ID:    "reviewer-follow-up-tool",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"pwd"}`),
+	}
+	mainClient := &fakeClient{responses: []llm.Response{
+		finalTextResponse("initial"),
+		commentaryResponse("applying review", toolCall),
+		finalTextResponse("review applied"),
+	}}
+	reviewerClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value(`{"suggestions":["apply correction"]}`),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}}}
+	toolStarted := make(chan struct{})
+	releaseTool := make(chan struct{})
+	stepLifecycle := &nonOverlappingStepLifecycleSink{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		mainClient,
+		newTestToolRegistry(t, tools.HandlerRegistration{
+			ID: toolspec.ToolExecCommand,
+			Handler: blockingTool{
+				name:    toolspec.ToolExecCommand,
+				started: toolStarted,
+				release: releaseTool,
+			},
+		}),
+		Config{
+			Model:         "gpt-5",
+			StepLifecycle: stepLifecycle,
+			Reviewer: ReviewerConfig{
+				Frequency:     "all",
+				Model:         "gpt-5",
+				ThinkingLevel: "low",
+				Client:        reviewerClient,
+			},
+		},
+	)
+	var releaseToolOnce sync.Once
+	releaseHeldTool := func() { releaseToolOnce.Do(func() { close(releaseTool) }) }
+	t.Cleanup(func() {
+		releaseHeldTool()
+		waitEngineLifecycleTasks(t, engine)
+	})
+
+	if _, err := engine.SubmitUserMessage(t.Context(), "start Reviewer follow-up"); err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	select {
+	case <-toolStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Reviewer follow-up tool")
+	}
+	if !engine.ReviewerRunning() {
+		t.Fatal("Reviewer activity completed before its follow-up tool boundary")
+	}
+
+	transitionRan := false
+	transitionDone := make(chan error, 1)
+	go func() {
+		transitionDone <- engine.RunWorktreeTransition(t.Context(), func() error {
+			transitionRan = true
+			return nil
+		})
+	}()
+	waitForAcceptedRuntimeOperationCount(t, engine, 1)
+	select {
+	case err := <-transitionDone:
+		t.Fatalf("Worktree transition completed before the Reviewer follow-up tool boundary: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	releaseHeldTool()
+	select {
+	case err := <-transitionDone:
+		if err != nil {
+			t.Fatalf("Worktree transition failed at Reviewer follow-up boundary: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("Worktree transition did not run at Reviewer follow-up boundary")
+	}
+	if !transitionRan {
+		t.Fatal("Worktree transition callback did not run")
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if engine.ReviewerRunning() {
+		t.Fatal("Reviewer activity remained active after its follow-up completed")
+	}
+}
+
 func TestWorktreeDeleteTransitionRejectsReviewerStartedBeforeGrantedBoundary(t *testing.T) {
 	mainClient, mainStarted, releaseMain := newGatedHookClient(
 		finalTextResponse("done"),

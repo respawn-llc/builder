@@ -263,6 +263,7 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 	err error,
 	beforeLiveRun func() error,
 ) (error, error, func()) {
+	publishExternalLifecycle := s.activeOwnsExternalLifecycle()
 	s.beginTerminalPublication()
 	if options.EmitRunState {
 		state := &RunState{Lifecycle: IdleRunLifecycle()}
@@ -282,7 +283,7 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 		}))
 	}
 	var publicationErr error
-	if snapshot != nil && s.engine.cfg.StepLifecycle != nil {
+	if publishExternalLifecycle && snapshot != nil && s.engine.cfg.StepLifecycle != nil {
 		if publishErr := s.engine.cfg.StepLifecycle.StepEnded(
 			context.Background(),
 			stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *snapshot),
@@ -609,7 +610,7 @@ func (s *defaultExclusiveStepLifecycle) activateLocked(ctx context.Context, opti
 }
 
 func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOptions, stepCtx context.Context, stepID string) (context.Context, string, error) {
-	if snapshot := s.Snapshot(); snapshot != nil && s.engine.cfg.StepLifecycle != nil {
+	if snapshot := s.Snapshot(); s.activeOwnsExternalLifecycle() && snapshot != nil && s.engine.cfg.StepLifecycle != nil {
 		if err := s.engine.cfg.StepLifecycle.StepBegan(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionBegan, *snapshot)); err != nil {
 			finished := s.snapshotWithFinishedAt(time.Now().UTC(), RunStatusFailed)
 			s.beginTerminalPublication()
@@ -636,6 +637,13 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 		}
 	}
 	return stepCtx, stepID, nil
+}
+
+func (s *defaultExclusiveStepLifecycle) activeOwnsExternalLifecycle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Boundary reservations run inside the suspended Agent Step's resource lifecycle.
+	return s.active != nil && s.suspended == nil
 }
 
 func (s *defaultExclusiveStepLifecycle) reservationPendingLocked(reservation *exclusiveStepReservation) bool {
