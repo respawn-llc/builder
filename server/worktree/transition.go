@@ -94,6 +94,7 @@ func (s *Service) runWorktreeTransition(
 	err := s.authority.RunWorktreeTransition(
 		ctx,
 		request.sessionID,
+		request.kind,
 		func(
 			ctx context.Context,
 			authority func(func() error) error,

@@ -65,14 +65,24 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind
 // Turn at its next Step Boundary. Queued user steering remains paused until the
 // execution target and its model-visible reminder are updated together.
 func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) error {
+	return e.runWorktreeTransition(ctx, nil, fn)
+}
+
+func (e *Engine) RunWorktreeDeleteTransition(ctx context.Context, fn func() error) error {
+	return e.runWorktreeTransition(ctx, func() error {
+		if e.ReviewerRunning() {
+			return ErrReviewerRunning
+		}
+		return nil
+	}, fn)
+}
+
+func (e *Engine) runWorktreeTransition(ctx context.Context, admit func() error, fn func() error) error {
 	if fn == nil {
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
 	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[struct{}], error) {
-		if e.ReviewerRunning() {
-			return runtimeDeferred[struct{}]{}, ErrReviewerRunning
-		}
 		reservation := &exclusiveStepReservation{
 			Kind:      exclusiveStepReservationWorktreeTransition,
 			queueable: true,
@@ -83,10 +93,6 @@ func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) err
 		deferred := newRuntimeDeferred[struct{}]()
 		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
 			defer e.stepLifecycle.ReleaseReservation(reservation)
-			if e.ReviewerRunning() {
-				deferred.complete(struct{}{}, ErrReviewerRunning)
-				return nil
-			}
 			transitionCtx, cancel := context.WithCancelCause(lifecycleCtx)
 			stopCallerCancellation := context.AfterFunc(ctx, func() {
 				cancel(context.Cause(ctx))
@@ -103,6 +109,11 @@ func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) err
 				ActiveKindRuntimeMaintenance,
 				reservation,
 				func(context.Context, string) error {
+					if admit != nil {
+						if err := admit(); err != nil {
+							return err
+						}
+					}
 					return fn()
 				},
 			)

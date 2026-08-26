@@ -57,6 +57,7 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 func (a *Authority) RunWorktreeTransition(
 	ctx context.Context,
 	sessionID string,
+	transition clientui.WorktreeTransitionKind,
 	fn func(
 		context.Context,
 		func(func() error) error,
@@ -66,6 +67,11 @@ func (a *Authority) RunWorktreeTransition(
 ) error {
 	if fn == nil {
 		return nil
+	}
+	switch transition {
+	case clientui.WorktreeTransitionEnter, clientui.WorktreeTransitionLeave, clientui.WorktreeTransitionDelete:
+	default:
+		return errors.New("worktree transition kind is invalid")
 	}
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
@@ -90,7 +96,11 @@ func (a *Authority) RunWorktreeTransition(
 			)
 		}
 		retire := false
-		err := engine.RunWorktreeTransition(runCtx, func() error {
+		runTransition := engine.RunWorktreeTransition
+		if transition == clientui.WorktreeTransitionDelete {
+			runTransition = engine.RunWorktreeDeleteTransition
+		}
+		err := runTransition(runCtx, func() error {
 			active := true
 			defer func() { active = false }()
 			return fn(

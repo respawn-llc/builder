@@ -342,7 +342,8 @@ func TestWorktreeTransitionWaitsForActiveAgentStepBoundary(t *testing.T) {
 	}
 }
 
-func TestWorktreeTransitionRejectsRunningReviewer(t *testing.T) {
+func newHeldReviewerWorktreeEngine(t *testing.T, mainClient llm.Client) (*Engine, <-chan struct{}) {
+	t.Helper()
 	reviewerClient, reviewerStarted, releaseReviewer := newGatedHookClient(
 		llm.Response{
 			Assistant: llm.Message{
@@ -356,7 +357,7 @@ func TestWorktreeTransitionRejectsRunningReviewer(t *testing.T) {
 	engine := mustNewTestEngine(
 		t,
 		mustCreateTestSession(t),
-		&fakeClient{responses: []llm.Response{finalTextResponse("done")}},
+		mainClient,
 		tools.NewRegistry(),
 		Config{
 			Model: "gpt-5",
@@ -372,6 +373,14 @@ func TestWorktreeTransitionRejectsRunningReviewer(t *testing.T) {
 		releaseReviewer()
 		waitEngineLifecycleTasks(t, engine)
 	})
+	return engine, reviewerStarted
+}
+
+func TestWorktreeTransitionRunsWhileReviewerIsActive(t *testing.T) {
+	engine, reviewerStarted := newHeldReviewerWorktreeEngine(
+		t,
+		&fakeClient{responses: []llm.Response{finalTextResponse("done")}},
+	)
 	if _, err := engine.SubmitUserMessage(t.Context(), "start Reviewer"); err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -386,11 +395,62 @@ func TestWorktreeTransitionRejectsRunningReviewer(t *testing.T) {
 		transitionRan = true
 		return nil
 	})
-	if !errors.Is(err, ErrReviewerRunning) {
-		t.Fatalf("RunWorktreeTransition error = %v, want ErrReviewerRunning", err)
+	if err != nil {
+		t.Fatalf("RunWorktreeTransition: %v", err)
+	}
+	if !transitionRan {
+		t.Fatal("Worktree transition did not run while Reviewer was active")
+	}
+}
+
+func TestWorktreeDeleteTransitionRejectsReviewerStartedBeforeGrantedBoundary(t *testing.T) {
+	mainClient, mainStarted, releaseMain := newGatedHookClient(
+		finalTextResponse("done"),
+		llm.Response{},
+	)
+	engine, reviewerStarted := newHeldReviewerWorktreeEngine(t, mainClient)
+	t.Cleanup(releaseMain)
+
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(t.Context(), "start Reviewer at boundary")
+		submitDone <- err
+	}()
+	select {
+	case <-mainStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for active Agent provider request")
+	}
+
+	transitionRan := false
+	transitionDone := make(chan error, 1)
+	go func() {
+		transitionDone <- engine.RunWorktreeDeleteTransition(t.Context(), func() error {
+			transitionRan = true
+			return nil
+		})
+	}()
+	waitForAcceptedRuntimeOperationCount(t, engine, 1)
+	releaseMain()
+
+	select {
+	case <-reviewerStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Reviewer provider request")
+	}
+	select {
+	case err := <-transitionDone:
+		if !errors.Is(err, ErrReviewerRunning) {
+			t.Fatalf("RunWorktreeDeleteTransition error = %v, want ErrReviewerRunning", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("Worktree deletion did not reject Reviewer activity at the granted Step Boundary")
 	}
 	if transitionRan {
-		t.Fatal("Worktree transition ran while Reviewer was active")
+		t.Fatal("Worktree deletion ran after Reviewer activity started")
+	}
+	if err := <-submitDone; err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
 	}
 }
 
