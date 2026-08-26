@@ -11,6 +11,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/mutationlane"
 	"core/server/workflow"
 	"core/shared/invariant"
 	"core/shared/jsoncontract"
@@ -27,7 +28,7 @@ type Store struct {
 	roleResolver        workflow.RoleResolver
 	now                 func() time.Time
 	approvalGate        chan struct{}
-	graphSaves          *metadata.MutationLaneRegistry[runtimeids.WorkflowID]
+	graphSaves          *mutationlane.MutationLaneRegistry[runtimeids.WorkflowID]
 	eventMu             sync.RWMutex
 	eventSink           WorkflowEventPublisher
 	invariantPolicy     invariant.Policy
@@ -87,7 +88,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 		priorValuesContract: priorValues,
 		now:                 func() time.Time { return time.Now().UTC() },
 		approvalGate:        make(chan struct{}, 1),
-		graphSaves:          metadata.NewMutationLaneRegistry[runtimeids.WorkflowID](),
+		graphSaves:          mutationlane.NewMutationLaneRegistry[runtimeids.WorkflowID](),
 		eventSink:           noopWorkflowEventPublisher{},
 		invariantPolicy:     invariant.NewPolicy(invariant.WithSink(workflowInvariantSlogSink{})),
 	}

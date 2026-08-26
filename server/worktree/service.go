@@ -15,6 +15,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/mutationlane"
 	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
@@ -60,7 +61,7 @@ type Service struct {
 	setupTimeoutSeconds int
 	resolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
 	setupBroker         *setupEventBroker
-	workspaceMutations  *metadata.MutationLaneRegistry[string]
+	workspaceMutations  *mutationlane.MutationLaneRegistry[string]
 
 	transitionCtx     context.Context
 	cancelTransitions context.CancelFunc
@@ -360,7 +361,7 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 		setupTimeoutSeconds: opts.SetupTimeoutSeconds,
 		resolveSetup:        opts.ResolveSetup,
 		setupBroker:         newSetupEventBroker(),
-		workspaceMutations:  metadata.NewMutationLaneRegistry[string](),
+		workspaceMutations:  mutationlane.NewMutationLaneRegistry[string](),
 		transitionCtx:       transitionCtx,
 		cancelTransitions:   cancelTransitions,
 		transitionTails:     make(map[string]chan struct{}),
@@ -2099,7 +2100,7 @@ func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) 
 	}
 }
 
-func (s *Service) acquireWorkspaceMutationLease(ctx context.Context, workspaceID string) (*metadata.MutationLaneLease[string], error) {
+func (s *Service) acquireWorkspaceMutationLease(ctx context.Context, workspaceID string) (*mutationlane.MutationLaneLease[string], error) {
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	if s == nil {
 		return nil, errors.New("worktree service is required")

@@ -462,7 +462,7 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 		if _, knownCommand := m.commandRegistry.Command(text); knownCommand {
 			if commandResult := m.commandRegistry.Execute(text); commandResult.Handled {
 				if commandResult.Action == commands.ActionCompact {
-					return finalizeSlashCommandCmd(commandResult.Action, c.startCompactionWithOrigin(commandResult.Args, uiCompactionOriginQueued), m.recordPromptHistory(text))
+					return finalizeSlashCommandCmd(commandResult.Action, c.startCompaction(commandResult.Args), m.recordPromptHistory(text))
 				}
 				_, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(
 					commandResult,

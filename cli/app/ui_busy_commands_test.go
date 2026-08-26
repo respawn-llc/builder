@@ -263,7 +263,7 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 	model := newProjectedTestUIModel(client)
 	model.startupCmds = nil
 
-	if cmd := model.inputController().startCompactionWithOrigin("", uiCompactionOriginManual); cmd == nil {
+	if cmd := model.inputController().startCompaction(""); cmd == nil {
 		t.Fatal("expected compaction command")
 	}
 	if model.isCompacting() || model.blocksRuntimeInput() || model.layout().mainInputPrefix() != "› " {

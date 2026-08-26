@@ -49,6 +49,12 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageCompactionStatus:
 		// RuntimeActivity is the authoritative compaction lifecycle. This event
 		// carries lifecycle notification facts, not live-session state.
+		status := message.Payload().(clientui.TranscriptCompactionStatus)
+		if status.State == clientui.CompactionCompleted &&
+			status.Mode == clientui.CompactionModeManual &&
+			m.turnQueueHook != nil {
+			m.turnQueueHook.OnUserCompactionCompleted(m.inputController().turnQueueDrained())
+		}
 	case clientui.TranscriptMessageContextUsage:
 		m.applyTranscriptContextUsage(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:

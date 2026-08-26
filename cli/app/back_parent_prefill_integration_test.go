@@ -12,7 +12,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -305,7 +304,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			_, err = server.SessionLifecycleClient().PersistInputDraft(
 				context.Background(),
 				serverapi.SessionPersistInputDraftRequest{
-					ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+					ClientRequestID: uuid.NewString(),
 					SessionID:       parent.Meta().SessionID,
 					Input:           "conflicting parent draft",
 				},

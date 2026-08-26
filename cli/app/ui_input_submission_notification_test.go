@@ -34,6 +34,58 @@ func TestSubmitDoneDispatchesQueuedTurnWithoutNotificationTranscriptFacts(t *tes
 	}
 }
 
+func TestManualCompactionNotificationWaitsForTerminalTranscriptOutcome(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
+
+	next, _ := model.Update(compactDoneMsg{})
+	model = next.(*uiModel)
+	if ringer.total() != 0 {
+		t.Fatalf("compaction scheduling emitted %d notification events before terminal outcome", ringer.total())
+	}
+
+	for sequence, status := range []clientui.TranscriptCompactionStatus{
+		{
+			StepID: ongoingTestStepID(),
+			State:  clientui.CompactionStarted,
+			Mode:   clientui.CompactionModeManual,
+			Count:  1,
+		},
+		{
+			StepID: ongoingTestStepID(),
+			State:  clientui.CompactionCompleted,
+			Mode:   clientui.CompactionModeAuto,
+			Count:  1,
+		},
+		{
+			StepID: ongoingTestStepID(),
+			State:  clientui.CompactionFailed,
+			Mode:   clientui.CompactionModeManual,
+			Count:  1,
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   "compaction_failed",
+				Detail: "provider failed",
+			},
+		},
+	} {
+		model.applyAdmittedTranscriptMessageState(clientui.NewTranscriptMessage(uint64(sequence+2), clientui.NewTranscriptEvent(status)), runtimeTupleMergeResult{})
+	}
+	if ringer.total() != 0 {
+		t.Fatalf("non-success manual outcomes emitted %d notification events", ringer.total())
+	}
+
+	model.applyAdmittedTranscriptMessageState(clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptCompactionStatus{
+		StepID: ongoingTestStepID(),
+		State:  clientui.CompactionCompleted,
+		Mode:   clientui.CompactionModeManual,
+		Count:  1,
+	})), runtimeTupleMergeResult{})
+	if ringer.notifications != 1 {
+		t.Fatalf("terminal manual compaction emitted %d notifications, want 1", ringer.notifications)
+	}
+}
+
 func TestTranscriptHydrationClearsNotificationStateWithoutReplayingRows(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)

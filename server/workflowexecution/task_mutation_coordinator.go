@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"core/server/metadata"
+	"core/server/mutationlane"
 	"core/server/workflow"
 )
 
@@ -22,12 +22,12 @@ type activeTaskMutation struct {
 // TaskMutationCoordinator serializes lifecycle mutations for one Task while
 // allowing unrelated Tasks to proceed independently.
 type TaskMutationCoordinator struct {
-	lanes *metadata.MutationLaneRegistry[workflow.TaskID]
+	lanes *mutationlane.MutationLaneRegistry[workflow.TaskID]
 }
 
 func NewTaskMutationCoordinator() *TaskMutationCoordinator {
 	return &TaskMutationCoordinator{
-		lanes: metadata.NewMutationLaneRegistry[workflow.TaskID](),
+		lanes: mutationlane.NewMutationLaneRegistry[workflow.TaskID](),
 	}
 }
 

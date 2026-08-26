@@ -132,7 +132,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 		next, cmd := c.handleQuestionsCommand(commandResult.QuestionsMode)
 		return next, sequenceCmds(prefixCmd, cmd)
 	case commands.ActionCompact:
-		return m, sequenceCmds(prefixCmd, c.startCompactionWithOrigin(commandResult.Args, uiCompactionOriginManual))
+		return m, sequenceCmds(prefixCmd, c.startCompaction(commandResult.Args))
 	case commands.ActionStatus:
 		return m, sequenceCmds(prefixCmd, c.startStatusFlowCmd())
 	case commands.ActionGoal:

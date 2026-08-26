@@ -177,21 +177,12 @@ func (m *uiModel) beginSubmitAttempt(
 	return m.submitToken
 }
 
-type uiCompactionOrigin uint8
-
-const (
-	uiCompactionOriginNone uiCompactionOrigin = iota
-	uiCompactionOriginManual
-	uiCompactionOriginQueued
-)
-
-func (c uiInputController) startCompactionWithOrigin(args string, origin uiCompactionOrigin) tea.Cmd {
+func (c uiInputController) startCompaction(args string) tea.Cmd {
 	m := c.model
 	if m.isCompacting() {
 		return nil
 	}
 	c.startRuntimeOperationAffordance()
-	m.compactionOrigin = origin
 	m.logf("compaction.start args_chars=%d", len(strings.TrimSpace(args)))
 	m.layout().syncViewport()
 	return tea.Batch(c.compactCmd(args), m.reconcileSpinnerTicking(false))
@@ -223,15 +214,20 @@ func (c uiInputController) finishRuntimeOperationAffordance() {
 
 func (c uiInputController) notifyTurnQueueDrainedIfIdle() {
 	m := c.model
-	if m.turnQueueHook == nil ||
-		m.blocksRuntimeInput() ||
-		len(m.queued) > 0 ||
-		m.injectedQueueBlocksDrain() ||
-		m.hasEnqueuedInjectedRuntimeWork() ||
-		m.ask.hasCurrent() {
+	if m.turnQueueHook == nil || !c.turnQueueDrained() {
 		return
 	}
 	m.turnQueueHook.OnTurnQueueDrained()
+}
+
+func (c uiInputController) turnQueueDrained() bool {
+	m := c.model
+	return m != nil &&
+		!m.blocksRuntimeInput() &&
+		len(m.queued) == 0 &&
+		!m.injectedQueueBlocksDrain() &&
+		!m.hasEnqueuedInjectedRuntimeWork() &&
+		!m.ask.hasCurrent()
 }
 
 func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.Cmd) {
@@ -353,8 +349,6 @@ func (c uiInputController) handleSpinnerTick(msg spinnerTickMsg) (tea.Model, tea
 func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea.Cmd) {
 	m := c.model
 	serverActiveBeforeCompletion := m.runtimeActivityBusy()
-	compactionOrigin := m.compactionOrigin
-	m.compactionOrigin = uiCompactionOriginNone
 	m.observeRuntimeRequestResult(msg.err)
 	c.finishRuntimeOperationAffordance()
 	if msg.err != nil {
@@ -377,32 +371,18 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	if !serverActiveBeforeCompletion {
 		m.activity = uiActivityIdle
 	}
-	m.logf("compaction.done")
+	m.logf("compaction.scheduled")
 	if len(m.queued) > 0 {
-		c.notifyUserCompactionCompleted(compactionOrigin, false)
 		next, cmd := c.flushQueuedInputs(queueDrainAuto)
 		c.notifyTurnQueueDrainedIfIdle()
 		return next, cmd
 	}
 	if m.injectedQueueBlocksDrain() || m.hasEnqueuedInjectedRuntimeWork() {
-		c.notifyUserCompactionCompleted(compactionOrigin, false)
 		m.layout().syncViewport()
 		return m, nil
 	}
-	c.notifyUserCompactionCompleted(compactionOrigin, true)
 	m.layout().syncViewport()
 	return m, nil
-}
-
-func (c uiInputController) notifyUserCompactionCompleted(origin uiCompactionOrigin, queueDrained bool) {
-	m := c.model
-	if m == nil || m.turnQueueHook == nil {
-		return
-	}
-	switch origin {
-	case uiCompactionOriginManual, uiCompactionOriginQueued:
-		m.turnQueueHook.OnUserCompactionCompleted(queueDrained)
-	}
 }
 
 func (m *uiModel) shouldRestoreSubmittedTextOnSubmitError(err error) bool {
