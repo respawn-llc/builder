@@ -13,6 +13,8 @@ import (
 
 const queuedUserSubmissionBusyRetryDelay = 25 * time.Millisecond
 
+var ErrReviewerRunning = errors.New("Reviewer is running")
+
 // CommandAcceptance serializes caller cancellation with a candidate mutation that reports whether it committed.
 type CommandAcceptance func(commit func() (bool, error)) (bool, error)
 
@@ -68,6 +70,9 @@ func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) err
 	}
 	e.ensureOrchestrationCollaborators()
 	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[struct{}], error) {
+		if e.ReviewerRunning() {
+			return runtimeDeferred[struct{}]{}, ErrReviewerRunning
+		}
 		reservation := &exclusiveStepReservation{
 			Kind:      exclusiveStepReservationWorktreeTransition,
 			queueable: true,
@@ -78,6 +83,10 @@ func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) err
 		deferred := newRuntimeDeferred[struct{}]()
 		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
 			defer e.stepLifecycle.ReleaseReservation(reservation)
+			if e.ReviewerRunning() {
+				deferred.complete(struct{}{}, ErrReviewerRunning)
+				return nil
+			}
 			transitionCtx, cancel := context.WithCancelCause(lifecycleCtx)
 			stopCallerCancellation := context.AfterFunc(ctx, func() {
 				cancel(context.Cause(ctx))

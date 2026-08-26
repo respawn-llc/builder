@@ -121,6 +121,9 @@ func (a *Authority) RunWorktreeTransition(
 				},
 			)
 		})
+		if errors.Is(err, runtime.ErrReviewerRunning) {
+			err = errors.Join(serverapi.ErrWorktreeBlocked, err)
+		}
 		return retire, err
 	})
 }

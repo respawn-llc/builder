@@ -53,6 +53,18 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 			release()
 			return serverapi.WorktreeDeleteResult{}, err
 		}
+		active, err := s.authority.HasBlockingRuntimeActivity(ctx, req.SessionID)
+		if err != nil {
+			release()
+			return serverapi.WorktreeDeleteResult{}, err
+		}
+		if active {
+			release()
+			return serverapi.WorktreeDeleteResult{}, errors.Join(
+				serverapi.ErrWorktreeBlocked,
+				fmt.Errorf("current Session %s has blocking Runtime activity", strings.TrimSpace(req.SessionID)),
+			)
+		}
 		deleteTarget, err := scheduledKentWorktreeTargetFromEntry(match.entry)
 		if err != nil {
 			release()

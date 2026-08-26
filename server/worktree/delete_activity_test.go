@@ -427,10 +427,10 @@ func TestDeleteWorktreeRejectsLiveRunAndCompletesUnrelatedWorktree(t *testing.T)
 func TestDeleteWorktreeRejectsRunningReviewer(t *testing.T) {
 	env := newServiceTestEnv(t)
 	busy := mustCreateWorktree(t, env, "feature/delete-running-reviewer-busy")
-	busySession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	updateServiceTestSessionTarget(t, env, busySession.Meta().SessionID, env.binding.WorkspaceID, busy.WorktreeID, ".")
-	state := captureDeleteTargetState(t, env, busySession.Meta().SessionID, busy)
-	descriptor := openDeleteActivitySessionDescriptor(t, busySession.Meta().SessionID)
+	sessionID := env.session.Meta().SessionID
+	updateServiceTestSessionTarget(t, env, sessionID, env.binding.WorkspaceID, busy.WorktreeID, ".")
+	state := captureDeleteTargetState(t, env, sessionID, busy)
+	descriptor := openDeleteActivitySessionDescriptor(t, sessionID)
 	reviewer := newDeleteActivityReviewerClient()
 	t.Cleanup(reviewer.Release)
 	plan := deleteActivityRuntimePlan(
@@ -480,14 +480,14 @@ func TestDeleteWorktreeRejectsRunningReviewer(t *testing.T) {
 	if _, err := handle.Wait(waitCtx); err != nil {
 		t.Fatalf("wait for originating execution: %v", err)
 	}
-	active, err := env.authority.HasBlockingRuntimeActivity(context.Background(), busySession.Meta().SessionID)
+	active, err := env.authority.HasBlockingRuntimeActivity(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("HasBlockingRuntimeActivity: %v", err)
 	}
 	if !active {
 		t.Fatal("running Reviewer was not reported as blocking Runtime activity")
 	}
-	retired, err := env.authority.RetireIdleRuntime(context.Background(), busySession.Meta().SessionID)
+	retired, err := env.authority.RetireIdleRuntime(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("RetireIdleRuntime: %v", err)
 	}
@@ -504,7 +504,7 @@ func TestDeleteWorktreeRejectsRunningReviewer(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("busy delete waited for the Reviewer provider request")
 	}
-	state.assertUnchanged(t, env, busySession.Meta().SessionID, busy.WorktreeID)
+	state.assertUnchanged(t, env, sessionID, busy.WorktreeID)
 }
 
 func TestDeleteWorktreeRetiresIdleRuntimeAndRetargetsSessionBeforePhysicalRemoval(t *testing.T) {

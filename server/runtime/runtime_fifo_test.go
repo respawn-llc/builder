@@ -342,6 +342,58 @@ func TestWorktreeTransitionWaitsForActiveAgentStepBoundary(t *testing.T) {
 	}
 }
 
+func TestWorktreeTransitionRejectsRunningReviewer(t *testing.T) {
+	reviewerClient, reviewerStarted, releaseReviewer := newGatedHookClient(
+		llm.Response{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value(`{"suggestions":[]}`),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		llm.Response{},
+	)
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{responses: []llm.Response{finalTextResponse("done")}},
+		tools.NewRegistry(),
+		Config{
+			Model: "gpt-5",
+			Reviewer: ReviewerConfig{
+				Frequency:     "all",
+				Model:         "gpt-5",
+				ThinkingLevel: "low",
+				Client:        reviewerClient,
+			},
+		},
+	)
+	t.Cleanup(func() {
+		releaseReviewer()
+		waitEngineLifecycleTasks(t, engine)
+	})
+	if _, err := engine.SubmitUserMessage(t.Context(), "start Reviewer"); err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	select {
+	case <-reviewerStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Reviewer provider request")
+	}
+
+	transitionRan := false
+	err := engine.RunWorktreeTransition(t.Context(), func() error {
+		transitionRan = true
+		return nil
+	})
+	if !errors.Is(err, ErrReviewerRunning) {
+		t.Fatalf("RunWorktreeTransition error = %v, want ErrReviewerRunning", err)
+	}
+	if transitionRan {
+		t.Fatal("Worktree transition ran while Reviewer was active")
+	}
+}
+
 func TestRuntimeOperationFIFOPropagatesTypedFailure(t *testing.T) {
 	fifo := newRuntimeOperationFIFO()
 	t.Cleanup(fifo.Close)
