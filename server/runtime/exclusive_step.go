@@ -149,7 +149,7 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 	if err != nil {
 		return err
 	}
-	if isAgentStepCapable(options.ActiveKind) {
+	if isAgentStepKind(options.ActiveKind) {
 		if pauseErr := s.engine.pauseRuntimeOperations(ctx); pauseErr != nil {
 			return s.finishStep(stepID, options, pauseErr)
 		}
@@ -177,7 +177,7 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 }
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
-	if isAgentStepCapable(options.ActiveKind) {
+	if isAgentStepKind(options.ActiveKind) {
 		if drainErr := s.engine.drainRuntimeOperations(context.Background()); drainErr != nil &&
 			!errors.Is(drainErr, ErrEngineClosed) {
 			err = errors.Join(err, fmt.Errorf("drain Runtime operations at agent Step Boundary: %w", drainErr))
@@ -368,7 +368,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(afterPersist func(*RunSnapshot)) (*RunSnapshot, error) {
 	s.mu.Lock()
 	active := s.active
-	if active == nil || !isAgentStepCapable(active.activeKind) || active.closing || active.interrupted {
+	if active == nil || !isInterruptibleAgentTurn(active.activeKind) || active.closing || active.interrupted {
 		s.mu.Unlock()
 		return nil, nil
 	}
@@ -779,7 +779,7 @@ func (s *defaultExclusiveStepLifecycle) CompleteAgentStepBoundary(ctx context.Co
 func (s *defaultExclusiveStepLifecycle) activeAgentStepID() *string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active == nil || !isAgentStepCapable(s.active.activeKind) {
+	if s.active == nil || !isAgentStepKind(s.active.activeKind) {
 		return nil
 	}
 	stepID := s.active.stepID
@@ -796,7 +796,7 @@ func (s *defaultExclusiveStepLifecycle) drainAgentStepBoundary(ctx context.Conte
 func (s *defaultExclusiveStepLifecycle) drainBoundaryReservations(ctx context.Context) error {
 	for {
 		s.mu.Lock()
-		if s.active == nil || s.suspended != nil || !isAgentStepCapable(s.active.activeKind) ||
+		if s.active == nil || s.suspended != nil || !isAgentStepKind(s.active.activeKind) ||
 			len(s.nextWaiters) == 0 || s.nextWaiters[0].reservation == nil {
 			s.mu.Unlock()
 			return nil

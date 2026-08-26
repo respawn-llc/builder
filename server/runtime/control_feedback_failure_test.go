@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 
 	"core/server/llm"
@@ -19,7 +20,7 @@ func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 	}}, Config{Model: "gpt-5.3-codex"})
 	blocker := mustBlockTestEventLogAppends(t, store)
 
-	changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(true, func(bool) string {
+	changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(context.Background(), true, func(bool) string {
 		return "feedback"
 	})
 	if err == nil || receipt.Committed || changed || engine.FastModeEnabled() {
@@ -44,7 +45,7 @@ func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testin
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
 	blocker := mustBlockTestEventLogAppends(t, store)
 
-	changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(false, func(bool, bool) string {
+	changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(context.Background(), false, func(bool, bool) string {
 		return "feedback"
 	})
 	if err == nil || receipt.Committed || changed || !enabled || !engine.QuestionsEnabled() {
@@ -81,7 +82,7 @@ func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 	})
 	blocker := mustBlockTestEventLogAppends(t, store)
 
-	changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(true, func(bool, string, bool) string {
+	changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(context.Background(), true, func(bool, string, bool) string {
 		return "feedback"
 	})
 	if err == nil || receipt.Committed || changed || mode != "edits" || engine.ReviewerFrequency() != "off" {

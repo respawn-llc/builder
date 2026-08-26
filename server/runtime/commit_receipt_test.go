@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -78,7 +80,7 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 				}}, Config{Model: "gpt-5.3-codex"})
 			},
 			apply: func(engine *Engine) (bool, session.CommitReceipt, error) {
-				return engine.SetFastModeEnabledWithCommittedFeedback(true, func(bool) string {
+				return engine.SetFastModeEnabledWithCommittedFeedback(context.Background(), true, func(bool) string {
 					return "feedback"
 				})
 			},
@@ -90,7 +92,7 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 				return mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
 			},
 			apply: func(engine *Engine) (bool, session.CommitReceipt, error) {
-				changed, _, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(false, func(bool, bool) string {
+				changed, _, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(context.Background(), false, func(bool, bool) string {
 					return "feedback"
 				})
 				return changed, receipt, err
@@ -114,7 +116,7 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 				})
 			},
 			apply: func(engine *Engine) (bool, session.CommitReceipt, error) {
-				changed, _, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(true, func(bool, string, bool) string {
+				changed, _, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(context.Background(), true, func(bool, string, bool) string {
 					return "feedback"
 				})
 				return changed, receipt, err
@@ -142,6 +144,55 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 				t.Fatalf("committed control feedback projected rows: %+v", rows)
 			}
 		})
+	}
+}
+
+func TestCommittedControlFeedbackCallerCancellationStopsOnlyWait(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+		t.Fatalf("pause Runtime FIFO: %v", err)
+	}
+
+	caller, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() {
+		_, _, _, err := engine.SetQuestionsEnabledWithCommittedFeedback(caller, false, func(bool, bool) string {
+			return "feedback"
+		})
+		result <- err
+	}()
+	deadline := time.After(runtimeTestSynchronizationTimeout)
+	for !engine.HasPendingRuntimeOperations() {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for accepted control mutation")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled control wait error = %v, want canceled", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("canceled control caller remained blocked")
+	}
+	if !engine.QuestionsEnabled() {
+		t.Fatal("control mutation applied before the paused Runtime FIFO drained")
+	}
+
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatalf("drain accepted control mutation: %v", err)
+	}
+	if engine.QuestionsEnabled() {
+		t.Fatal("accepted control mutation did not continue after caller cancellation")
+	}
+	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 1 {
+		t.Fatalf("accepted control feedback projected rows: %+v", rows)
 	}
 }
 

@@ -270,7 +270,16 @@ func (c *defaultContextCompactor) CompactContextForPreSubmitWithAcceptance(ctx c
 	return c.compactContext(ctx, compactionModeManual, nil, compactionInstructionsInput{}, false, nil, onActive, accept, false)
 }
 
-func isAgentStepCapable(kind ActiveKind) bool {
+func isAgentStepKind(kind ActiveKind) bool {
+	switch kind {
+	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop, ActiveKindBackground:
+		return true
+	default:
+		return false
+	}
+}
+
+func isInterruptibleAgentTurn(kind ActiveKind) bool {
 	switch kind {
 	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop:
 		return true

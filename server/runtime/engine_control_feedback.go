@@ -43,14 +43,14 @@ func (e *Engine) appendCommittedControlFeedback(text string) (session.CommitRece
 	})
 }
 
-func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback func(changed bool) string) (bool, session.CommitReceipt, error) {
+func (e *Engine) SetFastModeEnabledWithCommittedFeedback(ctx context.Context, enabled bool, feedback func(changed bool) string) (bool, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
 	if enabled && !e.FastModeAvailable() {
 		return false, session.CommitReceipt{}, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
-	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
 		changed bool
 		receipt session.CommitReceipt
 	}, error) {
@@ -69,11 +69,11 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback 
 	return result.changed, result.receipt, err
 }
 
-func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, changed bool) string) (bool, bool, session.CommitReceipt, error) {
+func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(ctx context.Context, enabled bool, feedback func(enabled bool, changed bool) string) (bool, bool, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, e.QuestionsEnabled(), session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
-	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
 		changed bool
 		enabled bool
 		receipt session.CommitReceipt
@@ -99,11 +99,11 @@ func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback
 	return result.changed, result.enabled, result.receipt, err
 }
 
-func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
+func (e *Engine) SetReviewerEnabledWithCommittedFeedback(ctx context.Context, enabled bool, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, e.ReviewerFrequency(), session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
-	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
 		changed bool
 		mode    string
 		receipt session.CommitReceipt
@@ -131,7 +131,7 @@ func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback 
 	return result.changed, result.mode, result.receipt, err
 }
 
-func (e *Engine) SetReviewerFrequencyWithCommittedFeedback(frequency string, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
+func (e *Engine) SetReviewerFrequencyWithCommittedFeedback(ctx context.Context, frequency string, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, e.ReviewerFrequency(), session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
@@ -139,7 +139,7 @@ func (e *Engine) SetReviewerFrequencyWithCommittedFeedback(frequency string, fee
 	if err != nil {
 		return false, e.ReviewerFrequency(), session.CommitReceipt{}, err
 	}
-	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
 		changed bool
 		receipt session.CommitReceipt
 	}, error) {

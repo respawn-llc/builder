@@ -68,43 +68,41 @@ func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) boo
 	return false
 }
 
-func TestBackgroundStepBoundarySkipsAgentFIFOAndCompactionBookkeeping(t *testing.T) {
+func TestBackgroundStepBoundaryDrainsAgentFIFOAndCompletesCompactionBookkeeping(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
 	engine.stepLifecycle = lifecycle
 	engine.compactionRuntimeState().SetManualCompactionEligible(false)
-	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
-		t.Fatalf("pause Runtime FIFO: %v", err)
-	}
 	operationStarted := make(chan struct{})
-	deferred := submitEngineRuntimeOperation(engine, func(context.Context) (struct{}, error) {
-		close(operationStarted)
-		return struct{}{}, nil
-	})
+	var deferred runtimeDeferred[struct{}]
 
 	err := lifecycle.Run(
-		context.Background(),
+		t.Context(),
 		exclusiveStepOptions{ActiveKind: ActiveKindBackground},
 		func(context.Context, string) error {
-			canceled, cancel := context.WithCancel(context.Background())
-			cancel()
-			if err := lifecycle.CompleteAgentStepBoundary(canceled); err != nil {
+			deferred = submitEngineRuntimeOperation(engine, func(context.Context) (struct{}, error) {
+				close(operationStarted)
+				return struct{}{}, nil
+			})
+			select {
+			case <-operationStarted:
+				return errors.New("background Agent Step did not pause the Runtime FIFO")
+			default:
+			}
+			if err := lifecycle.CompleteAgentStepBoundary(t.Context()); err != nil {
 				return err
 			}
-			if engine.compactionRuntimeState().ManualCompactionEligible() {
-				return errors.New("background boundary enabled manual compaction")
+			if !engine.compactionRuntimeState().ManualCompactionEligible() {
+				return errors.New("background Agent Step boundary did not enable manual compaction")
 			}
 			select {
 			case <-operationStarted:
-				return errors.New("background boundary drained the Runtime FIFO")
+				return nil
 			default:
+				return errors.New("background Agent Step boundary did not drain the Runtime FIFO")
 			}
-			return nil
 		},
 	)
-	if drainErr := engine.drainRuntimeOperations(t.Context()); drainErr != nil {
-		err = errors.Join(err, drainErr)
-	}
 	if _, awaitErr := deferred.Await(t.Context()); awaitErr != nil {
 		err = errors.Join(err, awaitErr)
 	}
@@ -866,6 +864,7 @@ func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testin
 		{name: string(ActiveKindWorkflowTurn), kind: ActiveKindWorkflowTurn, wantMatch: true},
 		{name: string(ActiveKindGoalLoop), kind: ActiveKindGoalLoop, wantMatch: true},
 		{name: "closing_user_turn", kind: ActiveKindUserTurn, closing: true},
+		{name: string(ActiveKindBackground), kind: ActiveKindBackground},
 		{name: string(ActiveKindCompaction), kind: ActiveKindCompaction},
 	} {
 		t.Run(test.name, func(t *testing.T) {
