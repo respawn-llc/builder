@@ -142,11 +142,25 @@ func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverap
 }
 
 func (c *sessionRuntimeClient) applyGoalResponse(resp serverapi.RuntimeGoalShowResponse) *clientui.RuntimeGoal {
-	goal := runtimeGoalFromCore(resp.Goal)
+	var goal *clientui.RuntimeGoal
 	c.patchMainView(func(view *clientui.RuntimeMainView) {
+		goal = runtimeGoalFromCorePreservingAvailability(resp.Goal, view.Status.Goal)
 		view.Status.Goal = cloneRuntimeGoal(goal)
 	})
 	return goal
+}
+
+func runtimeGoalFromCorePreservingAvailability(goal *clientui.Goal, current *clientui.RuntimeGoal) *clientui.RuntimeGoal {
+	projected := runtimeGoalFromCore(goal)
+	if current == nil || current.Availability == nil {
+		return projected
+	}
+	if projected == nil {
+		projected = &clientui.RuntimeGoal{}
+	}
+	availability := *current.Availability
+	projected.Availability = &availability
+	return projected
 }
 
 func runtimeGoalFromCore(goal *clientui.Goal) *clientui.RuntimeGoal {
@@ -167,6 +181,10 @@ func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {
 	if goal.Goal != nil {
 		core := *goal.Goal
 		cloned.Goal = &core
+	}
+	if goal.Availability != nil {
+		availability := *goal.Availability
+		cloned.Availability = &availability
 	}
 	return &cloned
 }

@@ -265,6 +265,13 @@ func TestRuntimeClientGoalMutationMethodsPatchCachedMainView(t *testing.T) {
 	reactivator := newRuntimeReactivator()
 	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
 	runtimeClient.SetRuntimeReactivator(reactivator)
+	availability := clientui.GoalAvailabilityAgentCapabilityMissing
+	runtimeClient.storeMainView(clientui.RuntimeMainView{
+		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
+		Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{
+			Availability: &availability,
+		}},
+	})
 
 	for _, tt := range []struct {
 		name string
@@ -282,7 +289,12 @@ func TestRuntimeClientGoalMutationMethodsPatchCachedMainView(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s goal: %v", tt.name, err)
 			}
-			assertRuntimeClientGoalCached(t, runtimeClient, goal, runtimeGoalFromCore(tt.want))
+			want := runtimeGoalFromCore(tt.want)
+			if want == nil {
+				want = &clientui.RuntimeGoal{}
+			}
+			want.Availability = &availability
+			assertRuntimeClientGoalCached(t, runtimeClient, goal, want)
 		})
 	}
 }
@@ -310,16 +322,21 @@ func TestCloneRuntimeGoalReturnsIndependentCopy(t *testing.T) {
 		runtimeClientTestGoal("goal-1", "ship", clientui.RuntimeGoalStatusActive),
 		true,
 	)
+	availability := clientui.GoalAvailabilityAgentCapabilityMissing
+	original.Availability = &availability
 	cloned := cloneRuntimeGoal(original)
 	original.ID = "goal-2"
 	original.Objective = "mutated"
 	original.Status = clientui.RuntimeGoalStatusPaused
+	*original.Availability = clientui.GoalAvailabilityAvailable
 	original.Suspended = false
 
 	want := runtimeClientTestRuntimeGoal(
 		runtimeClientTestGoal("goal-1", "ship", clientui.RuntimeGoalStatusActive),
 		true,
 	)
+	wantAvailability := clientui.GoalAvailabilityAgentCapabilityMissing
+	want.Availability = &wantAvailability
 	if !reflect.DeepEqual(cloned, want) {
 		t.Fatalf("clone = %+v, want %+v", cloned, want)
 	}
