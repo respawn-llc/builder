@@ -1095,6 +1095,7 @@ func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *
 		Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
 		MinimumExecToBgTime: 50 * time.Millisecond,
 		ShellOutputMaxChars: 16_000,
+		ModelContextWindow:  200_000,
 		SupportsVision:      true,
 		Background:          manager,
 	})
@@ -1253,6 +1254,39 @@ func TestRuntimeWiringExecCommandUsesEffectiveBuiltinInsteadOfBootstrapNone(t *t
 	}
 }
 
+func TestRuntimeWiringUsesLockedSessionContextWindowForShell(t *testing.T) {
+	root := t.TempDir()
+	store := newRuntimeWireSession(t, root, "shell-context-window")
+	active := runtimeWireShellSettings(config.ShellPostprocessingModeNone, nil)
+	active.ModelContextWindow = 40
+	if err := store.MarkModelDispatchLocked(session.LockedContract{
+		Model:          active.Model,
+		ContextWindow:  20,
+		ContextPercent: 95,
+	}); err != nil {
+		t.Fatalf("lock Session context window: %v", err)
+	}
+
+	wiring, err := NewRuntimeWiringWithBackground(
+		store,
+		materializedRuntimeWireEventLog(t, store),
+		active,
+		[]toolspec.ID{toolspec.ToolExecCommand},
+		nil,
+		nil,
+		nil,
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: &runtimewireCaptureClient{}}),
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
+	}
+	t.Cleanup(func() { _ = wiring.Close() })
+
+	assertRuntimeWireToolError(t, wiring.LocalTools.Registry(), toolspec.ToolExecCommand, map[string]any{
+		"cmd": "printf 123456789012345678901234567890123456789012345678", "shell": "/bin/sh", "login": false, "yield_time_ms": 1_000, "max_output_tokens": 11,
+	})
+}
+
 func TestRuntimeWiringExecCommandUsesEffectiveHookAcrossWorkspaceRebind(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()
@@ -1344,28 +1378,9 @@ func newRuntimeWireShellManager(t *testing.T, runner *postprocess.Runner) *shell
 }
 
 func callRuntimeWireExec(t *testing.T, registry *tools.Registry, command string) string {
-	t.Helper()
-	handler, ok := registry.Get(toolspec.ToolExecCommand)
-	if !ok {
-		t.Fatal("expected exec_command handler")
-	}
-	input, err := json.Marshal(map[string]any{
-		"cmd":           command,
-		"shell":         "/bin/sh",
-		"login":         false,
-		"yield_time_ms": 1_000,
+	result := callRuntimeWireTool(t, registry, toolspec.ToolExecCommand, map[string]any{
+		"cmd": command, "shell": "/bin/sh", "login": false, "yield_time_ms": 1_000,
 	})
-	if err != nil {
-		t.Fatalf("marshal exec_command input: %v", err)
-	}
-	result, err := handler.Call(context.Background(), tools.Call{
-		ID:    "runtimewire-exec",
-		Name:  toolspec.ToolExecCommand,
-		Input: input,
-	})
-	if err != nil {
-		t.Fatalf("exec_command call: %v", err)
-	}
 	if result.IsError {
 		t.Fatalf("exec_command result error: %s", string(result.Output))
 	}
@@ -1386,6 +1401,24 @@ func TestNewLocalToolRegistryBindingRejectsEmptyWorkspaceRoot(t *testing.T) {
 	})
 	if !errors.Is(err, errWorkspaceRootRequired) {
 		t.Fatalf("new local tool registry binding error = %v, want errWorkspaceRootRequired", err)
+	}
+}
+
+func TestNewLocalToolRegistryBindingRejectsNonPositiveContextWindowForShellTools(t *testing.T) {
+	for _, toolID := range []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWriteStdin} {
+		t.Run(string(toolID), func(t *testing.T) {
+			_, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+				FilesystemContext:   runtimeWireFilesystemContext(t, t.TempDir()),
+				Enabled:             []toolspec.ID{toolID},
+				ModelContextWindow:  0,
+				MinimumExecToBgTime: 15 * time.Second,
+				ShellOutputMaxChars: 16_000,
+				SupportsVision:      true,
+			})
+			if err == nil {
+				t.Fatal("accepted non-positive model context window for shell tool")
+			}
+		})
 	}
 }
 
@@ -1619,6 +1652,7 @@ func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Log
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
+		ModelContextWindow:  200_000,
 		SupportsVision:      true,
 		Logger:              logger,
 	})
@@ -1635,6 +1669,7 @@ func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, config
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
+		ModelContextWindow:  200_000,
 		AllowNonCwdEdits:    allowNonCwdEdits,
 		SupportsVision:      true,
 		GlobalConfigDir:     configRoot,
@@ -1652,6 +1687,7 @@ func newRuntimeWireBinding(t *testing.T, workspace string, enabled ...toolspec.I
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
+		ModelContextWindow:  200_000,
 		SupportsVision:      true,
 	})
 	if err != nil {

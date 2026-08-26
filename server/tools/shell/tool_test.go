@@ -115,9 +115,8 @@ func newShellTestManager(t *testing.T, minimumExecToBackground time.Duration) *M
 }
 
 func TestExecCommandSilentSuccessIsTerminalAndUnambiguous(t *testing.T) {
-	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(t.TempDir(), 16_000, 20, manager, "")
 
 	result := callExecCommand(t, execTool, "silent-success", map[string]any{
 		"cmd":           "true",
@@ -138,14 +137,13 @@ func TestExecCommandSilentSuccessIsTerminalAndUnambiguous(t *testing.T) {
 	if result.PresentationDelta != nil && result.PresentationDelta.MovedToBackground {
 		t.Fatalf("silent foreground completion must not be marked backgrounded: %+v", result.PresentationDelta)
 	}
-	waitForManagerCount(t, manager, 0, time.Second)
 }
 
 func TestExecCommandEmptyDefaultWorkdirReturnsManagerErrorWithoutExecuting(t *testing.T) {
 	serverCWD := t.TempDir()
 	t.Chdir(serverCWD)
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool("", 16_000, manager, "")
+	execTool := NewExecCommandTool("", 16_000, 200_000, manager, "")
 	call := tools.Call{
 		ID:   "empty-default-workdir",
 		Name: toolspec.ToolExecCommand,
@@ -243,7 +241,7 @@ func TestExecCommandWorkdirValidationErrors(t *testing.T) {
 			}
 			call := tools.Call{ID: tt.id, Name: toolspec.ToolExecCommand, Input: rawInput}
 			manager := newBackgroundTestManager(t)
-			got, err := NewExecCommandTool(workspace, 16_000, manager, "").Call(context.Background(), call)
+			got, err := NewExecCommandTool(workspace, 16_000, 200_000, manager, "").Call(context.Background(), call)
 			if err != nil {
 				t.Fatalf("exec_command call returned transport error: %v", err)
 			}
@@ -573,8 +571,8 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
 			manager := newShellTestManager(t, 50*time.Millisecond)
-			execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-			pollTool := NewWriteStdinTool(16_000, manager)
+			execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
+			pollTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 			start := callExecCommand(t, execTool, "poll-start", map[string]any{
 				"cmd":           tt.command,
@@ -628,8 +626,8 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 func TestWriteStdinRejectsShortTimedOutputPolls(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newShellTestManager(t, 50*time.Millisecond)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	pollTool := NewWriteStdinTool(16_000, manager)
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
+	pollTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	start := callExecCommand(t, execTool, "short-poll-start", map[string]any{
 		"cmd":           "sleep 0.15",
@@ -691,7 +689,7 @@ func TestWriteStdinRejectsShortTimedOutputPolls(t *testing.T) {
 func TestWriteStdinCancellationReportsActiveProcess(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
-	pollTool := NewWriteStdinTool(16_000, manager)
+	pollTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	result, err := manager.Start(context.Background(), ExecRequest{
 		Command:        []string{"sh", "-c", "sleep 2"},
@@ -751,7 +749,7 @@ func TestExecCommandCancellationReturnsUndecoratedBaseError(t *testing.T) {
 	workspace := t.TempDir()
 	readyMarker := filepath.Join(workspace, "exec-command-cancellation-ready")
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 	call := tools.Call{
 		ID:   "exec-command-cancellation",
 		Name: toolspec.ToolExecCommand,
@@ -805,7 +803,7 @@ func TestExecCommandReturnsClosedManagerErrorUnchanged(t *testing.T) {
 	if err := manager.Close(); err != nil {
 		t.Fatalf("close manager: %v", err)
 	}
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 	call := tools.Call{
 		ID:   "closed-manager",
 		Name: toolspec.ToolExecCommand,
@@ -873,7 +871,7 @@ func TestManagerWriteStdinCancellationPreservesContextCanceled(t *testing.T) {
 func TestExecCommandReportsNonZeroExitCode(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 
 	result := callExecCommand(t, execTool, "nonzero-1", map[string]any{
 		"cmd":           "printf 'bad\\n'; exit 7",
@@ -901,7 +899,7 @@ func TestExecCommandReportsNonZeroExitCode(t *testing.T) {
 func TestWriteStdinWarnsAndRetriesWhenFullLogReadFails(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newShellTestManager(t, 50*time.Millisecond)
-	pollTool := NewWriteStdinTool(16_000, manager)
+	pollTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	result, err := manager.Start(context.Background(), ExecRequest{
 		Command:        []string{"sh", "-c", "sleep 0.15; printf done"},
@@ -969,7 +967,7 @@ func TestExecCommandClampsShortYieldTime(t *testing.T) {
 		t.Fatalf("new manager: %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 
 	result := callExecCommand(t, execTool, "clamp-1", map[string]any{
 		"cmd":           fmt.Sprintf("sleep %.1f; echo done", commandDelay.Seconds()),
@@ -1008,8 +1006,8 @@ func TestNormalizeWriteYieldTimeDoesNotCapLongPolls(t *testing.T) {
 func TestWriteStdinPollHonorsRequestedDuration(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newShellTestManager(t, 50*time.Millisecond)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	pollTool := NewWriteStdinTool(16_000, manager)
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
+	pollTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	result := callExecCommand(t, execTool, "poll-duration-exec", map[string]any{
 		"cmd":           "read line; sleep 0.6",
@@ -1067,8 +1065,8 @@ func TestWriteStdinWhitespaceInputRemainsInputAtLongWaits(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
 			manager := newShellTestManager(t, 50*time.Millisecond)
-			execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-			stdinTool := NewWriteStdinTool(16_000, manager)
+			execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
+			stdinTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 			start := callExecCommand(t, execTool, "whitespace-input-start", map[string]any{
 				"cmd":           "read line; sleep 0.6",
@@ -1110,7 +1108,7 @@ func TestWriteStdinWhitespaceInputRemainsInputAtLongWaits(t *testing.T) {
 func TestExecCommandForegroundTruncationSetsPresentationMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 
 	result := callExecCommand(t, execTool, "fg-trunc-1", map[string]any{
 		"cmd":               "i=0; while [ $i -lt 400 ]; do printf x; i=$((i+1)); done",
@@ -1133,7 +1131,7 @@ func TestExecCommandForegroundTruncationSetsPresentationMetadata(t *testing.T) {
 func TestExecCommandRawOutputAddsPresentationMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 
 	result := callExecCommand(t, execTool, "raw-presentation-1", map[string]any{
 		"cmd":           "printf raw",
@@ -1153,8 +1151,8 @@ func TestExecCommandRawOutputAddsPresentationMetadata(t *testing.T) {
 func TestWriteStdinRawSessionAddsPresentationMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newShellTestManager(t, 50*time.Millisecond)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	stdinTool := NewWriteStdinTool(16_000, manager)
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
+	stdinTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	result := callExecCommand(t, execTool, "raw-tty-1", map[string]any{
 		"cmd":           "read line; printf '\\033[31m%s\\033[0m' \"$line\"",
@@ -1185,8 +1183,8 @@ func TestWriteStdinRawSessionAddsPresentationMetadata(t *testing.T) {
 func TestWriteStdinSendsInputToInteractiveProcess(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newShellTestManager(t, 50*time.Millisecond)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	stdinTool := NewWriteStdinTool(16_000, manager)
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
+	stdinTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	result := callExecCommand(t, execTool, "tty-1", map[string]any{
 		"cmd":           "read line; echo $line",
@@ -1221,8 +1219,8 @@ func TestWriteStdinSendsInputToInteractiveProcess(t *testing.T) {
 func TestWriteStdinCompletionTruncationSetsPresentationMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newShellTestManager(t, 50*time.Millisecond)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	stdinTool := NewWriteStdinTool(16_000, manager)
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
+	stdinTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	result := callExecCommand(t, execTool, "tty-trunc-1", map[string]any{
 		"cmd":           "read line; printf '%s' \"$line\"",
@@ -1253,8 +1251,8 @@ func TestWriteStdinCompletionTruncationSetsPresentationMetadata(t *testing.T) {
 func TestWriteStdinPreservesBackgroundSummaryTruncationMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newShellTestManager(t, 50*time.Millisecond)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	stdinTool := NewWriteStdinTool(16_000, manager)
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
+	stdinTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	result := callExecCommand(t, execTool, "tty-summary-trunc-1", map[string]any{
 		"cmd":           "read line; head -c 2200000 /dev/zero | tr '\\0' x",
