@@ -66,6 +66,7 @@ type Service struct {
 	cancelTransitions context.CancelFunc
 	transitionMu      sync.Mutex
 	transitionWG      sync.WaitGroup
+	transitionTails   map[string]chan struct{}
 	transitionsClosed bool
 }
 
@@ -362,6 +363,7 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 		workspaceMutations:  metadata.NewMutationLaneRegistry[string](),
 		transitionCtx:       transitionCtx,
 		cancelTransitions:   cancelTransitions,
+		transitionTails:     make(map[string]chan struct{}),
 	}
 }
 

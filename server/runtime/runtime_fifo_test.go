@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/textutil"
@@ -616,6 +617,50 @@ func TestRuntimeOperationFIFOIdleDrainWaitsForAcceptedWork(t *testing.T) {
 	close(release)
 	if err := <-drained; err != nil {
 		t.Fatalf("Idle drain: %v", err)
+	}
+}
+
+func TestRuntimeOperationFIFOCanceledPauseDoesNotSuspendLaterAcceptedWork(t *testing.T) {
+	fifo := newRuntimeOperationFIFO()
+	t.Cleanup(fifo.Close)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	submitRuntimeOperation(fifo, func(context.Context) (struct{}, error) {
+		close(firstStarted)
+		<-releaseFirst
+		return struct{}{}, nil
+	})
+	<-firstStarted
+
+	secondStarted := make(chan struct{})
+	submitRuntimeOperation(fifo, func(context.Context) (struct{}, error) {
+		close(secondStarted)
+		return struct{}{}, nil
+	})
+
+	pauseCtx, cancelPause := context.WithCancel(t.Context())
+	pauseDone := make(chan error, 1)
+	go func() { pauseDone <- fifo.Pause(pauseCtx) }()
+	testsetup.RequireUntil(t, time.Now().Add(runtimeTestSynchronizationTimeout), time.Millisecond, func() bool {
+		fifo.mu.Lock()
+		defer fifo.mu.Unlock()
+		return fifo.pauseDone != nil
+	}, "timed out waiting for Runtime FIFO pause request")
+	cancelPause()
+	if err := <-pauseDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled pause error = %v, want context canceled", err)
+	}
+
+	drained := make(chan error, 1)
+	go func() { drained <- fifo.Drain(t.Context()) }()
+	close(releaseFirst)
+	select {
+	case <-secondStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("accepted Runtime operation remained suspended after pause cancellation")
+	}
+	if err := <-drained; err != nil {
+		t.Fatalf("drain after pause cancellation: %v", err)
 	}
 }
 

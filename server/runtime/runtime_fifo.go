@@ -72,6 +72,7 @@ type runtimeOperationFIFO struct {
 	paused        bool
 	pauseTarget   uint64
 	pauseDone     chan struct{}
+	pauseWaiters  int
 	idleDone      chan struct{}
 	closed        bool
 	currentCancel context.CancelFunc
@@ -216,10 +217,14 @@ func (f *runtimeOperationFIFO) Pause(ctx context.Context) error {
 			f.paused = true
 			close(f.pauseDone)
 			f.pauseDone = nil
+			f.pauseTarget = 0
 		}
 	}
 	pauseDone := f.pauseDone
 	paused := f.paused
+	if !paused {
+		f.pauseWaiters++
+	}
 	f.mu.Unlock()
 	if paused {
 		return nil
@@ -230,7 +235,24 @@ func (f *runtimeOperationFIFO) Pause(ctx context.Context) error {
 	case <-f.workerDone:
 		return ErrEngineClosed
 	case <-ctx.Done():
+		f.withdrawPauseWaiter(pauseDone)
 		return context.Cause(ctx)
+	}
+}
+
+func (f *runtimeOperationFIFO) withdrawPauseWaiter(pauseDone <-chan struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pauseDone != pauseDone {
+		return
+	}
+	f.pauseWaiters--
+	if f.pauseWaiters < 0 {
+		panic("Runtime operation FIFO pause waiter count became negative")
+	}
+	if f.pauseWaiters == 0 {
+		f.pauseDone = nil
+		f.pauseTarget = 0
 	}
 }
 
@@ -311,6 +333,8 @@ func (f *runtimeOperationFIFO) beginClose() {
 	if f.pauseDone != nil {
 		close(f.pauseDone)
 		f.pauseDone = nil
+		f.pauseTarget = 0
+		f.pauseWaiters = 0
 	}
 	if f.pendingCount == 0 {
 		closeRuntimeOperationSignal(f.idleDone)
@@ -354,6 +378,8 @@ func (f *runtimeOperationFIFO) run() {
 			f.paused = true
 			close(f.pauseDone)
 			f.pauseDone = nil
+			f.pauseTarget = 0
+			f.pauseWaiters = 0
 		}
 		if f.pendingCount == 0 {
 			closeRuntimeOperationSignal(f.idleDone)

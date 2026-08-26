@@ -77,11 +77,39 @@ func (s *Service) scheduleWorktreeTransition(
 		s.transitionMu.Unlock()
 		return serverapi.WorktreeScheduledAcknowledgement{}, context.Canceled
 	}
+	predecessor := s.transitionTails[request.sessionID]
+	completed := make(chan struct{})
+	s.transitionTails[request.sessionID] = completed
 	s.transitionWG.Add(1)
 	s.transitionMu.Unlock()
 
-	go func() { _ = s.runWorktreeTransition(s.transitionCtx, request, execute) }()
+	go s.runQueuedWorktreeTransition(predecessor, completed, request, execute)
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: request.operationID}, nil
+}
+
+func (s *Service) runQueuedWorktreeTransition(
+	predecessor <-chan struct{},
+	completed chan struct{},
+	request worktreeTransitionRequest,
+	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
+) {
+	defer func() {
+		close(completed)
+		s.transitionMu.Lock()
+		if s.transitionTails[request.sessionID] == completed {
+			delete(s.transitionTails, request.sessionID)
+		}
+		s.transitionWG.Done()
+		s.transitionMu.Unlock()
+	}()
+	if predecessor != nil {
+		select {
+		case <-predecessor:
+		case <-s.transitionCtx.Done():
+			return
+		}
+	}
+	_ = s.runWorktreeTransition(s.transitionCtx, request, execute)
 }
 
 func (s *Service) runWorktreeTransition(
@@ -89,7 +117,6 @@ func (s *Service) runWorktreeTransition(
 	request worktreeTransitionRequest,
 	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
 ) error {
-	defer s.transitionWG.Done()
 	var terminalOutcome *clientui.WorktreeTransitionOutcome
 	err := s.authority.RunWorktreeTransition(
 		ctx,
