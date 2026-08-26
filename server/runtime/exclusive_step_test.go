@@ -72,6 +72,7 @@ func TestBackgroundStepBoundarySkipsAgentFIFOAndCompactionBookkeeping(t *testing
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
 	engine.stepLifecycle = lifecycle
+	engine.compactionRuntimeState().SetManualCompactionEligible(false)
 	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("pause Runtime FIFO: %v", err)
 	}
@@ -1254,6 +1255,7 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 	if _, err := eng.compactionFlow.CompactContextWithAcceptance(context.Background(), "", nil, nil); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
+	waitEngineLifecycleTasks(t, eng)
 	if snapshot := eng.stepLifecycle.Snapshot(); snapshot != nil {
 		t.Fatalf("manual compaction retained active Step: %+v", snapshot)
 	}

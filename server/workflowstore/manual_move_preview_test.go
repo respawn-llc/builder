@@ -726,7 +726,7 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 	}
 }
 
-func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.T) {
+func TestManualMoveUsesLatestRetainedTargetAfterPlannedSourceBinds(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	definition, _, err := store.GetDefinition(ctx, workflowID)
@@ -777,7 +777,7 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 	if err != nil {
 		t.Fatalf("CompleteCurrentNode Review: %v", err)
 	}
-	auditSessionID := associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, auditResult.Mutation.Created[0].Reference)
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, auditResult.Mutation.Created[0].Reference)
 	implementationBMove := applyManualMoveFixture(t, ctx, store, binding, ManualMoveRequest{
 		TaskID:       task.ID,
 		TargetNodeID: workflow.NodeIDOf(plan),
@@ -805,16 +805,16 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 	}
 	if len(moved.Mutation.Created) != 1 ||
 		moved.Mutation.Created[0].SessionID == nil ||
-		*moved.Mutation.Created[0].SessionID == retainedReviewSessionID {
+		*moved.Mutation.Created[0].SessionID != retainedReviewSessionID {
 		t.Fatalf(
-			"manual Review = %+v, want fresh instead of historical %q",
+			"manual Review = %+v, want latest retained Session %q",
 			moved.Mutation.Created,
 			retainedReviewSessionID,
 		)
 	}
 	sourceID, ok := moved.Mutation.Created[0].ContinuationSource.ExactSessionID()
-	if !ok || sourceID != auditSessionID {
-		t.Fatalf("manual Review source = %q, %v; want selected Audit %q", sourceID, ok, auditSessionID)
+	if !ok || sourceID != retainedReviewSessionID {
+		t.Fatalf("manual Review source = %q, %v; want retained Review %q", sourceID, ok, retainedReviewSessionID)
 	}
 }
 
@@ -865,7 +865,7 @@ func TestManualMoveRetainedTargetUsesCurrentAssociationBeforePlannedSourceBinds(
 	if err != nil {
 		t.Fatalf("CompleteCurrentNode Review: %v", err)
 	}
-	auditSessionID := associateAndBindCurrentNodeSessionForTest(
+	associateAndBindCurrentNodeSessionForTest(
 		t, ctx, store, binding, cfg, auditResult.Mutation.Created[0].Reference,
 	)
 	transitionKey := workflow.TransitionID("rework")
@@ -930,12 +930,12 @@ WHERE task_id = ?
 		t.Fatalf("manual Review = %+v, want retained Review Session %q", moved.Mutation.Created, retainedReviewSessionID)
 	}
 	sourceID, exact := moved.Mutation.Created[0].ContinuationSource.ExactSessionID()
-	if !exact || sourceID != auditSessionID {
-		t.Fatalf("manual Review source = %q, %v; want retained Audit Session %q", sourceID, exact, auditSessionID)
+	if !exact || sourceID != retainedReviewSessionID {
+		t.Fatalf("manual Review source = %q, %v; want retained Review Session %q", sourceID, exact, retainedReviewSessionID)
 	}
 }
 
-func TestManualMoveRetainedTargetUsesSourceAssociationProvenance(t *testing.T) {
+func TestManualMoveRetainedTargetUsesLatestTargetAssociation(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	definition, _, err := store.GetDefinition(ctx, workflowID)
@@ -1040,17 +1040,17 @@ func TestManualMoveRetainedTargetUsesSourceAssociationProvenance(t *testing.T) {
 		)
 	}
 	sourceSessionID, exact := moved.Mutation.Created[0].ContinuationSource.ExactSessionID()
-	if !exact || sourceSessionID != lineageSessionID {
+	if !exact || sourceSessionID != retainedReviewSessionID {
 		t.Fatalf(
-			"manual move source = %q, %v; want lineage Session %q",
+			"manual move source = %q, %v; want retained Review Session %q",
 			sourceSessionID,
 			exact,
-			lineageSessionID,
+			retainedReviewSessionID,
 		)
 	}
 }
 
-func TestManualMoveRetainedTargetStartsFreshWhenUnboundSourceHasNoHistory(t *testing.T) {
+func TestManualMoveRetainedTargetUsesLatestTargetWhenSourceIsUnbound(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	definition, _, err := store.GetDefinition(ctx, workflowID)
@@ -1142,12 +1142,12 @@ WHERE session_id = ?
 	}
 	if len(moved.Mutation.Created) != 1 ||
 		moved.Mutation.Created[0].SessionID == nil ||
-		*moved.Mutation.Created[0].SessionID == retainedReviewSessionID {
-		t.Fatalf("manual Review = %+v, want fresh instead of retained %q", moved.Mutation.Created, retainedReviewSessionID)
+		*moved.Mutation.Created[0].SessionID != retainedReviewSessionID {
+		t.Fatalf("manual Review = %+v, want retained Review Session %q", moved.Mutation.Created, retainedReviewSessionID)
 	}
 	sourceSessionID, exact := moved.Mutation.Created[0].ContinuationSource.ExactSessionID()
-	if !exact || sourceSessionID != *moved.Mutation.Created[0].SessionID {
-		t.Fatalf("manual Review source = %v, want assigned fresh Session", moved.Mutation.Created[0].ContinuationSource)
+	if !exact || sourceSessionID != retainedReviewSessionID {
+		t.Fatalf("manual Review source = %v, want retained Review Session %q", moved.Mutation.Created[0].ContinuationSource, retainedReviewSessionID)
 	}
 }
 

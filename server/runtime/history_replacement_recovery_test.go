@@ -190,9 +190,10 @@ func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	diagnosticKey := "test_diagnostic"
-	if err := runTestActiveStep(engine, "before-compaction", func() error {
+	beforeStepID := runtimeTestStepID("before-compaction")
+	if err := runTestActiveStep(engine, beforeStepID, func() error {
 		return engine.steerPersistedDiagnosticEntry(
-			"before-compaction",
+			beforeStepID,
 			diagnosticKey,
 			string(transcript.EntryRoleDeveloperErrorFeedback),
 			"before",
@@ -201,10 +202,11 @@ func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 		t.Fatalf("persist pre-compaction diagnostic: %v", err)
 	}
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(engine, "compaction", func() error {
+	compactionStepID := runtimeTestStepID("compaction")
+	err := runTestActiveStep(engine, compactionStepID, func() error {
 		var replaceErr error
 		receipt, replaceErr = newCompactionPersistence(engine).replaceHistory(
-			"compaction",
+			compactionStepID,
 			"local",
 			compactionModeManual,
 			llm.ItemsFromMessages([]llm.Message{{
@@ -221,9 +223,10 @@ func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 
 	reopened := mustOpenTestSession(t, store.Dir())
 	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if err := runTestActiveStep(restored, "after-reopen", func() error {
+	afterStepID := runtimeTestStepID("after-reopen")
+	if err := runTestActiveStep(restored, afterStepID, func() error {
 		return restored.steerPersistedDiagnosticEntry(
-			"after-reopen",
+			afterStepID,
 			diagnosticKey,
 			string(transcript.EntryRoleDeveloperErrorFeedback),
 			"after",
@@ -658,12 +661,12 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 		t.Fatalf("cache-key compaction generation = %d, want 1", generation)
 	}
 	expectedCacheKey := conversationPromptCacheKey(fixture.store.Meta().SessionID)
-	if request.SessionID == nil ||
-		*request.SessionID != fixture.store.Meta().SessionID ||
+	if request.SessionID != nil ||
+		request.CodexDispatch != nil ||
 		request.PromptCacheKey != expectedCacheKey ||
 		request.PromptCacheScope != transcript.CacheWarningScopeConversation {
 		t.Fatalf(
-			"post-compaction request identity = session:%v cache-key:%q scope:%q",
+			"post-compaction context-free request identity = session:%v cache-key:%q scope:%q",
 			request.SessionID,
 			request.PromptCacheKey,
 			request.PromptCacheScope,
@@ -690,8 +693,9 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 		t.Fatalf("persist seed message: %v", err)
 	}
 	engine.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
-	if err := runTestActiveStep(engine, "reminder", func() error {
-		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "reminder")
+	reminderStepID := runtimeTestStepID("reminder")
+	if err := runTestActiveStep(engine, reminderStepID, func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), reminderStepID)
 	}); err != nil {
 		t.Fatalf("append compaction reminder: %v", err)
 	}
@@ -718,9 +722,7 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 		)
 	}
 
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact context: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 	if engine.compactionRuntimeState().SoonReminderIssued() || store.Meta().CompactionSoonReminderIssued {
 		t.Fatalf(
 			"committed compaction reminder state runtime=%v persisted=%v, want both false",

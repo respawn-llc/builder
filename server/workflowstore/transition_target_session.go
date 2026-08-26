@@ -15,7 +15,6 @@ type transitionContextResolution struct {
 	TargetSession              workflow.TargetSessionIntent
 	ActiveSource               workflow.MaterializedContinuationSource
 	SelectedCurrentAssociation *TaskSessionAssociation
-	invariant                  *workflow.RetainedTargetInvariantDetail
 	legacyFallback             *legacyContinuationSourceFallbackDetail
 }
 
@@ -25,13 +24,6 @@ func (r transitionContextResolution) targetSessionID() *runtimeids.SessionID {
 		return nil
 	}
 	return &sessionID
-}
-
-func (r transitionContextResolution) invariantDetail() (workflow.RetainedTargetInvariantDetail, bool) {
-	if r.invariant == nil {
-		return workflow.RetainedTargetInvariantDetail{}, false
-	}
-	return *r.invariant, true
 }
 
 func resolveTransitionContext(
@@ -216,92 +208,36 @@ func resolveRetainedTargetTransitionContext(
 	if err != nil {
 		return transitionContextResolution{}, err
 	}
-	targetState := workflow.UnavailableRetainedTarget()
-	targetHasProvenance := false
-	var selected *TaskSessionAssociation
 	association, err := currentTaskSessionForNode(sqlitegen.WithExpectedNoRows(ctx), q, targetReference)
 	switch {
 	case err == nil:
-		targetHasProvenance = true
-		targetState, err = workflow.NewCurrentRetainedTarget(association.SessionID, association.SourceSessionID)
+		targetSession, err := workflow.NewReuseTargetSessionIntent(association.SessionID)
 		if err != nil {
 			return transitionContextResolution{}, err
 		}
-		selected = &association
+		activeSource, err := workflow.NewExactMaterializedContinuationSource(association.SessionID)
+		if err != nil {
+			return transitionContextResolution{}, err
+		}
+		return transitionContextResolution{
+			TargetSession:              targetSession,
+			ActiveSource:               activeSource,
+			SelectedCurrentAssociation: &association,
+		}, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return transitionContextResolution{}, err
-	default:
-		historical, err := hasHistoricalTaskSessionForNode(ctx, q, targetReference)
-		if err != nil {
-			return transitionContextResolution{}, err
-		}
-		if historical {
-			targetHasProvenance = true
-			targetState = workflow.HistoricalRetainedTarget()
+	}
+	if workflow.CanonicalContextSource(edge.ContextSource).Kind == workflow.ContextSourcePreviousTarget {
+		return transitionContextResolution{}, workflow.RetainedTargetUnavailableError{
+			TaskID:       taskID,
+			SourceNodeID: workflow.NodeIDOf(sourceNode),
+			TargetNodeID: edge.TargetNodeID,
 		}
 	}
-	activeSource := incomingTransitionActiveSource(source)
-	unboundManualMoveSourceWithoutHistory := false
-	if manualMoveContext {
-		if source == nil ||
-			source.Reference.IsBranchScoped() ||
-			source.Reference.NodeID != workflow.NodeIDOf(sourceNode) ||
-			source.SessionID == nil {
-			sourceReference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeIDOf(sourceNode), nil)
-			if err != nil {
-				return transitionContextResolution{}, err
-			}
-			sourceAssociation, associationErr := currentTaskSessionForNode(
-				sqlitegen.WithExpectedNoRows(ctx),
-				q,
-				sourceReference,
-			)
-			if associationErr == nil {
-				activeSource, err = workflow.NewExactMaterializedContinuationSource(sourceAssociation.SourceSessionID)
-				if err != nil {
-					return transitionContextResolution{}, err
-				}
-			} else {
-				if !errors.Is(associationErr, sql.ErrNoRows) ||
-					source == nil ||
-					!source.Reference.Equal(sourceReference) ||
-					source.SessionID != nil {
-					return transitionContextResolution{}, associationErr
-				}
-				unboundManualMoveSourceWithoutHistory = sourceNode.Kind() == workflow.NodeKindAgent
-			}
-		}
-	}
-	if unboundManualMoveSourceWithoutHistory && targetHasProvenance {
-		return transitionContextResolution{
-			TargetSession: workflow.CreateTargetSessionIntent(),
-			ActiveSource:  workflow.DeferredSelfMaterializedContinuationSource(),
-		}, nil
-	}
-	decision, err := workflow.EvaluateRetainedTarget(workflow.RetainedTargetEvaluationRequest{
-		TaskID:        taskID,
-		SourceNodeID:  workflow.NodeIDOf(sourceNode),
-		TargetNodeID:  edge.TargetNodeID,
-		ContextSource: edge.ContextSource,
-		ActiveSource:  activeSource,
-		Target:        targetState,
-	})
-	if err != nil {
-		return transitionContextResolution{}, err
-	}
-	var selectedCurrentAssociation *TaskSessionAssociation
-	if decision.TargetSession.Kind() == workflow.TargetSessionIntentReuse {
-		selectedCurrentAssociation = selected
-	}
-	resolution := transitionContextResolution{
-		TargetSession:              decision.TargetSession,
-		ActiveSource:               decision.ActiveSource,
-		SelectedCurrentAssociation: selectedCurrentAssociation,
-	}
-	if detail, ok := decision.InvariantDetail(); ok {
-		resolution.invariant = &detail
-	}
-	return resolution, nil
+	return transitionContextResolution{
+		TargetSession: workflow.CreateTargetSessionIntent(),
+		ActiveSource:  workflow.DeferredSelfMaterializedContinuationSource(),
+	}, nil
 }
 
 func incomingTransitionActiveSource(source *workflow.CurrentNode) workflow.MaterializedContinuationSource {

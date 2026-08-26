@@ -169,16 +169,19 @@ func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.
 func (c *CurrentNodeController) ReactivateWorkflowSession(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
-) error {
+) (sessionruntime.ExecutionHandle, error) {
 	if c == nil {
-		return errors.New("current node workflow controller is required")
+		return nil, errors.New("current node workflow controller is required")
 	}
 	if sessionID.IsZero() {
-		return errors.New("session id is required")
+		return nil, errors.New("session id is required")
 	}
 	input, err := c.store.ResolveCurrentSessionStartContext(ctx, sessionID)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if handle, live := c.authority.SessionExecution(sessionID); live {
+		return validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
 	}
 	result, completion, err := c.resumeTask(
 		ctx,
@@ -188,21 +191,21 @@ func (c *CurrentNodeController) ReactivateWorkflowSession(
 		&input.CurrentNode.Reference,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if result.Outcome != TaskResumeApplied && result.Outcome != TaskResumeNoOp {
-		return fmt.Errorf("workflow Session reactivation returned invalid Resume outcome %q", result.Outcome)
+		return nil, fmt.Errorf("workflow Session reactivation returned invalid Resume outcome %q", result.Outcome)
 	}
 	if completion != nil {
 		handle, waitErr := completion.wait(ctx)
 		if waitErr != nil {
-			return fmt.Errorf("reactivate workflow Session %s: %w", sessionID, waitErr)
+			return nil, fmt.Errorf("reactivate workflow Session %s: %w", sessionID, waitErr)
 		}
 		return validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
 	}
 	handle, live := c.authority.SessionExecution(sessionID)
 	if !live {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"reactivate workflow Session %s: Current Node %v has no admission owner or live execution",
 			sessionID,
 			input.CurrentNode.Reference,
@@ -215,13 +218,13 @@ func validateReactivatedWorkflowExecution(
 	handle sessionruntime.ExecutionHandle,
 	sessionID runtimeids.SessionID,
 	currentNode workflow.CurrentNodeReference,
-) error {
+) (sessionruntime.ExecutionHandle, error) {
 	if handle == nil {
-		return errors.New("reactivated workflow execution is absent")
+		return nil, errors.New("reactivated workflow execution is absent")
 	}
 	scope := handle.Scope()
 	if scope.Kind() != sessionruntime.ExecutionScopeAgent {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"reactivated workflow Session %s started non-Agent execution scope %s",
 			sessionID,
 			scope.ID(),
@@ -233,13 +236,13 @@ func validateReactivatedWorkflowExecution(
 		resource.SessionID() != sessionID ||
 		!workflowScoped ||
 		!workflowRef.CurrentNode.Equal(currentNode) {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"reactivated workflow Session %s started mismatched execution scope %s",
 			sessionID,
 			scope.ID(),
 		)
 	}
-	return nil
+	return handle, nil
 }
 
 func (c *CurrentNodeController) currentNodeAdmissionCompletionLocked(
@@ -373,7 +376,7 @@ func (c *CurrentNodeController) PreflightTaskResume(
 		return TaskResumePreflight{}, errors.New("current node workflow controller is required")
 	}
 	return runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (TaskResumePreflight, error) {
-		classification, err := c.classifyTaskResume(ctx, taskID)
+		classification, err := c.classifyTaskResume(ctx, taskID, nil)
 		if err != nil {
 			return TaskResumePreflight{}, err
 		}
@@ -402,6 +405,7 @@ type taskResumeClassification struct {
 func (c *CurrentNodeController) classifyTaskResume(
 	ctx context.Context,
 	taskID workflow.TaskID,
+	selected *workflow.CurrentNodeReference,
 ) (taskResumeClassification, error) {
 	c.mu.Lock()
 	if err := c.ensureTaskAvailableLocked(taskID); err != nil {
@@ -419,12 +423,15 @@ func (c *CurrentNodeController) classifyTaskResume(
 			return taskResumeClassification{}, err
 		}
 		for _, currentNode := range currentNodes {
+			if selected != nil && !currentNode.Reference.Equal(*selected) {
+				continue
+			}
 			if currentNode.Scheduling == nil {
 				continue
 			}
 			switch currentNode.Scheduling.State {
 			case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
-				return taskResumeClassification{alreadyResumed: currentNodes}, nil
+				return taskResumeClassification{alreadyResumed: []workflow.CurrentNode{currentNode}}, nil
 			}
 		}
 		return taskResumeClassification{}, &TaskResumeConflictError{TaskID: taskID}
@@ -434,6 +441,9 @@ func (c *CurrentNodeController) classifyTaskResume(
 	}
 	var validationErrs []error
 	for _, classification := range classifications {
+		if selected != nil && !classification.CurrentNode.Reference.Equal(*selected) {
+			continue
+		}
 		if validationErr := classification.ValidationError(); validationErr != nil {
 			validationErrs = append(validationErrs, validationErr)
 			continue
@@ -467,7 +477,7 @@ func (c *CurrentNodeController) resumeTask(
 	var watchedCompletion *currentNodeAdmissionCompletion
 	result, err := runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (TaskResumeResult, error) {
 		var resolution workflowstore.TaskAttentionResolution
-		classification, err := c.classifyTaskResume(ctx, taskID)
+		classification, err := c.classifyTaskResume(ctx, taskID, watch)
 		if err != nil {
 			return TaskResumeResult{}, err
 		}
@@ -565,6 +575,24 @@ func (c *CurrentNodeController) resumeTask(
 		c.mu.Lock()
 		if preparation == nil {
 			for _, start := range starts {
+				if watch != nil && start.reference.Equal(*watch) {
+					key, keyErr := start.reference.Key()
+					if keyErr != nil {
+						resumeErrs = append(resumeErrs, keyErr)
+						continue
+					}
+					if c.currentNodeOwnedLocked(key) {
+						resumeErrs = append(
+							resumeErrs,
+							fmt.Errorf(
+								"queue resumed current node %v while controller ownership remains: %w",
+								start.reference,
+								ErrTaskExecutionNotQuiescent,
+							),
+						)
+						continue
+					}
+				}
 				if queueErr := c.queueExplicitStartLocked(start); queueErr != nil {
 					resumeErrs = append(resumeErrs, fmt.Errorf("queue resumed current node %v: %w", start.reference, queueErr))
 					continue

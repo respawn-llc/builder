@@ -97,14 +97,15 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 		},
 	})
 	eng.ensureOrchestrationCollaborators()
-	restoreStep := setTestActiveStep(eng, "cache-step")
+	stepID := runtimeTestStepID("cache-step")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
 
 	cachePersistEntered, releaseCachePersist := gate.BlockNext()
 
 	cacheDone := make(chan error, 1)
 	go func() {
-		cacheDone <- eng.observePromptCacheResponse("cache-step", preparedCacheRequestObservation{
+		cacheDone <- eng.observePromptCacheResponse(stepID, preparedCacheRequestObservation{
 			request: persistedCacheRequestObserved{
 				DigestVersion: requestCacheDigestVersion,
 				CacheKey:      "session-1/cache-key",
@@ -175,10 +176,11 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
-	restoreStep := setTestActiveStep(eng, "step-1")
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
 
-	if err := eng.observePromptCacheResponse("step-1", preparedCacheRequestObservation{
+	if err := eng.observePromptCacheResponse(stepID, preparedCacheRequestObservation{
 		request: persistedCacheRequestObserved{
 			DigestVersion: requestCacheDigestVersion,
 			CacheKey:      "session-1/cache-key",
@@ -311,7 +313,8 @@ func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T)
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
-	restoreStep := setTestActiveStep(eng, "step-1")
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
 
 	call := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
@@ -385,7 +388,8 @@ func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
-	restoreStep := setTestActiveStep(eng, "step-1")
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
 	executor := defaultStepExecutor{
 		engine: eng,
@@ -393,7 +397,7 @@ func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry
 
 	_, _, err := executor.materializeFinalAnswerToolCalls(
 		context.Background(),
-		"step-1",
+		stepID,
 		acceptedResponseCalls{
 			local: []llm.ToolCall{{
 				ID:    "call-1",

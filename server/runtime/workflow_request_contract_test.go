@@ -470,7 +470,10 @@ func TestRequestToolsRespectLockedVisionCapability(t *testing.T) {
 				t,
 				store,
 				&fakeClient{},
-				tools.NewRegistry(),
+				newTestToolRegistry(t, tools.HandlerRegistration{
+					ID:      toolspec.ToolViewImage,
+					Handler: fakeTool{name: toolspec.ToolViewImage},
+				}),
 				Config{
 					Model:             test.model,
 					ModelCapabilities: test.capabilities,

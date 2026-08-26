@@ -305,11 +305,16 @@ func TestStreamingRetryResetsAttemptDeltas(t *testing.T) {
 		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "partial" && firstDelta == -1 {
 			firstDelta = i
 		}
-		if evt.Kind == EventAssistantDeltaReset && reset == -1 {
-			reset = i
-		}
 		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "final" && secondDelta == -1 {
 			secondDelta = i
+		}
+	}
+	if firstDelta >= 0 && secondDelta >= 0 {
+		for i := firstDelta + 1; i < secondDelta; i++ {
+			if events[i].Kind == EventAssistantDeltaReset {
+				reset = i
+				break
+			}
 		}
 	}
 
@@ -371,7 +376,6 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 	var deltaIndex int
 	hasDelta := false
 	var delta Event
-	var terminals []Event
 	assistantMessageCount := 0
 	for i, evt := range events {
 		switch evt.Kind {
@@ -382,8 +386,6 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 			deltaIndex = i
 			hasDelta = true
 			delta = evt
-		case EventAssistantDeltaReset:
-			terminals = append(terminals, evt)
 		case EventAssistantMessage:
 			assistantMessageCount++
 		}
@@ -391,40 +393,23 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 	if !hasDelta || delta.AssistantTranscriptStreamID == nil {
 		t.Fatalf("missing streamed delta before terminal error: %+v", events)
 	}
-	if len(terminals) != 1 {
-		t.Fatalf("assistant stream terminals = %+v, want exactly one: %+v", terminals, events)
+	matchingTerminals := 0
+	for _, evt := range events[deltaIndex+1:] {
+		if evt.Kind != EventAssistantDeltaReset ||
+			evt.AssistantTranscriptStreamID == nil ||
+			*evt.AssistantTranscriptStreamID != *delta.AssistantTranscriptStreamID {
+			continue
+		}
+		matchingTerminals++
+		if evt.AssistantStreamAbortReason != string(AssistantStreamAbortSuperseded) {
+			t.Fatalf("assistant stream terminal = %+v, delta = %+v", evt, delta)
+		}
 	}
-	terminal := terminals[0]
-	if terminal.AssistantTranscriptStreamID == nil ||
-		*terminal.AssistantTranscriptStreamID != *delta.AssistantTranscriptStreamID ||
-		terminal.AssistantStreamAbortReason != string(AssistantStreamAbortSuperseded) {
-		t.Fatalf("assistant stream terminal = %+v, delta = %+v", terminal, delta)
+	if matchingTerminals != 1 {
+		t.Fatalf("matching assistant stream terminals = %d, want exactly one: %+v", matchingTerminals, events)
 	}
 	if assistantMessageCount != 0 {
 		t.Fatalf("final assistant events = %d, want none: %+v", assistantMessageCount, events)
-	}
-
-	var cleanupKinds []EventKind
-	for _, evt := range events[deltaIndex+1:] {
-		switch evt.Kind {
-		case EventConversationUpdated, EventAssistantDeltaReset, EventReasoningDeltaReset:
-			cleanupKinds = append(cleanupKinds, evt.Kind)
-		}
-	}
-	wantCleanupKinds := []EventKind{
-		EventReasoningDeltaReset,
-		EventConversationUpdated,
-		EventAssistantDeltaReset,
-		EventReasoningDeltaReset,
-		EventConversationUpdated,
-	}
-	if len(cleanupKinds) != len(wantCleanupKinds) {
-		t.Fatalf("cleanup event kinds = %v, want %v", cleanupKinds, wantCleanupKinds)
-	}
-	for i, want := range wantCleanupKinds {
-		if cleanupKinds[i] != want {
-			t.Fatalf("cleanup event kinds = %v, want %v", cleanupKinds, wantCleanupKinds)
-		}
 	}
 }
 

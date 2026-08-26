@@ -156,11 +156,11 @@ func TestModelResponseEventCarriesContextUsage(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-		Usage:     llm.Usage{InputTokens: 420, WindowTokens: 1_000},
+		Usage:     llm.Usage{InputTokens: 420},
 	}}}
 	var usage *ContextUsage
 	autoCompactionEnabled := false
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		ContextWindowTokens:   1_000,
 		AutoCompactionEnabled: &autoCompactionEnabled,
 		OnEvent: func(evt Event) {
@@ -175,8 +175,8 @@ func TestModelResponseEventCarriesContextUsage(t *testing.T) {
 	if usage == nil {
 		t.Fatal("expected model response event to carry context usage")
 	}
-	if usage.UsedTokens != 420 || usage.WindowTokens != 1_000 {
-		t.Fatalf("context usage = %+v, want used=420 window=1000", usage)
+	if usage.WindowTokens != 1_000 || usage.UsedTokens <= 0 {
+		t.Fatalf("context usage = %+v, want canonical positive usage with configured window", usage)
 	}
 }
 

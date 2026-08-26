@@ -56,10 +56,11 @@ func TestWorkflowPostCompletionCompactionKeepsCompletedOutputAndDormantMetaConte
 		t.Fatalf("persist terminal output: %v", err)
 	}
 
-	restoreStep := setTestActiveStep(engine, "workflow-post-completion")
+	stepID := runtimeTestStepID("workflow-post-completion")
+	restoreStep := setTestActiveStep(engine, stepID)
 	_, receipt, err := engine.compactNow(
 		context.Background(),
-		"workflow-post-completion",
+		stepID,
 		compactionModeWorkflowPostCompletion,
 		compactionInstructionsInput{},
 		false,
@@ -132,11 +133,12 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 	}
 
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(fixture.engine, "workflow-post-completion", func() error {
+	stepID := runtimeTestStepID("workflow-post-completion")
+	err := runTestActiveStep(fixture.engine, stepID, func() error {
 		var compactErr error
 		_, receipt, compactErr = fixture.engine.compactNow(
 			context.Background(),
-			"workflow-post-completion",
+			stepID,
 			compactionModeWorkflowPostCompletion,
 			compactionInstructionsInput{},
 			false,
@@ -171,9 +173,10 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 		t.Fatal("restored boundary did not have one successful consumption")
 	}
 
-	restoreStep := setTestActiveStep(reopened, "ordinary-replacement")
+	stepID = runtimeTestStepID("ordinary-replacement")
+	restoreStep := setTestActiveStep(reopened, stepID)
 	receipt, err = newCompactionPersistence(reopened).replaceHistory(
-		"ordinary-replacement",
+		stepID,
 		"local",
 		compactionModeManual,
 		llm.ItemsFromMessages([]llm.Message{{
@@ -747,10 +750,11 @@ func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
 		}
 	}
 
-	restoreStep := setTestActiveStep(engine, "compact")
+	stepID := runtimeTestStepID("compact")
+	restoreStep := setTestActiveStep(engine, stepID)
 	_, receipt, err := engine.compactNow(
 		context.Background(),
-		"compact",
+		stepID,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

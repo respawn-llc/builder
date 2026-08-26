@@ -73,6 +73,7 @@ func TestSetReviewerEnabledConcurrentWithBusyStep(t *testing.T) {
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit while enabling reviewer: %v", err)
 	}
+	waitEngineLifecycleTasks(t, eng)
 	if got := eng.ReviewerFrequency(); got != "edits" {
 		t.Fatalf("reviewer frequency after concurrent enable = %q, want edits", got)
 	}

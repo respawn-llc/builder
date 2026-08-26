@@ -18,7 +18,6 @@ type currentNodeFanoutTarget struct {
 	CurrentNode    workflow.CurrentNode
 	Node           workflow.Node
 	NodeKind       workflow.NodeKind
-	Invariant      *workflow.RetainedTargetInvariantDetail
 	LegacyFallback *legacyContinuationSourceFallbackDetail
 }
 
@@ -68,9 +67,6 @@ func completeCurrentNodeFanout(
 			return CurrentNodeCompletionResult{}, err
 		}
 		targetCurrentNode := materializedTarget.CurrentNode
-		if materializedTarget.Invariant != nil {
-			checkRetainedTargetInvariantBeforeMutation(policy, *materializedTarget.Invariant)
-		}
 		if materializedTarget.LegacyFallback != nil {
 			checkLegacyContinuationSourceBeforeMutation(policy, *materializedTarget.LegacyFallback)
 		}
@@ -78,7 +74,6 @@ func completeCurrentNodeFanout(
 			BranchKey:      branchKey,
 			CurrentNode:    targetCurrentNode,
 			Node:           target.Node,
-			Invariant:      materializedTarget.Invariant,
 			LegacyFallback: materializedTarget.LegacyFallback,
 		})
 		contextResolution, err := pendingApprovalContextSourceResolution(target.Node.Kind(), targetCurrentNode)
@@ -116,9 +111,6 @@ func completeCurrentNodeFanout(
 		}
 		result := CurrentNodeCompletionResult{PendingApproval: &approval}
 		for _, target := range preparedTargets {
-			if target.Invariant != nil {
-				result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
-			}
 			if target.LegacyFallback != nil {
 				result.legacyFallbacks = append(result.legacyFallbacks, *target.LegacyFallback)
 			}
@@ -139,9 +131,6 @@ func completeCurrentNodeFanout(
 		},
 	}
 	for _, target := range preparedTargets {
-		if target.Invariant != nil {
-			result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
-		}
 		if target.LegacyFallback != nil {
 			result.legacyFallbacks = append(result.legacyFallbacks, *target.LegacyFallback)
 		}

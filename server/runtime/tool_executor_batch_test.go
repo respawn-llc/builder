@@ -202,9 +202,10 @@ func TestExecuteToolCallsCommitsHandlerErrorAsHonestResult(t *testing.T) {
 		Config{Model: "gpt-5"},
 	)
 
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
-	results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+	results, err := engine.executeToolCalls(context.Background(), stepID, []llm.ToolCall{{
 		ID:    "handler-error",
 		Name:  string(toolspec.ToolExecCommand),
 		Input: json.RawMessage(`{"cmd":"true"}`),
@@ -254,9 +255,10 @@ func TestToolExecutionDurabilityObservationBaseline(t *testing.T) {
 				}
 			}
 
-			restoreStep := setTestActiveStep(engine, "step")
+			stepID := runtimeTestStepID("step")
+			restoreStep := setTestActiveStep(engine, stepID)
 			defer restoreStep()
-			results, err := engine.executeToolCalls(context.Background(), "step", calls)
+			results, err := engine.executeToolCalls(context.Background(), stepID, calls)
 			if err != nil {
 				t.Fatalf("execute tools: %v", err)
 			}
@@ -336,9 +338,10 @@ func TestExecuteToolCallsCommitsSuccessfulResultsAsOneGroup(t *testing.T) {
 		},
 	}
 
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
-	results, err := engine.executeToolCalls(context.Background(), "step", calls)
+	results, err := engine.executeToolCalls(context.Background(), stepID, calls)
 	if err != nil {
 		t.Fatalf("execute tools: %v", err)
 	}

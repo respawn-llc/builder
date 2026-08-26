@@ -275,6 +275,11 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := e.stepLifecycle.BeginAgentStepBoundary(ctx); err != nil {
 			return stepLoopResult{}, err
 		}
+		if e.backgroundFlow != nil {
+			if _, err := e.backgroundFlow.flushPendingNotices(stepID); err != nil {
+				return stepLoopResult{}, err
+			}
+		}
 		if terminal, err := s.workflowDurableCompletionTerminal(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		} else if terminal {

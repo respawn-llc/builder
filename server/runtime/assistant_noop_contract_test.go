@@ -164,18 +164,14 @@ func TestBlankFinalWithAcceptedToolCallsFailsBeforeExecution(t *testing.T) {
 		}},
 		Usage: llm.Usage{WindowTokens: 200_000},
 	}}}
-	registry := tools.NewRegistry()
-	if err := registry.ReplaceHandlers(tools.HandlerRegistration{
-		ID:      toolspec.ToolPatch,
-		Handler: fakeTool{name: toolspec.ToolPatch},
-	}); err != nil {
-		t.Fatalf("register patch tool: %v", err)
-	}
 	engine := mustNewTestEngine(
 		t,
 		store,
 		client,
-		registry,
+		newTestToolRegistry(t, tools.HandlerRegistration{
+			ID:      toolspec.ToolPatch,
+			Handler: fakeTool{name: toolspec.ToolPatch},
+		}),
 		Config{
 			Model:        "gpt-5",
 			EnabledTools: []toolspec.ID{toolspec.ToolPatch},

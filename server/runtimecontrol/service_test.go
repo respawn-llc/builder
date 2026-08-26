@@ -336,12 +336,15 @@ func (r staticRuntimeControlWorkflowTaskResolver) SessionHasWorkflowTask(context
 	return r.workflow, nil
 }
 
-type runtimeControlWorkflowSessionReactivatorFunc func(context.Context, runtimeids.SessionID) error
+type runtimeControlWorkflowSessionReactivatorFunc func(
+	context.Context,
+	runtimeids.SessionID,
+) (sessionruntime.ExecutionHandle, error)
 
 func (f runtimeControlWorkflowSessionReactivatorFunc) ReactivateWorkflowSession(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
-) error {
+) (sessionruntime.ExecutionHandle, error) {
 	return f(ctx, sessionID)
 }
 
@@ -801,18 +804,18 @@ func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting
 	}
 	reactivations := 0
 	service.WithWorkflowSessionReactivator(runtimeControlWorkflowSessionReactivatorFunc(
-		func(_ context.Context, got runtimeids.SessionID) error {
+		func(_ context.Context, got runtimeids.SessionID) (sessionruntime.ExecutionHandle, error) {
 			reactivations++
 			if got != sessionID {
 				t.Fatalf("reactivated session = %s, want %s", got, sessionID)
 			}
 			bindingClosed = true
 			if err := binding.Close(); err != nil {
-				return err
+				return nil, err
 			}
 			descriptor, err := session.NewOpenSessionDescriptor(sessionID)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			detached, err := service.authority.PrepareDetachedAgentExecution(
 				context.Background(),
@@ -828,15 +831,15 @@ func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting
 				},
 			)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			execution = handle
 			launch()
-			return nil
+			return handle, nil
 		},
 	))
 

@@ -34,9 +34,10 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 	}
 
 	for index := 0; index < 3; index++ {
-		if err := runTestActiveStep(eng, "compact-step", func() error {
+		stepID := runtimeTestStepID("compact-step")
+		if err := runTestActiveStep(eng, stepID, func() error {
 			_, err := newCompactionPersistence(eng).replaceHistory(
-				"compact-step",
+				stepID,
 				"local",
 				compactionModeManual,
 				llm.ItemsFromMessages([]llm.Message{{

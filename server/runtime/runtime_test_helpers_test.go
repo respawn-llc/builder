@@ -83,6 +83,93 @@ func withGenerateRetryDelays(t *testing.T, delays []time.Duration) {
 	})
 }
 
+func withActiveTestRun(
+	t *testing.T,
+	engine *Engine,
+	activeKind ActiveKind,
+	fn func(context.Context, string) error,
+) error {
+	t.Helper()
+	return withActiveTestRunContext(t, context.Background(), engine, activeKind, fn)
+}
+
+func withActiveTestRunContext(
+	t *testing.T,
+	ctx context.Context,
+	engine *Engine,
+	activeKind ActiveKind,
+	fn func(context.Context, string) error,
+) error {
+	t.Helper()
+	engine.ensureOrchestrationCollaborators()
+	return engine.stepLifecycle.Run(
+		ctx,
+		exclusiveStepOptions{ActiveKind: activeKind},
+		fn,
+	)
+}
+
+func buildActiveTurnRequestForTest(
+	t *testing.T,
+	engine *Engine,
+	extra []llm.ResponseItem,
+	allowTools bool,
+) llm.Request {
+	t.Helper()
+	var request llm.Request
+	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		var buildErr error
+		request, buildErr = engine.buildActiveTurnDispatchRequest(ctx, stepID, extra, allowTools)
+		return buildErr
+	})
+	if err != nil {
+		t.Fatalf("build active turn request: %v", err)
+	}
+	return request
+}
+
+func buildReviewerDispatchRequestForTest(
+	t *testing.T,
+	engine *Engine,
+	reviewerClient llm.Client,
+) llm.Request {
+	t.Helper()
+	var request llm.Request
+	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		var buildErr error
+		request, buildErr = engine.buildReviewerDispatchRequest(ctx, stepID, reviewerClient)
+		return buildErr
+	})
+	if err != nil {
+		t.Fatalf("build Reviewer dispatch request: %v", err)
+	}
+	return request
+}
+
+func compactNowInActiveTestRun(
+	t *testing.T,
+	engine *Engine,
+	mode compactionMode,
+	instructions compactionInstructionsInput,
+	includePreservedUserMessage bool,
+) (compactionResult, session.CommitReceipt, error) {
+	t.Helper()
+	var result compactionResult
+	var receipt session.CommitReceipt
+	err := withActiveTestRun(t, engine, ActiveKindCompaction, func(ctx context.Context, stepID string) error {
+		var compactErr error
+		result, receipt, compactErr = engine.compactNow(
+			ctx,
+			stepID,
+			mode,
+			instructions,
+			includePreservedUserMessage,
+		)
+		return compactErr
+	})
+	return result, receipt, err
+}
+
 type blockingStepLifecycleSink struct {
 	endedStarted chan StepLifecycleSnapshot
 	releaseEnded chan struct{}
@@ -372,10 +459,13 @@ func runStepLoopInActiveTestRun(
 	engine *Engine,
 ) (llm.Message, error) {
 	t.Helper()
-	stepID := runtimeTestStepID("test-step")
-	restore := setTestActiveStep(engine, stepID)
-	defer restore()
-	return engine.runStepLoop(ctx, stepID)
+	var message llm.Message
+	err := withActiveTestRunContext(t, ctx, engine, ActiveKindUserTurn, func(runCtx context.Context, stepID string) error {
+		var runErr error
+		message, runErr = engine.runStepLoop(runCtx, stepID)
+		return runErr
+	})
+	return message, err
 }
 
 func mustMaterializeTestEventLog(
@@ -607,7 +697,16 @@ func mustNewHandoffTestEngine(t *testing.T, store *session.Store, client llm.Cli
 
 func mustNewWorkflowTestEngine(t *testing.T, store *session.Store, client llm.Client, workflowCfg *workflowruntime.CurrentNodeExecutionConfig, cfg Config) *Engine {
 	t.Helper()
-	engine := mustNewExecTestEngine(t, store, client, cfg)
+	toolIDs := []toolspec.ID{toolspec.ToolExecCommand}
+	seen := map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
+	for _, id := range cfg.EnabledTools {
+		if id == toolspec.ToolCompleteNode || id == toolspec.ToolWebSearch || seen[id] {
+			continue
+		}
+		seen[id] = true
+		toolIDs = append(toolIDs, id)
+	}
+	engine := mustNewFakeToolEngine(t, store, client, cfg, toolIDs...)
 	publishTestWorkflowExecution(t, engine, workflowCfg)
 	return engine
 }

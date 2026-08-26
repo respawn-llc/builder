@@ -186,6 +186,7 @@ func TestReviewerSuggestionsRequestInheritsFastMode(t *testing.T) {
 	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
+	waitEngineLifecycleTasks(t, eng)
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("expected reviewer to be called once, got %d", len(reviewerClient.calls))
 	}

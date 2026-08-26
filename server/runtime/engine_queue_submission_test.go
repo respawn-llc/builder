@@ -28,13 +28,38 @@ func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("active turn did not start")
 	}
-	queued, err := engine.QueueUserMessage("queued input")
-	if err != nil || queued.ID == "" {
-		t.Fatalf("accepted queue item = %+v/%v", queued, err)
+	queuedDone := make(chan struct {
+		item QueuedUserMessage
+		err  error
+	}, 1)
+	go func() {
+		queued, err := engine.QueueUserMessage("queued input")
+		queuedDone <- struct {
+			item QueuedUserMessage
+			err  error
+		}{item: queued, err: err}
+	}()
+	select {
+	case result := <-queuedDone:
+		t.Fatalf("post-turn Queue applied before the protected Step boundary: %+v/%v", result.item, result.err)
+	case <-time.After(25 * time.Millisecond):
 	}
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatalf("active turn completion: %v", err)
+	}
+	var queued QueuedUserMessage
+	select {
+	case result := <-queuedDone:
+		if result.err != nil || result.item.ID == "" {
+			t.Fatalf("accepted queue item = %+v/%v", result.item, result.err)
+		}
+		queued = result.item
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("post-turn Queue did not apply at the protected Step boundary")
+	}
+	if queued.ID == "" {
+		t.Fatal("post-turn Queue accepted an empty item")
 	}
 	waitEngineLifecycleTasks(t, engine)
 	if calls := fakeClientCallCount(client); calls != 0 {

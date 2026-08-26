@@ -41,7 +41,7 @@ func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
 	}
 
 	var delta, assistant, reset *Event
-	deltaIndex, assistantIndex, resetIndex := -1, -1, -1
+	deltaIndex, resetIndex, assistantIndex := -1, -1, -1
 	for index := range events {
 		event := &events[index]
 		switch event.Kind {
@@ -68,8 +68,8 @@ func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
 
 	if delta == nil || assistant == nil || reset == nil ||
 		delta.AssistantTranscriptStreamID == nil ||
-		assistant.AssistantTranscriptStreamID == nil ||
 		reset.AssistantTranscriptStreamID == nil ||
+		assistant.AssistantTranscriptStreamID != nil ||
 		assistant.Message.Role != llm.RoleAssistant ||
 		assistant.Message.Phase == nil ||
 		*assistant.Message.Phase != llm.MessagePhaseFinal ||
@@ -81,22 +81,22 @@ func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
 			reset,
 		)
 	}
-	if deltaIndex >= assistantIndex || assistantIndex >= resetIndex {
+	if deltaIndex >= resetIndex || resetIndex >= assistantIndex {
 		t.Fatalf(
-			"stream finalization order = delta:%d assistant:%d reset:%d events:%+v",
+			"stream divergence order = delta:%d reset:%d assistant:%d events:%+v",
 			deltaIndex,
-			assistantIndex,
 			resetIndex,
+			assistantIndex,
 			events,
 		)
 	}
-	if *delta.AssistantTranscriptStreamID != *assistant.AssistantTranscriptStreamID ||
-		*delta.AssistantTranscriptStreamID != *reset.AssistantTranscriptStreamID {
+	if *delta.AssistantTranscriptStreamID != *reset.AssistantTranscriptStreamID ||
+		reset.AssistantStreamAbortReason != string(AssistantStreamAbortSuperseded) {
 		t.Fatalf(
-			"stream finalization UUIDs differ: delta:%s assistant:%s reset:%s",
+			"divergent stream terminal = delta:%s reset:%s reason:%q",
 			*delta.AssistantTranscriptStreamID,
-			*assistant.AssistantTranscriptStreamID,
 			*reset.AssistantTranscriptStreamID,
+			reset.AssistantStreamAbortReason,
 		)
 	}
 }
@@ -169,7 +169,7 @@ func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T
 	}}
 	accepted := scriptedllm.FinalAnswer(`{"transition":"done","summary":"done"}`)
 	accepted.StreamDeltas = []llm.AssistantDelta{{
-		Text:  "completed",
+		Text:  `{"transition"`,
 		Phase: llm.MessagePhaseFinal,
 	}}
 	var events []Event
@@ -300,7 +300,7 @@ func TestCompletedResponseReasoningOnlyAbortsBeforeContinuation(t *testing.T) {
 	}
 	final := scriptedllm.FinalAnswer("completed")
 	final.StreamDeltas = []llm.AssistantDelta{{
-		Text:  "resolved",
+		Text:  "complete",
 		Phase: llm.MessagePhaseFinal,
 	}}
 	var events []Event
@@ -414,7 +414,7 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 	})
 	step.Response.Assistant.Phase = textutil.Value(llm.MessagePhaseFinal)
 	step.StreamDeltas = []llm.AssistantDelta{{
-		Text:  "draft",
+		Text:  "complete",
 		Phase: llm.MessagePhaseFinal,
 	}}
 	var events []Event
@@ -577,7 +577,7 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 	}
 	step := scriptedllm.ToolBatch("completed", calls...)
 	step.Response.Assistant.Phase = textutil.Value(llm.MessagePhaseFinal)
-	step.StreamDeltas = []llm.AssistantDelta{{Text: "draft", Phase: llm.MessagePhaseFinal}}
+	step.StreamDeltas = []llm.AssistantDelta{{Text: "complete", Phase: llm.MessagePhaseFinal}}
 	reasoningOutput, reasoningPart := int64(0), int64(0)
 	step.ReasoningDeltas = []llm.ReasoningSummaryDelta{{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{

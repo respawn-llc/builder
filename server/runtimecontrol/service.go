@@ -45,7 +45,10 @@ type WorkflowTaskSessionResolver interface {
 }
 
 type WorkflowSessionReactivator interface {
-	ReactivateWorkflowSession(context.Context, runtimeids.SessionID) error
+	ReactivateWorkflowSession(
+		context.Context,
+		runtimeids.SessionID,
+	) (sessionruntime.ExecutionHandle, error)
 }
 
 var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction cannot be disabled for workflow task sessions")

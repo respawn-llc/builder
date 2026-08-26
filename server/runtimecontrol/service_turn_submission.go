@@ -3,6 +3,7 @@ package runtimecontrol
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/server/runtime"
@@ -167,8 +168,11 @@ func (s *Service) submitUserTurn(
 	}
 	err = executeTurn()
 	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) && s.reactivator != nil {
-		if reactivateErr := s.reactivator.ReactivateWorkflowSession(attempt.Context(), sessionID); reactivateErr != nil {
+		reactivated, reactivateErr := s.reactivator.ReactivateWorkflowSession(attempt.Context(), sessionID)
+		if reactivateErr != nil {
 			err = reactivateErr
+		} else if validateErr := validateReactivatedWorkflowExecution(s.authority, sessionID, reactivated); validateErr != nil {
+			err = validateErr
 		} else {
 			err = executeTurn()
 		}
@@ -180,6 +184,53 @@ func (s *Service) submitUserTurn(
 		s.recordAcceptedUserTurnHistory(request, projection)
 	}
 	return response, err
+}
+
+func validateReactivatedWorkflowExecution(
+	authority *sessionruntime.Authority,
+	sessionID runtimeids.SessionID,
+	reactivated sessionruntime.ExecutionHandle,
+) error {
+	if authority == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if reactivated == nil {
+		return errors.New("reactivated Workflow execution is absent")
+	}
+	scope := reactivated.Scope()
+	resource, hasResource := scope.Resource()
+	workflowRef, workflowScoped := scope.Workflow()
+	if scope.Kind() != sessionruntime.ExecutionScopeAgent ||
+		!hasResource ||
+		resource.SessionID() != sessionID ||
+		!workflowScoped {
+		return fmt.Errorf(
+			"reactivated Workflow Session %s returned mismatched execution scope %s",
+			sessionID,
+			scope.ID(),
+		)
+	}
+	live, exists := authority.SessionExecution(sessionID)
+	if !exists {
+		return fmt.Errorf(
+			"reactivated Workflow Session %s returned execution scope %s before publication",
+			sessionID,
+			scope.ID(),
+		)
+	}
+	liveScope := live.Scope()
+	liveWorkflowRef, liveWorkflowScoped := liveScope.Workflow()
+	if liveScope.ID() != scope.ID() ||
+		!liveWorkflowScoped ||
+		!liveWorkflowRef.CurrentNode.Equal(workflowRef.CurrentNode) {
+		return fmt.Errorf(
+			"reactivated Workflow Session %s returned execution scope %s that does not match live scope %s",
+			sessionID,
+			scope.ID(),
+			liveScope.ID(),
+		)
+	}
+	return nil
 }
 
 func (s *Service) recordAcceptedUserTurnHistory(

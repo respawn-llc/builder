@@ -108,8 +108,9 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 	if !changed || enabled {
 		t.Fatalf("expected auto compaction toggle off, changed=%v enabled=%v", changed, enabled)
 	}
-	if err := runTestActiveStep(eng, "step-off", func() error {
-		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-off")
+	stepOffID := runtimeTestStepID("step-off")
+	if err := runTestActiveStep(eng, stepOffID, func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), stepOffID)
 	}); err != nil {
 		t.Fatalf("reminder while disabled: %v", err)
 	}
@@ -123,13 +124,15 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 	if !changed || !enabled {
 		t.Fatalf("expected auto compaction toggle on, changed=%v enabled=%v", changed, enabled)
 	}
-	if err := runTestActiveStep(eng, "step-on", func() error {
-		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-on")
+	stepOnID := runtimeTestStepID("step-on")
+	if err := runTestActiveStep(eng, stepOnID, func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), stepOnID)
 	}); err != nil {
 		t.Fatalf("reminder after re-enable: %v", err)
 	}
-	if err := runTestActiveStep(eng, "step-on-duplicate", func() error {
-		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-on-duplicate")
+	duplicateStepID := runtimeTestStepID("step-on-duplicate")
+	if err := runTestActiveStep(eng, duplicateStepID, func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), duplicateStepID)
 	}); err != nil {
 		t.Fatalf("duplicate reminder check: %v", err)
 	}
@@ -146,14 +149,16 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 	}
 
 	eng.setLastUsage(llm.Usage{InputTokens: 800, WindowTokens: 2_000})
-	if err := runTestActiveStep(eng, "step-reset", func() error {
-		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-reset")
+	resetStepID := runtimeTestStepID("step-reset")
+	if err := runTestActiveStep(eng, resetStepID, func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), resetStepID)
 	}); err != nil {
 		t.Fatalf("reset reminder state: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 860, WindowTokens: 2_000})
-	if err := runTestActiveStep(eng, "step-reissue", func() error {
-		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-reissue")
+	reissueStepID := runtimeTestStepID("step-reissue")
+	if err := runTestActiveStep(eng, reissueStepID, func() error {
+		return newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), reissueStepID)
 	}); err != nil {
 		t.Fatalf("reissue reminder: %v", err)
 	}
@@ -249,8 +254,9 @@ func TestForkedSessionBeforeReminderDoesNotCopyReminderIssuedState(t *testing.T)
 	if forked.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("expected forked session before reminder to start with cleared reminder-issued state")
 	}
-	if err := runTestActiveStep(forked, "step-fork", func() error {
-		return newCompactionReminderCoordinator(forked).maybeAppend(context.Background(), "step-fork")
+	forkStepID := runtimeTestStepID("step-fork")
+	if err := runTestActiveStep(forked, forkStepID, func() error {
+		return newCompactionReminderCoordinator(forked).maybeAppend(context.Background(), forkStepID)
 	}); err != nil {
 		t.Fatalf("reminder after fork: %v", err)
 	}
@@ -494,25 +500,12 @@ func TestRunStepLoopAppendsCompactionSoonReminderImmediatelyAfterToolOutputBound
 			{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("checking"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 				ToolCalls: []llm.ToolCall{{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
-				Usage:     llm.Usage{InputTokens: 100, WindowTokens: 2_000},
+				Usage:     llm.Usage{InputTokens: 890, WindowTokens: 2_000},
 			},
 			{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 				Usage:     llm.Usage{InputTokens: 920, WindowTokens: 2_000},
 			},
-		},
-		inputTokenCountFn: func(req llm.Request) int {
-			hasToolResult := false
-			for _, msg := range requestMessages(req) {
-				if msg.Role == llm.RoleTool {
-					hasToolResult = true
-					break
-				}
-			}
-			if hasToolResult {
-				return 890
-			}
-			return 100
 		},
 	}
 
@@ -526,9 +519,7 @@ func TestRunStepLoopAppendsCompactionSoonReminderImmediatelyAfterToolOutputBound
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	restoreStep := setTestActiveStep(eng, "step-1")
-	msg, err := eng.runStepLoop(context.Background(), runtimeTestStepID("step-1"))
-	restoreStep()
+	msg, err := runStepLoopInActiveTestRun(t, context.Background(), eng)
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}

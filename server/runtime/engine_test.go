@@ -1007,9 +1007,7 @@ func TestSystemPromptSnapshotRefreshesAfterCompaction(t *testing.T) {
 	if got := client.calls[1].SystemPrompt; got != "prompt A" {
 		t.Fatalf("pre-compaction system prompt = %q, want prompt A", got)
 	}
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if got := client.calls[2].SystemPrompt; got != "prompt A" {
 		t.Fatalf("compaction system prompt = %q, want prompt A", got)
 	}
@@ -1051,9 +1049,7 @@ func TestSystemPromptRefreshFailureKeepsStaleLockAndRetries(t *testing.T) {
 		t.Fatalf("submit first: %v", err)
 	}
 	writeTestFile(t, systemPath, "prompt B {{")
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if _, err := eng.SubmitUserMessage(context.Background(), "fails"); err == nil {
 		t.Fatal("expected invalid prompt refresh to fail")
 	}
@@ -1095,9 +1091,7 @@ func TestPendingSystemPromptRefreshRunsAfterReopen(t *testing.T) {
 		t.Fatalf("submit first: %v", err)
 	}
 	writeTestFile(t, systemPath, "prompt B")
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if locked := store.Meta().Locked; locked == nil || locked.HasSystemPrompt || locked.SystemPrompt != "" {
 		t.Fatalf("locked prompt after compaction = %+v, want stale", locked)
 	}

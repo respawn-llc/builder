@@ -163,8 +163,8 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 	}()
 	select {
 	case <-updateDone:
-		t.Fatal("background terminal update completed before the protected Step boundary")
-	case <-time.After(25 * time.Millisecond):
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background terminal update submission blocked on the protected Step boundary")
 	}
 
 	client.mu.Lock()
@@ -182,12 +182,6 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 	if messageContent(result.assistant) != "foreground done" {
 		t.Fatalf("assistant content = %q, want foreground done", messageContent(result.assistant))
 	}
-	select {
-	case <-updateDone:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("background terminal update did not complete at the Step boundary")
-	}
-
 	client.mu.Lock()
 	requests := append([]llm.Request(nil), client.calls...)
 	client.mu.Unlock()
@@ -238,6 +232,10 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued input done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("reviewed done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
@@ -257,6 +255,7 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 		},
 	})
 	t.Cleanup(func() {
+		releaseReviewer()
 		eng.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
 		waitEngineLifecycleTasks(t, eng)
 	})
@@ -273,24 +272,62 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for reviewer request")
 	}
-	if _, err := eng.QueueUserMessage("steer reviewer follow-up"); err != nil {
-		t.Fatalf("QueueUserMessage: %v", err)
+	_, queued, err := eng.SubmitUserMessageOrSteerWithAcceptance(
+		context.Background(),
+		"steer reviewer follow-up",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("SubmitUserMessageOrSteerWithAcceptance: %v", err)
+	}
+	if queued == nil {
+		t.Fatal("Steer was not accepted into Pending Work")
+	}
+	deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
+	for fakeClientCallCount(mainClient) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := fakeClientCallCount(mainClient); got != 2 {
+		t.Fatalf("ordinary main work did not proceed while Reviewer was running: calls=%d", got)
 	}
 	releaseReviewer()
 	waitEngineLifecycleTasks(t, eng)
+	reviewerClient.mu.Lock()
+	reviewerRequests := append([]llm.Request(nil), reviewerClient.calls...)
+	reviewerClient.mu.Unlock()
+	if len(reviewerRequests) != 1 {
+		t.Fatalf("Reviewer requests = %d, want 1", len(reviewerRequests))
+	}
+	assertRequestHasUserMessage(t, reviewerRequests[0], "steer reviewer follow-up", false)
 	mainClient.mu.Lock()
 	requests := append([]llm.Request(nil), mainClient.calls...)
 	mainClient.mu.Unlock()
-	if len(requests) != 2 {
-		t.Fatalf("main-agent requests = %d, want initial and reviewer follow-up", len(requests))
+	if len(requests) != 3 {
+		t.Fatalf("main-agent requests = %d, want initial, queued-input, and Reviewer follow-up", len(requests))
 	}
 	assertRequestHasUserMessage(t, requests[1], "steer reviewer follow-up", true)
+	reviewerFeedback := 0
+	for _, message := range requestMessages(requests[2]) {
+		if message.Role == llm.RoleDeveloper && message.MessageType != nil && *message.MessageType == llm.MessageTypeReviewerFeedback {
+			reviewerFeedback++
+		}
+	}
+	if reviewerFeedback != 1 {
+		t.Fatalf("Reviewer follow-up feedback messages = %d, want 1; messages=%+v", reviewerFeedback, requestMessages(requests[2]))
+	}
 	snapshot := eng.ChatSnapshot()
+	foundQueuedInputAnswer := false
 	foundReviewedAnswer := false
 	for _, entry := range snapshot.Entries {
+		if entry.Role == "assistant" && entry.Text == "queued input done" {
+			foundQueuedInputAnswer = true
+		}
 		if entry.Role == "assistant" && entry.Text == "reviewed done" {
 			foundReviewedAnswer = true
 		}
+	}
+	if !foundQueuedInputAnswer {
+		t.Fatalf("queued-input answer missing from snapshot: %+v", snapshot.Entries)
 	}
 	if !foundReviewedAnswer {
 		t.Fatalf("late continuation answer missing from snapshot: %+v", snapshot.Entries)
@@ -392,12 +429,21 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 		t.Fatal("timed out waiting for tool call to start")
 	}
 
-	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       BackgroundShellEventCompleted,
-		ID:         "1000",
-		State:      "completed",
-		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
-	}, true)
+	updateDone := make(chan struct{})
+	go func() {
+		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+			Type:       BackgroundShellEventCompleted,
+			ID:         "1000",
+			State:      "completed",
+			NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
+		}, true)
+		close(updateDone)
+	}()
+	select {
+	case <-updateDone:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background terminal update submission blocked on the protected Step boundary")
+	}
 
 	close(release)
 	result := <-submitDone
@@ -407,6 +453,7 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 	if messageContent(result.assistant) != "foreground done" {
 		t.Fatalf("assistant content = %q, want foreground done", messageContent(result.assistant))
 	}
+	waitEngineLifecycleTasks(t, eng)
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("expected reviewer to run once for deferred final, got %d", len(reviewerClient.calls))
 	}
@@ -436,6 +483,7 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 		queueOnce    sync.Once
 		eng          *Engine
 		backgroundID = "1000"
+		updateDone   = make(chan struct{})
 	)
 	var client *hookClient
 	client = &hookClient{
@@ -445,18 +493,21 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 		},
 		beforeReturn: func() error {
 			queueOnce.Do(func() {
-				eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-					Type:       BackgroundShellEventCompleted,
-					ID:         backgroundID,
-					State:      "completed",
-					NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
-				}, true)
 				client.mu.Lock()
 				client.response = llm.Response{
 					Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(""), Phase: textutil.Value(llm.MessagePhaseFinal)},
 					Usage:     llm.Usage{WindowTokens: 200000},
 				}
 				client.mu.Unlock()
+				go func() {
+					eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+						Type:       BackgroundShellEventCompleted,
+						ID:         backgroundID,
+						State:      "completed",
+						NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
+					}, true)
+					close(updateDone)
+				}()
 			})
 			return nil
 		},
@@ -472,6 +523,12 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 	if _, err := eng.SubmitUserMessage(context.Background(), "run task"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
+	select {
+	case <-updateDone:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background terminal update did not complete after the Step boundary")
+	}
+	waitEngineLifecycleTasks(t, eng)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -547,12 +604,21 @@ func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 		t.Fatal("timed out waiting for tool call to start")
 	}
 
-	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       BackgroundShellEventCompleted,
-		ID:         "1000",
-		State:      "completed",
-		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
-	}, true)
+	updateDone := make(chan struct{})
+	go func() {
+		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+			Type:       BackgroundShellEventCompleted,
+			ID:         "1000",
+			State:      "completed",
+			NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
+		}, true)
+		close(updateDone)
+	}()
+	select {
+	case <-updateDone:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background terminal update submission blocked on the protected Step boundary")
+	}
 
 	close(release)
 	result := <-submitDone
@@ -562,13 +628,14 @@ func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 	if result.assistant.Content != nil {
 		t.Fatalf("assistant content = %q, want absent", *result.assistant.Content)
 	}
+	waitEngineLifecycleTasks(t, eng)
 
 	client.mu.Lock()
 	callCount := len(client.calls)
 	requests := append([]llm.Request(nil), client.calls...)
 	client.mu.Unlock()
 	if callCount != 2 {
-		t.Fatalf("expected 2 model calls within the same turn, got %d", callCount)
+		t.Fatalf("expected 2 model calls within the same Step, got %d", callCount)
 	}
 
 	containsNotice := func(req llm.Request) bool {
@@ -580,14 +647,14 @@ func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 		return false
 	}
 	if !containsNotice(requests[1]) {
-		t.Fatalf("expected background notice in same-turn follow-up, messages=%+v", requestMessages(requests[1]))
+		t.Fatalf("expected background notice in same-Step follow-up, messages=%+v", requestMessages(requests[1]))
 	}
 	time.Sleep(50 * time.Millisecond)
 	client.mu.Lock()
 	callCountAfterReturn := len(client.calls)
 	client.mu.Unlock()
 	if callCountAfterReturn != 2 {
-		t.Fatalf("did not expect a later batched continuation after turn completion, got %d calls", callCountAfterReturn)
+		t.Fatalf("did not expect a later batched continuation after Step completion, got %d calls", callCountAfterReturn)
 	}
 
 	finalAssistantContents := make([]string, 0)

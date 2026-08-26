@@ -1156,13 +1156,13 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 			if err != nil {
 				return err
 			}
-			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(stepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
-			if streamID != nil {
+			appended := e.transcriptRuntimeState().AppendStreamingDelta(stepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
+			if appended.supersededStreamID != nil {
 				reason := AssistantStreamAbortSuperseded
 				if err := e.emitStreamingAssistantCleanupEventsRaw(
 					stepID,
-					metadata,
-					streamID,
+					appended.supersededMetadata,
+					appended.supersededStreamID,
 					&reason,
 				); err != nil {
 					return err
@@ -1173,8 +1173,8 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 				StepID:                      exactStepIDPointer(stepID),
 				AssistantDelta:              delta.Text,
 				AssistantDeltaPhase:         delta.Phase,
-				AssistantStreamMetadata:     metadata,
-				AssistantTranscriptStreamID: streamID,
+				AssistantStreamMetadata:     appended.metadata,
+				AssistantTranscriptStreamID: appended.transcriptStreamID,
 			})
 		}
 		if item.streaming.reasoningDelta != nil {

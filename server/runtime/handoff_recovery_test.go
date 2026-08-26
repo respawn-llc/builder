@@ -66,9 +66,10 @@ func TestHandoffReplacementStoresFutureMessageAtomically(t *testing.T) {
 	}}}
 	restored := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), summaryClient, Config{})
 	var applied bool
-	err := runTestActiveStep(restored, "step", func() error {
+	stepID := runtimeTestStepID("step")
+	err := runTestActiveStep(restored, stepID, func() error {
 		var applyErr error
-		applied, applyErr = restored.applyPendingHandoffIfNeeded(context.Background(), "step")
+		applied, applyErr = restored.applyPendingHandoffIfNeeded(context.Background(), stepID)
 		return applyErr
 	})
 	if err != nil {
@@ -173,8 +174,9 @@ func TestLegacyPendingOnlyHandoffRecoveryRemainsStable(t *testing.T) {
 				return
 			}
 
-			err := runTestActiveStep(restored, "step", func() error {
-				_, applyErr := restored.applyPendingHandoffIfNeeded(context.Background(), "step")
+			stepID := runtimeTestStepID("step")
+			err := runTestActiveStep(restored, stepID, func() error {
+				_, applyErr := restored.applyPendingHandoffIfNeeded(context.Background(), stepID)
 				return applyErr
 			})
 			if err != nil {
@@ -203,10 +205,11 @@ func TestReopenedSessionAfterTriggerHandoffDoesNotRequeueWhenAnyCompactionAlread
 	}
 	handoffCall := persistSuccessfulTriggerHandoff(t, engine, "satisfied-handoff-call")
 	var receipt session.CommitReceipt
-	err := runTestActiveStep(engine, "compact", func() error {
+	stepID := runtimeTestStepID("compact")
+	err := runTestActiveStep(engine, stepID, func() error {
 		var replaceErr error
 		receipt, replaceErr = newCompactionPersistence(engine).replaceHistory(
-			"compact",
+			stepID,
 			"local",
 			compactionModeManual,
 			llm.ItemsFromMessages([]llm.Message{{
@@ -364,9 +367,10 @@ func TestReopenedSessionAfterTriggerHandoffUsesAtomicFutureMessageReplacement(t 
 	engine.handoffRuntimeState().QueueRequest("summarize", "continue")
 
 	var applied bool
-	err := runTestActiveStep(engine, "step", func() error {
+	stepID := runtimeTestStepID("step")
+	err := runTestActiveStep(engine, stepID, func() error {
 		var applyErr error
-		applied, applyErr = engine.applyPendingHandoffIfNeeded(context.Background(), "step")
+		applied, applyErr = engine.applyPendingHandoffIfNeeded(context.Background(), stepID)
 		return applyErr
 	})
 	if err != nil || !applied {
@@ -389,12 +393,13 @@ func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	engine.handoffRuntimeState().QueueFutureMessage("continue")
 	gate.FailNext(observerErr)
 
-	applied, err := engine.applyPendingHandoffIfNeeded(context.Background(), "step")
+	applied, err := engine.applyPendingHandoffIfNeeded(context.Background(), stepID)
 	if applied || !errors.Is(err, observerErr) {
 		t.Fatalf("future-message append outcome = applied:%v error:%v", applied, err)
 	}
@@ -402,7 +407,7 @@ func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.
 		t.Fatalf("committed handoff future-message records = %d, want 1", futureMessages)
 	}
 
-	applied, err = engine.applyPendingHandoffIfNeeded(context.Background(), "step")
+	applied, err = engine.applyPendingHandoffIfNeeded(context.Background(), stepID)
 	if applied || err != nil {
 		t.Fatalf("second future-message append outcome = applied:%v error:%v", applied, err)
 	}
@@ -427,9 +432,10 @@ func TestReopenedSessionAfterTriggerHandoffUsesStableRequestSessionAndOmitsLinge
 	engine.handoffRuntimeState().QueueRequest("summarize", "continue")
 
 	var compacted bool
-	err := runTestActiveStep(engine, "handoff", func() error {
+	stepID := runtimeTestStepID("handoff")
+	err := runTestActiveStep(engine, stepID, func() error {
 		var applyErr error
-		compacted, applyErr = engine.applyPendingHandoffIfNeeded(context.Background(), "handoff")
+		compacted, applyErr = engine.applyPendingHandoffIfNeeded(context.Background(), stepID)
 		return applyErr
 	})
 	if err != nil || !compacted {

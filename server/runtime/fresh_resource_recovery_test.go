@@ -142,16 +142,18 @@ func TestFreshResourceRepairIgnoresStalePendingStartWhileLiveRepairDefers(t *tes
 		t.Helper()
 		store := mustCreateTestSession(t)
 		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-		steerDanglingToolCall(t, engine, "step", llm.ToolCall{
+		stepID := runtimeTestStepID("fresh-resource-pending-start")
+		steerDanglingToolCall(t, engine, stepID, llm.ToolCall{
 			ID: callID, Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`),
 		})
 		engine.rememberPendingToolCallStarts(map[string]int{callID: 0})
 		return engine, store
 	}
+	stepID := runtimeTestStepID("fresh-resource-pending-start")
 
 	fresh, freshStore := newDanglingEngine(t, "fresh")
 	repaired, err := fresh.repairMissingToolOutputsByAppending(
-		textutil.Value("step"),
+		textutil.Value(stepID),
 		missingToolOutputRepairFreshResource,
 	)
 	if err != nil {
@@ -166,10 +168,10 @@ func TestFreshResourceRepairIgnoresStalePendingStartWhileLiveRepairDefers(t *tes
 	}
 
 	live, liveStore := newDanglingEngine(t, "live")
-	restoreLiveStep := setTestActiveStep(live, "step")
+	restoreLiveStep := setTestActiveStep(live, stepID)
 	defer restoreLiveStep()
 	repaired, err = live.repairMissingToolOutputsByAppending(
-		textutil.Value("step"),
+		textutil.Value(stepID),
 		missingToolOutputRepairLiveProvider400,
 	)
 	if err != nil {
@@ -182,7 +184,7 @@ func TestFreshResourceRepairIgnoresStalePendingStartWhileLiveRepairDefers(t *tes
 		t.Fatal("live repair pre-empted a pending tool operation")
 	}
 	if _, err := live.repairMissingToolOutputsByAppending(
-		textutil.Value("step"),
+		textutil.Value(stepID),
 		missingToolOutputRepairDisposition(0),
 	); err == nil {
 		t.Fatal("repair accepted an absent disposition")
@@ -201,11 +203,13 @@ func TestFreshResourceRepairCommitsAllCompletionsWithAggregateWarning(t *testing
 		session.WithPersistenceObserver(gate),
 	)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	const recoveryStepID = "recovery-step"
-	steerDanglingToolCall(t, engine, "first-step", llm.ToolCall{
+	recoveryStepID := runtimeTestStepID("fresh-resource-recovery")
+	firstStepID := runtimeTestStepID("fresh-resource-first")
+	secondStepID := runtimeTestStepID("fresh-resource-second")
+	steerDanglingToolCall(t, engine, firstStepID, llm.ToolCall{
 		ID: "first", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`),
 	})
-	steerDanglingToolCall(t, engine, "second-step", llm.ToolCall{
+	steerDanglingToolCall(t, engine, secondStepID, llm.ToolCall{
 		ID: "second", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`),
 	})
 	gate.FailNext(observerErr)
@@ -226,8 +230,8 @@ func TestFreshResourceRepairCommitsAllCompletionsWithAggregateWarning(t *testing
 	assertFreshResourceRepairOnEngine(t, restored, reopened, "first")
 	assertFreshResourceRepairOnEngine(t, restored, reopened, "second")
 	for callID, expectedStepID := range map[string]string{
-		"first":  "first-step",
-		"second": "second-step",
+		"first":  firstStepID,
+		"second": secondStepID,
 	} {
 		record, _ := repairCompletionRecord(t, reopened, callID)
 		if stepID := record.StepID(); stepID == nil || *stepID != expectedStepID {

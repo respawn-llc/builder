@@ -446,11 +446,12 @@ func runPersistedEffectRecoveryCase(
 		}),
 		Config{Model: "gpt-5"},
 	)
-	restoreStep := setTestActiveStep(engine, "effect-step")
+	stepID := runtimeTestStepID("effect-step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	calls := questionBarrierAcceptedCalls()
 	calls.local[0] = fixture.call
-	persistAcceptedToolCallIntents(t, engine, "effect-step", calls)
+	persistAcceptedToolCallIntents(t, engine, stepID, calls)
 	cause := errors.New("persisted effect barrier failure")
 	switch failure {
 	case persistedEffectObserverFailure:
@@ -463,7 +464,7 @@ func runPersistedEffectRecoveryCase(
 
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),
-		"effect-step",
+		stepID,
 		calls,
 	)
 	var fatal *resultGroupFatal

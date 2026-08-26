@@ -152,10 +152,11 @@ func TestFreshWorkflowMetaContextRetriesCommittedObserverFailureWithoutDuplicate
 
 func assertFreshRequestMatchesCompactionProjection(t *testing.T, engine *Engine, want []llm.MessageType) {
 	t.Helper()
-	if err := engine.ensureMetaContextForRequest(context.Background(), "fresh"); err != nil {
+	stepID := runtimeTestStepID("fresh")
+	if err := engine.ensureMetaContextForRequest(context.Background(), stepID); err != nil {
 		t.Fatalf("ensure fresh meta context: %v", err)
 	}
-	freshRequest, err := engine.buildRequest(context.Background(), "fresh", true)
+	freshRequest, err := engine.buildRequest(context.Background(), stepID, true)
 	if err != nil {
 		t.Fatalf("build fresh request: %v", err)
 	}

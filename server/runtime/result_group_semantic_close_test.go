@@ -84,7 +84,7 @@ func TestSemanticCloseDoesNotRereportCompletedCellAndLeavesNoEmptySlot(t *testin
 	}
 
 	postJoin, err := engine.coordinateAcceptedResponsePostJoin(
-		"step",
+		runtimeTestStepID("step"),
 		[]executorToolCall{
 			{call: calls[0], toolID: toolspec.ToolExecCommand, knownTool: true},
 			{call: calls[1], toolID: toolspec.ToolExecCommand, knownTool: true},

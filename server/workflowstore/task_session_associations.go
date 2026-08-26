@@ -27,10 +27,9 @@ type CurrentNodeSessionBindingRequest struct {
 }
 
 type TaskSessionAssociation struct {
-	SessionID       runtimeids.SessionID
-	SourceSessionID runtimeids.SessionID
-	CurrentNode     workflow.CurrentNodeReference
-	AssociatedAt    time.Time
+	SessionID    runtimeids.SessionID
+	CurrentNode  workflow.CurrentNodeReference
+	AssociatedAt time.Time
 }
 
 // ErrSessionNotCurrentWorkflowNode means that a retained Task-owned Session is
@@ -233,9 +232,8 @@ func loadSessionReuseAssociations(
 			return nil, err
 		}
 		associations = append(associations, workflow.SessionReuseAssociation{
-			SessionID:       association.SessionID,
-			SourceSessionID: association.SourceSessionID,
-			CurrentNode:     association.CurrentNode,
+			SessionID:   association.SessionID,
+			CurrentNode: association.CurrentNode,
 		})
 	}
 	return associations, nil
@@ -417,15 +415,6 @@ func (s *Store) resolveMaterializedCurrentNodeStartContext(
 	sourceNode, err := currentNodeDefinitionNode(definition, transitionGroupSourceNodeID(definition, enteringEdge.TransitionGroupID))
 	if err != nil {
 		return CurrentNodeStartContext{}, fmt.Errorf("resolve entering source node for current node %v: %w", currentNode.Reference, err)
-	}
-	if err := s.validateRetainedTargetSessionCreationAuthorization(
-		ctx,
-		q,
-		enteringEdge,
-		workflow.NodeIDOf(sourceNode),
-		currentNode,
-	); err != nil {
-		return CurrentNodeStartContext{}, err
 	}
 	nodeRecord, err := nodeRecordFromCurrentDefinition(node)
 	if err != nil {
@@ -628,10 +617,9 @@ func latestTaskSessionForNode(ctx context.Context, q *sqlitegen.Queries, current
 		return TaskSessionAssociation{}, fmt.Errorf("decode associated session id: %w", err)
 	}
 	return TaskSessionAssociation{
-		SessionID:       sessionID,
-		SourceSessionID: sessionID,
-		CurrentNode:     currentNode,
-		AssociatedAt:    time.UnixMilli(associatedAtUnixMs).UTC(),
+		SessionID:    sessionID,
+		CurrentNode:  currentNode,
+		AssociatedAt: time.UnixMilli(associatedAtUnixMs).UTC(),
 	}, nil
 }
 
@@ -641,36 +629,6 @@ func currentTaskSessionForNode(
 	currentNode workflow.CurrentNodeReference,
 ) (TaskSessionAssociation, error) {
 	return latestTaskSessionForNode(ctx, q, currentNode)
-}
-
-func hasHistoricalTaskSessionForNode(
-	_ context.Context,
-	_ *sqlitegen.Queries,
-	currentNode workflow.CurrentNodeReference,
-) (bool, error) {
-	if err := currentNode.Validate(); err != nil {
-		return false, err
-	}
-	// Session association history is not durable after the one-authority
-	// cutover. Absence from the latest-association query means unavailable.
-	return false, nil
-}
-
-func bindingSourceSessionID(
-	currentNode workflow.CurrentNode,
-	sessionID runtimeids.SessionID,
-) (runtimeids.SessionID, error) {
-	if sourceSessionID, exact := currentNode.ContinuationSource.ExactSessionID(); exact {
-		return sourceSessionID, nil
-	}
-	if currentNode.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceDeferredSelf {
-		return sessionID, nil
-	}
-	return runtimeids.SessionID{}, fmt.Errorf(
-		"assigned current node %v has non-binding continuation source %q",
-		currentNode.Reference,
-		currentNode.ContinuationSource.Kind(),
-	)
 }
 
 func normalizeTaskSessionAssociationRequest(req TaskSessionAssociationRequest) (TaskSessionAssociationRequest, error) {

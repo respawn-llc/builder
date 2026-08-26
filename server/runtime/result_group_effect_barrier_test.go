@@ -116,11 +116,12 @@ func TestQuestionBarrierCommitsReadyHostedSiblingBeforeInteraction(t *testing.T)
 		}),
 		Config{Model: "gpt-5", DurabilityObserver: flushes},
 	)
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),
-		"step",
+		stepID,
 		questionBarrierAcceptedCalls(),
 	)
 	if err != nil {
@@ -193,16 +194,17 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 		}),
 		Config{Model: "gpt-5", DurabilityObserver: flushes},
 	)
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	calls := questionBarrierAcceptedCalls()
 	calls.local[0] = llm.ToolCall{
 		ID:    "patch",
 		Name:  string(toolspec.ToolPatch),
-		Input: json.RawMessage(`{}`),
+		Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: approval-barrier.txt\n+approved\n*** End Patch\n"}`),
 	}
 
-	results, err := engine.executeAcceptedToolCalls(context.Background(), "step", calls)
+	results, err := engine.executeAcceptedToolCalls(context.Background(), stepID, calls)
 	if err != nil {
 		t.Fatalf("execute accepted calls: %v", err)
 	}

@@ -23,10 +23,11 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 		}
 	})
 
-	restoreStep := setTestActiveStep(engine, "compaction")
+	stepID := runtimeTestStepID("compaction")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	err := newCompactionPersistence(engine).emitStatus(
-		"compaction",
+		stepID,
 		EventCompactionFailed,
 		compactionModeAuto,
 		"remote",
@@ -59,10 +60,11 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
-	restoreStep := setTestActiveStep(engine, "compact")
+	stepID := runtimeTestStepID("compact")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	receipt, err := newCompactionPersistence(engine).replaceHistory(
-		"compact",
+		stepID,
 		"local",
 		compactionModeManual,
 		llm.ItemsFromMessages([]llm.Message{
@@ -73,7 +75,7 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 	if err != nil || !receipt.Committed {
 		t.Fatalf("replace history: receipt=%+v error=%v", receipt, err)
 	}
-	if err := newCompactionPersistence(engine).emitStatus("compact", EventCompactionCompleted, compactionModeManual, "local", "openai", nil, 1, ""); err != nil {
+	if err := newCompactionPersistence(engine).emitStatus(stepID, EventCompactionCompleted, compactionModeManual, "local", "openai", nil, 1, ""); err != nil {
 		t.Fatalf("emit completion status: %v", err)
 	}
 
@@ -106,9 +108,10 @@ func TestAutoCompactionStatusEventDoesNotPublishCommittedEntryStart(t *testing.T
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
-	restoreStep := setTestActiveStep(engine, "compact")
+	stepID := runtimeTestStepID("compact")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
-	if err := newCompactionPersistence(engine).emitStatus("compact", EventCompactionCompleted, compactionModeAuto, "local", "openai", nil, 1, ""); err != nil {
+	if err := newCompactionPersistence(engine).emitStatus(stepID, EventCompactionCompleted, compactionModeAuto, "local", "openai", nil, 1, ""); err != nil {
 		t.Fatalf("emit auto completion status: %v", err)
 	}
 	if len(events) != 1 || events[0].Kind != EventCompactionCompleted || events[0].CommittedEntryStartSet {

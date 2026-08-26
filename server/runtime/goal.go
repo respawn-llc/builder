@@ -869,6 +869,36 @@ func (e *Engine) waitBeforeGoalLoopBusyRetry(ctx context.Context) bool {
 }
 
 func (e *Engine) surfaceRunError(err error) {
+	e.surfaceRunErrorWith(
+		err,
+		func(intent steeringIntent) error {
+			return e.steerRuntime(intent)
+		},
+		func(message string) {
+			e.SetStreamingError(message)
+		},
+	)
+}
+
+func (e *Engine) surfaceRunErrorRaw(err error) {
+	e.surfaceRunErrorWith(
+		err,
+		func(intent steeringIntent) error {
+			return e.steerOrderedRaw(sessionSteeringProvenance(), intent)
+		},
+		func(message string) {
+			_ = e.applyStreamingStateMutationRaw(func(state *transcriptRuntimeState) {
+				state.SetStreamingError(message)
+			})
+		},
+	)
+}
+
+func (e *Engine) surfaceRunErrorWith(
+	err error,
+	steer func(steeringIntent) error,
+	setStreamingError func(string),
+) {
 	if _, fatal := resultGroupFatalFromError(err); fatal {
 		return
 	}
@@ -879,18 +909,19 @@ func (e *Engine) surfaceRunError(err error) {
 		errors.Is(err, ErrEngineClosed) {
 		return
 	}
-	message, appendErr := e.steerRuntimeErrorFeedback(err)
+	message, feedback := runtimeErrorFeedback(err)
+	appendErr := steer(feedback)
 	if appendErr != nil {
 		if message == "" {
 			message = err.Error()
 		}
-		_ = e.steerRuntime(steerLocalEntryIntent(storedLocalEntry{
+		_ = steer(steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 			Text:       "Failed to persist run error: " + appendErr.Error(),
 		}))
 	}
-	e.SetStreamingError(message)
+	setStreamingError(message)
 }
 
 func runtimeAbortFeedbackMessage(fatal *resultGroupFatal) string {
@@ -911,15 +942,20 @@ func (e *Engine) steerRuntimeErrorFeedback(err error) (string, error) {
 	if err == nil {
 		return "", errors.New("runtime error feedback requires an error")
 	}
+	message, feedback := runtimeErrorFeedback(err)
+	return message, e.steerRuntime(feedback)
+}
+
+func runtimeErrorFeedback(err error) (string, steeringIntent) {
 	message := strings.TrimSpace(llm.UserFacingError(err))
 	if message == "" {
 		message = err.Error()
 	}
-	return message, e.steerRuntime(steerLocalEntryIntent(storedLocalEntry{
+	return message, steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 		Text:       message,
-	}))
+	})
 }
 
 func (e *Engine) shouldContinueGoalLoop(ctx context.Context) bool {

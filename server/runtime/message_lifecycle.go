@@ -473,6 +473,13 @@ func queuedUserMessagesForFlush(messages []queuedUserMessage) ([]QueuedUserMessa
 	return items, nil
 }
 
+func startsAgentStep(message llm.Message) bool {
+	return message.Role == llm.RoleUser && message.MessageType == nil ||
+		message.Role == llm.RoleDeveloper &&
+			message.MessageType != nil &&
+			*message.MessageType == llm.MessageTypeAgentSteer
+}
+
 func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	result, err := m.CommitPendingUserInjections(stepID, selection)
 	if err != nil || result.disposition != userInjectionFlushContinue {
@@ -541,6 +548,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 				result.queueItemIDs[queueItemID] = struct{}{}
 			}
 		}
+		result.startedStep = result.startedStep || startsAgentStep(group.message)
 		result.flushed++
 	}
 	return result, nil

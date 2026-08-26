@@ -134,9 +134,6 @@ func completeCurrentNodeJoinArrival(
 		return CurrentNodeCompletionResult{}, err
 	}
 	targetCurrentNode := materializedTarget.CurrentNode
-	if materializedTarget.Invariant != nil {
-		checkRetainedTargetInvariantBeforeMutation(policy, *materializedTarget.Invariant)
-	}
 	if materializedTarget.LegacyFallback != nil {
 		checkLegacyContinuationSourceBeforeMutation(policy, *materializedTarget.LegacyFallback)
 	}
@@ -167,9 +164,6 @@ func completeCurrentNodeJoinArrival(
 			Created: []workflow.CurrentNode{targetCurrentNode},
 		},
 		Handoff: handoff,
-	}
-	if materializedTarget.Invariant != nil {
-		result.retainedTargetInvariants = []workflow.RetainedTargetInvariantDetail{*materializedTarget.Invariant}
 	}
 	if materializedTarget.LegacyFallback != nil {
 		result.legacyFallbacks = []legacyContinuationSourceFallbackDetail{*materializedTarget.LegacyFallback}

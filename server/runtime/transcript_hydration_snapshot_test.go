@@ -76,6 +76,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsRuntimeOwners(t *testing.T)
 	defer restoreStep()
 	engine.compactionRuntimeState().SetCount(7)
 	if err := engine.steer(stepID,
+		steerCompactionActivityIntent(true, "remote", 8),
 		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: exactStepIDPointer(stepID), Compaction: &CompactionStatus{Mode: "remote", Count: 8}}),
 	); err != nil {
 		t.Fatalf("steer active owner events: %v", err)
@@ -92,7 +93,9 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsRuntimeOwners(t *testing.T)
 		snapshot.ActiveCompaction.Count != 8 || snapshot.CompactionCount != 7 {
 		t.Fatalf("compaction = active %+v count %d", snapshot.ActiveCompaction, snapshot.CompactionCount)
 	}
-	if snapshot.ContextUsage == nil || snapshot.ContextUsage.WindowTokens != 1000 || snapshot.ContextUsage.UsedTokens <= 0 {
+	if snapshot.ContextUsage == nil ||
+		snapshot.ContextUsage.WindowTokens != int(engine.LiveChatContextSnapshot().Policy.ContextWindowTokens) ||
+		snapshot.ContextUsage.UsedTokens <= 0 {
 		t.Fatalf("context usage = %+v", snapshot.ContextUsage)
 	}
 	if snapshot.Goal == nil || !snapshot.GoalSuspended {
@@ -100,6 +103,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsRuntimeOwners(t *testing.T)
 	}
 
 	if err := engine.steer(stepID,
+		steerCompactionActivityIntent(false, "", 0),
 		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: exactStepIDPointer(stepID)}),
 	); err != nil {
 		t.Fatalf("steer terminal owner events: %v", err)

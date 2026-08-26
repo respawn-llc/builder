@@ -197,8 +197,9 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 	}
 	eng.handoffRuntimeState().QueueRequest("", "resume with tests")
 
-	if err := runTestActiveStep(eng, "step-1", func() error {
-		_, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1")
+	stepID := runtimeTestStepID("step-1")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		_, err := eng.applyPendingHandoffIfNeeded(context.Background(), stepID)
 		return err
 	}); err != nil {
 		t.Fatalf("apply pending handoff: %v", err)

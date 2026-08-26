@@ -634,14 +634,24 @@ func testAcceptedLiveWorkflowSteeringToolChoice(t *testing.T, useAutomaticToolCh
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active workflow request")
 	}
-	_, queued, err := eng.SubmitUserMessageOrSteerWithAcceptance(context.Background(), "steer active workflow", nil)
-	if err != nil {
-		t.Fatalf("SubmitUserMessageOrSteerWithAcceptance: %v", err)
+	type steeringResult struct {
+		queued *QueuedUserMessage
+		err    error
 	}
+	steeringDone := make(chan steeringResult, 1)
+	go func() {
+		_, queued, err := eng.SubmitUserMessageOrSteerWithAcceptance(context.Background(), "steer active workflow", nil)
+		steeringDone <- steeringResult{queued: queued, err: err}
+	}()
+	releaseClient()
+	steering := <-steeringDone
+	if steering.err != nil {
+		t.Fatalf("SubmitUserMessageOrSteerWithAcceptance: %v", steering.err)
+	}
+	queued := steering.queued
 	if queued == nil {
 		t.Fatal("expected accepted live steering to queue on active workflow")
 	}
-	releaseClient()
 	if err := <-submitDone; err != nil {
 		t.Fatalf("SubmitWorkflowTurn: %v", err)
 	}
@@ -813,13 +823,15 @@ func TestWorkflowModeInitialAssignmentQueriesTaskAwarenessOnlyForNewInstructions
 	workflowCfg.TaskAwarenessSource = source
 	eng := mustNewWorkflowTestEngine(t, mustCreateTestSession(t), &fakeClient{}, workflowCfg, Config{})
 
-	if err := runTestActiveStep(eng, "initial", func() error {
-		return eng.steerWorkflowModeIfNeeded(context.Background(), "initial")
+	initialStepID := runtimeTestStepID("initial")
+	if err := runTestActiveStep(eng, initialStepID, func() error {
+		return eng.steerWorkflowModeIfNeeded(context.Background(), initialStepID)
 	}); err != nil {
 		t.Fatalf("prepare initial assignment: %v", err)
 	}
-	if err := runTestActiveStep(eng, "follow-up", func() error {
-		return eng.steerWorkflowModeIfNeeded(context.Background(), "follow-up")
+	followUpStepID := runtimeTestStepID("follow-up")
+	if err := runTestActiveStep(eng, followUpStepID, func() error {
+		return eng.steerWorkflowModeIfNeeded(context.Background(), followUpStepID)
 	}); err != nil {
 		t.Fatalf("prepare same-assignment follow-up: %v", err)
 	}
@@ -899,12 +911,13 @@ func TestWorkflowShellAndUnstructuredModesOmitDynamicCompletionMetadata(t *testi
 			eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, workflowCfg, Config{
 				EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
 			})
-			if err := runTestActiveStep(eng, "step", func() error {
-				return eng.ensureMetaContextForRequest(context.Background(), "step")
+			stepID := runtimeTestStepID("step")
+			if err := runTestActiveStep(eng, stepID, func() error {
+				return eng.ensureMetaContextForRequest(context.Background(), stepID)
 			}); err != nil {
 				t.Fatalf("ensure meta context: %v", err)
 			}
-			req, err := eng.buildRequest(context.Background(), "step", true)
+			req, err := eng.buildRequest(context.Background(), stepID, true)
 			if err != nil {
 				t.Fatalf("buildRequest: %v", err)
 			}
@@ -1270,11 +1283,15 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for commentary response")
 	}
-	_, _, err := eng.SubmitUserMessageOrSteerWithAcceptance(context.Background(), "accepted steering", nil)
-	if err != nil {
+	steeringDone := make(chan error, 1)
+	go func() {
+		_, _, err := eng.SubmitUserMessageOrSteerWithAcceptance(context.Background(), "accepted steering", nil)
+		steeringDone <- err
+	}()
+	releaseRun()
+	if err := <-steeringDone; err != nil {
 		t.Fatalf("SubmitUserMessageOrSteerWithAcceptance: %v", err)
 	}
-	releaseRun()
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -1303,7 +1320,7 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	}
 }
 
-func TestWorkflowTerminalCompletionRetainsQueuedSteeringAtRunRelease(t *testing.T) {
+func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	started := make(chan struct{})
@@ -1336,8 +1353,21 @@ func TestWorkflowTerminalCompletionRetainsQueuedSteeringAtRunRelease(t *testing.
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for workflow turn")
 	}
-	queued := mustQueueUserMessage(t, eng, "do not submit after run release")
+	type queuedResult struct {
+		item QueuedUserMessage
+		err  error
+	}
+	queueDone := make(chan queuedResult, 1)
+	go func() {
+		item, err := eng.QueueUserMessage("do not submit after run release")
+		queueDone <- queuedResult{item: item, err: err}
+	}()
 	releaseRun()
+	queuedSubmission := <-queueDone
+	if queuedSubmission.err != nil {
+		t.Fatalf("queue pending message: %v", queuedSubmission.err)
+	}
+	queued := queuedSubmission.item
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -1345,12 +1375,18 @@ func TestWorkflowTerminalCompletionRetainsQueuedSteeringAtRunRelease(t *testing.
 	if got := hookClientCallCount(client); got != 1 {
 		t.Fatalf("model calls = %d, want terminal completion to avoid queued turn", got)
 	}
-	if len(statuses) != 1 || statuses[0].Status != QueuedUserMessageAccepted {
-		t.Fatalf("queued statuses = %+v, want accepted pending work", statuses)
+	if len(statuses) != 2 ||
+		statuses[0].Status != QueuedUserMessageAccepted ||
+		statuses[1].Status != QueuedUserMessageFailed {
+		t.Fatalf("queued statuses = %+v, want accepted then failed", statuses)
 	}
-	pending := eng.messageFlow.PendingUserMessages()
-	if len(pending) != 1 || pending[0].ID != queued.ID {
-		t.Fatalf("pending queue = %+v, want retained %q", pending, queued.ID)
+	if statuses[1].QueueItemID != queued.ID ||
+		statuses[1].Text != "do not submit after run release" ||
+		statuses[1].FailureReason != QueuedUserMessageFailureTerminalWorkflowCompletion {
+		t.Fatalf("failed queue status = %+v, want terminal completion failure for %q", statuses[1], queued.ID)
+	}
+	if pending := eng.messageFlow.PendingUserMessages(); len(pending) != 0 {
+		t.Fatalf("pending queue = %+v, want terminal steering removed", pending)
 	}
 }
 

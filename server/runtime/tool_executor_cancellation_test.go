@@ -35,14 +35,15 @@ func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	done := make(chan error, 1)
 	go func() {
-		_, err := engine.executeToolCalls(ctx, "step", []llm.ToolCall{{
+		_, err := engine.executeToolCalls(ctx, stepID, []llm.ToolCall{{
 			ID:    "canceled-call",
 			Name:  string(toolspec.ToolExecCommand),
-			Input: json.RawMessage(`{}`),
+			Input: json.RawMessage(`{"cmd":"true"}`),
 		}})
 		done <- err
 	}()
@@ -82,7 +83,8 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 		&fakeWorkflowController{},
 		config.WorkflowCompletionModeTool,
 	))
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct {
@@ -90,7 +92,7 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 		err     error
 	}, 1)
 	go func() {
-		results, err := engine.executeToolCalls(ctx, "step", []llm.ToolCall{
+		results, err := engine.executeToolCalls(ctx, stepID, []llm.ToolCall{
 			{
 				ID:          "completed",
 				Name:        string(toolspec.ToolPatch),

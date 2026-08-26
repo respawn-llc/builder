@@ -30,8 +30,9 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	}
 	engine.setLastUsage(llm.Usage{InputTokens: autoCompactLimit, WindowTokens: 200_000})
 
-	if err := runTestActiveStep(engine, "compact", func() error {
-		return engine.autoCompactIfNeeded(context.Background(), "compact", compactionModeAuto)
+	stepID := runtimeTestStepID("compact")
+	if err := runTestActiveStep(engine, stepID, func() error {
+		return engine.autoCompactIfNeeded(context.Background(), stepID, compactionModeAuto)
 	}); err != nil {
 		t.Fatalf("auto compact: %v", err)
 	}

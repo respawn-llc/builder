@@ -62,10 +62,11 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
-	restoreStep := setTestActiveStep(engine, "compact")
+	stepID := runtimeTestStepID("compact")
+	restoreStep := setTestActiveStep(engine, stepID)
 	_, receipt, err := engine.compactNow(
 		context.Background(),
-		"compact",
+		stepID,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

@@ -28,9 +28,10 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 			OnEvent:          func(event Event) { events = append(events, event) },
 		},
 	)
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
-	if err := engine.observePromptCacheResponse("step", preparedCacheRequestObservation{
+	if err := engine.observePromptCacheResponse(stepID, preparedCacheRequestObservation{
 		request: persistedCacheRequestObserved{
 			DigestVersion: requestCacheDigestVersion,
 			CacheKey:      "cache-key",
@@ -104,7 +105,8 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	executor := defaultStepExecutor{
 		engine: engine,
@@ -116,7 +118,7 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 	}
 	if _, _, err := executor.materializeFinalAnswerToolCalls(
 		context.Background(),
-		"step",
+		stepID,
 		acceptedResponseCalls{
 			local: []llm.ToolCall{call},
 			order: []acceptedResponseCallRef{{

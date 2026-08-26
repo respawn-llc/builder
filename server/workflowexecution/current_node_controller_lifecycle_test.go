@@ -10,6 +10,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/runtime"
+	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -72,19 +73,57 @@ func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsAc
 }
 
 func TestReactivateWorkflowSessionReturnsAdmissionFailure(t *testing.T) {
-	reference := currentNodeReferenceForControllerTest(
-		t,
-		"task-reactivate-startup-failure",
-		"node-reactivate-startup-failure",
+	taskID := workflow.TaskID("task-reactivate-startup-failure")
+	selectedBranch := workflow.TransitionBranchKey("selected")
+	reference, err := workflow.NewCurrentNodeReference(
+		taskID,
+		workflow.NodeID("node-reactivate-startup-failure"),
+		&selectedBranch,
 	)
+	if err != nil {
+		t.Fatalf("new selected Current Node reference: %v", err)
+	}
+	siblingBranch := workflow.TransitionBranchKey("sibling")
+	sibling, err := workflow.NewCurrentNodeReference(
+		taskID,
+		workflow.NodeID("node-reactivate-startup-failure"),
+		&siblingBranch,
+	)
+	if err != nil {
+		t.Fatalf("new sibling Current Node reference: %v", err)
+	}
 	sessionID := runtimeids.NewSessionID()
-	taskID := reference.TaskID
 	store := &currentNodeControllerStore{
-		interrupted: []workflow.CurrentNode{{
-			Reference:  reference,
-			SessionID:  &sessionID,
-			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
-		}},
+		interrupted: []workflow.CurrentNode{
+			{
+				Reference:  reference,
+				SessionID:  &sessionID,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+			},
+			{
+				Reference:  sibling,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+			},
+		},
+		resumeClassifications: []workflowstore.CurrentNodeResumeClassification{
+			{CurrentNode: workflow.CurrentNode{
+				Reference:  reference,
+				SessionID:  &sessionID,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+			}},
+			{
+				CurrentNode: workflow.CurrentNode{
+					Reference:  sibling,
+					Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+				},
+				Diagnostics: []workflowstore.CurrentNodeResumeValidationDiagnostic{{
+					Code:           workflowstore.CurrentNodeResumeParameterNotMaterializedCode,
+					CurrentNode:    sibling,
+					EnteringEdgeID: workflow.EdgeID("edge-sibling"),
+					ParameterKey:   "input",
+				}},
+			},
+		},
 		sessionTaskID: &taskID,
 		sessionAssociation: &workflowstore.TaskSessionAssociation{
 			SessionID:   sessionID,
@@ -109,13 +148,189 @@ func TestReactivateWorkflowSessionReturnsAdmissionFailure(t *testing.T) {
 		}
 	})
 
-	err := controller.ReactivateWorkflowSession(context.Background(), sessionID)
+	_, err = controller.ReactivateWorkflowSession(context.Background(), sessionID)
 	if !errors.Is(err, cause) {
 		t.Fatalf("ReactivateWorkflowSession error = %v, want startup failure %v", err, cause)
 	}
 	if calls := store.interruptionCount(reference); calls != 1 {
 		t.Fatalf("startup-failure interruption writes = %d, want 1", calls)
 	}
+	if calls := store.interruptionCount(sibling); calls != 0 {
+		t.Fatalf("sibling startup-failure interruption writes = %d, want 0", calls)
+	}
+	if len(store.resumed) != 1 || !store.resumed[0].Equal(reference) {
+		t.Fatalf("ResumeCurrentNode mutations = %+v, want only selected %v", store.resumed, reference)
+	}
+}
+
+func TestReactivateWorkflowSessionReturnsOwnQueuedStartHandle(t *testing.T) {
+	fixture := newCurrentNodeQuestionFixture(t)
+	taskID := workflow.TaskID("task-reactivate-own-start")
+	selectedBranch := workflow.TransitionBranchKey("selected")
+	selected, err := workflow.NewCurrentNodeReference(
+		taskID,
+		workflow.NodeID("node-reactivate-own-start"),
+		&selectedBranch,
+	)
+	if err != nil {
+		t.Fatalf("new selected Current Node reference: %v", err)
+	}
+	siblingBranch := workflow.TransitionBranchKey("sibling")
+	sibling, err := workflow.NewCurrentNodeReference(
+		taskID,
+		workflow.NodeID("node-reactivate-own-start"),
+		&siblingBranch,
+	)
+	if err != nil {
+		t.Fatalf("new sibling Current Node reference: %v", err)
+	}
+	initial, sessionID := fixture.startQuestionExecution(
+		t,
+		selected,
+		func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+	)
+	attachment, err := fixture.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "retained-reactivation-test",
+	})
+	if err != nil {
+		t.Fatalf("retain Session Runtime: %v", err)
+	}
+	initial.RequestStop()
+	if err := initial.Close(context.Background()); err != nil {
+		t.Fatalf("close initial Workflow execution: %v", err)
+	}
+
+	runner := retainedSessionReactivationPublicationRunner{
+		authority: fixture.authority,
+		sessionID: sessionID,
+	}
+	controller, err := NewCurrentNodeController(
+		fixture.store,
+		runner,
+		fixture.authority,
+		NewTaskMutationCoordinator(),
+		CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("new reactivation controller: %v", err)
+	}
+	fixture.store.mu.Lock()
+	fixture.store.interrupted = []workflow.CurrentNode{
+		{
+			Reference:  selected,
+			SessionID:  &sessionID,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+		},
+		{
+			Reference:  sibling,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+		},
+	}
+	fixture.store.sessionTaskID = &taskID
+	fixture.store.sessionAssociation = &workflowstore.TaskSessionAssociation{
+		SessionID:   sessionID,
+		CurrentNode: selected,
+	}
+	fixture.store.mu.Unlock()
+
+	handle, err := controller.ReactivateWorkflowSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("ReactivateWorkflowSession: %v", err)
+	}
+	t.Cleanup(func() {
+		handle.RequestStop()
+		if err := handle.Close(context.Background()); err != nil {
+			t.Errorf("close reactivated Workflow execution: %v", err)
+		}
+		if err := controller.Close(); err != nil {
+			t.Errorf("close reactivation controller: %v", err)
+		}
+		if _, err := attachment.Release(context.Background(), sessionruntime.RuntimeReleaseClose); err != nil {
+			t.Errorf("release retained Session Runtime: %v", err)
+		}
+	})
+	resource, hasResource := handle.Scope().Resource()
+	workflowRef, workflowScoped := handle.Scope().Workflow()
+	if !hasResource ||
+		resource.SessionID() != sessionID ||
+		!workflowScoped ||
+		!workflowRef.CurrentNode.Equal(selected) {
+		t.Fatalf("reactivated execution scope = %+v, want Session %s Current Node %v", handle.Scope(), sessionID, selected)
+	}
+	fixture.store.mu.Lock()
+	resumed := append([]workflow.CurrentNodeReference(nil), fixture.store.resumed...)
+	admitted := append([]workflow.CurrentNodeReference(nil), fixture.store.admitted...)
+	fixture.store.mu.Unlock()
+	if len(resumed) != 1 || !resumed[0].Equal(selected) {
+		t.Fatalf("ResumeCurrentNode mutations = %+v, want only selected %v", resumed, selected)
+	}
+	if len(admitted) != 1 || !admitted[0].Equal(selected) {
+		t.Fatalf("AdmitCurrentNode mutations = %+v, want only selected %v", admitted, selected)
+	}
+	if _, live := fixture.authority.ExecutionByCurrentNode(
+		"project-test",
+		currentNodeControllerTestWorkflowID,
+		sibling,
+	); live {
+		t.Fatalf("sibling Current Node %v has a live execution after exact reactivation", sibling)
+	}
+}
+
+type retainedSessionReactivationPublicationRunner struct {
+	authority *sessionruntime.Authority
+	sessionID runtimeids.SessionID
+}
+
+func (retainedSessionReactivationPublicationRunner) PrepareScriptPublication(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.Controller,
+) (CurrentNodeScriptPublication, error) {
+	return nil, nil
+}
+
+func (r retainedSessionReactivationPublicationRunner) PrepareAgentPublication(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ CurrentNodeAssignmentSteer,
+	onRetire func(),
+	controller workflowruntime.Controller,
+) (CurrentNodeAgentPublication, error) {
+	descriptor, err := session.NewOpenSessionDescriptor(r.sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return r.authority.PrepareDetachedAgentExecution(ctx, sessionruntime.DetachedAgentExecutionRequest{
+		Descriptor: descriptor,
+		Workflow: sessionruntime.WorkflowExecutionRef{
+			ProjectID:   "project-test",
+			WorkflowID:  currentNodeControllerTestWorkflowID,
+			CurrentNode: reference,
+		},
+		Resource: sessionruntime.CurrentAgentResource{},
+		Config: &workflowruntime.CurrentNodeExecutionConfig{
+			Contract:       workflowruntime.CompletionContract{Transitions: []workflowruntime.CompletionTransition{{ID: "next"}}},
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     controller,
+			Instructions: workflowruntime.TaskInstructions{
+				WorkflowID:  currentNodeControllerTestWorkflowID,
+				CurrentNode: reference,
+			},
+		},
+		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+		OnRetire: onRetire,
+	})
 }
 
 func TestReactivateWorkflowSessionJoinsConcurrentExplicitResumeAdmission(t *testing.T) {
@@ -175,7 +390,8 @@ func TestReactivateWorkflowSessionJoinsConcurrentExplicitResumeAdmission(t *test
 
 	reactivated := make(chan error, 1)
 	go func() {
-		reactivated <- controller.ReactivateWorkflowSession(context.Background(), sessionID)
+		_, err := controller.ReactivateWorkflowSession(context.Background(), sessionID)
+		reactivated <- err
 	}()
 	select {
 	case err := <-reactivated:
@@ -194,7 +410,7 @@ func TestReactivateWorkflowSessionJoinsConcurrentExplicitResumeAdmission(t *test
 	}
 }
 
-func TestReactivateWorkflowSessionJoinsAlreadyPublishedWorkflowExecution(t *testing.T) {
+func TestReactivateWorkflowSessionReturnsAlreadyPublishedWorkflowExecution(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(
 		t,
@@ -230,8 +446,12 @@ func TestReactivateWorkflowSessionJoinsAlreadyPublishedWorkflowExecution(t *test
 	}}
 	fixture.store.mu.Unlock()
 
-	if err := fixture.controller.ReactivateWorkflowSession(context.Background(), sessionID); err != nil {
+	reactivated, err := fixture.controller.ReactivateWorkflowSession(context.Background(), sessionID)
+	if err != nil {
 		t.Fatalf("ReactivateWorkflowSession: %v", err)
+	}
+	if reactivated != handle {
+		t.Fatalf("reactivated execution = %v, want already-published handle %v", reactivated, handle)
 	}
 	workflowRef, workflowScoped := handle.Scope().Workflow()
 	if !workflowScoped || !workflowRef.CurrentNode.Equal(reference) {

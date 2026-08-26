@@ -68,18 +68,33 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 		t.Fatal("timed out waiting for tool call to start")
 	}
 
-	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       BackgroundShellEventCompleted,
-		ID:         "1000",
-		State:      "completed",
-		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone-a",
-	}, true)
-	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       BackgroundShellEventCompleted,
-		ID:         "1001",
-		State:      "completed",
-		NoticeText: "Background shell 1001 completed.\nExit code: 0\nOutput:\ndone-b",
-	}, true)
+	updateDone := make(chan string, 2)
+	for _, update := range []BackgroundShellEvent{
+		{
+			Type:       BackgroundShellEventCompleted,
+			ID:         "1000",
+			State:      "completed",
+			NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone-a",
+		},
+		{
+			Type:       BackgroundShellEventCompleted,
+			ID:         "1001",
+			State:      "completed",
+			NoticeText: "Background shell 1001 completed.\nExit code: 0\nOutput:\ndone-b",
+		},
+	} {
+		go func() {
+			eng.HandleBackgroundShellUpdate(update, true)
+			updateDone <- update.ID
+		}()
+	}
+	for range 2 {
+		select {
+		case <-updateDone:
+		case <-time.After(runtimeTestSynchronizationTimeout):
+			t.Fatal("background terminal update submission blocked on the protected Step boundary")
+		}
+	}
 
 	client.mu.Lock()
 	callCountWhileBusy := len(client.calls)
@@ -96,6 +111,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	if messageContent(result.assistant) != "done" {
 		t.Fatalf("assistant content = %q, want done", messageContent(result.assistant))
 	}
+	waitEngineLifecycleTasks(t, eng)
 
 	client.mu.Lock()
 	requests := append([]llm.Request(nil), client.calls...)
@@ -370,15 +386,15 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{
-				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
-				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{}`)},
+				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
+				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: grouped-result.txt\n+done\n*** End Patch\n"}`)},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -439,15 +455,15 @@ func TestParallelToolCompletionsStayPendingUntilResultGroupClose(t *testing.T) {
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{
-				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
-				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{}`)},
+				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
+				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: grouped-result.txt\n+done\n*** End Patch\n"}`)},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -552,7 +568,8 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: sequencer},
 	), Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	restoreStep := setTestActiveStep(eng, "step")
+	stepID := runtimeTestStepID("sequential-ask-question-tools")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
 
 	done := make(chan struct {
@@ -560,9 +577,9 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 		err     error
 	}, 1)
 	go func() {
-		results, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{
-			{ID: "call-ask-1", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{}`)},
-			{ID: "call-ask-2", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{}`)},
+		results, err := eng.executeToolCalls(context.Background(), stepID, []llm.ToolCall{
+			{ID: "call-ask-1", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{"question":"First?"}`)},
+			{ID: "call-ask-2", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{"question":"Second?"}`)},
 		})
 		done <- struct {
 			results []tools.Result
@@ -572,6 +589,8 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 
 	select {
 	case <-sequencer.firstStarted:
+	case result := <-done:
+		t.Fatalf("execute tool calls completed before first ask_question call started: %v", result.err)
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for first ask_question call to start")
 	}
@@ -616,20 +635,23 @@ func TestWorkflowPromptCapableToolCallsSerializeWithAskQuestion(t *testing.T) {
 		EnabledTools: []toolspec.ID{toolspec.ToolPatch, toolspec.ToolAskQuestion},
 	})
 	publishTestWorkflowExecution(t, eng, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool))
-	restoreStep := setTestActiveStep(eng, "step")
+	stepID := runtimeTestStepID("workflow-prompt-capable-tools")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{
-			{ID: "call-patch", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{}`)},
-			{ID: "call-ask", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{}`)},
+		_, err := eng.executeToolCalls(context.Background(), stepID, []llm.ToolCall{
+			{ID: "call-patch", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: serialized-prompt-tool.txt\n+done\n*** End Patch\n"}`)},
+			{ID: "call-ask", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{"question":"Continue?"}`)},
 		})
 		done <- err
 	}()
 
 	select {
 	case <-sequencer.firstStarted:
+	case err := <-done:
+		t.Fatalf("execute tool calls completed before workflow prompt-capable tool started: %v", err)
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for workflow prompt-capable tool to start")
 	}
@@ -734,10 +756,11 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 			store := mustCreateTestSession(t)
 			eng := mustNewTestEngine(t, store, &fakeClient{}, tc.registry, Config{Model: "gpt-5"})
 			mustBlockTestEventLogAppends(t, store)
-			restoreStep := setTestActiveStep(eng, "step")
+			stepID := runtimeTestStepID(tc.name + "/uncommitted")
+			restoreStep := setTestActiveStep(eng, stepID)
 			defer restoreStep()
 
-			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+			_, err := eng.executeToolCalls(context.Background(), stepID, []llm.ToolCall{{
 				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
 			}})
 			var fatal *resultGroupFatal
@@ -755,10 +778,11 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 			store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))
 			eng := mustNewTestEngine(t, store, &fakeClient{}, tc.registry, Config{Model: "gpt-5"})
 			gate.FailNext(observerErr)
-			restoreStep := setTestActiveStep(eng, "step")
+			stepID := runtimeTestStepID(tc.name + "/committed-observer-error")
+			restoreStep := setTestActiveStep(eng, stepID)
 			defer restoreStep()
 
-			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+			_, err := eng.executeToolCalls(context.Background(), stepID, []llm.ToolCall{{
 				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
 			}})
 			var fatal *resultGroupFatal

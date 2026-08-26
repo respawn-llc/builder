@@ -137,12 +137,13 @@ func TestCompleteNodeValidatesBeforeEffectBarrier(t *testing.T) {
 		},
 	)
 	publishTestWorkflowExecution(t, engine, testWorkflowConfig(controller, config.WorkflowCompletionModeTool))
-	restoreStep := setTestActiveStep(engine, "step")
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),
-		"step",
+		stepID,
 		completeNodeBarrierAcceptedCalls(
 			json.RawMessage(`{"summary":""}`),
 		),

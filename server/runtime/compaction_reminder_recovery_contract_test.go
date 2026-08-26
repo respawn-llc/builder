@@ -25,8 +25,9 @@ func TestCompactionSoonReminderRemainsSingleShotAcrossAdmissionToggle(t *testing
 		t.Fatalf("append disabled reminder: %v", err)
 	}
 	engine.SetAutoCompactionEnabled(true)
-	if err := runTestActiveStep(engine, "enabled", func() error {
-		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "enabled")
+	stepID := runtimeTestStepID("enabled")
+	if err := runTestActiveStep(engine, stepID, func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), stepID)
 	}); err != nil {
 		t.Fatalf("append enabled reminder: %v", err)
 	}
@@ -47,8 +48,9 @@ func TestReopenPreservesCompactionSoonReminderAdmission(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
 	seedReminderUsage(t, engine)
-	if err := runTestActiveStep(engine, "issued", func() error {
-		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "issued")
+	stepID := runtimeTestStepID("issued")
+	if err := runTestActiveStep(engine, stepID, func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), stepID)
 	}); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
@@ -100,8 +102,9 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 		t.Fatalf("persist seed: %v", err)
 	}
 	seedReminderUsage(t, engine)
-	if err := runTestActiveStep(engine, "issued", func() error {
-		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "issued")
+	stepID := runtimeTestStepID("issued")
+	if err := runTestActiveStep(engine, stepID, func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), stepID)
 	}); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}

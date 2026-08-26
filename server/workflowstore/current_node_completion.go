@@ -40,7 +40,6 @@ type CurrentNodeCompletionResult struct {
 	SessionReuseClassification workflow.SessionReuseClassification
 	SourceSessionID            *runtimeids.SessionID
 	PostCompletionEligible     bool
-	retainedTargetInvariants   []workflow.RetainedTargetInvariantDetail
 	legacyFallbacks            []legacyContinuationSourceFallbackDetail
 }
 
@@ -247,9 +246,6 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			CommitReceipt:               session.CommitReceipt{Committed: true},
 			CurrentNodeCompletionResult: result,
 		}
-		for _, detail := range result.retainedTargetInvariants {
-			reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, detail)
-		}
 		for _, detail := range result.legacyFallbacks {
 			reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, detail)
 		}
@@ -321,9 +317,6 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	}
 	targetCurrentNode := materializedTarget.CurrentNode
 	if target.Edge.RequiresApproval {
-		if materializedTarget.Invariant != nil {
-			checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, *materializedTarget.Invariant)
-		}
 		if materializedTarget.LegacyFallback != nil {
 			checkLegacyContinuationSourceBeforeMutation(s.invariantPolicy, *materializedTarget.LegacyFallback)
 		}
@@ -349,16 +342,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			PendingApproval:        &approval,
 			PostCompletionEligible: source.Kind() == workflow.NodeKindAgent,
 		}
-		if materializedTarget.Invariant != nil {
-			result.retainedTargetInvariants = []workflow.RetainedTargetInvariantDetail{*materializedTarget.Invariant}
-		}
 		if materializedTarget.LegacyFallback != nil {
 			result.legacyFallbacks = []legacyContinuationSourceFallbackDetail{*materializedTarget.LegacyFallback}
 		}
 		return finish(result, []workflow.Edge{target.Edge})
-	}
-	if materializedTarget.Invariant != nil {
-		checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, *materializedTarget.Invariant)
 	}
 	if materializedTarget.LegacyFallback != nil {
 		checkLegacyContinuationSourceBeforeMutation(s.invariantPolicy, *materializedTarget.LegacyFallback)
@@ -383,9 +370,6 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			Created: []workflow.CurrentNode{targetCurrentNode},
 		},
 		Handoff: handoff,
-	}
-	if materializedTarget.Invariant != nil {
-		result.retainedTargetInvariants = []workflow.RetainedTargetInvariantDetail{*materializedTarget.Invariant}
 	}
 	if materializedTarget.LegacyFallback != nil {
 		result.legacyFallbacks = []legacyContinuationSourceFallbackDetail{*materializedTarget.LegacyFallback}
@@ -642,7 +626,6 @@ type transitionTargetMaterializationRequest struct {
 
 type transitionTargetMaterialization struct {
 	CurrentNode    workflow.CurrentNode
-	Invariant      *workflow.RetainedTargetInvariantDetail
 	LegacyFallback *legacyContinuationSourceFallbackDetail
 }
 
@@ -764,9 +747,6 @@ func materializeTransitionTargetCurrentNode(
 		return transitionTargetMaterialization{}, err
 	}
 	materialized := transitionTargetMaterialization{CurrentNode: currentNode}
-	if detail, ok := contextResolution.invariantDetail(); ok {
-		materialized.Invariant = &detail
-	}
 	materialized.LegacyFallback = contextResolution.legacyFallback
 	return materialized, nil
 }

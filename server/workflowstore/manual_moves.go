@@ -279,7 +279,6 @@ func (s *Store) applyManualMoveWithinWorkflowLane(
 	}
 	var (
 		targets         []workflow.CurrentNode
-		invariants      []workflow.RetainedTargetInvariantDetail
 		legacyFallbacks []legacyContinuationSourceFallbackDetail
 	)
 	if executableNodeKind(targetDefinition.Kind()) {
@@ -304,7 +303,7 @@ func (s *Store) applyManualMoveWithinWorkflowLane(
 		if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
 			return ManualMoveResult{}, err
 		}
-		targets, invariants, legacyFallbacks, err = s.materializeManualMoveTargets(
+		targets, legacyFallbacks, err = s.materializeManualMoveTargets(
 			ctx,
 			q,
 			definition,
@@ -315,9 +314,6 @@ func (s *Store) applyManualMoveWithinWorkflowLane(
 		)
 		if err != nil {
 			return ManualMoveResult{}, err
-		}
-		for _, detail := range invariants {
-			checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, detail)
 		}
 		for _, detail := range legacyFallbacks {
 			checkLegacyContinuationSourceBeforeMutation(s.invariantPolicy, detail)
@@ -380,9 +376,6 @@ func (s *Store) applyManualMoveWithinWorkflowLane(
 		return ManualMoveResult{}, err
 	}
 	assignmentsConsumed = true
-	for _, detail := range invariants {
-		reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, detail)
-	}
 	for _, detail := range legacyFallbacks {
 		reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, detail)
 	}
@@ -511,7 +504,7 @@ func (s *Store) prepareManualMoveAssignmentContexts(
 	if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
 		return nil, nil, 0, err
 	}
-	targets, _, _, err := s.materializeManualMoveTargets(
+	targets, _, err := s.materializeManualMoveTargets(
 		ctx,
 		s.queries,
 		definition,
@@ -603,28 +596,26 @@ func (s *Store) materializeManualMoveTargets(
 	submitted map[workflow.ModelKey]map[string]string,
 ) (
 	[]workflow.CurrentNode,
-	[]workflow.RetainedTargetInvariantDetail,
 	[]legacyContinuationSourceFallbackDetail,
 	error,
 ) {
 	if len(choice.Edges) == 0 {
-		return nil, nil, nil, ErrManualMoveTransitionNotUsable
+		return nil, nil, ErrManualMoveTransitionNotUsable
 	}
 	targets := make([]workflow.CurrentNode, 0, len(choice.Edges))
-	invariants := make([]workflow.RetainedTargetInvariantDetail, 0, len(choice.Edges))
 	legacyFallbacks := make([]legacyContinuationSourceFallbackDetail, 0, len(choice.Edges))
 	contextSource := manualMoveContextCurrentNode(currentNodes)
 	priorValues := manualMoveBasePriorValues(currentNodes)
 	for _, edge := range choice.Edges {
 		target, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		var branchKey *workflow.TransitionBranchKey
 		if len(choice.Edges) > 1 {
 			value := workflow.TransitionBranchKey(strings.TrimSpace(string(edge.Key)))
 			if value == "" {
-				return nil, nil, nil, errors.New("manual move fan-out branch key is required")
+				return nil, nil, errors.New("manual move fan-out branch key is required")
 			}
 			branchKey = &value
 		}
@@ -649,10 +640,7 @@ func (s *Store) materializeManualMoveTargets(
 			TransitionBranchKey: branchKey,
 		})
 		if err != nil {
-			return nil, nil, nil, err
-		}
-		if materializedTarget.Invariant != nil {
-			invariants = append(invariants, *materializedTarget.Invariant)
+			return nil, nil, err
 		}
 		if materializedTarget.LegacyFallback != nil {
 			legacyFallbacks = append(legacyFallbacks, *materializedTarget.LegacyFallback)
@@ -661,10 +649,10 @@ func (s *Store) materializeManualMoveTargets(
 	}
 	if len(targets) > 1 {
 		if err := validateFanoutTargets(currentNodes[0].Reference.TaskID, targets); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 	}
-	return targets, invariants, legacyFallbacks, nil
+	return targets, legacyFallbacks, nil
 }
 
 func applyManualMoveTargetAssignments(
@@ -774,10 +762,6 @@ func prepareManualMoveAssignedTargetsForInsert(
 		if result[index].SessionID == nil {
 			continue
 		}
-		sourceSessionID, err := bindingSourceSessionID(result[index], *result[index].SessionID)
-		if err != nil {
-			return nil, err
-		}
 		if result[index].ContinuationSource.Kind() == workflow.MaterializedContinuationSourceDeferredSelf {
 			association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
 				SessionID:    *result[index].SessionID,
@@ -790,7 +774,7 @@ func prepareManualMoveAssignedTargetsForInsert(
 			if err := bindSessionToTask(ctx, q, association); err != nil {
 				return nil, err
 			}
-			source, err := workflow.NewExactMaterializedContinuationSource(sourceSessionID)
+			source, err := workflow.NewExactMaterializedContinuationSource(*result[index].SessionID)
 			if err != nil {
 				return nil, err
 			}

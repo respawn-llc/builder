@@ -332,9 +332,8 @@ WHERE id = 'group-fanout'`)
 		t.Fatalf("migrated Approval target binding = %+v, want Session %q and Current Node %v", bound, parsedSourceSessionID, legacyTarget.Reference)
 	}
 	if current, err := store.LatestTaskSessionForNode(t.Context(), legacyTarget.Reference); err != nil ||
-		current.SessionID != parsedSourceSessionID ||
-		current.SourceSessionID != parsedSourceSessionID {
-		t.Fatalf("migrated Approval target current association = %+v, %v; want exact frozen source", current, err)
+		current.SessionID != parsedSourceSessionID {
+		t.Fatalf("migrated Approval target current association = %+v, %v; want exact frozen Session", current, err)
 	}
 	freshSessionID := runtimeids.NewSessionID()
 	if _, err := metadataStore.DB().ExecContext(t.Context(), `

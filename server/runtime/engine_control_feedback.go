@@ -58,6 +58,8 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback 
 		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(changed))
 		if receipt.Committed {
 			e.applyFastModeEnabled(enabled)
+		} else {
+			changed = false
 		}
 		return struct {
 			changed bool
@@ -84,6 +86,9 @@ func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback
 		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(resultEnabled, changed))
 		if receipt.Committed && changed {
 			e.applyQuestionsEnabled(enabled)
+		} else if !receipt.Committed {
+			changed = false
+			resultEnabled = current
 		}
 		return struct {
 			changed bool
@@ -114,6 +119,8 @@ func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback 
 		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(mode != "off", mode, changed))
 		if receipt.Committed {
 			e.applyReviewerEnabled(enabled, mode)
+		} else {
+			changed = false
 		}
 		return struct {
 			changed bool
@@ -140,6 +147,8 @@ func (e *Engine) SetReviewerFrequencyWithCommittedFeedback(frequency string, fee
 		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(target != "off", target, changed))
 		if receipt.Committed {
 			e.setReviewerFrequency(target)
+		} else {
+			changed = false
 		}
 		return struct {
 			changed bool

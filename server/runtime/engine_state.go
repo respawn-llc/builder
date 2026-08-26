@@ -311,11 +311,18 @@ func (e *Engine) applyStreamingStateMutation(mutate func(*transcriptRuntimeState
 		return
 	}
 	_, _ = awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
-		e.outputMutationMu.Lock()
-		defer e.outputMutationMu.Unlock()
-		mutate(e.transcriptRuntimeState())
-		return struct{}{}, e.steerOrderedRaw(sessionSteeringProvenance(), steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+		return struct{}{}, e.applyStreamingStateMutationRaw(mutate)
 	})
+}
+
+func (e *Engine) applyStreamingStateMutationRaw(mutate func(*transcriptRuntimeState)) error {
+	if mutate == nil {
+		return nil
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	mutate(e.transcriptRuntimeState())
+	return e.steerOrderedRaw(sessionSteeringProvenance(), steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
 func (e *Engine) SetSessionName(name string) error {

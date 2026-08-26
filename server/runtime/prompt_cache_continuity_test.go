@@ -204,9 +204,7 @@ func TestSkillsPolicyChangesOnlyAtMainContextReconstruction(t *testing.T) {
 		t.Fatal("reviewer reconstruction mutated the main transcript")
 	}
 
-	if err := disabled.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact disabled context: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, disabled)
 	postCompactionRequest, err := disabled.buildRequest(context.Background(), "", true)
 	if err != nil {
 		t.Fatalf("build post-compaction request: %v", err)

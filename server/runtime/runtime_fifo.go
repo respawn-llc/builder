@@ -94,8 +94,16 @@ func submitRuntimeOperation[T any](
 	fifo *runtimeOperationFIFO,
 	operation func(context.Context) (T, error),
 ) runtimeDeferred[T] {
+	deferred, _ := trySubmitRuntimeOperation(fifo, operation)
+	return deferred
+}
+
+func trySubmitRuntimeOperation[T any](
+	fifo *runtimeOperationFIFO,
+	operation func(context.Context) (T, error),
+) (runtimeDeferred[T], bool) {
 	if fifo == nil || operation == nil {
-		return completedRuntimeDeferred[T](ErrEngineClosed)
+		return completedRuntimeDeferred[T](ErrEngineClosed), false
 	}
 	deferred := newRuntimeDeferred[T]()
 	accepted := fifo.submit(runtimeOperation{
@@ -111,17 +119,25 @@ func submitRuntimeOperation[T any](
 	if !accepted {
 		deferred.complete(*new(T), ErrEngineClosed)
 	}
-	return deferred
+	return deferred, accepted
 }
 
 func submitEngineRuntimeOperation[T any](
 	engine *Engine,
 	operation func(context.Context) (T, error),
 ) runtimeDeferred[T] {
+	deferred, _ := trySubmitEngineRuntimeOperation(engine, operation)
+	return deferred
+}
+
+func trySubmitEngineRuntimeOperation[T any](
+	engine *Engine,
+	operation func(context.Context) (T, error),
+) (runtimeDeferred[T], bool) {
 	if engine == nil || engine.closed.Load() || operation == nil {
-		return completedRuntimeDeferred[T](ErrEngineClosed)
+		return completedRuntimeDeferred[T](ErrEngineClosed), false
 	}
-	return submitRuntimeOperation(engine.runtimeFIFO, operation)
+	return trySubmitRuntimeOperation(engine.runtimeFIFO, operation)
 }
 
 func awaitEngineRuntimeOperation[T any](

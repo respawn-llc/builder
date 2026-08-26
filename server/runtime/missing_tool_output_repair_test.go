@@ -106,7 +106,7 @@ func TestNormalGenerationLive400RepairWaitsForMatchingStartThenRetriesOnce(t *te
 		Custom:      true,
 		CustomInput: &customInput,
 	}
-	const originalStepID = "normal-live-original-step"
+	originalStepID := runtimeTestStepID("normal-live-original-step")
 	steerDanglingToolCall(t, eng, originalStepID, call)
 	eng.rememberPendingToolCallStarts(map[string]int{call.ID: 1})
 
@@ -171,6 +171,7 @@ func TestMissingToolOutputRepairRetryPreservesQueuedSteeringBoundary(t *testing.
 	store := mustCreateTestSession(t)
 
 	queued := false
+	queueDone := make(chan error, 1)
 	var eng *Engine
 	client := &hookClient{
 		errors:   []error{&llm.APIStatusError{StatusCode: 400}},
@@ -180,9 +181,10 @@ func TestMissingToolOutputRepairRetryPreservesQueuedSteeringBoundary(t *testing.
 				return nil
 			}
 			queued = true
-			if _, err := eng.QueueUserMessage("queued steering"); err != nil {
-				return err
-			}
+			go func() {
+				_, err := eng.QueueUserMessage("queued steering")
+				queueDone <- err
+			}()
 			return nil
 		},
 	}
@@ -191,6 +193,14 @@ func TestMissingToolOutputRepairRetryPreservesQueuedSteeringBoundary(t *testing.
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); err != nil {
 		t.Fatalf("submit user message: %v", err)
+	}
+	select {
+	case err := <-queueDone:
+		if err != nil {
+			t.Fatalf("queue steering at protected Step boundary: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out queueing steering at protected Step boundary")
 	}
 	if len(client.calls) != 2 {
 		t.Fatalf("model calls = %d, want initial 400 plus repaired retry", len(client.calls))
@@ -212,10 +222,11 @@ func TestMissingToolOutputRepairRetryPreservesQueuedSteeringBoundary(t *testing.
 func TestLiveMissingToolOutputRepairWaitsForOutputSteeringBoundary(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	steerDanglingToolCall(t, engine, "step", llm.ToolCall{
+	stepID := runtimeTestStepID("serialized-live-repair")
+	steerDanglingToolCall(t, engine, stepID, llm.ToolCall{
 		ID: "serialized-repair", Name: "exec_command", Input: json.RawMessage(`{}`),
 	})
-	restoreStep := setTestActiveStep(engine, "step")
+	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 
 	type repairOutcome struct {
@@ -227,7 +238,7 @@ func TestLiveMissingToolOutputRepairWaitsForOutputSteeringBoundary(t *testing.T)
 	go func() {
 		close(started)
 		count, err := engine.repairMissingToolOutputsByAppending(
-			textutil.Value("step"),
+			textutil.Value(stepID),
 			missingToolOutputRepairLiveProvider400,
 		)
 		done <- repairOutcome{count: count, err: err}
@@ -336,13 +347,14 @@ func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T)
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	steerDanglingToolCall(t, eng, "step", llm.ToolCall{
+	stepID := runtimeTestStepID("synthetic-repair-presentation")
+	steerDanglingToolCall(t, eng, stepID, llm.ToolCall{
 		ID: "missing", Name: "exec_command", Input: json.RawMessage(`{"cmd":"true"}`),
 	})
-	restoreStep := setTestActiveStep(eng, "step")
+	restoreStep := setTestActiveStep(eng, stepID)
 	defer restoreStep()
 
-	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"), missingToolOutputRepairLiveProvider400); err != nil {
+	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value(stepID), missingToolOutputRepairLiveProvider400); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	_, completion := repairCompletionRecord(t, store, "missing")
@@ -438,11 +450,14 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 			t.Fatal("expected a missing-output provider error after collapse to violate the invariant")
 		}
 	}()
-	dispatchFactory, err := eng.activeDispatchRequestFactory(runtimeTestStepID("step"), nil)
-	if err != nil {
-		t.Fatalf("create compaction dispatch: %v", err)
-	}
-	_, _, _, _ = eng.compactWithContextRepairRetry(context.Background(), runtimeTestStepID("step"), client, request, dispatchFactory)
+	_ = withActiveTestRun(t, eng, ActiveKindCompaction, func(ctx context.Context, stepID string) error {
+		dispatchFactory, err := eng.activeDispatchRequestFactory(stepID, llm.CodexRequestKindCompaction.Optional())
+		if err != nil {
+			return err
+		}
+		_, _, _, compactErr := eng.compactWithContextRepairRetry(ctx, stepID, client, request, dispatchFactory)
+		return compactErr
+	})
 }
 
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {

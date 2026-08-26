@@ -192,7 +192,11 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 				return err
 			}
-			flushResult, err := e.flushPendingUserInjections(stepID, allPendingUserInjectionSelection{})
+			var selection userInjectionSelection = allPendingUserInjectionSelection{}
+			if len(queueItemIDs) > 0 {
+				selection = steerUserInjections(queueItemIDs)
+			}
+			flushResult, err := e.flushPendingUserInjections(stepID, selection)
 			if flushResult.receipt.Committed {
 				receipt = flushResult.receipt
 			}
@@ -335,6 +339,10 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 		return false
 	}
 	e.queuedUserWorkMu.Lock()
+	if len(e.queuedUserWorkAutoDrainIDs) == 0 {
+		e.queuedUserWorkMu.Unlock()
+		return false
+	}
 	if e.queuedUserWorkScheduled {
 		e.queuedUserWorkMu.Unlock()
 		return true
@@ -363,7 +371,7 @@ func (e *Engine) processQueuedUserWork(
 			return
 		}
 		e.ensureOrchestrationCollaborators()
-		if e.messageFlow.HasPendingUserInjections() {
+		if e.hasQueuedUserAutoDrainIDs() {
 			e.scheduleQueuedUserInjectionsIfIdle()
 		}
 	}()

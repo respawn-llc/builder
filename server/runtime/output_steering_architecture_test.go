@@ -45,7 +45,7 @@ func TestMissingToolOutputRepairConsumesWorkflowPostCompletionBoundaryOnlyAfterR
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set workflow post-completion boundary: %v", err)
 	}
-	stepID := "step"
+	stepID := runtimeTestStepID("missing-output-workflow-boundary")
 	if repaired, err := engine.repairMissingToolOutputsByAppending(&stepID, missingToolOutputRepairFreshResource); err != nil || repaired != 0 {
 		t.Fatalf("no-op missing-output repair = count:%d error:%v", repaired, err)
 	}

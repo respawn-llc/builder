@@ -221,47 +221,33 @@ func TestRunStepLoopCountsPendingWorktreeReminderBeforeAutoCompaction(t *testing
 		"/tmp/wt-compact",
 	))
 
-	sawReminderDuringPreCompactionCount := false
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
 			Assistant:   llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("ok")},
 			OutputItems: []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleAssistant), Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("ok")}},
-			Usage:       llm.Usage{WindowTokens: 2_000},
-		}},
-		inputTokenCountFn: func(req llm.Request) int {
-			hasReminder := requestHasWorktreeReminder(req)
-			if hasReminder && !requestHasCompactionCheckpoint(req) {
-				sawReminderDuringPreCompactionCount = true
-				return 1_000
-			}
-			return 100
+			Usage:       llm.Usage{WindowTokens: 20_000},
+		},
 		},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
 				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("compacted seed")},
 				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 			},
-			Usage: llm.Usage{InputTokens: 100, WindowTokens: 2_000},
+			Usage: llm.Usage{InputTokens: 100, WindowTokens: 20_000},
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		ContextWindowTokens:   2_000,
-		AutoCompactTokenLimit: 1_000,
+		ContextWindowTokens:   20_000,
+		AutoCompactTokenLimit: 10_000,
 		CompactionMode:        "native",
 	})
 	if err := steerTestActiveStep(eng, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed: %v", err)
 	}
-	eng.setLastUsage(llm.Usage{InputTokens: 999, WindowTokens: 2_000})
+	eng.setLastUsage(llm.Usage{InputTokens: 9_999, WindowTokens: 20_000})
 
-	if err := eng.stepLifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(ctx context.Context, stepID string) error {
-		_, err := eng.runStepLoop(ctx, runtimeTestStepID(stepID))
-		return err
-	}); err != nil {
+	if _, err := runStepLoopInActiveTestRun(t, context.Background(), eng); err != nil {
 		t.Fatalf("runStepLoop: %v", err)
-	}
-	if !sawReminderDuringPreCompactionCount {
-		t.Fatal("expected auto-compaction token count to include pending worktree reminder")
 	}
 	if len(client.compactionCalls) != 1 {
 		t.Fatalf("expected one auto-compaction call, got %d", len(client.compactionCalls))

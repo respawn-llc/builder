@@ -825,6 +825,9 @@ func (s *defaultExclusiveStepLifecycle) BeginAgentStepBoundary(ctx context.Conte
 	if s.activeAgentStepID() == nil {
 		return nil
 	}
+	if err := s.drainAgentStepBoundary(ctx); err != nil {
+		return err
+	}
 	if err := s.engine.pauseRuntimeOperations(ctx); err != nil {
 		return err
 	}

@@ -960,8 +960,8 @@ func TestCompleteCurrentNodePreviousTargetContextFailsWithoutAssociatedSession(t
 		Source:       fixture.audit.Reference,
 		TransitionID: "rework",
 		OutputValues: map[string]string{"summary": "review again"},
-	}); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("CompleteCurrentNode error = %v, want sql.ErrNoRows", err)
+	}); !errors.As(err, new(workflow.RetainedTargetUnavailableError)) {
+		t.Fatalf("CompleteCurrentNode error = %v, want RetainedTargetUnavailableError", err)
 	}
 	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.audit.Reference.TaskID)
 	if err != nil {
