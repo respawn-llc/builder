@@ -899,6 +899,20 @@ func (e *Engine) surfaceRunError(err error) {
 	)
 }
 
+func (e *Engine) surfaceRunErrorForStep(stepID string, err error) {
+	e.surfaceRunErrorWith(
+		err,
+		func(intent steeringIntent) error {
+			return e.steer(stepID, intent)
+		},
+		func(message string) {
+			_ = e.applyStreamingStateMutationForStep(stepID, func(state *transcriptRuntimeState) {
+				state.SetStreamingError(message)
+			})
+		},
+	)
+}
+
 func (e *Engine) surfaceRunErrorRaw(err error) {
 	e.surfaceRunErrorWith(
 		err,

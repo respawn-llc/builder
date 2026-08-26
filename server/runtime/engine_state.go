@@ -332,6 +332,20 @@ func (e *Engine) applyStreamingStateMutationRaw(mutate func(*transcriptRuntimeSt
 	return e.steerOrderedRaw(sessionSteeringProvenance(), steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
+func (e *Engine) applyStreamingStateMutationForStep(stepID string, mutate func(*transcriptRuntimeState)) error {
+	if mutate == nil {
+		return nil
+	}
+	provenance, err := exactSteeringProvenance(stepID)
+	if err != nil {
+		return err
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	mutate(e.transcriptRuntimeState())
+	return e.steerOrderedRaw(provenance, steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+}
+
 func (e *Engine) SetSessionName(ctx context.Context, name string) error {
 	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
 		return struct{}{}, e.store.SetName(name)

@@ -523,7 +523,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 					assistantEventEmitted = true
 				}
 				if err := e.startReviewer(ctx, stepID, effectiveReviewerClient, s.reviewer); err != nil {
-					e.surfaceRunError(err)
+					e.surfaceRunErrorForStep(stepID, err)
 				}
 			}
 			if !assistantEventEmitted {
