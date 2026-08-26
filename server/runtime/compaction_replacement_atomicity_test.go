@@ -18,7 +18,7 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 		Model:           "gpt-5",
 		GlobalConfigDir: globalConfigDir,
 	})
-	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
+	if _, err := engine.SetGoal(t.Context(), "goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set active goal: %v", err)
 	}
 	mustSetWorktreeReminderState(t, store, testWorktreeReminderState(

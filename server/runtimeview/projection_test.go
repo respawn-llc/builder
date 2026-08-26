@@ -150,7 +150,7 @@ func TestActivityFromRuntimeSnapshotCopiesRuntimeOwnedActiveKinds(t *testing.T) 
 func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
 	client := newProjectionBlockingClient()
 	engine := newRuntimeViewEngine(t, newRuntimeViewStore(t), client, runtime.Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("ship feature", session.GoalActorUser); err != nil {
+	if _, err := engine.SetGoal(t.Context(), "ship feature", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
 	if err := engine.StartGoalLoop(); err != nil {

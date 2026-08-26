@@ -1359,7 +1359,7 @@ func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T)
 	}
 	queueDone := make(chan queuedResult, 1)
 	go func() {
-		item, err := eng.QueueUserMessage("do not submit after run release")
+		item, err := eng.QueueUserMessage(t.Context(), "do not submit after run release")
 		queueDone <- queuedResult{item: item, err: err}
 	}()
 	releaseRun()

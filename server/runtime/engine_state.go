@@ -352,7 +352,7 @@ func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 	}
 	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
 		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{Thinking: &normalized})
-		if settings.Changed && !settings.Committed {
+		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
 			return struct{}{}, settingsErr
 		}
 		return struct{}{}, errors.Join(settingsErr, e.setThinkingValue(normalized))
@@ -425,7 +425,7 @@ func (e *Engine) SetAutoCompactionEnabled(ctx context.Context, enabled bool) (bo
 		enabled bool
 	}, error) {
 		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{AutoCompaction: &enabled})
-		if settings.Changed && !settings.Committed {
+		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
 			return struct {
 				changed bool
 				enabled bool

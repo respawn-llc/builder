@@ -1119,7 +1119,7 @@ func TestWorktreeTransitionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 		t.Fatal("timed out waiting for Worktree transition")
 	}
 
-	if _, err := engine.QueueUserMessageForAutoDrain("accepted while Worktree holds eligibility"); err != nil {
+	if _, err := engine.QueueUserMessageForAutoDrain(t.Context(), "accepted while Worktree holds eligibility"); err != nil {
 		t.Fatalf("accept Human input while Worktree transition is held: %v", err)
 	}
 	if err := engine.SetThinkingLevel(t.Context(), "low"); err != nil {

@@ -587,7 +587,7 @@ func TestCloseIfIdleRetainsOwnerlessRuntimeForQueuedWorkAfterCurrentExecutionFin
 		Resource:   CurrentAgentResource{},
 		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
 			if err := bridge.WithEngine(ctx, func(_ context.Context, engine *runtime.Engine) error {
-				_, queueErr := engine.QueueUserMessage("queued during current execution")
+				_, queueErr := engine.QueueUserMessage(t.Context(), "queued during current execution")
 				return queueErr
 			}); err != nil {
 				return err
@@ -643,7 +643,7 @@ func TestCloseIfIdleRetainsOwnerlessRuntimeWithQueuedWork(t *testing.T) {
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		_, queueErr := engine.QueueUserMessage("queued before disconnect")
+		_, queueErr := engine.QueueUserMessage(t.Context(), "queued before disconnect")
 		return queueErr
 	}); err != nil {
 		t.Fatalf("queue user message: %v", err)
@@ -789,7 +789,7 @@ func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T
 		t.Fatalf("wait ownerless execution: %v", err)
 	}
 	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item, queueErr := engine.QueueUserMessage("steer retained runtime")
+		item, queueErr := engine.QueueUserMessage(t.Context(), "steer retained runtime")
 		if queueErr != nil {
 			return queueErr
 		}

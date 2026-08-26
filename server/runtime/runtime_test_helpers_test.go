@@ -314,6 +314,13 @@ func mustBlockTestEventLogAppends(t *testing.T, store *session.Store) *testEvent
 	return filemode.MustBlockEventLogAppends(t, filepath.Join(store.Dir(), "events.jsonl"))
 }
 
+func blockTestSessionMetadataMutations(t *testing.T, store *session.Store) {
+	t.Helper()
+	if err := os.Mkdir(filepath.Join(store.Dir(), "append-recovery.json"), 0o755); err != nil {
+		t.Fatalf("block Session metadata mutations: %v", err)
+	}
+}
+
 func appendRawCurrentEventLine(t *testing.T, store *session.Store, line []byte) {
 	t.Helper()
 	path := filepath.Join(store.Dir(), "events.jsonl")

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
 		err  error
 	}, 1)
 	go func() {
-		queued, err := engine.QueueUserMessage("queued input")
+		queued, err := engine.QueueUserMessage(t.Context(), "queued input")
 		queuedDone <- struct {
 			item QueuedUserMessage
 			err  error
@@ -67,5 +68,43 @@ func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
 	}
 	if !engine.HasQueuedUserWork() {
 		t.Fatal("post-turn Queue did not remain pending for an Agent Turn")
+	}
+}
+
+func TestQueuedUserMessageCallerCancellationStopsWaitAndPreventsLaterAcceptance(t *testing.T) {
+	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), &fakeClient{}, Config{Model: "gpt-5"})
+	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+		t.Fatalf("pause Runtime FIFO: %v", err)
+	}
+	caller, cancel := context.WithCancel(t.Context())
+	accept := func(commit func() (bool, error)) (bool, error) {
+		select {
+		case <-caller.Done():
+			return false, context.Cause(caller)
+		default:
+			return commit()
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.QueueUserMessageForAutoDrainWithAcceptance(caller, "canceled input", accept)
+		done <- err
+	}()
+	waitForPendingRuntimeOperation(t, engine)
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled Queue wait = %v, want canceled", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("canceled Queue caller remained blocked")
+	}
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatalf("drain rejected Queue operation: %v", err)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("canceled caller created Pending Work after the Runtime boundary")
 	}
 }

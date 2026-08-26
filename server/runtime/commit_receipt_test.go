@@ -410,6 +410,52 @@ func TestStateOnlyChatSettingsPersistBeforeLiveProjection(t *testing.T) {
 	})
 }
 
+func TestDefinitelyUncommittedStateOnlyChatSettingsStopBeforeLiveProjection(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(*testing.T, *Engine) error
+		state func(*Engine) bool
+	}{
+		{
+			name: "Thinking",
+			apply: func(t *testing.T, engine *Engine) error {
+				return engine.SetThinkingLevel(t.Context(), "low")
+			},
+			state: func(engine *Engine) bool { return engine.ThinkingLevel() == "high" },
+		},
+		{
+			name: "Auto-compaction",
+			apply: func(t *testing.T, engine *Engine) error {
+				_, _, err := engine.SetAutoCompactionEnabled(t.Context(), false)
+				return err
+			},
+			state: func(engine *Engine) bool { return engine.AutoCompactionEnabled() },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+				Model:                   "gpt-5",
+				ThinkingLevel:           "high",
+				SupportedThinkingValues: []string{"low", "high"},
+			})
+			blockTestSessionMetadataMutations(t, store)
+
+			if err := test.apply(t, engine); err == nil {
+				t.Fatal("definitely uncommitted setting mutation succeeded")
+			}
+			if !test.state(engine) {
+				t.Fatal("definitely uncommitted setting changed live Runtime state")
+			}
+			if err := engine.SetSessionName(t.Context(), "closed"); !errors.Is(err, ErrEngineClosed) {
+				t.Fatalf("mutation after uncommitted settings failure = %v, want Engine closed", err)
+			}
+		})
+	}
+}
+
 func TestCommittedControlFeedbackCallerCancellationStopsOnlyWait(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})

@@ -82,7 +82,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsRuntimeOwners(t *testing.T)
 		t.Fatalf("steer active owner events: %v", err)
 	}
 	engine.setLastUsage(llm.Usage{InputTokens: 123, WindowTokens: 1000})
-	if _, err := engine.SetGoal("ship the owner snapshot", session.GoalActorUser); err != nil {
+	if _, err := engine.SetGoal(t.Context(), "ship the owner snapshot", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
 	engine.goalLoopState().Start()

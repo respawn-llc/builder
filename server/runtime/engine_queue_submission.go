@@ -263,19 +263,19 @@ func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, tex
 	if strings.TrimSpace(text) == "" {
 		return UserTurnResult{}, nil, errors.New("empty message")
 	}
-	item, err := e.QueueUserMessageForAutoDrainWithAcceptance(text, accept)
+	item, err := e.QueueUserMessageForAutoDrainWithAcceptance(ctx, text, accept)
 	if err != nil {
 		return UserTurnResult{}, nil, err
 	}
 	return UserTurnResult{}, &item, nil
 }
 
-func (e *Engine) QueueUserMessageForAutoDrain(text string) (QueuedUserMessage, error) {
-	return e.queueUserMessage(text, true, nil)
+func (e *Engine) QueueUserMessageForAutoDrain(ctx context.Context, text string) (QueuedUserMessage, error) {
+	return e.queueUserMessage(ctx, text, true, nil)
 }
 
-func (e *Engine) QueueUserMessageForAutoDrainWithAcceptance(text string, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return e.queueUserMessage(text, true, accept)
+func (e *Engine) QueueUserMessageForAutoDrainWithAcceptance(ctx context.Context, text string, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.queueUserMessage(ctx, text, true, accept)
 }
 
 func (e *Engine) HasQueuedUserWork() bool {

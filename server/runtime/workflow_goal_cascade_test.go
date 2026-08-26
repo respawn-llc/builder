@@ -33,7 +33,7 @@ func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
-	if _, err := eng.SetGoal("race objective", session.GoalActorUser); err != nil {
+	if _, err := eng.SetGoal(t.Context(), "race objective", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 
@@ -50,7 +50,7 @@ func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.
 
 	mutateDone := make(chan struct{})
 	go func() {
-		_, _ = eng.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
+		_, _ = eng.SetGoalStatus(t.Context(), session.GoalStatusPaused, session.GoalActorUser)
 		close(mutateDone)
 	}()
 	releaseRun()
@@ -120,7 +120,7 @@ func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterHostedToolResult(t *test
 		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch, toolspec.ToolAskQuestion},
 		HeadlessMode:  true,
 	})
-	if _, err := eng.SetGoal("finish via tool completion with web search", session.GoalActorUser); err != nil {
+	if _, err := eng.SetGoal(t.Context(), "finish via tool completion with web search", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {

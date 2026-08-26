@@ -129,7 +129,7 @@ func (e *Engine) currentGoalDisposition(disposition GoalCommandDisposition, goal
 	return currentGoalHandled(result, nil)
 }
 
-func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, ownership CurrentGoalExecutionOwnership) (CurrentGoalOperationOutcome, error) {
+func (e *Engine) ApplyCurrentGoalOperation(ctx context.Context, operation CurrentGoalOperation, ownership CurrentGoalExecutionOwnership) (CurrentGoalOperationOutcome, error) {
 	if ownership != CurrentGoalRetainedOnly && ownership != CurrentGoalExactExecution {
 		return CurrentGoalOperationOutcome{}, errors.New("current Goal execution ownership is required")
 	}
@@ -143,7 +143,7 @@ func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, owner
 			return e.currentGoalDisposition(GoalCommandQueued, goal, false)
 		}
 		if ownership == CurrentGoalExactExecution {
-			result, err := e.SetGoal(operation.Objective, operation.Actor)
+			result, err := e.SetGoal(ctx, operation.Objective, operation.Actor)
 			if err == nil && result.MetadataReceipt.Committed {
 				err = e.StartGoalLoop()
 			}
@@ -170,7 +170,7 @@ func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, owner
 			return e.currentGoalDisposition(GoalCommandQueued, goal, false)
 		}
 		if ownership == CurrentGoalExactExecution {
-			result, err := e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor)
+			result, err := e.SetGoalStatusWithoutGoalLoopStart(ctx, status, operation.Actor)
 			if err == nil && status == session.GoalStatusActive && result.MetadataReceipt.Committed {
 				err = e.StartGoalLoop()
 			}
@@ -179,7 +179,7 @@ func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, owner
 		if status == session.GoalStatusActive {
 			return currentGoalExecutionRequired()
 		}
-		return currentGoalHandled(e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor))
+		return currentGoalHandled(e.SetGoalStatusWithoutGoalLoopStart(ctx, status, operation.Actor))
 	case CurrentGoalClear:
 		goal, queued, err := e.QueueGoalClearForActiveStep(operation.Actor)
 		if err != nil {
@@ -188,7 +188,7 @@ func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, owner
 		if queued {
 			return e.currentGoalDisposition(GoalCommandQueued, goal, true)
 		}
-		return currentGoalHandled(e.ClearGoal(operation.Actor))
+		return currentGoalHandled(e.ClearGoal(ctx, operation.Actor))
 	default:
 		return CurrentGoalOperationOutcome{}, errors.New("current Goal operation is required")
 	}
@@ -263,9 +263,9 @@ func (e *Engine) goalLoopRestartNeeded() bool {
 	return e.goalLoopState().RestartNeeded() && e.goalActive()
 }
 
-func (e *Engine) SetGoal(objective string, actor session.GoalActor) (GoalCommandResult, error) {
+func (e *Engine) SetGoal(ctx context.Context, objective string, actor session.GoalActor) (GoalCommandResult, error) {
 	return awaitEngineRuntimeOperation(
-		context.Background(),
+		ctx,
 		e,
 		func(context.Context) (GoalCommandResult, error) {
 			return e.setGoalRaw(sessionSteeringProvenance(), objective, actor)
@@ -310,16 +310,16 @@ func (e *Engine) setGoalRaw(provenance steeringProvenance, objective string, act
 	return result, err
 }
 
-func (e *Engine) SetGoalStatus(status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.setGoalStatusRuntime(status, actor, true)
+func (e *Engine) SetGoalStatus(ctx context.Context, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.setGoalStatusRuntime(ctx, status, actor, true)
 }
 
 func (e *Engine) setGoalStatusForStep(stepID string, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
 	return e.setGoalStatusForStepWithGoalLoopAdmission(stepID, status, actor, true)
 }
 
-func (e *Engine) SetGoalStatusWithoutGoalLoopStart(status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.setGoalStatusRuntime(status, actor, false)
+func (e *Engine) SetGoalStatusWithoutGoalLoopStart(ctx context.Context, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.setGoalStatusRuntime(ctx, status, actor, false)
 }
 
 func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
@@ -330,9 +330,9 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 	return e.setGoalStatusRaw(provenance, status, actor, requireGoalLoopStart)
 }
 
-func (e *Engine) setGoalStatusRuntime(status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
+func (e *Engine) setGoalStatusRuntime(ctx context.Context, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
 	return awaitEngineRuntimeOperation(
-		context.Background(),
+		ctx,
 		e,
 		func(context.Context) (GoalCommandResult, error) {
 			return e.setGoalStatusRaw(sessionSteeringProvenance(), status, actor, requireGoalLoopStart)
@@ -629,9 +629,9 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 	}
 }
 
-func (e *Engine) ClearGoal(actor session.GoalActor) (GoalCommandResult, error) {
+func (e *Engine) ClearGoal(ctx context.Context, actor session.GoalActor) (GoalCommandResult, error) {
 	return awaitEngineRuntimeOperation(
-		context.Background(),
+		ctx,
 		e,
 		func(context.Context) (GoalCommandResult, error) {
 			return e.clearGoalRaw(sessionSteeringProvenance(), actor)

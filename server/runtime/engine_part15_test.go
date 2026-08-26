@@ -101,7 +101,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 		Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if _, err := eng.SetGoal("preserve atomic goal context", session.GoalActorUser); err != nil {
+	if _, err := eng.SetGoal(t.Context(), "preserve atomic goal context", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	mustSetWorktreeReminderState(t, store, testWorktreeReminderState(

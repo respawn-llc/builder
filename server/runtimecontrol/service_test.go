@@ -133,7 +133,7 @@ func runtimeControlCurrentNodeInstructions() workflowruntime.TaskInstructions {
 
 func mustQueueRuntimeControlMessage(t *testing.T, engine *runtime.Engine, text string) runtime.QueuedUserMessage {
 	t.Helper()
-	item, err := engine.QueueUserMessage(text)
+	item, err := engine.QueueUserMessage(t.Context(), text)
 	if err != nil {
 		t.Fatalf("queue runtime message: %v", err)
 	}
@@ -1455,7 +1455,7 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	defer client.releaseFirst()
 	defer client.releaseSecond()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	initialGoal, err := engine.SetGoal("committed before active step", session.GoalActorUser)
+	initialGoal, err := engine.SetGoal(t.Context(), "committed before active step", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
@@ -1528,6 +1528,66 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 		t.Fatalf("Interrupt Goal loop: %v", err)
 	}
 	client.releaseSecond()
+}
+
+func TestServiceGoalCallerCancellationStopsWaitWhileAcceptedMutationContinues(t *testing.T) {
+	client := newRestartableRuntimeControlClient()
+	defer client.releaseFirst()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	submission, err := service.SubmitUserTurn(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "turn-1", "work"),
+	)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn: %v", err)
+	}
+	if submission.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn response = %+v, want queued acceptance", submission)
+	}
+	select {
+	case <-client.call1Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active model step")
+	}
+
+	caller, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, goalErr := service.SetGoal(caller, serverapi.RuntimeGoalSetRequest{
+			SessionID: store.Meta().SessionID,
+			Objective: "accepted after disconnect",
+			Actor:     string(session.GoalActorUser),
+		})
+		done <- goalErr
+	}()
+	for !engine.HasPendingRuntimeOperations() {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case goalErr := <-done:
+		if !errors.Is(goalErr, context.Canceled) {
+			t.Fatalf("canceled SetGoal = %v, want canceled", goalErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled SetGoal caller remained blocked")
+	}
+
+	client.releaseFirst()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		response, showErr := service.ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
+		if showErr != nil {
+			t.Fatalf("ShowGoal after accepted mutation: %v", showErr)
+		}
+		if response.Goal != nil && response.Goal.Objective == "accepted after disconnect" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("accepted Goal did not continue after caller cancellation: %+v", response.Goal)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
@@ -1740,11 +1800,11 @@ func TestServiceSetGoalRejectsAgentOverwrite(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store, engine, service := newRuntimeControlTestService(t, &blockingRuntimeControlClient{}, nil, runtime.Config{})
-			if _, err := engine.SetGoal("existing goal\n\n- keep markdown", session.GoalActorUser); err != nil {
+			if _, err := engine.SetGoal(t.Context(), "existing goal\n\n- keep markdown", session.GoalActorUser); err != nil {
 				t.Fatalf("SetGoal initial: %v", err)
 			}
 			if tt.status == session.GoalStatusPaused {
-				if _, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
+				if _, err := engine.SetGoalStatus(context.Background(), session.GoalStatusPaused, session.GoalActorUser); err != nil {
 					t.Fatalf("SetGoalStatus paused: %v", err)
 				}
 			}
@@ -1773,11 +1833,11 @@ func TestServiceSetGoalRejectsAgentOverwrite(t *testing.T) {
 
 func TestServiceSetGoalAllowsAgentAfterCompletedGoal(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, &blockingRuntimeControlClient{}, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	completed, err := engine.SetGoal("completed goal", session.GoalActorUser)
+	completed, err := engine.SetGoal(t.Context(), "completed goal", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal initial: %v", err)
 	}
-	if _, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent); err != nil {
+	if _, err := engine.SetGoalStatus(context.Background(), session.GoalStatusComplete, session.GoalActorAgent); err != nil {
 		t.Fatalf("SetGoalStatus complete: %v", err)
 	}
 	if goal := store.Meta().Goal; goal == nil || goal.ID != completed.ID || goal.Status != session.GoalStatusComplete {
@@ -1833,10 +1893,10 @@ func TestServiceResumeGoalPreflightFailureDoesNotMutateOrEmit(t *testing.T) {
 			events = append(events, evt)
 		},
 	})
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+	if _, err := engine.SetGoal(t.Context(), "ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	if _, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
+	if _, err := engine.SetGoalStatus(context.Background(), session.GoalStatusPaused, session.GoalActorUser); err != nil {
 		t.Fatalf("pause goal: %v", err)
 	}
 	events = nil
@@ -1858,7 +1918,7 @@ func TestServiceResumeGoalPreflightFailureDoesNotMutateOrEmit(t *testing.T) {
 
 func TestServiceCompleteGoalAlreadyCompleteDoesNotDuplicateAudit(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+	if _, err := engine.SetGoal(t.Context(), "ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	if _, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{SessionID: store.Meta().SessionID, Actor: "agent"}); err != nil {
@@ -1885,7 +1945,7 @@ func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
 	defer client.releaseFirst()
 	defer client.releaseSecond()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	goal, err := engine.SetGoal(t.Context(), "ship goal mode", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
@@ -1938,7 +1998,7 @@ func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
 	}
 	client.releaseSecond()
 	waitForRuntimeControlIdle(t, engine)
-	if _, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem); err != nil {
+	if _, err := engine.SetGoalStatus(context.Background(), session.GoalStatusComplete, session.GoalActorSystem); err != nil {
 		t.Fatalf("complete Goal cleanup: %v", err)
 	}
 }
@@ -1946,7 +2006,7 @@ func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
 func TestServiceResumeOwnerlessActiveGoalRestartsLoopWithReminder(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	goal, err := engine.SetGoal(t.Context(), "ship goal mode", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
@@ -1974,7 +2034,7 @@ func TestServiceResumeOwnerlessActiveGoalRestartsLoopWithReminder(t *testing.T) 
 		_ = engine.Interrupt()
 		close(client.release)
 		waitForRuntimeControlIdle(t, engine)
-		_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem)
+		_, _ = engine.SetGoalStatus(context.Background(), session.GoalStatusComplete, session.GoalActorSystem)
 	}()
 	messages := runtimeControlGoalDeveloperMessages(t, store)
 	if len(messages) != 2 {
@@ -1992,7 +2052,7 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 		client.releaseSecond()
 	}()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	goal, err := engine.SetGoal(t.Context(), "ship goal mode", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
@@ -2051,7 +2111,7 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 	}
 	client.releaseSecond()
 	waitForRuntimeControlIdle(t, engine)
-	if _, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem); err != nil {
+	if _, err := engine.SetGoalStatus(context.Background(), session.GoalStatusComplete, session.GoalActorSystem); err != nil {
 		t.Fatalf("complete Goal cleanup: %v", err)
 	}
 }

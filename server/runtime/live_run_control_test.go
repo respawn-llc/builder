@@ -390,7 +390,7 @@ func TestTryInterruptActiveAgentTurnPreservesGoalLoopInterruptBookkeeping(t *tes
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := eng.SetGoal("interrupt ordinary goal Agent Turn", session.GoalActorUser); err != nil {
+	if _, err := eng.SetGoal(t.Context(), "interrupt ordinary goal Agent Turn", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	if err := eng.StartGoalLoop(); err != nil {

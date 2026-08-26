@@ -31,23 +31,23 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 		t.Run("absent", func(t *testing.T) {
 			assertInactiveGoalCompaction(t, engine, "absent")
 		})
-		if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
+		if _, err := engine.SetGoal(t.Context(), "goal", session.GoalActorUser); err != nil {
 			t.Fatalf("set goal: %v", err)
 		}
 		t.Run("paused", func(t *testing.T) {
-			if _, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
+			if _, err := engine.SetGoalStatus(t.Context(), session.GoalStatusPaused, session.GoalActorUser); err != nil {
 				t.Fatalf("pause goal: %v", err)
 			}
 			assertInactiveGoalCompaction(t, engine, "paused")
 		})
 		t.Run("complete", func(t *testing.T) {
-			if _, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorUser); err != nil {
+			if _, err := engine.SetGoalStatus(t.Context(), session.GoalStatusComplete, session.GoalActorUser); err != nil {
 				t.Fatalf("complete goal: %v", err)
 			}
 			assertInactiveGoalCompaction(t, engine, "complete")
 		})
 		t.Run("cleared", func(t *testing.T) {
-			if _, err := engine.ClearGoal(session.GoalActorUser); err != nil {
+			if _, err := engine.ClearGoal(t.Context(), session.GoalActorUser); err != nil {
 				t.Fatalf("clear goal: %v", err)
 			}
 			assertInactiveGoalCompaction(t, engine, "cleared")
@@ -74,7 +74,7 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 			activeStepID: workflowInputStepID,
 			snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: workflowInputStepID},
 		}
-		if _, err := workflowEngine.SetGoal("goal", session.GoalActorUser); err != nil {
+		if _, err := workflowEngine.SetGoal(t.Context(), "goal", session.GoalActorUser); err != nil {
 			t.Fatalf("set workflow goal: %v", err)
 		}
 		assertInactiveGoalCompaction(t, workflowEngine, "workflow")

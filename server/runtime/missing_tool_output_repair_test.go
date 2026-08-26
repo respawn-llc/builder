@@ -182,7 +182,7 @@ func TestMissingToolOutputRepairRetryPreservesQueuedSteeringBoundary(t *testing.
 			}
 			queued = true
 			go func() {
-				_, err := eng.QueueUserMessage("queued steering")
+				_, err := eng.QueueUserMessage(t.Context(), "queued steering")
 				queueDone <- err
 			}()
 			return nil

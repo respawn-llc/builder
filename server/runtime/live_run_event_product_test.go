@@ -100,7 +100,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 			OnEvent:      events.accept,
 			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 		})
-		if _, err := eng.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+		if _, err := eng.SetGoal(t.Context(), "ship goal mode", session.GoalActorUser); err != nil {
 			t.Fatalf("SetGoal: %v", err)
 		}
 

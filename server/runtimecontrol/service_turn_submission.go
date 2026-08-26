@@ -120,6 +120,7 @@ func (s *Service) submitUserTurn(
 		}
 		if compactionBusy {
 			queued, queueErr := engine.QueueUserMessageForAutoDrainWithAcceptance(
+				runCtx,
 				projection.ExecutionText,
 				accept,
 			)

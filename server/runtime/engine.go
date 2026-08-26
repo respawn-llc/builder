@@ -474,12 +474,12 @@ type QueuedUserMessage struct {
 	Message llm.Message
 }
 
-func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
-	return e.queueUserMessage(text, false, nil)
+func (e *Engine) QueueUserMessage(ctx context.Context, text string) (QueuedUserMessage, error) {
+	return e.queueUserMessage(ctx, text, false, nil)
 }
 
-func (e *Engine) queueUserMessage(text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (QueuedUserMessage, error) {
+func (e *Engine) queueUserMessage(ctx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return awaitEngineRuntimeOperation(ctx, e, func(context.Context) (QueuedUserMessage, error) {
 		return e.queueUserMessageRaw(text, forceAutoDrain, accept)
 	})
 }

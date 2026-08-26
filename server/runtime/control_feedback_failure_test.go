@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"core/server/llm"
@@ -9,6 +10,25 @@ import (
 	"core/server/tools"
 	"core/shared/toolspec"
 )
+
+func TestDefinitelyUncommittedControlSettingStopsRuntimeBeforeFeedbackOrLiveProjection(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	blockTestSessionMetadataMutations(t, store)
+
+	changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(t.Context(), false, func(bool, bool) string {
+		return "feedback"
+	})
+	if err == nil || receipt.Committed || changed || enabled || !engine.QuestionsEnabled() {
+		t.Fatalf("uncommitted Questions mutation = changed %t enabled %t receipt %+v current %t error %v", changed, enabled, receipt, engine.QuestionsEnabled(), err)
+	}
+	assertBoundedControlFeedbackCount(t, store, 0)
+	if _, _, _, closeErr := engine.SetQuestionsEnabledWithCommittedFeedback(t.Context(), false, func(bool, bool) string {
+		return "feedback"
+	}); !errors.Is(closeErr, ErrEngineClosed) {
+		t.Fatalf("mutation after uncommitted settings failure = %v, want Engine closed", closeErr)
+	}
+}
 
 func TestSetFastModeWithCommittedFeedbackKeepsCommittedSettingOnAppendFailure(t *testing.T) {
 	t.Parallel()

@@ -49,7 +49,7 @@ func (e *Engine) mutateChatSettingWithCommittedFeedback(
 	apply func(),
 ) (bool, session.CommitReceipt, error) {
 	settings, settingsErr := e.store.MutateChatSettings(mutation)
-	if settings.Changed && !settings.Committed {
+	if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
 		return false, settings.CommitReceipt, settingsErr
 	}
 	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(settings.Changed))
@@ -58,6 +58,14 @@ func (e *Engine) mutateChatSettingWithCommittedFeedback(
 	}
 	apply()
 	return settings.Changed, receipt, errors.Join(settingsErr, feedbackErr)
+}
+
+func (e *Engine) stopAfterDefinitelyUncommittedChatSetting(receipt session.CommitReceipt, err error) bool {
+	if err == nil || receipt.Committed {
+		return false
+	}
+	e.closeAdmissionAfterRuntimeAbort()
+	return true
 }
 
 func (e *Engine) SetFastModeEnabledWithCommittedFeedback(ctx context.Context, enabled bool, feedback func(changed bool) string) (bool, session.CommitReceipt, error) {

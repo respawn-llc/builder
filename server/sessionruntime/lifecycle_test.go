@@ -390,7 +390,7 @@ func TestGoalLifecycleDurabilityAbortRetiresCurrentGeneration(t *testing.T) {
 			_ context.Context,
 			engine *runtime.Engine,
 		) error {
-			if _, err := engine.SetGoal("continue autonomously", session.GoalActorUser); err != nil {
+			if _, err := engine.SetGoal(t.Context(), "continue autonomously", session.GoalActorUser); err != nil {
 				return err
 			}
 			return engine.StartGoalLoop()

@@ -169,9 +169,9 @@ func (s *Service) applyLiveGoalMutation(
 	mutation goalMutation,
 ) (runtime.GoalCommandResult, error) {
 	var result runtime.GoalCommandResult
-	apply := func(_ context.Context, engine *runtime.Engine) error {
+	apply := func(runtimeCtx context.Context, engine *runtime.Engine) error {
 		var err error
-		result, err = applyLiveGoalMutation(engine, mutation)
+		result, err = applyLiveGoalMutation(runtimeCtx, engine, mutation)
 		return err
 	}
 	err := s.authority.WithCurrentRuntime(ctx, sessionID, apply)
@@ -219,7 +219,7 @@ func (s *Service) applyExactAgentGoalMutation(
 	return result, err
 }
 
-func applyLiveGoalMutation(engine *runtime.Engine, mutation goalMutation) (runtime.GoalCommandResult, error) {
+func applyLiveGoalMutation(ctx context.Context, engine *runtime.Engine, mutation goalMutation) (runtime.GoalCommandResult, error) {
 	switch mutation.kind {
 	case goalMutationSet:
 		if err := engine.ValidateGoalSet(mutation.Objective, mutation.Actor); err != nil {
@@ -228,19 +228,19 @@ func applyLiveGoalMutation(engine *runtime.Engine, mutation goalMutation) (runti
 		if err := engine.RequireGoalLoopStartAllowed(); err != nil {
 			return runtime.GoalCommandResult{}, err
 		}
-		result, err := engine.SetGoal(mutation.Objective, mutation.Actor)
+		result, err := engine.SetGoal(ctx, mutation.Objective, mutation.Actor)
 		if err == nil && result.MetadataReceipt.Committed {
 			err = engine.StartGoalLoop()
 		}
 		return result, err
 	case goalMutationStatus:
-		result, err := engine.SetGoalStatus(mutation.Status, mutation.Actor)
+		result, err := engine.SetGoalStatus(ctx, mutation.Status, mutation.Actor)
 		if err == nil && mutation.Status == session.GoalStatusActive && result.MetadataReceipt.Committed {
 			err = engine.StartGoalLoop()
 		}
 		return result, err
 	case goalMutationClear:
-		return engine.ClearGoal(mutation.Actor)
+		return engine.ClearGoal(ctx, mutation.Actor)
 	default:
 		return runtime.GoalCommandResult{}, fmt.Errorf("unsupported Goal mutation kind %d", mutation.kind)
 	}
