@@ -9,6 +9,7 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -629,6 +630,21 @@ func TestWorktreeProtoMapper(t *testing.T) {
 				t.Fatal("ImmediateTransitionDetails without diagnostic unexpectedly validated")
 			}
 		}},
+		{name: "setup events", run: func(t *testing.T) {
+			for _, event := range worktreeMapperSetupEvents(t) {
+				message, err := WorktreeSetupEventToProto(event)
+				if err != nil {
+					t.Fatalf("WorktreeSetupEventToProto(%s): %v", event.Phase, err)
+				}
+				roundTrip, err := WorktreeSetupEventFromProto(message)
+				if err != nil {
+					t.Fatalf("WorktreeSetupEventFromProto(%s): %v", event.Phase, err)
+				}
+				if !reflect.DeepEqual(roundTrip, event) {
+					t.Fatalf("setup event round trip = %#v, want %#v", roundTrip, event)
+				}
+			}
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, test.run)
@@ -664,4 +680,141 @@ func worktreeMapperWorkspaceEntry(root string) worktreecontract.ListEntry {
 	entry := worktreeMapperRegisteredEntry(root)
 	entry.Projection.IsCurrent = false
 	return entry
+}
+
+func worktreeMapperSetupEvents(t *testing.T) []worktreecontract.SetupEvent {
+	t.Helper()
+	setupOperationID, err := worktreecontract.ParseSetupOperationID("223e4567-e89b-42d3-a456-426614174000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered := worktreeMapperRegisteredEntry("/repo").Topology
+	retainedPrevious := &worktreecontract.RetainedPreviousWorktree{Worktree: registered}
+	scriptPath := "/repo/setup.sh"
+	stdout := "stdout"
+	stderr := "stderr"
+	customRef := "refs/heads/custom"
+	failed := func(
+		cause worktreecontract.SetupFailureCause,
+		readiness worktreecontract.SetupRetryReadiness,
+		script *string,
+		executionTarget *workflowcontract.ExecutionTargetSelection,
+		retained *worktreecontract.TopologyEntry,
+	) worktreecontract.SetupEvent {
+		return worktreecontract.SetupEvent{
+			SetupOperationID: setupOperationID,
+			Phase:            worktreecontract.SetupPhaseFailed,
+			Failed: &worktreecontract.SetupFailed{
+				RetryReadiness:           readiness,
+				Cause:                    cause,
+				Diagnostic:               "setup failed",
+				ScriptPath:               script,
+				ExecutionTarget:          executionTarget,
+				RetainedWorktree:         retained,
+				RetainedPreviousWorktree: retainedPrevious,
+			},
+		}
+	}
+	return []worktreecontract.SetupEvent{
+		{
+			SetupOperationID: setupOperationID,
+			Phase:            worktreecontract.SetupPhaseStarted,
+			Started: &worktreecontract.SetupStarted{
+				SourceWorkspaceRoot: "/repo", WorktreeRoot: "/repo-feature", ScriptPath: scriptPath,
+			},
+		},
+		{
+			SetupOperationID: setupOperationID,
+			Phase:            worktreecontract.SetupPhaseCompleted,
+			Completed:        &worktreecontract.SetupCompleted{RetainedPreviousWorktree: retainedPrevious},
+		},
+		{
+			SetupOperationID: setupOperationID,
+			Phase:            worktreecontract.SetupPhaseNotRequired,
+			NotRequired: &worktreecontract.SetupNotRequired{
+				Reason: worktreecontract.SetupNotRequiredNoTargetPreparation,
+			},
+		},
+		{
+			SetupOperationID: setupOperationID,
+			Phase:            worktreecontract.SetupPhaseNotRequired,
+			NotRequired: &worktreecontract.SetupNotRequired{
+				Reason:                   worktreecontract.SetupNotRequiredNoConfiguredScript,
+				RetainedPreviousWorktree: retainedPrevious,
+			},
+		},
+		failed(
+			worktreecontract.SetupFailureCause{
+				Kind: worktreecontract.SetupFailureProcessExit,
+				ProcessExit: &worktreecontract.SetupProcessExit{
+					ExitCode: 1, Stdout: &stdout, Stderr: &stderr,
+				},
+			},
+			worktreecontract.SetupRetryReady,
+			&scriptPath,
+			&workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeNone},
+			&registered,
+		),
+		failed(
+			worktreecontract.SetupFailureCause{
+				Kind: worktreecontract.SetupFailureTimeout,
+				Timeout: &worktreecontract.SetupTimeout{
+					Stdout: &stdout, Stderr: &stderr,
+				},
+			},
+			worktreecontract.SetupRetryReady,
+			&scriptPath,
+			&workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeHead},
+			&registered,
+		),
+		failed(
+			worktreecontract.SetupFailureCause{
+				Kind: worktreecontract.SetupFailureTargetPreparation, Preparation: &worktreecontract.SetupPreparationFailure{},
+			},
+			worktreecontract.SetupRetryReady,
+			nil,
+			&workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeDefaultBranch},
+			nil,
+		),
+		failed(
+			worktreecontract.SetupFailureCause{
+				Kind:                    worktreecontract.SetupFailureInterruptionPersistence,
+				InterruptionPersistence: &worktreecontract.SetupInterruptionPersistenceFailure{},
+			},
+			worktreecontract.SetupNonRetryable,
+			nil,
+			nil,
+			nil,
+		),
+		failed(
+			worktreecontract.SetupFailureCause{
+				Kind: worktreecontract.SetupFailureCanceled, Canceled: &worktreecontract.SetupCanceled{},
+			},
+			worktreecontract.SetupNonRetryable,
+			nil,
+			nil,
+			nil,
+		),
+		failed(
+			worktreecontract.SetupFailureCause{
+				Kind:               worktreecontract.SetupFailureControllerShutdown,
+				ControllerShutdown: &worktreecontract.SetupControllerShutdown{},
+			},
+			worktreecontract.SetupNonRetryable,
+			nil,
+			nil,
+			nil,
+		),
+		failed(
+			worktreecontract.SetupFailureCause{
+				Kind: worktreecontract.SetupFailureOperational, Operational: &worktreecontract.SetupOperationalFailure{},
+			},
+			worktreecontract.SetupRetryReady,
+			&scriptPath,
+			&workflowcontract.ExecutionTargetSelection{
+				Mode: workflowcontract.ExecutionTargetModeCustomRef, CustomRef: &customRef,
+			},
+			&registered,
+		),
+	}
 }
