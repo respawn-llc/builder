@@ -1047,8 +1047,15 @@ type WorkflowTaskCompleteRequest struct {
 }
 
 type WorkflowTaskCompleteResponse struct {
-	AgentCompletion *WorkflowTaskAgentCompletion      `json:"agent_completion,omitempty"`
-	ForcedMove      *WorkflowTaskForcedCompletionMove `json:"forced_move,omitempty"`
+	AgentCompletion *WorkflowTaskAgentCompletion      `json:"agent_completion"`
+	ForcedMove      *WorkflowTaskForcedCompletionMove `json:"forced_move"`
+}
+
+func (r WorkflowTaskCompleteResponse) Validate() error {
+	if (r.AgentCompletion == nil) == (r.ForcedMove == nil) {
+		return errors.New("workflow task completion response must contain exactly one outcome")
+	}
+	return nil
 }
 
 type WorkflowTaskAgentCompletion struct {

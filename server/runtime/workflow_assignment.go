@@ -66,11 +66,19 @@ func (s WorkflowAssignmentSteer) complete(receipt session.CommitReceipt, err err
 }
 
 func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (WorkflowAssignmentSteer, error) {
-	message, err := buildWorkflowAssignmentMessage(assignment)
+	snapshot, err := NewWorkflowAssignmentSnapshot(assignment)
 	if err != nil {
 		return WorkflowAssignmentSteer{}, err
 	}
-	return e.steerWorkflowAssignmentMessage(message)
+	return e.SteerWorkflowAssignmentSnapshot(snapshot)
+}
+
+func NewWorkflowAssignmentSnapshot(assignment WorkflowAssignment) (WorkflowAssignmentSnapshot, error) {
+	message, err := buildWorkflowAssignmentMessage(assignment)
+	if err != nil {
+		return WorkflowAssignmentSnapshot{}, err
+	}
+	return WorkflowAssignmentSnapshot{message: &message}, nil
 }
 
 func (e *Engine) SteerWorkflowAssignmentSnapshot(snapshot WorkflowAssignmentSnapshot) (WorkflowAssignmentSteer, error) {
@@ -88,10 +96,6 @@ func (e *Engine) RestoreWorkflowAssignmentSnapshotThinking(snapshot WorkflowAssi
 		return struct{}{}, e.setThinkingValue(*snapshot.thinking)
 	})
 	return err
-}
-
-func (e *Engine) steerWorkflowAssignmentMessage(message llm.Message) (WorkflowAssignmentSteer, error) {
-	return e.steerWorkflowAssignmentSnapshot(WorkflowAssignmentSnapshot{message: &message})
 }
 
 func (e *Engine) steerWorkflowAssignmentSnapshot(snapshot WorkflowAssignmentSnapshot) (WorkflowAssignmentSteer, error) {

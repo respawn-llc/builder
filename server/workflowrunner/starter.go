@@ -258,19 +258,19 @@ func (s *currentNodeAgentAssignmentSteer) Prepare(ctx context.Context) error {
 			if selectionErr != nil {
 				return selectionErr
 			}
+			snapshot, snapshotErr := runtime.NewWorkflowAssignmentSnapshot(s.assignment)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
 			thinkingMutation := workflowThinkingMutationFor(s.input, selection)
 			switch thinkingMutation.Kind() {
 			case launch.WorkflowThinkingMutationSet:
-				if err := engine.SetWorkflowThinkingValue(thinkingMutation.Value()); err != nil {
-					return err
-				}
+				snapshot = snapshot.WithThinkingLevel(string(thinkingMutation.Value()))
 			case launch.WorkflowThinkingMutationClear:
-				if err := engine.ClearWorkflowThinkingValue(); err != nil {
-					return err
-				}
+				snapshot = snapshot.WithThinkingLevel("")
 			}
 			var steerErr error
-			steer, steerErr = engine.SteerWorkflowAssignment(s.assignment)
+			steer, steerErr = engine.SteerWorkflowAssignmentSnapshot(snapshot)
 			return steerErr
 		})
 	}

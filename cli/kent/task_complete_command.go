@@ -81,6 +81,10 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintln(stderr, taskCompleteErrorMessage(err))
 			return 1
 		}
+		if err := resp.Validate(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 		if resp.ForcedMove != nil {
 			taskRef := parsed.TaskRef
 			if strings.TrimSpace(taskRef) == "" {
@@ -96,10 +100,6 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 				parsed.JSONPayloadSet || parsed.JSONFileSet,
 				fmt.Sprintf("%s task move %s %s", config.Command, resp.ForcedMove.TaskID, resp.ForcedMove.TargetNodeID),
 			)
-		}
-		if resp.AgentCompletion == nil {
-			fmt.Fprintln(stderr, "workflow task completion returned no outcome")
-			return 1
 		}
 		completion := *resp.AgentCompletion
 		if parsed.JSONPayloadSet || parsed.JSONFileSet {
