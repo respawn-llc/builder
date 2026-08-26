@@ -289,21 +289,6 @@ func (q *Queries) AllocateProjectTaskSequence(ctx context.Context, arg AllocateP
 	return i, err
 }
 
-const anchorTaskSearchReadSnapshot = `-- name: AnchorTaskSearchReadSnapshot :one
-SELECT EXISTS(
-    SELECT 1
-    FROM task_search_documents
-) AS anchored
-`
-
-func (q *Queries) AnchorTaskSearchReadSnapshot(ctx context.Context) (bool, error) {
-	row := q.db.QueryRowContext(ctx, anchorTaskSearchReadSnapshot)
-	var anchored bool
-	err := recordQueryError(ctx, row.Scan(&anchored), anchorTaskSearchReadSnapshot, 0)
-
-	return anchored, err
-}
-
 const appendLegacyBranchSessionWorkflowNodeHistory = `-- name: AppendLegacyBranchSessionWorkflowNodeHistory :execrows
 INSERT INTO session_workflow_node_associations (
     task_id,

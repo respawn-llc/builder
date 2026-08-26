@@ -5,7 +5,8 @@
 - Workflow orchestration lets users define reusable, Project-scoped processes for Tasks.
 - A Workflow contains Nodes and Transitions.
 - Tasks can move through agent work, scripts, review loops, parallel branches, Joins, and terminal states.
-- Every Kent client presents the same authoritative Workflow and Task behavior.
+- Every Kent client presents the same server-owned Workflow and Task behavior.
+- Data-only Workflow and Task requests independently load the latest completed durable and live projections available to them. Responses may be stale or combine facts from different completed moments, while mutations revalidate their safety-critical facts.
 - Every incompatible Workflow contract cutover increments the client/server protocol version. Incompatible clients fail with a clear compatibility error, and Kent does not emulate an older Workflow contract.
 
 ## Domain Model
@@ -528,7 +529,7 @@
 
 - Task Search, Task detail, Workflow boards, and Task lists use one server-owned authoritative Task-status projection derived from Current Nodes, pending Workflow Transition Approvals, and current live activity.
 - The projection supplies primary status, every applicable attention kind and reference, available Task actions, and the exact Current Node, Session, or Script targets for those actions. A surface may omit fields it does not expose, but does not independently recompute lifecycle-sensitive facts.
-- Each request combines one durable Task-state view with one Immutable Live Snapshot, then derives the complete projection from those views. A Workflow lifecycle change between the views may briefly combine durable and live facts from different moments.
+- Each request independently loads durable Task facts and owner-local immutable live projections, then derives the complete projection from those facts. The facts may be stale and may represent different completed moments.
 - Each request is independent. Kent does not synchronize separate Search, List, Board, and Detail requests, so they may observe different lifecycle moments.
 - Agreement among List/Search status filtering, status sorting, and returned status is not a product invariant. Each evaluation still follows the authoritative Task-status semantics.
 - Projected actions and targets are hints that may become stale after the response. Each Task-changing operation checks its authoritative state again before changing the Task.
@@ -571,7 +572,7 @@
 - Task search reuses the authoritative Task status defined above.
 - [CLI Commands](cli-commands.md) owns the complete Task Search command contract.
 - Search returns Task status from the server-owned Task-status projection.
-- Each response is point-in-time consistent for matching text, counts, filters, and Task metadata. It combines that durable view with one separately captured Immutable Live Snapshot. A Workflow lifecycle change between the views may briefly combine durable and live facts from different moments.
+- Each response independently loads the durable facts used for matching text, counts, filters, and Task metadata and combines them with owner-local immutable live projections. The facts may be stale and may represent different completed moments.
 
 ## Execution Targets And Worktrees
 
@@ -688,7 +689,7 @@
 - Each Task belongs to one Project through one Project Workflow Link.
 - A Project's default Workflow link and primary workspace must belong to that Project.
 - Kent derives workspace and worktree display facts from their authoritative roots and Project choices. It does not maintain duplicate editable copies.
-- After reconnect or a live-update error, clients refresh authoritative Workflow and Task information.
+- After reconnect or a live-update error, clients reissue Workflow and Task reads and subscriptions. The resulting projections retain the stale-tolerant read contract.
 - A Workflow deletion preview reports counts only.
 - Workflow deletion requires Quiescence across every affected Task. It also requires a replacement when deleting the Project's default Workflow would leave an invalid default state.
 - Confirmed Workflow deletion removes the Workflow, its Project Workflow Links, its Tasks, and its graph as one atomic change.

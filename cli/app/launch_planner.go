@@ -48,6 +48,7 @@ type sessionLaunchPlan struct {
 	QuestionsEnabled           bool
 	AutoCompactionEnabled      bool
 	ThinkingOverrideExplicit   bool
+	ActivationAgentSelection   *serverapi.SessionRuntimeAgentSelection
 	StatusConfig               uiStatusConfig
 	ExecutionTarget            clientui.SessionExecutionTarget
 	Source                     config.SourceReport
@@ -235,6 +236,12 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
+	activationAgentSelection, err := protoapi.SessionRuntimeAgentSelectionFromProto(
+		resp.Plan.ActivationAgentSelection,
+	)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
 	return sessionLaunchPlan{
 		Mode:                     req.Mode,
 		SessionID:                resp.Plan.SessionId,
@@ -247,6 +254,7 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		QuestionsEnabled:         resp.Plan.QuestionsEnabled,
 		AutoCompactionEnabled:    resp.Plan.AutoCompactionEnabled,
 		ThinkingOverrideExplicit: resp.Plan.ThinkingOverrideExplicit,
+		ActivationAgentSelection: activationAgentSelection,
 		StatusConfig: uiStatusConfig{
 			WorkspaceRoot:   executionTarget.EffectiveWorkdir,
 			ExecutionTarget: executionTarget,

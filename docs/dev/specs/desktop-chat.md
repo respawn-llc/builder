@@ -20,7 +20,7 @@
 - Before a Session has a name or an accepted first prompt, its browser row uses the full Session ID as its title and omits the first-prompt preview. The ID truncates only when required by the available row width; it is not shortened by default.
 - Session discovery uses zero-based, non-negative offset pagination. An omitted offset starts at zero. An omitted limit defaults to 100, and a supplied limit is between 1 and 100.
 - A response includes the next offset only when older Sessions remain. Clients derive the preceding page offset from the offset and limit they requested.
-- Each request reads the current category as a stateless live view. Session recency changes between requests may cause later results to repeat or skip Sessions, and Kent does not reconcile them.
+- Each request reads its category independently from the latest completed server-owned projection. Session recency changes between requests may cause later results to repeat or skip Sessions, and Kent does not reconcile them.
 - Desktop requests 50 Sessions per page and retains at most ten pages independently for each category.
 - Selecting a Session opens full-page Chat. Session rows have no secondary actions or context menu.
 - Session rows do not expose execution-target availability or warnings.
@@ -85,8 +85,8 @@
 - Committed time is informational. The committed-row locator remains the sole identity and transcript-order authority. Kent never uses committed time for sorting, cursors, deduplication, or reconciliation.
 - Duplicate locators are contract failures within one bounded page and within one continuous subscription generation after applying hydration and live committed rows. After hydration, live committed rows advance by durable event sequence; rows from one event are contiguous and use gapless one-based ordinals in deterministic projection order. Regression, repetition, an ordinal gap, or a live event sequence that is not newer than the greatest hydrated event sequence is a contract failure.
 - The locator-order contract applies only to committed rows in one subscription generation. The same locator may recur across independent reads, page responses, replacement hydration generations, reconnects, and separate clients or surfaces.
-- Opening, reopening, and transcript recovery hydrate mutable Session facts from their authoritative server owners. Cached feed-ordering state never replaces fresher Session identity, execution-target, runtime, or transcript facts.
-- Desktop does not require a globally atomic cross-owner snapshot-plus-live handoff or exactly-once delivery across that boundary. If event-sequence continuity cannot be established, Desktop discards transient live state and repeats authoritative hydration instead of remaining silently stale.
+- Opening, reopening, and transcript recovery use ordered transcript hydration and independently load the latest completed projections from each server owner. Non-transcript projections may be stale or represent different completed moments, and cached feed-ordering state does not replace them.
+- Desktop does not require a globally atomic cross-owner snapshot-plus-live handoff or exactly-once delivery across that boundary. If transcript event-sequence continuity cannot be established, Desktop discards transient live transcript state and reopens the sequenced transcript subscription.
 
 ## Tools And Processes
 
@@ -270,7 +270,7 @@
 - The sidebar shows the authoritative Goal status and a small secondary line `Set <age> ago` derived from the server's Goal creation timestamp. It omits Goal ID and updated time.
 - Goal status uses ordinary foreground text in every state. The age line alone uses muted text. Desktop adds no Goal-status badge or semantic status color.
 - The age line shows `Set just now` below one minute, `Set N min ago` below one hour, `Set HhMm ago` below one day, and `Set DdHhMm ago` from one day onward. It omits zero-value units, keeps days unbounded, and refreshes once per minute.
-- Opening the sidebar for an existing Goal performs one authoritative Goal read. Until it resolves, the sidebar uses the standard compact Loading state. Failure uses the matching compact Error state with Retry. Lazy Goal creation opens directly without this read.
+- Opening the sidebar for an existing Goal performs one server-owned Goal read. The response is the latest completed durable Goal projection selected by that request and may race with mutations. Until it resolves, the sidebar uses the standard compact Loading state. Failure uses the matching compact Error state with Retry. Lazy Goal creation opens directly without this read.
 - While the sidebar remains open after a successful read, ordinary Goal broadcasts update clean authoritative state. Desktop adds no Goal polling loop or timer-based server refresh.
 - If an authoritative Goal broadcast arrives after an open read starts but before its response is applied, the broadcast state wins and Desktop discards the late read response. Desktop adds no retry, revision, timestamp-ordering, or polling mechanism for this race.
 - Goal objective drafting copies Task Description reconciliation and destination lifetime. A clean draft follows authoritative Goal broadcasts. A dirty draft remains unchanged while the Goal sidebar destination stays alive. Save replaces the latest authoritative Goal. Closing or navigating away from the sidebar or relaunching Desktop discards an unsaved Goal draft; Desktop adds no server-owned Goal-editor draft.
@@ -317,14 +317,14 @@
 - The Worktree sidebar opens directly to one management list. It has no overview landing page, cards, tabs, or nested Manage screen.
 - The sidebar header has a primary icon-only `+` action for creating a worktree.
 - The sidebar header has a secondary icon-only Refresh action beside `+`.
-- Opening the Worktree sidebar performs one fresh authoritative list read. Initial loading uses the standard compact Loading state, and failure uses the matching compact Error state with Retry.
+- Opening the Worktree sidebar performs one server-owned list read. The response may race with Worktree mutations or out-of-band Git changes. Initial loading uses the standard compact Loading state, and failure uses the matching compact Error state with Retry.
 - Successful Worktree creation, switching, and deletion refresh the list. Manual Refresh discovers out-of-band Git topology changes.
 - Desktop adds no Worktree-list polling loop or timer-based refresh.
-- After reconnection, Desktop refreshes the authoritative current target and any open Worktree list.
+- After reconnection, Desktop reissues the current-target and open Worktree-list reads.
 - Desktop does not reconstruct, retain, or retry a pending Worktree target change that the server lost during shutdown or restart.
-- Reconnection shows no speculative warning for an absent pending Worktree operation. The refreshed server state is authoritative.
+- Reconnection shows no speculative warning for an absent pending Worktree operation. Mutation admission remains authoritative if the operator acts on a stale Worktree projection.
 - If connection loss interrupts creation or setup, Desktop does not retry the Create request or keep waiting for its old result.
-- After reconnection, an open Worktree surface returns to its list and performs a fresh authoritative read. Any worktree retained by the interrupted operation appears through that read.
+- After reconnection, an open Worktree surface returns to its list and performs another server-owned read. A worktree retained by the interrupted operation appears when a read or update observes it.
 - Desktop performs the automatic Switch only after it receives a successful Create result. An interrupted Create request does not infer success from list topology.
 - The list contains the server's complete worktree topology in authoritative order without pagination.
 - The current target row uses the shared UI kit's established selected-list-row treatment. Desktop adds no bespoke Current badge or marker.
@@ -409,13 +409,13 @@
 - A pre-retention creation failure not owned by one field shows the authoritative diagnostic as error-colored form-level plain text below the fields. It shows no Sonner.
 - The Worktree sidebar remains dismissible while creation and optional setup run.
 - Dismissing the Worktree sidebar does not cancel the submitted creation operation. The operation continues without its spinner after the destination closes.
-- Reopening Worktree while that creation operation remains in flight opens the ordinary list and performs its ordinary fresh read.
+- Reopening Worktree while that creation operation remains in flight opens the ordinary list and performs its ordinary server-owned read.
 - The reopened list keeps its normal actions available. Desktop does not reattach the creation spinner or add a client-wide Worktree mutation lock.
 - Concurrent requests follow the server's ordinary Worktree ordering and re-evaluation behavior.
 - Dismissing the Worktree sidebar does not suppress the automatic Switch after successful creation and setup.
 - Successful creation and automatic Switch remain silent. The authoritative current-target control changes when the Switch applies.
 - If optional setup fails while the Worktree sidebar remains open, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.
-- If the Worktree sidebar was dismissed, setup failure does not reopen it. Desktop shows the authoritative diagnostic through Sonner, and the next Worktree-sidebar open performs its ordinary fresh list read.
+- If the Worktree sidebar was dismissed, setup failure does not reopen it. Desktop shows the authoritative diagnostic through Sonner, and the next Worktree-sidebar open performs its ordinary server-owned list read.
 - Setup failure preserves the created worktree and does not offer an inline Error state, Retry action, or automatic deletion.
 - Successful creation waits for optional setup to finish and then applies the ordinary Switch operation for the new worktree.
 - If creation succeeds but the automatic Switch fails, Desktop preserves the created worktree, refreshes the list, leaves the Session on its previous target, and surfaces the Switch failure.
@@ -482,13 +482,13 @@
 
 - Desktop's existing global connection state owns server disconnection. Chat adds no banner, card, modal, or second reconnect indicator.
 - While disconnected, the existing persistent warning notice remains visible, Chat keeps its last committed authoritative content, and every server mutation is unavailable. Composer and form text remain present.
-- Reconnection dismisses the global warning, refreshes visible authoritative queries, recreates the transcript subscription, and performs Scratch Rehydration. Success adds no notification.
-- Desktop never replays an ambiguous Session mutation after connection loss. A later explicit operator action is a new operation; reconnect refreshes transcript, Pending Work, draft, runtime, prompt, Goal, Process, and Worktree state from their owners.
+- Reconnection dismisses the global warning, reissues visible owner reads, recreates the transcript subscription, and performs Scratch Rehydration. Success adds no notification.
+- Desktop never replays an ambiguous Session mutation after connection loss. A later explicit operator action is a new operation; reconnect reopens the ordered transcript subscription and independently reads the latest completed Pending Work, draft, runtime, prompt, Goal, Process, and Worktree projections from their owners.
 - A transcript sequence gap, subscription loss, or buffered-stream failure discards provisional live content and starts Scratch Rehydration. Already committed transcript content never becomes fake empty or idle state.
-- Scratch Rehydration uses the ordinary authoritative hydration projection. It adds no client transcript repair, duplicate suppression, history rewrite, or global snapshot/replay mechanism.
+- Scratch Rehydration uses the ordinary sequenced transcript hydration and independent owner reads. It adds no client transcript repair, duplicate suppression, history rewrite, freshness fence, or global snapshot/replay mechanism.
 - Initial existing-Session loading uses the compact centered Chat loading state already specified. Initial inspection, runtime activation, transcript hydration, or draft-load failure uses the matching compact Error state with Retry while chrome Back remains available.
 - Initial Retry repeats the complete ordinary Session open path. It does not retry only one guessed failing sub-operation and adds no target-repair behavior.
-- A failed refresh after Chat is already hydrated preserves the last authoritative visible state. Desktop surfaces the failure through the owning global connection or operation error presentation and never fabricates empty state.
+- A failed refresh after Chat is already hydrated preserves the last server-owned visible projections. Desktop surfaces the failure through the owning global connection or operation error presentation and never fabricates empty state.
 - Older/newer transcript page failure affects only that boundary row. Loaded content remains usable and Retry repeats the same opaque cursor request.
 - A failed Session mutation keeps its initiating text, draft, Pending Work item, picker, Goal, Worktree, or settings state according to that operation's existing contract and uses the shared status-notice/Sonner owner. Desktop creates no optimistic transcript fallback row.
 - Mutation controls prevent duplicate activation while their request is pending. This is request presentation, not client-owned replay, reconciliation, or a second authoritative operation state.
@@ -496,7 +496,7 @@
 - An in-app navigation, detach, pop-out transition, or other controlled disposal that requires draft persistence or runtime release does not silently complete after that prerequisite fails. It keeps the current presentation and surfaces the authoritative diagnostic.
 - Opening a native Chat pop-out failure leaves Chat in the main window and uses the existing native-window failure notice. Desktop does not create a fallback duplicate window or partially navigate the main window.
 - Prompt-answer races follow the Question/Approval contract: externally resolved prompts disappear, stale results cannot replace current prompt state, and a failed still-pending submission preserves its local answer draft.
-- After a batch failure, Desktop refreshes authoritative pending state and preserves local drafts only for prompts that remain pending. Desktop does not retry or replay the failed batch automatically.
+- After a batch failure, Desktop reads the latest completed pending-prompt projection and preserves local drafts only for prompts that appear pending in that response. Desktop does not retry or replay the failed batch automatically.
 - Impossible typed payloads, transcript integrity violations, and reducer/lifecycle states fail immediately in development. Production uses the owning transcript or operation failure path without placeholder rows, swallowed errors, or fake successful state.
 
 ## Desktop Exceptions

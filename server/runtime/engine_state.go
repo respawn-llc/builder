@@ -39,7 +39,13 @@ type TranscriptSegmentPage struct {
 	LastCommittedAssistantFinalAnswer *string
 }
 
-func TranscriptSegmentPageFromEventLog(eventLog session.MaterializedEventLog, cursor int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
+type TranscriptEventLogReader interface {
+	ReadNewestSegmentBackward(match func(session.EventRecord) bool) (session.EventRecordWindow, error)
+	ReadSegmentBackward(endOffset int64, match func(session.EventRecord) bool) (session.EventRecordWindow, error)
+	ReadSegmentForward(startOffset int64, match func(session.EventRecord) bool) (session.EventRecordWindow, error)
+}
+
+func TranscriptSegmentPageFromEventLog(eventLog TranscriptEventLogReader, cursor int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
 	if cursor <= 0 {
 		return TranscriptSegmentPage{}, fmt.Errorf("transcript segment cursor must be positive, got %d", cursor)
 	}
@@ -54,7 +60,7 @@ func TranscriptSegmentPageFromEventLog(eventLog session.MaterializedEventLog, cu
 	return segmentPageFromWindow(window, cacheWarningMode)
 }
 
-func TranscriptNewestSegmentPageFromEventLog(eventLog session.MaterializedEventLog, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
+func TranscriptNewestSegmentPageFromEventLog(eventLog TranscriptEventLogReader, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
 	var matchErr error
 	window, err := eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
 	if err != nil {
@@ -74,7 +80,7 @@ func TranscriptNewestSegmentPageFromEventLog(eventLog session.MaterializedEventL
 	return page, nil
 }
 
-func TranscriptSegmentPageForwardFromEventLog(eventLog session.MaterializedEventLog, startOffset int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
+func TranscriptSegmentPageForwardFromEventLog(eventLog TranscriptEventLogReader, startOffset int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
 	var matchErr error
 	window, err := eventLog.ReadSegmentForward(
 		startOffset,

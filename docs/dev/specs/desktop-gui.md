@@ -8,7 +8,7 @@
 - If the server is unavailable or authentication is not ready, show a concise failure and next action, including instructions to run the server when unreachable.
 - A safe application shell remains available when startup fails. Home omits endpoint, version, authentication mode, and other runtime identity.
 - On connection loss, disable mutations while retaining cached content where available. Show persistent disconnected status until reconnection; closing that notice does not change connection state.
-- Keep unsent local drafts for new Tasks, comments, and editable Task or Project text while the window stays open. Do not queue or replay mutations. After reconnection, refresh server state and let the operator submit preserved drafts manually; a save overwrites remote changes.
+- Keep unsent local drafts for new Tasks, comments, and editable Task or Project text while the window stays open. Do not queue or replay mutations. After reconnection, reissue server reads and let the operator submit preserved drafts manually; each mutation revalidates its safety-critical facts, and an accepted save overwrites remote changes.
 - Local capabilities such as clipboard, directory selection, separate windows, window controls, and notifications are distinct from server readiness. When unavailable, explain the unavailable action; cosmetic shell behavior may be absent in a browser presentation.
 - Text input is plain multiline Markdown. Rich Markdown preserves every source newline as a visible line break. Rich Markdown remains within its available surface width; only a code block may scroll horizontally inside its own block. Task Detail and Workflow Editor content use the approved rich Markdown presentation with sanitized raw-HTML and link behavior. Board previews are flattened text previews: they strip Markdown formatting and raw HTML without rendering rich structure or controls, preserve readable text labels, and remain bounded for dense boards. Completed supported code is syntax-highlighted and selectable in rich content; incomplete code remains selectable plain text.
 - Task Description and Goal objective use one shared large Markdown field. Desktop does not maintain feature-specific copies of its read or edit presentation.
@@ -114,7 +114,7 @@
 - With no linked Workflows, the empty state's primary action is `Link Workflow`.
 - With linked Workflows but no Tasks, the empty state says `No tasks yet`. Its primary action is `New Task` when exactly one Workflow is linked or when multiple are linked with a default; otherwise it is `Link Workflow`.
 - A successful Link Workflow action opened from the Tasks empty state returns to Tasks rather than opening the Workflow board. Cancel uses the existing close behavior. Failure keeps the linking page open with its entered state and existing error behavior.
-- A successful New Task action closes creation and refreshes the authoritative list. It preserves the current Backlog disclosure state and does not programmatically reveal the created Task or open Task Detail.
+- A successful New Task action closes creation and reissues the Task-list reads. The successful creation response is authoritative for that operation, while list responses remain stale-tolerant. The action preserves the current Backlog disclosure state and does not programmatically reveal the created Task or open Task Detail.
 - Canceling New Task uses the existing close behavior. Creation failure keeps the form open with its Draft and existing error behavior.
 - The Project Task list has no persistent New Task action outside its empty state.
 
@@ -321,7 +321,7 @@
 - Selected existing Labels are assigned atomically with Task creation. Creating a Label during Task creation selects it after Label creation succeeds; Create Task is unavailable while Label creation is pending. The Label remains in the Project if Task creation is cancelled or fails.
 - Creation makes a Backlog Task; it does not start automation. Title, body, and source workspace are editable only in Backlog. A managed Execution Target remains tied to its original source workspace; no-managed-worktree execution uses the Task's current source workspace.
 - Task creation and editing show server validation errors.
-- Task Detail can appear inline, in a separate window when supported, or as a standalone destination. Reopening an already separate Task Detail focuses it rather than duplicating it. Closing it after a mutation refreshes visible content.
+- Task Detail can appear inline, in a separate window when supported, or as a standalone destination. Reopening an already separate Task Detail focuses it rather than duplicating it. Closing it after a mutation reissues its visible reads.
 - On wide layouts that place Description and Metadata side by side, both islands must have exactly the same height. Their shared height is the maximum of the Description intrinsic height and the Metadata intrinsic height.
 - Side-by-side Description and Metadata islands use the same surface elevation and render their complete shadows without clipping.
 - Metadata property labels use one consistent font size, line height, weight, and foreground treatment. Value typography may still communicate value semantics such as code, status, or muted secondary information.
@@ -398,7 +398,7 @@
 - A push beyond the limit preserves the root and evicts the oldest non-root destination.
 - Only the current destination remains mounted and live.
 - Back restores Task Detail description expansion, selected Comments or Activity tab, unsaved Task title and body edits, unsaved new-comment text, and one edited-comment draft.
-- Restored Task Detail refreshes server-authoritative data and layers retained unsaved input over it.
+- Restored Task Detail reissues its independent server-owned reads and layers retained unsaved input over the returned projections.
 - Inactive Task Detail data follows the ordinary Desktop query-cache lifetime.
 - A mounted Task or Project destination that receives a typed missing result goes Back, including closing when it is the root.
 - Missing retained destinations are skipped lazily when Back reveals them.
@@ -438,8 +438,7 @@
 - The Add control is unavailable with an accessible explanation when its
   relationship direction has reached the 50-Task limit.
 - Kent rechecks the limit when New Task is submitted.
-- Dependency changes refresh open Task Detail and visible board cards from
-  server-authoritative state.
+- Dependency changes reissue open Task Detail and visible board-card reads. A later dependency mutation revalidates its safety-critical facts rather than relying on those projections.
 
 ## Inbox, Questions, Approvals, And Notifications
 

@@ -7,7 +7,6 @@ import (
 
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
@@ -32,8 +31,8 @@ type sessionStatusCountingResolver struct {
 	publishErr   error
 }
 
-func (r *sessionStatusCountingResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
-	return runtimeactivity.ResponseSnapshot{}, nil
+func (r *sessionStatusCountingResolver) RuntimeReadModelFeedSnapshot(context.Context, string) (clientui.RuntimeReadModelUpdate, error) {
+	return clientui.RuntimeReadModelUpdate{}, nil
 }
 
 func (r *sessionStatusCountingResolver) PublishSessionStatus(string) error {
@@ -87,11 +86,11 @@ func TestServiceCommittedRuntimeMutationReturnsAndCachesSessionStatusPublishErro
 }
 
 type sequenceRuntimeActivityResolver struct {
-	snapshots []runtimeactivity.ResponseSnapshot
+	snapshots []clientui.RuntimeReadModelUpdate
 	calls     int
 }
 
-func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
+func (r *sequenceRuntimeActivityResolver) RuntimeReadModelFeedSnapshot(context.Context, string) (clientui.RuntimeReadModelUpdate, error) {
 	if r.calls >= len(r.snapshots) {
 		return r.snapshots[len(r.snapshots)-1], nil
 	}
@@ -105,7 +104,7 @@ func TestServiceInterruptRetryRejectsReadModelLivenessWithoutRuntime(t *testing.
 	idleVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 2}
 	runID := mustRuntimeControlRunID(t)
 	stepID := mustRuntimeControlStepID(t)
-	resolver := &sequenceRuntimeActivityResolver{snapshots: []runtimeactivity.ResponseSnapshot{
+	resolver := &sequenceRuntimeActivityResolver{snapshots: []clientui.RuntimeReadModelUpdate{
 		{
 			Version: runningVersion,
 			Activity: clientui.RuntimeActivity{

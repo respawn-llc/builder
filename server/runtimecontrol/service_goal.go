@@ -25,12 +25,9 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("persisted session resolver is required")
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
-	record, err := s.persisted.ResolvePersistedSession(ctx, sessionID)
+	record, err := session.ResolvePersistedSessionRecord(ctx, s.persisted, sessionID)
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve persisted session %q: %w", sessionID, err)
-	}
-	if record.Meta == nil {
-		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("persisted session %q metadata is required", sessionID)
 	}
 	availability, err := session.GoalAvailabilityFromMeta(*record.Meta)
 	if err != nil {

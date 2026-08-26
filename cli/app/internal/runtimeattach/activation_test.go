@@ -50,11 +50,22 @@ func TestSessionRuntimeAttachmentValidation(t *testing.T) {
 
 func TestActivateBuildsRequest(t *testing.T) {
 	service := &fakeRuntimeService{}
+	selection := &serverapi.SessionRuntimeAgentSelection{
+		Agent: "worker",
+		Baseline: serverapi.SessionRuntimeChatSettings{
+			Supervisor:     "all",
+			Thinking:       "high",
+			Fast:           true,
+			Questions:      true,
+			AutoCompaction: true,
+		},
+	}
 	_, err := Activate(context.Background(), service, Request{
 		SessionID:                "session-1",
 		EnabledTools:             []toolspec.ID{"shell", "patch"},
 		ActiveSettings:           config.Settings{Model: "gpt-test"},
 		ThinkingOverrideExplicit: true,
+		AgentSelection:           selection,
 		Source:                   config.SourceReport{SettingsPath: "/config.toml"},
 	})
 	if err != nil {
@@ -75,6 +86,9 @@ func TestActivateBuildsRequest(t *testing.T) {
 	}
 	if !req.ThinkingOverrideExplicit {
 		t.Fatal("explicit Thinking override was not forwarded")
+	}
+	if !reflect.DeepEqual(req.AgentSelection, selection) {
+		t.Fatalf("Agent selection = %+v, want %+v", req.AgentSelection, selection)
 	}
 }
 

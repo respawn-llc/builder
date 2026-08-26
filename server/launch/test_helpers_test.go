@@ -96,6 +96,10 @@ func newSettingsPlan(t *testing.T, workspace string, settings config.Settings) S
 	return newSettingsPlanWithSource(t, workspace, settings, config.SourceReport{})
 }
 
+func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDir string) SessionPlan {
+	return sessionPlanWithMeta(plan, store.Meta(), containerDir)
+}
+
 func newSettingsPlanWithSource(t *testing.T, workspace string, settings config.Settings, source config.SourceReport) SessionPlan {
 	t.Helper()
 	store := createTestSessionInContainer(t, filepath.Join(t.TempDir(), "projects", "project-a", "sessions"), "workspace-a", workspace)
@@ -168,7 +172,15 @@ func ApplyPreparedRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPr
 	if store == nil {
 		return SessionPlan{}, nil, fmt.Errorf("no test store registered for session %q", plan.Descriptor.SessionID())
 	}
-	return planner.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, RunPromptOverrideOptions{}, applyDerivedModelContextBudgetOverrides)
+	return planner.applyPreparedRunPromptOverridesWithBudgetApplier(
+		plan,
+		store.Meta(),
+		store.SetContinuationContext,
+		overrides,
+		prepared,
+		RunPromptOverrideOptions{},
+		applyDerivedModelContextBudgetOverrides,
+	)
 }
 
 func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {

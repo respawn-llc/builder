@@ -392,7 +392,7 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	}
 	snapshot := ExecutionPromptSnapshot{
 		Scope:     s.scope,
-		Request:   cloneExecutionPromptRequest(req),
+		Request:   req.Clone(),
 		CreatedAt: time.Now().UTC(),
 	}
 	entry := &executionPromptEntry{
@@ -555,7 +555,7 @@ func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) 
 	if s.feed == nil {
 		return nil
 	}
-	return s.feed.PromptPendingScope(snapshot.Scope, cloneExecutionPromptRequest(snapshot.Request), snapshot.CreatedAt)
+	return s.feed.PromptPendingScope(snapshot.Scope, snapshot.Request.Clone(), snapshot.CreatedAt)
 }
 
 func (s *executionPromptStore) publishResolved(snapshot ExecutionPromptSnapshot) error {
@@ -602,25 +602,6 @@ func (a *Authority) sessionExecution(sessionID runtimeids.SessionID) *execution 
 }
 
 func cloneExecutionPromptSnapshot(snapshot ExecutionPromptSnapshot) ExecutionPromptSnapshot {
-	snapshot.Request = cloneExecutionPromptRequest(snapshot.Request)
+	snapshot.Request = snapshot.Request.Clone()
 	return snapshot
-}
-
-func cloneExecutionPromptRequest(req tools.AskQuestionRequest) tools.AskQuestionRequest {
-	req.Suggestions = append([]string(nil), req.Suggestions...)
-	req.ApprovalOptions = append([]tools.AskQuestionApprovalOption(nil), req.ApprovalOptions...)
-	if req.QuestionBatch != nil {
-		batch := *req.QuestionBatch
-		batch.BatchPromptIDs = append([]string(nil), req.QuestionBatch.BatchPromptIDs...)
-		req.QuestionBatch = &batch
-	}
-	if req.AttentionTarget != nil {
-		target := *req.AttentionTarget
-		if target.Focus != nil {
-			focus := *target.Focus
-			target.Focus = &focus
-		}
-		req.AttentionTarget = &target
-	}
-	return req
 }

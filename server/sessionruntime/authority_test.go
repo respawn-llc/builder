@@ -33,6 +33,16 @@ import (
 	"github.com/google/uuid"
 )
 
+func currentScopedTaskExecutionSnapshot(
+	authority *Authority,
+	projectID string,
+	workflowID runtimeids.WorkflowID,
+	taskID workflow.TaskID,
+) (TaskExecutionSnapshot, error) {
+	snapshots, err := authority.CurrentScopedTaskExecutionSnapshots(projectID, workflowID, []workflow.TaskID{taskID})
+	return snapshots[taskID], err
+}
+
 type authorityLifecycleProbe struct {
 	draining chan struct{}
 	retain   AgentResourceRetainer
@@ -137,7 +147,7 @@ func TestWithExactExecutionsDoesNotBlockTaskExecutionObservation(t *testing.T) {
 
 	observationDone := make(chan error, 1)
 	go func() {
-		_, observationErr := authority.CurrentWorkflowTaskExecutionReadSnapshot()
+		_, observationErr := authority.CurrentWorkflowTaskExecutionSnapshots()
 		observationDone <- observationErr
 	}()
 	var observationBlocked bool
@@ -195,7 +205,7 @@ func TestWorkflowTaskExecutionReadSnapshotDoesNotWaitForLifecycleSelection(t *te
 		lease.Cancel()
 		_ = handle.Stop(context.Background())
 	})
-	initial, err := authority.CurrentWorkflowTaskExecutionReadSnapshot()
+	initial, err := authority.CurrentWorkflowTaskExecutionSnapshots()
 	if err != nil {
 		t.Fatalf("initial read snapshot: %v", err)
 	}
@@ -224,7 +234,7 @@ func TestWorkflowTaskExecutionReadSnapshotDoesNotWaitForLifecycleSelection(t *te
 
 	readDone := make(chan error, 1)
 	go func() {
-		snapshot, readErr := authority.CurrentWorkflowTaskExecutionReadSnapshot()
+		snapshot, readErr := authority.CurrentWorkflowTaskExecutionSnapshots()
 		if readErr == nil && len(snapshot[taskID].Executions) != 1 {
 			readErr = fmt.Errorf("stale Task executions = %+v, want prior queued snapshot", snapshot[taskID].Executions)
 		}
@@ -1302,7 +1312,7 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start agent execution: %v", err)
 	}
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
+	targets, err := currentScopedTaskExecutionSnapshot(authority, workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1363,7 +1373,7 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 		handles = append(handles, handle)
 	}
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
+	targets, err := currentScopedTaskExecutionSnapshot(authority, "project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1420,7 +1430,7 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		}
 	})
 
-	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", authorityWorkflowID(t, "a"), "task-a")
+	snapshot, err := currentScopedTaskExecutionSnapshot(authority, "project-a", authorityWorkflowID(t, "a"), "task-a")
 	if err != nil {
 		t.Fatalf("scoped snapshot: %v", err)
 	}
@@ -1428,7 +1438,7 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		t.Fatalf("scoped snapshot included unrelated execution: %+v", snapshot)
 	}
 	snapshot.Executions[0].Script.Path = "mutated"
-	again, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", authorityWorkflowID(t, "a"), "task-a")
+	again, err := currentScopedTaskExecutionSnapshot(authority, "project-a", authorityWorkflowID(t, "a"), "task-a")
 	if err != nil {
 		t.Fatalf("repeat scoped snapshot: %v", err)
 	}
@@ -1473,7 +1483,7 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 	})
 	<-finalizeStarted
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
+	targets, err := currentScopedTaskExecutionSnapshot(authority, "project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1612,7 +1622,7 @@ func TestScriptStartupFailureLeavesNoWorkflowRunningOrInterruptibleState(t *test
 	})
 	<-finalizeStarted
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
+	targets, err := currentScopedTaskExecutionSnapshot(authority, "project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -2982,7 +2992,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), stepID: expectedStepID, requestID: askID}) {
 		t.Fatalf("pending prompt = %+v, want exact resource %v scope %s ask %s", pending, resource, handle.Scope().ID(), askID)
 	}
-	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
+	snapshot, err := currentScopedTaskExecutionSnapshot(authority, workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -3193,7 +3203,7 @@ func TestCurrentTaskExecutionSnapshotExposesPendingPromptKinds(t *testing.T) {
 		<-feed
 	}
 
-	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
+	snapshot, err := currentScopedTaskExecutionSnapshot(authority, workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -3216,7 +3226,7 @@ func TestCurrentTaskExecutionSnapshotExposesPendingPromptKinds(t *testing.T) {
 	if err := handle.Stop(context.Background()); err != nil {
 		t.Fatalf("stop agent execution: %v", err)
 	}
-	afterRetirement, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
+	afterRetirement, err := currentScopedTaskExecutionSnapshot(authority, workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot after retirement: %v", err)
 	}
@@ -3263,7 +3273,7 @@ func TestCurrentTaskExecutionSnapshotRejectsDuplicatePendingPromptIDs(t *testing
 	if _, err := authority.AwaitPromptResolution(context.Background(), handle.Scope().ID(), request); err == nil {
 		t.Fatal("duplicate pending prompt was accepted")
 	}
-	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
+	snapshot, err := currentScopedTaskExecutionSnapshot(authority, workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}

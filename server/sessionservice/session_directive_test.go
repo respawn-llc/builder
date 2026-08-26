@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"core/server/auth"
-	"core/server/requestmemo"
 	"core/server/session"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
@@ -180,57 +178,6 @@ func TestSessionTransitionLogoutResultDependsOnCurrentSession(t *testing.T) {
 		t.Fatalf("result kind = %q, want select session", withoutCurrent.Kind())
 	}
 	assertSessionLifecycleAuth(t, withoutCurrent, serverapi.SessionAuthPreparationReauthenticate)
-}
-
-func TestSessionTransitionMemoizationUsesTypedLifecycleResult(t *testing.T) {
-	service := newTestSessionLifecycleService(t.TempDir(), nil)
-	req := serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "typed-result-replay",
-		Transition:      serverapi.SessionTransition{Action: serverapi.SessionTransitionActionResume},
-	}
-	first, err := service.ResolveTransition(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ResolveTransition first: %v", err)
-	}
-	second, err := service.ResolveTransition(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ResolveTransition replay: %v", err)
-	}
-	requireSessionDirectiveWireEqual(t, second, first)
-
-	req.Transition.Action = serverapi.SessionTransitionActionNone
-	if _, err := service.ResolveTransition(context.Background(), req); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("changed transition error = %v, want request ID reuse", err)
-	}
-}
-
-func TestSessionTransitionMemoizationComparesPreviousSessionIDByValue(t *testing.T) {
-	parentID := mustSessionLifecycleResultID(t, "parent-session")
-	service := newTestSessionLifecycleService(t.TempDir(), nil)
-	req := serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "previous-session-replay",
-		Transition: serverapi.SessionTransition{
-			Action:            serverapi.SessionTransitionActionNewSession,
-			PreviousSessionID: &parentID,
-		},
-	}
-	first, err := service.ResolveTransition(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ResolveTransition first: %v", err)
-	}
-	encoded, err := json.Marshal(req)
-	if err != nil {
-		t.Fatalf("Marshal request: %v", err)
-	}
-	var decoded serverapi.SessionResolveTransitionRequest
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("Unmarshal request: %v", err)
-	}
-	second, err := service.ResolveTransition(context.Background(), decoded)
-	if err != nil {
-		t.Fatalf("ResolveTransition replay after JSON round trip: %v", err)
-	}
-	requireSessionDirectiveWireEqual(t, second, first)
 }
 
 func requireSessionDirectiveWireEqual(t *testing.T, got serverapi.SessionDirective, want serverapi.SessionDirective) {

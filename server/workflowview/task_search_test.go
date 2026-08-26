@@ -288,51 +288,6 @@ func TestTaskSearchReflectsTaskAndCommentMutationsImmediately(t *testing.T) {
 	assertTaskSearchEmpty(t, fixture.ctx, search, request)
 }
 
-func TestTaskSearchSearchKeepsLiteralResponseCoherentDuringCanonicalMutation(t *testing.T) {
-	fixture, search := newTaskSearchFixture(t, false)
-	task := createTaskSearchTask(t, fixture, "Snapshot", "before needle after")
-	request := taskSearchRequest("needle")
-	started := make(chan struct{})
-	mutationsDone := make(chan error, 1)
-	go func() {
-		close(started)
-		for index := range 128 {
-			body := "replacement"
-			if index%2 == 0 {
-				body = "before needle after"
-			}
-			if _, err := fixture.store.UpdateTask(fixture.ctx, workflowstore.UpdateTaskRequest{
-				TaskID: task.ID,
-				Body:   &body,
-			}); err != nil {
-				mutationsDone <- err
-				return
-			}
-		}
-		mutationsDone <- nil
-	}()
-	<-started
-	for index := range 128 {
-		response, err := search.Search(fixture.ctx, request)
-		if err != nil {
-			t.Fatalf("Search during canonical mutation %d: %v", index, err)
-		}
-		if len(response.Groups) == 0 {
-			continue
-		}
-		if len(response.Groups) != 1 ||
-			response.Groups[0].TaskID != string(task.ID) ||
-			len(response.Groups[0].Hits) != 1 ||
-			response.Groups[0].Hits[0].Literal == nil ||
-			response.Groups[0].Hits[0].Literal.Match != "needle" {
-			t.Fatalf("Search during canonical mutation %d = %+v, want a complete pre-mutation hit or no match", index, response)
-		}
-	}
-	if err := <-mutationsDone; err != nil {
-		t.Fatalf("canonical mutation: %v", err)
-	}
-}
-
 func TestTaskSearchFiltersDurableCurrentNodeStatuses(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -428,7 +383,7 @@ func TestTaskSearchFiltersQueuedAndRunningCurrentNodeExecutions(t *testing.T) {
 	})
 	runningLease.Release()
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshots, snapshotErr := fixture.authority.CurrentProjectWorkflowTaskExecutionSnapshots(fixture.binding.ProjectID, fixture.workflowID)
+		snapshots, snapshotErr := fixture.authority.CurrentWorkflowTaskExecutionSnapshots()
 		if snapshotErr != nil {
 			return false
 		}
@@ -455,7 +410,6 @@ func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 	task := createTaskSearchTask(t, fixture, "Question", "needle")
 	question := fixture.startCurrentNodeQuestion(t, startTaskSearchTask(t, fixture, task))
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		currentNodeViewStatusObservationSource{
@@ -482,7 +436,6 @@ func TestTaskSearchProjectsLiveSessionApprovalStatus(t *testing.T) {
 	started := fixture.startTask(t, "Approval execution")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{

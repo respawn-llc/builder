@@ -833,9 +833,9 @@ type failingRuntimeActivityResolver struct {
 	observedContext context.Context
 }
 
-func (r *failingRuntimeActivityResolver) RuntimeReadModelSnapshot(ctx context.Context, _ string) (runtimeactivity.ResponseSnapshot, error) {
+func (r *failingRuntimeActivityResolver) RuntimeReadModelFeedSnapshot(ctx context.Context, _ string) (clientui.RuntimeReadModelUpdate, error) {
 	r.observedContext = ctx
-	return runtimeactivity.ResponseSnapshot{}, r.err
+	return clientui.RuntimeReadModelUpdate{}, r.err
 }
 
 func TestServiceInterruptReturnsDiagnosticActivityWhenPostInterruptSnapshotFails(t *testing.T) {
@@ -1068,7 +1068,7 @@ func runtimeControlPromptHistoryStoresLoad(t *testing.T, sessionID string) *runt
 func TestServiceInterruptIdleIsNotAccepted(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	service.WithRuntimeActivityResolver(&sequenceRuntimeActivityResolver{
-		snapshots: []runtimeactivity.ResponseSnapshot{{
+		snapshots: []clientui.RuntimeReadModelUpdate{{
 			Version:  clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1},
 			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true},
 		}},

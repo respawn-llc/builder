@@ -56,7 +56,7 @@ type serviceTestProcessSource struct {
 	snapshots []shelltool.Snapshot
 }
 
-func (s *serviceTestProcessSource) List() []shelltool.Snapshot {
+func (s *serviceTestProcessSource) CurrentSnapshots() []shelltool.Snapshot {
 	return append([]shelltool.Snapshot(nil), s.snapshots...)
 }
 

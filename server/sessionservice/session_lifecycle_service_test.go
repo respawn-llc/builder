@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,7 +86,8 @@ func newSessionLifecycleServiceWithOptions(root string, authManager *auth.Manage
 		PersistenceRoot: root,
 		StoreOptions:    storeOptions,
 	})
-	return NewSessionLifecycleService(root, authority, authManager)
+	return NewSessionLifecycleService(root, authority, authManager).
+		WithPersistedSessionResolver(sessionServiceTestPersistence)
 }
 
 func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.Manager, storeOptions []session.StoreOption) *SessionLifecycleService {
@@ -93,7 +95,8 @@ func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.
 		PersistenceRoot: root,
 		StoreOptions:    storeOptions,
 	})
-	return NewGlobalSessionLifecycleService(root, authority, authManager)
+	return NewGlobalSessionLifecycleService(root, authority, authManager).
+		WithPersistedSessionResolver(sessionServiceTestPersistence)
 }
 
 var sessionServiceTestPersistence = sessiontest.NewPersistence()
@@ -105,13 +108,27 @@ type sessionLifecycleRetargeterStub struct {
 }
 
 type sessionNavigationTargetResolverStub struct {
-	target serverapi.SessionNavigationBinding
-	err    error
-	calls  []string
+	target       serverapi.SessionNavigationBinding
+	err          error
+	mu           sync.Mutex
+	calls        []string
+	firstStarted chan struct{}
+	releaseFirst <-chan struct{}
 }
 
-func (s *sessionNavigationTargetResolverStub) ResolveSessionNavigationBinding(_ context.Context, sessionID string) (serverapi.SessionNavigationBinding, error) {
+func (s *sessionNavigationTargetResolverStub) ResolveSessionNavigationBinding(ctx context.Context, sessionID string) (serverapi.SessionNavigationBinding, error) {
+	s.mu.Lock()
 	s.calls = append(s.calls, sessionID)
+	first := len(s.calls) == 1
+	s.mu.Unlock()
+	if first && s.firstStarted != nil {
+		close(s.firstStarted)
+		select {
+		case <-s.releaseFirst:
+		case <-ctx.Done():
+			return serverapi.SessionNavigationBinding{}, context.Cause(ctx)
+		}
+	}
 	return s.target, s.err
 }
 
@@ -433,13 +450,19 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	if err := child.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable child: %v", err)
 	}
-	resolver := &sessionNavigationTargetResolverStub{target: serverapi.SessionNavigationBinding{
-		ProjectID:   "project-target",
-		WorkspaceID: "workspace-target",
-	}}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	resolver := &sessionNavigationTargetResolverStub{
+		target: serverapi.SessionNavigationBinding{
+			ProjectID:   "project-target",
+			WorkspaceID: "workspace-target",
+		},
+		firstStarted: firstStarted,
+		releaseFirst: releaseFirst,
+	}
 	service := newTestSessionLifecycleService(containerDir, nil).WithNavigationTargetResolver(resolver)
 
-	response, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
+	request := serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "authorized-navigation",
 		SessionID:       child.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
@@ -447,9 +470,22 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 			TargetSessionID: parent.Meta().SessionID,
 			InitialInput:    textutil.Value("draft reply"),
 		},
-	})
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, resolveErr := service.ResolveTransition(context.Background(), request)
+		firstDone <- resolveErr
+	}()
+	<-firstStarted
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	response, err := service.ResolveTransition(ctx, request)
+	cancel()
 	if err != nil {
-		t.Fatalf("ResolveTransition: %v", err)
+		t.Fatalf("duplicate ResolveTransition waited for the earlier read: %v", err)
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first ResolveTransition: %v", err)
 	}
 	intent, preparation := requireSessionLifecycleLaunch(t, response)
 	targetID, present := intent.SessionID()
@@ -460,8 +496,10 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	if !present || binding.ProjectID != "project-target" || binding.WorkspaceID != "workspace-target" {
 		t.Fatalf("navigation binding = %+v/%t", binding, present)
 	}
-	if len(resolver.calls) != 1 || resolver.calls[0] != parent.Meta().SessionID {
-		t.Fatalf("target resolver calls = %#v, want parent once", resolver.calls)
+	if len(resolver.calls) != 2 ||
+		resolver.calls[0] != parent.Meta().SessionID ||
+		resolver.calls[1] != parent.Meta().SessionID {
+		t.Fatalf("target resolver calls = %#v, want parent twice", resolver.calls)
 	}
 }
 

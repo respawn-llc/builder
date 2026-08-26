@@ -28,11 +28,8 @@ type sessionTransitionResolveRequest struct {
 	Transition sessionTransition
 }
 
-func initialSessionInput(store *session.Store, transitionInput string) string {
-	if store == nil {
-		return transitionInput
-	}
-	if draft := store.Meta().InputDraft; draft != "" {
+func initialSessionInput(meta session.Meta, transitionInput string) string {
+	if draft := meta.InputDraft; draft != "" {
 		return draft
 	}
 	return transitionInput

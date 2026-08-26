@@ -429,8 +429,8 @@ func TestServicePreviewManualMoveMapsOutcomesAndLiveBlockers(t *testing.T) {
 	}
 	if noOp.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeNoOp ||
 		noOp.NoOp == nil || len(noOp.NoOp.CurrentNodes) != 1 ||
-		noOp.NoOp.CurrentNodes[0].NodeID != currentNodeID || execution.dispositionCalls != 0 {
-		t.Fatalf("no-op preview = %+v, disposition calls = %d", noOp, execution.dispositionCalls)
+		noOp.NoOp.CurrentNodes[0].NodeID != currentNodeID {
+		t.Fatalf("no-op preview = %+v", noOp)
 	}
 
 	direct, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
@@ -456,29 +456,6 @@ func TestServicePreviewManualMoveMapsOutcomesAndLiveBlockers(t *testing.T) {
 		t.Fatalf("transition preview = %+v", transition)
 	}
 
-	execution.disposition = workflowexecution.ManualMoveDispositionAutoInterruptible
-	interruptible, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
-		TaskID: task.Task.ID, TargetNodeID: terminalID,
-	})
-	if err != nil {
-		t.Fatalf("PreviewWorkflowTaskMove auto-interruptible: %v", err)
-	}
-	if interruptible.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeDirect ||
-		interruptible.Direct == nil {
-		t.Fatalf("auto-interruptible preview = %+v, want direct move", interruptible)
-	}
-	execution.disposition = workflowexecution.ManualMoveDispositionLifecycleConflict
-	blocked, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
-		TaskID: task.Task.ID, TargetNodeID: terminalID,
-	})
-	if err != nil {
-		t.Fatalf("PreviewWorkflowTaskMove lifecycle conflict: %v", err)
-	}
-	if blocked.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeBlocked ||
-		blocked.Blocked == nil ||
-		blocked.Blocked.Reason != serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict {
-		t.Fatalf("lifecycle-conflict preview = %+v", blocked)
-	}
 }
 
 func TestServiceManualMoveNoOpSkipsInterruptionAttentionAndEvent(t *testing.T) {
@@ -867,7 +844,7 @@ func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testi
 		_ = authority.Close(context.Background())
 	})
 	projector := workflowview.NewTaskProjector()
-	projection, err := workflowview.NewTaskStatusProjection(metadataStore, service.store, projector, controller)
+	projection, err := workflowview.NewTaskStatusProjection(service.store, projector, controller)
 	if err != nil {
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
@@ -2113,9 +2090,6 @@ type manualMoveExecutionStub struct {
 	quiescentErr     error
 	quiescentErrors  []error
 	quiescentTaskIDs []workflow.TaskID
-	disposition      workflowexecution.ManualMoveDisposition
-	dispositionErr   error
-	dispositionCalls int
 	interruptTaskIDs []workflow.TaskID
 	interruptErr     error
 	interruptHook    func()
@@ -2221,17 +2195,6 @@ func (s *manualMoveExecutionStub) EnsureTaskQuiescent(taskID workflow.TaskID) er
 		return s.quiescentErrors[index]
 	}
 	return s.quiescentErr
-}
-
-func (s *manualMoveExecutionStub) ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error) {
-	s.dispositionCalls++
-	if s.dispositionErr != nil {
-		return "", s.dispositionErr
-	}
-	if s.disposition == "" {
-		return workflowexecution.ManualMoveDispositionQuiescent, nil
-	}
-	return s.disposition, nil
 }
 
 func (s *manualMoveExecutionStub) InterruptForManualMove(_ context.Context, taskID workflow.TaskID, beforeSelection func() error) error {
@@ -3256,83 +3219,6 @@ func TestServiceWorkflowGraphSaveDoesNotWaitForTaskMutation(t *testing.T) {
 	}
 }
 
-func TestServiceWorkflowGraphPreviewOrdersVersionGateWithSameWorkflowMetadataMutation(t *testing.T) {
-	ctx, service, _ := newWorkflowServiceTestContext(t)
-	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-	otherWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow current: %v", err)
-	}
-	otherCurrent, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: otherWorkflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow other current: %v", err)
-	}
-
-	laneStarted := make(chan struct{})
-	releaseLane := make(chan struct{})
-	laneDone := make(chan error, 1)
-	go func() {
-		_, err := service.store.RunWorkflowGraphSaveOperation(ctx, workflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-			close(laneStarted)
-			<-releaseLane
-			return workflowstore.WorkflowGraphSaveResult{}, service.store.UpdateWorkflowInfo(ctx, workflowID, "Concurrent update", "")
-		})
-		laneDone <- err
-	}()
-	<-laneStarted
-
-	previewDone := make(chan struct {
-		response serverapi.WorkflowGraphSavePreviewResponse
-		err      error
-	}, 1)
-	go func() {
-		response, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
-			WorkflowID:      workflowID,
-			ExpectedVersion: current.Definition.Workflow.Version,
-			Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
-				ID:             "node-prefixed",
-				Kind:           string(serverapi.WorkflowNodeKindAgent),
-				CompletionMode: "tool",
-			}}},
-		})
-		previewDone <- struct {
-			response serverapi.WorkflowGraphSavePreviewResponse
-			err      error
-		}{response: response, err: err}
-	}()
-
-	otherPreview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
-		WorkflowID:      otherWorkflowID,
-		ExpectedVersion: otherCurrent.Definition.Workflow.Version,
-		Graph:           serverapi.WorkflowGraphDraftFromDefinition(otherCurrent.Definition),
-	})
-	if err != nil {
-		t.Fatalf("PreviewWorkflowGraphSave other Workflow: %v", err)
-	}
-	if otherPreview.Changed {
-		t.Fatalf("other Workflow preview = %+v, want unchanged", otherPreview)
-	}
-	select {
-	case outcome := <-previewDone:
-		t.Fatalf("same-Workflow Preview bypassed metadata ordering: response=%+v error=%v", outcome.response, outcome.err)
-	case <-time.After(25 * time.Millisecond):
-	}
-
-	close(releaseLane)
-	if err := <-laneDone; err != nil {
-		t.Fatalf("same-Workflow metadata mutation: %v", err)
-	}
-	outcome := <-previewDone
-	if outcome.err != nil {
-		t.Fatalf("PreviewWorkflowGraphSave stale malformed Draft: %v", outcome.err)
-	}
-	if outcome.response.CurrentVersion != current.Definition.Workflow.Version+1 ||
-		!workflowServiceHasGraphSaveBlocker(outcome.response.Blockers, "version_changed") {
-		t.Fatalf("preview = %+v, want current-version blocker", outcome.response)
-	}
-}
-
 func workflowServiceHasGraphSaveBlocker(blockers []serverapi.WorkflowGraphSaveBlocker, code string) bool {
 	for _, blocker := range blockers {
 		if blocker.Code == code {
@@ -3709,7 +3595,6 @@ func newWorkflowServiceReadModels(
 		}
 	})
 	projection, err := workflowview.NewTaskStatusProjection(
-		metadataStore,
 		store,
 		projector,
 		workflowViewStatusObservationSource{authority: authority, quiescence: quiescence},

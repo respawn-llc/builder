@@ -40,7 +40,6 @@ type Service struct {
 		ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowexecution.TaskResumeResult, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
-		ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
 		InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 		Interrupt(context.Context, workflowexecution.InterruptSelector) error
 		EnsureTaskQuiescent(workflow.TaskID) error
@@ -184,7 +183,6 @@ func WithCurrentNodeExecution(execution interface {
 	ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowexecution.TaskResumeResult, error)
 	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 	ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
-	ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
 	InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 	Interrupt(context.Context, workflowexecution.InterruptSelector) error
 	EnsureTaskQuiescent(workflow.TaskID) error
@@ -580,25 +578,25 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
-	result, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-		currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
-		if err != nil {
-			return workflowstore.WorkflowGraphSaveResult{}, err
-		}
-		if currentVersion != req.ExpectedVersion {
-			return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
-		}
+	currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+	if err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, err
+	}
+	var result workflowstore.WorkflowGraphSaveResult
+	if currentVersion != req.ExpectedVersion {
+		result = workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion)
+	} else {
 		if err := req.Validate(); err != nil {
-			return workflowstore.WorkflowGraphSaveResult{}, err
+			return serverapi.WorkflowGraphSavePreviewResponse{}, err
 		}
 		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
 		if err != nil {
-			return workflowstore.WorkflowGraphSaveResult{}, err
+			return serverapi.WorkflowGraphSavePreviewResponse{}, err
 		}
-		return s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
-	})
-	if err != nil {
-		return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
+		result, err = s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
+		if err != nil {
+			return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
+		}
 	}
 	resp := workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result))
 	if err := resp.Validate(); err != nil {
@@ -1717,9 +1715,6 @@ func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.Wor
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskMovePreviewResponse{}, err
 	}
-	if s.currentNodeExecution == nil {
-		return serverapi.WorkflowTaskMovePreviewResponse{}, errors.New("current node workflow execution is required")
-	}
 	preview, err := s.store.PreviewManualMove(ctx, workflowstore.ManualMoveRequest{
 		TaskID:       workflow.TaskID(req.TaskID),
 		TargetNodeID: workflow.NodeID(req.TargetNodeID),
@@ -1746,22 +1741,6 @@ func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.Wor
 				Reason: reason,
 			},
 		}, nil
-	}
-	disposition, err := s.currentNodeExecution.ManualMoveDisposition(workflow.TaskID(req.TaskID))
-	if err != nil {
-		return serverapi.WorkflowTaskMovePreviewResponse{}, err
-	}
-	switch disposition {
-	case workflowexecution.ManualMoveDispositionLifecycleConflict:
-		return serverapi.WorkflowTaskMovePreviewResponse{
-			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
-			Blocked: &serverapi.WorkflowTaskMovePreviewBlocked{
-				Reason: serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict,
-			},
-		}, nil
-	case workflowexecution.ManualMoveDispositionQuiescent, workflowexecution.ManualMoveDispositionAutoInterruptible:
-	default:
-		return serverapi.WorkflowTaskMovePreviewResponse{}, fmt.Errorf("manual move disposition %q is invalid", disposition)
 	}
 	switch preview.Outcome {
 	case workflowstore.ManualMovePreviewOutcomeDirect:

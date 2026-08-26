@@ -314,19 +314,11 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 			continue
 		}
 
-		select {
-		case admission <- struct{}{}:
-		case <-connCtx.Done():
-			return
-		}
-
 		request, err := g.receiveEstablishedRequest(connCtx, conn)
 		if err != nil {
-			<-admission
 			return
 		}
 		if request.failure != nil {
-			<-admission
 			if !sendTransportFailure(connCtx, conn, request.failure) {
 				stop()
 				return
@@ -334,14 +326,26 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 			continue
 		}
 		schedule := g.gatewayRequestScheduleForEstablished(request)
-		if schedule.kind != gatewayRequestScheduleOrdinary {
-			<-admission
+		if schedule.kind == gatewayRequestScheduleExclusive {
 			ordinary.Wait()
 			if !g.serveEstablishedRequest(conn, connCtx, state, request, schedule) {
 				stop()
 				return
 			}
 			continue
+		}
+		if schedule.kind == gatewayRequestScheduleProgress || schedule.kind == gatewayRequestScheduleSubscription {
+			if !g.serveEstablishedRequest(conn, connCtx, state, request, schedule) {
+				stop()
+				return
+			}
+			continue
+		}
+
+		select {
+		case admission <- struct{}{}:
+		case <-connCtx.Done():
+			return
 		}
 
 		ordinary.Add(1)

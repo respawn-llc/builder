@@ -26,8 +26,16 @@ type SessionLifecycleService struct {
 	retargeter      sessionWorkspaceRetargeter
 	navigation      sessionNavigationTargetResolver
 	authManager     *auth.Manager
+	persisted       session.PersistedSessionResolver
 	drafts          *requestmemo.Memo[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse]
 	transitions     *requestmemo.Memo[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]
+}
+
+func (s *SessionLifecycleService) WithPersistedSessionResolver(resolver session.PersistedSessionResolver) *SessionLifecycleService {
+	if s != nil {
+		s.persisted = resolver
+	}
+	return s
 }
 
 type sessionDraftMemoRequest struct {
@@ -98,21 +106,33 @@ func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serve
 	if strings.TrimSpace(req.SessionID) == "" {
 		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
 	}
-	var resp serverapi.SessionInitialInputResponse
-	err := s.withStore(ctx, req.SessionID, func(_ context.Context, store *session.Store) error {
-		if req.OverrideStoredDraft {
-			resp.Input = req.TransitionInput
-			return nil
-		}
-		resp = serverapi.SessionInitialInputResponse{
-			Input: initialSessionInput(store, req.TransitionInput),
-		}
-		return nil
-	})
+	if req.OverrideStoredDraft {
+		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
+	}
+	meta, err := s.resolvePersistedSessionMeta(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.SessionInitialInputResponse{}, err
 	}
-	return resp, nil
+	return serverapi.SessionInitialInputResponse{Input: initialSessionInput(meta, req.TransitionInput)}, nil
+}
+
+func (s *SessionLifecycleService) resolvePersistedSessionMeta(ctx context.Context, sessionID string) (session.Meta, error) {
+	if s == nil || s.persisted == nil {
+		return session.Meta{}, errors.New("persisted Session resolver is required")
+	}
+	var (
+		record session.PersistedSessionRecord
+		err    error
+	)
+	if containerDir := strings.TrimSpace(s.containerDir); containerDir != "" {
+		record, err = session.ResolveScopedPersistedSessionRecord(ctx, s.persisted, containerDir, sessionID)
+	} else {
+		record, err = session.ResolvePersistedSessionRecord(ctx, s.persisted, sessionID)
+	}
+	if err != nil {
+		return session.Meta{}, err
+	}
+	return *record.Meta, nil
 }
 
 func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
@@ -158,6 +178,9 @@ func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, 
 func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
+	}
+	if req.Transition.Action != serverapi.SessionTransitionActionForkRollback {
+		return s.resolveTransitionOnce(ctx, req)
 	}
 	memoReq := sessionTransitionMemoRequest{
 		SessionID:  strings.TrimSpace(req.SessionID),
@@ -205,15 +228,27 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 			),
 		), nil
 	}
-	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback ||
-		req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
+	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback {
 		var resolved serverapi.SessionResolveTransitionResponse
 		err := s.withStore(ctx, req.SessionID, func(runCtx context.Context, store *session.Store) error {
 			var err error
-			resolved, err = s.resolveStoreTransition(runCtx, req, store)
+			resolved, err = s.resolveForkRollbackTransition(runCtx, req, store)
 			return err
 		})
 		return resolved, err
+	}
+	if req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
+		meta, err := s.resolvePersistedSessionMeta(ctx, strings.TrimSpace(req.SessionID))
+		if err != nil {
+			return serverapi.SessionResolveTransitionResponse{}, err
+		}
+		resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{Transition: sessionTransition{
+			Action: req.Transition.Action, InitialInput: textutil.Pointer(req.Transition.InitialInput), TargetSessionID: req.Transition.TargetSessionID,
+		}})
+		if err != nil {
+			return serverapi.SessionResolveTransitionResponse{}, err
+		}
+		return s.authorizeNavigationTransition(ctx, meta, resolved)
 	}
 	return resolveSessionTransition(ctx, sessionTransitionResolveRequest{
 		Transition: sessionTransition{
@@ -227,11 +262,7 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 	})
 }
 
-func (s *SessionLifecycleService) resolveStoreTransition(
-	ctx context.Context,
-	req serverapi.SessionResolveTransitionRequest,
-	store *session.Store,
-) (serverapi.SessionResolveTransitionResponse, error) {
+func (s *SessionLifecycleService) resolveForkRollbackTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest, store *session.Store) (serverapi.SessionResolveTransitionResponse, error) {
 	transition := sessionTransition{
 		Action:                       req.Transition.Action,
 		InitialPrompt:                req.Transition.InitialPrompt,
@@ -240,22 +271,17 @@ func (s *SessionLifecycleService) resolveStoreTransition(
 		TargetSessionID:              req.Transition.TargetSessionID,
 		PreviousSessionID:            req.Transition.PreviousSessionID,
 	}
-	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback {
-		forkUserMessageSeq, err := rollbacktarget.DecodeUserMessageSeq(req.Transition.ForkRollbackTargetID)
-		if err != nil {
-			return serverapi.SessionResolveTransitionResponse{}, err
-		}
-		transition.ForkUserMessageSeq = forkUserMessageSeq
+	forkUserMessageSeq, err := rollbacktarget.DecodeUserMessageSeq(req.Transition.ForkRollbackTargetID)
+	if err != nil {
+		return serverapi.SessionResolveTransitionResponse{}, err
 	}
+	transition.ForkUserMessageSeq = forkUserMessageSeq
 	resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{
 		Store:      store,
 		Transition: transition,
 	})
 	if err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
-	}
-	if req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
-		return s.authorizeNavigationTransition(ctx, store, resolved)
 	}
 	intent, ok := resolved.LaunchIntent()
 	if !ok {
@@ -271,10 +297,7 @@ func (s *SessionLifecycleService) resolveStoreTransition(
 	return resolved, nil
 }
 
-func (s *SessionLifecycleService) authorizeNavigationTransition(ctx context.Context, current *session.Store, resolved serverapi.SessionDirective) (serverapi.SessionDirective, error) {
-	if current == nil {
-		return serverapi.SessionDirective{}, errors.New("current session is required for session navigation")
-	}
+func (s *SessionLifecycleService) authorizeNavigationTransition(ctx context.Context, current session.Meta, resolved serverapi.SessionDirective) (serverapi.SessionDirective, error) {
 	intent, present := resolved.LaunchIntent()
 	if !present {
 		return serverapi.SessionDirective{}, errors.New("session navigation did not resolve to a launch intent")
@@ -283,7 +306,7 @@ func (s *SessionLifecycleService) authorizeNavigationTransition(ctx context.Cont
 	if !present {
 		return serverapi.SessionDirective{}, errors.New("session navigation launch intent omitted target session id")
 	}
-	authorizedTarget := session.NavigationTargetSessionID(current.Meta())
+	authorizedTarget := session.NavigationTargetSessionID(current)
 	if authorizedTarget == nil || *authorizedTarget != requestedTarget {
 		return serverapi.SessionDirective{}, errors.New("session navigation target does not match current session provenance")
 	}
