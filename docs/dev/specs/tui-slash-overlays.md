@@ -20,6 +20,7 @@
 ## /goal
 
 - `/goal` and `/goal show` open the overlay. `set <objective>`, `pause`, `resume`, and `clear` act directly.
+- An accepted queued Set or replacement shows the preview defined by `core-runtime-tools.md` directly as non-authoritative command feedback. The TUI does not cache or reconcile the preview; Goal mutations and broadcasts remain authoritative for their operations, while Goal reads return the latest completed durable projection.
 - Overlay shows goal status, goal ID, and the objective rendered as Markdown; a no-goal state shows a hint to start one; load errors render inline in the overlay.
 - Setting an objective while a goal is active opens a Replace confirmation (current vs new objective); clearing an active goal opens a Clear confirmation. Both use a Cancel/Confirm button group (Cancel default) with `y`/`n` shortcuts; confirming issues the mutation and closes the confirm state. Paused goals clear without confirmation.
 - Goal changes for an Active Session Runtime enter Steering as distinct typed intents in acceptance order. The overlay does not replace, coalesce, or replay an earlier accepted Goal change.

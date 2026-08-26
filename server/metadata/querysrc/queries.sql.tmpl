@@ -1158,12 +1158,6 @@ FROM effective_status
 WHERE task_id IN (SELECT task_id FROM requested_task_ids)
 ORDER BY task_id ASC;
 
--- name: AnchorTaskSearchReadSnapshot :one
-SELECT EXISTS(
-    SELECT 1
-    FROM task_search_documents
-) AS anchored;
-
 -- name: GetTaskByProjectShortID :one
 SELECT
     id,

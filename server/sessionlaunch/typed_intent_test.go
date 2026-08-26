@@ -7,7 +7,6 @@ import (
 	"core/server/launch"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/sessionruntime"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -33,15 +32,6 @@ func TestServiceMapsTypedLaunchIntents(t *testing.T) {
 		t.Fatalf("parse target session ID: %v", err)
 	}
 
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: persistenceRoot,
-		StoreOptions:    persistence.Options(),
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close runtime authority: %v", err)
-		}
-	})
 	service := NewService(launch.Planner{
 		Config: config.App{
 			WorkspaceRoot:   "/tmp/workspace-a",
@@ -52,7 +42,7 @@ func TestServiceMapsTypedLaunchIntents(t *testing.T) {
 		StoreOptions:             persistence.Options(),
 		PersistedSessions:        persistence,
 		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: "/tmp/workspace-a"},
-	}).WithRuntimeAuthority(authority)
+	})
 
 	createRequest := PlanRequest{
 		Mode:   launch.ModeInteractive,

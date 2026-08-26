@@ -177,10 +177,10 @@ func TestTranscriptSessionStatusDoesNotAdvertiseUnavailableFastMode(t *testing.T
 		newRuntimeViewStore(t),
 		projectionUnavailableFastClient{},
 		runtime.Config{
-			Model:          "gpt-5",
-			FastModeState:  runtime.NewFastModeState(true),
-			ThinkingLevel:  "medium",
-			CompactionMode: "auto",
+			Model:           "gpt-5",
+			FastModeEnabled: true,
+			ThinkingLevel:   "medium",
+			CompactionMode:  "auto",
 		},
 	)
 

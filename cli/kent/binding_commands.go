@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/clientui"
@@ -232,7 +234,7 @@ func rebindWorkspaceWithTimeout(ctx context.Context, remote apicontract.ProjectV
 }
 
 func retargetSessionWorkspace(ctx context.Context, remote apicontract.SessionLifecycleService, sessionID string, workspaceRoot string, projectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	return remote.RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{SessionID: sessionID, WorkspaceRoot: workspaceRoot, ProjectID: projectID})
+	return remote.RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: sessionID, WorkspaceRoot: workspaceRoot, ProjectID: projectID})
 }
 
 func listProjects(ctx context.Context) ([]clientui.ProjectSummary, error) {

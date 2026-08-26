@@ -48,47 +48,46 @@ func (r *RuntimeRegistry) SubscribeSessionAttentionNotifications(_ context.Conte
 	if !req.IncludePendingPromptSnapshot {
 		return r.attentionBroker.SubscribeSession(req.SessionID)
 	}
-	return r.pendingPrompts.WithLockedAttentionSnapshotResult(req.SessionID, func(items []PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error) {
-		sub, err := r.attentionBroker.SubscribeSession(req.SessionID)
-		if err != nil {
-			return nil, err
-		}
-		taskBatches := taskQuestionBatchSnapshotGroups(items)
-		processedTaskSteps := map[string]struct{}{}
-		for _, item := range items {
-			if item.Request.QuestionBatch != nil && item.Request.AttentionTarget != nil && item.Request.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
-				stepID := questionBatchStepID(*item.Request.QuestionBatch)
-				if _, ok := processedTaskSteps[stepID]; ok {
-					continue
-				}
-				processedTaskSteps[stepID] = struct{}{}
-				if err := r.enqueueTaskQuestionBatchSnapshot(sub, req.SessionID, taskBatches[stepID]); err != nil {
-					_ = sub.Close()
-					return nil, err
-				}
+	sub, err := r.attentionBroker.SubscribeSession(req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	items := r.pendingPrompts.List(req.SessionID)
+	taskBatches := taskQuestionBatchSnapshotGroups(items)
+	processedTaskSteps := map[string]struct{}{}
+	for _, item := range items {
+		if item.Request.QuestionBatch != nil && item.Request.AttentionTarget != nil && item.Request.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
+			stepID := questionBatchStepID(*item.Request.QuestionBatch)
+			if _, ok := processedTaskSteps[stepID]; ok {
 				continue
 			}
-			event := attentionPendingEventFromPrompt(req.SessionID, item, clientui.AttentionNotificationSourceSnapshot)
-			if event.Pending == nil {
-				continue
-			}
-			scope := attentionScopeForRequest(req.SessionID, item.Request)
-			if err := r.attentionBroker.EnqueueInitial(sub, scope, event); err != nil {
+			processedTaskSteps[stepID] = struct{}{}
+			if err := r.enqueueTaskQuestionBatchSnapshot(sub, req.SessionID, taskBatches[stepID]); err != nil {
 				_ = sub.Close()
 				return nil, err
 			}
+			continue
 		}
-		complete := clientui.AttentionNotificationEvent{
-			Source:    clientui.AttentionNotificationSourceSnapshot,
-			Type:      clientui.AttentionNotificationEventSnapshotComplete,
-			SessionID: req.SessionID,
+		event := attentionPendingEventFromPrompt(req.SessionID, item, clientui.AttentionNotificationSourceSnapshot)
+		if event.Pending == nil {
+			continue
 		}
-		if err := r.attentionBroker.EnqueueInitial(sub, attentionnotify.RoutingScope{Kind: attentionnotify.RoutingSessionPrompt, SessionID: req.SessionID}, complete); err != nil {
+		scope := attentionScopeForRequest(req.SessionID, item.Request)
+		if err := r.attentionBroker.EnqueueInitial(sub, scope, event); err != nil {
 			_ = sub.Close()
 			return nil, err
 		}
-		return sub, nil
-	})
+	}
+	complete := clientui.AttentionNotificationEvent{
+		Source:    clientui.AttentionNotificationSourceSnapshot,
+		Type:      clientui.AttentionNotificationEventSnapshotComplete,
+		SessionID: req.SessionID,
+	}
+	if err := r.attentionBroker.EnqueueInitial(sub, attentionnotify.RoutingScope{Kind: attentionnotify.RoutingSessionPrompt, SessionID: req.SessionID}, complete); err != nil {
+		_ = sub.Close()
+		return nil, err
+	}
+	return sub, nil
 }
 
 func taskQuestionBatchSnapshotGroups(items []PendingPromptSnapshot) map[string][]PendingPromptSnapshot {

@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -328,7 +327,7 @@ func openPersistedSession(
 		eventLogCreationVersion: eventLogVersionPointer(EventLogVersionV2),
 	}
 	if record.Meta == nil {
-		return nil, errPersistedSessionResolverRequired
+		return nil, ErrPersistedSessionResolverRequired
 	}
 	s.meta = cloneMeta(*record.Meta)
 	s.contextFacts = normalizeSessionContextFacts(record.ContextFacts)
@@ -372,24 +371,10 @@ func openPersistedSession(
 
 func resolvePersistedSessionRecord(persistenceRoot, sessionID string, storeOpts storeOptions) (PersistedSessionRecord, error) {
 	root := strings.TrimSpace(persistenceRoot)
-	id := strings.TrimSpace(sessionID)
 	if root == "" {
 		return PersistedSessionRecord{}, errors.New("persistence root is required")
 	}
-	if id == "" {
-		return PersistedSessionRecord{}, errors.New("session id is required")
-	}
-	if storeOpts.resolver == nil {
-		return PersistedSessionRecord{}, errPersistedSessionResolverRequired
-	}
-	record, err := storeOpts.resolver.ResolvePersistedSession(context.Background(), id)
-	if err != nil {
-		return PersistedSessionRecord{}, err
-	}
-	if err := validatePersistedSessionRecord(id, record); err != nil {
-		return PersistedSessionRecord{}, err
-	}
-	return record, nil
+	return ResolvePersistedSessionRecord(context.Background(), storeOpts.resolver, sessionID)
 }
 
 func resolvePersistedSessionMetaForDir(sessionDir string, storeOpts storeOptions) (*Meta, error) {
@@ -402,7 +387,7 @@ func resolvePersistedSessionMetaForDir(sessionDir string, storeOpts storeOptions
 
 func resolvePersistedSessionRecordForDir(sessionDir string, storeOpts storeOptions) (PersistedSessionRecord, error) {
 	if storeOpts.resolver == nil {
-		return PersistedSessionRecord{}, errPersistedSessionResolverRequired
+		return PersistedSessionRecord{}, ErrPersistedSessionResolverRequired
 	}
 	cleanDir := filepath.Clean(sessionDir)
 	sessionID := filepath.Base(cleanDir)
@@ -413,15 +398,7 @@ func resolvePersistedSessionRecordForDir(sessionDir string, storeOpts storeOptio
 	if err := validatePersistedSessionRecord(sessionID, record); err != nil {
 		return PersistedSessionRecord{}, err
 	}
-	scopedIdentity, err := config.CanonicalPathIdentity(cleanDir)
-	if err != nil {
-		return PersistedSessionRecord{}, fmt.Errorf("resolve scoped session dir identity %q: %w", cleanDir, err)
-	}
-	authoritativeIdentity, err := config.CanonicalPathIdentity(record.SessionDir)
-	if err != nil {
-		return PersistedSessionRecord{}, fmt.Errorf("resolve authoritative session dir identity %q: %w", record.SessionDir, err)
-	}
-	if scopedIdentity != authoritativeIdentity {
+	if err := validatePersistedSessionDir(cleanDir, record.SessionDir); err != nil {
 		return PersistedSessionRecord{}, fmt.Errorf(
 			"session %q scoped dir %q does not match authoritative dir %q: %w",
 			sessionID,

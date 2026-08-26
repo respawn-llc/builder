@@ -222,8 +222,11 @@ To respond, run: kent run steer <source-session-id> "message"
 - Run wait emits no progress.
 - `kent run watch <session-id>` observes the selected Session's active execution once.
 - Run watch requires a Session ID and rejects attempts by a Session to target itself.
-- Run watch returns immediately for the first pending regular Question or access request, Final answer, no-final result, Execution error, or Interrupted outcome.
-- Otherwise Run watch waits for the next matching outcome in that active execution.
+- Run watch returns immediately when its initial pending projection contains a regular Question or access request.
+- Run watch returns a Final answer, no-final result, Execution error, or Interrupted outcome captured from the selected active execution.
+- Otherwise Run watch waits for an attention or terminal event from that active execution.
+- An attention event triggers another pending projection. Run watch returns a Question or access request only when that projection contains it.
+- If a prompt is resolved before the event-triggered projection, Run watch continues toward another observable prompt or terminal outcome.
 - If Run watch starts with no active execution and no pending Question or access request, it fails with the no-active-execution error.
 - Run watch does not return a historical result and does not wait for a later execution to start.
 - Run watch is Session-scoped. It does not target Script Nodes or follow a Session's Task into Script work.
@@ -254,8 +257,14 @@ To respond, run: kent run steer <source-session-id> "message"
 - Task observation never polls read commands or mutates the Task.
 - Task wait ignores Questions, access requests, Workflow Transition Approvals, and successful intermediate Node completion.
 - Task wait returns for a current-work Interrupted outcome, a current Session or Script Execution error, or Task done.
-- Task watch returns for a Task Question or access request, current-work Interrupted outcome, current Session or Script Execution error, or Task done.
+- Task done is durable and Task wait behavior does not depend on a transient projection.
+- Task watch subscribes before its first Task projection.
+- The initial projection and each matching Task event trigger a new Task projection.
+- Task watch returns a Task Question or access request, current-work Interrupted outcome, or current Session or Script Execution error only when that projection contains the outcome.
+- A transient Question, access request, Interrupted outcome, or Execution error that disappears before projection is not guaranteed to be returned.
+- Task watch returns when a projection reports that the Task is done.
 - Task watch ignores Workflow Transition Approvals and successful intermediate Node completion.
+- Typed stream, cancellation, and observation failures remain failures.
 - Human Task observation output and exit behavior remain unchanged when JSON mode is absent.
 
 ## Observation JSON
@@ -611,11 +620,9 @@ Blocked by:
 - SQLite reports malformed raw FTS5 syntax and some FTS schema or configuration failures through the same runtime error class.
 - Kent reports every raw FTS5 SQLite evaluation error as one generic operational failure with exit code 1.
 - Search uses the authoritative Task status shared with Task lists and Task detail.
-- Persisted Task fields in one response use one point-in-time view.
-- Live Task activity is observed separately.
-- Task status and status filtering combine that durable view with the separately captured live activity view.
-- A Workflow transition overlapping the request may briefly combine durable fields from before the transition with live status facts from after it, or the reverse.
-- Search text, hit counts, filters, and source metadata remain internally consistent.
+- Persisted Task facts and live Task activity are observed independently.
+- Task status and status filtering combine independently loaded durable and live facts.
+- A Workflow transition or durable Task mutation overlapping the request may produce fields from different completed moments.
 - Short ID candidate selection must not scan every persisted Task.
 - Task Search must support Short ID matching in a persistence root with up to 1,000,000 Tasks.
 - The supported size boundary does not promise a numeric response time.

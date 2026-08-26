@@ -14,6 +14,7 @@ import (
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 const (
@@ -159,7 +160,7 @@ func retargetInteractiveSessionWorkspace(ctx context.Context, server sessionLife
 	if trimmedWorkspaceRoot == "" {
 		return errors.New("workspace root is required")
 	}
-	_, err := server.SessionLifecycleClient().RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{SessionID: trimmedSessionID, WorkspaceRoot: trimmedWorkspaceRoot})
+	_, err := server.SessionLifecycleClient().RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: trimmedSessionID, WorkspaceRoot: trimmedWorkspaceRoot})
 	return err
 }
 

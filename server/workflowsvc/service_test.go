@@ -404,7 +404,7 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	}
 }
 
-func TestServicePreviewManualMoveMapsOutcomesAndLiveBlockers(t *testing.T) {
+func TestServicePreviewManualMoveMapsOutcomes(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
@@ -428,8 +428,8 @@ func TestServicePreviewManualMoveMapsOutcomesAndLiveBlockers(t *testing.T) {
 	}
 	if noOp.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeNoOp ||
 		noOp.NoOp == nil || len(noOp.NoOp.CurrentNodes) != 1 ||
-		noOp.NoOp.CurrentNodes[0].NodeID != currentNodeID || execution.dispositionCalls != 0 {
-		t.Fatalf("no-op preview = %+v, disposition calls = %d", noOp, execution.dispositionCalls)
+		noOp.NoOp.CurrentNodes[0].NodeID != currentNodeID {
+		t.Fatalf("no-op preview = %+v", noOp)
 	}
 
 	direct, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
@@ -455,29 +455,6 @@ func TestServicePreviewManualMoveMapsOutcomesAndLiveBlockers(t *testing.T) {
 		t.Fatalf("transition preview = %+v", transition)
 	}
 
-	execution.disposition = workflowexecution.ManualMoveDispositionAutoInterruptible
-	interruptible, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
-		TaskID: task.Task.ID, TargetNodeID: terminalID,
-	})
-	if err != nil {
-		t.Fatalf("PreviewWorkflowTaskMove auto-interruptible: %v", err)
-	}
-	if interruptible.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeDirect ||
-		interruptible.Direct == nil {
-		t.Fatalf("auto-interruptible preview = %+v, want direct move", interruptible)
-	}
-	execution.disposition = workflowexecution.ManualMoveDispositionLifecycleConflict
-	blocked, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
-		TaskID: task.Task.ID, TargetNodeID: terminalID,
-	})
-	if err != nil {
-		t.Fatalf("PreviewWorkflowTaskMove lifecycle conflict: %v", err)
-	}
-	if blocked.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeBlocked ||
-		blocked.Blocked == nil ||
-		blocked.Blocked.Reason != serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict {
-		t.Fatalf("lifecycle-conflict preview = %+v", blocked)
-	}
 }
 
 func TestServiceManualMoveNoOpSkipsInterruptionAttentionAndEvent(t *testing.T) {
@@ -885,7 +862,7 @@ func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testi
 		_ = authority.Close(context.Background())
 	})
 	projector := workflowview.NewTaskProjector()
-	projection, err := workflowview.NewTaskStatusProjection(metadataStore, service.store, projector, controller)
+	projection, err := workflowview.NewTaskStatusProjection(service.store, projector, controller)
 	if err != nil {
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
@@ -2055,9 +2032,6 @@ type manualMoveExecutionStub struct {
 	quiescentErr     error
 	quiescentErrors  []error
 	quiescentTaskIDs []workflow.TaskID
-	disposition      workflowexecution.ManualMoveDisposition
-	dispositionErr   error
-	dispositionCalls int
 	interruptTaskIDs []workflow.TaskID
 	interruptErr     error
 	interruptHook    func()
@@ -2161,17 +2135,6 @@ func (s *manualMoveExecutionStub) EnsureTaskQuiescent(taskID workflow.TaskID) er
 		return s.quiescentErrors[index]
 	}
 	return s.quiescentErr
-}
-
-func (s *manualMoveExecutionStub) ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error) {
-	s.dispositionCalls++
-	if s.dispositionErr != nil {
-		return "", s.dispositionErr
-	}
-	if s.disposition == "" {
-		return workflowexecution.ManualMoveDispositionQuiescent, nil
-	}
-	return s.disposition, nil
 }
 
 func (s *manualMoveExecutionStub) InterruptForManualMove(_ context.Context, taskID workflow.TaskID, beforeSelection func() error) error {
@@ -3384,17 +3347,15 @@ func newWorkflowServiceReadModels(
 	}
 	projector := workflowview.NewTaskProjector()
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	quiescence := workflowViewQuiescenceSource{}
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
 			t.Errorf("close workflow read-model authority: %v", err)
 		}
 	})
 	projection, err := workflowview.NewTaskStatusProjection(
-		metadataStore,
 		store,
 		projector,
-		workflowViewStatusObservationSource{authority: authority, quiescence: quiescence},
+		workflowViewStatusObservationSource{authority: authority},
 	)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskStatusProjection: %v", err)
@@ -3449,8 +3410,6 @@ func newWorkflowServiceReadModels(
 	}
 }
 
-type workflowViewQuiescenceSource struct{}
-
 type emptyWorkflowTaskSessionActivitySource struct{}
 
 func (emptyWorkflowTaskSessionActivitySource) ActiveRuntimeActivitySnapshots(context.Context) ([]runtimeactivity.ActiveSessionSnapshot, error) {
@@ -3458,12 +3417,7 @@ func (emptyWorkflowTaskSessionActivitySource) ActiveRuntimeActivitySnapshots(con
 }
 
 type workflowViewStatusObservationSource struct {
-	authority  *sessionruntime.Authority
-	quiescence workflowViewTaskQuiescenceSource
-}
-
-type workflowViewTaskQuiescenceSource interface {
-	CurrentTaskQuiescence([]workflow.TaskID) (map[workflow.TaskID]bool, error)
+	authority *sessionruntime.Authority
 }
 
 func (s workflowViewStatusObservationSource) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
@@ -3471,22 +3425,14 @@ func (s workflowViewStatusObservationSource) ObserveWorkflowTaskExecutions(taskI
 	if err != nil {
 		return workflowexecution.WorkflowTaskExecutionObservation{}, err
 	}
-	quiescence, err := s.quiescence.CurrentTaskQuiescence(taskIDs)
-	if err != nil {
-		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	quiescence := make(map[workflow.TaskID]bool, len(taskIDs))
+	for _, taskID := range taskIDs {
+		quiescence[taskID] = true
 	}
 	return workflowexecution.WorkflowTaskExecutionObservation{
 		Executions: executions,
 		Quiescence: quiescence,
 	}, nil
-}
-
-func (workflowViewQuiescenceSource) CurrentTaskQuiescence(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {
-	result := make(map[workflow.TaskID]bool, len(taskIDs))
-	for _, taskID := range taskIDs {
-		result[taskID] = true
-	}
-	return result, nil
 }
 
 type emptyWorkflowPendingPromptSource struct{}

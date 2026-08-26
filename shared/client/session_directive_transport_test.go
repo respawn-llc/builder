@@ -44,7 +44,8 @@ func TestSessionLifecycleResultRemoteRoundTrip(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	got, err := remote.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		Transition: serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
+		ClientRequestID: "remote-lifecycle-result",
+		Transition:      serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
 	})
 	if err != nil {
 		t.Fatalf("ResolveTransition: %v", err)

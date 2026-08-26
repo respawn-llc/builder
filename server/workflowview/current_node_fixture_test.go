@@ -39,7 +39,7 @@ type currentNodeViewFixture struct {
 	agentNodeID       workflow.NodeID
 	authority         *sessionruntime.Authority
 	dependencyCounter *TaskDependencyCounter
-	quiescence        *currentNodeViewQuiescence
+	quiescence        *currentNodeViewStatusObservationSource
 	projection        *TaskStatusProjection
 	board             *Board
 	detail            *TaskDetail
@@ -49,12 +49,8 @@ type currentNodeViewFixture struct {
 }
 
 type currentNodeViewStatusObservationSource struct {
-	authority  *sessionruntime.Authority
-	quiescence currentNodeViewQuiescenceSource
-}
-
-type currentNodeViewQuiescenceSource interface {
-	CurrentTaskQuiescence([]workflow.TaskID) (map[workflow.TaskID]bool, error)
+	authority *sessionruntime.Authority
+	blocked   map[workflow.TaskID]bool
 }
 
 func (s currentNodeViewStatusObservationSource) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
@@ -62,9 +58,9 @@ func (s currentNodeViewStatusObservationSource) ObserveWorkflowTaskExecutions(ta
 	if err != nil {
 		return workflowexecution.WorkflowTaskExecutionObservation{}, err
 	}
-	quiescence, err := s.quiescence.CurrentTaskQuiescence(taskIDs)
-	if err != nil {
-		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	quiescence := make(map[workflow.TaskID]bool, len(taskIDs))
+	for _, taskID := range taskIDs {
+		quiescence[taskID] = !s.blocked[taskID]
 	}
 	return workflowexecution.WorkflowTaskExecutionObservation{
 		Executions: executions,
@@ -143,7 +139,10 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		PersistenceRoot: cfg.PersistenceRoot,
 		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
 	})
-	quiescence := &currentNodeViewQuiescence{blocked: map[workflow.TaskID]bool{}}
+	quiescence := &currentNodeViewStatusObservationSource{
+		authority: authority,
+		blocked:   map[workflow.TaskID]bool{},
+	}
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
 			t.Errorf("close fixture authority: %v", err)
@@ -151,13 +150,9 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 	})
 	projector := NewTaskProjector()
 	projection, err := NewTaskStatusProjection(
-		metadataStore,
 		store,
 		projector,
-		currentNodeViewStatusObservationSource{
-			authority:  authority,
-			quiescence: quiescence,
-		},
+		quiescence,
 	)
 	if err != nil {
 		t.Fatalf("NewTaskStatusProjection: %v", err)
@@ -208,18 +203,6 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		search:            search,
 		activity:          activity,
 	}
-}
-
-type currentNodeViewQuiescence struct {
-	blocked map[workflow.TaskID]bool
-}
-
-func (q *currentNodeViewQuiescence) CurrentTaskQuiescence(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {
-	result := make(map[workflow.TaskID]bool, len(taskIDs))
-	for _, taskID := range taskIDs {
-		result[taskID] = !q.blocked[taskID]
-	}
-	return result, nil
 }
 
 func (f currentNodeViewFixture) startTask(t *testing.T, title string) startedCurrentNodeViewTask {

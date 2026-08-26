@@ -28,14 +28,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type testSessionViewSessionResolver struct {
-	store *session.Store
-}
-
-func (r testSessionViewSessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	return r.store, nil
-}
-
 func waitForTestCondition(t *testing.T, timeout time.Duration, label string, condition func() bool) {
 	t.Helper()
 	testsetup.RequireUntil(t, time.Now().Add(timeout), 10*time.Millisecond, condition, "timed out waiting for %s", label)
@@ -234,10 +226,10 @@ func newProjectedAuthorityRuntime(
 			t.Errorf("close projected runtime: %v", err)
 		}
 	})
-	reads := sessionview.NewService(testSessionViewSessionResolver{store: store}, activity, authority, nil)
+	reads := sessionview.NewService(persistence, activity, nil)
 	controls := runtimecontrol.NewService(authority).WithRuntimeActivityResolver(activity)
 	runtimeClient := newUIRuntimeClientWithReads(sessionID.String(), reads, controls).(*sessionRuntimeClient)
-	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String())
+	snapshot, err := activity.RuntimeReadModelFeedSnapshot(context.Background(), sessionID.String())
 	if err != nil {
 		t.Fatalf("projected runtime snapshot: %v", err)
 	}

@@ -38,41 +38,28 @@ func (s *StatusService) GetStatus(ctx context.Context, req *authpb.GetStatusRequ
 		return nil, errors.New("auth status request is required")
 	}
 	state := auth.EmptyState()
-	var authStateErr error
 	if s != nil && s.manager != nil {
-		resolution, err := s.manager.ResolveCurrentState(ctx)
-		if resolution.Loaded != nil {
-			state = *resolution.Loaded
-		}
+		loaded, err := s.manager.Load(ctx)
 		if err != nil {
-			if resolution.Loaded == nil {
-				failure := authStatusFailure(err)
-				return &authpb.Status{
-					Resolution: &authpb.StatusResolution{
-						Resolution: &authpb.StatusResolution_Unavailable{Unavailable: failure},
-					},
-					Subscription: &authpb.SubscriptionFacts{},
-				}, nil
-			}
-			authStateErr = err
-		} else {
-			state = *resolution.Current
+			return &authpb.Status{
+				Resolution: &authpb.StatusResolution{
+					Resolution: &authpb.StatusResolution_Unavailable{Unavailable: authStatusFailure(err)},
+				},
+				Subscription: &authpb.SubscriptionFacts{},
+			}, nil
 		}
+		state = loaded
 	}
 	provider, subscriptionUsageSupported, err := s.resolveProvider(state, req.Provider)
 	if err != nil {
 		return nil, err
 	}
 	subscriptionUsageSupported = subscriptionUsageSupported && !req.SkipSubscriptionUsage
-	resolution := &authpb.StatusResolution{
-		Resolution: &authpb.StatusResolution_Known{Known: authFacts(state, provider)},
-	}
-	if authStateErr != nil {
-		resolution.PartialFailure = authStatusFailure(authStateErr)
-	}
 	return &authpb.Status{
-		Resolution:   resolution,
-		Subscription: subscriptionStatus(ctx, state, authStateErr, subscriptionUsageSupported),
+		Resolution: &authpb.StatusResolution{
+			Resolution: &authpb.StatusResolution_Known{Known: authFacts(state, provider)},
+		},
+		Subscription: subscriptionStatus(ctx, state, nil, subscriptionUsageSupported),
 	}, nil
 }
 

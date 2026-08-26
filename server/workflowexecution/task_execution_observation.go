@@ -20,11 +20,11 @@ type WorkflowTaskExecutionObservation struct {
 type workflowTaskControllerReadSnapshot struct {
 	concurrencyQueued map[workflow.TaskID][]workflow.CurrentNodeReference
 	quiescence        map[workflow.TaskID]bool
+	closed            bool
 }
 
-// ObserveWorkflowTaskExecutions never waits for lifecycle ownership. It
-// opportunistically refreshes each owner's immutable projection and otherwise
-// returns the last completed snapshots.
+// ObserveWorkflowTaskExecutions opportunistically refreshes the Controller
+// projection without waiting for lifecycle ownership.
 func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (WorkflowTaskExecutionObservation, error) {
 	if c == nil {
 		return WorkflowTaskExecutionObservation{}, errors.New("current node workflow controller is required")
@@ -45,7 +45,7 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		ConcurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 		Quiescence:        map[workflow.TaskID]bool{},
 	}
-	executions, err := c.authority.CurrentWorkflowTaskExecutionReadSnapshot()
+	executions, err := c.authority.CurrentWorkflowTaskExecutionSnapshots()
 	if err != nil {
 		return WorkflowTaskExecutionObservation{}, err
 	}
@@ -54,6 +54,7 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		snapshot := &workflowTaskControllerReadSnapshot{
 			concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 			quiescence:        map[workflow.TaskID]bool{},
+			closed:            c.closed,
 		}
 		if c.agentCapacityActive >= c.agentConcurrency {
 			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
@@ -84,12 +85,7 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 			snapshot.concurrencyQueued[taskID] = references
 		}
 		for taskID := range selected {
-			quiescent, err := c.taskQuiescentLocked(taskID)
-			if err != nil {
-				c.mu.Unlock()
-				return WorkflowTaskExecutionObservation{}, err
-			}
-			snapshot.quiescence[taskID] = quiescent
+			snapshot.quiescence[taskID] = !c.closed && c.taskExecutionQuiescentLocked(taskID)
 		}
 		c.mu.Unlock()
 		c.taskExecutionReads.Store(snapshot)
@@ -100,6 +96,9 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 			observation.Quiescence[taskID] = false
 		}
 		return observation, nil
+	}
+	if current.closed {
+		return WorkflowTaskExecutionObservation{}, errors.New("current node workflow controller is closed")
 	}
 	observation.ConcurrencyQueued = cloneConcurrencyQueued(current.concurrencyQueued)
 	for taskID := range selected {

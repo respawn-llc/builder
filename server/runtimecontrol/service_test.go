@@ -13,7 +13,6 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -39,7 +38,7 @@ var runtimeControlOpenAICapabilities = llm.ProviderCapabilities{
 }
 
 type sequenceRuntimeActivityResolver struct {
-	snapshots []runtimeactivity.ResponseSnapshot
+	snapshots []clientui.RuntimeReadModelUpdate
 	calls     int
 }
 
@@ -85,7 +84,7 @@ func (f *runtimeControlPromptFeed) Counts() (pending int, resolved int) {
 	return f.pendingCount, f.resolvedCount
 }
 
-func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
+func (r *sequenceRuntimeActivityResolver) RuntimeReadModelFeedSnapshot(context.Context, string) (clientui.RuntimeReadModelUpdate, error) {
 	if r.calls >= len(r.snapshots) {
 		return r.snapshots[len(r.snapshots)-1], nil
 	}
@@ -1050,9 +1049,9 @@ type failingRuntimeActivityResolver struct {
 	observedContext context.Context
 }
 
-func (r *failingRuntimeActivityResolver) RuntimeReadModelSnapshot(ctx context.Context, _ string) (runtimeactivity.ResponseSnapshot, error) {
+func (r *failingRuntimeActivityResolver) RuntimeReadModelFeedSnapshot(ctx context.Context, _ string) (clientui.RuntimeReadModelUpdate, error) {
 	r.observedContext = ctx
-	return runtimeactivity.ResponseSnapshot{}, r.err
+	return clientui.RuntimeReadModelUpdate{}, r.err
 }
 
 func TestServiceInterruptReturnsDiagnosticActivityWhenPostInterruptSnapshotFails(t *testing.T) {
@@ -1318,7 +1317,7 @@ func runtimeControlPromptHistoryStoresLoad(t *testing.T, sessionID string) *runt
 func TestServiceInterruptIdleIsNotAccepted(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	service.WithRuntimeActivityResolver(&sequenceRuntimeActivityResolver{
-		snapshots: []runtimeactivity.ResponseSnapshot{{
+		snapshots: []clientui.RuntimeReadModelUpdate{{
 			Version: clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1},
 			Activity: clientui.RuntimeActivity{
 				State:          clientui.RuntimeActivityRegisteredIdle,

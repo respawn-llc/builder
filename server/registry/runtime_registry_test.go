@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -12,7 +14,6 @@ import (
 	"core/server/attentionnotify"
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
@@ -22,6 +23,33 @@ import (
 )
 
 type registryRuntimeFakeClient struct{}
+
+type registryBlockingClient struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newRegistryBlockingClient() *registryBlockingClient {
+	return &registryBlockingClient{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (c *registryBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	c.once.Do(func() { close(c.started) })
+	select {
+	case <-ctx.Done():
+		return llm.Response{}, context.Cause(ctx)
+	case <-c.release:
+		return llm.Response{}, nil
+	}
+}
+
+func (c *registryBlockingClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}, nil
+}
 
 type registryRetention chan struct{}
 
@@ -357,6 +385,64 @@ func TestAuthorityRuntimeDrainClosesSubscriptionsAndReleasesRetention(t *testing
 	case <-retentionClosed:
 	default:
 		t.Fatal("registry drain did not release transcript retention")
+	}
+}
+
+func TestRuntimeSnapshotsStopExposingRuntimeBeforeDrainCleanupCompletes(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	closeStarted := make(chan struct{})
+	releaseClose := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClose) }) }
+	t.Cleanup(release)
+	if err := registry.ResourceReady(
+		context.Background(),
+		registryTestResource(ref),
+		engine,
+		func() (io.Closer, error) {
+			return &registryBlockingRetention{closeStarted: closeStarted, release: releaseClose}, nil
+		},
+	); err != nil {
+		t.Fatalf("ResourceReady: %v", err)
+	}
+	registry.PublishRuntimeReadModelUpdate(
+		engine.SessionID(),
+		registryTestReadModelUpdate(t, 2, clientui.RuntimeActivityRunning),
+	)
+	subscription, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: engine.SessionID(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionTranscript: %v", err)
+	}
+	if _, err := subscription.Next(context.Background()); err != nil {
+		t.Fatalf("read hydration: %v", err)
+	}
+
+	drainDone := make(chan error, 1)
+	go func() {
+		drainDone <- registry.ResourceDraining(context.Background(), registryTestResource(ref))
+	}()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Runtime drain did not reach retention cleanup")
+	}
+	if view, ok := registry.RuntimeMainViewSnapshot(engine.SessionID()); ok {
+		t.Fatalf("Runtime Main View remained available during drain cleanup: %+v", view)
+	}
+	snapshots, err := registry.ActiveRuntimeActivitySnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("ActiveRuntimeActivitySnapshots: %v", err)
+	}
+	if len(snapshots) != 0 {
+		t.Fatalf("active snapshots during drain cleanup = %+v, want none", snapshots)
+	}
+	release()
+	if err := <-drainDone; err != nil {
+		t.Fatalf("ResourceDraining: %v", err)
 	}
 }
 
@@ -872,7 +958,6 @@ func assertNoSleepObserverState(t *testing.T, notifications <-chan bool) {
 func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) {
 	activity := clientui.RuntimeActivity{
 		State:          clientui.RuntimeActivityRegisteredIdle,
-		Reviewer:       clientui.ReviewerActivityInactive,
 		QueueAccepting: true,
 	}
 	if running {
@@ -885,8 +970,7 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 			panic(err)
 		}
 		activity = clientui.RuntimeActivity{
-			State:    clientui.RuntimeActivityRunning,
-			Reviewer: clientui.ReviewerActivityInactive,
+			State: clientui.RuntimeActivityRunning,
 			ActiveStep: &clientui.RuntimeActiveStep{
 				RunID:      runID,
 				StepID:     stepID,
@@ -895,8 +979,202 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 			QueueAccepting: true,
 		}
 	}
-	registry.PublishRuntimeReadModelUpdate(sessionID, clientui.RuntimeReadModelUpdate{
-		Version:  runtimeactivity.NextReadModelVersion(sessionID),
-		Activity: activity,
+	update, err := registry.RuntimeReadModelFeedSnapshot(context.Background(), sessionID)
+	if err != nil {
+		panic(fmt.Sprintf("build Runtime Read Model test update for Session %q: %v", sessionID, err))
+	}
+	update.Activity = activity
+	registry.PublishRuntimeReadModelUpdate(sessionID, update)
+}
+
+func TestActiveRuntimeActivitySnapshotsExcludeRegisteredIdlePopulation(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	for index := range 500 {
+		sessionID := fmt.Sprintf("idle-session-%03d", index)
+		registerReady(t, registry, sessionID, &runtime.Engine{})
+	}
+	runningEngine, runningDone := startRegistryBlockingRuntime(t, registry)
+	questionEngine, questionDone := startRegistryBlockingRuntime(t, registry)
+	projectPendingPromptForTest(registry, questionEngine.SessionID(), askquestion.AskQuestionRequest{
+		ID:       "question-active-snapshot",
+		StepID:   registryTestStepID,
+		Question: "Continue?",
 	})
+
+	snapshots, err := registry.ActiveRuntimeActivitySnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("ActiveRuntimeActivitySnapshots: %v", err)
+	}
+	wantIDs := []string{runningEngine.SessionID(), questionEngine.SessionID()}
+	slices.Sort(wantIDs)
+	if len(snapshots) != len(wantIDs) {
+		t.Fatalf("snapshots = %+v, want only %v", snapshots, wantIDs)
+	}
+	for index, snapshot := range snapshots {
+		if snapshot.SessionID != wantIDs[index] {
+			t.Fatalf("snapshots = %+v, want sorted IDs %v", snapshots, wantIDs)
+		}
+		if !snapshot.Activity.ActiveForControl() {
+			t.Fatalf("snapshot %q is not active: %+v", snapshot.SessionID, snapshot.Activity)
+		}
+	}
+
+	closeRegistryBlockingRuntime(t, runningEngine, runningDone)
+	closeRegistryBlockingRuntime(t, questionEngine, questionDone)
+}
+
+func TestRuntimeReadModelPublicationRejectsProvablyOlderUpdate(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+
+	newer := registryTestReadModelUpdate(t, 2, clientui.RuntimeActivityRunning)
+	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), newer)
+	subscription, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: engine.SessionID(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionTranscript: %v", err)
+	}
+	if _, err := subscription.Next(context.Background()); err != nil {
+		t.Fatalf("read hydration: %v", err)
+	}
+
+	older := registryTestReadModelUpdate(t, 1, clientui.RuntimeActivityRegisteredIdle)
+	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), older)
+
+	view, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
+	if !ok || view.Version != newer.Version || view.Activity.State != clientui.RuntimeActivityRunning {
+		t.Fatalf("Runtime Main View = %+v, %t; want newer running publication", view, ok)
+	}
+	snapshots, err := registry.ActiveRuntimeActivitySnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("ActiveRuntimeActivitySnapshots: %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].SessionID != engine.SessionID() {
+		t.Fatalf("active snapshots = %+v, want only %q", snapshots, engine.SessionID())
+	}
+	nextCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if message, err := subscription.Next(nextCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stale update message = %+v, error = %v; want no publication", message, err)
+	}
+}
+
+func TestRuntimeActivitySnapshotsDoNotShareActiveStep(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	update := registryTestReadModelUpdate(t, 2, clientui.RuntimeActivityRunning)
+	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), update)
+
+	view, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
+	if !ok || view.Activity.ActiveStep == nil {
+		t.Fatalf("Runtime Main View = %+v, %t; want active step", view, ok)
+	}
+	view.Activity.ActiveStep.ActiveKind = clientui.RuntimeActivityActiveKindBackground
+	again, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
+	if !ok || again.Activity.ActiveStep == nil ||
+		again.Activity.ActiveStep.ActiveKind != clientui.RuntimeActivityActiveKindUserTurn {
+		t.Fatalf("Runtime Main View after caller mutation = %+v, %t", again, ok)
+	}
+
+	snapshots, err := registry.ActiveRuntimeActivitySnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("ActiveRuntimeActivitySnapshots: %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Activity.ActiveStep == nil {
+		t.Fatalf("active snapshots = %+v, want one active step", snapshots)
+	}
+	snapshots[0].Activity.ActiveStep.ActiveKind = clientui.RuntimeActivityActiveKindBackground
+	againSnapshots, err := registry.ActiveRuntimeActivitySnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("ActiveRuntimeActivitySnapshots after mutation: %v", err)
+	}
+	if len(againSnapshots) != 1 || againSnapshots[0].Activity.ActiveStep == nil ||
+		againSnapshots[0].Activity.ActiveStep.ActiveKind != clientui.RuntimeActivityActiveKindUserTurn {
+		t.Fatalf("active snapshots after caller mutation = %+v", againSnapshots)
+	}
+}
+
+func registryTestReadModelUpdate(
+	t *testing.T,
+	sequence uint64,
+	state clientui.RuntimeActivityState,
+) clientui.RuntimeReadModelUpdate {
+	t.Helper()
+	version, err := clientui.NewReadModelVersion("registry-publication-test", 1, sequence)
+	if err != nil {
+		t.Fatalf("NewReadModelVersion: %v", err)
+	}
+	activity := clientui.RuntimeActivity{State: state, QueueAccepting: true}
+	if state == clientui.RuntimeActivityRunning {
+		runID, err := runtimeids.ParseRunID(registryTestRunID)
+		if err != nil {
+			t.Fatalf("ParseRunID: %v", err)
+		}
+		stepID, err := runtimeids.ParseStepID(registryTestStepID)
+		if err != nil {
+			t.Fatalf("ParseStepID: %v", err)
+		}
+		activity.ActiveStep = &clientui.RuntimeActiveStep{
+			RunID:      runID,
+			StepID:     stepID,
+			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+		}
+	}
+	return clientui.RuntimeReadModelUpdate{Version: version, Activity: activity}
+}
+
+func startRegistryBlockingRuntime(t *testing.T, registry *RuntimeRegistry) (*runtime.Engine, <-chan error) {
+	t.Helper()
+	client := newRegistryBlockingClient()
+	engine := newRegistryRuntime(
+		t,
+		client,
+		askquestion.NewRegistry(),
+		runtime.Config{Model: "gpt-5", ThinkingLevel: "medium"},
+		func(engine *runtime.Engine, evt runtime.Event) {
+			if err := registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), evt); err != nil {
+				t.Errorf("PublishAuthorityRuntimeEvent: %v", err)
+			}
+		},
+	)
+	registerReady(t, registry, engine.SessionID(), engine)
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "work")
+		done <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active runtime")
+	}
+	if err := registry.publishCurrentRuntimeActivity(engine.SessionID()); err != nil {
+		t.Fatalf("publish active runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-client.release:
+		default:
+			close(client.release)
+		}
+	})
+	return engine, done
+}
+
+func closeRegistryBlockingRuntime(t *testing.T, engine *runtime.Engine, done <-chan error) {
+	t.Helper()
+	if _, err := engine.TryInterruptActiveRun(); err != nil {
+		t.Fatalf("TryInterruptActiveRun: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("SubmitUserMessage: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active runtime to stop")
+	}
 }

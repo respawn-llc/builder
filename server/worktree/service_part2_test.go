@@ -33,7 +33,7 @@ func TestDeleteWorktreeBlocksWhenBackgroundProcessUsesDescendantPath(t *testing.
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
 	}
-	snapshots := env.processes.List()
+	snapshots := env.processes.CurrentSnapshots()
 	if len(snapshots) != 1 || !snapshots[0].Running {
 		t.Fatalf("background process snapshot changed after blocked delete: %+v", snapshots)
 	}

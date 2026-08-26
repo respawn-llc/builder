@@ -101,6 +101,7 @@ func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "release-remote-transport",
 		Attachment: serverapi.SessionRuntimeAttachment{
 			SessionID:  "session-1",
 			Generation: 7,

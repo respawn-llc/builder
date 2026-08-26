@@ -156,39 +156,34 @@ func (d *TaskDependencies) loadFacts(ctx context.Context, taskID string, blocked
 	if d.projection == nil {
 		return taskDependencyFacts{}, errors.New("task status projection is required")
 	}
-	var facts taskDependencyFacts
-	err := d.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
-		var err error
-		facts, err = d.loadFactsWithSnapshot(ctx, taskID, blockedOnly, observation, durable)
-		return err
-	})
-	return facts, err
+	observation, err := d.projection.Observe(nil)
+	if err != nil {
+		return taskDependencyFacts{}, err
+	}
+	return d.loadFactsWithQueries(ctx, taskID, blockedOnly, observation, d.queries)
 }
 
-func (d *TaskDependencies) projectTaskDependenciesWithSnapshot(
+func (d *TaskDependencies) projectTaskDependencies(
 	ctx context.Context,
 	taskID string,
 	observation TaskStatusObservation,
-	durable *TaskStatusDurableSnapshot,
+	queries *sqlitegen.Queries,
 ) (serverapi.WorkflowTaskDependencies, error) {
-	facts, err := d.loadFactsWithSnapshot(ctx, taskID, false, observation, durable)
+	facts, err := d.loadFactsWithQueries(ctx, taskID, false, observation, queries)
 	if err != nil {
 		return serverapi.WorkflowTaskDependencies{}, err
 	}
 	return d.projectFacts(facts)
 }
 
-func (d *TaskDependencies) loadFactsWithSnapshot(
+func (d *TaskDependencies) loadFactsWithQueries(
 	ctx context.Context,
 	taskID string,
 	blockedOnly bool,
 	observation TaskStatusObservation,
-	durable *TaskStatusDurableSnapshot,
+	queries *sqlitegen.Queries,
 ) (taskDependencyFacts, error) {
-	if err := durable.validate(); err != nil {
-		return taskDependencyFacts{}, err
-	}
-	rows, err := d.relationshipRowsWithQueries(ctx, durable.queries, taskID, blockedOnly)
+	rows, err := d.relationshipRowsWithQueries(ctx, queries, taskID, blockedOnly)
 	if err != nil {
 		return taskDependencyFacts{}, err
 	}
@@ -226,7 +221,7 @@ func (d *TaskDependencies) loadFactsWithSnapshot(
 		workflowIDs[key] = workflowID
 		taskIDs = append(taskIDs, row.TaskID)
 	}
-	statuses, err := d.projectDependencyStatuses(ctx, taskIDs, observation, durable)
+	statuses, err := d.projectDependencyStatuses(ctx, queries, taskIDs, observation)
 	if err != nil {
 		return taskDependencyFacts{}, err
 	}
@@ -261,15 +256,19 @@ func (d *TaskDependencies) loadFactsWithSnapshot(
 
 func (d *TaskDependencies) projectDependencyStatuses(
 	ctx context.Context,
+	queries *sqlitegen.Queries,
 	taskIDs []string,
 	observation TaskStatusObservation,
-	durable *TaskStatusDurableSnapshot,
 ) (map[workflow.TaskID]workflowTaskStatusFact, error) {
 	ids := make([]workflow.TaskID, 0, len(taskIDs))
 	for _, taskID := range taskIDs {
 		ids = append(ids, workflow.TaskID(taskID))
 	}
-	projected, err := durable.ProjectedStatuses(ctx, ids, observation.LiveTaskStatesJSON)
+	encodedTaskIDs, err := encodeTaskIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	projected, err := d.projection.projectedStatuses(ctx, queries, encodedTaskIDs, observation.LiveTaskStatesJSON)
 	if err != nil {
 		return nil, err
 	}

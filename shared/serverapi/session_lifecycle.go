@@ -7,6 +7,10 @@ import (
 	"core/shared/runtimeids"
 )
 
+// ErrClientRequestIDRequired is returned when a lifecycle request omits its
+// client_request_id.
+var ErrClientRequestIDRequired = errors.New("client_request_id is required")
+
 type SessionTransitionAction string
 
 const (
@@ -39,16 +43,18 @@ type SessionInitialInputResponse struct {
 }
 
 type SessionPersistInputDraftRequest struct {
-	SessionID string `json:"session_id"`
-	Input     string `json:"input,omitempty"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Input           string `json:"input,omitempty"`
 }
 
 type SessionPersistInputDraftResponse struct{}
 
 type SessionRetargetWorkspaceRequest struct {
-	SessionID     string  `json:"session_id"`
-	WorkspaceRoot string  `json:"workspace_root"`
-	ProjectID     *string `json:"project_id,omitempty"`
+	ClientRequestID string  `json:"client_request_id"`
+	SessionID       string  `json:"session_id"`
+	WorkspaceRoot   string  `json:"workspace_root"`
+	ProjectID       *string `json:"project_id,omitempty"`
 }
 
 type SessionRetargetWorkspaceResponse struct {
@@ -57,13 +63,17 @@ type SessionRetargetWorkspaceResponse struct {
 }
 
 type SessionResolveTransitionRequest struct {
-	SessionID  string            `json:"session_id,omitempty"`
-	Transition SessionTransition `json:"transition"`
+	ClientRequestID string            `json:"client_request_id"`
+	SessionID       string            `json:"session_id,omitempty"`
+	Transition      SessionTransition `json:"transition"`
 }
 
 type SessionResolveTransitionResponse = SessionDirective
 
 func (r SessionPersistInputDraftRequest) Validate() error {
+	if strings.TrimSpace(r.ClientRequestID) == "" {
+		return ErrClientRequestIDRequired
+	}
 	if err := validateScopedSessionID(r.SessionID); err != nil {
 		return err
 	}
@@ -78,6 +88,9 @@ func (r SessionInitialInputRequest) Validate() error {
 }
 
 func (r SessionRetargetWorkspaceRequest) Validate() error {
+	if strings.TrimSpace(r.ClientRequestID) == "" {
+		return ErrClientRequestIDRequired
+	}
 	if err := validateScopedSessionID(r.SessionID); err != nil {
 		return err
 	}
@@ -91,6 +104,9 @@ func (r SessionRetargetWorkspaceRequest) Validate() error {
 }
 
 func (r SessionResolveTransitionRequest) Validate() error {
+	if strings.TrimSpace(r.ClientRequestID) == "" {
+		return ErrClientRequestIDRequired
+	}
 	if strings.TrimSpace(r.SessionID) != "" {
 		if err := validateScopedSessionID(r.SessionID); err != nil {
 			return err

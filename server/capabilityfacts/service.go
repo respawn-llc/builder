@@ -102,7 +102,7 @@ func normalizedProviderIDs(values []string) []string {
 func (s *Service) currentProviderFacts(ctx context.Context) (llm.ProviderCapabilities, error) {
 	authState := auth.EmptyState()
 	if s.authManager != nil {
-		loaded, err := s.authManager.StoredState(ctx)
+		loaded, err := s.authManager.Load(ctx)
 		if err != nil {
 			return llm.ProviderCapabilities{}, fmt.Errorf("load stored auth state for capability facts: %w", err)
 		}

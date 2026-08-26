@@ -13,6 +13,8 @@ import (
 	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+
+	"github.com/google/uuid"
 )
 
 type sessionLifecycleClientProvider interface {
@@ -371,8 +373,9 @@ func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleCli
 		return nil
 	}
 	_, err := server.SessionLifecycleClient().PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{
-		SessionID: strings.TrimSpace(sessionID),
-		Input:     ui.mainEditor.Text(),
+		ClientRequestID: uuid.NewString(),
+		SessionID:       strings.TrimSpace(sessionID),
+		Input:           ui.mainEditor.Text(),
 	})
 	return err
 }
@@ -450,7 +453,8 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 		return serverapi.SessionDirective{}, errors.New("session lifecycle client is required")
 	}
 	resolved, err := server.SessionLifecycleClient().ResolveTransition(ctx, serverapi.SessionResolveTransitionRequest{
-		SessionID: strings.TrimSpace(sessionID),
+		ClientRequestID: uuid.NewString(),
+		SessionID:       strings.TrimSpace(sessionID),
 		Transition: serverapi.SessionTransition{
 			Action:                       transition.Action,
 			InitialPrompt:                transition.InitialPrompt,

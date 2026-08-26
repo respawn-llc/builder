@@ -139,17 +139,14 @@ func (s *BootstrapService) CompleteBootstrap(ctx context.Context, req *authpb.Co
 }
 
 func (s *BootstrapService) authReady(ctx context.Context) (bool, error) {
-	if s == nil || s.manager == nil {
-		return false, nil
-	}
-	if !s.authRequired {
-		return true, nil
+	if s.manager == nil {
+		return !s.authRequired, nil
 	}
 	state, err := s.manager.Load(ctx)
 	if err != nil {
 		return false, err
 	}
-	return auth.EvaluateStartupGate(state).Ready, nil
+	return !s.authRequired || auth.EvaluateStartupGate(state).Ready, nil
 }
 
 func (s *BootstrapService) storedState(ctx context.Context) (auth.State, error) {

@@ -11,7 +11,7 @@ import (
 // LatestCommittedAssistantFinalAnswerFromEventLog finds the newest durable
 // assistant final answer in the active transcript segment. A compaction
 // boundary is an absence result and is never decoded as carried history.
-func LatestCommittedAssistantFinalAnswerFromEventLog(eventLog session.MaterializedEventLog) (*string, error) {
+func LatestCommittedAssistantFinalAnswerFromEventLog(eventLog TranscriptEventLogReader) (*string, error) {
 	var (
 		answer   *string
 		matchErr error

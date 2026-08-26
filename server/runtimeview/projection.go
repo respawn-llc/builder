@@ -42,23 +42,6 @@ func MainViewFromRuntimeActivity(
 	}, nil
 }
 
-func RuntimeMainViewFromActivity(activity clientui.RuntimeActivity, status clientui.RuntimeStatus, sessionView clientui.RuntimeSessionView) clientui.RuntimeMainView {
-	version := runtimeactivity.NextReadModelVersion(sessionView.SessionID)
-	if err := activity.Validate(); err != nil {
-		activity = clientui.RuntimeActivity{
-			State:              clientui.RuntimeActivityUnavailable,
-			Reviewer:           clientui.ReviewerActivityInactive,
-			DiagnosticRecovery: true,
-		}
-	}
-	return clientui.RuntimeMainView{
-		Version:  version,
-		Status:   status,
-		Session:  sessionView,
-		Activity: activity,
-	}
-}
-
 func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 	if engine == nil {
 		return clientui.RuntimeStatus{}, nil

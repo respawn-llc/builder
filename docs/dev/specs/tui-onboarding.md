@@ -47,7 +47,10 @@
 - The wizard submits choices to Kent. Kent executes imports and writes `config.toml`; the TUI does not write files.
 - Kent supplies model facts such as context windows, thinking, and verbosity support.
 - Kent also supplies provider facts such as native compaction and importable skills or commands.
-- One setup attempt uses one consistent set of these facts.
+- One setup attempt requests Capability Facts once.
+- Capability Facts uses the latest completely published startup configuration and settings available when Kent selects the request's snapshot.
+- Capability Facts combines that snapshot with auth-store and import-discovery observations performed for the request.
+- Capability Facts does not wait for an in-progress startup activation to publish newer settings. A separate setup attempt may observe a newer published snapshot.
 - Model facts include the complete built-in known-model list and each model's capabilities.
 - Model facts include one fallback for non-empty unknown model names, so every client applies the same behavior.
 - Provider capability facts cover both the current effective provider and explicit provider choices.
@@ -65,7 +68,6 @@
 - Provider facts use stable identifiers. Each client supplies display names.
 - Recommendations are structured facts such as identifiers, modes, counts, and paths. Each client supplies the wording.
 - When no workspace root is provided, import facts include global external-provider imports and generated Kent skill candidates, but omit workspace-local duplicate and skip checks.
-- Each setup attempt reads current capabilities.
 - Reading setup facts does not execute imports, finalize choices, or write configuration.
 - Kent supplies provider capabilities and known-model capabilities such as thinking, verbosity, vision input, reasoning summary, and context-window support.
 - For a known model, the built-in model catalog decides verbosity support.

@@ -45,7 +45,7 @@ func (r sessionChatSettingsPreparationResolver) PrepareSessionChatSettings(
 			return launch.PreparedChatSettings{}, err
 		}
 	}
-	promptFacing, err := (launch.Planner{Config: cfg}).SelectedSessionPromptFacingTargetWithStore(store)
+	promptFacing, err := (launch.Planner{Config: cfg}).SelectedSessionPromptFacingTargetFromMeta(store.Meta())
 	if err != nil {
 		return launch.PreparedChatSettings{}, err
 	}

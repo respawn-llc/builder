@@ -184,12 +184,11 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	question := fixture.startCurrentNodeQuestion(t, started)
 	projector := NewTaskProjector()
 	questionProjection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		projector,
-		currentNodeViewStatusObservationSource{
-			authority:  question.authority,
-			quiescence: fixture.quiescence,
+		&currentNodeViewStatusObservationSource{
+			authority: question.authority,
+			blocked:   fixture.quiescence.blocked,
 		},
 	)
 	if err != nil {

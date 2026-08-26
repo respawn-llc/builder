@@ -16,12 +16,10 @@ import (
 )
 
 func (m *Manager) List() []Snapshot {
-	m.mu.Lock()
-	entries := make([]*processEntry, 0, len(m.entries))
-	for _, entry := range m.entries {
-		entries = append(entries, entry)
+	if m == nil {
+		return nil
 	}
-	m.mu.Unlock()
+	entries := m.processEntries()
 	out := make([]Snapshot, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, entry.snapshot())
@@ -38,16 +36,24 @@ func (m *Manager) List() []Snapshot {
 	return out
 }
 
-func (m *Manager) Count() int {
-	m.mu.Lock()
-	entries := make([]*processEntry, 0, len(m.entries))
-	for _, entry := range m.entries {
-		entries = append(entries, entry)
+func (m *Manager) CurrentSnapshots() []Snapshot {
+	if m == nil {
+		return nil
 	}
-	m.mu.Unlock()
-	count := 0
+	entries := m.processEntries()
+	out := make([]Snapshot, 0, len(entries))
 	for _, entry := range entries {
-		if entry.isRunning() {
+		entry.mu.Lock()
+		out = append(out, entry.snapshotLocked())
+		entry.mu.Unlock()
+	}
+	return out
+}
+
+func (m *Manager) Count() int {
+	count := 0
+	for _, snapshot := range m.List() {
+		if snapshot.Running {
 			count++
 		}
 	}
@@ -55,7 +61,7 @@ func (m *Manager) Count() int {
 }
 
 func (m *Manager) Snapshot(id string) (Snapshot, error) {
-	entry, err := m.entry(strings.TrimSpace(id))
+	entry, err := m.readEntry(strings.TrimSpace(id))
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -69,11 +75,8 @@ func (m *Manager) Close() error {
 		return nil
 	}
 	m.closed = true
-	entries := make([]*processEntry, 0, len(m.entries))
-	for _, entry := range m.entries {
-		entries = append(entries, entry)
-	}
 	m.mu.Unlock()
+	entries := m.processEntries()
 
 	for _, entry := range entries {
 		entry.mu.Lock()
@@ -81,6 +84,7 @@ func (m *Manager) Close() error {
 			_ = entry.stdin.Close()
 			entry.stdin = nil
 			entry.stdinOpen = false
+			entry.publishSnapshotLocked()
 		}
 		entry.mu.Unlock()
 	}
@@ -231,12 +235,32 @@ func (m *Manager) Close() error {
 func (m *Manager) entry(id string) (*processEntry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	entry, ok := m.entries[id]
-	if !ok {
+	entry, err := m.readEntry(id)
+	if err != nil {
 		return nil, ErrResultUnavailable
 	}
 	m.touchCompletedLocked(id)
 	return entry, nil
+}
+
+func (m *Manager) readEntry(id string) (*processEntry, error) {
+	if m == nil {
+		return nil, ErrResultUnavailable
+	}
+	value, ok := m.entries.Load(id)
+	if !ok {
+		return nil, ErrResultUnavailable
+	}
+	return value.(*processEntry), nil
+}
+
+func (m *Manager) processEntries() []*processEntry {
+	entries := make([]*processEntry, 0)
+	m.entries.Range(func(_, value any) bool {
+		entries = append(entries, value.(*processEntry))
+		return true
+	})
+	return entries
 }
 
 func (m *Manager) emitEvent(evt Event) bool {
@@ -343,12 +367,7 @@ func (m *Manager) RetryTerminalEvents(ownerSessionID string) {
 	if ownerSessionID == "" {
 		return
 	}
-	m.mu.Lock()
-	entries := make([]*processEntry, 0, len(m.entries))
-	for _, entry := range m.entries {
-		entries = append(entries, entry)
-	}
-	m.mu.Unlock()
+	entries := m.processEntries()
 	for _, entry := range entries {
 		entry.mu.Lock()
 		pending := entry.ownerSessionID == ownerSessionID &&
@@ -389,7 +408,7 @@ func (m *Manager) retryTerminalEvent(entry *processEntry, ownerSessionID string)
 func cacheTerminalEvent(entry *processEntry, event Event) *terminalEventCache {
 	cached := &terminalEventCache{
 		eventType:        event.Type,
-		snapshot:         snapshotWithExecutionCorrelationCopy(event.Snapshot),
+		snapshot:         cloneSnapshot(event.Snapshot),
 		noticeSuppressed: event.NoticeSuppressed,
 	}
 	if event.completion == nil {
@@ -427,7 +446,7 @@ func (c *terminalEventCache) event() Event {
 	}
 	event := Event{
 		Type:             c.eventType,
-		Snapshot:         snapshotWithExecutionCorrelationCopy(c.snapshot),
+		Snapshot:         cloneSnapshot(c.snapshot),
 		NoticeSuppressed: c.noticeSuppressed,
 	}
 	if c.completion == nil {
@@ -454,7 +473,7 @@ func (c *terminalEventCache) fallbackEvent(cause error) Event {
 	if err != nil {
 		return Event{
 			Type:             c.eventType,
-			Snapshot:         snapshotWithExecutionCorrelationCopy(c.snapshot),
+			Snapshot:         cloneSnapshot(c.snapshot),
 			NoticeSuppressed: c.noticeSuppressed,
 		}
 	}
@@ -514,15 +533,15 @@ func (m *Manager) allocateProcessSlot() (string, string, error) {
 func (m *Manager) releaseEntry(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.entries, id)
+	m.entries.Delete(id)
 	m.removeCompletedLocked(id)
 }
 
 func (m *Manager) retainCompletedEntry(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	entry, exists := m.entries[id]
-	if !exists || entry.isRunning() {
+	entry, err := m.readEntry(id)
+	if err != nil || entry.isRunning() {
 		return
 	}
 	m.removeCompletedLocked(id)
@@ -531,9 +550,9 @@ func (m *Manager) retainCompletedEntry(id string) {
 		evictedID := m.completedRecency[0]
 		m.completedRecency[0] = ""
 		m.completedRecency = m.completedRecency[1:]
-		evicted, exists := m.entries[evictedID]
-		if exists && !evicted.isRunning() {
-			delete(m.entries, evictedID)
+		evicted, err := m.readEntry(evictedID)
+		if err == nil && !evicted.isRunning() {
+			m.entries.Delete(evictedID)
 		}
 	}
 }

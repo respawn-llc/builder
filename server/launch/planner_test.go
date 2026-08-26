@@ -122,12 +122,12 @@ func TestPlannerReappliesPersistedSubagentRoleSettingsOnResume(t *testing.T) {
 			Sources:  map[string]string{"thinking_level": "file", "tools.patch": "file"},
 		},
 	}
-	planner := newTestPlanner(config.App{
+	planner := newPersistenceBackedTestPlanner(config.App{
 		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings:        settings,
 		Source:          loaded.Source,
-	}, containerDir, persistence.Options()...)
+	}, containerDir, persistence)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
@@ -226,14 +226,14 @@ func TestPlannerIgnoresMissingPersistedSubagentRoleOnResume(t *testing.T) {
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("deleted_role")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
-	planner := newTestPlanner(config.App{
+	planner := newPersistenceBackedTestPlanner(config.App{
 		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings: config.Settings{
 			Model:         "gpt-5.6-sol",
 			ThinkingLevel: "medium",
 		},
-	}, containerDir, persistence.Options()...)
+	}, containerDir, persistence)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
@@ -280,12 +280,12 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 	source.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	source.Sources["openai_base_url"] = "file"
 	source.Sources["thinking_level"] = "file"
-	planner := newTestPlanner(config.App{
+	planner := newPersistenceBackedTestPlanner(config.App{
 		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings:        settings,
 		Source:          source,
-	}, containerDir, persistence.Options()...)
+	}, containerDir, persistence)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
@@ -1522,12 +1522,12 @@ func TestPlannerResumeFastRoleUsesProviderOverrideForHeuristic(t *testing.T) {
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole(config.BuiltInSubagentRoleFast)}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
-	planner := newTestPlanner(config.App{
+	planner := newPersistenceBackedTestPlanner(config.App{
 		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings:        loaded.Settings,
 		Source:          loaded.Source,
-	}, containerDir, persistence.Options()...)
+	}, containerDir, persistence)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
@@ -1559,12 +1559,12 @@ func TestPlannerResumeLockedDefaultModelTreatsSessionModelAsExplicitForRoleProvi
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-session-model", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
-	planner := newTestPlanner(config.App{
+	planner := newPersistenceBackedTestPlanner(config.App{
 		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings:        loaded.Settings,
 		Source:          loaded.Source,
-	}, containerDir, persistence.Options()...)
+	}, containerDir, persistence)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
@@ -1600,12 +1600,12 @@ func TestPlannerResumePersistedRoleRejectsContextWindowBelowMinimum(t *testing.T
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
-	planner := newTestPlanner(config.App{
+	planner := newPersistenceBackedTestPlanner(config.App{
 		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings:        loaded.Settings,
 		Source:          loaded.Source,
-	}, containerDir, persistence.Options()...)
+	}, containerDir, persistence)
 
 	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))}); err == nil {
 		t.Fatal("expected persisted subagent role context window below minimum to fail")

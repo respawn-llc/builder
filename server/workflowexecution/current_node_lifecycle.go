@@ -15,14 +15,6 @@ import (
 
 const ReasonCurrentNodeStartupRecovery workflow.CurrentNodeInterruptionReason = "workflow_startup_recovery"
 
-type ManualMoveDisposition string
-
-const (
-	ManualMoveDispositionQuiescent         ManualMoveDisposition = "quiescent"
-	ManualMoveDispositionAutoInterruptible ManualMoveDisposition = "auto_interruptible"
-	ManualMoveDispositionLifecycleConflict ManualMoveDisposition = "lifecycle_conflict"
-)
-
 var ErrManualMoveLifecycleConflict = errors.New("workflow task has a non-interruptible lifecycle conflict")
 
 type TaskStartPreparation struct {
@@ -38,38 +30,6 @@ func (p TaskStartPreparation) validate() error {
 		return errors.New("task preparation commit is required")
 	}
 	return nil
-}
-
-func (c *CurrentNodeController) ManualMoveDisposition(taskID workflow.TaskID) (ManualMoveDisposition, error) {
-	if c == nil {
-		return "", errors.New("current node workflow controller is required")
-	}
-	if strings.TrimSpace(string(taskID)) == "" {
-		return "", errors.New("workflow task id is required")
-	}
-	state, err := c.authority.CurrentWorkflowTaskExecutionState(taskID)
-	if err != nil {
-		return "", err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.ensureTaskAvailableLocked(taskID); err != nil && !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-		return "", err
-	}
-	quiescent, err := c.taskQuiescentLocked(taskID)
-	if err != nil {
-		return "", err
-	}
-	if state.WaitingApprovals > 0 || state.Queued > 0 {
-		return ManualMoveDispositionLifecycleConflict, nil
-	}
-	if state.Running > 0 || state.WaitingQuestions > 0 {
-		return ManualMoveDispositionAutoInterruptible, nil
-	}
-	if quiescent {
-		return ManualMoveDispositionQuiescent, nil
-	}
-	return ManualMoveDispositionLifecycleConflict, nil
 }
 
 // Recover marks any executable Current Nodes found at process startup as
@@ -662,19 +622,10 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		executionState, err := c.authority.CurrentWorkflowTaskExecutionState(approval.Source.TaskID)
-		if err != nil {
-			return workflowstore.PendingApprovalApplyResult{}, err
-		}
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(approval.Source.TaskID); err != nil {
 			c.mu.Unlock()
 			return workflowstore.PendingApprovalApplyResult{}, err
-		}
-		if executionState.Running != 0 || executionState.Queued != 0 ||
-			executionState.WaitingQuestions != 0 || executionState.WaitingApprovals != 0 {
-			c.mu.Unlock()
-			return workflowstore.PendingApprovalApplyResult{}, ErrTaskExecutionNotQuiescent
 		}
 		c.mu.Unlock()
 
@@ -795,53 +746,9 @@ func (c *CurrentNodeController) EnsureTaskQuiescent(taskID workflow.TaskID) erro
 	if taskID == "" {
 		return errors.New("workflow task id is required")
 	}
-	state, err := c.authority.CurrentWorkflowTaskExecutionState(taskID)
-	if err != nil {
-		return err
-	}
-	if !workflowTaskExecutionStateQuiescent(state) {
-		return ErrTaskExecutionNotQuiescent
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ensureTaskQuiescentLocked(taskID)
-}
-
-// CurrentTaskQuiescence returns an immutable view of the same controller-owned
-// Quiescence state enforced by Task Delete.
-func (c *CurrentNodeController) CurrentTaskQuiescence(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {
-	if c == nil {
-		return nil, errors.New("current node workflow controller is required")
-	}
-	executionStates := make(map[workflow.TaskID]sessionruntime.WorkflowTaskExecutionState, len(taskIDs))
-	for _, taskID := range taskIDs {
-		if taskID == "" {
-			return nil, errors.New("workflow task id is required")
-		}
-		state, err := c.authority.CurrentWorkflowTaskExecutionState(taskID)
-		if err != nil {
-			return nil, err
-		}
-		executionStates[taskID] = state
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	quiescence := make(map[workflow.TaskID]bool, len(taskIDs))
-	for _, taskID := range taskIDs {
-		quiescent, err := c.taskQuiescentLocked(taskID)
-		if err != nil {
-			return nil, err
-		}
-		quiescence[taskID] = quiescent && workflowTaskExecutionStateQuiescent(executionStates[taskID])
-	}
-	return quiescence, nil
-}
-
-func workflowTaskExecutionStateQuiescent(state sessionruntime.WorkflowTaskExecutionState) bool {
-	return state.Running == 0 &&
-		state.WaitingQuestions == 0 &&
-		state.WaitingApprovals == 0 &&
-		state.Queued == 0
 }
 
 func (c *CurrentNodeController) ensureTaskQuiescentLocked(taskID workflow.TaskID) error {
@@ -852,13 +759,6 @@ func (c *CurrentNodeController) ensureTaskQuiescentLocked(taskID workflow.TaskID
 		return ErrTaskExecutionNotQuiescent
 	}
 	return nil
-}
-
-func (c *CurrentNodeController) taskQuiescentLocked(taskID workflow.TaskID) (bool, error) {
-	if c.closed {
-		return false, errors.New("current node workflow controller is closed")
-	}
-	return c.taskExecutionQuiescentLocked(taskID), nil
 }
 
 func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.TaskID) bool {

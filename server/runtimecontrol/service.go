@@ -21,7 +21,7 @@ import (
 )
 
 type RuntimeActivityResolver interface {
-	RuntimeReadModelSnapshot(ctx context.Context, sessionID string) (runtimeactivity.ResponseSnapshot, error)
+	RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error)
 }
 
 type sessionIdentityPublisher interface {
@@ -537,10 +537,10 @@ func (s *Service) interrupt(ctx context.Context, sessionID string) (serverapi.Ru
 }
 
 func (s *Service) runtimeInterruptResponse(ctx context.Context, sessionID string) (serverapi.RuntimeInterruptResponse, error) {
-	var snapshot runtimeactivity.ResponseSnapshot
+	var snapshot clientui.RuntimeReadModelUpdate
 	var err error
 	if s.activity != nil {
-		snapshot, err = s.activity.RuntimeReadModelSnapshot(ctx, sessionID)
+		snapshot, err = s.activity.RuntimeReadModelFeedSnapshot(ctx, sessionID)
 	} else {
 		err = errors.New("runtime activity resolver is unavailable")
 	}

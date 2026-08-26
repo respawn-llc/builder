@@ -210,46 +210,30 @@ func ChatSettingsStateFromMeta(meta Meta) (ChatSettingsState, error) {
 	return chatSettingsStateFromNormalizedMeta(meta), nil
 }
 
-func (s *Store) MutateChatSettings(mutation ChatSettingsMutation) (ChatSettingsMutationResult, error) {
+// ProjectChatSettingsMutation applies Chat settings domain rules to an
+// immutable Meta value without persisting it.
+func ProjectChatSettingsMutation(meta Meta, mutation ChatSettingsMutation) (Meta, ChatSettingsMutationResult, error) {
 	prepared, err := prepareChatSettingsMutation(mutation)
 	if err != nil {
-		return ChatSettingsMutationResult{}, err
+		return Meta{}, ChatSettingsMutationResult{}, err
 	}
-	if s == nil {
-		return ChatSettingsMutationResult{}, errors.New("Session store is required")
-	}
-
-	s.mutationMu.Lock()
-	defer s.mutationMu.Unlock()
-	s.mu.Lock()
-
-	currentMeta := cloneMeta(s.meta)
+	currentMeta := cloneMeta(meta)
 	if err := normalizeMetaContinuation(&currentMeta); err != nil {
-		s.mu.Unlock()
-		return ChatSettingsMutationResult{}, err
+		return Meta{}, ChatSettingsMutationResult{}, err
 	}
 	if err := normalizeMetaChatSettings(&currentMeta); err != nil {
-		s.mu.Unlock()
-		return ChatSettingsMutationResult{}, err
+		return Meta{}, ChatSettingsMutationResult{}, err
 	}
 	current := chatSettingsStateFromNormalizedMeta(currentMeta)
 	next, err := applyChatSettingsMutation(current, prepared, currentMeta.Locked != nil)
 	if err != nil {
-		s.mu.Unlock()
-		return ChatSettingsMutationResult{State: current}, err
+		return Meta{}, ChatSettingsMutationResult{State: current}, err
 	}
 	if chatSettingsStatesEqual(current, next) {
-		s.mu.Unlock()
-		return ChatSettingsMutationResult{State: current}, nil
+		return currentMeta, ChatSettingsMutationResult{State: current}, nil
 	}
-	if err := s.requireMetadataPersistenceLocked(); err != nil {
-		s.mu.Unlock()
-		return ChatSettingsMutationResult{State: current}, err
-	}
-
-	checkpoint := s.metadataMutationCheckpointLocked()
-	s.meta.ChatSettings = cloneChatSettingsOverrides(next.Settings)
-	continuation := cloneContinuationContext(s.meta.Continuation)
+	currentMeta.ChatSettings = cloneChatSettingsOverrides(next.Settings)
+	continuation := cloneContinuationContext(currentMeta.Continuation)
 	if continuation == nil {
 		continuation = &ContinuationContext{}
 	}
@@ -262,23 +246,43 @@ func (s *Store) MutateChatSettings(mutation ChatSettingsMutation) (ChatSettingsM
 	if prepared.agent != nil {
 		continuation.OpenAIBaseURL = nil
 	}
-	normalizedContinuation, err := NormalizeContinuationContext(*continuation)
+	currentMeta.Continuation, err = NormalizeContinuationContext(*continuation)
 	if err != nil {
-		s.mu.Unlock()
-		return ChatSettingsMutationResult{State: current}, err
+		return Meta{}, ChatSettingsMutationResult{State: current}, err
 	}
-	s.meta.Continuation = normalizedContinuation
+	return currentMeta, ChatSettingsMutationResult{Changed: true, State: next}, nil
+}
+
+func (s *Store) MutateChatSettings(mutation ChatSettingsMutation) (ChatSettingsMutationResult, error) {
+	if s == nil {
+		return ChatSettingsMutationResult{}, errors.New("Session store is required")
+	}
+
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	s.mu.Lock()
+
+	projected, result, err := ProjectChatSettingsMutation(s.meta, mutation)
+	if err != nil || !result.Changed {
+		s.mu.Unlock()
+		return result, err
+	}
+	if err := s.requireMetadataPersistenceLocked(); err != nil {
+		s.mu.Unlock()
+		return ChatSettingsMutationResult{State: result.State}, err
+	}
+
+	checkpoint := s.metadataMutationCheckpointLocked()
+	s.meta.ChatSettings = projected.ChatSettings
+	s.meta.Continuation = projected.Continuation
 	s.meta.UpdatedAt = storeTimestamp(s.options)
 
 	receipt, err := s.persistMetadataMutationWithCommitReceiptLocked(checkpoint)
 	if !receipt.Committed {
-		return ChatSettingsMutationResult{CommitReceipt: receipt, State: current}, err
+		result.Changed = false
 	}
-	return ChatSettingsMutationResult{
-		CommitReceipt: receipt,
-		Changed:       true,
-		State:         next,
-	}, err
+	result.CommitReceipt = receipt
+	return result, err
 }
 
 func normalizeMetaChatSettings(meta *Meta) error {

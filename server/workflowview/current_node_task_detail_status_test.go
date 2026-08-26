@@ -20,15 +20,11 @@ func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	calls := 0
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		countingTaskStatusLiveObservationSource{
-			source: currentNodeViewStatusObservationSource{
-				authority:  fixture.authority,
-				quiescence: fixture.quiescence,
-			},
-			calls: &calls,
+			source: fixture.quiescence,
+			calls:  &calls,
 		},
 	)
 	if err != nil {
@@ -250,7 +246,6 @@ func taskDetailWithObservation(
 ) *TaskDetail {
 	t.Helper()
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{observation: observation},
@@ -581,7 +576,6 @@ func TestTaskListPreservesAllLiveAttentionThroughCanonicalStatus(t *testing.T) {
 	started := fixture.startTask(t, "Live question and approval")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
@@ -661,7 +655,6 @@ func TestTaskListProjectsDurableDoneRunningAndQueued(t *testing.T) {
 		t.Fatalf("CompleteCurrentNode: %v", err)
 	}
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{

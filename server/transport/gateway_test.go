@@ -342,6 +342,7 @@ func activateGatewayController(t *testing.T, appCore *core.Core, sessionID strin
 		settings.ProviderOverride = "openai"
 	}
 	response, err := appCore.SessionRuntimeClient().ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:       "activate-" + strings.TrimSpace(sessionID),
 		SessionID:             strings.TrimSpace(sessionID),
 		OwnerID:               "gateway-test-owner",
 		ActiveSettings:        settings,
@@ -361,8 +362,9 @@ func activateGatewayController(t *testing.T, appCore *core.Core, sessionID strin
 func releaseGatewayController(t *testing.T, appCore *core.Core, attachment serverapi.SessionRuntimeAttachment) {
 	t.Helper()
 	if _, err := appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		Attachment: attachment,
-		OwnerID:    "gateway-test-owner",
+		ClientRequestID: "release-" + strings.TrimSpace(attachment.SessionID),
+		Attachment:      attachment,
+		OwnerID:         "gateway-test-owner",
 	}); err != nil {
 		t.Fatalf("ReleaseSessionRuntime: %v", err)
 	}
@@ -377,6 +379,7 @@ func gatewayRuntimeActivateRequest(appCore *core.Core, sessionID string, request
 		settings.ProviderOverride = "openai"
 	}
 	return serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:       strings.TrimSpace(requestID),
 		SessionID:             strings.TrimSpace(sessionID),
 		ActiveSettings:        settings,
 		QuestionsEnabled:      textutil.Value(true),
@@ -472,10 +475,11 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 	var successor serverapi.SessionRuntimeActivateResponse
 	callGateway(t, conn, "activate-runtime-2", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime-2"), &successor)
 	callGateway(t, conn, "release-runtime-1", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
-		Attachment:  activation.Attachment,
-		OwnerID:     "client-spoof",
-		DropOwner:   true,
-		ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		ClientRequestID: "release-runtime-1",
+		Attachment:      activation.Attachment,
+		OwnerID:         "client-spoof",
+		DropOwner:       true,
+		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	}, nil)
 	select {
 	case request := <-counter.releaseRequests:
@@ -529,10 +533,11 @@ func TestGatewayDetachOnlyReleaseInjectsOwnerAndSkipsDisconnectRelease(t *testin
 	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
 	var release serverapi.SessionRuntimeReleaseResponse
 	callGateway(t, conn, "release-runtime", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
-		Attachment:  activation.Attachment,
-		OwnerID:     "client-spoof",
-		DropOwner:   true,
-		ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		ClientRequestID: "release-runtime",
+		Attachment:      activation.Attachment,
+		OwnerID:         "client-spoof",
+		DropOwner:       true,
+		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	}, &release)
 	if release.Released || !release.Active {
 		t.Fatalf("detach-only release response = %+v, want active unreleased response", release)
@@ -580,9 +585,10 @@ func TestGatewayCloseIfIdleReleasePropagatesPolicy(t *testing.T) {
 	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
 	var release serverapi.SessionRuntimeReleaseResponse
 	callGateway(t, conn, "release-runtime", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
-		Attachment:  activation.Attachment,
-		DropOwner:   true,
-		ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
+		ClientRequestID: "release-runtime",
+		Attachment:      activation.Attachment,
+		DropOwner:       true,
+		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
 	}, &release)
 	if !release.Released {
 		t.Fatalf("close-if-idle release response = %+v, want released", release)
@@ -1233,10 +1239,10 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 	if _, err := remote.GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: foreignSession.Meta().SessionID}); err == nil {
 		t.Fatal("expected foreign-project final answer access to be rejected")
 	}
-	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{SessionID: foreignSession.Meta().SessionID, Input: "should fail"}); err == nil {
+	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: "persist-foreign", SessionID: foreignSession.Meta().SessionID, Input: "should fail"}); err == nil {
 		t.Fatal("expected foreign-project session mutation to be rejected")
 	}
-	if _, err := remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{SessionID: foreignSession.Meta().SessionID, WorkspaceRoot: resolvedA.Config.WorkspaceRoot}); err == nil {
+	if _, err := remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: "retarget-foreign", SessionID: foreignSession.Meta().SessionID, WorkspaceRoot: resolvedA.Config.WorkspaceRoot}); err == nil {
 		t.Fatal("expected foreign-project session retarget to be rejected")
 	}
 	foreignSessionID, err := runtimeids.ParseSessionID(foreignSession.Meta().SessionID)
@@ -1422,6 +1428,7 @@ func TestGatewayAllowsOptionalSessionLifecycleRequestsWithoutSessionID(t *testin
 	}
 
 	resolvedTransition, err := remote.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
+		ClientRequestID: "new-session-no-current-session",
 		Transition: serverapi.SessionTransition{
 			Action:        "new_session",
 			InitialPrompt: "hello",
@@ -1459,8 +1466,9 @@ func TestGatewayComposerDraftRoundTripKeepsServerAvailable(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		SessionID: store.Meta().SessionID,
-		Input:     "visible draft",
+		ClientRequestID: "gateway-composer-draft",
+		SessionID:       store.Meta().SessionID,
+		Input:           "visible draft",
 	}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}

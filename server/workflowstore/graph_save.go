@@ -141,9 +141,7 @@ func (s *Store) RunWorkflowGraphSaveOperation(
 }
 
 func (s *Store) PreviewWorkflowGraphSave(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
-	return s.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (WorkflowGraphSaveResult, error) {
-		return s.previewWorkflowGraphSave(ctx, req)
-	})
+	return s.previewWorkflowGraphSave(ctx, req)
 }
 
 func (s *Store) previewWorkflowGraphSave(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {

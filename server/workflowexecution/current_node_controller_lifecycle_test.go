@@ -18,23 +18,6 @@ import (
 	"core/shared/runtimeids"
 )
 
-func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
-	cause := errors.New("automatic assignment failed")
-	controller := &CurrentNodeController{workerErr: cause}
-	taskID := workflow.TaskID("task-board-read")
-
-	quiescence, err := controller.CurrentTaskQuiescence([]workflow.TaskID{taskID})
-	if err != nil {
-		t.Fatalf("CurrentTaskQuiescence: %v", err)
-	}
-	if !quiescence[taskID] {
-		t.Fatalf("task quiescence = %+v, want quiescent controller snapshot", quiescence)
-	}
-	if err := controller.EnsureTaskQuiescent(taskID); !errors.Is(err, cause) {
-		t.Fatalf("EnsureTaskQuiescent error = %v, want worker failure %v", err, cause)
-	}
-}
-
 func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsActive(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-resume-active-session", "node-implementation")

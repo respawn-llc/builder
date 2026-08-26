@@ -39,7 +39,7 @@ type runtimePublisher interface {
 }
 
 type processSource interface {
-	List() []shelltool.Snapshot
+	CurrentSnapshots() []shelltool.Snapshot
 }
 
 type ServiceOptions struct {
@@ -2147,7 +2147,7 @@ func (s *Service) backgroundProcessBlockers(worktreeRoot string) []string {
 	if err != nil {
 		return []string{strings.TrimSpace(worktreeRoot)}
 	}
-	entries := s.processes.List()
+	entries := s.processes.CurrentSnapshots()
 	blockers := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.Running {
