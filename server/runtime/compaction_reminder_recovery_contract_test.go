@@ -20,11 +20,11 @@ func TestCompactionSoonReminderRemainsSingleShotAcrossAdmissionToggle(t *testing
 	})
 	seedReminderUsage(t, engine)
 
-	engine.SetAutoCompactionEnabled(false)
+	engine.SetAutoCompactionEnabled(t.Context(), false)
 	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "disabled"); err != nil {
 		t.Fatalf("append disabled reminder: %v", err)
 	}
-	engine.SetAutoCompactionEnabled(true)
+	engine.SetAutoCompactionEnabled(t.Context(), true)
 	stepID := runtimeTestStepID("enabled")
 	if err := runTestActiveStep(engine, stepID, func() error {
 		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), stepID)

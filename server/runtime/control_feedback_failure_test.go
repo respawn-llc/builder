@@ -10,7 +10,7 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
+func TestSetFastModeWithCommittedFeedbackKeepsCommittedSettingOnAppendFailure(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{
@@ -23,20 +23,29 @@ func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 	changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(context.Background(), true, func(bool) string {
 		return "feedback"
 	})
-	if err == nil || receipt.Committed || changed || engine.FastModeEnabled() {
+	if err == nil || !receipt.Committed || !changed || !engine.FastModeEnabled() {
 		t.Fatalf(
-			"uncommitted fast-mode feedback mutated runtime state: receipt=%+v changed=%t enabled=%t error=%v",
+			"committed fast-mode setting was not retained after feedback failure: receipt=%+v changed=%t enabled=%t error=%v",
 			receipt,
 			changed,
 			engine.FastModeEnabled(),
 			err,
 		)
 	}
+	requireSessionFastModeOverride(t, store, true)
 
 	if err := blocker.Restore(); err != nil {
 		t.Fatalf("restore event-log appends: %v", err)
 	}
 	assertBoundedControlFeedbackCount(t, store, 0)
+}
+
+func requireSessionFastModeOverride(t *testing.T, store *session.Store, want bool) {
+	t.Helper()
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.Fast == nil || *meta.ChatSettings.Fast != want {
+		t.Fatalf("Session Fast Mode override = %+v, want %t", meta.ChatSettings, want)
+	}
 }
 
 func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {

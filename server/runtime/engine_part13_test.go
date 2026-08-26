@@ -51,7 +51,7 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 	}
 	restoreStep()
 
-	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
 	if err != nil {
 		t.Fatalf("disable auto-compaction: %v", err)
 	}

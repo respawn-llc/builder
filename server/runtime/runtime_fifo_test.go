@@ -871,7 +871,7 @@ func TestActiveSessionRuntimeFIFOsAreIndependent(t *testing.T) {
 
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- second.SetThinkingLevel("low")
+		secondDone <- second.SetThinkingLevel(t.Context(), "low")
 	}()
 	select {
 	case err := <-secondDone:
@@ -990,7 +990,7 @@ func TestForegroundShellReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 
 	settingDone := make(chan error, 1)
 	go func() {
-		settingDone <- engine.SetThinkingLevel("low")
+		settingDone <- engine.SetThinkingLevel(t.Context(), "low")
 	}()
 	select {
 	case err := <-settingDone:
@@ -1122,7 +1122,7 @@ func TestWorktreeTransitionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 	if _, err := engine.QueueUserMessageForAutoDrain("accepted while Worktree holds eligibility"); err != nil {
 		t.Fatalf("accept Human input while Worktree transition is held: %v", err)
 	}
-	if err := engine.SetThinkingLevel("low"); err != nil {
+	if err := engine.SetThinkingLevel(t.Context(), "low"); err != nil {
 		t.Fatalf("apply setting while Worktree transition is held: %v", err)
 	}
 	if got := fakeClientCallCount(client); got != 0 {
@@ -1247,7 +1247,7 @@ func TestManualCompactionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for manual compaction")
 	}
-	if err := engine.SetThinkingLevel("low"); err != nil {
+	if err := engine.SetThinkingLevel(t.Context(), "low"); err != nil {
 		t.Fatalf("apply setting while manual compaction is held: %v", err)
 	}
 	close(client.release)

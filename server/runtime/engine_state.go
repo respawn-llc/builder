@@ -331,19 +331,19 @@ func (e *Engine) applyStreamingStateMutationRaw(mutate func(*transcriptRuntimeSt
 	return e.steerOrderedRaw(sessionSteeringProvenance(), steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
-func (e *Engine) SetSessionName(name string) error {
-	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+func (e *Engine) SetSessionName(ctx context.Context, name string) error {
+	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
 		return struct{}{}, e.store.SetName(name)
 	})
 	return err
 }
 
-func (e *Engine) SetThinkingLevel(level string) error {
+func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 	normalized := strings.TrimSpace(level)
 	if normalized == "" {
 		return errors.New("thinking level is required")
 	}
-	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
 		return struct{}{}, e.setThinkingValue(normalized)
 	})
 	return err
@@ -408,8 +408,8 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 	return changed
 }
 
-func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+func (e *Engine) SetAutoCompactionEnabled(ctx context.Context, enabled bool) (bool, bool, error) {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
 		changed bool
 		enabled bool
 	}, error) {

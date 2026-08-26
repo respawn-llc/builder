@@ -55,7 +55,7 @@ func TestTriggerHandoffRejectsUnavailableAdmissionWithoutQueueing(t *testing.T) 
 			name: "auto compaction disabled",
 			setup: func(engine *Engine) {
 				engine.compactionRuntimeState().SetSoonReminderIssued(true)
-				engine.SetAutoCompactionEnabled(false)
+				engine.SetAutoCompactionEnabled(context.Background(), false)
 			},
 			want: errHandoffDisabledByUser,
 		},

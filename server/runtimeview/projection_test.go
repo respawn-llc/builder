@@ -227,7 +227,7 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 		t.Fatalf("append assistant message: %v", err)
 	}
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	if err := eng.SetThinkingLevel("high"); err != nil {
+	if err := eng.SetThinkingLevel(t.Context(), "high"); err != nil {
 		t.Fatalf("set thinking level: %v", err)
 	}
 	if changed, err := eng.SetFastModeEnabled(true); err != nil {
@@ -235,7 +235,7 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	} else if !changed {
 		t.Fatal("expected fast mode enable to report changed=true")
 	}
-	if changed, enabled, err := eng.SetAutoCompactionEnabled(false); err != nil {
+	if changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false); err != nil {
 		t.Fatalf("disable auto-compaction: %v", err)
 	} else if !changed || enabled {
 		t.Fatalf("expected auto-compaction disabled, changed=%v enabled=%v", changed, enabled)

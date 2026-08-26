@@ -486,7 +486,7 @@ func TestThinkingLevelCanChangeAfterLock(t *testing.T) {
 	if _, err := eng.SubmitUserMessage(context.Background(), "hi"); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
-	if err := eng.SetThinkingLevel("low"); err != nil {
+	if err := eng.SetThinkingLevel(t.Context(), "low"); err != nil {
 		t.Fatalf("set thinking level: %v", err)
 	}
 	if _, err := eng.SubmitUserMessage(context.Background(), "again"); err != nil {
@@ -529,7 +529,7 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 	)
 
 	t.Run("blank thinking level", func(t *testing.T) {
-		if err := eng.SetThinkingLevel(" "); err == nil {
+		if err := eng.SetThinkingLevel(t.Context(), " "); err == nil {
 			t.Fatal("expected blank thinking level error")
 		}
 		if got := eng.ThinkingLevel(); got != "high" {
@@ -708,7 +708,7 @@ func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	cfg := Config{Model: "gpt-5"}
 	eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
 
-	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
 	if err != nil {
 		t.Fatalf("disable auto-compaction: %v", err)
 	}
@@ -732,7 +732,7 @@ func TestSetAutoCompactionEnabledRejectsAfterClose(t *testing.T) {
 	if err := eng.Close(); err != nil {
 		t.Fatalf("close engine: %v", err)
 	}
-	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
 	if !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("disable auto-compaction after close error = %v, want ErrEngineClosed", err)
 	}
@@ -793,7 +793,7 @@ func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) 
 	}
 	settingDone := make(chan settingResult, 1)
 	go func() {
-		changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+		changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
 		settingDone <- settingResult{changed: changed, enabled: enabled, err: err}
 	}()
 	select {

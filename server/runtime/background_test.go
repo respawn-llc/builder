@@ -185,7 +185,7 @@ func TestBackgroundFinalAnswerAppliesRuntimeMutationAtStepBoundary(t *testing.T)
 
 	mutationDone := make(chan error, 1)
 	go func() {
-		mutationDone <- engine.SetThinkingLevel("low")
+		mutationDone <- engine.SetThinkingLevel(t.Context(), "low")
 	}()
 	select {
 	case err := <-mutationDone:
@@ -210,7 +210,7 @@ func TestBackgroundFinalAnswerAppliesRuntimeMutationAtStepBoundary(t *testing.T)
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for background final answer")
 	}
-	if err := engine.SetThinkingLevel("medium"); err != nil {
+	if err := engine.SetThinkingLevel(t.Context(), "medium"); err != nil {
 		t.Fatalf("apply Runtime mutation after background final answer: %v", err)
 	}
 }

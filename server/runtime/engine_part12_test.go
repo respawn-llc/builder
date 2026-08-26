@@ -104,7 +104,7 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
 
-	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
 	if err != nil {
 		t.Fatalf("disable auto-compaction: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 		t.Fatalf("expected only seed entry while disabled, got %+v", snap.Entries)
 	}
 
-	changed, enabled, err = eng.SetAutoCompactionEnabled(true)
+	changed, enabled, err = eng.SetAutoCompactionEnabled(t.Context(), true)
 	if err != nil {
 		t.Fatalf("enable auto-compaction: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestCompactionSoonReminderSkipsPreciseCountingWhenSuppressed(t *testing.T) 
 			eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
 			if tt.disableAuto {
-				changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+				changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
 				if err != nil {
 					t.Fatalf("disable auto-compaction: %v", err)
 				}

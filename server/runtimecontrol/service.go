@@ -287,8 +287,8 @@ func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSe
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-		if err := engine.SetSessionName(req.Name); err != nil {
+	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		if err := engine.SetSessionName(callbackCtx, req.Name); err != nil {
 			return err
 		}
 		if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
@@ -302,8 +302,8 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-		if err := engine.SetThinkingLevel(req.Level); err != nil {
+	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		if err := engine.SetThinkingLevel(callbackCtx, req.Level); err != nil {
 			return err
 		}
 		return s.publishSessionStatus(req.SessionID)
@@ -339,13 +339,13 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 		return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, err
 	}
 	var resp serverapi.RuntimeSetAutoCompactionEnabledResponse
-	err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
 		if !req.Enabled {
-			if err := s.rejectWorkflowAutoCompactionDisable(ctx, req.SessionID, engine); err != nil {
+			if err := s.rejectWorkflowAutoCompactionDisable(callbackCtx, req.SessionID, engine); err != nil {
 				return err
 			}
 		}
-		changed, enabled, err := engine.SetAutoCompactionEnabled(req.Enabled)
+		changed, enabled, err := engine.SetAutoCompactionEnabled(callbackCtx, req.Enabled)
 		if err != nil {
 			return err
 		}

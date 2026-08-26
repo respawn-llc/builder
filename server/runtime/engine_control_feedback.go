@@ -54,17 +54,23 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(ctx context.Context, en
 		changed bool
 		receipt session.CommitReceipt
 	}, error) {
-		changed := e.localFastModeEnabledChange(enabled)
-		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(changed))
-		if receipt.Committed {
-			e.applyFastModeEnabled(enabled)
-		} else {
-			changed = false
+		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{Fast: &enabled})
+		if settings.Changed && !settings.Committed {
+			return struct {
+				changed bool
+				receipt session.CommitReceipt
+			}{receipt: settings.CommitReceipt}, settingsErr
 		}
+		changed := settings.Changed
+		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(changed))
+		if settings.Committed {
+			receipt = settings.CommitReceipt
+		}
+		e.applyFastModeEnabled(enabled)
 		return struct {
 			changed bool
 			receipt session.CommitReceipt
-		}{changed: changed, receipt: receipt}, feedbackErr
+		}{changed: changed, receipt: receipt}, errors.Join(settingsErr, feedbackErr)
 	})
 	return result.changed, result.receipt, err
 }

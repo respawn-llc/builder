@@ -147,6 +147,59 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 	}
 }
 
+func TestFastModePersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	engine := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{
+		ProviderID:           "openai",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   true,
+	}}, Config{Model: "gpt-5.3-codex"})
+	entered, release := gate.BlockNext()
+	defer release()
+
+	result := make(chan struct {
+		changed bool
+		receipt session.CommitReceipt
+		err     error
+	}, 1)
+	go func() {
+		changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(t.Context(), true, func(bool) string {
+			return "feedback"
+		})
+		result <- struct {
+			changed bool
+			receipt session.CommitReceipt
+			err     error
+		}{changed: changed, receipt: receipt, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Fast Mode metadata persistence")
+	}
+	requireSessionFastModeOverride(t, store, true)
+	if engine.FastModeEnabled() {
+		t.Fatal("Fast Mode applied to live Runtime before Session metadata persistence completed")
+	}
+	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
+		t.Fatalf("Fast Mode feedback committed before Session metadata persistence: %+v", rows)
+	}
+
+	release()
+	select {
+	case got := <-result:
+		if got.err != nil || !got.changed || !got.receipt.Committed {
+			t.Fatalf("SetFastModeEnabledWithCommittedFeedback = %+v", got)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Fast Mode completion")
+	}
+	if !engine.FastModeEnabled() {
+		t.Fatal("Fast Mode was not applied after Session metadata persistence")
+	}
+}
+
 func TestCommittedControlFeedbackCallerCancellationStopsOnlyWait(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
@@ -162,15 +215,7 @@ func TestCommittedControlFeedbackCallerCancellationStopsOnlyWait(t *testing.T) {
 		})
 		result <- err
 	}()
-	deadline := time.After(runtimeTestSynchronizationTimeout)
-	for !engine.HasPendingRuntimeOperations() {
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for accepted control mutation")
-		default:
-			time.Sleep(time.Millisecond)
-		}
-	}
+	waitForPendingRuntimeOperation(t, engine)
 
 	cancel()
 	select {
@@ -193,6 +238,89 @@ func TestCommittedControlFeedbackCallerCancellationStopsOnlyWait(t *testing.T) {
 	}
 	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 1 {
 		t.Fatalf("accepted control feedback projected rows: %+v", rows)
+	}
+}
+
+func TestRuntimeSetterCallerCancellationStopsOnlyWait(t *testing.T) {
+	tests := []struct {
+		name    string
+		apply   func(context.Context, *Engine) error
+		applied func(*Engine) bool
+	}{
+		{
+			name: "Session name",
+			apply: func(ctx context.Context, engine *Engine) error {
+				return engine.SetSessionName(ctx, "renamed")
+			},
+			applied: func(engine *Engine) bool { return engine.SessionName() == "renamed" },
+		},
+		{
+			name: "Thinking",
+			apply: func(ctx context.Context, engine *Engine) error {
+				return engine.SetThinkingLevel(ctx, "low")
+			},
+			applied: func(engine *Engine) bool { return engine.ThinkingLevel() == "low" },
+		},
+		{
+			name: "Auto-compaction",
+			apply: func(ctx context.Context, engine *Engine) error {
+				_, _, err := engine.SetAutoCompactionEnabled(ctx, false)
+				return err
+			},
+			applied: func(engine *Engine) bool { return !engine.AutoCompactionEnabled() },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+				Model:         "gpt-5",
+				ThinkingLevel: "high",
+			})
+			if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+				t.Fatalf("pause Runtime FIFO: %v", err)
+			}
+
+			caller, cancel := context.WithCancel(t.Context())
+			result := make(chan error, 1)
+			go func() {
+				result <- test.apply(caller, engine)
+			}()
+			waitForPendingRuntimeOperation(t, engine)
+			cancel()
+			select {
+			case err := <-result:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("canceled setter wait error = %v, want canceled", err)
+				}
+			case <-time.After(runtimeTestSynchronizationTimeout):
+				t.Fatal("canceled setter caller remained blocked")
+			}
+			if test.applied(engine) {
+				t.Fatal("setter applied before the paused Runtime FIFO drained")
+			}
+
+			if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+				t.Fatalf("drain accepted setter: %v", err)
+			}
+			if !test.applied(engine) {
+				t.Fatal("accepted setter did not continue after caller cancellation")
+			}
+		})
+	}
+}
+
+func waitForPendingRuntimeOperation(t *testing.T, engine *Engine) {
+	t.Helper()
+	deadline := time.After(runtimeTestSynchronizationTimeout)
+	for !engine.HasPendingRuntimeOperations() {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for accepted Runtime operation")
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 
