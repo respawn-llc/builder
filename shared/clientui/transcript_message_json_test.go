@@ -9,6 +9,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
+	"core/shared/worktreecontract"
 )
 
 func TestTranscriptMessageJSONUsesTaggedPayloadEnvelope(t *testing.T) {
@@ -186,7 +187,7 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		NewTranscriptEvent(TranscriptGoalStatus{}),
 		NewTranscriptEvent(TranscriptBackgroundActivity{ActivityID: transcriptTestBackgroundActivityID(t), ProcessID: "process-1", OwnerRunID: transcriptTestRunID(t), OwnerStepID: stepID, Lifecycle: BackgroundLifecycleBackgrounded, Command: "go test", Workdir: "/repo"}),
 		NewTranscriptEvent(prompt),
-		NewTranscriptEvent(TranscriptWorktreeTransitionOutcome{OperationID: NewWorktreeTransitionID(), Transition: WorktreeTransitionEnter, State: WorktreeTransitionCompleted}),
+		NewTranscriptEvent(TranscriptWorktreeTransitionOutcome{OperationID: worktreecontract.NewOperationID(), Transition: WorktreeTransitionEnter, State: WorktreeTransitionCompleted}),
 		NewTranscriptEvent(TranscriptOperationalDiagnostic{Code: OperationalDiagnosticSleepGuardFailed, Detail: "failed"}),
 		NewTranscriptEvent(TranscriptLiveRunResult{Status: LiveRunStatusCompleted, ResultKind: LiveRunResultAssistantFinalAnswer, FinalAnswer: &final, StartedAt: time.Unix(1_700_000_000, 0), FinishedAt: time.Unix(1_700_000_001, 0)}),
 	}

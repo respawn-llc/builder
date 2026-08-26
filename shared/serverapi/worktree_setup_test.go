@@ -71,8 +71,8 @@ func TestWorktreeSetupEventValidation(t *testing.T) {
 }
 
 func TestSetupRecoveryDetailValidationAtAPIContract(t *testing.T) {
-	valid := worktreecontract.SetupRecoveryDetail[WorktreeSetupOperationID, workflowcontract.ExecutionTargetSelection]{
-		SetupOperationID: NewWorktreeSetupOperationID(), Cause: worktreecontract.SetupFailureTargetPreparation,
+	valid := worktreecontract.SetupRecoveryDetail{
+		SetupOperationID: worktreecontract.NewSetupOperationID(), Cause: worktreecontract.SetupFailureTargetPreparation,
 		Diagnostic: "target failed", SetupRequirement: worktreecontract.SetupRequirementRequired,
 		ExecutionTarget: workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeHead},
 	}

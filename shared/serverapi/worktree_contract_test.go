@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/worktreecontract"
 )
 
 func TestWorktreeTopologyEntryRequiresExactlyOneMatchingPayload(t *testing.T) {
@@ -292,7 +293,7 @@ func TestWorktreeDeletePreviewResponseValidatesTopologyOwnedSelectorAndCleanline
 	valid := WorktreeDeletePreviewResponse{
 		Worktree:         entry,
 		DeletionSelector: entry.Missing.Kent.WorktreeID,
-		Cleanliness:      clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean},
+		Cleanliness:      worktreecontract.DirtyState{Kind: worktreecontract.DirtyStateClean},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid deletion preview rejected: %v", err)
@@ -303,8 +304,8 @@ func TestWorktreeDeletePreviewResponseValidatesTopologyOwnedSelectorAndCleanline
 		t.Fatal("deletion preview accepted a selector that does not match topology")
 	}
 	notClean := valid
-	notClean.Cleanliness = clientui.WorktreeDirtyState{
-		Kind:         clientui.WorktreeDirtyStateUnknown,
+	notClean.Cleanliness = worktreecontract.DirtyState{
+		Kind:         worktreecontract.DirtyStateUnknown,
 		UnknownCause: stringPointer("status unavailable"),
 	}
 	if err := notClean.Validate(); err == nil {
@@ -401,13 +402,13 @@ func TestWorktreeWorkspaceListRequestRequiresProjectAndWorkspace(t *testing.T) {
 }
 
 func TestWorktreeTransitionRequestsUseUUIDV4Correlation(t *testing.T) {
-	operationID := NewWorktreeOperationID()
+	operationID := worktreecontract.NewOperationID()
 	if err := operationID.Validate(); err != nil {
 		t.Fatalf("generated operation id rejected: %v", err)
 	}
 	for _, raw := range []string{"", "not-a-uuid", "00000000-0000-0000-0000-000000000000", "11111111-1111-1111-1111-111111111111"} {
-		if _, err := ParseWorktreeOperationID(raw); err == nil {
-			t.Fatalf("ParseWorktreeOperationID(%q) succeeded", raw)
+		if _, err := worktreecontract.ParseOperationID(raw); err == nil {
+			t.Fatalf("ParseOperationID(%q) succeeded", raw)
 		}
 	}
 	var decoded WorktreeScheduledAcknowledgement
@@ -422,7 +423,7 @@ func TestWorktreeTransitionRequestsUseUUIDV4Correlation(t *testing.T) {
 }
 
 func TestWorktreeDeleteResultAndCleanupPoliciesAreDiscriminated(t *testing.T) {
-	operationID := NewWorktreeOperationID()
+	operationID := worktreecontract.NewOperationID()
 	completed := WorktreeDeleteResult{
 		Kind: WorktreeDeleteResultKindCompleted,
 		Completed: &WorktreeDeleteCompletedResult{
@@ -471,24 +472,24 @@ func TestWorktreeDeleteResultAndCleanupPoliciesAreDiscriminated(t *testing.T) {
 }
 
 func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
-	operationID := NewWorktreeOperationID()
+	operationID := worktreecontract.NewOperationID()
 	valid := []interface{ Validate() error }{
 		WorktreeSelectorPreviewRequest{SessionID: "session", Selector: "feature"},
-		WorktreeEnterRequest{TransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
-		WorktreeEnterRequest{TransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
+		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
+		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
 			RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
 		}}, Selector: "feature"},
-		WorktreeLeaveRequest{TransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}},
-		WorktreeLeaveRequest{TransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
+		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}},
+		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
 			RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
 		}}},
 		WorktreeDeleteRequest{
-			TransitionHeader:    WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"},
-			Selector:            "feature",
-			BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
+			WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"},
+			Selector:                 "feature",
+			BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
 		},
 		WorktreeDeleteRequest{
-			TransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
+			WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
 				RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
 			}},
 			Selector:            "feature",
@@ -502,10 +503,10 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	}
 	invalid := []interface{ Validate() error }{
 		WorktreeSelectorPreviewRequest{SessionID: "session"},
-		WorktreeEnterRequest{TransitionHeader: WorktreeTransitionHeader{SessionID: "session"}, Selector: "feature"},
-		WorktreeEnterRequest{TransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{}}, Selector: "feature"},
-		WorktreeLeaveRequest{TransitionHeader: WorktreeTransitionHeader{OperationID: operationID}},
-		WorktreeDeleteRequest{TransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
+		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{SessionID: "session"}, Selector: "feature"},
+		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{}}, Selector: "feature"},
+		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID}},
+		WorktreeDeleteRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
 	}
 	for _, request := range invalid {
 		if err := request.Validate(); err == nil {
@@ -515,7 +516,7 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 }
 
 func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
-	operationID := NewWorktreeOperationID()
+	operationID := worktreecontract.NewOperationID()
 	origin := &RuntimeStepOrigin{
 		RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
 		StepID: "018fdd67-89ab-4cde-8123-456789abc002",
@@ -531,7 +532,7 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 	}{
 		{
 			name:    "enter external",
-			request: WorktreeEnterRequest{TransitionHeader: header(nil), Selector: "feature"},
+			request: WorktreeEnterRequest{WorktreeTransitionHeader: header(nil), Selector: "feature"},
 			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
 				t.Helper()
 				var request WorktreeEnterRequest
@@ -543,7 +544,7 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 		},
 		{
 			name:    "enter model",
-			request: WorktreeEnterRequest{TransitionHeader: header(origin), Selector: "feature"},
+			request: WorktreeEnterRequest{WorktreeTransitionHeader: header(origin), Selector: "feature"},
 			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
 				t.Helper()
 				var request WorktreeEnterRequest
@@ -556,7 +557,7 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 		},
 		{
 			name:    "leave external",
-			request: WorktreeLeaveRequest{TransitionHeader: header(nil)},
+			request: WorktreeLeaveRequest{WorktreeTransitionHeader: header(nil)},
 			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
 				t.Helper()
 				var request WorktreeLeaveRequest
@@ -568,7 +569,7 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 		},
 		{
 			name:    "leave model",
-			request: WorktreeLeaveRequest{TransitionHeader: header(origin)},
+			request: WorktreeLeaveRequest{WorktreeTransitionHeader: header(origin)},
 			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
 				t.Helper()
 				var request WorktreeLeaveRequest
@@ -582,9 +583,9 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 		{
 			name: "delete external",
 			request: WorktreeDeleteRequest{
-				TransitionHeader:    header(nil),
-				Selector:            "feature",
-				BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
+				WorktreeTransitionHeader: header(nil),
+				Selector:                 "feature",
+				BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
 			},
 			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
 				t.Helper()
@@ -598,9 +599,9 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 		{
 			name: "delete model",
 			request: WorktreeDeleteRequest{
-				TransitionHeader:    header(origin),
-				Selector:            "feature",
-				BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
+				WorktreeTransitionHeader: header(origin),
+				Selector:                 "feature",
+				BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
 			},
 			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
 				t.Helper()

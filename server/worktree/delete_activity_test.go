@@ -431,7 +431,7 @@ func TestDeleteWorktreeScheduledCurrentTargetRetargetsOtherSession(t *testing.T)
 		t.Fatalf("DeleteWorktree scheduled result = %+v", result)
 	}
 	outcome := waitForDeleteActivityTransitionOutcome(t, env.publisher)
-	if outcome.OperationID != clientui.WorktreeTransitionID(request.OperationID) || outcome.State != clientui.WorktreeTransitionCompleted {
+	if outcome.OperationID != request.OperationID || outcome.State != clientui.WorktreeTransitionCompleted {
 		t.Fatalf("scheduled delete outcome = %+v, want completed operation %q", outcome, request.OperationID)
 	}
 	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)

@@ -6,6 +6,7 @@ import (
 
 	"core/shared/runtimeids"
 	"core/shared/transcript"
+	"core/shared/worktreecontract"
 )
 
 func TestTranscriptEventDerivesKindFromItsPayload(t *testing.T) {
@@ -130,7 +131,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			return prompt
 		}()), TranscriptMessagePrompt},
 		{"worktree transition outcome", NewTranscriptEvent(TranscriptWorktreeTransitionOutcome{
-			OperationID: NewWorktreeTransitionID(), Transition: WorktreeTransitionEnter,
+			OperationID: worktreecontract.NewOperationID(), Transition: WorktreeTransitionEnter,
 			State: WorktreeTransitionCompleted,
 		}), TranscriptMessageWorktreeTransitionOutcome},
 		{"operational diagnostic", NewTranscriptEvent(TranscriptOperationalDiagnostic{

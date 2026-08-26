@@ -204,16 +204,6 @@ type WorktreeBranchCleanupOutcome struct {
 	Diagnostic *string                          `json:"diagnostic,omitempty"`
 }
 
-type WorktreeOperationID = clientui.WorktreeTransitionID
-
-func NewWorktreeOperationID() WorktreeOperationID {
-	return clientui.NewWorktreeTransitionID()
-}
-
-func ParseWorktreeOperationID(value string) (WorktreeOperationID, error) {
-	return clientui.ParseWorktreeTransitionID(value)
-}
-
 type WorktreeSelectorPreviewRequest struct {
 	SessionID string `json:"session_id"`
 	Selector  string `json:"selector"`
@@ -235,15 +225,15 @@ type WorktreeDeletePreviewRequest struct {
 type WorktreeDeletePreviewResponse struct {
 	Worktree         WorktreeTopologyEntry       `json:"worktree"`
 	DeletionSelector string                      `json:"deletion_selector"`
-	Cleanliness      clientui.WorktreeDirtyState `json:"cleanliness"`
+	Cleanliness      worktreecontract.DirtyState `json:"cleanliness"`
 }
 
 // WorktreeTransitionHeader is the shared execution identity for every
 // operation that may switch a Session's worktree target.
 type WorktreeTransitionHeader struct {
-	OperationID WorktreeOperationID `json:"operation_id"`
-	SessionID   string              `json:"session_id"`
-	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
+	OperationID worktreecontract.OperationID `json:"operation_id"`
+	SessionID   string                       `json:"session_id"`
+	Origin      *RuntimeStepOrigin           `json:"origin,omitempty"`
 }
 
 type RuntimeStepOrigin struct {
@@ -268,7 +258,7 @@ type WorktreeDeleteRequest struct {
 }
 
 type WorktreeScheduledAcknowledgement struct {
-	OperationID WorktreeOperationID `json:"operation_id"`
+	OperationID worktreecontract.OperationID `json:"operation_id"`
 }
 
 type WorktreeDeleteResultKind string
@@ -567,7 +557,7 @@ func (response WorktreeDeletePreviewResponse) Validate() error {
 		return err
 	}
 	if response.Worktree.Variant == WorktreeTopologyVariantMissing &&
-		response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+		response.Cleanliness.Kind != worktreecontract.DirtyStateClean {
 		return errors.New("missing worktree deletion preview must be clean")
 	}
 	return nil

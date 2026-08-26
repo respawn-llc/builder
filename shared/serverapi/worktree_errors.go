@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/worktreecontract"
 )
@@ -128,8 +127,8 @@ func (candidate WorktreeSelectorCandidate) Validate() error {
 }
 
 type WorktreeTransitionPendingError struct {
-	SessionID          string              `json:"session_id"`
-	PendingOperationID WorktreeOperationID `json:"pending_operation_id"`
+	SessionID          string                       `json:"session_id"`
+	PendingOperationID worktreecontract.OperationID `json:"pending_operation_id"`
 }
 
 type WorktreeImmediateTransitionErrorKind string
@@ -197,9 +196,9 @@ func (e *WorktreeTransitionPendingError) RPCErrorData() json.RawMessage {
 		return nil
 	}
 	return marshalRPCErrorData(struct {
-		Type               string              `json:"type"`
-		SessionID          string              `json:"session_id"`
-		PendingOperationID WorktreeOperationID `json:"pending_operation_id"`
+		Type               string                       `json:"type"`
+		SessionID          string                       `json:"session_id"`
+		PendingOperationID worktreecontract.OperationID `json:"pending_operation_id"`
 	}{
 		Type:               "worktree_transition_pending",
 		SessionID:          e.SessionID,
@@ -304,7 +303,7 @@ func (e *WorktreeSetupRetainedError) Validate() error {
 }
 
 type WorktreeDeletePreconditionError struct {
-	DirtyState clientui.WorktreeDirtyState `json:"dirty_state"`
+	DirtyState worktreecontract.DirtyState `json:"dirty_state"`
 }
 
 func (e *WorktreeDeletePreconditionError) Error() string {
@@ -313,7 +312,7 @@ func (e *WorktreeDeletePreconditionError) Error() string {
 		return base
 	}
 	switch e.DirtyState.Kind {
-	case clientui.WorktreeDirtyStateDirty:
+	case worktreecontract.DirtyStateDirty:
 		if e.DirtyState.DirtyFileCount != nil && *e.DirtyState.DirtyFileCount > 0 {
 			return fmt.Sprintf(
 				"%s: %d modified or untracked file(s); force folder removal to continue",
@@ -321,7 +320,7 @@ func (e *WorktreeDeletePreconditionError) Error() string {
 				*e.DirtyState.DirtyFileCount,
 			)
 		}
-	case clientui.WorktreeDirtyStateUnknown:
+	case worktreecontract.DirtyStateUnknown:
 		if e.DirtyState.UnknownCause != nil {
 			cause := strings.TrimSpace(*e.DirtyState.UnknownCause)
 			if cause != "" {
@@ -350,7 +349,7 @@ func (e *WorktreeDeletePreconditionError) RPCErrorData() json.RawMessage {
 	}
 	return marshalRPCErrorData(struct {
 		Type       string                      `json:"type"`
-		DirtyState clientui.WorktreeDirtyState `json:"dirty_state"`
+		DirtyState worktreecontract.DirtyState `json:"dirty_state"`
 	}{
 		Type:       "worktree_delete_precondition",
 		DirtyState: e.DirtyState,
@@ -393,9 +392,9 @@ func DecodeWorktreeRPCError(data json.RawMessage, message string) error {
 		return result
 	case "worktree_transition_pending":
 		var payload struct {
-			Type               string              `json:"type"`
-			SessionID          string              `json:"session_id"`
-			PendingOperationID WorktreeOperationID `json:"pending_operation_id"`
+			Type               string                       `json:"type"`
+			SessionID          string                       `json:"session_id"`
+			PendingOperationID worktreecontract.OperationID `json:"pending_operation_id"`
 		}
 		if err := json.Unmarshal(data, &payload); err != nil {
 			return fallbackWorktreeRPCError(message)
@@ -449,7 +448,7 @@ func DecodeWorktreeRPCError(data json.RawMessage, message string) error {
 	case "worktree_delete_precondition":
 		var payload struct {
 			Type       string                      `json:"type"`
-			DirtyState clientui.WorktreeDirtyState `json:"dirty_state"`
+			DirtyState worktreecontract.DirtyState `json:"dirty_state"`
 		}
 		if err := json.Unmarshal(data, &payload); err != nil {
 			return fallbackWorktreeRPCError(message)

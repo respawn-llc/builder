@@ -21,6 +21,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 type registryRuntimeFakeClient struct{}
@@ -630,7 +631,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	}
 
 	outcome := clientui.WorktreeTransitionOutcome{
-		OperationID: clientui.NewWorktreeTransitionID(),
+		OperationID: worktreecontract.NewOperationID(),
 		Transition:  clientui.WorktreeTransitionEnter,
 		State:       clientui.WorktreeTransitionCompleted,
 	}
@@ -644,13 +645,13 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 
 	dirtyCount := 2
 	failed := clientui.WorktreeTransitionOutcome{
-		OperationID: clientui.NewWorktreeTransitionID(),
+		OperationID: worktreecontract.NewOperationID(),
 		Transition:  clientui.WorktreeTransitionDelete,
 		State:       clientui.WorktreeTransitionFailed,
 		Failure: &clientui.WorktreeTransitionFailure{
 			Diagnostic: "delete precondition",
-			DeletePrecondition: &clientui.WorktreeDirtyState{
-				Kind:           clientui.WorktreeDirtyStateDirty,
+			DeletePrecondition: &worktreecontract.DirtyState{
+				Kind:           worktreecontract.DirtyStateDirty,
 				DirtyFileCount: &dirtyCount,
 			},
 		},
@@ -659,7 +660,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	message = nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageWorktreeTransitionOutcome)
 	projected = transcriptPayload[clientui.TranscriptWorktreeTransitionOutcome](t, message)
 	if projected.DeletePrecondition == nil ||
-		projected.DeletePrecondition.Kind != clientui.WorktreeDirtyStateDirty ||
+		projected.DeletePrecondition.Kind != worktreecontract.DirtyStateDirty ||
 		projected.DeletePrecondition.DirtyFileCount == nil ||
 		*projected.DeletePrecondition.DirtyFileCount != dirtyCount {
 		t.Fatalf("typed delete precondition projection = %+v, want dirty count %d", projected, dirtyCount)

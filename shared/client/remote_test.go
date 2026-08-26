@@ -1304,7 +1304,7 @@ func assertRemoteSessionRetargetError(t *testing.T, err error, source *serverapi
 }
 
 func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
-	operationID := serverapi.NewWorktreeOperationID()
+	operationID := worktreecontract.NewOperationID()
 	for _, source := range remoteTestWorktreeStructuredErrors(operationID) {
 		t.Run(source.Error(), func(t *testing.T) {
 			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
@@ -1330,7 +1330,7 @@ func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
 	}
 }
 
-func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationID) []protocol.StructuredRPCError {
+func remoteTestWorktreeStructuredErrors(operationID worktreecontract.OperationID) []protocol.StructuredRPCError {
 	return []protocol.StructuredRPCError{
 		&serverapi.WorktreeSelectorError{
 			Kind:  serverapi.WorktreeSelectorErrorKindAmbiguous,
@@ -1365,8 +1365,8 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 			Diagnostic: "setup failed",
 		},
 		&serverapi.WorktreeDeletePreconditionError{
-			DirtyState: clientui.WorktreeDirtyState{
-				Kind:           clientui.WorktreeDirtyStateDirty,
+			DirtyState: worktreecontract.DirtyState{
+				Kind:           worktreecontract.DirtyStateDirty,
 				DirtyFileCount: remoteTestIntPointer(2),
 			},
 		},
@@ -1380,7 +1380,7 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 	}
 }
 
-func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protocol.StructuredRPCError, operationID serverapi.WorktreeOperationID) {
+func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protocol.StructuredRPCError, operationID worktreecontract.OperationID) {
 	t.Helper()
 	switch source.(type) {
 	case *serverapi.WorktreeSelectorError:

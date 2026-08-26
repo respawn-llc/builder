@@ -141,7 +141,7 @@ func (s *Service) runWorktreeTransition(
 	)
 	if s.transitionCtx.Err() == nil {
 		outcome := clientui.WorktreeTransitionOutcome{
-			OperationID: clientui.WorktreeTransitionID(request.operationID),
+			OperationID: request.operationID,
 			Transition:  request.kind,
 			State:       clientui.WorktreeTransitionCompleted,
 		}
@@ -151,11 +151,7 @@ func (s *Service) runWorktreeTransition(
 			var precondition *worktreecontract.DeletePreconditionError
 			if errors.As(err, &precondition) {
 				dirtyState := precondition.DirtyState
-				outcome.Failure.DeletePrecondition = &clientui.WorktreeDirtyState{
-					Kind:           dirtyState.Kind,
-					DirtyFileCount: dirtyState.DirtyFileCount,
-					UnknownCause:   dirtyState.UnknownCause,
-				}
+				outcome.Failure.DeletePrecondition = &dirtyState
 			}
 		}
 		s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
