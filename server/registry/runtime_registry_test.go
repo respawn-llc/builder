@@ -958,6 +958,7 @@ func assertNoSleepObserverState(t *testing.T, notifications <-chan bool) {
 func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) {
 	activity := clientui.RuntimeActivity{
 		State:          clientui.RuntimeActivityRegisteredIdle,
+		Reviewer:       clientui.ReviewerActivityInactive,
 		QueueAccepting: true,
 	}
 	if running {

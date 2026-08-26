@@ -440,6 +440,9 @@ func (a *Authority) StopWorkflowExecutions(ctx context.Context) error {
 		executions[running.scope.ID()] = executionHandle{execution: running}
 	})
 	a.mu.Unlock()
+	for _, running := range executions {
+		running.RequestStop()
+	}
 	var stopErrs []error
 	for _, running := range executions {
 		if err := running.Stop(ctx); err != nil {
