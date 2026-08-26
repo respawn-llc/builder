@@ -620,6 +620,33 @@ func TestRuntimeOperationFIFOIdleDrainWaitsForAcceptedWork(t *testing.T) {
 	}
 }
 
+func TestRuntimeOperationFIFOPauseCutoffDetectsAcceptanceAfterIdleDrain(t *testing.T) {
+	fifo := newRuntimeOperationFIFO()
+	t.Cleanup(fifo.Close)
+
+	drainedThrough, err := fifo.drainThrough(t.Context())
+	if err != nil {
+		t.Fatalf("idle drain: %v", err)
+	}
+	applied := submitRuntimeOperation(fifo, func(context.Context) (struct{}, error) {
+		return struct{}{}, nil
+	})
+	if _, err := applied.Await(t.Context()); err != nil {
+		t.Fatalf("accepted Runtime operation: %v", err)
+	}
+	pausedThrough, err := fifo.pauseThrough(t.Context())
+	if err != nil {
+		t.Fatalf("pause after acceptance: %v", err)
+	}
+	if pausedThrough <= drainedThrough {
+		t.Fatalf(
+			"pause cutoff = %d, want newer than preceding drain cutoff %d",
+			pausedThrough,
+			drainedThrough,
+		)
+	}
+}
+
 func TestRuntimeOperationFIFOCanceledPauseDoesNotSuspendLaterAcceptedWork(t *testing.T) {
 	fifo := newRuntimeOperationFIFO()
 	t.Cleanup(fifo.Close)

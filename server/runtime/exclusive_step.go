@@ -790,6 +790,10 @@ func (s *defaultExclusiveStepLifecycle) drainAgentStepBoundary(ctx context.Conte
 	if err := s.engine.drainRuntimeOperations(ctx); err != nil {
 		return err
 	}
+	return s.drainBoundaryReservations(ctx)
+}
+
+func (s *defaultExclusiveStepLifecycle) drainBoundaryReservations(ctx context.Context) error {
 	for {
 		s.mu.Lock()
 		if s.active == nil || s.suspended != nil || !isAgentStepCapable(s.active.activeKind) ||
@@ -825,11 +829,21 @@ func (s *defaultExclusiveStepLifecycle) BeginAgentStepBoundary(ctx context.Conte
 	if s.activeAgentStepID() == nil {
 		return nil
 	}
-	if err := s.drainAgentStepBoundary(ctx); err != nil {
-		return err
-	}
-	if err := s.engine.pauseRuntimeOperations(ctx); err != nil {
-		return err
+	for {
+		drainedThrough, err := s.engine.drainRuntimeOperationsThrough(ctx)
+		if err != nil {
+			return err
+		}
+		if err := s.drainBoundaryReservations(ctx); err != nil {
+			return err
+		}
+		pausedThrough, err := s.engine.pauseRuntimeOperationsThrough(ctx)
+		if err != nil {
+			return err
+		}
+		if pausedThrough == drainedThrough {
+			break
+		}
 	}
 	s.EndAgentStepBoundary()
 	return nil

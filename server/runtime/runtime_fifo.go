@@ -156,11 +156,25 @@ func (e *Engine) pauseRuntimeOperations(ctx context.Context) error {
 	return e.runtimeFIFO.Pause(ctx)
 }
 
+func (e *Engine) pauseRuntimeOperationsThrough(ctx context.Context) (uint64, error) {
+	if e == nil {
+		return 0, ErrEngineClosed
+	}
+	return e.runtimeFIFO.pauseThrough(ctx)
+}
+
 func (e *Engine) drainRuntimeOperations(ctx context.Context) error {
 	if e == nil {
 		return ErrEngineClosed
 	}
 	return e.runtimeFIFO.Drain(ctx)
+}
+
+func (e *Engine) drainRuntimeOperationsThrough(ctx context.Context) (uint64, error) {
+	if e == nil {
+		return 0, ErrEngineClosed
+	}
+	return e.runtimeFIFO.drainThrough(ctx)
 }
 
 func (e *Engine) hasPendingRuntimeOperations() bool {
@@ -195,8 +209,13 @@ func (f *runtimeOperationFIFO) submit(operation runtimeOperation) bool {
 }
 
 func (f *runtimeOperationFIFO) Pause(ctx context.Context) error {
+	_, err := f.pauseThrough(ctx)
+	return err
+}
+
+func (f *runtimeOperationFIFO) pauseThrough(ctx context.Context) (uint64, error) {
 	if f == nil {
-		return ErrEngineClosed
+		return 0, ErrEngineClosed
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -204,14 +223,17 @@ func (f *runtimeOperationFIFO) Pause(ctx context.Context) error {
 	f.mu.Lock()
 	if f.closed {
 		f.mu.Unlock()
-		return ErrEngineClosed
+		return 0, ErrEngineClosed
 	}
 	if f.paused {
+		through := f.completed
 		f.mu.Unlock()
-		return nil
+		return through, nil
 	}
+	pauseTarget := f.pauseTarget
 	if f.pauseDone == nil {
-		f.pauseTarget = f.accepted
+		pauseTarget = f.accepted
+		f.pauseTarget = pauseTarget
 		f.pauseDone = make(chan struct{})
 		if f.completed >= f.pauseTarget {
 			f.paused = true
@@ -227,16 +249,16 @@ func (f *runtimeOperationFIFO) Pause(ctx context.Context) error {
 	}
 	f.mu.Unlock()
 	if paused {
-		return nil
+		return pauseTarget, nil
 	}
 	select {
 	case <-pauseDone:
-		return nil
+		return pauseTarget, nil
 	case <-f.workerDone:
-		return ErrEngineClosed
+		return 0, ErrEngineClosed
 	case <-ctx.Done():
 		f.withdrawPauseWaiter(pauseDone)
-		return context.Cause(ctx)
+		return 0, context.Cause(ctx)
 	}
 }
 
@@ -257,8 +279,13 @@ func (f *runtimeOperationFIFO) withdrawPauseWaiter(pauseDone <-chan struct{}) {
 }
 
 func (f *runtimeOperationFIFO) Drain(ctx context.Context) error {
+	_, err := f.drainThrough(ctx)
+	return err
+}
+
+func (f *runtimeOperationFIFO) drainThrough(ctx context.Context) (uint64, error) {
 	if f == nil {
-		return ErrEngineClosed
+		return 0, ErrEngineClosed
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -266,7 +293,7 @@ func (f *runtimeOperationFIFO) Drain(ctx context.Context) error {
 	f.mu.Lock()
 	if f.closed {
 		f.mu.Unlock()
-		return ErrEngineClosed
+		return 0, ErrEngineClosed
 	}
 	f.paused = false
 	idleDone := f.idleDone
@@ -274,11 +301,18 @@ func (f *runtimeOperationFIFO) Drain(ctx context.Context) error {
 	f.mu.Unlock()
 	select {
 	case <-idleDone:
-		return nil
+		f.mu.Lock()
+		through := f.completed
+		closed := f.closed
+		f.mu.Unlock()
+		if closed {
+			return 0, ErrEngineClosed
+		}
+		return through, nil
 	case <-f.workerDone:
-		return ErrEngineClosed
+		return 0, ErrEngineClosed
 	case <-ctx.Done():
-		return context.Cause(ctx)
+		return 0, context.Cause(ctx)
 	}
 }
 
