@@ -426,6 +426,38 @@ func (e *Engine) closeAdmissionAfterRuntimeAbort() {
 	e.runtimeFIFO.beginClose()
 }
 
+func (e *Engine) closeAndRetireAfterRuntimeAbort() {
+	if e == nil {
+		return
+	}
+	retire := e.registerRuntimeAbortRetirement()
+	e.closeAdmissionAfterRuntimeAbort()
+	if retire != nil {
+		go retire()
+	}
+}
+
+func (e *Engine) registerRuntimeAbortRetirement() func() {
+	if e.cfg.LifecycleRuntimeAbort == nil {
+		return nil
+	}
+	e.ensureLifecycle()
+	e.lifecycleMu.Lock()
+	if e.lifecycleClosed {
+		e.lifecycleMu.Unlock()
+		return nil
+	}
+	e.lifecycleWG.Add(1)
+	callback := e.cfg.LifecycleRuntimeAbort
+	e.lifecycleMu.Unlock()
+	return func() {
+		// Resource retirement may close this Engine and wait for lifecycle work.
+		// Leave the wait group before entering the authoritative resource owner.
+		e.lifecycleWG.Done()
+		e.surfaceRunError(callback())
+	}
+}
+
 func (e *Engine) ensureLifecycle() {
 	if e == nil {
 		return

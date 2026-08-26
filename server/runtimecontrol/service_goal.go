@@ -228,17 +228,12 @@ func applyLiveGoalMutation(ctx context.Context, engine *runtime.Engine, mutation
 		if err := engine.RequireGoalLoopStartAllowed(); err != nil {
 			return runtime.GoalCommandResult{}, err
 		}
-		result, err := engine.SetGoal(ctx, mutation.Objective, mutation.Actor)
-		if err == nil && result.MetadataReceipt.Committed {
-			err = engine.StartGoalLoop()
-		}
-		return result, err
+		return engine.SetGoalAndStartLoop(ctx, mutation.Objective, mutation.Actor)
 	case goalMutationStatus:
-		result, err := engine.SetGoalStatus(ctx, mutation.Status, mutation.Actor)
-		if err == nil && mutation.Status == session.GoalStatusActive && result.MetadataReceipt.Committed {
-			err = engine.StartGoalLoop()
+		if mutation.Status == session.GoalStatusActive {
+			return engine.SetGoalStatusAndStartLoop(ctx, mutation.Status, mutation.Actor)
 		}
-		return result, err
+		return engine.SetGoalStatus(ctx, mutation.Status, mutation.Actor)
 	case goalMutationClear:
 		return engine.ClearGoal(ctx, mutation.Actor)
 	default:

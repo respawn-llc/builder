@@ -1531,62 +1531,113 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 }
 
 func TestServiceGoalCallerCancellationStopsWaitWhileAcceptedMutationContinues(t *testing.T) {
-	client := newRestartableRuntimeControlClient()
-	defer client.releaseFirst()
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	submission, err := service.SubmitUserTurn(
-		t.Context(),
-		runtimeControlUserTurnRequest(store, "turn-1", "work"),
-	)
-	if err != nil {
-		t.Fatalf("SubmitUserTurn: %v", err)
-	}
-	if submission.QueueItemID == "" {
-		t.Fatalf("SubmitUserTurn response = %+v, want queued acceptance", submission)
-	}
-	select {
-	case <-client.call1Started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for active model step")
+	tests := []struct {
+		name      string
+		prepare   func(*testing.T, *runtime.Engine)
+		mutate    func(context.Context, *Service, string) error
+		committed func(*clientui.Goal) bool
+	}{
+		{
+			name: "set",
+			mutate: func(ctx context.Context, service *Service, sessionID string) error {
+				_, err := service.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{
+					SessionID: sessionID,
+					Objective: "accepted after disconnect",
+					Actor:     string(session.GoalActorUser),
+				})
+				return err
+			},
+			committed: func(goal *clientui.Goal) bool {
+				return goal != nil && goal.Objective == "accepted after disconnect"
+			},
+		},
+		{
+			name: "resume",
+			prepare: func(t *testing.T, engine *runtime.Engine) {
+				if _, err := engine.SetGoal(t.Context(), "resume after disconnect", session.GoalActorUser); err != nil {
+					t.Fatalf("prepare Goal: %v", err)
+				}
+				if _, err := engine.SetGoalStatus(t.Context(), session.GoalStatusPaused, session.GoalActorUser); err != nil {
+					t.Fatalf("pause Goal: %v", err)
+				}
+			},
+			mutate: func(ctx context.Context, service *Service, sessionID string) error {
+				_, err := service.ResumeGoal(ctx, serverapi.RuntimeGoalStatusRequest{
+					SessionID: sessionID,
+					Actor:     string(session.GoalActorUser),
+				})
+				return err
+			},
+			committed: func(goal *clientui.Goal) bool {
+				return goal != nil && goal.Status == clientui.RuntimeGoalStatusActive
+			},
+		},
 	}
 
-	caller, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		_, goalErr := service.SetGoal(caller, serverapi.RuntimeGoalSetRequest{
-			SessionID: store.Meta().SessionID,
-			Objective: "accepted after disconnect",
-			Actor:     string(session.GoalActorUser),
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := newRestartableRuntimeControlClient()
+			defer client.releaseFirst()
+			defer client.releaseSecond()
+			store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+			if test.prepare != nil {
+				test.prepare(t, engine)
+			}
+			submission, err := service.SubmitUserTurn(
+				t.Context(),
+				runtimeControlUserTurnRequest(store, "turn-1", "work"),
+			)
+			if err != nil {
+				t.Fatalf("SubmitUserTurn: %v", err)
+			}
+			if submission.QueueItemID == "" {
+				t.Fatalf("SubmitUserTurn response = %+v, want queued acceptance", submission)
+			}
+			select {
+			case <-client.call1Started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("timed out waiting for active model step")
+			}
+
+			caller, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() {
+				done <- test.mutate(caller, service, store.Meta().SessionID)
+			}()
+			for !engine.HasPendingRuntimeOperations() {
+				time.Sleep(time.Millisecond)
+			}
+			cancel()
+			select {
+			case goalErr := <-done:
+				if !errors.Is(goalErr, context.Canceled) {
+					t.Fatalf("canceled Goal mutation = %v, want canceled", goalErr)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("canceled Goal caller remained blocked")
+			}
+
+			client.releaseFirst()
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				response, showErr := service.ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
+				if showErr != nil {
+					t.Fatalf("ShowGoal after accepted mutation: %v", showErr)
+				}
+				if test.committed(response.Goal) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("accepted Goal did not continue after caller cancellation: %+v", response.Goal)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			select {
+			case <-client.call2Started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("accepted Goal did not start its Goal loop after caller cancellation")
+			}
 		})
-		done <- goalErr
-	}()
-	for !engine.HasPendingRuntimeOperations() {
-		time.Sleep(time.Millisecond)
-	}
-	cancel()
-	select {
-	case goalErr := <-done:
-		if !errors.Is(goalErr, context.Canceled) {
-			t.Fatalf("canceled SetGoal = %v, want canceled", goalErr)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("canceled SetGoal caller remained blocked")
-	}
-
-	client.releaseFirst()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		response, showErr := service.ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
-		if showErr != nil {
-			t.Fatalf("ShowGoal after accepted mutation: %v", showErr)
-		}
-		if response.Goal != nil && response.Goal.Objective == "accepted after disconnect" {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("accepted Goal did not continue after caller cancellation: %+v", response.Goal)
-		}
-		time.Sleep(time.Millisecond)
 	}
 }
 

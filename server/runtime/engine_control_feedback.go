@@ -64,7 +64,7 @@ func (e *Engine) stopAfterDefinitelyUncommittedChatSetting(receipt session.Commi
 	if err == nil || receipt.Committed {
 		return false
 	}
-	e.closeAdmissionAfterRuntimeAbort()
+	e.closeAndRetireAfterRuntimeAbort()
 	return true
 }
 
