@@ -970,7 +970,8 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 			panic(err)
 		}
 		activity = clientui.RuntimeActivity{
-			State: clientui.RuntimeActivityRunning,
+			State:    clientui.RuntimeActivityRunning,
+			Reviewer: clientui.ReviewerActivityInactive,
 			ActiveStep: &clientui.RuntimeActiveStep{
 				RunID:      runID,
 				StepID:     stepID,

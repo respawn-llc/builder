@@ -2027,16 +2027,9 @@ func (s *Service) forceCompleteWorkflowTask(
 	if err != nil {
 		return serverapi.WorkflowTaskCompleteResponse{}, err
 	}
-	if moved.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || moved.Applied == nil {
-		return serverapi.WorkflowTaskCompleteResponse{}, fmt.Errorf("forced completion manual move outcome %q is not applied", moved.Outcome)
-	}
 	return serverapi.WorkflowTaskCompleteResponse{
-		TaskID:       string(taskID),
-		CurrentNodes: moved.Applied.CurrentNodes,
-		Handoff: serverapi.WorkflowTaskCompletionHandoff{
-			SourceNodeDisplayName:  workflow.NodeDisplayName(source),
-			DestinationDisplayName: workflow.NodeDisplayName(target),
-		},
+		TaskID:     string(taskID),
+		ManualMove: &moved,
 	}, nil
 }
 

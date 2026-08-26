@@ -113,10 +113,50 @@ func TestCompleteWorkflowTaskForceComposesInterruptThenManualMove(t *testing.T) 
 		t.Fatalf("forced completion interrupt selections = %v, want Task Interrupt then Manual Move interruption", execution.interruptTaskIDs)
 	}
 	if response.TaskID != task.Task.ID ||
-		len(response.CurrentNodes) != 1 ||
-		response.Handoff.SourceNodeDisplayName != "Plan" ||
-		response.Handoff.DestinationDisplayName != "Implement" {
+		response.ManualMove == nil ||
+		response.ManualMove.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||
+		response.ManualMove.Applied == nil ||
+		len(response.ManualMove.Applied.CurrentNodes) != 1 {
 		t.Fatalf("forced completion response = %+v", response)
+	}
+}
+
+func TestCompleteWorkflowTaskForceReturnsDependencyConfirmationManualMoveOutcome(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	blocker := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	blocked := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	execution := newManualMoveExecutionStub(service)
+	service.currentNodeExecution = execution
+	startWorkflowServiceTask(t, ctx, service, blocked.Task.ID)
+	execution.calls = nil
+	if _, err := service.AddWorkflowTaskDependency(ctx, serverapi.WorkflowTaskDependencyAddRequest{
+		BlockerTaskID: blocker.Task.ID,
+		BlockedTaskID: blocked.Task.ID,
+	}); err != nil {
+		t.Fatalf("AddWorkflowTaskDependency: %v", err)
+	}
+
+	response, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
+		ActorKind:    serverapi.WorkflowTaskCompleteActorUser,
+		Force:        true,
+		TaskID:       blocked.Task.ID,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "planned"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteWorkflowTask: %v", err)
+	}
+	if response.TaskID != blocked.Task.ID ||
+		response.ManualMove == nil ||
+		response.ManualMove.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired ||
+		response.ManualMove.UnsatisfiedDependencyCount == nil ||
+		*response.ManualMove.UnsatisfiedDependencyCount != 1 {
+		t.Fatalf("forced completion response = %+v", response)
+	}
+	if !reflect.DeepEqual(execution.calls, []string{"interrupt"}) {
+		t.Fatalf("forced completion operations = %v, want Interrupt before dependency outcome", execution.calls)
 	}
 }
 

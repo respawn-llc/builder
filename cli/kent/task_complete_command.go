@@ -81,6 +81,21 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintln(stderr, taskCompleteErrorMessage(err))
 			return 1
 		}
+		if resp.ManualMove != nil {
+			taskRef := parsed.TaskRef
+			if strings.TrimSpace(taskRef) == "" {
+				taskRef = resp.TaskID
+			}
+			return writeTaskMoveOutcome(
+				stdout,
+				stderr,
+				remote,
+				resp.TaskID,
+				taskRef,
+				*resp.ManualMove,
+				parsed.JSONPayloadSet || parsed.JSONFileSet,
+			)
+		}
 		if parsed.JSONPayloadSet || parsed.JSONFileSet {
 			return writeCommandJSON(stdout, stderr, taskCompleteJSONResponse{
 				TaskID:            resp.TaskID,

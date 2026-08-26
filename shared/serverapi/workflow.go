@@ -1051,6 +1051,7 @@ type WorkflowTaskCompleteResponse struct {
 	CurrentNodes      []WorkflowTaskCurrentNode     `json:"current_nodes"`
 	PendingApprovalID *string                       `json:"pending_approval_id,omitempty"`
 	Handoff           WorkflowTaskCompletionHandoff `json:"handoff"`
+	ManualMove        *WorkflowTaskMoveResponse     `json:"manual_move,omitempty"`
 }
 
 type WorkflowTaskCompletionHandoff struct {

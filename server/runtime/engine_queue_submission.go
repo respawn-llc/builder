@@ -11,6 +11,8 @@ import (
 	"core/server/session"
 )
 
+var ErrWorktreeDeleteBlockedByQueuedWork = errors.New("worktree deletion is blocked by accepted Session work")
+
 const queuedUserSubmissionBusyRetryDelay = 25 * time.Millisecond
 
 var ErrReviewerRunning = errors.New("Reviewer is running")
@@ -72,6 +74,9 @@ func (e *Engine) RunWorktreeDeleteTransition(ctx context.Context, fn func() erro
 	return e.runWorktreeTransition(ctx, func() error {
 		if e.ReviewerRunning() {
 			return ErrReviewerRunning
+		}
+		if e.HasQueuedUserWork() || e.HasScheduledQueuedUserWork() {
+			return ErrWorktreeDeleteBlockedByQueuedWork
 		}
 		return nil
 	}, fn)

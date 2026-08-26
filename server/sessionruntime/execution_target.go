@@ -131,7 +131,8 @@ func (a *Authority) RunWorktreeTransition(
 				},
 			)
 		})
-		if errors.Is(err, runtime.ErrReviewerRunning) {
+		if errors.Is(err, runtime.ErrReviewerRunning) ||
+			errors.Is(err, runtime.ErrWorktreeDeleteBlockedByQueuedWork) {
 			err = errors.Join(serverapi.ErrWorktreeBlocked, err)
 		}
 		return retire, err

@@ -809,56 +809,68 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 			return 1
 		}
-		if err := resp.Validate(); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
+		return writeTaskMoveOutcome(stdout, stderr, remote, taskID, positionals[0], resp, *jsonOut)
+	})
+}
+
+func writeTaskMoveOutcome(
+	stdout io.Writer,
+	stderr io.Writer,
+	remote *client.Remote,
+	taskID string,
+	taskRef string,
+	resp serverapi.WorkflowTaskMoveResponse,
+	jsonOut bool,
+) int {
+	if err := resp.Validate(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		if jsonOut {
+			_ = writeCommandJSON(stdout, stderr, resp)
+		} else {
+			writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
 		}
-		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
-			if *jsonOut {
-				_ = writeCommandJSON(stdout, stderr, resp)
-			} else {
-				writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
-			}
-			return 1
+		return 1
+	}
+	if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired {
+		if jsonOut {
+			_ = writeCommandJSON(stdout, stderr, resp)
+		} else {
+			writeTaskDependencyConfirmationRequired(stderr, taskRef, resp.UnsatisfiedDependencyCount)
 		}
-		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired {
-			if *jsonOut {
-				_ = writeCommandJSON(stdout, stderr, resp)
-				return 1
-			}
-			writeTaskDependencyConfirmationRequired(stderr, positionals[0], resp.UnsatisfiedDependencyCount)
-			return 1
-		}
-		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeNoOp {
-			renderRetainedWorktreeGuidance(stderr, resp.NoOp.RetainedPreviousWorktree)
-			if *jsonOut {
-				return writeCommandJSON(stdout, stderr, resp)
-			}
-			detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
-			if err != nil {
-				fmt.Fprintf(stderr, "task %s move became a no-op but failed to load task detail: %v\n", taskID, err)
-				return 1
-			}
-			writeTaskLifecycleResult(stdout, "No-op move", detail)
-			return 0
-		}
-		applied, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		renderRetainedWorktreeGuidance(stderr, applied.RetainedPreviousWorktree)
-		if *jsonOut {
+		return 1
+	}
+	if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeNoOp {
+		renderRetainedWorktreeGuidance(stderr, resp.NoOp.RetainedPreviousWorktree)
+		if jsonOut {
 			return writeCommandJSON(stdout, stderr, resp)
 		}
 		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
 		if err != nil {
-			fmt.Fprintf(stderr, "moved task %s but failed to load task detail for output: %v\n", taskID, err)
+			fmt.Fprintf(stderr, "task %s move became a no-op but failed to load task detail: %v\n", taskID, err)
 			return 1
 		}
-		writeTaskLifecycleResult(stdout, "Moved", detail)
+		writeTaskLifecycleResult(stdout, "No-op move", detail)
 		return 0
-	})
+	}
+	applied, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	renderRetainedWorktreeGuidance(stderr, applied.RetainedPreviousWorktree)
+	if jsonOut {
+		return writeCommandJSON(stdout, stderr, resp)
+	}
+	detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
+	if err != nil {
+		fmt.Fprintf(stderr, "moved task %s but failed to load task detail for output: %v\n", taskID, err)
+		return 1
+	}
+	writeTaskLifecycleResult(stdout, "Moved", detail)
+	return 0
 }
 
 func selectTaskMoveTransition(
