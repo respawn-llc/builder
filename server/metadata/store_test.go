@@ -553,9 +553,8 @@ func TestWorkspaceUnlinkCommitCombinesStaticAndRuntimeBlockers(t *testing.T) {
 				return nil, nil, errors.New("commit runtime blocker check received no session IDs")
 			}
 			return []serverapi.ProjectWorkspaceUnlinkBlocker{{
-				Code:    "active_sessions",
-				Message: "Active runtime sessions still depend on this workspace.",
-				Count:   1,
+				Code:  "active_sessions",
+				Count: 1,
 			}}, func() {}, nil
 		},
 	)
