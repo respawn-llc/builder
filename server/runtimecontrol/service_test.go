@@ -2424,6 +2424,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 
 	if err := service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
 		SessionID: store.Meta().SessionID,
+		RequestID: runtimeids.NewCompactionRequestID(),
 		Args:      "compact",
 	}); err != nil {
 		t.Fatalf("CompactContext scheduling: %v", err)

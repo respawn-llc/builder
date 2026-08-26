@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 func TestSubmitDoneDispatchesQueuedTurnWithoutNotificationTranscriptFacts(t *testing.T) {
@@ -38,8 +39,11 @@ func TestManualCompactionNotificationWaitsForTerminalTranscriptOutcome(t *testin
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
+	requestID := runtimeids.NewCompactionRequestID()
+	otherRequestID := runtimeids.NewCompactionRequestID()
+	model.registerPendingCompactionRequest(requestID)
 
-	next, _ := model.Update(compactDoneMsg{})
+	next, _ := model.Update(compactDoneMsg{requestID: requestID})
 	model = next.(*uiModel)
 	if ringer.total() != 0 {
 		t.Fatalf("compaction scheduling emitted %d notification events before terminal outcome", ringer.total())
@@ -47,10 +51,11 @@ func TestManualCompactionNotificationWaitsForTerminalTranscriptOutcome(t *testin
 
 	for sequence, status := range []clientui.TranscriptCompactionStatus{
 		{
-			StepID: ongoingTestStepID(),
-			State:  clientui.CompactionStarted,
-			Mode:   clientui.CompactionModeManual,
-			Count:  1,
+			StepID:    ongoingTestStepID(),
+			State:     clientui.CompactionStarted,
+			Mode:      clientui.CompactionModeManual,
+			Count:     1,
+			RequestID: &requestID,
 		},
 		{
 			StepID: ongoingTestStepID(),
@@ -59,10 +64,11 @@ func TestManualCompactionNotificationWaitsForTerminalTranscriptOutcome(t *testin
 			Count:  1,
 		},
 		{
-			StepID: ongoingTestStepID(),
-			State:  clientui.CompactionFailed,
-			Mode:   clientui.CompactionModeManual,
-			Count:  1,
+			StepID:    ongoingTestStepID(),
+			State:     clientui.CompactionFailed,
+			Mode:      clientui.CompactionModeManual,
+			Count:     1,
+			RequestID: &otherRequestID,
 			Diagnostic: &clientui.TranscriptDiagnostic{
 				Code:   "compaction_failed",
 				Detail: "provider failed",
@@ -74,15 +80,48 @@ func TestManualCompactionNotificationWaitsForTerminalTranscriptOutcome(t *testin
 	if ringer.total() != 0 {
 		t.Fatalf("non-success manual outcomes emitted %d notification events", ringer.total())
 	}
+	if _, exists := model.pendingCompactionRequestIDs[requestID]; !exists {
+		t.Fatal("unrelated terminal compaction cleared the initiating TUI request")
+	}
 
 	model.applyAdmittedTranscriptMessageState(clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptCompactionStatus{
-		StepID: ongoingTestStepID(),
-		State:  clientui.CompactionCompleted,
-		Mode:   clientui.CompactionModeManual,
-		Count:  1,
+		StepID:    ongoingTestStepID(),
+		State:     clientui.CompactionCompleted,
+		Mode:      clientui.CompactionModeManual,
+		Count:     1,
+		RequestID: &requestID,
 	})), runtimeTupleMergeResult{})
 	if ringer.notifications != 1 {
 		t.Fatalf("terminal manual compaction emitted %d notifications, want 1", ringer.notifications)
+	}
+	if len(model.pendingCompactionRequestIDs) != 0 {
+		t.Fatal("matching terminal compaction retained the completed request")
+	}
+}
+
+func TestManualCompactionTerminalEventDoesNotNotifyOtherAttachedTUI(t *testing.T) {
+	requestID := runtimeids.NewCompactionRequestID()
+	initiatorRinger := &countRinger{}
+	observerRinger := &countRinger{}
+	initiator := newProjectedStaticUIModel(WithUITurnQueueHook(newUnfocusedBellHooks(initiatorRinger)))
+	observer := newProjectedStaticUIModel(WithUITurnQueueHook(newUnfocusedBellHooks(observerRinger)))
+	initiator.registerPendingCompactionRequest(requestID)
+
+	event := clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(clientui.TranscriptCompactionStatus{
+		StepID:    ongoingTestStepID(),
+		State:     clientui.CompactionCompleted,
+		Mode:      clientui.CompactionModeManual,
+		Count:     1,
+		RequestID: &requestID,
+	}))
+	initiator.applyAdmittedTranscriptMessageState(event, runtimeTupleMergeResult{})
+	observer.applyAdmittedTranscriptMessageState(event, runtimeTupleMergeResult{})
+
+	if initiatorRinger.notifications != 1 {
+		t.Fatalf("initiating TUI notifications = %d, want 1", initiatorRinger.notifications)
+	}
+	if observerRinger.total() != 0 {
+		t.Fatalf("observing TUI received %d spurious notifications", observerRinger.total())
 	}
 }
 
@@ -113,6 +152,8 @@ func TestTranscriptSubscriptionLossClearsNotificationState(t *testing.T) {
 	recordToolHeavyBellTurn(hooks, 1)
 
 	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
+	requestID := runtimeids.NewCompactionRequestID()
+	model.registerPendingCompactionRequest(requestID)
 	model.ongoingTranscript = newNoopOngoingTranscriptController(
 		&ongoingSurfaceSpy{},
 		ongoingTestFrameProvider,
@@ -122,5 +163,8 @@ func TestTranscriptSubscriptionLossClearsNotificationState(t *testing.T) {
 
 	if ringer.total() != 0 {
 		t.Fatalf("subscription loss retained %d notification events", ringer.total())
+	}
+	if len(model.pendingCompactionRequestIDs) != 0 {
+		t.Fatal("subscription loss retained a pending compaction notification request")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
@@ -33,6 +34,7 @@ func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
 			name: "compact",
 			request: RuntimeCompactContextRequest{
 				SessionID: "session-1",
+				RequestID: runtimeids.NewCompactionRequestID(),
 				Args:      "notes",
 			},
 			forbidden: []string{"operation_ref"},
@@ -64,5 +66,12 @@ func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRuntimeCompactContextRequiresRequestIdentity(t *testing.T) {
+	err := (RuntimeCompactContextRequest{SessionID: "session-1"}).Validate()
+	if err == nil {
+		t.Fatal("RuntimeCompactContextRequest accepted a missing request identity")
 	}
 }

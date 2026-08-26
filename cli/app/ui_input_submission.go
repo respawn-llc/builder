@@ -8,6 +8,7 @@ import (
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
@@ -182,20 +183,28 @@ func (c uiInputController) startCompaction(args string) tea.Cmd {
 	if m.isCompacting() {
 		return nil
 	}
+	requestID := runtimeids.NewCompactionRequestID()
+	m.registerPendingCompactionRequest(requestID)
 	c.startRuntimeOperationAffordance()
 	m.logf("compaction.start args_chars=%d", len(strings.TrimSpace(args)))
 	m.layout().syncViewport()
-	return tea.Batch(c.compactCmd(args), m.reconcileSpinnerTicking(false))
+	return tea.Batch(c.compactCmd(requestID, args), m.reconcileSpinnerTicking(false))
 }
 
-func (c uiInputController) compactCmd(args string) tea.Cmd {
+func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, args string) tea.Cmd {
 	m := c.model
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
-			return compactDoneMsg{err: errors.New("runtime engine is not configured")}
+			return compactDoneMsg{requestID: requestID, err: errors.New("runtime engine is not configured")}
 		}
-		return compactDoneMsg{err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{Args: args})}
+		return compactDoneMsg{
+			requestID: requestID,
+			err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{
+				RequestID: requestID,
+				Args:      args,
+			}),
+		}
 	}
 }
 
@@ -352,6 +361,7 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	m.observeRuntimeRequestResult(msg.err)
 	c.finishRuntimeOperationAffordance()
 	if msg.err != nil {
+		m.clearPendingCompactionRequest(msg.requestID)
 		restoreInjectedCmd := c.restoreInjectedInputsIntoComposer()
 		c.restoreQueuedMessagesIntoInput()
 		if isRuntimeOperationInterrupted(msg.err) {
@@ -383,6 +393,27 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	}
 	m.layout().syncViewport()
 	return m, nil
+}
+
+func (m *uiModel) clearPendingCompactionRequest(requestID runtimeids.CompactionRequestID) bool {
+	if m == nil {
+		return false
+	}
+	if _, exists := m.pendingCompactionRequestIDs[requestID]; !exists {
+		return false
+	}
+	delete(m.pendingCompactionRequestIDs, requestID)
+	if len(m.pendingCompactionRequestIDs) == 0 {
+		m.pendingCompactionRequestIDs = nil
+	}
+	return true
+}
+
+func (m *uiModel) registerPendingCompactionRequest(requestID runtimeids.CompactionRequestID) {
+	if m.pendingCompactionRequestIDs == nil {
+		m.pendingCompactionRequestIDs = make(map[runtimeids.CompactionRequestID]struct{})
+	}
+	m.pendingCompactionRequestIDs[requestID] = struct{}{}
 }
 
 func (m *uiModel) shouldRestoreSubmittedTextOnSubmitError(err error) bool {

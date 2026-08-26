@@ -1252,7 +1252,7 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 	}
 
 	eng.compactionRuntimeState().SetManualCompactionEligible(true)
-	if _, err := eng.compactionFlow.CompactContextWithAcceptance(context.Background(), "", nil, nil); err != nil {
+	if _, err := eng.compactionFlow.CompactContextWithAcceptance(context.Background(), runtimeids.NewCompactionRequestID(), "", nil, nil); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
 	waitEngineLifecycleTasks(t, eng)

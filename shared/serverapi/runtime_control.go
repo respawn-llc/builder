@@ -142,8 +142,9 @@ type RuntimeSubmitUserShellCommandRequest struct {
 }
 
 type RuntimeCompactContextRequest struct {
-	SessionID string `json:"session_id"`
-	Args      string `json:"args"`
+	SessionID string                         `json:"session_id"`
+	RequestID runtimeids.CompactionRequestID `json:"request_id"`
+	Args      string                         `json:"args"`
 }
 
 type RuntimeInterruptRequest struct {
@@ -350,7 +351,13 @@ func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
 	return validateRuntimeControlRequest(r.SessionID)
 }
 func (r RuntimeCompactContextRequest) Validate() error {
-	return validateRuntimeControlRequest(r.SessionID)
+	if err := validateRuntimeControlRequest(r.SessionID); err != nil {
+		return err
+	}
+	if r.RequestID.IsZero() {
+		return errors.New("compaction request id is required")
+	}
+	return nil
 }
 func (r RuntimeInterruptRequest) Validate() error {
 	return validateRuntimeControlRequest(r.SessionID)

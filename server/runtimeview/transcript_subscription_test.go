@@ -100,6 +100,26 @@ func TestTranscriptCompactionProjectionCarriesTypedFactsWithoutServerPresentatio
 	}
 }
 
+func TestTranscriptCompactionStatusPreservesInitiatingRequestIdentity(t *testing.T) {
+	requestID := runtimeids.NewCompactionRequestID()
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:   runtime.EventCompactionCompleted,
+		StepID: runtimeStepIDPointer(transcriptProjectionStepID),
+		Compaction: &runtime.CompactionStatus{
+			Mode:      "manual",
+			RequestID: &requestID,
+			Count:     1,
+		},
+	})
+	if len(messages) != 1 {
+		t.Fatalf("compaction messages = %+v, want one", messages)
+	}
+	status := transcriptPayload[clientui.TranscriptCompactionStatus](t, messages[0])
+	if status.RequestID == nil || *status.RequestID != requestID {
+		t.Fatalf("projected request identity = %v, want %s", status.RequestID, requestID.String())
+	}
+}
+
 func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	tests := []struct {

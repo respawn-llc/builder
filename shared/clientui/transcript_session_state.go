@@ -41,6 +41,7 @@ const (
 
 type TranscriptCompactionStatus struct {
 	StepID     runtimeids.StepID
+	RequestID  *runtimeids.CompactionRequestID
 	State      CompactionState
 	Mode       CompactionMode
 	Count      int
@@ -93,6 +94,14 @@ func (s TranscriptCompactionStatus) Validate() error {
 	case CompactionModeAuto, CompactionModeHandoff, CompactionModeManual, CompactionModeWorkflowPostCompletion:
 	default:
 		return fmt.Errorf("unknown compaction mode %q", s.Mode)
+	}
+	if s.RequestID != nil {
+		if s.RequestID.IsZero() {
+			return fmt.Errorf("compaction request id cannot be zero")
+		}
+		if s.Mode != CompactionModeManual {
+			return fmt.Errorf("%s compaction cannot carry a client request id", s.Mode)
+		}
 	}
 	if s.Count < 0 {
 		return fmt.Errorf("compaction count cannot be negative")

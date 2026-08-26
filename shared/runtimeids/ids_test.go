@@ -126,6 +126,7 @@ func TestRuntimeUUIDIDsRoundTripAsJSONString(t *testing.T) {
 	}
 
 	assertRuntimeUUIDJSONRoundTrip(t, NewQueueItemID(), new(QueueItemID))
+	assertRuntimeUUIDJSONRoundTrip(t, NewCompactionRequestID(), new(CompactionRequestID))
 	assertRuntimeUUIDJSONRoundTrip(t, NewLiveRunGroupID(), new(LiveRunGroupID))
 	assertRuntimeUUIDJSONRoundTrip(t, runID, new(RunID))
 	assertRuntimeUUIDJSONRoundTrip(t, stepID, new(StepID))

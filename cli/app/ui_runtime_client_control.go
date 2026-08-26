@@ -233,7 +233,11 @@ func (c *sessionRuntimeClient) CompactRuntime(ctx context.Context, req clientui.
 		return err
 	}
 	_, err := runtimeRequestCall(ctx, c, true, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{SessionID: c.sessionID, Args: req.Args})
+		return struct{}{}, c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{
+			SessionID: c.sessionID,
+			RequestID: req.RequestID,
+			Args:      req.Args,
+		})
 	})
 	return err
 }

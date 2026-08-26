@@ -32,7 +32,7 @@ func TestLiveChatContextSnapshotUsesRuntimeFactsBehindPersistencePresenceGates(t
 	engine.setLastUsage(llm.Usage{InputTokens: 64_000})
 	engine.compactionRuntimeState().SetCount(7)
 	engine.compactionRuntimeState().SetManualCompactionEligible(true)
-	engine.compactionRuntimeState().SetActive("compact-step", "manual", 8)
+	engine.compactionRuntimeState().SetActive("compact-step", nil, "manual", 8)
 
 	engine.compactionRuntimeState().SetContextFacts(session.SessionContextFacts{})
 	absent := engine.LiveChatContextSnapshot()
