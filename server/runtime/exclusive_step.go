@@ -545,7 +545,7 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 			s.mu.Unlock()
 			return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
 		}
-		if (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 {
+		if s.suspended != nil || (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 {
 			waiter.ready = make(chan struct{})
 			s.mu.Unlock()
 			continue
@@ -669,7 +669,7 @@ func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWa
 }
 
 func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
-	if (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 || len(s.nextWaiters) == 0 {
+	if s.suspended != nil || (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 || len(s.nextWaiters) == 0 {
 		return
 	}
 	if s.heldReservation != nil && s.heldWaiter == nil {
@@ -792,7 +792,7 @@ func (s *defaultExclusiveStepLifecycle) drainAgentStepBoundary(ctx context.Conte
 	}
 	for {
 		s.mu.Lock()
-		if s.active == nil || !isAgentStepCapable(s.active.activeKind) ||
+		if s.active == nil || s.suspended != nil || !isAgentStepCapable(s.active.activeKind) ||
 			len(s.nextWaiters) == 0 || s.nextWaiters[0].reservation == nil {
 			s.mu.Unlock()
 			return nil

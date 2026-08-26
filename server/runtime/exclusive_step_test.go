@@ -1053,6 +1053,130 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 	}
 }
 
+func TestExclusiveStepLifecycleDefersSecondBoundaryReservationToOuterStep(t *testing.T) {
+	stepLifecycle := &nonOverlappingStepLifecycleSink{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5", StepLifecycle: stepLifecycle},
+	)
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+	engine.stepLifecycle = lifecycle
+
+	outerStarted := make(chan struct{})
+	releaseOuterBoundary := make(chan struct{})
+	outerDone := make(chan error, 1)
+	go func() {
+		outerDone <- lifecycle.Run(
+			t.Context(),
+			exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
+			func(ctx context.Context, _ string) error {
+				close(outerStarted)
+				<-releaseOuterBoundary
+				return lifecycle.DrainAgentStepBoundary(ctx)
+			},
+		)
+	}()
+	select {
+	case <-outerStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for outer Agent Step")
+	}
+
+	firstReservation := &exclusiveStepReservation{
+		Kind:      exclusiveStepReservationWorktreeTransition,
+		queueable: true,
+	}
+	if err := lifecycle.AcquireReservation(firstReservation); err != nil {
+		t.Fatalf("AcquireReservation first: %v", err)
+	}
+	firstStarted := make(chan struct{})
+	releaseFirstBoundary := make(chan struct{})
+	firstBoundaryReturned := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		err := lifecycle.RunNext(
+			t.Context(),
+			exclusiveStepOptions{ActiveKind: ActiveKindUserTurn, Reservation: firstReservation},
+			func(ctx context.Context, _ string) error {
+				close(firstStarted)
+				<-releaseFirstBoundary
+				if err := lifecycle.DrainAgentStepBoundary(ctx); err != nil {
+					return err
+				}
+				close(firstBoundaryReturned)
+				<-releaseFirst
+				return nil
+			},
+		)
+		lifecycle.ReleaseReservation(firstReservation)
+		firstDone <- err
+	}()
+	close(releaseOuterBoundary)
+	select {
+	case <-firstStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for first boundary reservation")
+	}
+
+	secondReservation := &exclusiveStepReservation{
+		Kind:      exclusiveStepReservationWorktreeTransition,
+		queueable: true,
+	}
+	if err := lifecycle.AcquireReservation(secondReservation); err != nil {
+		t.Fatalf("AcquireReservation second: %v", err)
+	}
+	secondStarted := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		err := lifecycle.RunNext(
+			t.Context(),
+			exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance, Reservation: secondReservation},
+			func(context.Context, string) error {
+				close(secondStarted)
+				return nil
+			},
+		)
+		lifecycle.ReleaseReservation(secondReservation)
+		secondDone <- err
+	}()
+
+	close(releaseFirstBoundary)
+	select {
+	case <-secondStarted:
+		t.Fatal("second boundary reservation nested inside an already-suspended Step")
+	case <-firstBoundaryReturned:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("first nested Step did not retain its outer boundary owner")
+	}
+	close(releaseFirst)
+
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first boundary reservation: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("first boundary reservation did not complete")
+	}
+	select {
+	case <-secondStarted:
+	case err := <-secondDone:
+		t.Fatalf("second boundary reservation failed before starting: %v", err)
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("second boundary reservation did not return to the outer Step")
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second boundary reservation: %v", err)
+	}
+	if err := <-outerDone; err != nil {
+		t.Fatalf("outer Agent Step: %v", err)
+	}
+}
+
 func TestExclusiveStepRuntimeAbortClosesAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
