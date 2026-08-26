@@ -229,6 +229,50 @@ func (f *runtimeControlFakeClient) RecordPromptHistory(text string) error {
 	return f.err
 }
 
+func TestGoalShowSupersededByMutationDoesNotOverwriteMutationResult(t *testing.T) {
+	m := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	m.sessionID = "session-1"
+
+	if cmd := m.goalRuntimeCommand(goalRuntimePause, ""); cmd == nil {
+		t.Fatal("initial Goal mutation did not start")
+	}
+	mutationToken := m.goalRuntimePending.token
+	if cmd := m.goalRuntimeCommand(goalRuntimeShow, ""); cmd == nil {
+		t.Fatal("Goal read did not start")
+	}
+	showToken := m.goalRuntimeToken
+	showMutationSerial := m.goalRuntimeMutationSerial
+	if cmd := m.goalRuntimeCommand(goalRuntimePause, ""); cmd != nil {
+		t.Fatal("matching Goal mutation did not coalesce")
+	}
+
+	paused := &clientui.RuntimeGoal{
+		Goal: &clientui.Goal{ID: "goal-1", Objective: "latest", Status: clientui.RuntimeGoalStatusPaused},
+	}
+	m.applyGoalRuntimeDone(goalRuntimeDoneMsg{
+		token:     mutationToken,
+		sessionID: m.sessionID,
+		operation: goalRuntimePause,
+		goal:      paused,
+	})
+	stale := &clientui.RuntimeGoal{
+		Goal: &clientui.Goal{ID: "goal-1", Objective: "stale", Status: clientui.RuntimeGoalStatusActive},
+	}
+	m.applyGoalRuntimeDone(goalRuntimeDoneMsg{
+		token:          showToken,
+		sessionID:      m.sessionID,
+		mutationSerial: showMutationSerial,
+		operation:      goalRuntimeShow,
+		goal:           stale,
+	})
+
+	if m.goal.goal == nil || m.goal.goal.Goal == nil ||
+		m.goal.goal.Goal.Objective != "latest" ||
+		m.goal.goal.Status != clientui.RuntimeGoalStatusPaused {
+		t.Fatalf("Goal projection = %+v, want latest paused mutation result", m.goal.goal)
+	}
+}
+
 func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
 	client := &runtimeControlFakeClient{
 		interruptErr: serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn")),
