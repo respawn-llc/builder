@@ -1673,6 +1673,26 @@ func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T)
 	}
 }
 
+func TestServiceSetThinkingLevelRejectsUnsupportedValue(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{Model: "gpt-5"})
+	before := engine.ThinkingLevel()
+
+	err := service.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{
+		SessionID: store.Meta().SessionID,
+		Level:     "ultra",
+	})
+	if err == nil {
+		t.Fatal("SetThinkingLevel accepted unsupported value")
+	}
+	if got := engine.ThinkingLevel(); got != before {
+		t.Fatalf("live Thinking = %q after rejection, want %q", got, before)
+	}
+	meta := store.Meta()
+	if meta.ChatSettings != nil && meta.ChatSettings.Thinking != nil {
+		t.Fatalf("unsupported Thinking persisted Session override: %+v", meta.ChatSettings)
+	}
+}
+
 func TestServiceSetAutoCompactionEnabledPropagatesClosedRuntime(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	if err := engine.Close(); err != nil {

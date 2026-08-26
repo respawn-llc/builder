@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -343,8 +344,18 @@ func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 	if normalized == "" {
 		return errors.New("thinking level is required")
 	}
+	e.mu.Lock()
+	supported := slices.Contains(e.cfg.SupportedThinkingValues, normalized)
+	e.mu.Unlock()
+	if !supported {
+		return fmt.Errorf("thinking level %q is unavailable for the selected Session Agent", normalized)
+	}
 	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
-		return struct{}{}, e.setThinkingValue(normalized)
+		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{Thinking: &normalized})
+		if settings.Changed && !settings.Committed {
+			return struct{}{}, settingsErr
+		}
+		return struct{}{}, errors.Join(settingsErr, e.setThinkingValue(normalized))
 	})
 	return err
 }
@@ -413,31 +424,32 @@ func (e *Engine) SetAutoCompactionEnabled(ctx context.Context, enabled bool) (bo
 		changed bool
 		enabled bool
 	}, error) {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		current := true
-		if e.cfg.AutoCompactionEnabled != nil {
-			current = *e.cfg.AutoCompactionEnabled
-		}
-		if current == enabled {
+		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{AutoCompaction: &enabled})
+		if settings.Changed && !settings.Committed {
 			return struct {
 				changed bool
 				enabled bool
-			}{enabled: current}, nil
+			}{enabled: e.AutoCompactionEnabled()}, settingsErr
 		}
-		if e.cfg.AutoCompactionEnabled == nil {
-			e.cfg.AutoCompactionEnabled = new(bool)
-		}
-		*e.cfg.AutoCompactionEnabled = enabled
+		e.applyAutoCompactionEnabled(enabled)
 		return struct {
 			changed bool
 			enabled bool
-		}{changed: true, enabled: enabled}, nil
+		}{changed: settings.Changed, enabled: enabled}, settingsErr
 	})
 	if err != nil {
 		return false, e.AutoCompactionEnabled(), err
 	}
 	return result.changed, result.enabled, nil
+}
+
+func (e *Engine) applyAutoCompactionEnabled(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.cfg.AutoCompactionEnabled == nil {
+		e.cfg.AutoCompactionEnabled = new(bool)
+	}
+	*e.cfg.AutoCompactionEnabled = enabled
 }
 
 func (e *Engine) QuestionsEnabled() bool {

@@ -43,6 +43,23 @@ func (e *Engine) appendCommittedControlFeedback(text string) (session.CommitRece
 	})
 }
 
+func (e *Engine) mutateChatSettingWithCommittedFeedback(
+	mutation session.ChatSettingsMutation,
+	feedback func(changed bool) string,
+	apply func(),
+) (bool, session.CommitReceipt, error) {
+	settings, settingsErr := e.store.MutateChatSettings(mutation)
+	if settings.Changed && !settings.Committed {
+		return false, settings.CommitReceipt, settingsErr
+	}
+	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(settings.Changed))
+	if settings.Committed {
+		receipt = settings.CommitReceipt
+	}
+	apply()
+	return settings.Changed, receipt, errors.Join(settingsErr, feedbackErr)
+}
+
 func (e *Engine) SetFastModeEnabledWithCommittedFeedback(ctx context.Context, enabled bool, feedback func(changed bool) string) (bool, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
@@ -54,23 +71,15 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(ctx context.Context, en
 		changed bool
 		receipt session.CommitReceipt
 	}, error) {
-		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{Fast: &enabled})
-		if settings.Changed && !settings.Committed {
-			return struct {
-				changed bool
-				receipt session.CommitReceipt
-			}{receipt: settings.CommitReceipt}, settingsErr
-		}
-		changed := settings.Changed
-		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(changed))
-		if settings.Committed {
-			receipt = settings.CommitReceipt
-		}
-		e.applyFastModeEnabled(enabled)
+		changed, receipt, mutationErr := e.mutateChatSettingWithCommittedFeedback(
+			session.ChatSettingsMutation{Fast: &enabled},
+			feedback,
+			func() { e.applyFastModeEnabled(enabled) },
+		)
 		return struct {
 			changed bool
 			receipt session.CommitReceipt
-		}{changed: changed, receipt: receipt}, errors.Join(settingsErr, feedbackErr)
+		}{changed: changed, receipt: receipt}, mutationErr
 	})
 	return result.changed, result.receipt, err
 }
@@ -84,23 +93,16 @@ func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(ctx context.Context, e
 		enabled bool
 		receipt session.CommitReceipt
 	}, error) {
-		changed, current := e.questionsEnabledChange(enabled)
-		resultEnabled := current
-		if changed {
-			resultEnabled = enabled
-		}
-		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(resultEnabled, changed))
-		if receipt.Committed && changed {
-			e.applyQuestionsEnabled(enabled)
-		} else if !receipt.Committed {
-			changed = false
-			resultEnabled = current
-		}
+		changed, receipt, mutationErr := e.mutateChatSettingWithCommittedFeedback(
+			session.ChatSettingsMutation{Questions: &enabled},
+			func(changed bool) string { return feedback(enabled, changed) },
+			func() { e.applyQuestionsEnabled(enabled) },
+		)
 		return struct {
 			changed bool
 			enabled bool
 			receipt session.CommitReceipt
-		}{changed: changed, enabled: resultEnabled, receipt: receipt}, feedbackErr
+		}{changed: changed, enabled: enabled, receipt: receipt}, mutationErr
 	})
 	return result.changed, result.enabled, result.receipt, err
 }
@@ -114,7 +116,7 @@ func (e *Engine) SetReviewerEnabledWithCommittedFeedback(ctx context.Context, en
 		mode    string
 		receipt session.CommitReceipt
 	}, error) {
-		changed, mode, prepareErr := e.reviewerEnabledChange(enabled)
+		_, mode, prepareErr := e.reviewerEnabledChange(enabled)
 		if prepareErr != nil {
 			return struct {
 				changed bool
@@ -122,17 +124,16 @@ func (e *Engine) SetReviewerEnabledWithCommittedFeedback(ctx context.Context, en
 				receipt session.CommitReceipt
 			}{mode: mode}, prepareErr
 		}
-		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(mode != "off", mode, changed))
-		if receipt.Committed {
-			e.applyReviewerEnabled(enabled, mode)
-		} else {
-			changed = false
-		}
+		changed, receipt, mutationErr := e.mutateChatSettingWithCommittedFeedback(
+			session.ChatSettingsMutation{Supervisor: &mode},
+			func(changed bool) string { return feedback(mode != "off", mode, changed) },
+			func() { e.setReviewerFrequency(mode) },
+		)
 		return struct {
 			changed bool
 			mode    string
 			receipt session.CommitReceipt
-		}{changed: changed, mode: mode, receipt: receipt}, feedbackErr
+		}{changed: changed, mode: mode, receipt: receipt}, mutationErr
 	})
 	return result.changed, result.mode, result.receipt, err
 }
@@ -149,17 +150,15 @@ func (e *Engine) SetReviewerFrequencyWithCommittedFeedback(ctx context.Context, 
 		changed bool
 		receipt session.CommitReceipt
 	}, error) {
-		changed := e.ReviewerFrequency() != target
-		receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(target != "off", target, changed))
-		if receipt.Committed {
-			e.setReviewerFrequency(target)
-		} else {
-			changed = false
-		}
+		changed, receipt, mutationErr := e.mutateChatSettingWithCommittedFeedback(
+			session.ChatSettingsMutation{Supervisor: &target},
+			func(changed bool) string { return feedback(target != "off", target, changed) },
+			func() { e.setReviewerFrequency(target) },
+		)
 		return struct {
 			changed bool
 			receipt session.CommitReceipt
-		}{changed: changed, receipt: receipt}, feedbackErr
+		}{changed: changed, receipt: receipt}, mutationErr
 	})
 	return result.changed, target, result.receipt, err
 }

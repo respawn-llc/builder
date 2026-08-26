@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,6 +75,7 @@ type Config struct {
 	Temperature                     float64
 	MaxTokens                       int
 	ThinkingLevel                   string
+	SupportedThinkingValues         []string
 	ModelCapabilities               session.LockedModelCapabilities
 	FastModeEnabled                 bool
 	WebSearchMode                   string
@@ -240,6 +242,7 @@ func New(
 		enabled := true
 		cfg.AutoCompactionEnabled = &enabled
 	}
+	cfg.SupportedThinkingValues = slices.Clone(cfg.SupportedThinkingValues)
 	var workflowPromptContract *workflowruntime.CompletionContract
 	if cfg.WorkflowPrompt != nil {
 		prepared, err := newWorkflowPromptCompletionContract(cfg.WorkflowPrompt)

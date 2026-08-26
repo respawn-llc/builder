@@ -479,9 +479,10 @@ func TestThinkingLevelCanChangeAfterLock(t *testing.T) {
 	}}
 
 	eng := mustNewExecTestEngine(t, store, client, Config{
-		Temperature:   1,
-		ThinkingLevel: "xhigh",
-		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand},
+		Temperature:             1,
+		ThinkingLevel:           "xhigh",
+		SupportedThinkingValues: []string{"low", "xhigh"},
+		EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
 	})
 	if _, err := eng.SubmitUserMessage(context.Background(), "hi"); err != nil {
 		t.Fatalf("submit first: %v", err)
@@ -518,8 +519,9 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
 		Config{
-			Model:         "gpt-5.3-codex",
-			ThinkingLevel: "high",
+			Model:                   "gpt-5.3-codex",
+			ThinkingLevel:           "high",
+			SupportedThinkingValues: []string{"low", "medium", "high", "xhigh"},
 			Reviewer: ReviewerConfig{
 				Frequency:     "off",
 				Model:         "gpt-5",
@@ -534,6 +536,19 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 		}
 		if got := eng.ThinkingLevel(); got != "high" {
 			t.Fatalf("thinking level after blank set = %q, want high", got)
+		}
+	})
+
+	t.Run("unsupported thinking level", func(t *testing.T) {
+		if err := eng.SetThinkingLevel(t.Context(), "ultra"); err == nil {
+			t.Fatal("expected unsupported thinking level error")
+		}
+		if got := eng.ThinkingLevel(); got != "high" {
+			t.Fatalf("thinking level after unsupported set = %q, want high", got)
+		}
+		meta := eng.store.Meta()
+		if meta.ChatSettings != nil && meta.ChatSettings.Thinking != nil {
+			t.Fatalf("unsupported Thinking persisted Session override: %+v", meta.ChatSettings)
 		}
 	})
 
@@ -703,10 +718,9 @@ func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
+func TestSetAutoCompactionEnabledPersistsSessionSetting(t *testing.T) {
 	store := mustCreateTestSession(t)
-	cfg := Config{Model: "gpt-5"}
-	eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
+	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
 
 	changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
 	if err != nil {
@@ -718,10 +732,9 @@ func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	if got := eng.AutoCompactionEnabled(); got {
 		t.Fatalf("expected runtime auto-compaction disabled, got %v", got)
 	}
-
-	restarted := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
-	if got := restarted.AutoCompactionEnabled(); !got {
-		t.Fatalf("expected auto-compaction enabled after restart, got %v", got)
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.AutoCompaction == nil || *meta.ChatSettings.AutoCompaction {
+		t.Fatalf("Session Auto-compaction override = %+v, want false", meta.ChatSettings)
 	}
 }
 

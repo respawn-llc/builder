@@ -854,7 +854,7 @@ func TestActiveSessionRuntimeFIFOsAreIndependent(t *testing.T) {
 		mustCreateTestSession(t),
 		&fakeClient{},
 		tools.NewRegistry(),
-		Config{Model: "gpt-5"},
+		Config{Model: "gpt-5", SupportedThinkingValues: []string{"low"}},
 	)
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -952,7 +952,7 @@ func TestForegroundShellReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 			ID:      toolspec.ToolExecCommand,
 			Handler: handler,
 		}),
-		Config{Model: "gpt-5"},
+		Config{Model: "gpt-5", SupportedThinkingValues: []string{"low"}},
 	)
 
 	firstStarted := make(chan struct{})
@@ -1079,7 +1079,7 @@ func TestWorktreeTransitionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 		mustCreateTestSession(t),
 		client,
 		tools.NewRegistry(),
-		Config{Model: "gpt-5"},
+		Config{Model: "gpt-5", SupportedThinkingValues: []string{"low"}},
 	)
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -1226,7 +1226,7 @@ func TestManualCompactionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 		mustCreateTestSession(t),
 		client,
 		tools.NewRegistry(),
-		Config{Model: "gpt-5"},
+		Config{Model: "gpt-5", SupportedThinkingValues: []string{"low"}},
 	)
 	engine.compactionRuntimeState().SetManualCompactionEligible(true)
 

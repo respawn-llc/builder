@@ -48,7 +48,7 @@ func requireSessionFastModeOverride(t *testing.T, store *session.Store, want boo
 	}
 }
 
-func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
+func TestSetQuestionsWithCommittedFeedbackKeepsCommittedSettingOnAppendFailure(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
@@ -57,15 +57,19 @@ func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testin
 	changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(context.Background(), false, func(bool, bool) string {
 		return "feedback"
 	})
-	if err == nil || receipt.Committed || changed || !enabled || !engine.QuestionsEnabled() {
+	if err == nil || !receipt.Committed || !changed || enabled || engine.QuestionsEnabled() {
 		t.Fatalf(
-			"uncommitted questions feedback mutated runtime state: receipt=%+v changed=%t enabled=%t current=%t error=%v",
+			"committed Questions setting was not retained after feedback failure: receipt=%+v changed=%t enabled=%t current=%t error=%v",
 			receipt,
 			changed,
 			enabled,
 			engine.QuestionsEnabled(),
 			err,
 		)
+	}
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.Questions == nil || *meta.ChatSettings.Questions {
+		t.Fatalf("Session Questions override = %+v, want false", meta.ChatSettings)
 	}
 
 	if err := blocker.Restore(); err != nil {
@@ -74,7 +78,7 @@ func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testin
 	assertBoundedControlFeedbackCount(t, store, 0)
 }
 
-func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
+func TestSetReviewerWithCommittedFeedbackKeepsCommittedSettingOnAppendFailure(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
@@ -94,15 +98,19 @@ func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 	changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(context.Background(), true, func(bool, string, bool) string {
 		return "feedback"
 	})
-	if err == nil || receipt.Committed || changed || mode != "edits" || engine.ReviewerFrequency() != "off" {
+	if err == nil || !receipt.Committed || !changed || mode != "edits" || engine.ReviewerFrequency() != "edits" {
 		t.Fatalf(
-			"uncommitted reviewer feedback mutated runtime state: receipt=%+v changed=%t mode=%q frequency=%q error=%v",
+			"committed Reviewer setting was not retained after feedback failure: receipt=%+v changed=%t mode=%q frequency=%q error=%v",
 			receipt,
 			changed,
 			mode,
 			engine.ReviewerFrequency(),
 			err,
 		)
+	}
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.Supervisor == nil || *meta.ChatSettings.Supervisor != "edits" {
+		t.Fatalf("Session Supervisor override = %+v, want edits", meta.ChatSettings)
 	}
 
 	if err := blocker.Restore(); err != nil {

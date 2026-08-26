@@ -165,7 +165,10 @@ func TestBackgroundFinalAnswerAppliesRuntimeMutationAtStepBoundary(t *testing.T)
 			return nil
 		},
 	}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model:                   "gpt-5",
+		SupportedThinkingValues: []string{"low", "medium"},
+	})
 	scheduler := engine.backgroundFlow.(*defaultBackgroundNoticeScheduler)
 	scheduler.queueDeveloperNotice(llm.Message{
 		Role:    llm.RoleDeveloper,

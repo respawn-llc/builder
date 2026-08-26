@@ -219,6 +219,7 @@ func NewRuntimeWiringWithBackground(
 		Temperature:                     1,
 		MaxTokens:                       0,
 		ThinkingLevel:                   active.ThinkingLevel,
+		SupportedThinkingValues:         launch.SupportedChatThinkingValues(active.Model, active.ThinkingLevel),
 		ModelCapabilities:               llm.LockedModelCapabilitiesForConfig(active.Model, active.ModelCapabilities),
 		FastModeEnabled:                 active.PriorityRequestMode,
 		WebSearchMode:                   active.WebSearch,
