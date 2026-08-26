@@ -402,7 +402,7 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 	return changed
 }
 
-func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
+func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
 	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
 		changed bool
 		enabled bool
@@ -429,9 +429,9 @@ func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
 		}{changed: true, enabled: enabled}, nil
 	})
 	if err != nil {
-		return false, e.AutoCompactionEnabled()
+		return false, e.AutoCompactionEnabled(), err
 	}
-	return result.changed, result.enabled
+	return result.changed, result.enabled, nil
 }
 
 func (e *Engine) QuestionsEnabled() bool {

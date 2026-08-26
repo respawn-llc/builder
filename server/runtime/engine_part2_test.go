@@ -708,7 +708,10 @@ func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	cfg := Config{Model: "gpt-5"}
 	eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
 
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	if err != nil {
+		t.Fatalf("disable auto-compaction: %v", err)
+	}
 	if !changed || enabled {
 		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
 	}
@@ -719,6 +722,22 @@ func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	restarted := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
 	if got := restarted.AutoCompactionEnabled(); !got {
 		t.Fatalf("expected auto-compaction enabled after restart, got %v", got)
+	}
+}
+
+func TestSetAutoCompactionEnabledRejectsAfterClose(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close engine: %v", err)
+	}
+	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	if !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("disable auto-compaction after close error = %v, want ErrEngineClosed", err)
+	}
+	if changed || !enabled {
+		t.Fatalf("setting after close = changed %v, enabled %v; want unchanged and enabled", changed, enabled)
 	}
 }
 
@@ -770,11 +789,12 @@ func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) 
 	type settingResult struct {
 		changed bool
 		enabled bool
+		err     error
 	}
 	settingDone := make(chan settingResult, 1)
 	go func() {
-		changed, enabled := eng.SetAutoCompactionEnabled(false)
-		settingDone <- settingResult{changed: changed, enabled: enabled}
+		changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+		settingDone <- settingResult{changed: changed, enabled: enabled, err: err}
 	}()
 	select {
 	case result := <-settingDone:
@@ -787,6 +807,9 @@ func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) 
 		t.Fatalf("submit while disabling auto-compaction: %v", err)
 	}
 	result := <-settingDone
+	if result.err != nil {
+		t.Fatalf("disable auto-compaction: %v", result.err)
+	}
 	if !result.changed || result.enabled {
 		t.Fatalf("setting result = %+v, want changed and disabled", result)
 	}

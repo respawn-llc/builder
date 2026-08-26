@@ -1674,6 +1674,27 @@ func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T)
 	}
 }
 
+func TestServiceSetAutoCompactionEnabledPropagatesClosedRuntime(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close engine: %v", err)
+	}
+
+	resp, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
+		SessionID: store.Meta().SessionID,
+		Enabled:   false,
+	})
+	if !errors.Is(err, runtime.ErrEngineClosed) {
+		t.Fatalf("SetAutoCompactionEnabled error = %v, want ErrEngineClosed", err)
+	}
+	if resp.Changed || resp.Enabled {
+		t.Fatalf("SetAutoCompactionEnabled response = %+v, want zero response on failure", resp)
+	}
+	if !engine.AutoCompactionEnabled() {
+		t.Fatal("auto-compaction changed after Runtime admission failure")
+	}
+}
+
 func TestServiceSetGoalAllowsAgentWithoutExistingGoal(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, &blockingRuntimeControlClient{}, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 
