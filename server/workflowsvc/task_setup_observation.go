@@ -10,13 +10,15 @@ import (
 	"core/server/workflowexecution"
 	"core/server/worktree"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
+
 	"github.com/google/uuid"
 )
 
 type taskSetupObservation struct {
 	setupOperationID serverapi.WorktreeSetupOperationID
-	executionTarget  serverapi.WorkflowExecutionTargetSelection
+	executionTarget  workflowcontract.ExecutionTargetSelection
 	publisher        workflowTaskSetupEventPublisher
 
 	mu             sync.Mutex
@@ -25,22 +27,19 @@ type taskSetupObservation struct {
 	finalized      bool
 }
 
-func newTaskSetupObservation(setupOperationID serverapi.WorktreeSetupOperationID, executionTarget workflow.ExecutionTargetSelection, publisher workflowTaskSetupEventPublisher) (*taskSetupObservation, error) {
+func newTaskSetupObservation(setupOperationID serverapi.WorktreeSetupOperationID, executionTarget workflowcontract.ExecutionTargetSelection, publisher workflowTaskSetupEventPublisher) (*taskSetupObservation, error) {
 	if err := setupOperationID.Validate(); err != nil {
 		return nil, err
 	}
 	if publisher == nil {
 		return nil, errors.New("Workflow Task setup event publisher is required")
 	}
-	target := serverapi.WorkflowExecutionTargetSelection{
-		Mode: serverapi.WorkflowExecutionTargetMode(executionTarget.Mode), CustomRef: executionTarget.CustomRef,
-	}
-	if err := target.Validate(); err != nil {
+	if err := executionTarget.Validate(); err != nil {
 		return nil, err
 	}
 	return &taskSetupObservation{
 		setupOperationID: setupOperationID,
-		executionTarget:  target,
+		executionTarget:  executionTarget,
 		publisher:        publisher,
 	}, nil
 }

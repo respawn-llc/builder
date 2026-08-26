@@ -20,6 +20,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/workflowcontract"
 )
 
 func TestCompleteWorkflowTaskConsumesCommittedResultBeforeReturningDiagnostic(t *testing.T) {
@@ -155,8 +156,8 @@ func TestApproveWorkflowTaskStartupFailureProjectsInterruptedResumeAcrossRestart
 	resumed, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	})
 	if err != nil || resumed.Applied == nil || len(resumed.Applied.CurrentNodes) != 1 {
@@ -240,8 +241,8 @@ WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	})
 	if err != nil || response.Applied == nil {

@@ -26,7 +26,9 @@ import (
 	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
+
 	"github.com/google/uuid"
 )
 
@@ -820,8 +822,8 @@ func isManagedExecutionTargetMode(mode sql.NullString) bool {
 	if !mode.Valid {
 		return false
 	}
-	switch workflow.ExecutionTargetMode(mode.String) {
-	case workflow.ExecutionTargetModeHead, workflow.ExecutionTargetModeDefaultBranch, workflow.ExecutionTargetModeCustomRef:
+	switch workflowcontract.ExecutionTargetMode(mode.String) {
+	case workflowcontract.ExecutionTargetModeHead, workflowcontract.ExecutionTargetModeDefaultBranch, workflowcontract.ExecutionTargetModeCustomRef:
 		return true
 	default:
 		return false

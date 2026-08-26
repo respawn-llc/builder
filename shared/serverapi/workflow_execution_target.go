@@ -7,26 +7,12 @@ import (
 	"strings"
 
 	"core/shared/protocol"
-)
-
-type WorkflowExecutionTargetMode string
-
-const (
-	WorkflowExecutionTargetModeNone                WorkflowExecutionTargetMode = "none"
-	WorkflowExecutionTargetModeHead                WorkflowExecutionTargetMode = "head"
-	WorkflowExecutionTargetModeDefaultBranch       WorkflowExecutionTargetMode = "default_branch"
-	WorkflowExecutionTargetModeCustomRef           WorkflowExecutionTargetMode = "custom_ref"
-	WorkflowExecutionTargetModeAskOnFirstExecution WorkflowExecutionTargetMode = "ask_on_first_execution"
+	"core/shared/workflowcontract"
 )
 
 type WorkflowExecutionTargetConfiguration struct {
-	Mode      WorkflowExecutionTargetMode `json:"mode"`
-	CustomRef *string                     `json:"custom_ref,omitempty"`
-}
-
-type WorkflowExecutionTargetSelection struct {
-	Mode      WorkflowExecutionTargetMode `json:"mode"`
-	CustomRef *string                     `json:"custom_ref,omitempty"`
+	Mode      workflowcontract.ExecutionTargetMode `json:"mode"`
+	CustomRef *string                              `json:"custom_ref,omitempty"`
 }
 
 type WorkflowExecutionTargetProvenance string
@@ -37,16 +23,16 @@ const (
 )
 
 type WorkflowExecutionTarget struct {
-	Mode         WorkflowExecutionTargetMode       `json:"mode"`
-	RequestedRef *string                           `json:"requested_ref,omitempty"`
-	ResolvedRef  *string                           `json:"resolved_ref,omitempty"`
-	CommitOID    *string                           `json:"commit_oid,omitempty"`
-	Provenance   WorkflowExecutionTargetProvenance `json:"provenance"`
+	Mode         workflowcontract.ExecutionTargetMode `json:"mode"`
+	RequestedRef *string                              `json:"requested_ref,omitempty"`
+	ResolvedRef  *string                              `json:"resolved_ref,omitempty"`
+	CommitOID    *string                              `json:"commit_oid,omitempty"`
+	Provenance   WorkflowExecutionTargetProvenance    `json:"provenance"`
 }
 
 type WorkflowExecutionTargetConfiguredTarget struct {
-	Mode         WorkflowExecutionTargetMode `json:"mode"`
-	RequestedRef *string                     `json:"requested_ref,omitempty"`
+	Mode         workflowcontract.ExecutionTargetMode `json:"mode"`
+	RequestedRef *string                              `json:"requested_ref,omitempty"`
 }
 
 type WorkflowExecutionTargetSelectionReason string
@@ -185,10 +171,10 @@ func DecodeWorkflowLockedExecutionTargetError(data json.RawMessage, message stri
 }
 
 func (p WorkflowExecutionTargetConfiguration) Validate(allowIncompleteCustomRef bool) error {
-	if !validWorkflowExecutionTargetPolicyMode(p.Mode) {
+	if !workflowcontract.IsExecutionTargetPolicyMode(p.Mode) {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "execution_target.mode", "execution_target.mode is invalid")
 	}
-	if p.Mode != WorkflowExecutionTargetModeCustomRef {
+	if p.Mode != workflowcontract.ExecutionTargetModeCustomRef {
 		if p.CustomRef != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "execution_target.custom_ref", "execution_target.custom_ref is only valid for custom_ref")
 		}
@@ -206,30 +192,11 @@ func (p WorkflowExecutionTargetConfiguration) Validate(allowIncompleteCustomRef 
 	return nil
 }
 
-func (s WorkflowExecutionTargetSelection) Validate() error {
-	if !validWorkflowConcreteExecutionTargetMode(s.Mode) {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "execution_target.mode", "execution_target.mode must be a concrete target")
-	}
-	if s.Mode != WorkflowExecutionTargetModeCustomRef {
-		if s.CustomRef != nil {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "execution_target.custom_ref", "execution_target.custom_ref is only valid for custom_ref")
-		}
-		return nil
-	}
-	if s.CustomRef == nil {
-		return workflowRequestError(WorkflowRequestErrorRequired, "execution_target.custom_ref", "execution_target.custom_ref is required")
-	}
-	if strings.TrimSpace(*s.CustomRef) == "" {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "execution_target.custom_ref", "execution_target.custom_ref must be non-blank")
-	}
-	return nil
-}
-
 func (t WorkflowExecutionTarget) Validate() error {
 	if t.Provenance != WorkflowExecutionTargetProvenanceResolved && t.Provenance != WorkflowExecutionTargetProvenanceLegacyObserved {
 		return errors.New("execution target provenance is invalid")
 	}
-	if t.Mode == WorkflowExecutionTargetModeNone {
+	if t.Mode == workflowcontract.ExecutionTargetModeNone {
 		if t.Provenance != WorkflowExecutionTargetProvenanceResolved {
 			return errors.New("none execution target provenance must be resolved")
 		}
@@ -238,7 +205,7 @@ func (t WorkflowExecutionTarget) Validate() error {
 		}
 		return nil
 	}
-	if !validWorkflowManagedExecutionTargetMode(t.Mode) {
+	if !workflowcontract.IsManagedExecutionTargetMode(t.Mode) {
 		return errors.New("execution target mode is invalid")
 	}
 	for _, fact := range []struct {
@@ -268,13 +235,13 @@ func (r WorkflowExecutionTargetSelectionRequirement) Validate() error {
 		if r.ConfiguredTarget == nil || !validWorkflowExecutionTargetUnavailableCause(r.UnavailableCause) {
 			return errors.New("configured target requirement requires configured target and unavailable cause")
 		}
-		if !validWorkflowManagedExecutionTargetMode(r.ConfiguredTarget.Mode) {
+		if !workflowcontract.IsManagedExecutionTargetMode(r.ConfiguredTarget.Mode) {
 			return errors.New("configured target requirement mode must be managed")
 		}
-		if r.ConfiguredTarget.Mode == WorkflowExecutionTargetModeCustomRef && (r.ConfiguredTarget.RequestedRef == nil || strings.TrimSpace(*r.ConfiguredTarget.RequestedRef) == "") {
+		if r.ConfiguredTarget.Mode == workflowcontract.ExecutionTargetModeCustomRef && (r.ConfiguredTarget.RequestedRef == nil || strings.TrimSpace(*r.ConfiguredTarget.RequestedRef) == "") {
 			return errors.New("configured custom ref requirement requires requested ref")
 		}
-		if r.ConfiguredTarget.Mode != WorkflowExecutionTargetModeCustomRef && r.ConfiguredTarget.RequestedRef != nil {
+		if r.ConfiguredTarget.Mode != workflowcontract.ExecutionTargetModeCustomRef && r.ConfiguredTarget.RequestedRef != nil {
 			return errors.New("configured non-custom requirement cannot include requested ref")
 		}
 	default:
@@ -290,33 +257,6 @@ func validWorkflowExecutionTargetUnavailableCause(cause WorkflowExecutionTargetU
 		WorkflowExecutionTargetUnavailableCauseDefaultBranchMissing,
 		WorkflowExecutionTargetUnavailableCauseDefaultBranchAmbiguous,
 		WorkflowExecutionTargetUnavailableCauseGitFailure:
-		return true
-	default:
-		return false
-	}
-}
-
-func validWorkflowExecutionTargetPolicyMode(mode WorkflowExecutionTargetMode) bool {
-	switch mode {
-	case WorkflowExecutionTargetModeNone, WorkflowExecutionTargetModeHead, WorkflowExecutionTargetModeDefaultBranch, WorkflowExecutionTargetModeCustomRef, WorkflowExecutionTargetModeAskOnFirstExecution:
-		return true
-	default:
-		return false
-	}
-}
-
-func validWorkflowConcreteExecutionTargetMode(mode WorkflowExecutionTargetMode) bool {
-	switch mode {
-	case WorkflowExecutionTargetModeNone, WorkflowExecutionTargetModeHead, WorkflowExecutionTargetModeDefaultBranch, WorkflowExecutionTargetModeCustomRef:
-		return true
-	default:
-		return false
-	}
-}
-
-func validWorkflowManagedExecutionTargetMode(mode WorkflowExecutionTargetMode) bool {
-	switch mode {
-	case WorkflowExecutionTargetModeHead, WorkflowExecutionTargetModeDefaultBranch, WorkflowExecutionTargetModeCustomRef:
 		return true
 	default:
 		return false

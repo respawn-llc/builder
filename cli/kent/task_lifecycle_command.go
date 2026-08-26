@@ -15,6 +15,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 )
 
 var (
@@ -426,7 +427,7 @@ func writeWorkflowExecutionTargetSelectionRequired(stderr io.Writer, requirement
 }
 
 func workflowConfiguredExecutionTargetSelector(target serverapi.WorkflowExecutionTargetConfiguredTarget) string {
-	if target.Mode == serverapi.WorkflowExecutionTargetModeCustomRef {
+	if target.Mode == workflowcontract.ExecutionTargetModeCustomRef {
 		if target.RequestedRef != nil {
 			return "ref:" + *target.RequestedRef
 		}
@@ -1146,7 +1147,7 @@ func taskMoveRecoveryArgs(taskRef, targetNode string, project, commentary, trans
 	return args, nil
 }
 
-func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecutionTargetSelection, setupErr *serverapi.WorktreeSetupRetainedError) (taskSetupGuidance, error) {
+func projectMoveSetupGuidance(base []string, target *workflowcontract.ExecutionTargetSelection, setupErr *serverapi.WorktreeSetupRetainedError) (taskSetupGuidance, error) {
 	if err := setupErr.Validate(); err != nil {
 		return taskSetupGuidance{}, err
 	}
@@ -1172,15 +1173,15 @@ func taskSetupDiagnostic(value string) (*string, error) {
 	return &value, nil
 }
 
-func taskExecutionTargetSelector(target serverapi.WorkflowExecutionTargetSelection) (string, error) {
+func taskExecutionTargetSelector(target workflowcontract.ExecutionTargetSelection) (string, error) {
 	switch target.Mode {
-	case serverapi.WorkflowExecutionTargetModeNone:
+	case workflowcontract.ExecutionTargetModeNone:
 		return "none", nil
-	case serverapi.WorkflowExecutionTargetModeHead:
+	case workflowcontract.ExecutionTargetModeHead:
 		return "head", nil
-	case serverapi.WorkflowExecutionTargetModeDefaultBranch:
+	case workflowcontract.ExecutionTargetModeDefaultBranch:
 		return "default-branch", nil
-	case serverapi.WorkflowExecutionTargetModeCustomRef:
+	case workflowcontract.ExecutionTargetModeCustomRef:
 		if target.CustomRef != nil {
 			return "ref:" + *target.CustomRef, nil
 		}

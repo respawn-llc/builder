@@ -22,6 +22,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
 )
 
@@ -1730,7 +1731,7 @@ func lockTaskWorktreeExecutionTarget(t *testing.T, env *serviceTestEnv, store *w
 	commitOID := resolvedTarget.CommitOID
 	_, err := store.StartTaskWithExecutionTarget(env.ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:         workflow.ExecutionTargetModeHead,
+			Mode:         workflowcontract.ExecutionTargetModeHead,
 			RequestedRef: &requestedRef,
 			ResolvedRef:  resolvedTarget.CanonicalRef,
 			CommitOID:    &commitOID,

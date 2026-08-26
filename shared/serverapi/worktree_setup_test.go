@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
 )
 
@@ -70,10 +71,10 @@ func TestWorktreeSetupEventValidation(t *testing.T) {
 }
 
 func TestSetupRecoveryDetailValidationAtAPIContract(t *testing.T) {
-	valid := worktreecontract.SetupRecoveryDetail[WorktreeSetupOperationID, WorkflowExecutionTargetSelection]{
+	valid := worktreecontract.SetupRecoveryDetail[WorktreeSetupOperationID, workflowcontract.ExecutionTargetSelection]{
 		SetupOperationID: NewWorktreeSetupOperationID(), Cause: worktreecontract.SetupFailureTargetPreparation,
 		Diagnostic: "target failed", SetupRequirement: worktreecontract.SetupRequirementRequired,
-		ExecutionTarget: WorkflowExecutionTargetSelection{Mode: WorkflowExecutionTargetModeHead},
+		ExecutionTarget: workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeHead},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("Validate target-preparation recovery: %v", err)

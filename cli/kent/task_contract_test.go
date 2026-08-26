@@ -14,6 +14,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
+	"core/shared/workflowcontract"
 )
 
 type taskPaginationStub struct {
@@ -548,7 +549,7 @@ func TestTaskMoveStructuredValuesSelectionAndDependencyGuidance(t *testing.T) {
 }
 
 func TestTaskSetupGuidanceContracts(t *testing.T) {
-	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
+	target := workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeHead}
 	script := "/repo/setup.sh"
 	failed := &serverapi.WorktreeSetupEvent{
 		Phase: serverapi.WorktreeSetupPhaseFailed,
@@ -623,7 +624,7 @@ func TestTaskMoveSetupRecoveryPreservesStructuredInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
+	target := workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeHead}
 	guidance, err := projectMoveSetupGuidance(base, &target, &serverapi.WorktreeSetupRetainedError{
 		Worktree:                 *taskContractSetupWorktree("/tmp/retained"),
 		Diagnostic:               "failed twice",

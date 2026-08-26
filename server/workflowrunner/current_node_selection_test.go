@@ -13,6 +13,7 @@ import (
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/workflowcontract"
 )
 
 func TestCurrentNodeStartUsesMaterializedSelectedRoleAndForcesQuestions(t *testing.T) {
@@ -206,7 +207,7 @@ func newMaterializedRoleSelectionStart(t *testing.T) (*currentNodeRunnerFixture,
 	task := f.createTask(t, workflowID)
 	if err := f.store.LockTaskExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:       workflow.ExecutionTargetModeNone,
+			Mode:       workflowcontract.ExecutionTargetModeNone,
 			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 		},
 		Root: workflowstore.ExecutionRoot{

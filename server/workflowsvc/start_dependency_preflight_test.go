@@ -8,6 +8,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 )
 
 type countingTaskDependencyReadModel struct {
@@ -71,7 +72,7 @@ func TestStartDependencyPreflightWarnsBeforeExecutionTargetWorkAndProceedSkipsRe
 	if err := warning.Validate(); err != nil {
 		t.Fatalf("warning Validate: %v", err)
 	}
-	if targets.resolveSelection != (workflow.ExecutionTargetSelection{}) || targets.materializeTaskID != "" || targets.restoreTaskID != "" {
+	if targets.resolveSelection != (workflowcontract.ExecutionTargetSelection{}) || targets.materializeTaskID != "" || targets.restoreTaskID != "" {
 		t.Fatalf("target infrastructure used during warning: %+v", targets)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(blocked.Task.ID))
@@ -118,8 +119,8 @@ func TestStartDependencyPreflightReturnsBeforeTargetInfrastructure(t *testing.T)
 	_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           taskID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeHead,
 		},
 	})
 	if err != nil {
@@ -148,8 +149,8 @@ func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetInfrastructur
 		TaskID:                     task.Task.ID,
 		TargetNodeID:               workflowServiceNodeIDByKey(t, definition.Definition, "plan"),
 		ProceedDespiteDependencies: true,
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeHead,
 		},
 	})
 	if !errors.Is(err, errExecutionTargetInfrastructureRequired) {
@@ -199,14 +200,14 @@ func TestExecutableMoveDependencyPreflightRequiresExplicitProceed(t *testing.T) 
 	if len(execution.interruptTaskIDs) != 0 || len(execution.started) != 0 {
 		t.Fatalf("execution used during dependency warning: interrupts=%v starts=%v", execution.interruptTaskIDs, execution.started)
 	}
-	if targets.resolveSelection != (workflow.ExecutionTargetSelection{}) || targets.materializeTaskID != "" {
+	if targets.resolveSelection != (workflowcontract.ExecutionTargetSelection{}) || targets.materializeTaskID != "" {
 		t.Fatalf("target infrastructure used during dependency warning: %+v", targets)
 	}
 
 	proceeded, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:                     blocked.Task.ID,
 		TargetNodeID:               targetNodeID,
-		ExecutionTarget:            &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
+		ExecutionTarget:            &workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeNone},
 		ProceedDespiteDependencies: true,
 	})
 	if err != nil {
@@ -242,8 +243,8 @@ func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetCompatibility
 		Values: map[string]map[string]string{
 			"plan": {"prior_summary": "manual plan"},
 		},
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	})
 	if !errors.Is(err, workflowstore.ErrExecutionTargetAlreadyLocked) {

@@ -14,6 +14,7 @@ import (
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 )
 
 func TestServiceManualMoveNoOpRejectsExplicitBranchWithoutPendingMutation(t *testing.T) {
@@ -112,7 +113,7 @@ func TestServiceManualMoveCarriesBranchAssertionAndDoesNotApplyOnMismatch(t *tes
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -129,7 +130,7 @@ func TestServiceManualMoveCarriesBranchAssertionAndDoesNotApplyOnMismatch(t *tes
 	ref := "refs/heads/" + existingBranch
 	targets := &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
-			Mode: workflow.ExecutionTargetModeHead, RequestedRef: &requestedRef,
+			Mode: workflowcontract.ExecutionTargetModeHead, RequestedRef: &requestedRef,
 			CommitOID: &commitOID, Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 		},
 		materializeErr: &serverapi.WorkflowTaskInitialBranchError{
@@ -161,7 +162,7 @@ func TestServiceManualMoveAcceptedBranchReturnsConflictWhenFinalRevalidationBeco
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -182,7 +183,7 @@ func TestServiceManualMoveAcceptedBranchReturnsConflictWhenFinalRevalidationBeco
 	materializedBranch := ""
 	targets := &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
-			Mode: workflow.ExecutionTargetModeHead, RequestedRef: &requestedRef,
+			Mode: workflowcontract.ExecutionTargetModeHead, RequestedRef: &requestedRef,
 			CommitOID: &commitOID, Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 		},
 	}

@@ -15,6 +15,7 @@ import (
 	"core/server/workflow"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 )
 
 type TaskDetail struct {
@@ -339,7 +340,7 @@ func (d *TaskDetail) executionTargetForTask(ctx context.Context, task sqlitegen.
 		return nil, nil, nil
 	}
 	target := &serverapi.WorkflowExecutionTarget{
-		Mode:         serverapi.WorkflowExecutionTargetMode(task.ExecutionTargetMode.String),
+		Mode:         workflowcontract.ExecutionTargetMode(task.ExecutionTargetMode.String),
 		RequestedRef: metadata.OptionalString(task.ExecutionTargetRequestedRef),
 		ResolvedRef:  metadata.OptionalString(task.ExecutionTargetResolvedRef),
 		CommitOID:    metadata.OptionalString(task.ExecutionTargetCommitOid),

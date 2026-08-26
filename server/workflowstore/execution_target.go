@@ -10,6 +10,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/workflowcontract"
 )
 
 type ExecutionTargetProvenance string
@@ -20,7 +21,7 @@ const (
 )
 
 type ExecutionTargetSnapshot struct {
-	Mode         workflow.ExecutionTargetMode
+	Mode         workflowcontract.ExecutionTargetMode
 	RequestedRef *string
 	ResolvedRef  *string
 	CommitOID    *string
@@ -107,7 +108,7 @@ func (s *Store) GetTaskExecutionTargetContext(ctx context.Context, taskID workfl
 	return TaskExecutionTargetContext{
 		Task: taskRecord,
 		Policy: normalizeWorkflowExecutionTargetPolicy(workflow.ExecutionTargetPolicy{
-			Mode:      workflow.ExecutionTargetMode(workflowRecord.ExecutionTargetPolicy),
+			Mode:      workflowcontract.ExecutionTargetMode(workflowRecord.ExecutionTargetPolicy),
 			CustomRef: workflowCustomRefFromRow(workflowRecord.ExecutionTargetCustomRef),
 		}),
 		SourceWorkspaceID:   sourceWorkspace.ID,
@@ -167,7 +168,7 @@ func (c ExecutionTargetCandidate) Validate() error {
 	if err := c.Root.Validate(); err != nil {
 		return err
 	}
-	if c.Snapshot.Mode == workflow.ExecutionTargetModeNone {
+	if c.Snapshot.Mode == workflowcontract.ExecutionTargetModeNone {
 		if c.Root.Managed != nil {
 			return errors.New("none execution target candidate has a managed execution root")
 		}
@@ -227,13 +228,13 @@ func (e *ExecutionRootError) Unwrap() error {
 }
 
 func (s ExecutionTargetSnapshot) Validate() error {
-	if s.Mode == workflow.ExecutionTargetModeNone {
+	if s.Mode == workflowcontract.ExecutionTargetModeNone {
 		if s.RequestedRef != nil || s.ResolvedRef != nil || s.CommitOID != nil || !validExecutionTargetProvenance(s.Provenance) {
 			return errors.New("none execution target snapshot has managed facts")
 		}
 		return nil
 	}
-	if s.Mode != workflow.ExecutionTargetModeHead && s.Mode != workflow.ExecutionTargetModeDefaultBranch && s.Mode != workflow.ExecutionTargetModeCustomRef {
+	if s.Mode != workflowcontract.ExecutionTargetModeHead && s.Mode != workflowcontract.ExecutionTargetModeDefaultBranch && s.Mode != workflowcontract.ExecutionTargetModeCustomRef {
 		return errors.New("execution target snapshot mode is invalid")
 	}
 	if s.RequestedRef == nil || strings.TrimSpace(*s.RequestedRef) == "" || s.CommitOID == nil || strings.TrimSpace(*s.CommitOID) == "" || !validExecutionTargetProvenance(s.Provenance) {
@@ -270,7 +271,7 @@ func executionTargetSnapshotFromFields(mode *string, requestedRef *string, resol
 		return nil, nil
 	}
 	snapshot := ExecutionTargetSnapshot{
-		Mode:         workflow.ExecutionTargetMode(*mode),
+		Mode:         workflowcontract.ExecutionTargetMode(*mode),
 		RequestedRef: requestedRef,
 		ResolvedRef:  resolvedRef,
 		CommitOID:    commitOID,
@@ -310,7 +311,7 @@ func executionRootForTask(ctx context.Context, q *sqlitegen.Queries, task sqlite
 		SourceWorkspaceID:   sourceWorkspace.ID,
 		SourceWorkspaceRoot: sourceWorkspace.CanonicalRootPath,
 	}
-	if snapshot.Mode == workflow.ExecutionTargetModeNone {
+	if snapshot.Mode == workflowcontract.ExecutionTargetModeNone {
 		return root, root.Validate()
 	}
 	worktreeID := strings.TrimSpace(task.ManagedWorktreeID.String)
@@ -382,7 +383,7 @@ func validateExecutionTargetCandidateForTask(ctx context.Context, q *sqlitegen.Q
 	if candidate.Root.SourceWorkspaceID != sourceWorkspace.ID || candidate.Root.SourceWorkspaceRoot != sourceWorkspace.CanonicalRootPath {
 		return errors.New("execution target candidate source workspace does not match task source workspace")
 	}
-	if candidate.Snapshot.Mode == workflow.ExecutionTargetModeNone {
+	if candidate.Snapshot.Mode == workflowcontract.ExecutionTargetModeNone {
 		return nil
 	}
 	if !task.ManagedWorktreeID.Valid || strings.TrimSpace(task.ManagedWorktreeID.String) == "" || candidate.Root.Managed == nil || task.ManagedWorktreeID.String != candidate.Root.Managed.WorktreeID {

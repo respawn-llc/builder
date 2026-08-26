@@ -41,6 +41,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
+	"core/shared/workflowcontract"
 )
 
 func New(cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport) (*Core, error) {
@@ -452,15 +453,15 @@ func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Co
 	var revision worktree.GitRevision
 	var err error
 	switch req.Selection.Mode {
-	case workflow.ExecutionTargetModeHead:
+	case workflowcontract.ExecutionTargetModeHead:
 		revision, err = i.git.ResolveHEAD(ctx, req.SourceWorkspaceRoot)
-	case workflow.ExecutionTargetModeDefaultBranch:
+	case workflowcontract.ExecutionTargetModeDefaultBranch:
 		var defaultBranch worktree.GitDefaultBranch
 		defaultBranch, err = i.git.ResolveDefaultBranch(ctx, req.SourceWorkspaceRoot)
 		if err == nil {
 			revision, err = i.git.ResolveRevision(ctx, req.SourceWorkspaceRoot, defaultBranch.Ref)
 		}
-	case workflow.ExecutionTargetModeCustomRef:
+	case workflowcontract.ExecutionTargetModeCustomRef:
 		if req.Selection.CustomRef == nil {
 			return workflowstore.ExecutionTargetSnapshot{}, errors.New("custom execution target ref is required")
 		}
@@ -489,7 +490,7 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 	if err := req.Snapshot.Validate(); err != nil {
 		return workflowsvc.ExecutionTargetMaterialization{}, err
 	}
-	if req.Snapshot.Mode == workflow.ExecutionTargetModeNone {
+	if req.Snapshot.Mode == workflowcontract.ExecutionTargetModeNone {
 		prepared, err := i.service.PrepareTaskExecutionRoot(ctx, worktree.TaskExecutionRootPreparationRequest{
 			TaskID: req.TaskID, SetupOperationID: req.SetupOperationID, SetupRequirement: req.SetupRequirement,
 		})

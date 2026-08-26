@@ -5,13 +5,14 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
+	"core/shared/workflowcontract"
 )
 
 func TestDefinitionRejectsInvalidExecutionTargetPolicies(t *testing.T) {
 	customRef := "refs/tags/v1"
 	for _, policy := range []workflow.ExecutionTargetPolicy{
-		{Mode: workflow.ExecutionTargetModeHead, CustomRef: &customRef},
-		{Mode: workflow.ExecutionTargetMode("future")},
+		{Mode: workflowcontract.ExecutionTargetModeHead, CustomRef: &customRef},
+		{Mode: workflowcontract.ExecutionTargetMode("future")},
 	} {
 		def := parameterWorkflow(t)
 		def.ExecutionTargetPolicy = policy
@@ -25,38 +26,9 @@ func TestDefinitionRejectsInvalidExecutionTargetPolicies(t *testing.T) {
 	}
 }
 
-func TestExecutionTargetSelectionValidation(t *testing.T) {
-	customRef := "release/v1"
-	blankRef := " "
-
-	tests := []struct {
-		name      string
-		selection workflow.ExecutionTargetSelection
-		wantErr   bool
-	}{
-		{name: "none", selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone}},
-		{name: "head", selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeHead}},
-		{name: "default branch", selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeDefaultBranch}},
-		{name: "custom ref", selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeCustomRef, CustomRef: &customRef}},
-		{name: "ask on first execution cannot be selected", selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeAskOnFirstExecution}, wantErr: true},
-		{name: "custom selection requires ref", selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeCustomRef}, wantErr: true},
-		{name: "custom selection rejects blank ref", selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeCustomRef, CustomRef: &blankRef}, wantErr: true},
-		{name: "concrete non custom selection rejects ref", selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeHead, CustomRef: &customRef}, wantErr: true},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := test.selection.Validate()
-			if (err != nil) != test.wantErr {
-				t.Fatalf("Validate() error = %v, wantErr %v", err, test.wantErr)
-			}
-		})
-	}
-}
-
 func TestDefinitionReportsCustomRefDraftIssueWithoutBlockingDraft(t *testing.T) {
 	def := parameterWorkflow(t)
-	def.ExecutionTargetPolicy = workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeCustomRef}
+	def.ExecutionTargetPolicy = workflow.ExecutionTargetPolicy{Mode: workflowcontract.ExecutionTargetModeCustomRef}
 
 	draft := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 	if !hasValidationCode(draft, workflow.CodeExecutionTargetCustomRefRequired) {

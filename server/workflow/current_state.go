@@ -9,7 +9,9 @@ import (
 
 	"core/shared/protocol"
 	"core/shared/runtimeids"
+	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
+
 	"github.com/google/uuid"
 )
 
@@ -187,7 +189,7 @@ func (d CurrentNodeInterruptionDetail) SetupOperationID() (*uuid.UUID, error) {
 	return &value, nil
 }
 
-type CurrentNodeSetupRecoveryDetail = worktreecontract.SetupRecoveryDetail[uuid.UUID, ExecutionTargetSelection]
+type CurrentNodeSetupRecoveryDetail = worktreecontract.SetupRecoveryDetail[uuid.UUID, workflowcontract.ExecutionTargetSelection]
 
 type CurrentNodeSetupRecoveryCause = worktreecontract.SetupFailureKind
 

@@ -17,6 +17,8 @@ import (
 	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
+
 	"github.com/google/uuid"
 )
 
@@ -658,7 +660,7 @@ func workflowRecordFromRow(row workflowRecordRow) WorkflowRecord {
 		Description: row.Description,
 		Version:     row.Version,
 		ExecutionTargetPolicy: workflow.ExecutionTargetPolicy{
-			Mode:      workflow.ExecutionTargetMode(row.ExecutionTargetPolicy),
+			Mode:      workflowcontract.ExecutionTargetMode(row.ExecutionTargetPolicy),
 			CustomRef: metadata.OptionalString(row.ExecutionTargetCustomRef),
 		}.Canonical(),
 	}

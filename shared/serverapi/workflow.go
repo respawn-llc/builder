@@ -915,12 +915,12 @@ type WorkflowTaskUpdateResponse struct {
 }
 
 type WorkflowTaskStartRequest struct {
-	TaskID                     string                            `json:"task_id"`
-	InvokingSessionID          *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
-	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id"`
-	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
-	BranchName                 *string                           `json:"branch_name,omitempty"`
-	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
+	TaskID                     string                                     `json:"task_id"`
+	InvokingSessionID          *runtimeids.SessionID                      `json:"invoking_session_id,omitempty"`
+	SetupOperationID           WorktreeSetupOperationID                   `json:"setup_operation_id"`
+	ExecutionTarget            *workflowcontract.ExecutionTargetSelection `json:"execution_target,omitempty"`
+	BranchName                 *string                                    `json:"branch_name,omitempty"`
+	ProceedDespiteDependencies bool                                       `json:"proceed_despite_dependencies,omitempty"`
 }
 
 type WorkflowTaskStartResponse struct {
@@ -943,11 +943,11 @@ type WorkflowTaskCurrentNode struct {
 }
 
 type WorkflowTaskResumeRequest struct {
-	TaskID            string                            `json:"task_id"`
-	InvokingSessionID *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
-	SetupOperationID  WorktreeSetupOperationID          `json:"setup_operation_id"`
-	ExecutionTarget   *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
-	BranchName        *string                           `json:"branch_name,omitempty"`
+	TaskID            string                                     `json:"task_id"`
+	InvokingSessionID *runtimeids.SessionID                      `json:"invoking_session_id,omitempty"`
+	SetupOperationID  WorktreeSetupOperationID                   `json:"setup_operation_id"`
+	ExecutionTarget   *workflowcontract.ExecutionTargetSelection `json:"execution_target,omitempty"`
+	BranchName        *string                                    `json:"branch_name,omitempty"`
 }
 
 type WorkflowTaskResumeResponse struct {
@@ -980,15 +980,15 @@ type WorkflowTaskApproveApplied struct {
 }
 
 type WorkflowTaskMoveRequest struct {
-	TaskID                     string                            `json:"task_id"`
-	InvokingSessionID          *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
-	TargetNodeID               string                            `json:"target_node_id"`
-	TransitionKey              *string                           `json:"transition_key,omitempty"`
-	Values                     map[string]map[string]string      `json:"values,omitempty"`
-	Commentary                 string                            `json:"commentary,omitempty"`
-	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
-	BranchName                 *string                           `json:"branch_name,omitempty"`
-	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
+	TaskID                     string                                     `json:"task_id"`
+	InvokingSessionID          *runtimeids.SessionID                      `json:"invoking_session_id,omitempty"`
+	TargetNodeID               string                                     `json:"target_node_id"`
+	TransitionKey              *string                                    `json:"transition_key,omitempty"`
+	Values                     map[string]map[string]string               `json:"values,omitempty"`
+	Commentary                 string                                     `json:"commentary,omitempty"`
+	ExecutionTarget            *workflowcontract.ExecutionTargetSelection `json:"execution_target,omitempty"`
+	BranchName                 *string                                    `json:"branch_name,omitempty"`
+	ProceedDespiteDependencies bool                                       `json:"proceed_despite_dependencies,omitempty"`
 }
 
 type WorkflowTaskMoveResponse struct {
@@ -2860,13 +2860,13 @@ type workflowAttentionInterruptionDetailSchema struct {
 	Code                                 string             `json:"code"`
 	Fields                               map[string]*string `json:"fields"`
 	ConfiguredExecutionTargetUnavailable *struct {
-		Mode         WorkflowExecutionTargetMode             `json:"mode"`
+		Mode         workflowcontract.ExecutionTargetMode    `json:"mode"`
 		RequestedRef *string                                 `json:"requested_ref,omitempty"`
 		Cause        WorkflowExecutionTargetUnavailableCause `json:"cause"`
 	} `json:"configured_execution_target_unavailable,omitempty"`
 	SetupRecovery *worktreecontract.SetupRecoveryDetail[
 		WorktreeSetupOperationID,
-		WorkflowExecutionTargetSelection,
+		workflowcontract.ExecutionTargetSelection,
 	] `json:"setup_recovery,omitempty"`
 }
 

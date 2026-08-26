@@ -9,11 +9,11 @@ import (
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
-	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/server/workflowsvc"
 	"core/server/worktree"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 )
 
 func TestTaskExecutionTargetInfrastructureCarriesPostCreationBranchAssertion(t *testing.T) {
@@ -66,7 +66,7 @@ func TestTaskExecutionTargetInfrastructureCarriesPostCreationBranchAssertion(t *
 	requestedRef := revision.RequestedRef
 	commitOID := revision.CommitOID
 	snapshot := workflowstore.ExecutionTargetSnapshot{
-		Mode: workflow.ExecutionTargetModeHead, RequestedRef: &requestedRef,
+		Mode: workflowcontract.ExecutionTargetModeHead, RequestedRef: &requestedRef,
 		ResolvedRef: revision.CanonicalRef, CommitOID: &commitOID,
 		Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 	}

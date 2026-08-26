@@ -29,6 +29,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
 )
 
@@ -384,8 +385,8 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	applied, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:       task.Task.ID,
 		TargetNodeID: targetNodeID,
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	})
 	if err != nil {
@@ -650,8 +651,8 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:       task.Task.ID,
 		TargetNodeID: targetNodeID,
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	})
 	if !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
@@ -951,8 +952,8 @@ func TestServiceTaskStartAppliesExplicitNoneSelectionAndLocksTarget(t *testing.T
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		TaskID:           taskID,
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	})
 	if err != nil {
@@ -969,7 +970,7 @@ func TestServiceTaskStartAppliesExplicitNoneSelectionAndLocksTarget(t *testing.T
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
-		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone ||
+		targetContext.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone ||
 		targetContext.Task.ManagedWorktreeID != nil ||
 		targetContext.Task.PendingInitialManagedBranchName != nil {
 		t.Fatalf("locked target = %+v, managed worktree = %v, want none", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
@@ -980,7 +981,7 @@ func TestServiceAffectedStartNodeWithProvisionalWorktreeStartsAndLocksTarget(t *
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -992,7 +993,7 @@ func TestServiceAffectedStartNodeWithProvisionalWorktreeStartsAndLocksTarget(t *
 	bindWorkflowServiceManagedWorktree(t, ctx, metadataStore, binding.WorkspaceID, workflow.TaskID(task.Task.ID), worktreeID, worktreeRoot, true)
 	infrastructure := &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
-			Mode:         workflow.ExecutionTargetModeHead,
+			Mode:         workflowcontract.ExecutionTargetModeHead,
 			RequestedRef: &requestedRef,
 			ResolvedRef:  &resolvedRef,
 			CommitOID:    &commitOID,
@@ -1021,7 +1022,7 @@ func TestServiceAffectedStartNodeWithProvisionalWorktreeStartsAndLocksTarget(t *
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
-		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
+		targetContext.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeHead ||
 		targetContext.Task.ExecutionTarget.CommitOID == nil ||
 		*targetContext.Task.ExecutionTarget.CommitOID != commitOID ||
 		targetContext.Task.ManagedWorktreeID == nil ||
@@ -1049,7 +1050,7 @@ func TestServiceTaskResumeDoesNotRepeatCompletedSetupAfterTargetLockFailure(t *t
 	firstMaterialization := true
 	infrastructure := &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
-			Mode:         workflow.ExecutionTargetModeHead,
+			Mode:         workflowcontract.ExecutionTargetModeHead,
 			RequestedRef: &requestedRef,
 			CommitOID:    &commitOID,
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
@@ -1079,8 +1080,8 @@ func TestServiceTaskResumeDoesNotRepeatCompletedSetupAfterTargetLockFailure(t *t
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		TaskID:           task.Task.ID,
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeHead,
 		},
 	})
 	if err != nil || response.Applied == nil {
@@ -1129,8 +1130,8 @@ func TestServiceTaskResumeDoesNotRepeatCompletedSetupAfterTargetLockFailure(t *t
 	resumed, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeHead,
 		},
 	})
 	if err != nil || resumed.Applied == nil {
@@ -1147,7 +1148,7 @@ func TestServiceTaskResumeDoesNotRepeatCompletedSetupAfterTargetLockFailure(t *t
 		t.Fatalf("GetTaskExecutionTargetContext after Resume: %v", err)
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
-		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
+		targetContext.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeHead ||
 		targetContext.Task.ManagedWorktreeID == nil ||
 		*targetContext.Task.ManagedWorktreeID != worktreeID {
 		t.Fatalf("recovered target = %+v, worktree = %v; want locked retained target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
@@ -1159,7 +1160,7 @@ func TestTaskSetupObservationPublishesRetryReadyFailureOnlyAfterFinalization(t *
 	recorder := &workflowTaskSetupEventRecorder{}
 	observation, err := newTaskSetupObservation(
 		setupOperationID,
-		workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
+		workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeNone},
 		recorder,
 	)
 	if err != nil {
@@ -1168,7 +1169,7 @@ func TestTaskSetupObservationPublishesRetryReadyFailureOnlyAfterFinalization(t *
 	preparationErr := taskPreparationError(
 		setupOperationID,
 		initiatingActionTargetPreflight{
-			selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
+			selection: workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeNone},
 			explicit:  true,
 		},
 		nil,
@@ -1198,7 +1199,7 @@ func TestTaskSetupObservationPublishesRetryReadyFailureOnlyAfterFinalization(t *
 		event.Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
 		event.Failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
 		event.Failed.ExecutionTarget == nil ||
-		event.Failed.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeNone {
+		event.Failed.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone {
 		t.Fatalf("setup event = %+v, want retry-ready target preparation failure", event)
 	}
 }
@@ -1207,7 +1208,7 @@ func TestServiceTaskStartDefersConfiguredTargetResolutionFailure(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -1252,7 +1253,7 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -1268,11 +1269,11 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 		workflow.CurrentNodeInterruptionDetail{
 			Code: configuredTargetPreparationFailureCode,
 			Fields: map[string]string{
-				"mode":  string(serverapi.WorkflowExecutionTargetModeHead),
+				"mode":  string(workflowcontract.ExecutionTargetModeHead),
 				"cause": string(serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision),
 			},
 			ConfiguredExecutionTargetUnavailable: &workflow.ConfiguredExecutionTargetUnavailable{
-				Mode:  workflow.ExecutionTargetModeHead,
+				Mode:  workflowcontract.ExecutionTargetModeHead,
 				Cause: workflow.ExecutionTargetUnavailableCauseInvalidRevision,
 			},
 		},
@@ -1280,7 +1281,7 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 		t.Fatalf("InterruptCurrentNode: %v", err)
 	}
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeAskOnFirstExecution,
+		Mode: workflowcontract.ExecutionTargetModeAskOnFirstExecution,
 	})
 	execution := &currentNodeCompletionExecutionStub{store: service.store}
 	service.currentNodeExecution = execution
@@ -1321,8 +1322,8 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	response, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	})
 	if err != nil {
@@ -1339,7 +1340,7 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
-		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+		targetContext.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone {
 		t.Fatalf("execution target = %+v, want locked none target", targetContext.Task.ExecutionTarget)
 	}
 }
@@ -1348,7 +1349,7 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -1368,7 +1369,7 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 	commitOID := strings.Repeat("c", 40)
 	service.executionTargets = &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
-			Mode:         workflow.ExecutionTargetModeHead,
+			Mode:         workflowcontract.ExecutionTargetModeHead,
 			RequestedRef: &requestedRef,
 			CommitOID:    &commitOID,
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
@@ -1406,8 +1407,8 @@ func TestServiceTaskResumeNoOpsWhenTaskAlreadyResumed(t *testing.T) {
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	})
 	if err != nil {
@@ -1469,8 +1470,8 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 	request := serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	}
 
@@ -1568,8 +1569,8 @@ func TestServiceTaskStartReturnsTypedErrorForInvalidExplicitCustomRef(t *testing
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		TaskID:           taskID,
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode:      serverapi.WorkflowExecutionTargetModeCustomRef,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode:      workflowcontract.ExecutionTargetModeCustomRef,
 			CustomRef: &customRef,
 		},
 	})
@@ -2087,7 +2088,7 @@ func TestServiceMapsWorkflowTaskLabelScopeFailures(t *testing.T) {
 
 type recordingExecutionTargetInfrastructure struct {
 	resolution                workflowstore.ExecutionTargetSnapshot
-	resolveSelection          workflow.ExecutionTargetSelection
+	resolveSelection          workflowcontract.ExecutionTargetSelection
 	initialBranchInspection   InitialTaskBranchInspectionRequest
 	initialBranchInspections  int
 	initialBranchErr          error
@@ -2572,7 +2573,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 			Name:        "Saved Workflow",
 			Description: "Saved metadata",
 			ExecutionTargetPolicy: &serverapi.WorkflowExecutionTargetConfiguration{
-				Mode:      serverapi.WorkflowExecutionTargetModeCustomRef,
+				Mode:      workflowcontract.ExecutionTargetModeCustomRef,
 				CustomRef: &customRef,
 			},
 		},
@@ -2587,7 +2588,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	if saved.Definition.Workflow.Name != "Saved Workflow" || saved.Definition.Workflow.Description != "Saved metadata" {
 		t.Fatalf("saved workflow metadata = %+v, want combined metadata persisted", saved.Definition.Workflow)
 	}
-	if saved.Definition.Workflow.ExecutionTargetPolicy.Mode != serverapi.WorkflowExecutionTargetModeCustomRef ||
+	if saved.Definition.Workflow.ExecutionTargetPolicy.Mode != workflowcontract.ExecutionTargetModeCustomRef ||
 		saved.Definition.Workflow.ExecutionTargetPolicy.CustomRef == nil ||
 		*saved.Definition.Workflow.ExecutionTargetPolicy.CustomRef != customRef {
 		t.Fatalf("saved workflow target policy = %+v, want custom ref", saved.Definition.Workflow.ExecutionTargetPolicy)
@@ -3895,8 +3896,8 @@ func startWorkflowServiceTask(t *testing.T, ctx context.Context, service *Servic
 	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		TaskID:           taskID,
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
+			Mode: workflowcontract.ExecutionTargetModeNone,
 		},
 	})
 	if err != nil {

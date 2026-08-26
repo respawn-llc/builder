@@ -20,13 +20,14 @@ import (
 	"core/server/worktree"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/workflowcontract"
 )
 
 func TestServiceTaskResumeEligibilityRejectsExplicitBranchBeforePendingMutation(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -85,7 +86,7 @@ func TestServiceConcurrentTaskResumeNoOpDoesNotReplacePendingBranch(t *testing.T
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -137,7 +138,7 @@ func TestServiceConcurrentTaskResumeNoOpDoesNotReplacePendingBranch(t *testing.T
 	t.Cleanup(releaseMaterialization)
 	service.executionTargets = &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
-			Mode:         workflow.ExecutionTargetModeHead,
+			Mode:         workflowcontract.ExecutionTargetModeHead,
 			RequestedRef: textutil.Value("HEAD"),
 			CommitOID:    textutil.Value(strings.Repeat("7", 40)),
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
@@ -202,7 +203,7 @@ func TestServiceTaskResumeReturnsAppliedBeforeFinalBranchCollisionInterruptsCurr
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -249,7 +250,7 @@ func TestServiceTaskResumeReturnsAppliedBeforeFinalBranchCollisionInterruptsCurr
 	ref := "refs/heads/" + branchName
 	service.executionTargets = &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
-			Mode: workflow.ExecutionTargetModeHead, RequestedRef: &requestedRef,
+			Mode: workflowcontract.ExecutionTargetModeHead, RequestedRef: &requestedRef,
 			CommitOID: &commitOID, Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 		},
 		materializeErr: &serverapi.WorkflowTaskInitialBranchError{
@@ -302,7 +303,7 @@ func TestServiceTaskResumePreflightsLockedBranchBeforeAsynchronousRestoration(t 
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: serverapi.WorkflowExecutionTargetModeHead,
+		Mode: workflowcontract.ExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -347,7 +348,7 @@ func TestServiceTaskResumePreflightsLockedBranchBeforeAsynchronousRestoration(t 
 	commitOID := strings.Repeat("8", 40)
 	if err := service.store.LockTaskExecutionTarget(ctx, taskID, &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode: workflow.ExecutionTargetModeHead, RequestedRef: &requestedRef,
+			Mode: workflowcontract.ExecutionTargetModeHead, RequestedRef: &requestedRef,
 			CommitOID: &commitOID, Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 		},
 		Root: workflowstore.ExecutionRoot{

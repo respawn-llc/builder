@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
+
 	"github.com/google/uuid"
 )
 
@@ -143,13 +145,13 @@ type WorktreeSetupFailureCause struct {
 }
 
 type WorktreeSetupFailed struct {
-	RetryReadiness           WorktreeSetupRetryReadiness       `json:"retry_readiness"`
-	Cause                    WorktreeSetupFailureCause         `json:"cause"`
-	Diagnostic               string                            `json:"diagnostic"`
-	ScriptPath               *string                           `json:"script_path"`
-	ExecutionTarget          *WorkflowExecutionTargetSelection `json:"execution_target"`
-	RetainedWorktree         *WorktreeTopologyEntry            `json:"retained_worktree"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree         `json:"retained_previous_worktree"`
+	RetryReadiness           WorktreeSetupRetryReadiness                `json:"retry_readiness"`
+	Cause                    WorktreeSetupFailureCause                  `json:"cause"`
+	Diagnostic               string                                     `json:"diagnostic"`
+	ScriptPath               *string                                    `json:"script_path"`
+	ExecutionTarget          *workflowcontract.ExecutionTargetSelection `json:"execution_target"`
+	RetainedWorktree         *WorktreeTopologyEntry                     `json:"retained_worktree"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree                  `json:"retained_previous_worktree"`
 }
 
 type WorktreeSetupEvent struct {
