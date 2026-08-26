@@ -226,7 +226,11 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	); err != nil {
 		t.Fatalf("append assistant message: %v", err)
 	}
-	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5", ContextWindowTokens: 400_000})
+	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{
+		Model:                   "gpt-5",
+		ContextWindowTokens:     400_000,
+		SupportedThinkingValues: []string{"high"},
+	})
 	if err := eng.SetThinkingLevel(t.Context(), "high"); err != nil {
 		t.Fatalf("set thinking level: %v", err)
 	}

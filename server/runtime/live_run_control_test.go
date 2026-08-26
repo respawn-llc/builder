@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -246,6 +248,141 @@ func TestTryInterruptActiveRunCancelsActiveStepAndWaiters(t *testing.T) {
 	}
 	if err := <-waitDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("wait error = %v, want context canceled", err)
+	}
+}
+
+func TestInstantStopBroadcastsRemovedHumanInputInAcceptanceOrder(t *testing.T) {
+	toolCall := llm.ToolCall{
+		ID:    "hold-before-interrupt",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"pwd"}`),
+	}
+	client := &fakeClient{responses: []llm.Response{
+		commentaryResponse("working", toolCall),
+		finalTextResponse("must not run"),
+	}}
+	toolStarted := make(chan struct{})
+	releaseTool := make(chan struct{})
+	var (
+		eventsMu sync.Mutex
+		events   []Event
+	)
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t, tools.HandlerRegistration{
+		ID: toolspec.ToolExecCommand,
+		Handler: blockingTool{
+			name:    toolspec.ToolExecCommand,
+			started: toolStarted,
+			release: releaseTool,
+		},
+	}), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			eventsMu.Lock()
+			events = append(events, event)
+			eventsMu.Unlock()
+		},
+	})
+
+	initialDone := make(chan error, 1)
+	go func() {
+		_, err := eng.SubmitUserMessage(t.Context(), "start")
+		initialDone <- err
+	}()
+	select {
+	case <-toolStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("preceding Agent Step did not reach its held tool")
+	}
+
+	type queuedResult struct {
+		item     QueuedUserMessage
+		accepted bool
+		err      error
+	}
+	firstApplying := make(chan struct{})
+	releaseFirstApplication := make(chan struct{})
+	firstDone := make(chan queuedResult, 1)
+	go func() {
+		item, accepted, err := eng.QueueUserMessageForActiveRun(t.Context(), "first", func() error {
+			close(firstApplying)
+			<-releaseFirstApplication
+			return nil
+		})
+		firstDone <- queuedResult{item: item, accepted: accepted, err: err}
+	}()
+	waitForAcceptedRuntimeOperationCount(t, eng, 1)
+	close(releaseTool)
+	select {
+	case <-firstApplying:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("first queued input did not apply at the preceding Step Boundary")
+	}
+
+	secondDone := make(chan queuedResult, 1)
+	go func() {
+		item, accepted, err := eng.QueueUserMessageForActiveRun(t.Context(), "second", nil)
+		secondDone <- queuedResult{item: item, accepted: accepted, err: err}
+	}()
+	transitionStarted := make(chan struct{})
+	releaseTransition := make(chan struct{})
+	transitionDone := make(chan error, 1)
+	go func() {
+		transitionDone <- eng.RunWorktreeTransition(t.Context(), func() error {
+			close(transitionStarted)
+			<-releaseTransition
+			return nil
+		})
+	}()
+	waitForAcceptedRuntimeOperationCount(t, eng, 3)
+	close(releaseFirstApplication)
+	first := <-firstDone
+	if first.err != nil || !first.accepted {
+		t.Fatalf("queue first input accepted=%t err=%v", first.accepted, first.err)
+	}
+	second := <-secondDone
+	if second.err != nil || !second.accepted {
+		t.Fatalf("queue second input accepted=%t err=%v", second.accepted, second.err)
+	}
+	select {
+	case <-transitionStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("Worktree transition did not hold the next provider boundary")
+	}
+
+	stopped, err := eng.TryInterruptActiveRun()
+	if err != nil || !stopped {
+		t.Fatalf("TryInterruptActiveRun stopped=%t err=%v, want active stop", stopped, err)
+	}
+	close(releaseTransition)
+	if err := <-transitionDone; err != nil {
+		t.Fatalf("Worktree transition: %v", err)
+	}
+	if err := <-initialDone; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("preceding Agent turn error = %v, want success or context cancellation", err)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	var interruptions []HumanInputInterruptedEvent
+	for _, event := range events {
+		if event.HumanInputInterrupted != nil {
+			interruptions = append(interruptions, *event.HumanInputInterrupted)
+		}
+		if event.QueuedUserMessageStatus != nil &&
+			event.QueuedUserMessageStatus.Status == QueuedUserMessageFailed &&
+			(event.QueuedUserMessageStatus.QueueItemID == first.item.ID ||
+				event.QueuedUserMessageStatus.QueueItemID == second.item.ID) {
+			t.Fatalf("Instant Stop emitted obsolete queued-message failure: %+v", event.QueuedUserMessageStatus)
+		}
+	}
+	if len(interruptions) != 1 {
+		t.Fatalf("human-input interruption events = %+v, want one", interruptions)
+	}
+	items := interruptions[0].Items
+	if len(items) != 2 ||
+		items[0].QueueItemID != first.item.ID || items[0].Text != "first" ||
+		items[1].QueueItemID != second.item.ID || items[1].Text != "second" {
+		t.Fatalf("interrupted inputs = %+v, want accepted inputs in server order", items)
 	}
 }
 

@@ -550,7 +550,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 				return QueuedUserMessage{}, context.Canceled
 			}
 			e.outputMutationMu.Lock()
-			e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+			e.emitInterruptedHumanInputs([]QueuedUserMessage{liveItem})
 			e.outputMutationMu.Unlock()
 			return liveItem, nil
 		}

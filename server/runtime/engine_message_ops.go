@@ -684,6 +684,31 @@ func (e *Engine) emitQueuedUserMessageStatus(
 	e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
 }
 
+func (e *Engine) emitInterruptedHumanInputs(items []QueuedUserMessage) {
+	if e == nil || len(items) == 0 {
+		return
+	}
+	eventItems := make([]InterruptedHumanInput, 0, len(items))
+	for _, item := range items {
+		text, err := item.DisplayText()
+		if err != nil {
+			e.surfaceRunError(fmt.Errorf("interrupted human input: %w", err))
+			continue
+		}
+		eventItems = append(eventItems, InterruptedHumanInput{
+			QueueItemID: item.ID,
+			Text:        text,
+		})
+	}
+	if len(eventItems) == 0 {
+		return
+	}
+	e.emitRaw(Event{
+		Kind:                  EventHumanInputInterrupted,
+		HumanInputInterrupted: &HumanInputInterruptedEvent{Items: eventItems},
+	})
+}
+
 func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
 	pending := e.messageFlow.DrainPendingUserInjections()

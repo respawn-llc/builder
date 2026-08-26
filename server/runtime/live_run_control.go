@@ -395,10 +395,11 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
 	e.outputMutationMu.Lock()
 	failed := map[runtimeids.QueueItemID]struct{}{}
-	for _, item := range e.messageFlow.DrainPendingUserInjectionsByID(stringIDs) {
+	removed := e.messageFlow.DrainPendingUserInjectionsByID(stringIDs)
+	for _, item := range removed {
 		failed[mustQueueItemID(item.ID)] = struct{}{}
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 	}
+	e.emitInterruptedHumanInputs(removed)
 	e.outputMutationMu.Unlock()
 	e.liveRun.clearStoppedQueueItems(failed)
 }
@@ -416,16 +417,18 @@ func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserMessage) []queue
 		return items
 	}
 	filtered := items[:0]
+	removed := make([]QueuedUserMessage, 0, len(stopped))
 	e.outputMutationMu.Lock()
 	for _, item := range items {
 		id := mustQueueItemID(item.message.ID)
 		if _, ok := stopped[id]; ok {
 			e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
-			e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+			removed = append(removed, item.message)
 			continue
 		}
 		filtered = append(filtered, item)
 	}
+	e.emitInterruptedHumanInputs(removed)
 	e.outputMutationMu.Unlock()
 	return filtered
 }
