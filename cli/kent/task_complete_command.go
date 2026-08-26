@@ -123,13 +123,17 @@ func (a taskCompleteArgs) request(
 	if agentContext {
 		req.ActorKind = serverapi.WorkflowTaskCompleteActorAgent
 		req.AgentSessionID = strings.TrimSpace(agentSessionID)
-		req.RunID, req.StepID = sessionenv.LookupRunStepID(os.LookupEnv)
-		if _, err := runtimeids.ParseRunID(req.RunID); err != nil {
+		rawRunID, rawStepID := sessionenv.LookupRunStepID(os.LookupEnv)
+		runID, err := runtimeids.ParseRunID(rawRunID)
+		if err != nil {
 			return serverapi.WorkflowTaskCompleteRequest{}, fmt.Errorf("agent completion run provenance: %w", err)
 		}
-		if _, err := runtimeids.ParseStepID(req.StepID); err != nil {
+		stepID, err := runtimeids.ParseStepID(rawStepID)
+		if err != nil {
 			return serverapi.WorkflowTaskCompleteRequest{}, fmt.Errorf("agent completion step provenance: %w", err)
 		}
+		req.RunID = &runID
+		req.StepID = &stepID
 	} else {
 		req.ActorKind = serverapi.WorkflowTaskCompleteActorUser
 		req.Force = a.Force

@@ -1949,16 +1949,8 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 		if parseErr != nil {
 			return serverapi.WorkflowTaskCompleteResponse{}, parseErr
 		}
-		runID, parseErr := runtimeids.ParseRunID(req.RunID)
-		if parseErr != nil {
-			return serverapi.WorkflowTaskCompleteResponse{}, parseErr
-		}
-		stepID, parseErr := runtimeids.ParseStepID(req.StepID)
-		if parseErr != nil {
-			return serverapi.WorkflowTaskCompleteResponse{}, parseErr
-		}
 		outcome, err := s.currentNodeExecution.CompleteSessionCurrentNode(
-			ctx, sessionID, runID, stepID,
+			ctx, sessionID, *req.RunID, *req.StepID,
 			req.TransitionID, req.OutputValues, req.Commentary,
 		)
 		if err != nil {

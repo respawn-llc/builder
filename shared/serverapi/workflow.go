@@ -1034,16 +1034,16 @@ func (e WorkflowTaskCompleteSelectorAmbiguousError) Is(target error) bool {
 }
 
 type WorkflowTaskCompleteRequest struct {
-	SessionID      string            `json:"session_id,omitempty"`
-	TaskID         string            `json:"task_id,omitempty"`
-	TransitionID   string            `json:"transition_id,omitempty"`
-	OutputValues   map[string]string `json:"output_values,omitempty"`
-	Commentary     string            `json:"commentary,omitempty"`
-	ActorKind      string            `json:"actor_kind"`
-	AgentSessionID string            `json:"agent_session_id,omitempty"`
-	RunID          string            `json:"run_id,omitempty"`
-	StepID         string            `json:"step_id,omitempty"`
-	Force          bool              `json:"force,omitempty"`
+	SessionID      string             `json:"session_id,omitempty"`
+	TaskID         string             `json:"task_id,omitempty"`
+	TransitionID   string             `json:"transition_id,omitempty"`
+	OutputValues   map[string]string  `json:"output_values,omitempty"`
+	Commentary     string             `json:"commentary,omitempty"`
+	ActorKind      string             `json:"actor_kind"`
+	AgentSessionID string             `json:"agent_session_id,omitempty"`
+	RunID          *runtimeids.RunID  `json:"run_id,omitempty"`
+	StepID         *runtimeids.StepID `json:"step_id,omitempty"`
+	Force          bool               `json:"force,omitempty"`
 }
 
 type WorkflowTaskCompleteResponse struct {
@@ -3107,8 +3107,6 @@ func (r WorkflowTaskCompleteRequest) Validate() error {
 		requiredField("task_id", r.TaskID),
 		requiredField("transition_id", r.TransitionID),
 		requiredField("agent_session_id", r.AgentSessionID),
-		requiredField("run_id", r.RunID),
-		requiredField("step_id", r.StepID),
 	} {
 		if field.value != "" && strings.TrimSpace(field.value) != field.value {
 			return workflowRequestError(WorkflowRequestErrorInvalidMode, field.name, field.name+" must not have leading or trailing whitespace")
@@ -3122,15 +3120,15 @@ func (r WorkflowTaskCompleteRequest) Validate() error {
 		if strings.TrimSpace(r.AgentSessionID) == "" {
 			return workflowRequestError(WorkflowRequestErrorRequired, "agent_session_id", "agent_session_id is required for agent completion")
 		}
-		if _, err := runtimeids.ParseRunID(r.RunID); err != nil {
-			return workflowRequestError(WorkflowRequestErrorInvalidMode, "run_id", err.Error())
+		if r.RunID == nil || r.RunID.IsZero() {
+			return workflowRequestError(WorkflowRequestErrorRequired, "run_id", "run_id is required for agent completion")
 		}
-		if _, err := runtimeids.ParseStepID(r.StepID); err != nil {
-			return workflowRequestError(WorkflowRequestErrorInvalidMode, "step_id", err.Error())
+		if r.StepID == nil || r.StepID.IsZero() {
+			return workflowRequestError(WorkflowRequestErrorRequired, "step_id", "step_id is required for agent completion")
 		}
 		return nil
 	}
-	if r.RunID != "" || r.StepID != "" {
+	if r.RunID != nil || r.StepID != nil {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "provenance", "run_id and step_id are only allowed for agent completion")
 	}
 	if !r.Force {

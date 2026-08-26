@@ -32,8 +32,8 @@ func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t
 	response, err := service.CompleteWorkflowTask(context.Background(), serverapi.WorkflowTaskCompleteRequest{
 		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
 		AgentSessionID: sessionID.String(),
-		RunID:          "11111111-1111-4111-8111-111111111111",
-		StepID:         "22222222-2222-4222-8222-222222222222",
+		RunID:          currentNodeCompletionRunID(t),
+		StepID:         currentNodeCompletionStepID(t),
 		TransitionID:   "done",
 	})
 	if err != nil {
@@ -70,8 +70,8 @@ func TestCompleteWorkflowTaskReturnsResultDespitePostCommitDiagnostic(t *testing
 		serverapi.WorkflowTaskCompleteRequest{
 			ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
 			AgentSessionID: runtimeids.NewSessionID().String(),
-			RunID:          "11111111-1111-4111-8111-111111111111",
-			StepID:         "22222222-2222-4222-8222-222222222222",
+			RunID:          currentNodeCompletionRunID(t),
+			StepID:         currentNodeCompletionStepID(t),
 			TransitionID:   "done",
 		},
 	)
@@ -126,8 +126,8 @@ func TestCompleteWorkflowTaskMapsMissingLiveSourceFailure(t *testing.T) {
 	_, err := currentNodeCompletionService(execution).CompleteWorkflowTask(context.Background(), serverapi.WorkflowTaskCompleteRequest{
 		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
 		AgentSessionID: sessionID.String(),
-		RunID:          "11111111-1111-4111-8111-111111111111",
-		StepID:         "22222222-2222-4222-8222-222222222222",
+		RunID:          currentNodeCompletionRunID(t),
+		StepID:         currentNodeCompletionStepID(t),
 		TransitionID:   "done",
 	})
 	if !errors.Is(err, serverapi.ErrWorkflowTaskCompleteTargetNotFound) {
@@ -159,6 +159,24 @@ func currentNodeCompletionService(execution *currentNodeCompletionExecutionStub)
 		readModels:           ReadModels{TaskDetail: currentNodeCompletionUnavailableTaskDetail{}},
 		currentNodeExecution: execution,
 	}
+}
+
+func currentNodeCompletionRunID(t *testing.T) *runtimeids.RunID {
+	t.Helper()
+	value, err := runtimeids.ParseRunID("11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatalf("parse Run ID: %v", err)
+	}
+	return &value
+}
+
+func currentNodeCompletionStepID(t *testing.T) *runtimeids.StepID {
+	t.Helper()
+	value, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("parse Step ID: %v", err)
+	}
+	return &value
 }
 
 type currentNodeCompletionUnavailableTaskDetail struct{}
