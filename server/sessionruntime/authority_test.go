@@ -1137,6 +1137,82 @@ func TestDetachedAgentPublicationDoesNotChangeDispositionAfterOwnerEntry(t *test
 	}
 }
 
+func TestDetachedWorkflowAgentPreparationBlocksOrdinarySessionStartUntilPublication(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+	ref := workflowExecutionRefForTest(t, "task-agent-publication-reservation", "node-agent-publication-reservation", nil)
+	detached, err := authority.PrepareDetachedAgentExecution(context.Background(), DetachedAgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   ref,
+		Resource:   OpenAgentResource{},
+		Config: &workflowruntime.CurrentNodeExecutionConfig{
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: ref.CurrentNode,
+				WorkflowID:  ref.WorkflowID,
+			},
+		},
+		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepare detached Agent: %v", err)
+	}
+	t.Cleanup(func() { _ = detached.Cancel() })
+
+	type ordinaryStartResult struct {
+		handle ExecutionHandle
+		err    error
+	}
+	ordinaryStarted := make(chan ordinaryStartResult, 1)
+	go func() {
+		handle, startErr := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, sessionID),
+			Resource:   CurrentAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+		ordinaryStarted <- ordinaryStartResult{handle: handle, err: startErr}
+	}()
+	select {
+	case result := <-ordinaryStarted:
+		if result.handle != nil {
+			_ = result.handle.Close(context.Background())
+		}
+		t.Fatalf("ordinary Session start completed before Workflow publication: %v", result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("publish detached Workflow Agent: %v", err)
+	}
+	launch()
+	t.Cleanup(func() {
+		handle.RequestStop()
+		_ = handle.Close(context.Background())
+	})
+
+	result := <-ordinaryStarted
+	if result.handle != nil {
+		_ = result.handle.Close(context.Background())
+		t.Fatal("ordinary Session execution started while Workflow publication owned admission")
+	}
+	if !errors.Is(result.err, ErrSessionRunActive) {
+		t.Fatalf("ordinary Session start error = %v, want %v", result.err, ErrSessionRunActive)
+	}
+}
+
 func TestCanceledDetachedAgentPublicationReleasesResourcePin(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)

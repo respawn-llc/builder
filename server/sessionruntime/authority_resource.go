@@ -176,6 +176,7 @@ type DetachedAgentExecutionRequest struct {
 
 type DetachedAgentExecution struct {
 	authority     *Authority
+	admissionGate *sessionAdmissionGate
 	resource      *agentResource
 	execution     *execution
 	workflowKey   workflow.CurrentNodeReferenceKey
@@ -208,12 +209,16 @@ func (a *Authority) PrepareDetachedAgentExecution(
 	if err := gate.lock.LockContext(ctx); err != nil {
 		return nil, err
 	}
+	releaseGate := true
+	defer func() {
+		if releaseGate {
+			gate.lock.Unlock()
+		}
+	}()
 	if len(gate.blocks) != 0 {
-		gate.lock.Unlock()
 		return nil, sessionStartsBlockedError(request.Descriptor.SessionID())
 	}
 	resource, closeResource, err := a.selectDetachedResource(ctx, request.Descriptor, request.Runtime, request.Resource)
-	gate.lock.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -258,11 +263,13 @@ func (a *Authority) PrepareDetachedAgentExecution(
 		done: make(chan struct{}), prompts: newExecutionPromptStore(a, scope, a.promptFeed),
 		closeResource: closeResource, phase: executionPhaseQueued, onRetire: request.OnRetire,
 	}
-	return &DetachedAgentExecution{
-		authority: a, resource: resource, execution: execution, workflowKey: workflowKey,
+	detached := &DetachedAgentExecution{
+		authority: a, admissionGate: gate, resource: resource, execution: execution, workflowKey: workflowKey,
 		config: &config, correlation: &correlation, closeResource: closeResource,
 		runner: request.Runner, ask: request.Ask,
-	}, nil
+	}
+	releaseGate = false
+	return detached, nil
 }
 
 func (a *Authority) selectDetachedResource(
@@ -322,8 +329,15 @@ func (d *DetachedAgentExecution) Publish(
 		d.mu.Unlock()
 		return nil, nil, ErrExecutionNoLongerLive
 	}
+	if d.admissionGate == nil {
+		d.mu.Unlock()
+		return nil, nil, errors.New("detached Agent execution has no Session admission")
+	}
+	admissionGate := d.admissionGate
+	d.admissionGate = nil
 	d.settled = true
 	d.mu.Unlock()
+	defer admissionGate.lock.Unlock()
 	if err := context.Cause(ctx); err != nil {
 		d.discard()
 		return nil, nil, err
@@ -445,8 +459,13 @@ func (d *DetachedAgentExecution) Cancel() error {
 		d.mu.Unlock()
 		return nil
 	}
+	admissionGate := d.admissionGate
+	d.admissionGate = nil
 	d.settled = true
 	d.mu.Unlock()
+	if admissionGate != nil {
+		admissionGate.lock.Unlock()
+	}
 	d.execution.cancel()
 	return d.resource.releasePin()
 }

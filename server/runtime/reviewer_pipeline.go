@@ -159,16 +159,7 @@ func (e *Engine) applyReviewerProviderResult(
 	}
 	suggestions := result.suggestions.Suggestions
 	if len(suggestions) == 0 {
-		status := ReviewerStatus{
-			Outcome:               "no_suggestions",
-			CacheHitPercent:       result.suggestions.CacheHitPercent,
-			HasCacheHitPercentage: result.suggestions.HasCacheHitPercentage,
-		}
-		statusErr := e.steerOrdered(sessionSteeringProvenance(), steerLocalEntryIntent(storedLocalEntry{
-			Role: reviewerStatusEntryRole(status),
-			Text: reviewerStatusText(status, nil),
-		}))
-		return errors.Join(statusErr, e.completeReviewerActivity(originStepID))
+		return e.completeReviewerActivity(originStepID)
 	}
 
 	visibility := transcript.EntryVisibilityOngoingCollapsed

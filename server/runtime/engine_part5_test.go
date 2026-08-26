@@ -193,6 +193,11 @@ func TestReviewerSuggestionsRequestInheritsFastMode(t *testing.T) {
 	if !reviewerClient.calls[0].FastMode {
 		t.Fatal("expected reviewer request to inherit fast mode")
 	}
+	for _, entry := range eng.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleReviewerStatus) {
+			t.Fatalf("Reviewer with no suggestions persisted status row: %+v", entry)
+		}
+	}
 }
 
 func TestBlankFinalProjectionIsInvisibleAndSkipsReviewer(t *testing.T) {
