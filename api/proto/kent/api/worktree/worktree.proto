@@ -4,7 +4,9 @@ package kent.api.worktree;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
+import "kent/api/auth/auth.proto";
 import "kent/api/project/project.proto";
+import "kent/api/server/server.proto";
 import "kent/api/shared/foundation.proto";
 import "kent/api/shared/validation.proto";
 
@@ -406,6 +408,14 @@ message ImmediateTransitionDetails {
     defined_only: true
     not_in: [0]
   }];
+  string diagnostic = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.immediate_transition_diagnostic_nonblank"
+      message: "diagnostic must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message SetupRetainedDetails {
@@ -433,7 +443,16 @@ message CreateFailureDetails {
   string diagnostic = 2 [(buf.validate.field).string.min_len = 1];
 }
 
-message BlockedDetails {}
+message BlockedDetails {
+  string diagnostic = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.blocked_diagnostic_nonblank"
+      message: "diagnostic must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
 
 message StatusRequest {
   string session_id = 1 [(buf.validate.field).string.min_len = 1];
@@ -454,6 +473,14 @@ message StatusError {
     kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
+    }];
+    kent.api.auth.AuthRequiredDetails auth_required = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
     }];
   }
 }
@@ -485,6 +512,14 @@ message ListError {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
     }];
+    kent.api.auth.AuthRequiredDetails auth_required = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
+    }];
   }
 }
 
@@ -515,6 +550,18 @@ message WorkspaceListError {
     kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
+    }];
+    kent.api.project.WorkspaceNotRegisteredDetails workspace_not_registered = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workspace_not_registered"
+    }];
+    kent.api.auth.AuthRequiredDetails auth_required = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
     }];
   }
 }
@@ -556,6 +603,14 @@ message SelectorResolveError {
     kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
+    }];
+    kent.api.auth.AuthRequiredDetails auth_required = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
     }];
   }
 }
@@ -604,6 +659,14 @@ message DeletePreviewError {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
     }];
+    kent.api.auth.AuthRequiredDetails auth_required = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
+    }];
   }
 }
 
@@ -650,6 +713,14 @@ message CreateTargetResolveError {
     kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
+    }];
+    kent.api.auth.AuthRequiredDetails auth_required = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
     }];
   }
 }
@@ -705,6 +776,14 @@ message CreateError {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
     }];
+    kent.api.auth.AuthRequiredDetails auth_required = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
+    }];
   }
 }
 
@@ -754,6 +833,14 @@ message EnterError {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
     }];
+    kent.api.auth.AuthRequiredDetails auth_required = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 7 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
+    }];
   }
 }
 
@@ -782,6 +869,14 @@ message LeaveError {
     kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
+    }];
+    kent.api.auth.AuthRequiredDetails auth_required = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
     }];
   }
 }
@@ -853,6 +948,14 @@ message DeleteError {
     kent.api.shared.InternalFailureDetails internal_failure = 7 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
+    }];
+    kent.api.auth.AuthRequiredDetails auth_required = 8 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 9 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
     }];
   }
 }
@@ -1014,6 +1117,14 @@ message SetupStartError {
     kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
+    }];
+    kent.api.auth.AuthRequiredDetails auth_required = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "auth_required"
+    }];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "server_not_ready"
     }];
   }
 }
