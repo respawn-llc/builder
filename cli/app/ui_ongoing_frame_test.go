@@ -76,6 +76,21 @@ func TestOngoingFrameInputIgnoresRuntimeMainViewCopiesOfTranscriptOwnedFacts(t *
 	}
 }
 
+func TestOngoingFrameInputRendersAvailabilityOnlyGoalProjection(t *testing.T) {
+	availability := clientui.GoalAvailabilityAvailable
+	client := &runtimeControlFakeClient{
+		cachedMainView: clientui.RuntimeMainView{
+			Status: clientui.RuntimeStatus{
+				Goal: &clientui.RuntimeGoal{Availability: &availability},
+			},
+		},
+		hasCachedMainView: true,
+	}
+	m := sizedTestUIModel(newProjectedTestUIModel(client), 48, 10)
+
+	m.ongoingFrameInput()
+}
+
 func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUITerminalCursorState(newUITerminalCursorState()),

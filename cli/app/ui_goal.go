@@ -45,11 +45,11 @@ func (m *uiModel) workflowSessionActive() bool {
 }
 
 func goalIsActive(goal *clientui.RuntimeGoal) bool {
-	return goal != nil && goal.Status == clientui.RuntimeGoalStatusActive
+	return goal != nil && goal.Goal != nil && goal.Status == clientui.RuntimeGoalStatusActive
 }
 
 func goalIsPresent(goal *clientui.RuntimeGoal) bool {
-	if goal == nil {
+	if goal == nil || goal.Goal == nil {
 		return false
 	}
 	switch goal.Status {

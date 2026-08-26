@@ -82,6 +82,33 @@ func TestStepLifecycleSinkPublishesVersionedRunningThenIdleActivity(t *testing.T
 	}
 }
 
+func TestStepLifecycleSinkPublishesAuxiliaryRuntimeActivityKinds(t *testing.T) {
+	tests := map[runtime.ActiveKind]clientui.RuntimeActivityActiveKind{
+		runtime.ActiveKindUserShell:          clientui.RuntimeActivityActiveKindUserShell,
+		runtime.ActiveKindRuntimeMaintenance: clientui.RuntimeActivityActiveKindRuntimeMaintenance,
+	}
+	for kind, want := range tests {
+		t.Run(string(kind), func(t *testing.T) {
+			publisher := &recordingRuntimeReadModelPublisher{}
+			sink := NewStepLifecycleSink("session-auxiliary", publisher)
+			if err := sink.StepBegan(context.Background(), runtime.StepLifecycleSnapshot{
+				SessionID:  "session-auxiliary",
+				RunID:      stepLifecycleTestRunID,
+				StepID:     stepLifecycleTestStepID,
+				ActiveKind: kind,
+				StartedAt:  time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("StepBegan: %v", err)
+			}
+			if len(publisher.snapshots) != 1 ||
+				publisher.snapshots[0].Activity.ActiveStep == nil ||
+				publisher.snapshots[0].Activity.ActiveStep.ActiveKind != want {
+				t.Fatalf("published activity = %+v, want active kind %q", publisher.snapshots, want)
+			}
+		})
+	}
+}
+
 func TestStepLifecycleSinkUsesPublisherRegistrySnapshotForTerminalActivity(t *testing.T) {
 	publisher := &registrySnapshotRuntimeReadModelPublisher{registry: runtimeactivity.RegistrySnapshot{Registered: true, Draining: true}}
 	sink := NewStepLifecycleSink("session-draining", publisher)
