@@ -77,6 +77,7 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 	if string(data) != "new\n" {
 		t.Fatalf("edited content = %q, want new", string(data))
 	}
+	waitEngineLifecycleTasks(t, eng)
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("expected reviewer to run after edit, got %d calls", len(reviewerClient.calls))
 	}

@@ -8,6 +8,7 @@ import (
 
 	"core/prompts"
 	"core/server/runtime"
+	"core/server/runtimeview"
 	"core/server/session"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -31,7 +32,7 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 	if record.Meta.Goal == nil {
 		return serverapi.RuntimeGoalShowResponse{}, nil
 	}
-	return serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*record.Meta.Goal)}, nil
+	return serverapi.RuntimeGoalShowResponse{Goal: runtimeview.GoalCoreFromSessionState(record.Meta.Goal)}, nil
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
@@ -325,7 +326,7 @@ func goalResponseFromRuntimeResult(
 	if result.Disposition == 0 {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("accepted Goal mutation is missing a result")
 	}
-	return serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(result.GoalState)}, nil
+	return serverapi.RuntimeGoalShowResponse{Goal: runtimeview.GoalCoreFromSessionState(&result.GoalState)}, nil
 }
 
 type goalAgentOverwriteDeniedError struct {
@@ -346,14 +347,4 @@ func goalMutationError(err error) error {
 		return goalAgentOverwriteDeniedError{Objective: blocked.Goal.Objective, Status: string(blocked.Goal.Status)}
 	}
 	return err
-}
-
-func runtimeGoalFromSessionGoal(goal session.GoalState) *serverapi.RuntimeGoal {
-	return &serverapi.RuntimeGoal{
-		ID:        strings.TrimSpace(goal.ID),
-		Objective: goal.Objective,
-		Status:    strings.TrimSpace(string(goal.Status)),
-		CreatedAt: goal.CreatedAt,
-		UpdatedAt: goal.UpdatedAt,
-	}
 }

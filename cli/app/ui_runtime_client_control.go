@@ -90,7 +90,7 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return runtimeGoalFromAPI(resp.Goal), nil
+	return runtimeGoalFromCore(resp.Goal), nil
 }
 
 func (c *sessionRuntimeClient) SetGoal(objective string) (*clientui.RuntimeGoal, error) {
@@ -142,25 +142,20 @@ func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverap
 }
 
 func (c *sessionRuntimeClient) applyGoalResponse(resp serverapi.RuntimeGoalShowResponse) *clientui.RuntimeGoal {
-	goal := runtimeGoalFromAPI(resp.Goal)
+	goal := runtimeGoalFromCore(resp.Goal)
 	c.patchMainView(func(view *clientui.RuntimeMainView) {
 		view.Status.Goal = cloneRuntimeGoal(goal)
 	})
 	return goal
 }
 
-func runtimeGoalFromAPI(goal *serverapi.RuntimeGoal) *clientui.RuntimeGoal {
+func runtimeGoalFromCore(goal *clientui.Goal) *clientui.RuntimeGoal {
 	if goal == nil {
 		return nil
 	}
+	core := *goal
 	return &clientui.RuntimeGoal{
-		Goal: &clientui.Goal{
-			ID:        goal.ID,
-			Objective: goal.Objective,
-			Status:    clientui.RuntimeGoalStatus(strings.TrimSpace(goal.Status)),
-			CreatedAt: goal.CreatedAt,
-			UpdatedAt: goal.UpdatedAt,
-		},
+		Goal: &core,
 	}
 }
 

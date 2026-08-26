@@ -331,6 +331,7 @@ func TestReviewerRunsOnEditsFrequencyOnlyWhenPatchApplied(t *testing.T) {
 	if messageContent(msg) != "final" {
 		t.Fatalf("assistant content = %q, want final", messageContent(msg))
 	}
+	waitEngineLifecycleTasks(t, eng)
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("expected reviewer to be called once after patch edit, got %d", len(reviewerClient.calls))
 	}

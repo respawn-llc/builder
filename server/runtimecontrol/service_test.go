@@ -1389,7 +1389,7 @@ func TestServiceShowGoalReturnsPersistedGoalWithoutRuntime(t *testing.T) {
 	}
 	if resp.Goal.ID != goal.ID ||
 		resp.Goal.Objective != goal.Objective ||
-		resp.Goal.Status != string(goal.Status) ||
+		resp.Goal.Status != clientui.RuntimeGoalStatus(goal.Status) ||
 		!resp.Goal.CreatedAt.Equal(goal.CreatedAt) ||
 		!resp.Goal.UpdatedAt.Equal(goal.UpdatedAt) {
 		t.Fatalf("ShowGoal goal = %+v, want %+v", resp.Goal, goal)
@@ -1513,7 +1513,7 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for Goal mutation at the Step boundary")
 	}
-	if accepted.Goal == nil || accepted.Goal.Objective != "accepted pending goal" || accepted.Goal.Status != string(session.GoalStatusActive) {
+	if accepted.Goal == nil || accepted.Goal.Objective != "accepted pending goal" || accepted.Goal.Status != clientui.RuntimeGoalStatusActive {
 		t.Fatalf("SetGoal accepted response = %+v, want active pending goal", accepted.Goal)
 	}
 
@@ -1545,7 +1545,7 @@ func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetGoal in workflow run = %v, want allowed", err)
 	}
-	if resp.Goal == nil || resp.Goal.Status != string(session.GoalStatusActive) {
+	if resp.Goal == nil || resp.Goal.Status != clientui.RuntimeGoalStatusActive {
 		t.Fatalf("goal response = %+v, want active goal", resp.Goal)
 	}
 	if goal := engine.Goal(); goal == nil || goal.Status != session.GoalStatusActive {
@@ -1589,7 +1589,7 @@ func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetGoal in workflow runtime = %v, want allowed", err)
 	}
-	if resp.Goal == nil || resp.Goal.Status != string(session.GoalStatusActive) {
+	if resp.Goal == nil || resp.Goal.Status != clientui.RuntimeGoalStatusActive {
 		t.Fatalf("goal response = %+v, want active goal", resp.Goal)
 	}
 }
@@ -1901,7 +1901,7 @@ func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
 		t.Fatalf("ResumeGoal: %v", result.err)
 	}
 	resp := result.response
-	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != string(session.GoalStatusActive) {
+	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != clientui.RuntimeGoalStatusActive {
 		t.Fatalf("resume active response = %+v, want existing active goal", resp.Goal)
 	}
 	select {
@@ -1942,7 +1942,7 @@ func TestServiceResumeOwnerlessActiveGoalRestartsLoopWithReminder(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ResumeGoal: %v", err)
 	}
-	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != string(session.GoalStatusActive) {
+	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != clientui.RuntimeGoalStatusActive {
 		t.Fatalf("resume ownerless active response = %+v, want existing active goal", resp.Goal)
 	}
 	select {
@@ -2011,7 +2011,7 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 		t.Fatalf("ResumeGoal: %v", result.err)
 	}
 	resp := result.response
-	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != string(session.GoalStatusActive) {
+	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != clientui.RuntimeGoalStatusActive {
 		t.Fatalf("resume suspending active response = %+v, want existing active goal", resp.Goal)
 	}
 	select {

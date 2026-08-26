@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -220,42 +219,19 @@ type RuntimeRecordPromptHistoryRequest struct {
 	Text      string `json:"text"`
 }
 
-type RuntimeGoal struct {
-	ID        string    `json:"id"`
-	Objective string    `json:"objective"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
 type RuntimeGoalShowRequest struct {
 	SessionID string `json:"session_id"`
 }
 
 type RuntimeGoalShowResponse struct {
-	Goal *RuntimeGoal `json:"goal,omitempty"`
+	Goal *clientui.Goal `json:"goal"`
 }
 
 func (r RuntimeGoalShowResponse) Validate() error {
 	if r.Goal == nil {
 		return nil
 	}
-	if strings.TrimSpace(r.Goal.ID) == "" {
-		return errors.New("runtime goal id is required")
-	}
-	if strings.TrimSpace(r.Goal.Objective) == "" {
-		return errors.New("runtime goal objective is required")
-	}
-	if strings.TrimSpace(r.Goal.Status) == "" {
-		return errors.New("runtime goal status is required")
-	}
-	if r.Goal.CreatedAt.IsZero() {
-		return errors.New("runtime goal created_at is required")
-	}
-	if r.Goal.UpdatedAt.IsZero() {
-		return errors.New("runtime goal updated_at is required")
-	}
-	return nil
+	return r.Goal.Validate()
 }
 
 type RuntimeGoalMutationResponse struct {
@@ -348,7 +324,13 @@ func (r RuntimeSubmitUserTurnRequest) Validate() error {
 	return r.Input.Validate()
 }
 func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
-	return validateRuntimeControlRequest(r.SessionID)
+	if err := validateRuntimeControlRequest(r.SessionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.Command) == "" {
+		return errors.New("command is required")
+	}
+	return nil
 }
 func (r RuntimeCompactContextRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.SessionID); err != nil {
