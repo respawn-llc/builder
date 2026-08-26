@@ -181,7 +181,7 @@ func (c *CurrentNodeController) ReactivateWorkflowSession(
 		return nil, err
 	}
 	if handle, live := c.authority.SessionExecution(sessionID); live {
-		return validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+		return c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
 	}
 	result, completion, err := c.resumeTask(
 		ctx,
@@ -201,7 +201,7 @@ func (c *CurrentNodeController) ReactivateWorkflowSession(
 		if waitErr != nil {
 			return nil, fmt.Errorf("reactivate workflow Session %s: %w", sessionID, waitErr)
 		}
-		return validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+		return c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
 	}
 	handle, live := c.authority.SessionExecution(sessionID)
 	if !live {
@@ -211,10 +211,10 @@ func (c *CurrentNodeController) ReactivateWorkflowSession(
 			input.CurrentNode.Reference,
 		)
 	}
-	return validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+	return c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
 }
 
-func validateReactivatedWorkflowExecution(
+func (c *CurrentNodeController) validateReactivatedWorkflowExecution(
 	handle sessionruntime.ExecutionHandle,
 	sessionID runtimeids.SessionID,
 	currentNode workflow.CurrentNodeReference,
@@ -242,7 +242,27 @@ func validateReactivatedWorkflowExecution(
 			scope.ID(),
 		)
 	}
-	return handle, nil
+	live, exists := c.authority.SessionExecution(sessionID)
+	if !exists {
+		return nil, fmt.Errorf(
+			"reactivated workflow Session %s returned execution scope %s before publication",
+			sessionID,
+			scope.ID(),
+		)
+	}
+	liveScope := live.Scope()
+	liveWorkflowRef, liveWorkflowScoped := liveScope.Workflow()
+	if liveScope.ID() != scope.ID() ||
+		!liveWorkflowScoped ||
+		!liveWorkflowRef.CurrentNode.Equal(currentNode) {
+		return nil, fmt.Errorf(
+			"reactivated workflow Session %s returned execution scope %s that does not match live scope %s",
+			sessionID,
+			scope.ID(),
+			liveScope.ID(),
+		)
+	}
+	return live, nil
 }
 
 func (c *CurrentNodeController) currentNodeAdmissionCompletionLocked(
