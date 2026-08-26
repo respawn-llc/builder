@@ -166,6 +166,9 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
+	if err := resp.MainView.Activity.Validate(); err != nil {
+		t.Fatalf("validate dormant session activity: %v", err)
+	}
 	if resp.MainView.Session.SessionID != store.Meta().SessionID || resp.MainView.Session.SessionName != "incident triage" {
 		t.Fatalf("unexpected dormant session view: %+v", resp.MainView.Session)
 	}
@@ -181,7 +184,8 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if resp.MainView.Status.Goal == nil || resp.MainView.Status.Goal.Status != clientui.RuntimeGoalStatusActive || resp.MainView.Status.Goal.Objective != "ship dormant goal" {
 		t.Fatalf("unexpected dormant goal status: %+v", resp.MainView.Status.Goal)
 	}
-	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
+	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable ||
+		resp.MainView.Activity.Reviewer != clientui.ReviewerActivityInactive {
 		t.Fatalf("dormant activity = %+v, want unavailable", resp.MainView.Activity)
 	}
 }
