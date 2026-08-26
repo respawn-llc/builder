@@ -428,7 +428,9 @@ func binaryInternalFailure(err error) *sharedpb.InternalFailureDetails {
 	return &sharedpb.InternalFailureDetails{Cause: &cause}
 }
 
-func (g *Gateway) resolveBinaryRequest(encoded []byte) (*gatewayBinaryRequest, *sharedpb.TransportFailure) {
+func (g *Gateway) resolveBinaryRequest(
+	encoded []byte,
+) (*gatewayBinaryRequest, *gatewayBinarySubscriptionRequest, *sharedpb.TransportFailure) {
 	envelope, err := protoapi.DecodeEnvelope(encoded)
 	if err != nil {
 		correlation := protoapi.DecodeEnvelopeCorrelation(encoded)
@@ -436,32 +438,48 @@ func (g *Gateway) resolveBinaryRequest(encoded []byte) (*gatewayBinaryRequest, *
 		if correlation != "" {
 			recoveredCorrelation = &correlation
 		}
-		return nil, &sharedpb.TransportFailure{
+		return nil, nil, &sharedpb.TransportFailure{
 			Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_MALFORMED_ENVELOPE,
 			Correlation: recoveredCorrelation,
 		}
 	}
 	call := envelope.GetCall()
 	if call == nil {
-		return nil, &sharedpb.TransportFailure{
+		return nil, nil, &sharedpb.TransportFailure{
 			Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_WRONG_DIRECTION,
 			Correlation: envelopeCorrelation(envelope),
 		}
 	}
-	binding, exists := g.registration.BinaryBinding(call.Operation)
-	if !exists {
-		return nil, &sharedpb.TransportFailure{
-			Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_UNKNOWN_OPERATION,
-			Correlation: call.Correlation,
+	if binding, exists := g.registration.BinaryBinding(call.Operation); exists {
+		if binding.operation.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
+			return nil, nil, &sharedpb.TransportFailure{
+				Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_WRONG_DIRECTION,
+				Correlation: call.Correlation,
+			}
+		}
+		return &gatewayBinaryRequest{binding: binding, call: call}, nil, nil
+	}
+	if binding, exists := g.registration.BinarySubscriptionBinding(call.Operation); exists {
+		if binding.operation.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
+			return nil, nil, &sharedpb.TransportFailure{
+				Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_WRONG_DIRECTION,
+				Correlation: call.Correlation,
+			}
+		}
+		return nil, &gatewayBinarySubscriptionRequest{binding: binding, call: call}, nil
+	}
+	if operation, exists := g.registration.BinarySubscriptionNotification(call.Operation); exists {
+		if operation.Options.Direction == sharedpb.Direction_DIRECTION_SERVER_TO_CLIENT {
+			return nil, nil, &sharedpb.TransportFailure{
+				Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_WRONG_DIRECTION,
+				Correlation: call.Correlation,
+			}
 		}
 	}
-	if binding.operation.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
-		return nil, &sharedpb.TransportFailure{
-			Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_WRONG_DIRECTION,
-			Correlation: call.Correlation,
-		}
+	return nil, nil, &sharedpb.TransportFailure{
+		Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_UNKNOWN_OPERATION,
+		Correlation: call.Correlation,
 	}
-	return &gatewayBinaryRequest{binding: binding, call: call}, nil
 }
 
 func envelopeCorrelation(envelope *sharedpb.Envelope) *string {

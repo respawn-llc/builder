@@ -9,9 +9,11 @@ import (
 	"core/shared/protoapi"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/worktreecontract"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func registerWorktreeGatewayBinaryBindings(bindings map[string]gatewayBinaryBinding) error {
@@ -209,6 +211,54 @@ func registerWorktreeGatewayBinaryBindings(bindings map[string]gatewayBinaryBind
 			worktreeFailure[*worktreepb.DeleteRequest],
 		),
 	)
+}
+
+func registerWorktreeSetupGatewayBinaryBinding(
+	bindings map[string]gatewayBinarySubscriptionBinding,
+) error {
+	service := worktreepb.File_kent_api_worktree_worktree_proto.Services().ByName("SetupService")
+	return registerGatewayBinarySubscription(
+		bindings,
+		service,
+		"Subscribe",
+		gatewayBinaryCoreActiveOrdinary,
+		func() *worktreepb.SetupSubscribeRequest { return &worktreepb.SetupSubscribeRequest{} },
+		nil,
+		func() *emptypb.Empty { return &emptypb.Empty{} },
+		func(
+			g *Gateway,
+			ctx context.Context,
+			_ *connectionState,
+			request *worktreepb.SetupSubscribeRequest,
+		) (worktreecontract.SetupSubscription, error) {
+			client := g.deps.WorktreeClient()
+			if client == nil {
+				return nil, errors.New("worktree client is required")
+			}
+			domain, err := protoapi.WorktreeSetupSubscribeRequestFromProto(request)
+			if err != nil {
+				return nil, err
+			}
+			return client.SubscribeWorktreeSetup(ctx, domain)
+		},
+		func() *worktreepb.SetupEvent { return &worktreepb.SetupEvent{} },
+		protoapi.WorktreeSetupEventToProto,
+		func() *worktreepb.SetupCompletion { return &worktreepb.SetupCompletion{} },
+		worktreeSetupCompletion,
+		worktreeFailure[*worktreepb.SetupSubscribeRequest],
+	)
+}
+
+func worktreeSetupCompletion(err error) (*worktreepb.SetupCompletion, error) {
+	params := streamCompleteParams(err)
+	completion := &worktreepb.SetupCompletion{}
+	if params.Code != 0 {
+		code := int32(params.Code)
+		diagnostic := params.Message
+		completion.Code = &code
+		completion.Diagnostic = &diagnostic
+	}
+	return completion, protoapi.Validate(completion)
 }
 
 type worktreeSessionRequest interface {

@@ -9,12 +9,14 @@ import (
 	"core/shared/protoapi"
 
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	"google.golang.org/protobuf/proto"
 )
 
 type gatewayRegistration struct {
-	operations map[string]protoapi.Operation
-	legacy     map[string]apicontract.Route
-	binary     map[string]gatewayBinaryBinding
+	operations    map[string]protoapi.Operation
+	legacy        map[string]apicontract.Route
+	binary        map[string]gatewayBinaryBinding
+	subscriptions map[string]gatewayBinarySubscriptionBinding
 }
 
 func productionGatewayRegistration() (gatewayRegistration, error) {
@@ -23,8 +25,9 @@ func productionGatewayRegistration() (gatewayRegistration, error) {
 		return gatewayRegistration{}, err
 	}
 	registration := gatewayRegistration{
-		operations: make(map[string]protoapi.Operation, len(operations)),
-		legacy:     make(map[string]apicontract.Route),
+		operations:    make(map[string]protoapi.Operation, len(operations)),
+		legacy:        make(map[string]apicontract.Route),
+		subscriptions: make(map[string]gatewayBinarySubscriptionBinding),
 	}
 	legacyRoutes := make(map[string]apicontract.Route)
 	for _, route := range apicontract.Routes() {
@@ -53,9 +56,32 @@ func productionGatewayRegistration() (gatewayRegistration, error) {
 }
 
 func (r gatewayRegistration) Validate() error {
+	return r.validateAuthorityPartition(apicontract.Routes())
+}
+
+func (r gatewayRegistration) validateAuthorityPartition(legacyRoutes []apicontract.Route) error {
+	for name, binding := range r.subscriptions {
+		operation, exists := r.operations[name]
+		if !exists {
+			return fmt.Errorf("binary subscription binding %q has no descriptor operation", name)
+		}
+		if err := r.validateBinarySubscriptionBinding(operation, binding); err != nil {
+			return err
+		}
+	}
 	usedLegacyRoutes := make(map[string]string, len(r.legacy))
 	for name, operation := range r.operations {
-		binding, migrated := r.binary[name]
+		binding, unary := r.binary[name]
+		_, subscription := r.subscriptions[name]
+		notificationOwners, err := r.binarySubscriptionNotificationOwners(name)
+		if err != nil {
+			return err
+		}
+		binaryAuthorities := boolCount(unary) + boolCount(subscription) + notificationOwners
+		if binaryAuthorities > 1 {
+			return fmt.Errorf("operation %q has multiple binary authorities", name)
+		}
+		migrated := binaryAuthorities == 1
 		route, legacy := r.legacy[name]
 		if migrated == legacy {
 			if migrated {
@@ -67,8 +93,10 @@ func (r gatewayRegistration) Validate() error {
 			if operation.LegacyWireName != nil {
 				return fmt.Errorf("migrated operation %q retains legacy provenance %q", name, *operation.LegacyWireName)
 			}
-			if err := validateBinaryBinding(operation, binding); err != nil {
-				return err
+			if unary {
+				if err := validateBinaryBinding(operation, binding); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -97,7 +125,7 @@ func (r gatewayRegistration) Validate() error {
 		}
 	}
 	var unresolvedLegacyRoutes []string
-	for _, route := range apicontract.Routes() {
+	for _, route := range legacyRoutes {
 		if _, used := usedLegacyRoutes[route.Method]; !used {
 			unresolvedLegacyRoutes = append(unresolvedLegacyRoutes, route.Method)
 		}
@@ -116,6 +144,10 @@ func (r gatewayRegistration) AllowedPreAuthMethods() []string {
 			continue
 		}
 		if _, migrated := r.binary[name]; migrated {
+			methods = append(methods, name)
+			continue
+		}
+		if _, migrated := r.subscriptions[name]; migrated {
 			methods = append(methods, name)
 			continue
 		}
@@ -139,6 +171,212 @@ func (r gatewayRegistration) LegacyOperation(method string) (protoapi.Operation,
 func (r gatewayRegistration) BinaryBinding(operation string) (gatewayBinaryBinding, bool) {
 	binding, exists := r.binary[operation]
 	return binding, exists
+}
+
+func (r gatewayRegistration) BinarySubscriptionBinding(operation string) (gatewayBinarySubscriptionBinding, bool) {
+	binding, exists := r.subscriptions[operation]
+	return binding, exists
+}
+
+type gatewayBinarySubscriptionAssociations struct {
+	event      protoapi.Operation
+	completion protoapi.Operation
+}
+
+func (r gatewayRegistration) validateBinarySubscriptionBinding(
+	operation protoapi.Operation,
+	binding gatewayBinarySubscriptionBinding,
+) error {
+	if binding.operation.Name != operation.Name ||
+		binding.operation.Descriptor.FullName() != operation.Descriptor.FullName() {
+		return fmt.Errorf("binary subscription binding %q has a mismatched method descriptor", operation.Name)
+	}
+	if binding.request == nil {
+		return fmt.Errorf("binary subscription binding %q has no request constructor", operation.Name)
+	}
+	if binding.start == nil {
+		return fmt.Errorf("binary subscription binding %q has no start-result mapper", operation.Name)
+	}
+	if binding.subscribe == nil {
+		return fmt.Errorf("binary subscription binding %q has no subscriber", operation.Name)
+	}
+	if binding.failure == nil {
+		return fmt.Errorf("binary subscription binding %q has no failure mapper", operation.Name)
+	}
+	if binding.event == nil || binding.next == nil {
+		return fmt.Errorf("binary subscription binding %q has no event encoder", operation.Name)
+	}
+	if binding.completion == nil || binding.complete == nil {
+		return fmt.Errorf("binary subscription binding %q has no completion encoder", operation.Name)
+	}
+	switch binding.policy {
+	case gatewayBinaryPreCoreOrdinary,
+		gatewayBinaryPreCoreExclusive,
+		gatewayBinaryCoreActiveOrdinary,
+		gatewayBinaryCoreActiveExclusive:
+	default:
+		return fmt.Errorf("binary subscription binding %q has no execution policy", operation.Name)
+	}
+	if operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION {
+		return fmt.Errorf(
+			"binary subscription binding %q has unsupported operation kind %s",
+			operation.Name,
+			operation.Options.Kind,
+		)
+	}
+	if operation.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
+		return fmt.Errorf("binary subscription binding %q is not client-to-server", operation.Name)
+	}
+	request := binding.request()
+	if request == nil || request.ProtoReflect().Descriptor().FullName() != operation.Descriptor.Input().FullName() {
+		return fmt.Errorf("binary subscription binding %q has a mismatched request type", operation.Name)
+	}
+	start, err := binding.start()
+	if err != nil {
+		return fmt.Errorf("binary subscription binding %q start result: %w", operation.Name, err)
+	}
+	if start == nil || start.ProtoReflect().Descriptor().FullName() != operation.Descriptor.Output().FullName() {
+		return fmt.Errorf("binary subscription binding %q has a mismatched start-result type", operation.Name)
+	}
+	associations, err := r.binarySubscriptionAssociations(binding)
+	if err != nil {
+		return err
+	}
+	if err := validateBinaryNotificationAssociation(operation.Name, "event", associations.event, binding.event()); err != nil {
+		return err
+	}
+	if err := validateBinaryNotificationAssociation(
+		operation.Name,
+		"completion",
+		associations.completion,
+		binding.completion(),
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r gatewayRegistration) binarySubscriptionAssociations(
+	binding gatewayBinarySubscriptionBinding,
+) (gatewayBinarySubscriptionAssociations, error) {
+	event, err := r.operationForAssociation(binding.operation.Name, "event", binding.operation.Options.Event)
+	if err != nil {
+		return gatewayBinarySubscriptionAssociations{}, err
+	}
+	completion, err := r.operationForAssociation(
+		binding.operation.Name,
+		"completion",
+		binding.operation.Options.Completion,
+	)
+	if err != nil {
+		return gatewayBinarySubscriptionAssociations{}, err
+	}
+	return gatewayBinarySubscriptionAssociations{event: event, completion: completion}, nil
+}
+
+func (r gatewayRegistration) operationForAssociation(
+	owner string,
+	role string,
+	association *sharedpb.OperationAssociation,
+) (protoapi.Operation, error) {
+	if association == nil {
+		return protoapi.Operation{}, fmt.Errorf("binary subscription binding %q has no %s association", owner, role)
+	}
+	name, err := protoapi.ActiveOperationName(association.Package, association.Service, association.Method)
+	if err != nil {
+		return protoapi.Operation{}, fmt.Errorf(
+			"binary subscription binding %q %s association: %w",
+			owner,
+			role,
+			err,
+		)
+	}
+	operation, exists := r.operations[name]
+	if !exists {
+		return protoapi.Operation{}, fmt.Errorf(
+			"binary subscription binding %q %s association %q has no descriptor operation",
+			owner,
+			role,
+			name,
+		)
+	}
+	return operation, nil
+}
+
+func validateBinaryNotificationAssociation(
+	owner string,
+	role string,
+	operation protoapi.Operation,
+	payload proto.Message,
+) error {
+	if operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION {
+		return fmt.Errorf(
+			"binary subscription binding %q %s association %q has operation kind %s",
+			owner,
+			role,
+			operation.Name,
+			operation.Options.Kind,
+		)
+	}
+	if operation.Options.Direction != sharedpb.Direction_DIRECTION_SERVER_TO_CLIENT {
+		return fmt.Errorf(
+			"binary subscription binding %q %s association %q is not server-to-client",
+			owner,
+			role,
+			operation.Name,
+		)
+	}
+	if payload == nil || payload.ProtoReflect().Descriptor().FullName() != operation.Descriptor.Input().FullName() {
+		return fmt.Errorf(
+			"binary subscription binding %q %s association %q has a mismatched payload type",
+			owner,
+			role,
+			operation.Name,
+		)
+	}
+	return nil
+}
+
+func (r gatewayRegistration) binarySubscriptionNotificationOwners(operation string) (int, error) {
+	owners := 0
+	for _, binding := range r.subscriptions {
+		associations, err := r.binarySubscriptionAssociations(binding)
+		if err != nil {
+			return 0, err
+		}
+		if associations.event.Name == operation {
+			owners++
+		}
+		if associations.completion.Name == operation {
+			owners++
+		}
+	}
+	return owners, nil
+}
+
+func (r gatewayRegistration) BinarySubscriptionNotification(
+	operation string,
+) (protoapi.Operation, bool) {
+	for _, binding := range r.subscriptions {
+		associations, err := r.binarySubscriptionAssociations(binding)
+		if err != nil {
+			continue
+		}
+		switch operation {
+		case associations.event.Name:
+			return associations.event, true
+		case associations.completion.Name:
+			return associations.completion, true
+		}
+	}
+	return protoapi.Operation{}, false
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func validateBinaryBinding(operation protoapi.Operation, binding gatewayBinaryBinding) error {
