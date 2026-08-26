@@ -81,29 +81,35 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintln(stderr, taskCompleteErrorMessage(err))
 			return 1
 		}
-		if resp.ManualMove != nil {
+		if resp.ForcedMove != nil {
 			taskRef := parsed.TaskRef
 			if strings.TrimSpace(taskRef) == "" {
-				taskRef = resp.TaskID
+				taskRef = resp.ForcedMove.TaskID
 			}
 			return writeTaskMoveOutcome(
 				stdout,
 				stderr,
 				remote,
-				resp.TaskID,
+				resp.ForcedMove.TaskID,
 				taskRef,
-				*resp.ManualMove,
+				resp.ForcedMove.Outcome,
 				parsed.JSONPayloadSet || parsed.JSONFileSet,
+				fmt.Sprintf("%s task move %s %s", config.Command, resp.ForcedMove.TaskID, resp.ForcedMove.TargetNodeID),
 			)
 		}
+		if resp.AgentCompletion == nil {
+			fmt.Fprintln(stderr, "workflow task completion returned no outcome")
+			return 1
+		}
+		completion := *resp.AgentCompletion
 		if parsed.JSONPayloadSet || parsed.JSONFileSet {
 			return writeCommandJSON(stdout, stderr, taskCompleteJSONResponse{
-				TaskID:            resp.TaskID,
-				CurrentNodes:      resp.CurrentNodes,
-				PendingApprovalID: resp.PendingApprovalID,
+				TaskID:            completion.TaskID,
+				CurrentNodes:      completion.CurrentNodes,
+				PendingApprovalID: completion.PendingApprovalID,
 			})
 		}
-		writeTaskCompleteResult(stdout, resp)
+		writeTaskCompleteResult(stdout, completion)
 		return 0
 	})
 }
@@ -509,7 +515,7 @@ func writeTaskCompleteUsage(stderr io.Writer) {
 	fs.Usage()
 }
 
-func writeTaskCompleteResult(stdout io.Writer, resp serverapi.WorkflowTaskCompleteResponse) {
+func writeTaskCompleteResult(stdout io.Writer, resp serverapi.WorkflowTaskAgentCompletion) {
 	if resp.PendingApprovalID != nil {
 		fmt.Fprintf(stdout, "Completion is awaiting approval %s.\n", *resp.PendingApprovalID)
 		return

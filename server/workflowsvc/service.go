@@ -1972,7 +1972,7 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 			}
 			taskID = completed.Mutation.Removed[0].TaskID
 		}
-		response := serverapi.WorkflowTaskCompleteResponse{
+		completion := serverapi.WorkflowTaskAgentCompletion{
 			TaskID:       string(taskID),
 			CurrentNodes: workflowview.ProjectCurrentNodes(completed.Mutation.Created),
 			Handoff: serverapi.WorkflowTaskCompletionHandoff{
@@ -1982,14 +1982,14 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 		}
 		if completed.PendingApproval != nil {
 			approvalID := completed.PendingApproval.ID.String()
-			response.PendingApprovalID = &approvalID
+			completion.PendingApprovalID = &approvalID
 			if s.attentionFinalizer != nil {
 				finalizeCtx, cancel := workflowAttentionContext(ctx)
 				defer cancel()
 				s.attentionFinalizer.PublishPendingApproval(finalizeCtx, completed.PendingApproval.ID)
 			}
 		}
-		return response, nil
+		return serverapi.WorkflowTaskCompleteResponse{AgentCompletion: &completion}, nil
 	}
 	return serverapi.WorkflowTaskCompleteResponse{}, errors.New("workflow task completion actor is invalid")
 }
@@ -2028,8 +2028,11 @@ func (s *Service) forceCompleteWorkflowTask(
 		return serverapi.WorkflowTaskCompleteResponse{}, err
 	}
 	return serverapi.WorkflowTaskCompleteResponse{
-		TaskID:     string(taskID),
-		ManualMove: &moved,
+		ForcedMove: &serverapi.WorkflowTaskForcedCompletionMove{
+			TaskID:       string(taskID),
+			TargetNodeID: string(workflow.NodeIDOf(target)),
+			Outcome:      moved,
+		},
 	}, nil
 }
 

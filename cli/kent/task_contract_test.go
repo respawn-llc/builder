@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"core/shared/apicontract"
@@ -526,6 +527,23 @@ func TestTaskMoveStructuredValuesSelectionAndDependencyGuidance(t *testing.T) {
 	writeTaskDependencyConfirmationRequired(&stderr, "KENT-2", &count)
 	if stderr.Len() == 0 {
 		t.Fatalf("guidance=%q", stderr.String())
+	}
+	const recoveryCommand = "kent task move 11111111-1111-4111-8111-111111111111 22222222-2222-4222-8222-222222222222"
+	stderr.Reset()
+	writeTaskDependencyConfirmationRequiredForCommand(&stderr, "KENT-2", &count, recoveryCommand)
+	if !strings.Contains(stderr.String(), recoveryCommand+" --ignore-dependencies") {
+		t.Fatalf("forced-completion dependency guidance=%q", stderr.String())
+	}
+	stderr.Reset()
+	writeWorkflowExecutionTargetSelectionRequiredForCommand(
+		&stderr,
+		&serverapi.WorkflowExecutionTargetSelectionRequirement{
+			Reason: serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
+		},
+		recoveryCommand,
+	)
+	if !strings.Contains(stderr.String(), recoveryCommand+" --execution-target head") {
+		t.Fatalf("forced-completion selection guidance=%q", stderr.String())
 	}
 
 	response := serverapi.WorkflowTaskMoveResponse{

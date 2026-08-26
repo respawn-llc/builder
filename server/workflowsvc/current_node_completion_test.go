@@ -39,14 +39,18 @@ func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t
 	if err != nil {
 		t.Fatalf("CompleteWorkflowTask: %v", err)
 	}
-	if response.TaskID != string(source.TaskID) {
-		t.Fatalf("task id = %q, want %q", response.TaskID, source.TaskID)
+	if response.AgentCompletion == nil {
+		t.Fatalf("agent completion response = %+v", response)
 	}
-	if response.PendingApprovalID == nil || *response.PendingApprovalID != approvalID.String() {
-		t.Fatalf("pending approval id = %v, want %q", response.PendingApprovalID, approvalID)
+	completion := response.AgentCompletion
+	if completion.TaskID != string(source.TaskID) {
+		t.Fatalf("task id = %q, want %q", completion.TaskID, source.TaskID)
 	}
-	if len(response.CurrentNodes) != 0 {
-		t.Fatalf("current nodes = %+v, want none while source remains pending approval", response.CurrentNodes)
+	if completion.PendingApprovalID == nil || *completion.PendingApprovalID != approvalID.String() {
+		t.Fatalf("pending approval id = %v, want %q", completion.PendingApprovalID, approvalID)
+	}
+	if len(completion.CurrentNodes) != 0 {
+		t.Fatalf("current nodes = %+v, want none while source remains pending approval", completion.CurrentNodes)
 	}
 	if execution.sessionID != sessionID {
 		t.Fatalf("completion dispatch = %+v, want live Session completion", execution)
@@ -78,7 +82,7 @@ func TestCompleteWorkflowTaskReturnsResultDespitePostCommitDiagnostic(t *testing
 	if err != nil {
 		t.Fatalf("CompleteWorkflowTask: %v", err)
 	}
-	if response.TaskID != string(source.TaskID) {
+	if response.AgentCompletion == nil || response.AgentCompletion.TaskID != string(source.TaskID) {
 		t.Fatalf("accepted completion response = %+v, want Task %s", response, source.TaskID)
 	}
 }
@@ -112,11 +116,12 @@ func TestCompleteWorkflowTaskForceComposesInterruptThenManualMove(t *testing.T) 
 		execution.interruptTaskIDs[1] != workflow.TaskID(task.Task.ID) {
 		t.Fatalf("forced completion interrupt selections = %v, want Task Interrupt then Manual Move interruption", execution.interruptTaskIDs)
 	}
-	if response.TaskID != task.Task.ID ||
-		response.ManualMove == nil ||
-		response.ManualMove.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||
-		response.ManualMove.Applied == nil ||
-		len(response.ManualMove.Applied.CurrentNodes) != 1 {
+	if response.ForcedMove == nil ||
+		response.ForcedMove.TaskID != task.Task.ID ||
+		response.ForcedMove.TargetNodeID == "" ||
+		response.ForcedMove.Outcome.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||
+		response.ForcedMove.Outcome.Applied == nil ||
+		len(response.ForcedMove.Outcome.Applied.CurrentNodes) != 1 {
 		t.Fatalf("forced completion response = %+v", response)
 	}
 }
@@ -148,11 +153,12 @@ func TestCompleteWorkflowTaskForceReturnsDependencyConfirmationManualMoveOutcome
 	if err != nil {
 		t.Fatalf("CompleteWorkflowTask: %v", err)
 	}
-	if response.TaskID != blocked.Task.ID ||
-		response.ManualMove == nil ||
-		response.ManualMove.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired ||
-		response.ManualMove.UnsatisfiedDependencyCount == nil ||
-		*response.ManualMove.UnsatisfiedDependencyCount != 1 {
+	if response.ForcedMove == nil ||
+		response.ForcedMove.TaskID != blocked.Task.ID ||
+		response.ForcedMove.TargetNodeID == "" ||
+		response.ForcedMove.Outcome.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired ||
+		response.ForcedMove.Outcome.UnsatisfiedDependencyCount == nil ||
+		*response.ForcedMove.Outcome.UnsatisfiedDependencyCount != 1 {
 		t.Fatalf("forced completion response = %+v", response)
 	}
 	if !reflect.DeepEqual(execution.calls, []string{"interrupt"}) {

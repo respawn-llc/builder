@@ -1047,11 +1047,21 @@ type WorkflowTaskCompleteRequest struct {
 }
 
 type WorkflowTaskCompleteResponse struct {
+	AgentCompletion *WorkflowTaskAgentCompletion      `json:"agent_completion,omitempty"`
+	ForcedMove      *WorkflowTaskForcedCompletionMove `json:"forced_move,omitempty"`
+}
+
+type WorkflowTaskAgentCompletion struct {
 	TaskID            string                        `json:"task_id"`
 	CurrentNodes      []WorkflowTaskCurrentNode     `json:"current_nodes"`
 	PendingApprovalID *string                       `json:"pending_approval_id,omitempty"`
 	Handoff           WorkflowTaskCompletionHandoff `json:"handoff"`
-	ManualMove        *WorkflowTaskMoveResponse     `json:"manual_move,omitempty"`
+}
+
+type WorkflowTaskForcedCompletionMove struct {
+	TaskID       string                   `json:"task_id"`
+	TargetNodeID string                   `json:"target_node_id"`
+	Outcome      WorkflowTaskMoveResponse `json:"outcome"`
 }
 
 type WorkflowTaskCompletionHandoff struct {

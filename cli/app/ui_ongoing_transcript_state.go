@@ -252,7 +252,15 @@ func (m *uiModel) applyTranscriptHumanInputInterrupted(event clientui.Transcript
 	ids := make([]string, 0, len(event.Items))
 	texts := make([]string, 0, len(event.Items))
 	for _, item := range event.Items {
-		ids = append(ids, item.QueueItemID.String())
+		id := item.QueueItemID.String()
+		if m.injectedQueueIndexByAnyID(id) < 0 {
+			m.retainUnownedQueuedTerminalState(clientui.TranscriptQueuedMessageState{
+				QueueItemID: item.QueueItemID,
+				Status:      clientui.QueuedUserMessageDiscarded,
+			})
+		} else {
+			ids = append(ids, id)
+		}
 		texts = append(texts, item.Text)
 	}
 	var cmd tea.Cmd

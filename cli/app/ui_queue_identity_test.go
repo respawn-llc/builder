@@ -370,6 +370,44 @@ func TestTranscriptQueueStateWaitsForMatchingRPCOwnership(t *testing.T) {
 	}
 }
 
+func TestInterruptedHumanInputWaitsForMatchingRPCOwnership(t *testing.T) {
+	model := newProjectedTestUIModel(&runtimeControlFakeClient{})
+	queueID := runtimeids.NewQueueItemID()
+	model.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:         "local",
+		Text:            "interrupted",
+		State:           injectedRuntimeQueuePendingCreate,
+		CreateToken:     1,
+		submissionOrder: inputSubmissionOrder{sequence: 1},
+	}}
+
+	model.applyTranscriptHumanInputInterrupted(clientui.TranscriptHumanInputInterrupted{
+		Items: []clientui.TranscriptInterruptedHumanInputItem{{
+			QueueItemID: queueID,
+			Text:        "interrupted",
+		}},
+	})
+	if len(model.injectedQueue) != 1 || len(model.unownedQueuedTerminalStates) != 1 {
+		t.Fatalf("interruption discarded unresolved ownership: queue=%+v terminal=%+v", model.injectedQueue, model.unownedQueuedTerminalStates)
+	}
+
+	next, cmd := model.inputController().handleInjectedQueueCreateDone(injectedQueueCreateDoneMsg{
+		token:   1,
+		localID: "local",
+		item:    clientui.QueuedUserMessage{ID: queueID.String(), Text: "interrupted"},
+	})
+	model = next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		model = updateUIModel(t, model, msg)
+	}
+	if len(model.injectedQueue) != 0 || len(model.unownedQueuedTerminalStates) != 0 {
+		t.Fatalf("interrupted ownership left queued ghost: queue=%+v terminal=%+v", model.injectedQueue, model.unownedQueuedTerminalStates)
+	}
+	if got := testMainInput(model); got != "interrupted" {
+		t.Fatalf("restored composer = %q, want interrupted text exactly once", got)
+	}
+}
+
 func TestDrainedQueueRuntimeCommandNotAcceptedRestoresVerbatimExactlyOnce(t *testing.T) {
 	client := &runtimeControlFakeClient{
 		submitErr: serverapi.NewRuntimeCommandNotAcceptedError(errors.New("turn was not accepted")),

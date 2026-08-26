@@ -176,14 +176,17 @@ func TestServiceWorkflowGraphSaveAllowsCompletedSessionProvenanceDeletion(t *tes
 		OutputValues: map[string]string{"prior_summary": "completed"}, Force: true,
 	})
 	implementNodeID := workflowServiceNodeIDByKey(t, beforeCompletion, "implement")
-	if err != nil || len(completed.CurrentNodes) != 1 || completed.CurrentNodes[0].NodeID != implementNodeID {
+	if err != nil || completed.ForcedMove == nil || completed.ForcedMove.Outcome.Applied == nil ||
+		len(completed.ForcedMove.Outcome.Applied.CurrentNodes) != 1 ||
+		completed.ForcedMove.Outcome.Applied.CurrentNodes[0].NodeID != implementNodeID {
 		t.Fatalf("CompleteWorkflowTask = %+v, err = %v", completed, err)
 	}
 	completed, err = service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
 		ActorKind: serverapi.WorkflowTaskCompleteActorUser, TaskID: task.Task.ID, TransitionID: "done", Force: true,
 	})
-	if err != nil || len(completed.CurrentNodes) != 1 ||
-		completed.CurrentNodes[0].NodeID != workflowServiceNodeIDByKind(t, beforeCompletion, "terminal") {
+	if err != nil || completed.ForcedMove == nil || completed.ForcedMove.Outcome.Applied == nil ||
+		len(completed.ForcedMove.Outcome.Applied.CurrentNodes) != 1 ||
+		completed.ForcedMove.Outcome.Applied.CurrentNodes[0].NodeID != workflowServiceNodeIDByKind(t, beforeCompletion, "terminal") {
 		t.Fatalf("complete implement Node = %+v, err = %v", completed, err)
 	}
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)

@@ -404,6 +404,14 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 }
 
 func writeWorkflowExecutionTargetSelectionRequired(stderr io.Writer, requirement *serverapi.WorkflowExecutionTargetSelectionRequirement) {
+	writeWorkflowExecutionTargetSelectionRequiredForCommand(stderr, requirement, "")
+}
+
+func writeWorkflowExecutionTargetSelectionRequiredForCommand(
+	stderr io.Writer,
+	requirement *serverapi.WorkflowExecutionTargetSelectionRequirement,
+	command string,
+) {
 	switch {
 	case requirement == nil:
 		fmt.Fprintln(stderr, "Execution target selection is required.")
@@ -419,10 +427,13 @@ func writeWorkflowExecutionTargetSelectionRequired(stderr io.Writer, requirement
 		fmt.Fprintf(stderr, "Execution target selection is required: %s.\n", requirement.Reason)
 	}
 	fmt.Fprintln(stderr, "Rerun with one of:")
-	fmt.Fprintln(stderr, "  --execution-target none")
-	fmt.Fprintln(stderr, "  --execution-target head")
-	fmt.Fprintln(stderr, "  --execution-target default-branch")
-	fmt.Fprintln(stderr, "  --execution-target ref:<revision>")
+	for _, selection := range []string{"none", "head", "default-branch", "ref:<revision>"} {
+		prefix := strings.TrimSpace(command)
+		if prefix != "" {
+			prefix += " "
+		}
+		fmt.Fprintf(stderr, "  %s--execution-target %s\n", prefix, selection)
+	}
 }
 
 func workflowConfiguredExecutionTargetSelector(target serverapi.WorkflowExecutionTargetConfiguredTarget) string {
@@ -809,7 +820,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 			return 1
 		}
-		return writeTaskMoveOutcome(stdout, stderr, remote, taskID, positionals[0], resp, *jsonOut)
+		return writeTaskMoveOutcome(stdout, stderr, remote, taskID, positionals[0], resp, *jsonOut, "")
 	})
 }
 
@@ -821,6 +832,7 @@ func writeTaskMoveOutcome(
 	taskRef string,
 	resp serverapi.WorkflowTaskMoveResponse,
 	jsonOut bool,
+	recoveryCommand string,
 ) int {
 	if err := resp.Validate(); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -830,7 +842,7 @@ func writeTaskMoveOutcome(
 		if jsonOut {
 			_ = writeCommandJSON(stdout, stderr, resp)
 		} else {
-			writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
+			writeWorkflowExecutionTargetSelectionRequiredForCommand(stderr, resp.SelectionRequired, recoveryCommand)
 		}
 		return 1
 	}
@@ -838,7 +850,7 @@ func writeTaskMoveOutcome(
 		if jsonOut {
 			_ = writeCommandJSON(stdout, stderr, resp)
 		} else {
-			writeTaskDependencyConfirmationRequired(stderr, taskRef, resp.UnsatisfiedDependencyCount)
+			writeTaskDependencyConfirmationRequiredForCommand(stderr, taskRef, resp.UnsatisfiedDependencyCount, recoveryCommand)
 		}
 		return 1
 	}
@@ -953,11 +965,19 @@ func readManualMoveValues(inline, file string, inlineProvided, fileProvided bool
 }
 
 func writeTaskDependencyConfirmationRequired(stderr io.Writer, taskRef string, count *int) {
+	writeTaskDependencyConfirmationRequiredForCommand(stderr, taskRef, count, "")
+}
+
+func writeTaskDependencyConfirmationRequiredForCommand(stderr io.Writer, taskRef string, count *int, command string) {
 	if count == nil {
 		panic("dependency confirmation outcome requires an unsatisfied dependency count")
 	}
 	fmt.Fprintf(stderr, "Task %s has %d unsatisfied dependencies.\n", taskRef, *count)
 	fmt.Fprintf(stderr, "Review them with `%s task show %s`.\n", config.Command, taskRef)
+	if command = strings.TrimSpace(command); command != "" {
+		fmt.Fprintf(stderr, "Rerun with `%s --ignore-dependencies` to proceed.\n", command)
+		return
+	}
 	fmt.Fprintln(stderr, "Rerun with `--ignore-dependencies` to proceed.")
 }
 
