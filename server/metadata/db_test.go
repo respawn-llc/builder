@@ -117,8 +117,8 @@ func requireMetadataSQLitePragmas(t testing.TB, queryer sqlitePragmaQueryer) {
 	if err := queryer.QueryRowContext(t.Context(), "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
 		t.Fatalf("PRAGMA busy_timeout: %v", err)
 	}
-	if busyTimeout != 5000 {
-		t.Fatalf("busy_timeout = %d, want 5000", busyTimeout)
+	if busyTimeout != metadataSQLiteBusyTimeoutMilliseconds {
+		t.Fatalf("busy_timeout = %d, want %d", busyTimeout, metadataSQLiteBusyTimeoutMilliseconds)
 	}
 }
 

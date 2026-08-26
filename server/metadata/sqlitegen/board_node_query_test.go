@@ -51,7 +51,7 @@ CREATE INDEX task_label_assignments_label_task_idx
 	ON task_label_assignments(label_id, task_id);
 CREATE TABLE task_current_nodes (
 	task_id TEXT NOT NULL,
-	node_id BLOB NOT NULL
+	node_id TEXT NOT NULL
 );
 CREATE TABLE task_dependencies (
 	blocker_task_id TEXT NOT NULL,
@@ -73,10 +73,6 @@ CREATE VIEW task_records AS SELECT * FROM tasks;
 	workflowValue, err := workflowID.Value()
 	if err != nil {
 		t.Fatalf("workflow id value: %v", err)
-	}
-	nodeValue, err := runtimeids.GraphEntityIDBlob(boardQueryNodeID)
-	if err != nil {
-		t.Fatalf("Node id value: %v", err)
 	}
 	for _, label := range []struct {
 		id      string
@@ -116,7 +112,7 @@ INSERT INTO tasks (
 		); err != nil {
 			t.Fatalf("insert task %s: %v", task.id, err)
 		}
-		if _, err := db.Exec(`INSERT INTO task_current_nodes (task_id, node_id) VALUES (?, ?)`, task.id, nodeValue); err != nil {
+		if _, err := db.Exec(`INSERT INTO task_current_nodes (task_id, node_id) VALUES (?, ?)`, task.id, boardQueryNodeID); err != nil {
 			t.Fatalf("insert current node %s: %v", task.id, err)
 		}
 		for _, labelID := range task.labelIDs {

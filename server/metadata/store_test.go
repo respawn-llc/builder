@@ -461,7 +461,7 @@ func assertWorkspaceRetainedAfterBlockedUnlink(t *testing.T, store *Store, ctx c
 
 func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(t *testing.T) {
 	ctx := context.Background()
-	store, cfg, binding := newMetadataTestStore(t)
+	store, cfg, binding := newFileBackedMetadataTestStore(t)
 	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
@@ -521,7 +521,7 @@ func TestWorkspaceUnlinkReturnsStaticAndRuntimeBlockers(t *testing.T) {
 
 func TestWorkspaceUnlinkCommitCombinesStaticAndRuntimeBlockers(t *testing.T) {
 	ctx := context.Background()
-	store, cfg, binding := newMetadataTestStore(t)
+	store, cfg, binding := newFileBackedMetadataTestStore(t)
 	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
@@ -1418,7 +1418,7 @@ func TestRebindWorkspaceNormalizesUniqueConflictRace(t *testing.T) {
 
 func TestRebindWorkspaceExpectedBindingRejectsOldRootReuse(t *testing.T) {
 	ctx := context.Background()
-	store, cfg, prepared := newMetadataTestStore(t)
+	store, cfg, prepared := newFileBackedMetadataTestStore(t)
 	otherStore, err := Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("open second metadata store: %v", err)

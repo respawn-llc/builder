@@ -573,7 +573,7 @@ func TestNewLazyWithIDPreservesCategoryValidation(t *testing.T) {
 	}
 }
 
-func TestCloseIfIdleRetainsOwnerlessRuntimeForQueuedWorkAfterCurrentExecutionFinishes(t *testing.T) {
+func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionEvenWithQueuedWork(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
@@ -620,14 +620,10 @@ func TestCloseIfIdleRetainsOwnerlessRuntimeForQueuedWorkAfterCurrentExecutionFin
 	if accessErr != nil {
 		t.Fatalf("ready ownerless runtime rejected callback before retirement: %v", accessErr)
 	}
-	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(context.Context, *runtime.Engine) error {
-		return nil
-	}); err != nil {
-		t.Fatalf("ownerless runtime with queued work became unavailable: %v", err)
-	}
+	assertRuntimeUnavailable(t, authority, attachment.Resource(), "current execution finished")
 }
 
-func TestCloseIfIdleRetainsOwnerlessRuntimeWithQueuedWork(t *testing.T) {
+func TestCloseIfIdleFailsQueuedWorkWhenOwnerlessRuntimeRetires(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	var statusMu sync.Mutex
@@ -653,19 +649,18 @@ func TestCloseIfIdleRetainsOwnerlessRuntimeWithQueuedWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("release queued runtime: %v", err)
 	}
-	if release.Released || !release.Active {
-		t.Fatalf("queued release = %+v, want pending retirement", release)
+	if !release.Released || release.Active {
+		t.Fatalf("queued release = %+v, want immediate retirement", release)
 	}
-	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(context.Context, *runtime.Engine) error {
-		return nil
-	}); err != nil {
-		t.Fatalf("ownerless runtime with queued work became unavailable: %v", err)
-	}
+	assertRuntimeUnavailable(t, authority, attachment.Resource(), "queued ownerless runtime retired")
 
 	statusMu.Lock()
 	defer statusMu.Unlock()
-	if len(statuses) != 1 || statuses[0].Status != runtime.QueuedUserMessageAccepted {
-		t.Fatalf("queued message statuses = %+v, want accepted and retained", statuses)
+	if len(statuses) != 2 ||
+		statuses[0].Status != runtime.QueuedUserMessageAccepted ||
+		statuses[1].Status != runtime.QueuedUserMessageFailed ||
+		statuses[1].FailureReason != runtime.QueuedUserMessageFailureClosing {
+		t.Fatalf("queued message statuses = %+v, want accepted then failed on close", statuses)
 	}
 }
 

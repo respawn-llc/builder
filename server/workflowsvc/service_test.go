@@ -2079,7 +2079,23 @@ func (r *workflowAttentionRecorder) resolvedApprovalIDs() []workflow.ApprovalID 
 
 func newManualMoveExecutionStub(service *Service) *manualMoveExecutionStub {
 	return &manualMoveExecutionStub{
-		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{store: service.store},
+		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{
+			store:                 service.store,
+			manualMoveAssignments: workflowServiceManualMoveAssignments(service),
+		},
+	}
+}
+
+func workflowServiceManualMoveAssignments(service *Service) workflowstore.ManualMoveTargetAssignmentPreparer {
+	switch execution := service.currentNodeExecution.(type) {
+	case *currentNodeCompletionExecutionStub:
+		return execution.manualMoveAssignments
+	case *manualMoveExecutionStub:
+		return execution.manualMoveAssignments
+	case *taskMutationAuthorizationExecutionStub:
+		return execution.manualMoveAssignments
+	default:
+		return nil
 	}
 }
 
@@ -3320,7 +3336,11 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver, workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
+	execution := &currentNodeCompletionExecutionStub{
+		store:                 store,
+		manualMoveAssignments: workflowServiceTestManualMoveAssignments(t, metadataStore),
+	}
+	service, err := New(store, readModels, resolver, workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(execution))
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}

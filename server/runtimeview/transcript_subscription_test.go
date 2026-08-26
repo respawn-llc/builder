@@ -76,6 +76,23 @@ func TestTranscriptCacheWarningProjectionPreservesAbsentTokenLoss(t *testing.T) 
 	}
 }
 
+func TestTranscriptProviderModelMismatchProjectionPreservesTypedFacts(t *testing.T) {
+	mismatch := transcript.ProviderModelMismatchNotice{
+		RequestedModel: "requested-model",
+		ServedModel:    "served-model",
+	}
+	notice := transcriptNoticeFromFact(nil, &runtime.TranscriptNoticeRowFact{
+		Reason:                transcript.NoticeReasonProviderModelMismatch,
+		Severity:              transcript.NoticeSeverityWarning,
+		ProviderModelMismatch: &mismatch,
+	})
+	if notice.ProviderModelMismatch == nil ||
+		notice.ProviderModelMismatch.RequestedModel != mismatch.RequestedModel ||
+		notice.ProviderModelMismatch.ServedModel != mismatch.ServedModel {
+		t.Fatalf("provider-model mismatch projection = %+v, want %+v", notice.ProviderModelMismatch, mismatch)
+	}
+}
+
 func TestTranscriptCompactionProjectionCarriesTypedFactsWithoutServerPresentation(t *testing.T) {
 	count := 2
 	detail := "provider summary"

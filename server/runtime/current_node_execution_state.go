@@ -172,18 +172,8 @@ func (e *Engine) ResetLockedContractForWorkflowCompactionBoundary() error {
 	if e == nil || e.store == nil {
 		return errors.New("runtime engine is unavailable")
 	}
-	state := e.currentNodeExecution
-	if state == nil {
+	if e.currentNodeExecution == nil {
 		return errors.New("current node execution state is unavailable")
-	}
-	state.mu.RLock()
-	owner := state.owner
-	state.mu.RUnlock()
-	if owner != nil {
-		return fmt.Errorf(
-			"locked contract cannot reset while current node execution scope %s is active",
-			owner.scopeID,
-		)
 	}
 	if err := e.store.ResetLockedContractForCompactionBoundary(); err != nil {
 		return err

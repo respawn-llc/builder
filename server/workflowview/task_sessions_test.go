@@ -9,6 +9,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/runtimeactivity"
 	"core/server/workflow"
+	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -229,17 +230,12 @@ func associateTaskSessionForViewTest(
 }
 func associateHistoricalTaskSessionForViewTest(t *testing.T, fixture currentNodeViewFixture, reference workflow.CurrentNodeReference, sessionID runtimeids.SessionID, associatedAt int64) {
 	t.Helper()
-	branch, scoped := reference.TransitionBranchKey()
-	db := fixture.metadata.DB()
-	if _, err := db.ExecContext(fixture.ctx, `UPDATE sessions SET task_id = ? WHERE id = ?`, string(reference.TaskID), sessionID.String()); err != nil {
-		t.Fatal(err)
-	}
-	_, err := db.ExecContext(fixture.ctx, `INSERT INTO session_workflow_node_associations
-(task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms)
-VALUES (?, ?, kent_graph_entity_id_blob_v1(?), ?, 'historical', NULL, ?)`, string(reference.TaskID), sessionID.String(), string(reference.NodeID),
-		sql.NullString{String: string(branch), Valid: scoped}, associatedAt)
-	if err != nil {
-		t.Fatalf("insert historical Task Session association: %v", err)
+	if _, err := fixture.store.AssociateTaskSession(fixture.ctx, workflowstore.TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  reference,
+		AssociatedAt: time.UnixMilli(associatedAt).UTC(),
+	}); err != nil {
+		t.Fatalf("associate historical Task Session: %v", err)
 	}
 }
 func taskSessionSnapshot(

@@ -1107,7 +1107,11 @@ func registryTestReadModelUpdate(
 	if err != nil {
 		t.Fatalf("NewReadModelVersion: %v", err)
 	}
-	activity := clientui.RuntimeActivity{State: state, QueueAccepting: true}
+	activity := clientui.RuntimeActivity{
+		State:          state,
+		Reviewer:       clientui.ReviewerActivityInactive,
+		QueueAccepting: true,
+	}
 	if state == clientui.RuntimeActivityRunning {
 		runID, err := runtimeids.ParseRunID(registryTestRunID)
 		if err != nil {

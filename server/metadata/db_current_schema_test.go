@@ -42,7 +42,7 @@ func requireInMemoryMetadataSQLitePragmas(t testing.TB, queryer metadataSQLitePr
 		{pragma: "foreign_keys", want: int64(1)},
 		{pragma: "journal_mode", want: "memory"},
 		{pragma: "synchronous", want: int64(1)},
-		{pragma: "busy_timeout", want: int64(5000)},
+		{pragma: "busy_timeout", want: int64(metadataSQLiteBusyTimeoutMilliseconds)},
 	} {
 		switch want := test.want.(type) {
 		case int64:

@@ -543,9 +543,11 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	agentNodeID := workflow.NodeID("node-agent-" + created.ID.String())
-	startGroupID := workflow.TransitionGroupID("group-start-" + created.ID.String())
-	doneGroupID := workflow.TransitionGroupID("group-done-" + created.ID.String())
+	agentNodeID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	startGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	doneGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	startEdgeID := workflow.EdgeID(runtimeids.NewGraphEntityID())
+	doneEdgeID := workflow.EdgeID(runtimeids.NewGraphEntityID())
 	workflowfixture.SaveStoreGraph(t, t.Context(), store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindStart)
 		terminalNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
@@ -559,14 +561,14 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 		)
 		request.Edges = append(request.Edges,
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID,
+				ID: startEdgeID, WorkflowID: created.ID,
 				TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentNodeID,
 				AssigneeSelection: workflow.AssigneeSelectionConfigured,
 				ThinkingSelection: workflow.ThinkingSelectionConfigured,
 				ContextMode:       workflow.ContextModeNewSession, PromptTemplate: "Do work.",
 			},
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID,
+				ID: doneEdgeID, WorkflowID: created.ID,
 				TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalNodeID,
 				AssigneeSelection: workflow.AssigneeSelectionConfigured,
 				ThinkingSelection: workflow.ThinkingSelectionConfigured,
