@@ -746,6 +746,13 @@ func (c *CurrentNodeController) EnsureTaskQuiescent(taskID workflow.TaskID) erro
 	if taskID == "" {
 		return errors.New("workflow task id is required")
 	}
+	live, err := c.authority.HasLiveWorkflowTaskExecution(taskID)
+	if err != nil {
+		return err
+	}
+	if live {
+		return ErrTaskExecutionNotQuiescent
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ensureTaskQuiescentLocked(taskID)

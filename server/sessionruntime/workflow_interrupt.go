@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"core/server/workflow"
@@ -46,16 +45,7 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		return errors.New("workflow manual move selection operation is required")
 	}
 	a.mu.Lock()
-	executions := make([]*execution, 0)
-	for _, execution := range a.byScope {
-		ref, workflowScoped := execution.scope.Workflow()
-		if workflowScoped && ref.CurrentNode.TaskID == taskID {
-			executions = append(executions, execution)
-		}
-	}
-	sort.Slice(executions, func(i, j int) bool {
-		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
-	})
+	executions := a.workflowTaskExecutionsLocked(taskID)
 	a.mu.Unlock()
 	lockExactExecutions(executions)
 	defer unlockExactExecutions(executions)
@@ -157,23 +147,17 @@ func (a *Authority) WithWorkflowInterruptSelection(
 		return errors.New("workflow interrupt selection operation is required")
 	}
 	a.mu.Lock()
-	executions := make([]*execution, 0)
-	for _, execution := range a.byScope {
-		ref, workflowScoped := execution.scope.Workflow()
-		if !workflowScoped || ref.CurrentNode.TaskID != taskID {
-			continue
-		}
-		if sessionID != nil {
+	executions := a.workflowTaskExecutionsLocked(taskID)
+	if sessionID != nil {
+		filtered := executions[:0]
+		for _, execution := range executions {
 			resource, agent := execution.scope.Resource()
-			if !agent || resource.SessionID() != *sessionID {
-				continue
+			if agent && resource.SessionID() == *sessionID {
+				filtered = append(filtered, execution)
 			}
 		}
-		executions = append(executions, execution)
+		executions = filtered
 	}
-	sort.Slice(executions, func(i, j int) bool {
-		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
-	})
 	a.mu.Unlock()
 	lockExactExecutions(executions)
 	defer unlockExactExecutions(executions)

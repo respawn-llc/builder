@@ -3,6 +3,7 @@ package workflowexecution
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +18,92 @@ import (
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
 )
+
+func TestEnsureTaskQuiescentRejectsPublishedExactExecution(t *testing.T) {
+	t.Run("Agent", func(t *testing.T) {
+		fixture := newCurrentNodeQuestionFixture(t)
+		reference := currentNodeReferenceForControllerTest(t, "task-live-agent", "node-agent")
+		handle, _, _ := fixture.startAgentExecution(
+			t,
+			reference,
+			func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+				<-ctx.Done()
+				return context.Cause(ctx)
+			},
+		)
+		t.Cleanup(func() {
+			handle.RequestStop()
+			if err := handle.Close(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("close live Agent execution: %v", err)
+			}
+		})
+		waitForRunningCurrentNode(t, fixture.authority, reference)
+
+		if err := fixture.controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			t.Fatalf("EnsureTaskQuiescent error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+		}
+	})
+
+	t.Run("Script", func(t *testing.T) {
+		shellPath, err := exec.LookPath("sh")
+		if err != nil {
+			t.Skipf("sh executable unavailable: %v", err)
+		}
+		fixture := newCurrentNodeQuestionFixture(t)
+		reference := currentNodeReferenceForControllerTest(t, "task-live-script", "node-script")
+		handle := startLiveTestWorkflowScript(t, fixture.controller, fixture.authority, reference, sessionruntime.ScriptExecutionRequest{
+			Command: sessionruntime.ScriptCommand{
+				Path: shellPath,
+				Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+			},
+		})
+		t.Cleanup(func() {
+			handle.RequestStop()
+			if err := handle.Close(context.Background()); err != nil {
+				t.Errorf("close live Script execution: %v", err)
+			}
+		})
+		waitForRunningCurrentNode(t, fixture.authority, reference)
+
+		if err := fixture.controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			t.Fatalf("EnsureTaskQuiescent error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+		}
+	})
+
+	t.Run("finalizing Script", func(t *testing.T) {
+		shellPath, err := exec.LookPath("sh")
+		if err != nil {
+			t.Skipf("sh executable unavailable: %v", err)
+		}
+		fixture := newCurrentNodeQuestionFixture(t)
+		reference := currentNodeReferenceForControllerTest(t, "task-finalizing-script", "node-script")
+		finalizeEntered := make(chan struct{})
+		releaseFinalize := make(chan struct{})
+		handle := startLiveTestWorkflowScript(t, fixture.controller, fixture.authority, reference, sessionruntime.ScriptExecutionRequest{
+			Command: sessionruntime.ScriptCommand{Path: shellPath, Args: []string{"-c", "exit 0"}},
+			Finalize: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.ScriptResult, error) error {
+				close(finalizeEntered)
+				<-releaseFinalize
+				return nil
+			},
+		})
+		t.Cleanup(func() {
+			close(releaseFinalize)
+			if err := handle.Close(context.Background()); err != nil {
+				t.Errorf("close finalizing Script execution: %v", err)
+			}
+		})
+		select {
+		case <-finalizeEntered:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Script execution did not enter finalization")
+		}
+
+		if err := fixture.controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			t.Fatalf("EnsureTaskQuiescent error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+		}
+	})
+}
 
 func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsActive(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)

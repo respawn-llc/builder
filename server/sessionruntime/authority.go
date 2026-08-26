@@ -167,6 +167,35 @@ func (a *Authority) ExecutionByCurrentNode(
 	return executionHandle{execution: execution}, true
 }
 
+// HasLiveWorkflowTaskExecution checks the live execution authority for a
+// safety-critical Task mutation precondition. Read projections must use the
+// stale-tolerant snapshot APIs instead.
+func (a *Authority) HasLiveWorkflowTaskExecution(taskID workflow.TaskID) (bool, error) {
+	if a == nil {
+		return false, errors.New("session runtime authority is required")
+	}
+	if strings.TrimSpace(string(taskID)) == "" {
+		return false, errors.New("workflow task id is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.workflowTaskExecutionsLocked(taskID)) != 0, nil
+}
+
+func (a *Authority) workflowTaskExecutionsLocked(taskID workflow.TaskID) []*execution {
+	executions := make([]*execution, 0)
+	for _, execution := range a.byScope {
+		ref, workflowScoped := execution.scope.Workflow()
+		if workflowScoped && ref.CurrentNode.TaskID == taskID {
+			executions = append(executions, execution)
+		}
+	}
+	sort.Slice(executions, func(i, j int) bool {
+		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
+	})
+	return executions
+}
+
 func (a *Authority) workflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey) *execution {
 	return a.workflowExecutionByCurrentNodeLocked(ref, key)
 }
