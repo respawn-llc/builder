@@ -1641,6 +1641,64 @@ func TestServiceGoalCallerCancellationStopsWaitWhileAcceptedMutationContinues(t 
 	}
 }
 
+func TestServiceAppendCommittedEntryCallerCancellationStopsOnlyWait(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	stepStarted := make(chan struct{})
+	releaseStep := make(chan struct{})
+	stepDone := make(chan error, 1)
+	go func() {
+		stepDone <- engine.RunWhenIdle(t.Context(), runtime.ActiveKindUserTurn, func() error {
+			close(stepStarted)
+			<-releaseStep
+			return nil
+		})
+	}()
+	select {
+	case <-stepStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active model step")
+	}
+
+	caller, cancel := context.WithCancel(t.Context())
+	appendDone := make(chan error, 1)
+	go func() {
+		appendDone <- service.AppendCommittedEntry(caller, serverapi.RuntimeAppendCommittedEntryRequest{
+			SessionID: store.Meta().SessionID,
+			Role:      "system",
+			Text:      "accepted after cancellation",
+		})
+	}()
+	for !engine.HasPendingRuntimeOperations() {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-appendDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled append wait error = %v, want canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		close(releaseStep)
+		t.Fatal("canceled append caller remained blocked")
+	}
+
+	close(releaseStep)
+	if err := <-stepDone; err != nil {
+		t.Fatalf("finish active model step: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		count := engine.CommittedTranscriptEntryCount()
+		if count == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("accepted append count = %d, want 1 after caller cancellation", count)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 	store, engine, service := newRuntimeControlWorkflowTestService(
 		t, nil, nil,

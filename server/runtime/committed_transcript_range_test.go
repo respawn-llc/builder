@@ -453,7 +453,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 		string(transcript.EntryRoleSystem),
 		string(transcript.EntryRoleSystem),
 	} {
-		if err := engine.AppendCommittedEntry(role, "notice"); err != nil {
+		if err := engine.AppendCommittedEntry(t.Context(), role, "notice"); err != nil {
 			t.Fatalf("append pre-compaction entry: %v", err)
 		}
 	}
@@ -499,7 +499,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 	if got := reopened.CommittedTranscriptEntryCount(); got != 3 {
 		t.Fatalf("reopened committed entry count = %d", got)
 	}
-	if err := reopened.AppendCommittedEntry(string(transcript.EntryRoleSystem), "notice"); err != nil {
+	if err := reopened.AppendCommittedEntry(t.Context(), string(transcript.EntryRoleSystem), "notice"); err != nil {
 		t.Fatalf("append post-reopen entry: %v", err)
 	}
 	if len(events) != 1 {

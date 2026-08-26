@@ -426,14 +426,14 @@ func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.Runtim
 		return err
 	}
 	visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(req.Visibility))
-	return s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
 		if visibility == transcript.EntryVisibilityAuto && strings.TrimSpace(req.NoticeID) != "" {
-			return engine.AppendCommittedEntryWithNoticeID(req.Role, req.Text, req.NoticeID)
+			return engine.AppendCommittedEntryWithNoticeID(callbackCtx, req.Role, req.Text, req.NoticeID)
 		}
 		if visibility == transcript.EntryVisibilityAuto {
-			return engine.AppendCommittedEntry(req.Role, req.Text)
+			return engine.AppendCommittedEntry(callbackCtx, req.Role, req.Text)
 		}
-		return engine.AppendCommittedEntryWithVisibility(req.Role, req.Text, visibility)
+		return engine.AppendCommittedEntryWithVisibility(callbackCtx, req.Role, req.Text, visibility)
 	})
 }
 
@@ -450,8 +450,8 @@ func (s *Service) AppendSessionEntry(ctx context.Context, sessionID string, role
 	if trimmedText == "" {
 		return fmt.Errorf("text is required")
 	}
-	return s.withRuntime(ctx, trimmedSessionID, func(_ context.Context, engine *runtime.Engine) error {
-		return engine.AppendCommittedEntry(trimmedRole, trimmedText)
+	return s.withRuntime(ctx, trimmedSessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		return engine.AppendCommittedEntry(callbackCtx, trimmedRole, trimmedText)
 	})
 }
 

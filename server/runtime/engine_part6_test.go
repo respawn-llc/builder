@@ -90,7 +90,7 @@ func TestAppendCommittedEntryWithCondensedTextSkipsBlankEntries(t *testing.T) {
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
 
-	eng.AppendCommittedEntryWithCondensedText("user", "   ", "ignored")
+	eng.AppendCommittedEntryWithCondensedText(t.Context(), "user", "   ", "ignored")
 	if len(events) != 0 || len(eng.ChatSnapshot().Entries) != 0 {
 		t.Fatalf("blank local entry changed state: events=%+v snapshot=%+v", events, eng.ChatSnapshot())
 	}

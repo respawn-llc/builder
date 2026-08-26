@@ -37,7 +37,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- eng.AppendCommittedEntry("system", "first")
+		firstDone <- eng.AppendCommittedEntry(t.Context(), "system", "first")
 	}()
 	select {
 	case <-firstEntered:
@@ -47,7 +47,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- eng.AppendCommittedEntry("system", "second")
+		secondDone <- eng.AppendCommittedEntry(t.Context(), "system", "second")
 	}()
 	select {
 	case err := <-secondDone:
@@ -128,7 +128,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 
 	appendDone := make(chan error, 1)
 	go func() {
-		appendDone <- eng.AppendCommittedEntry("system", "feedback")
+		appendDone <- eng.AppendCommittedEntry(t.Context(), "system", "feedback")
 	}()
 	select {
 	case err := <-appendDone:
@@ -284,7 +284,7 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 
 	appendDone := make(chan error, 1)
 	go func() {
-		appendDone <- eng.AppendCommittedEntry("system", "feedback")
+		appendDone <- eng.AppendCommittedEntry(t.Context(), "system", "feedback")
 	}()
 	select {
 	case err := <-appendDone:

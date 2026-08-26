@@ -820,7 +820,7 @@ func TestEngineDefersOrdinaryRuntimeMutationUntilProtectedStepFinishes(t *testin
 
 	mutationDone := make(chan error, 1)
 	go func() {
-		mutationDone <- engine.AppendCommittedEntry("system", "after boundary")
+		mutationDone <- engine.AppendCommittedEntry(t.Context(), "system", "after boundary")
 	}()
 	select {
 	case err := <-mutationDone:

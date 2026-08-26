@@ -14,9 +14,9 @@ var (
 	errCommittedFeedbackTextRequired    = errors.New("committed feedback text is required")
 )
 
-func (e *Engine) appendCommittedEntryWithCommitReceipt(entry storedLocalEntry) (session.CommitReceipt, error) {
+func (e *Engine) appendCommittedEntryWithCommitReceipt(ctx context.Context, entry storedLocalEntry) (session.CommitReceipt, error) {
 	return awaitEngineRuntimeOperation(
-		context.Background(),
+		ctx,
 		e,
 		func(context.Context) (session.CommitReceipt, error) {
 			return e.appendCommittedEntryWithCommitReceiptRaw(entry)

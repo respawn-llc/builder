@@ -255,20 +255,20 @@ func (e *Engine) LiveChatContextSnapshot() chatcontext.ProjectionInput {
 	}
 }
 
-func (e *Engine) AppendCommittedEntry(role, text string) error {
-	return e.AppendCommittedEntryWithCondensedText(role, text, "")
+func (e *Engine) AppendCommittedEntry(ctx context.Context, role, text string) error {
+	return e.AppendCommittedEntryWithCondensedText(ctx, role, text, "")
 }
 
-func (e *Engine) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility) error {
-	return e.appendCommittedEntry(storedLocalEntry{
+func (e *Engine) AppendCommittedEntryWithVisibility(ctx context.Context, role, text string, visibility transcript.EntryVisibility) error {
+	return e.appendCommittedEntry(ctx, storedLocalEntry{
 		Visibility: normalizeRuntimeEntryVisibility(visibility),
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
 	})
 }
 
-func (e *Engine) AppendCommittedEntryWithNoticeID(role, text, noticeID string) error {
-	return e.appendCommittedEntry(storedLocalEntry{
+func (e *Engine) AppendCommittedEntryWithNoticeID(ctx context.Context, role, text, noticeID string) error {
+	return e.appendCommittedEntry(ctx, storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
@@ -276,8 +276,8 @@ func (e *Engine) AppendCommittedEntryWithNoticeID(role, text, noticeID string) e
 	})
 }
 
-func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText string) error {
-	return e.appendCommittedEntry(storedLocalEntry{
+func (e *Engine) AppendCommittedEntryWithCondensedText(ctx context.Context, role, text, condensedText string) error {
+	return e.appendCommittedEntry(ctx, storedLocalEntry{
 		Visibility:    transcript.EntryVisibilityAuto,
 		Role:          strings.TrimSpace(role),
 		Text:          strings.TrimSpace(text),
@@ -285,8 +285,8 @@ func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText
 	})
 }
 
-func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
-	_, err := e.appendCommittedEntryWithCommitReceipt(entry)
+func (e *Engine) appendCommittedEntry(ctx context.Context, entry storedLocalEntry) error {
+	_, err := e.appendCommittedEntryWithCommitReceipt(ctx, entry)
 	return err
 }
 
