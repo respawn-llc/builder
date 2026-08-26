@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"core/cli/app/internal/worktreeui"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -306,7 +306,7 @@ func TestUnorderedListWithoutResolvedIdentityCannotDismissDeleteConfirmation(t *
 	resolvedEntry := testResolvedFeatureWorktreeEntry()
 	for _, tc := range []struct {
 		name     string
-		response serverapi.WorktreeListResponse
+		response worktreecontract.ListResponse
 	}{
 		{
 			name:     "target omitted",
@@ -314,8 +314,8 @@ func TestUnorderedListWithoutResolvedIdentityCannotDismissDeleteConfirmation(t *
 		},
 		{
 			name: "target reclassified external",
-			response: serverapi.WorktreeListResponse{
-				Worktrees: []serverapi.WorktreeListEntry{
+			response: worktreecontract.ListResponse{
+				Worktrees: []worktreecontract.ListEntry{
 					testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, true, true, false),
 					testExternalWorktreeListEntry("/wt/feature-renamed", "feature-renamed", false),
 				},
@@ -363,8 +363,8 @@ func TestClosedWorktreeDeleteResolutionCannotOpenReplacementOverlay(t *testing.T
 
 func TestClosedWorktreeListResultCannotHydrateReplacementOverlay(t *testing.T) {
 	client := &worktreeCommandTestClient{
-		listResp: serverapi.WorktreeListResponse{
-			Worktrees: []serverapi.WorktreeListEntry{
+		listResp: worktreecontract.ListResponse{
+			Worktrees: []worktreecontract.ListEntry{
 				testRegisteredWorktreeListEntry("wt-stale", "stale", "/wt/stale", "stale", false, false, true, true),
 			},
 		},
@@ -412,19 +412,19 @@ func TestWorktreeListRefreshPreservesSelectionAndDeleteTargetByKentID(t *testing
 	}
 }
 
-func testSelectorPreview(entry serverapi.WorktreeListEntry) serverapi.WorktreeSelectorPreviewResponse {
-	return serverapi.WorktreeSelectorPreviewResponse{
+func testSelectorPreview(entry worktreecontract.ListEntry) worktreecontract.SelectorResolveResponse {
+	return worktreecontract.SelectorResolveResponse{
 		Worktree: entry,
 	}
 }
 
-func testResolvedFeatureWorktreeEntry() serverapi.WorktreeListEntry {
+func testResolvedFeatureWorktreeEntry() worktreecontract.ListEntry {
 	return testRegisteredWorktreeListEntry("wt-feature", "renamed", "/wt/feature-renamed", "feature/renamed", false, false, true, true)
 }
 
-func testRefreshedWorktreeListResponse() serverapi.WorktreeListResponse {
-	return serverapi.WorktreeListResponse{
-		Worktrees: []serverapi.WorktreeListEntry{
+func testRefreshedWorktreeListResponse() worktreecontract.ListResponse {
+	return worktreecontract.ListResponse{
+		Worktrees: []worktreecontract.ListEntry{
 			testRegisteredWorktreeListEntry("wt-other", "other", "/wt/other", "feature", false, false, true, true),
 			testRegisteredWorktreeListEntry("wt-feature", "renamed", "/wt/feature", "feature-renamed", false, false, true, true),
 		},

@@ -19,6 +19,8 @@ import (
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/serverjsoncontract"
+	"core/shared/worktreecontract"
+
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -693,55 +695,55 @@ func (c *Remote) ResolveTransition(ctx context.Context, req serverapi.SessionRes
 	return resp, c.call(ctx, protocol.MethodSessionResolveTransition, req, &resp)
 }
 
-func (c *Remote) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
-	return callValidatedRPC[serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](c, ctx, protocol.MethodWorktreeList, req)
+func (c *Remote) ListWorktrees(ctx context.Context, req worktreecontract.ListRequest) (worktreecontract.ListResponse, error) {
+	return callValidatedRPC[worktreecontract.ListRequest, worktreecontract.ListResponse](c, ctx, protocol.MethodWorktreeList, req)
 }
 
-func (c *Remote) ListWorkspaceWorktrees(ctx context.Context, req serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
-	return callValidatedRPC[serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](c, ctx, protocol.MethodWorktreeWorkspaceList, req)
+func (c *Remote) ListWorkspaceWorktrees(ctx context.Context, req worktreecontract.WorkspaceListRequest) (worktreecontract.WorkspaceListResponse, error) {
+	return callValidatedRPC[worktreecontract.WorkspaceListRequest, worktreecontract.WorkspaceListResponse](c, ctx, protocol.MethodWorktreeWorkspaceList, req)
 }
 
-func (c *Remote) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
-	var resp serverapi.WorktreeStatusResponse
+func (c *Remote) GetWorktreeStatus(ctx context.Context, req worktreecontract.StatusRequest) (worktreecontract.StatusResponse, error) {
+	var resp worktreecontract.StatusResponse
 	return resp, c.call(ctx, protocol.MethodWorktreeStatus, req, &resp)
 }
 
-func (c *Remote) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
-	return callValidatedRPC[serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](c, ctx, protocol.MethodWorktreeSelectorResolve, req)
+func (c *Remote) ResolveWorktreeSelector(ctx context.Context, req worktreecontract.SelectorResolveRequest) (worktreecontract.SelectorResolveResponse, error) {
+	return callValidatedRPC[worktreecontract.SelectorResolveRequest, worktreecontract.SelectorResolveResponse](c, ctx, protocol.MethodWorktreeSelectorResolve, req)
 }
 
-func (c *Remote) PreviewWorktreeDelete(ctx context.Context, req serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
-	var resp serverapi.WorktreeDeletePreviewResponse
+func (c *Remote) PreviewWorktreeDelete(ctx context.Context, req worktreecontract.DeletePreviewRequest) (worktreecontract.DeletePreviewResponse, error) {
+	var resp worktreecontract.DeletePreviewResponse
 	if err := c.call(ctx, protocol.MethodWorktreeDeletePreview, req, &resp); err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
+		return worktreecontract.DeletePreviewResponse{}, err
 	}
 	if err := resp.Validate(); err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, fmt.Errorf("validate worktree delete preview response: %w", err)
+		return worktreecontract.DeletePreviewResponse{}, fmt.Errorf("validate worktree delete preview response: %w", err)
 	}
 	return resp, nil
 }
 
-func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
-	var resp serverapi.WorktreeCreateTargetResolveResponse
+func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, req worktreecontract.CreateTargetResolveRequest) (worktreecontract.CreateTargetResolveResponse, error) {
+	var resp worktreecontract.CreateTargetResolveResponse
 	return resp, c.call(ctx, protocol.MethodWorktreeCreateTargetResolve, req, &resp)
 }
 
-func (c *Remote) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
-	return callValidatedRPC[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](c, ctx, protocol.MethodWorktreeCreate, req)
+func (c *Remote) CreateWorktree(ctx context.Context, req worktreecontract.CreateRequest) (worktreecontract.CreateResponse, error) {
+	return callValidatedRPC[worktreecontract.CreateRequest, worktreecontract.CreateResponse](c, ctx, protocol.MethodWorktreeCreate, req)
 }
 
-func (c *Remote) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	var resp serverapi.WorktreeScheduledAcknowledgement
+func (c *Remote) EnterWorktree(ctx context.Context, req worktreecontract.EnterRequest) (worktreecontract.ScheduledAcknowledgement, error) {
+	var resp worktreecontract.ScheduledAcknowledgement
 	return resp, c.call(ctx, protocol.MethodWorktreeEnter, req, &resp)
 }
 
-func (c *Remote) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	var resp serverapi.WorktreeScheduledAcknowledgement
+func (c *Remote) LeaveWorktree(ctx context.Context, req worktreecontract.LeaveRequest) (worktreecontract.ScheduledAcknowledgement, error) {
+	var resp worktreecontract.ScheduledAcknowledgement
 	return resp, c.call(ctx, protocol.MethodWorktreeLeave, req, &resp)
 }
 
-func (c *Remote) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
-	var resp serverapi.WorktreeDeleteResult
+func (c *Remote) DeleteWorktree(ctx context.Context, req worktreecontract.DeleteRequest) (worktreecontract.DeleteResult, error) {
+	var resp worktreecontract.DeleteResult
 	return resp, c.call(ctx, protocol.MethodWorktreeDelete, req, &resp)
 }
 

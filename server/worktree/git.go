@@ -10,9 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 var errGitTargetNotFound = errors.New("git target not found")
@@ -1006,33 +1005,33 @@ func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRo
 	return normalized.CreateBranch, nil
 }
 
-func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (clientui.WorktreeDirtyState, error) {
+func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (worktreecontract.DirtyState, error) {
 	if i == nil {
-		return clientui.WorktreeDirtyState{}, fmt.Errorf("git inspector is required")
+		return worktreecontract.DirtyState{}, fmt.Errorf("git inspector is required")
 	}
 	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
 	if err != nil {
-		return clientui.WorktreeDirtyState{}, err
+		return worktreecontract.DirtyState{}, err
 	}
 	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, "status", "--porcelain=v1", "-z")
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return clientui.WorktreeDirtyState{}, ctxErr
+			return worktreecontract.DirtyState{}, ctxErr
 		}
 		cause := err.Error()
-		return clientui.WorktreeDirtyState{
-			Kind:         clientui.WorktreeDirtyStateUnknown,
+		return worktreecontract.DirtyState{
+			Kind:         worktreecontract.DirtyStateUnknown,
 			UnknownCause: &cause,
 		}, nil
 	}
 	count := countPorcelainStatusEntries(output)
 	if count == 0 {
-		return clientui.WorktreeDirtyState{
-			Kind: clientui.WorktreeDirtyStateClean,
+		return worktreecontract.DirtyState{
+			Kind: worktreecontract.DirtyStateClean,
 		}, nil
 	}
-	return clientui.WorktreeDirtyState{
-		Kind:           clientui.WorktreeDirtyStateDirty,
+	return worktreecontract.DirtyState{
+		Kind:           worktreecontract.DirtyStateDirty,
 		DirtyFileCount: &count,
 	}, nil
 }
@@ -1191,7 +1190,7 @@ func (i *GitInspector) deleteBranch(ctx context.Context, workspaceRoot string, b
 func normalizeCreateSpec(spec CreateSpec) (CreateSpec, error) {
 	baseRef := strings.TrimSpace(spec.BaseRef)
 	branchName := strings.TrimSpace(spec.BranchName)
-	if err := serverapi.ValidateWorktreeCreateSpec(baseRef, spec.CreateBranch, branchName); err != nil {
+	if err := worktreecontract.ValidateCreateSpec(baseRef, spec.CreateBranch, branchName); err != nil {
 		return CreateSpec{}, err
 	}
 	return CreateSpec{BaseRef: baseRef, CreateBranch: spec.CreateBranch, BranchName: branchName}, nil

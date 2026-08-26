@@ -11,7 +11,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/shared/config"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 func updateWorktreeStatusTarget(t *testing.T, env *serviceTestEnv, worktreeID string, cwdRelpath string) {
@@ -26,9 +26,9 @@ func updateWorktreeStatusTarget(t *testing.T, env *serviceTestEnv, worktreeID st
 	)
 }
 
-func mustGetWorktreeStatus(t *testing.T, env *serviceTestEnv) serverapi.WorktreeStatusResponse {
+func mustGetWorktreeStatus(t *testing.T, env *serviceTestEnv) worktreecontract.StatusResponse {
 	t.Helper()
-	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
+	status, err := env.service.GetWorktreeStatus(env.ctx, worktreecontract.StatusRequest{
 		SessionID: env.session.Meta().SessionID,
 	})
 	if err != nil {
@@ -136,7 +136,7 @@ func TestWorktreeStatusReportsWorkspaceRootWhenWorkspaceGitBindingIsMissing(t *t
 
 	status := mustGetWorktreeStatus(t, env)
 	if len(status.Problems) != 1 ||
-		status.Problems[0].Kind != serverapi.WorktreeStatusProblemGitBindingMissing ||
+		status.Problems[0].Kind != worktreecontract.StatusProblemGitBindingMissing ||
 		status.Problems[0].Root == nil ||
 		*status.Problems[0].Root != missingWorkspaceRoot {
 		t.Fatalf("status problems = %+v, want missing workspace binding at %q", status.Problems, missingWorkspaceRoot)
@@ -157,7 +157,7 @@ func TestWorktreeStatusSurfacesInvalidRecordedGitMetadata(t *testing.T) {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
 
-	if _, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
+	if _, err := env.service.GetWorktreeStatus(env.ctx, worktreecontract.StatusRequest{
 		SessionID: env.session.Meta().SessionID,
 	}); err == nil {
 		t.Fatal("GetWorktreeStatus succeeded with invalid recorded Git metadata")
@@ -168,7 +168,7 @@ func TestWorktreeStatusPropagatesGitInspectionCancellation(t *testing.T) {
 	env := newServiceTestEnv(t)
 	env.service.git = NewGitInspector(canceledGitCommandRunner{})
 
-	_, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
+	_, err := env.service.GetWorktreeStatus(env.ctx, worktreecontract.StatusRequest{
 		SessionID: env.session.Meta().SessionID,
 	})
 	if !errors.Is(err, context.Canceled) {
@@ -191,7 +191,7 @@ func TestWorktreeStatusReportsMissingGitBinding(t *testing.T) {
 
 	status := mustGetWorktreeStatus(t, env)
 	if len(status.Problems) != 1 ||
-		status.Problems[0].Kind != serverapi.WorktreeStatusProblemGitBindingMissing {
+		status.Problems[0].Kind != worktreecontract.StatusProblemGitBindingMissing {
 		t.Fatalf("status problems = %+v, want GitBindingMissing", status.Problems)
 	}
 }
@@ -218,7 +218,7 @@ func TestWorktreeStatusPropagatesRecordedRefInspectionCancellation(t *testing.T)
 	updateWorktreeStatusTarget(t, env, created.WorktreeID, ".")
 	env.service.git = NewGitInspector(statusRefFailingGitRunner{err: context.Canceled, exitCode: -1})
 
-	_, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
+	_, err := env.service.GetWorktreeStatus(env.ctx, worktreecontract.StatusRequest{
 		SessionID: env.session.Meta().SessionID,
 	})
 	if !errors.Is(err, context.Canceled) {
@@ -237,7 +237,7 @@ func TestWorktreeStatusReportsMissingRecordedRef(t *testing.T) {
 
 	status := mustGetWorktreeStatus(t, env)
 	if len(status.Problems) != 1 ||
-		status.Problems[0].Kind != serverapi.WorktreeStatusProblemRecordedRefMissing {
+		status.Problems[0].Kind != worktreecontract.StatusProblemRecordedRefMissing {
 		t.Fatalf("status problems = %+v, want RecordedRefMissing", status.Problems)
 	}
 }

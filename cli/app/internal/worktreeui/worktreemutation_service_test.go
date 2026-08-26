@@ -6,86 +6,86 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 type testWorktreeClient struct {
-	listResp         serverapi.WorktreeListResponse
+	listResp         worktreecontract.ListResponse
 	listErr          error
 	listCtx          context.Context
-	listRequests     []serverapi.WorktreeListRequest
+	listRequests     []worktreecontract.ListRequest
 	selectorCtx      context.Context
-	selectorResp     serverapi.WorktreeSelectorPreviewResponse
-	selectorRequests []serverapi.WorktreeSelectorPreviewRequest
+	selectorResp     worktreecontract.SelectorResolveResponse
+	selectorRequests []worktreecontract.SelectorResolveRequest
 	resolveCtx       context.Context
-	resolveResp      serverapi.WorktreeCreateTargetResolveResponse
-	resolveRequests  []serverapi.WorktreeCreateTargetResolveRequest
+	resolveResp      worktreecontract.CreateTargetResolveResponse
+	resolveRequests  []worktreecontract.CreateTargetResolveRequest
 	createCtx        context.Context
-	createResp       serverapi.WorktreeCreateResponse
-	createRequests   []serverapi.WorktreeCreateRequest
+	createResp       worktreecontract.CreateResponse
+	createRequests   []worktreecontract.CreateRequest
 	enterCtx         context.Context
-	enterResp        serverapi.WorktreeScheduledAcknowledgement
-	enterRequests    []serverapi.WorktreeEnterRequest
+	enterResp        worktreecontract.ScheduledAcknowledgement
+	enterRequests    []worktreecontract.EnterRequest
 	deleteCtx        context.Context
-	deleteResp       serverapi.WorktreeDeleteResult
-	deleteRequests   []serverapi.WorktreeDeleteRequest
+	deleteResp       worktreecontract.DeleteResult
+	deleteRequests   []worktreecontract.DeleteRequest
 	errs             []error
 }
 
-func (c *testWorktreeClient) GetWorktreeStatus(context.Context, serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
-	return serverapi.WorktreeStatusResponse{}, c.nextErr()
+func (c *testWorktreeClient) GetWorktreeStatus(context.Context, worktreecontract.StatusRequest) (worktreecontract.StatusResponse, error) {
+	return worktreecontract.StatusResponse{}, c.nextErr()
 }
 
-func (c *testWorktreeClient) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
+func (c *testWorktreeClient) ListWorktrees(ctx context.Context, req worktreecontract.ListRequest) (worktreecontract.ListResponse, error) {
 	c.listCtx = ctx
 	c.listRequests = append(c.listRequests, req)
 	return c.listResp, c.listErr
 }
 
-func (c *testWorktreeClient) ListWorkspaceWorktrees(context.Context, serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
-	return serverapi.WorktreeWorkspaceListResponse{}, c.nextErr()
+func (c *testWorktreeClient) ListWorkspaceWorktrees(context.Context, worktreecontract.WorkspaceListRequest) (worktreecontract.WorkspaceListResponse, error) {
+	return worktreecontract.WorkspaceListResponse{}, c.nextErr()
 }
 
-func (c *testWorktreeClient) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+func (c *testWorktreeClient) ResolveWorktreeSelector(ctx context.Context, req worktreecontract.SelectorResolveRequest) (worktreecontract.SelectorResolveResponse, error) {
 	c.selectorCtx = ctx
 	c.selectorRequests = append(c.selectorRequests, req)
 	return c.selectorResp, c.nextErr()
 }
 
-func (c *testWorktreeClient) PreviewWorktreeDelete(context.Context, serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
-	return serverapi.WorktreeDeletePreviewResponse{}, c.nextErr()
+func (c *testWorktreeClient) PreviewWorktreeDelete(context.Context, worktreecontract.DeletePreviewRequest) (worktreecontract.DeletePreviewResponse, error) {
+	return worktreecontract.DeletePreviewResponse{}, c.nextErr()
 }
 
-func (c *testWorktreeClient) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
+func (c *testWorktreeClient) ResolveWorktreeCreateTarget(ctx context.Context, req worktreecontract.CreateTargetResolveRequest) (worktreecontract.CreateTargetResolveResponse, error) {
 	c.resolveCtx = ctx
 	c.resolveRequests = append(c.resolveRequests, req)
 	return c.resolveResp, c.nextErr()
 }
 
-func (c *testWorktreeClient) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
+func (c *testWorktreeClient) CreateWorktree(ctx context.Context, req worktreecontract.CreateRequest) (worktreecontract.CreateResponse, error) {
 	c.createCtx = ctx
 	c.createRequests = append(c.createRequests, req)
 	return c.createResp, c.nextErr()
 }
 
-func (c *testWorktreeClient) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+func (c *testWorktreeClient) EnterWorktree(ctx context.Context, req worktreecontract.EnterRequest) (worktreecontract.ScheduledAcknowledgement, error) {
 	c.enterCtx = ctx
 	c.enterRequests = append(c.enterRequests, req)
 	return c.enterResp, c.nextErr()
 }
 
-func (c *testWorktreeClient) LeaveWorktree(context.Context, serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	return serverapi.WorktreeScheduledAcknowledgement{}, c.nextErr()
+func (c *testWorktreeClient) LeaveWorktree(context.Context, worktreecontract.LeaveRequest) (worktreecontract.ScheduledAcknowledgement, error) {
+	return worktreecontract.ScheduledAcknowledgement{}, c.nextErr()
 }
 
-func (c *testWorktreeClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
+func (c *testWorktreeClient) DeleteWorktree(ctx context.Context, req worktreecontract.DeleteRequest) (worktreecontract.DeleteResult, error) {
 	c.deleteCtx = ctx
 	c.deleteRequests = append(c.deleteRequests, req)
 	return c.deleteResp, c.nextErr()
 }
 
-func (c *testWorktreeClient) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+func (c *testWorktreeClient) SubscribeWorktreeSetup(ctx context.Context, req worktreecontract.SetupSubscribeRequest) (worktreecontract.SetupSubscription, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -94,8 +94,8 @@ func (c *testWorktreeClient) SubscribeWorktreeSetup(ctx context.Context, req ser
 
 type testNoopWorktreeSetupSubscription struct{}
 
-func (testNoopWorktreeSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
-	return serverapi.WorktreeSetupEvent{}, io.EOF
+func (testNoopWorktreeSetupSubscription) Next(ctx context.Context) (worktreecontract.SetupEvent, error) {
+	return worktreecontract.SetupEvent{}, io.EOF
 }
 
 func (testNoopWorktreeSetupSubscription) Close() error { return nil }
@@ -110,7 +110,7 @@ func (c *testWorktreeClient) nextErr() error {
 }
 
 func TestListUsesSession(t *testing.T) {
-	client := &testWorktreeClient{listResp: serverapi.WorktreeListResponse{Target: clientui.SessionExecutionTarget{EffectiveWorkdir: "/repo"}}}
+	client := &testWorktreeClient{listResp: worktreecontract.ListResponse{Target: worktreecontract.SessionExecutionTarget{EffectiveWorkdir: "/repo"}}}
 	service := newTestService(client)
 
 	resp, err := service.List()
@@ -162,13 +162,13 @@ func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	client := &testWorktreeClient{}
 	service := newTestService(client)
 
-	if _, err := service.Create(serverapi.WorktreeCreateRequest{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/a"}); err != nil {
+	if _, err := service.Create(worktreecontract.CreateRequest{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/a"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, err := service.Enter(" feature/a "); err != nil {
 		t.Fatalf("Enter: %v", err)
 	}
-	if _, err := service.Delete(" wt-3 ", true, serverapi.WorktreeBranchCleanupModeDeleteSafe); err != nil {
+	if _, err := service.Delete(" wt-3 ", true, worktreecontract.BranchCleanupModeDeleteSafe); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if got := client.createRequests[0]; got.SetupOperationID.Validate() != nil || got.SessionID != "session-1" || got.BranchName != "feature/a" {
@@ -177,7 +177,7 @@ func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	if got := client.enterRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "feature/a" {
 		t.Fatalf("enter request = %+v", got)
 	}
-	if got := client.deleteRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "wt-3" || !got.ForceFolderRemoval || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
+	if got := client.deleteRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "wt-3" || !got.ForceFolderRemoval || got.BranchCleanupPolicy != worktreecontract.BranchCleanupModeDeleteSafe {
 		t.Fatalf("delete request = %+v", got)
 	}
 }
@@ -189,7 +189,7 @@ func TestMutationsUseDedicatedMutationContext(t *testing.T) {
 		return context.WithTimeout(context.Background(), 10*time.Second)
 	}
 
-	if _, err := service.Delete("wt-1", false, serverapi.WorktreeBranchCleanupModeRetain); err != nil {
+	if _, err := service.Delete("wt-1", false, worktreecontract.BranchCleanupModeRetain); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if client.deleteCtx == nil {
@@ -212,7 +212,7 @@ func TestCreateDoesNotInstallFixedMutationDeadline(t *testing.T) {
 		return context.WithTimeout(context.Background(), 10*time.Millisecond)
 	}
 
-	if _, err := service.Create(serverapi.WorktreeCreateRequest{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/a"}); err != nil {
+	if _, err := service.Create(worktreecontract.CreateRequest{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/a"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if client.createCtx == nil {
@@ -224,7 +224,7 @@ func TestCreateDoesNotInstallFixedMutationDeadline(t *testing.T) {
 }
 
 func TestResolveCreateTargetUsesBoundedContext(t *testing.T) {
-	client := &testWorktreeClient{resolveResp: serverapi.WorktreeCreateTargetResolveResponse{Resolution: serverapi.WorktreeCreateTargetResolution{Input: "main"}}}
+	client := &testWorktreeClient{resolveResp: worktreecontract.CreateTargetResolveResponse{Resolution: worktreecontract.CreateTargetResolution{Input: "main"}}}
 	service := newTestService(client)
 
 	if _, err := service.ResolveCreateTarget("main"); err != nil {
@@ -269,12 +269,12 @@ func newTestService(client *testWorktreeClient) Service {
 			},
 			RecoverRuntimeConnection: func(context.Context, error, bool) error { return nil },
 		},
-		NewOperationID: func() serverapi.WorktreeOperationID { return testWorktreeOperationID(nil) },
+		NewOperationID: func() worktreecontract.OperationID { return testWorktreeOperationID(nil) },
 	}
 }
 
-func testWorktreeOperationID(t *testing.T) serverapi.WorktreeOperationID {
-	id, err := serverapi.ParseWorktreeOperationID("11111111-1111-4111-8111-111111111111")
+func testWorktreeOperationID(t *testing.T) worktreecontract.OperationID {
+	id, err := worktreecontract.ParseOperationID("11111111-1111-4111-8111-111111111111")
 	if err != nil && t != nil {
 		t.Fatalf("ParseWorktreeOperationID: %v", err)
 	}

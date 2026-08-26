@@ -20,6 +20,7 @@ import (
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/serverjsoncontract"
+	"core/shared/worktreecontract"
 )
 
 var errRemoteClosed = errors.New("remote client is closed")
@@ -44,13 +45,13 @@ type worktreeBlockedError struct {
 
 func (e worktreeBlockedError) Error() string {
 	if e.diagnostic == nil {
-		return serverapi.ErrWorktreeBlocked.Error()
+		return worktreecontract.ErrWorktreeBlocked.Error()
 	}
 	return *e.diagnostic
 }
 
 func (e worktreeBlockedError) Unwrap() error {
-	return serverapi.ErrWorktreeBlocked
+	return worktreecontract.ErrWorktreeBlocked
 }
 
 func (e requestCanceledError) normalized() bool {

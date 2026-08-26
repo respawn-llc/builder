@@ -2,13 +2,12 @@ package worktree
 
 import (
 	"context"
+	"core/shared/worktreecontract"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"testing"
-
-	"core/shared/serverapi"
 )
 
 type recordingGitCommandRunner struct {
@@ -76,14 +75,14 @@ func TestCreateWorktreeRejectsBlankBaseRefBeforeGit(t *testing.T) {
 	runner := &recordingGitCommandRunner{delegate: execGitCommandRunner{}}
 	env.service.git = NewGitInspector(runner)
 
-	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	_, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		CreateBranch:     true,
 		BranchName:       "feature/blank-base-ref",
 	})
-	var typed *serverapi.WorktreeCreateError
-	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerBaseRef {
+	var typed *worktreecontract.CreateError
+	if !errors.As(err, &typed) || typed.Owner != worktreecontract.CreateErrorOwnerBaseRef {
 		t.Fatalf("CreateWorktree error = %T %v, want Base-ref-owned error", err, err)
 	}
 	if len(runner.calls) != 0 {
@@ -97,8 +96,8 @@ func TestCreateWorktreeResolvesBaseRefOnceAndUsesCommitOIDForAdd(t *testing.T) {
 	env.service.git = NewGitInspector(runner)
 	commitOID := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")
 
-	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	_, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -164,15 +163,15 @@ func TestCreateWorktreeBaseRefResolutionFailuresAreBaseRefOwned(t *testing.T) {
 				t.Fatalf("direct resolution error = %T %v, want GitRevisionResolutionError", expectedErr, expectedErr)
 			}
 			runner.resetCalls()
-			_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-				SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			_, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+				SetupOperationID: worktreecontract.NewSetupOperationID(),
 				SessionID:        env.session.Meta().SessionID,
 				BaseRef:          test.baseRef,
 				CreateBranch:     true,
 				BranchName:       "feature/resolve-" + test.name,
 			})
-			var typed *serverapi.WorktreeCreateError
-			if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerBaseRef {
+			var typed *worktreecontract.CreateError
+			if !errors.As(err, &typed) || typed.Owner != worktreecontract.CreateErrorOwnerBaseRef {
 				t.Fatalf("CreateWorktree error = %T %v, want Base-ref-owned error", err, err)
 			}
 			if typed.Diagnostic != expectedErr.Error() {
@@ -201,15 +200,15 @@ func TestCreateWorktreeGitBaseRefResolutionFailureIsFormOwned(t *testing.T) {
 	}
 	env.service.git = NewGitInspector(runner)
 
-	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	_, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
 		BranchName:       "feature/resolve-git-failure",
 	})
-	var typed *serverapi.WorktreeCreateError
-	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerForm {
+	var typed *worktreecontract.CreateError
+	if !errors.As(err, &typed) || typed.Owner != worktreecontract.CreateErrorOwnerForm {
 		t.Fatalf("CreateWorktree error = %T %v, want form-owned error", err, err)
 	}
 	var revisionErr *GitRevisionResolutionError
@@ -236,15 +235,15 @@ func TestCreateWorktreeCommitResolutionInfrastructureFailureIsFormOwned(t *testi
 	}
 	env.service.git = NewGitInspector(runner)
 
-	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	_, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
 		BranchName:       "feature/resolve-commit-git-failure",
 	})
-	var typed *serverapi.WorktreeCreateError
-	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerForm {
+	var typed *worktreecontract.CreateError
+	if !errors.As(err, &typed) || typed.Owner != worktreecontract.CreateErrorOwnerForm {
 		t.Fatalf("CreateWorktree error = %T %v, want form-owned error", err, err)
 	}
 	var revisionErr *GitRevisionResolutionError
@@ -262,15 +261,15 @@ func TestCreateWorktreePostResolutionAddFailureIsFormOwned(t *testing.T) {
 	}
 	env.service.git = NewGitInspector(runner)
 
-	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	_, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
 		BranchName:       "feature/post-resolution-add",
 	})
-	var typed *serverapi.WorktreeCreateError
-	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerForm {
+	var typed *worktreecontract.CreateError
+	if !errors.As(err, &typed) || typed.Owner != worktreecontract.CreateErrorOwnerForm {
 		t.Fatalf("CreateWorktree error = %T %v, want form-owned error", err, err)
 	}
 	if !errors.Is(err, addErr) {
@@ -287,8 +286,8 @@ func TestCreateWorktreeExistingAndDetachedTargetsDoNotResolveBaseRefAgain(t *tes
 	runner := &recordingGitCommandRunner{delegate: execGitCommandRunner{}}
 	env.service.git = NewGitInspector(runner)
 
-	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	_, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "feature/existing-create",
 		BranchName:       "",
@@ -301,13 +300,13 @@ func TestCreateWorktreeExistingAndDetachedTargetsDoNotResolveBaseRefAgain(t *tes
 	}
 
 	runner.resetCalls()
-	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	_, err = env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 	})
-	var typed *serverapi.WorktreeCreateError
-	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerForm {
+	var typed *worktreecontract.CreateError
+	if !errors.As(err, &typed) || typed.Owner != worktreecontract.CreateErrorOwnerForm {
 		t.Fatalf("detached CreateWorktree error = %T %v, want form-owned error", err, err)
 	}
 	if hasGitCall(runner.calls, []string{"rev-parse", "--verify", "--quiet", "HEAD^{commit}"}) {
@@ -327,8 +326,8 @@ func TestCreateWorktreeJoinsPostCreateAndCleanupCausesBeforeFormClassification(t
 	}
 	env.service.git = NewGitInspector(runner)
 
-	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	_, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -338,8 +337,8 @@ func TestCreateWorktreeJoinsPostCreateAndCleanupCausesBeforeFormClassification(t
 	if !errors.As(err, &listErr) || !errors.Is(err, postCreateErr) || !errors.Is(err, cleanupErr) {
 		t.Fatalf("CreateWorktree error = %T %v, want joined list and cleanup causes", err, err)
 	}
-	var typed *serverapi.WorktreeCreateError
-	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerForm {
+	var typed *worktreecontract.CreateError
+	if !errors.As(err, &typed) || typed.Owner != worktreecontract.CreateErrorOwnerForm {
 		t.Fatalf("CreateWorktree error = %T %v, want form-owned error", err, err)
 	}
 	expectedSource := errors.Join(

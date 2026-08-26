@@ -11,7 +11,7 @@ import (
 	"core/server/metadata"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTarget) error {
@@ -22,6 +22,27 @@ func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTa
 		return errors.New("session execution target worktree id is required")
 	}
 	return nil
+}
+
+func contractSessionExecutionTarget(target clientui.SessionExecutionTarget) worktreecontract.SessionExecutionTarget {
+	var worktree *worktreecontract.SessionExecutionWorktreeTarget
+	if target.Worktree != nil {
+		worktree = &worktreecontract.SessionExecutionWorktreeTarget{
+			ID:           target.Worktree.ID,
+			Name:         target.Worktree.Name,
+			Root:         target.Worktree.Root,
+			Availability: target.Worktree.Availability,
+		}
+	}
+	return worktreecontract.SessionExecutionTarget{
+		WorkspaceID:           target.WorkspaceID,
+		WorkspaceName:         target.WorkspaceName,
+		WorkspaceRoot:         target.WorkspaceRoot,
+		WorkspaceAvailability: worktreecontract.ProjectAvailability(target.WorkspaceAvailability),
+		Worktree:              worktree,
+		CwdRelpath:            target.CwdRelpath,
+		EffectiveWorkdir:      target.EffectiveWorkdir,
+	}
 }
 
 func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktree) (string, bool, error) {
@@ -49,11 +70,11 @@ func worktreeNamedBranch(worktree GitWorktree) (string, bool) {
 }
 
 type PathInspection struct {
-	Availability serverapi.WorktreePathAvailability
+	Availability worktreecontract.PathAvailability
 	Directory    bool
 }
 
-func PathAvailability(path string) serverapi.WorktreePathAvailability {
+func PathAvailability(path string) worktreecontract.PathAvailability {
 	return InspectPath(path).Availability
 }
 
@@ -61,15 +82,15 @@ func InspectPath(path string) PathInspection {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return PathInspection{Availability: serverapi.WorktreePathAvailabilityMissing}
+			return PathInspection{Availability: worktreecontract.PathAvailabilityMissing}
 		}
-		return PathInspection{Availability: serverapi.WorktreePathAvailabilityInaccessible}
+		return PathInspection{Availability: worktreecontract.PathAvailabilityInaccessible}
 	}
 	if !info.IsDir() {
-		return PathInspection{Availability: serverapi.WorktreePathAvailabilityInaccessible}
+		return PathInspection{Availability: worktreecontract.PathAvailabilityInaccessible}
 	}
 	return PathInspection{
-		Availability: serverapi.WorktreePathAvailabilityAvailable,
+		Availability: worktreecontract.PathAvailabilityAvailable,
 		Directory:    true,
 	}
 }

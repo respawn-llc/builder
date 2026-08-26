@@ -42,6 +42,7 @@ import (
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"core/shared/workflowcontract"
+	"core/shared/worktreecontract"
 )
 
 func New(cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport) (*Core, error) {
@@ -516,7 +517,7 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 		}
 		return workflowsvc.ExecutionTargetMaterialization{RetainedPreviousWorktree: prepared.RetainedPreviousWorktree}, err
 	}
-	var retainedWorktree *serverapi.WorktreeTopologyEntry
+	var retainedWorktree *worktreecontract.TopologyEntry
 	if prepared.Materialization != nil {
 		retainedWorktree = &prepared.Materialization.Worktree
 	}

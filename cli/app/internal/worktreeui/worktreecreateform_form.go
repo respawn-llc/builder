@@ -1,6 +1,6 @@
 package worktreeui
 
-import "core/shared/serverapi"
+import "core/shared/worktreecontract"
 
 type Field uint8
 
@@ -17,16 +17,16 @@ const (
 	CreateFormActionCancel
 )
 
-func OrderedFields(kind serverapi.WorktreeCreateTargetResolutionKind) []Field {
+func OrderedFields(kind worktreecontract.CreateTargetResolutionKind) []Field {
 	fields := []Field{FieldBranchTarget}
-	if kind == serverapi.WorktreeCreateTargetResolutionKindNewBranch {
+	if kind == worktreecontract.CreateTargetResolutionKindNewBranch {
 		fields = append(fields, FieldBaseRef)
 	}
 	fields = append(fields, FieldActions)
 	return fields
 }
 
-func MoveField(field Field, kind serverapi.WorktreeCreateTargetResolutionKind, delta int) Field {
+func MoveField(field Field, kind worktreecontract.CreateTargetResolutionKind, delta int) Field {
 	fields := OrderedFields(kind)
 	index := 0
 	for idx, candidate := range fields {

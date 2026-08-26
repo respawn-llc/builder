@@ -15,6 +15,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 type ActiveRuntimeMaintenance struct {
@@ -58,7 +59,7 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 func (a *Authority) RunWorktreeTransition(
 	ctx context.Context,
 	sessionID string,
-	origin *serverapi.RuntimeStepOrigin,
+	origin *worktreecontract.RuntimeStepOrigin,
 	fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
 ) error {
 	if fn == nil {
@@ -71,8 +72,8 @@ func (a *Authority) RunWorktreeTransition(
 	return a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
 		if resource == nil {
 			if origin != nil {
-				return false, serverapi.NewWorktreeImmediateTransitionError(
-					serverapi.WorktreeImmediateTransitionOriginInactive,
+				return false, worktreecontract.NewImmediateTransitionError(
+					worktreecontract.ImmediateTransitionOriginInactive,
 					runtimeUnavailableErr(id.String()),
 				)
 			}
@@ -109,8 +110,8 @@ func (a *Authority) RunWorktreeTransition(
 		}
 		activeStep := runtimeactivity.ActiveStepFromProvider(engine)
 		if activeStep == nil || activeStep.RunID != origin.RunID || activeStep.StepID != origin.StepID {
-			return false, serverapi.NewWorktreeImmediateTransitionError(
-				serverapi.WorktreeImmediateTransitionOriginInactive,
+			return false, worktreecontract.NewImmediateTransitionError(
+				worktreecontract.ImmediateTransitionOriginInactive,
 				runtime.ErrActiveStepInactive,
 			)
 		}
@@ -136,11 +137,11 @@ func (a *Authority) RunWorktreeTransition(
 			return syncErr
 		})
 		if err != nil {
-			kind := serverapi.WorktreeImmediateTransitionApplyFailed
+			kind := worktreecontract.ImmediateTransitionApplyFailed
 			if errors.Is(err, runtime.ErrActiveStepInactive) {
-				kind = serverapi.WorktreeImmediateTransitionOriginInactive
+				kind = worktreecontract.ImmediateTransitionOriginInactive
 			}
-			return retire, serverapi.NewWorktreeImmediateTransitionError(kind, err)
+			return retire, worktreecontract.NewImmediateTransitionError(kind, err)
 		}
 		return retire, nil
 	})

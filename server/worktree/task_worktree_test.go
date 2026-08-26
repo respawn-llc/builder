@@ -38,7 +38,7 @@ func prepareManagedTaskExecutionRoot(
 	ctx context.Context,
 	service *Service,
 	taskID workflow.TaskID,
-	setupOperationID *serverapi.WorktreeSetupOperationID,
+	setupOperationID *worktreecontract.SetupOperationID,
 	resolvedTarget GitRevision,
 ) (TaskWorktreeMaterialization, error) {
 	prepared, err := service.PrepareTaskExecutionRoot(ctx, TaskExecutionRootPreparationRequest{
@@ -53,20 +53,20 @@ func prepareManagedTaskExecutionRoot(
 	return *prepared.Materialization, err
 }
 
-func newWorktreeSetupOperationIDPointer() *serverapi.WorktreeSetupOperationID {
-	value := serverapi.NewWorktreeSetupOperationID()
+func newWorktreeSetupOperationIDPointer() *worktreecontract.SetupOperationID {
+	value := worktreecontract.NewSetupOperationID()
 	return &value
 }
 
-func taskWorktreeID(entry serverapi.WorktreeTopologyEntry) string {
+func taskWorktreeID(entry worktreecontract.TopologyEntry) string {
 	return entry.Registered.Kent.WorktreeID
 }
 
-func taskWorktreeRoot(entry serverapi.WorktreeTopologyEntry) string {
+func taskWorktreeRoot(entry worktreecontract.TopologyEntry) string {
 	return entry.Registered.Git.CanonicalRoot
 }
 
-func taskWorktreeBranch(entry serverapi.WorktreeTopologyEntry) string {
+func taskWorktreeBranch(entry worktreecontract.TopologyEntry) string {
 	if entry.Registered.Git.BranchName == nil {
 		return ""
 	}
@@ -1188,8 +1188,8 @@ func TestMaterializeInitialTaskWorktreeRunsSetupAndPublishesProgressBeforeReturn
 	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\nprintf started > %q\ncat > %q\nwhile [ ! -f %q ]; do sleep 0.02; done\nprintf marker > %q\n", startedPath, payloadPath, releasePath, markerPath))
 	env.service.setupScript = scriptRelpath
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
-	setupID := serverapi.NewWorktreeSetupOperationID()
-	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
+	setupID := worktreecontract.NewSetupOperationID()
+	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, worktreecontract.SetupSubscribeRequest{SetupOperationID: setupID})
 	if err != nil {
 		t.Fatalf("SubscribeWorktreeSetup: %v", err)
 	}
@@ -1215,7 +1215,7 @@ func TestMaterializeInitialTaskWorktreeRunsSetupAndPublishesProgressBeforeReturn
 	if err != nil {
 		t.Fatalf("setup event: %v", err)
 	}
-	if evt.Phase != serverapi.WorktreeSetupPhaseStarted || evt.SetupOperationID != setupID ||
+	if evt.Phase != worktreecontract.SetupPhaseStarted || evt.SetupOperationID != setupID ||
 		evt.Started == nil || evt.Started.ScriptPath == "" || evt.Started.WorktreeRoot == "" {
 		t.Fatalf("started setup event = %+v", evt)
 	}
@@ -1292,8 +1292,8 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 	capture := testsetup.New(t, testsetup.Options{})
 	env.service.setupScript = capture.Executable()
 
-	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	resp, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -1401,7 +1401,7 @@ func TestPrepareTaskExecutionRootFinalSetupFailureRetainsCurrentRootAndBinding(t
 	env.service.setupScript = scriptRelpath
 
 	materialized, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
-	var retained *serverapi.WorktreeSetupRetainedError
+	var retained *worktreecontract.SetupRetainedError
 	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
 		t.Fatalf("PrepareTaskExecutionRoot error = %T %v, want retained setup failure", err, err)
 	}
@@ -1546,13 +1546,13 @@ func TestDeleteWorktreeRecreatesNonTerminalTaskManagedWorktreeOnRestore(t *testi
 	env := newServiceTestEnv(t)
 	task, created, _ := materializeAndLockTaskWorktree(t, env)
 
-	_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
+	_, err := env.service.DeleteWorktree(env.ctx, worktreecontract.DeleteRequest{
+		TransitionHeader: worktreecontract.TransitionHeader{
+			OperationID: worktreecontract.NewOperationID(),
 			SessionID:   env.session.Meta().SessionID,
 		},
 		Selector:            taskWorktreeID(created.Worktree),
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+		BranchCleanupPolicy: worktreecontract.BranchCleanupModeRetain,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
@@ -1610,13 +1610,13 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 		t.Fatalf("CompleteCurrentNode: %v", err)
 	}
 
-	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
+	_, err = env.service.DeleteWorktree(env.ctx, worktreecontract.DeleteRequest{
+		TransitionHeader: worktreecontract.TransitionHeader{
+			OperationID: worktreecontract.NewOperationID(),
 			SessionID:   env.session.Meta().SessionID,
 		},
 		Selector:            taskWorktreeID(created.Worktree),
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+		BranchCleanupPolicy: worktreecontract.BranchCleanupModeRetain,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree terminal task worktree: %v", err)

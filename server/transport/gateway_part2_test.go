@@ -12,6 +12,7 @@ import (
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/worktreecontract"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -259,14 +260,14 @@ func TestGatewayRemoteResolveWorktreeCreateTarget(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	resp, err := remote.ResolveWorktreeCreateTarget(context.Background(), serverapi.WorktreeCreateTargetResolveRequest{
+	resp, err := remote.ResolveWorktreeCreateTarget(context.Background(), worktreecontract.CreateTargetResolveRequest{
 		SessionID: store.Meta().SessionID,
 		Target:    "HEAD",
 	})
 	if err != nil {
 		t.Fatalf("ResolveWorktreeCreateTarget: %v", err)
 	}
-	if resp.Resolution.Kind != serverapi.WorktreeCreateTargetResolutionKindDetachedRef {
+	if resp.Resolution.Kind != worktreecontract.CreateTargetResolutionKindDetachedRef {
 		t.Fatalf("resolution kind = %q, want detached_ref", resp.Resolution.Kind)
 	}
 	if strings.TrimSpace(resp.Resolution.ResolvedRef) == "" {

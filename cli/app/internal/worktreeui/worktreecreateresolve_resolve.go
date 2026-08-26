@@ -1,10 +1,9 @@
 package worktreeui
 
 import (
+	"core/shared/worktreecontract"
 	"errors"
 	"strings"
-
-	"core/shared/serverapi"
 )
 
 type State struct {
@@ -12,7 +11,7 @@ type State struct {
 	Resolving     bool
 	SubmitPending bool
 	Token         uint64
-	Resolution    serverapi.WorktreeCreateTargetResolution
+	Resolution    worktreecontract.CreateTargetResolution
 }
 
 type ScheduleOutcome struct {
@@ -24,7 +23,7 @@ func Schedule(state State, query string) (State, ScheduleOutcome) {
 	trimmedQuery := strings.TrimSpace(query)
 	state.ErrorText = ""
 	state.Token++
-	state.Resolution = serverapi.WorktreeCreateTargetResolution{}
+	state.Resolution = worktreecontract.CreateTargetResolution{}
 	state.Resolving = trimmedQuery != ""
 	state.SubmitPending = false
 	return state, ScheduleOutcome{Token: state.Token, Debounce: trimmedQuery != ""}
@@ -42,7 +41,7 @@ func BeginSubmit(state State, query string) (State, BeginSubmitOutcome, error) {
 		return state, BeginSubmitOutcome{}, err
 	}
 	state.ErrorText = ""
-	state.Resolution = serverapi.WorktreeCreateTargetResolution{}
+	state.Resolution = worktreecontract.CreateTargetResolution{}
 	state.Resolving = true
 	state.SubmitPending = true
 	state.Token++
@@ -65,7 +64,7 @@ func DebounceReady(state State, token uint64, query string) (State, DebounceOutc
 	if trimmedQuery == "" {
 		state.Resolving = false
 		state.SubmitPending = false
-		state.Resolution = serverapi.WorktreeCreateTargetResolution{}
+		state.Resolution = worktreecontract.CreateTargetResolution{}
 		state.ErrorText = ""
 		return state, DebounceOutcome{}
 	}
@@ -76,7 +75,7 @@ type DoneInput struct {
 	Token         uint64
 	CurrentQuery  string
 	ResponseQuery string
-	Resolution    serverapi.WorktreeCreateTargetResolution
+	Resolution    worktreecontract.CreateTargetResolution
 	HasError      bool
 	ErrorText     string
 }
@@ -84,7 +83,7 @@ type DoneInput struct {
 type DoneOutcome struct {
 	Ignored    bool
 	Submit     bool
-	SubmitKind serverapi.WorktreeCreateTargetResolutionKind
+	SubmitKind worktreecontract.CreateTargetResolutionKind
 }
 
 func Done(state State, input DoneInput) (State, DoneOutcome) {
@@ -98,7 +97,7 @@ func Done(state State, input DoneInput) (State, DoneOutcome) {
 	submitPending := state.SubmitPending
 	state.SubmitPending = false
 	if input.HasError {
-		state.Resolution = serverapi.WorktreeCreateTargetResolution{}
+		state.Resolution = worktreecontract.CreateTargetResolution{}
 		state.ErrorText = input.ErrorText
 		return state, DoneOutcome{}
 	}

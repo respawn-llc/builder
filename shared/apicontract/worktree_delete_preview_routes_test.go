@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"core/shared/protocol"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 func TestWorktreeDeletePreviewRouteUsesSessionWorktreeBoundary(t *testing.T) {
@@ -19,8 +19,8 @@ func TestWorktreeDeletePreviewRouteUsesSessionWorktreeBoundary(t *testing.T) {
 		route.Connection != ConnectionControl {
 		t.Fatalf("delete preview route policy = %+v", route)
 	}
-	if route.RequestType != reflect.TypeOf(serverapi.WorktreeDeletePreviewRequest{}) ||
-		route.ResponseType != reflect.TypeOf(serverapi.WorktreeDeletePreviewResponse{}) {
+	if route.RequestType != reflect.TypeOf(worktreecontract.DeletePreviewRequest{}) ||
+		route.ResponseType != reflect.TypeOf(worktreecontract.DeletePreviewResponse{}) {
 		t.Fatalf("delete preview route types = %v -> %v", route.RequestType, route.ResponseType)
 	}
 	if !route.ValidatesRequest {

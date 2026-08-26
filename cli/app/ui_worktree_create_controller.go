@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"core/cli/app/internal/worktreeui"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -19,7 +19,7 @@ type worktreeCreateTargetResolveDebounceMsg struct {
 type worktreeCreateTargetResolveDoneMsg struct {
 	token uint64
 	query string
-	resp  serverapi.WorktreeCreateTargetResolveResponse
+	resp  worktreecontract.CreateTargetResolveResponse
 	err   error
 }
 
@@ -27,7 +27,7 @@ func (d *uiWorktreeCreateDialogState) syncFocus() {
 	if d == nil {
 		return
 	}
-	if d.resolution.Kind != serverapi.WorktreeCreateTargetResolutionKindNewBranch && d.focus == uiWorktreeCreateFieldBaseRef {
+	if d.resolution.Kind != worktreecontract.CreateTargetResolutionKindNewBranch && d.focus == uiWorktreeCreateFieldBaseRef {
 		d.focus = uiWorktreeCreateFieldBranchTarget
 	}
 }
@@ -71,7 +71,7 @@ func (d *uiWorktreeCreateDialogState) applyResolveState(state worktreeui.State) 
 	d.submitPending = state.SubmitPending
 	d.resolveToken = state.Token
 	d.resolution = state.Resolution
-	if d.resolution.Kind != serverapi.WorktreeCreateTargetResolutionKindNewBranch {
+	if d.resolution.Kind != worktreecontract.CreateTargetResolutionKindNewBranch {
 		d.baseRefErrorText = ""
 	}
 	d.syncFocus()

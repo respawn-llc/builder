@@ -1,17 +1,16 @@
 package worktree
 
 import (
+	"core/shared/worktreecontract"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
-
-	"core/shared/serverapi"
 )
 
 type topologySelectorMatch struct {
 	index int
-	entry serverapi.WorktreeTopologyEntry
+	entry worktreecontract.TopologyEntry
 }
 
 type scheduledWorktreeTarget struct {
@@ -19,7 +18,7 @@ type scheduledWorktreeTarget struct {
 	canonicalRoot string
 }
 
-func scheduledWorktreeTargetFromEntry(entry serverapi.WorktreeTopologyEntry) (scheduledWorktreeTarget, error) {
+func scheduledWorktreeTargetFromEntry(entry worktreecontract.TopologyEntry) (scheduledWorktreeTarget, error) {
 	root := strings.TrimSpace(topologyRoot(entry))
 	if root == "" {
 		return scheduledWorktreeTarget{}, errors.New("scheduled worktree target requires a canonical root")
@@ -35,7 +34,7 @@ func scheduledWorktreeTargetFromEntry(entry serverapi.WorktreeTopologyEntry) (sc
 	return target, nil
 }
 
-func scheduledKentWorktreeTargetFromEntry(entry serverapi.WorktreeTopologyEntry) (scheduledWorktreeTarget, error) {
+func scheduledKentWorktreeTargetFromEntry(entry worktreecontract.TopologyEntry) (scheduledWorktreeTarget, error) {
 	target, err := scheduledWorktreeTargetFromEntry(entry)
 	if err != nil {
 		return scheduledWorktreeTarget{}, err
@@ -46,26 +45,26 @@ func scheduledKentWorktreeTargetFromEntry(entry serverapi.WorktreeTopologyEntry)
 	return target, nil
 }
 
-func (target scheduledWorktreeTarget) resolve(topology []serverapi.WorktreeTopologyEntry) (serverapi.WorktreeTopologyEntry, error) {
+func (target scheduledWorktreeTarget) resolve(topology []worktreecontract.TopologyEntry) (worktreecontract.TopologyEntry, error) {
 	root := strings.TrimSpace(target.canonicalRoot)
 	if root == "" {
-		return serverapi.WorktreeTopologyEntry{}, errors.New("scheduled worktree target identity is invalid")
+		return worktreecontract.TopologyEntry{}, errors.New("scheduled worktree target identity is invalid")
 	}
 	if target.worktreeID != nil {
 		worktreeID := strings.TrimSpace(*target.worktreeID)
 		if worktreeID == "" {
-			return serverapi.WorktreeTopologyEntry{}, errors.New("scheduled worktree target identity is invalid")
+			return worktreecontract.TopologyEntry{}, errors.New("scheduled worktree target identity is invalid")
 		}
 		entry, found := topologyEntryByWorktreeID(topology, worktreeID)
 		if !found {
-			return serverapi.WorktreeTopologyEntry{}, errors.Join(
-				serverapi.ErrWorktreeNotFound,
+			return worktreecontract.TopologyEntry{}, errors.Join(
+				worktreecontract.ErrWorktreeNotFound,
 				fmt.Errorf("scheduled worktree target %q is no longer present", worktreeID),
 			)
 		}
 		if filepath.Clean(topologyRoot(entry)) != filepath.Clean(root) {
-			return serverapi.WorktreeTopologyEntry{}, errors.Join(
-				serverapi.ErrWorktreeNotFound,
+			return worktreecontract.TopologyEntry{}, errors.Join(
+				worktreecontract.ErrWorktreeNotFound,
 				fmt.Errorf("scheduled worktree target %q changed root", worktreeID),
 			)
 		}
@@ -76,16 +75,16 @@ func (target scheduledWorktreeTarget) resolve(topology []serverapi.WorktreeTopol
 			return entry, nil
 		}
 	}
-	return serverapi.WorktreeTopologyEntry{}, errors.Join(
-		serverapi.ErrWorktreeNotFound,
+	return worktreecontract.TopologyEntry{}, errors.Join(
+		worktreecontract.ErrWorktreeNotFound,
 		fmt.Errorf("scheduled worktree target %q is no longer present", root),
 	)
 }
 
-func resolveTopologySelector(entries []serverapi.WorktreeTopologyEntry, selector string) (topologySelectorMatch, error) {
+func resolveTopologySelector(entries []worktreecontract.TopologyEntry, selector string) (topologySelectorMatch, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
-		return topologySelectorMatch{}, &serverapi.WorktreeSelectorError{Kind: serverapi.WorktreeSelectorErrorKindNotFound, Input: selector}
+		return topologySelectorMatch{}, &worktreecontract.SelectorError{Kind: worktreecontract.SelectorErrorKindNotFound, Input: selector}
 	}
 	for _, matches := range [][]topologySelectorMatch{
 		matchTopologyWorktreeID(entries, selector),
@@ -101,12 +100,12 @@ func resolveTopologySelector(entries []serverapi.WorktreeTopologyEntry, selector
 		}
 		return topologySelectorMatch{}, topologyAmbiguity(selector, matches)
 	}
-	return topologySelectorMatch{}, &serverapi.WorktreeSelectorError{Kind: serverapi.WorktreeSelectorErrorKindNotFound, Input: selector}
+	return topologySelectorMatch{}, &worktreecontract.SelectorError{Kind: worktreecontract.SelectorErrorKindNotFound, Input: selector}
 }
 
-func topologySelectorFor(entries []serverapi.WorktreeTopologyEntry, index int) (string, error) {
+func topologySelectorFor(entries []worktreecontract.TopologyEntry, index int) (string, error) {
 	if index < 0 || index >= len(entries) {
-		return "", &serverapi.WorktreeSelectorError{Kind: serverapi.WorktreeSelectorErrorKindNotFound, Input: ""}
+		return "", &worktreecontract.SelectorError{Kind: worktreecontract.SelectorErrorKindNotFound, Input: ""}
 	}
 	entry := entries[index]
 	candidates := make([]string, 0, 5)
@@ -130,34 +129,34 @@ func topologySelectorFor(entries []serverapi.WorktreeTopologyEntry, index int) (
 			return candidate, nil
 		}
 	}
-	return "", &serverapi.WorktreeSelectorError{Kind: serverapi.WorktreeSelectorErrorKindUnavailable, Input: root}
+	return "", &worktreecontract.SelectorError{Kind: worktreecontract.SelectorErrorKindUnavailable, Input: root}
 }
 
-func matchTopologyWorktreeID(entries []serverapi.WorktreeTopologyEntry, selector string) []topologySelectorMatch {
-	return filterTopology(entries, func(entry serverapi.WorktreeTopologyEntry) bool {
+func matchTopologyWorktreeID(entries []worktreecontract.TopologyEntry, selector string) []topologySelectorMatch {
+	return filterTopology(entries, func(entry worktreecontract.TopologyEntry) bool {
 		id := topologyWorktreeID(entry)
 		return id != nil && *id == selector
 	})
 }
 
-func matchTopologyBranch(entries []serverapi.WorktreeTopologyEntry, selector string) []topologySelectorMatch {
-	return filterTopology(entries, func(entry serverapi.WorktreeTopologyEntry) bool {
+func matchTopologyBranch(entries []worktreecontract.TopologyEntry, selector string) []topologySelectorMatch {
+	return filterTopology(entries, func(entry worktreecontract.TopologyEntry) bool {
 		branch := topologyBranch(entry)
 		return branch != nil && *branch == selector
 	})
 }
 
-func matchTopologyDisplayName(entries []serverapi.WorktreeTopologyEntry, selector string) []topologySelectorMatch {
-	return filterTopology(entries, func(entry serverapi.WorktreeTopologyEntry) bool {
+func matchTopologyDisplayName(entries []worktreecontract.TopologyEntry, selector string) []topologySelectorMatch {
+	return filterTopology(entries, func(entry worktreecontract.TopologyEntry) bool {
 		name := topologyDisplayName(entry)
 		return name != nil && *name == selector
 	})
 }
 
-func matchTopologyPath(entries []serverapi.WorktreeTopologyEntry, selector string) []topologySelectorMatch {
+func matchTopologyPath(entries []worktreecontract.TopologyEntry, selector string) []topologySelectorMatch {
 	absolute := filepath.IsAbs(selector)
 	selectorComponents := cleanPathComponents(selector)
-	return filterTopology(entries, func(entry serverapi.WorktreeTopologyEntry) bool {
+	return filterTopology(entries, func(entry worktreecontract.TopologyEntry) bool {
 		root := topologyRoot(entry)
 		if absolute {
 			return filepath.Clean(root) == filepath.Clean(selector)
@@ -166,7 +165,7 @@ func matchTopologyPath(entries []serverapi.WorktreeTopologyEntry, selector strin
 	})
 }
 
-func filterTopology(entries []serverapi.WorktreeTopologyEntry, matches func(serverapi.WorktreeTopologyEntry) bool) []topologySelectorMatch {
+func filterTopology(entries []worktreecontract.TopologyEntry, matches func(worktreecontract.TopologyEntry) bool) []topologySelectorMatch {
 	out := make([]topologySelectorMatch, 0, 1)
 	for index, entry := range entries {
 		if matches(entry) {
@@ -177,9 +176,9 @@ func filterTopology(entries []serverapi.WorktreeTopologyEntry, matches func(serv
 }
 
 func topologyAmbiguity(input string, matches []topologySelectorMatch) error {
-	candidates := make([]serverapi.WorktreeSelectorCandidate, 0, len(matches))
+	candidates := make([]worktreecontract.SelectorCandidate, 0, len(matches))
 	for _, match := range matches {
-		candidates = append(candidates, serverapi.WorktreeSelectorCandidate{
+		candidates = append(candidates, worktreecontract.SelectorCandidate{
 			Variant:          match.entry.Variant,
 			Selector:         topologyRoot(match.entry),
 			BranchName:       topologyBranch(match.entry),
@@ -187,28 +186,28 @@ func topologyAmbiguity(input string, matches []topologySelectorMatch) error {
 			FallbackIdentity: topologyRoot(match.entry),
 		})
 	}
-	return &serverapi.WorktreeSelectorError{Kind: serverapi.WorktreeSelectorErrorKindAmbiguous, Input: input, Candidates: candidates}
+	return &worktreecontract.SelectorError{Kind: worktreecontract.SelectorErrorKindAmbiguous, Input: input, Candidates: candidates}
 }
 
-func topologyRoot(entry serverapi.WorktreeTopologyEntry) string {
+func topologyRoot(entry worktreecontract.TopologyEntry) string {
 	switch entry.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
+	case worktreecontract.TopologyVariantRegistered:
 		return entry.Registered.Git.CanonicalRoot
-	case serverapi.WorktreeTopologyVariantExternal:
+	case worktreecontract.TopologyVariantExternal:
 		return entry.External.Git.CanonicalRoot
-	case serverapi.WorktreeTopologyVariantMissing:
+	case worktreecontract.TopologyVariantMissing:
 		return entry.Missing.Kent.CanonicalRoot
 	default:
 		return ""
 	}
 }
 
-func topologyWorktreeID(entry serverapi.WorktreeTopologyEntry) *string {
+func topologyWorktreeID(entry worktreecontract.TopologyEntry) *string {
 	switch entry.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
+	case worktreecontract.TopologyVariantRegistered:
 		value := entry.Registered.Kent.WorktreeID
 		return &value
-	case serverapi.WorktreeTopologyVariantMissing:
+	case worktreecontract.TopologyVariantMissing:
 		value := entry.Missing.Kent.WorktreeID
 		return &value
 	default:
@@ -216,26 +215,26 @@ func topologyWorktreeID(entry serverapi.WorktreeTopologyEntry) *string {
 	}
 }
 
-func topologyBranch(entry serverapi.WorktreeTopologyEntry) *string {
+func topologyBranch(entry worktreecontract.TopologyEntry) *string {
 	switch entry.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
+	case worktreecontract.TopologyVariantRegistered:
 		return entry.Registered.Git.BranchName
-	case serverapi.WorktreeTopologyVariantExternal:
+	case worktreecontract.TopologyVariantExternal:
 		return entry.External.Git.BranchName
 	default:
 		return nil
 	}
 }
 
-func topologyDisplayName(entry serverapi.WorktreeTopologyEntry) *string {
+func topologyDisplayName(entry worktreecontract.TopologyEntry) *string {
 	switch entry.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
+	case worktreecontract.TopologyVariantRegistered:
 		value := entry.Registered.Kent.DisplayName
 		return &value
-	case serverapi.WorktreeTopologyVariantMissing:
+	case worktreecontract.TopologyVariantMissing:
 		value := entry.Missing.Kent.DisplayName
 		return &value
-	case serverapi.WorktreeTopologyVariantExternal:
+	case worktreecontract.TopologyVariantExternal:
 		value := filepath.Base(entry.External.Git.CanonicalRoot)
 		return &value
 	default:
@@ -243,7 +242,7 @@ func topologyDisplayName(entry serverapi.WorktreeTopologyEntry) *string {
 	}
 }
 
-func shortestUniquePathSuffix(entries []serverapi.WorktreeTopologyEntry, index int) string {
+func shortestUniquePathSuffix(entries []worktreecontract.TopologyEntry, index int) string {
 	components := cleanPathComponents(topologyRoot(entries[index]))
 	for start := len(components) - 1; start >= 0; start-- {
 		candidate := strings.Join(components[start:], string(filepath.Separator))

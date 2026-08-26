@@ -15,14 +15,16 @@ import (
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/worktreecontract"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/net/websocket"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/net/websocket"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -64,7 +66,7 @@ func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 	status, err := remote.GetWorktreeStatus(
 		context.Background(),
-		serverapi.WorktreeStatusRequest{SessionID: store.Meta().SessionID},
+		worktreecontract.StatusRequest{SessionID: store.Meta().SessionID},
 	)
 	if err != nil {
 		t.Fatalf("GetWorktreeStatus: %v", err)

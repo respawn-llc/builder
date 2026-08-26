@@ -22,6 +22,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/worktreecontract"
 )
 
 func TestRoutePolicyAuthPolicyHandlesBlankAndUnknownMethods(t *testing.T) {
@@ -102,7 +103,7 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		ctx,
 		&connectionState{attachedProject: fixture.bindingA.ProjectID},
 		deletePreviewRoute,
-		serverapi.WorktreeDeletePreviewRequest{SessionID: fixture.ownSessionID, Selector: "feature"},
+		worktreecontract.DeletePreviewRequest{SessionID: fixture.ownSessionID, Selector: "feature"},
 	); err != nil {
 		t.Fatalf("active project own delete preview: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		ctx,
 		&connectionState{attachedProject: fixture.bindingA.ProjectID},
 		deletePreviewRoute,
-		serverapi.WorktreeDeletePreviewRequest{SessionID: fixture.foreignSessionID, Selector: "feature"},
+		worktreecontract.DeletePreviewRequest{SessionID: fixture.foreignSessionID, Selector: "feature"},
 	); err == nil {
 		t.Fatal("active project foreign delete preview unexpectedly allowed")
 	}
@@ -409,11 +410,11 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 		ctx,
 		&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
 		workspaceListRoute,
-		serverapi.WorktreeWorkspaceListRequest{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingA.WorkspaceID},
+		worktreecontract.WorkspaceListRequest{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingA.WorkspaceID},
 	); err != nil {
 		t.Fatalf("workspace list with matching project/workspace: %v", err)
 	}
-	for _, request := range []serverapi.WorktreeWorkspaceListRequest{
+	for _, request := range []worktreecontract.WorkspaceListRequest{
 		{ProjectID: fixture.bindingB.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
 		{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
 	} {

@@ -14,6 +14,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 type remoteSubscription[Wire any, Event any] struct {
@@ -188,19 +189,19 @@ func workflowProjectEventFromProtocol(event protocol.WorkflowProjectEvent) (serv
 	return decoded, nil
 }
 
-func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req worktreecontract.SetupSubscribeRequest) (worktreecontract.SetupSubscription, error) {
 	conn, route, err := c.subscribeRPC(ctx, protocol.MethodWorktreeSetupSubscribe, "subscribe-worktree-setup", req, "", false)
 	if err != nil {
 		return nil, err
 	}
-	return newRemoteSubscriptionWithError(conn, route, func(params protocol.WorktreeSetupEventParams) (serverapi.WorktreeSetupEvent, error) {
-		id, err := serverapi.ParseWorktreeSetupOperationID(params.Event.SetupOperationID)
+	return newRemoteSubscriptionWithError(conn, route, func(params protocol.WorktreeSetupEventParams) (worktreecontract.SetupEvent, error) {
+		id, err := worktreecontract.ParseSetupOperationID(params.Event.SetupOperationID)
 		if err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
+			return worktreecontract.SetupEvent{}, err
 		}
-		decoded := serverapi.WorktreeSetupEvent{
+		decoded := worktreecontract.SetupEvent{
 			SetupOperationID: id,
-			Phase:            serverapi.WorktreeSetupPhase(params.Event.Phase),
+			Phase:            worktreecontract.SetupPhase(params.Event.Phase),
 		}
 		decodePayload := func(raw json.RawMessage, target any) error {
 			if len(raw) == 0 {
@@ -212,19 +213,19 @@ func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.Workt
 			return nil
 		}
 		if err := decodePayload(params.Event.Started, &decoded.Started); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
+			return worktreecontract.SetupEvent{}, err
 		}
 		if err := decodePayload(params.Event.Completed, &decoded.Completed); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
+			return worktreecontract.SetupEvent{}, err
 		}
 		if err := decodePayload(params.Event.NotRequired, &decoded.NotRequired); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
+			return worktreecontract.SetupEvent{}, err
 		}
 		if err := decodePayload(params.Event.Failed, &decoded.Failed); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
+			return worktreecontract.SetupEvent{}, err
 		}
 		if err := decoded.Validate(); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
+			return worktreecontract.SetupEvent{}, err
 		}
 		return decoded, nil
 	}), nil

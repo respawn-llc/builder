@@ -8,7 +8,7 @@ import (
 	"core/cli/app/internal/worktreeui"
 	"core/shared/clientui"
 	"core/shared/invariant"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -175,7 +175,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		event := msg.event
 		m.worktrees.create.setupEvent = &event
 		m.layout().syncViewport()
-		if event.Phase == serverapi.WorktreeSetupPhaseCompleted || event.Phase == serverapi.WorktreeSetupPhaseFailed {
+		if event.Phase == worktreecontract.SetupPhaseCompleted || event.Phase == worktreecontract.SetupPhaseFailed {
 			return handledUIFeatureUpdate(m, nil)
 		}
 		return handledUIFeatureUpdate(m, worktreeSetupEventCmd(msg.events))
@@ -214,7 +214,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.worktrees.deleteConfirm.submitting = false
 		if msg.err != nil {
-			var precondition *serverapi.WorktreeDeletePreconditionError
+			var precondition *worktreecontract.DeletePreconditionError
 			if errors.As(msg.err, &precondition) {
 				m.worktrees.deleteConfirm.forceFolderRemoval = true
 				m.worktrees.deleteConfirm.errorText = worktreeDeleteForceConfirmation(precondition.DirtyState)
@@ -289,7 +289,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 }
 
 type worktreeCreateErrorPlacement struct {
-	owner      serverapi.WorktreeCreateErrorOwner
+	owner      worktreecontract.CreateErrorOwner
 	diagnostic string
 }
 
@@ -304,9 +304,9 @@ func (m *uiModel) applyWorktreeCreateError(err error) {
 		return
 	}
 	switch placement.owner {
-	case serverapi.WorktreeCreateErrorOwnerBaseRef:
+	case worktreecontract.CreateErrorOwnerBaseRef:
 		m.worktrees.create.baseRefErrorText = placement.diagnostic
-	case serverapi.WorktreeCreateErrorOwnerForm:
+	case worktreecontract.CreateErrorOwnerForm:
 		m.worktrees.create.errorText = placement.diagnostic
 	default:
 		m.worktrees.create.errorText = placement.diagnostic
@@ -317,37 +317,57 @@ func classifyWorktreeCreateError(err error, policy invariant.Policy) *worktreeCr
 	if err == nil {
 		return nil
 	}
-	if contractErr := serverapi.ValidateWorktreeCreateErrorBoundary(err, "cli.worktree.create", policy); contractErr != nil {
+	if contractErr := validateWorktreeCreateErrorBoundary(err, "cli.worktree.create", policy); contractErr != nil {
 		return &worktreeCreateErrorPlacement{
-			owner:      serverapi.WorktreeCreateErrorOwnerForm,
+			owner:      worktreecontract.CreateErrorOwnerForm,
 			diagnostic: runtimeattach.FormatSubmissionError(contractErr),
 		}
 	}
-	var typed *serverapi.WorktreeCreateError
+	var typed *worktreecontract.CreateError
 	if errors.As(err, &typed) {
 		if typed == nil {
 			return &worktreeCreateErrorPlacement{
-				owner:      serverapi.WorktreeCreateErrorOwnerForm,
+				owner:      worktreecontract.CreateErrorOwnerForm,
 				diagnostic: runtimeattach.FormatSubmissionError(err),
 			}
 		}
 		switch typed.Owner {
-		case serverapi.WorktreeCreateErrorOwnerBaseRef:
+		case worktreecontract.CreateErrorOwnerBaseRef:
 			return &worktreeCreateErrorPlacement{
-				owner:      serverapi.WorktreeCreateErrorOwnerBaseRef,
+				owner:      worktreecontract.CreateErrorOwnerBaseRef,
 				diagnostic: typed.Diagnostic,
 			}
-		case serverapi.WorktreeCreateErrorOwnerForm:
+		case worktreecontract.CreateErrorOwnerForm:
 			return &worktreeCreateErrorPlacement{
-				owner:      serverapi.WorktreeCreateErrorOwnerForm,
+				owner:      worktreecontract.CreateErrorOwnerForm,
 				diagnostic: typed.Diagnostic,
 			}
 		}
 	}
 	return &worktreeCreateErrorPlacement{
-		owner:      serverapi.WorktreeCreateErrorOwnerForm,
+		owner:      worktreecontract.CreateErrorOwnerForm,
 		diagnostic: runtimeattach.FormatSubmissionError(err),
 	}
+}
+
+func validateWorktreeCreateErrorBoundary(err error, operation string, policy invariant.Policy) error {
+	contractErr := worktreecontract.ValidateCreateError(err, operation)
+	if contractErr == nil {
+		return nil
+	}
+	diagnostic := invariant.Diagnostic{
+		Scope: invariant.ScopeWorktreeContract,
+		Fields: map[invariant.Field]string{
+			invariant.FieldOperation:       strings.TrimSpace(operation),
+			invariant.FieldValidationCause: contractErr.Error(),
+		},
+	}
+	var typedContract *worktreecontract.CreateContractError
+	if errors.As(contractErr, &typedContract) && typedContract.Owner != nil {
+		diagnostic.Fields[invariant.FieldRawOwner] = string(*typedContract.Owner)
+	}
+	policy.Check(false, diagnostic)
+	return contractErr
 }
 
 func worktreeCreateInvariantPolicy(debugMode bool) invariant.Policy {

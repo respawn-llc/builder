@@ -8,10 +8,10 @@ import (
 
 	"core/server/metadata"
 	"core/shared/clientui"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
-func (s *Service) projectTopology(ctx context.Context, workspaceID string, workspaceRoot string) ([]serverapi.WorktreeTopologyEntry, error) {
+func (s *Service) projectTopology(ctx context.Context, workspaceID string, workspaceRoot string) ([]worktreecontract.TopologyEntry, error) {
 	if s == nil || s.metadata == nil || s.git == nil {
 		return nil, errors.New("worktree service dependencies are required")
 	}
@@ -26,7 +26,7 @@ func (s *Service) projectTopology(ctx context.Context, workspaceID string, works
 	return projectTopologyEntries(gitEntries, records)
 }
 
-func projectTopologyEntries(gitEntries []GitWorktree, records []metadata.WorktreeRecord) ([]serverapi.WorktreeTopologyEntry, error) {
+func projectTopologyEntries(gitEntries []GitWorktree, records []metadata.WorktreeRecord) ([]worktreecontract.TopologyEntry, error) {
 	byRoot := make(map[string]metadata.WorktreeRecord, len(records))
 	for _, record := range records {
 		root := strings.TrimSpace(record.CanonicalRoot)
@@ -38,7 +38,7 @@ func projectTopologyEntries(gitEntries []GitWorktree, records []metadata.Worktre
 		}
 		byRoot[root] = record
 	}
-	out := make([]serverapi.WorktreeTopologyEntry, 0, len(gitEntries)+len(records))
+	out := make([]worktreecontract.TopologyEntry, 0, len(gitEntries)+len(records))
 	gitRoots := make(map[string]struct{}, len(gitEntries))
 	for _, gitEntry := range gitEntries {
 		root := strings.TrimSpace(gitEntry.Root)
@@ -53,28 +53,28 @@ func projectTopologyEntries(gitEntries []GitWorktree, records []metadata.Worktre
 		delete(byRoot, root)
 		gitFacts := gitFactsFromEntry(gitEntry)
 		if registered {
-			out = append(out, serverapi.WorktreeTopologyEntry{Variant: serverapi.WorktreeTopologyVariantRegistered, Registered: &serverapi.WorktreeRegisteredFacts{Git: gitFacts, Kent: kentFactsFromRecord(record)}})
+			out = append(out, worktreecontract.TopologyEntry{Variant: worktreecontract.TopologyVariantRegistered, Registered: &worktreecontract.RegisteredFacts{Git: gitFacts, Kent: kentFactsFromRecord(record)}})
 			continue
 		}
-		out = append(out, serverapi.WorktreeTopologyEntry{Variant: serverapi.WorktreeTopologyVariantExternal, External: &serverapi.WorktreeExternalFacts{Git: gitFacts}})
+		out = append(out, worktreecontract.TopologyEntry{Variant: worktreecontract.TopologyVariantExternal, External: &worktreecontract.ExternalFacts{Git: gitFacts}})
 	}
 	for _, record := range records {
 		if _, missing := byRoot[strings.TrimSpace(record.CanonicalRoot)]; !missing {
 			continue
 		}
-		out = append(out, serverapi.WorktreeTopologyEntry{Variant: serverapi.WorktreeTopologyVariantMissing, Missing: &serverapi.WorktreeMissingFacts{Kent: kentFactsFromRecord(record)}})
+		out = append(out, worktreecontract.TopologyEntry{Variant: worktreecontract.TopologyVariantMissing, Missing: &worktreecontract.MissingFacts{Kent: kentFactsFromRecord(record)}})
 	}
 	return out, nil
 }
 
-func projectWorktreeList(entries []serverapi.WorktreeTopologyEntry, target *clientui.SessionExecutionTarget) ([]serverapi.WorktreeListEntry, error) {
-	out := make([]serverapi.WorktreeListEntry, 0, len(entries))
+func projectWorktreeList(entries []worktreecontract.TopologyEntry, target *clientui.SessionExecutionTarget) ([]worktreecontract.ListEntry, error) {
+	out := make([]worktreecontract.ListEntry, 0, len(entries))
 	for index, topology := range entries {
 		selector, err := topologySelectorFor(entries, index)
 		if err != nil {
 			return nil, err
 		}
-		entry, err := serverapi.ProjectWorktreeListEntry(
+		entry, err := worktreecontract.ProjectListEntry(
 			topology,
 			selector,
 			target != nil && topologyIsCurrent(topology, *target),
@@ -88,12 +88,12 @@ func projectWorktreeList(entries []serverapi.WorktreeTopologyEntry, target *clie
 	return out, nil
 }
 
-func topologyIsCurrent(entry serverapi.WorktreeTopologyEntry, target clientui.SessionExecutionTarget) bool {
+func topologyIsCurrent(entry worktreecontract.TopologyEntry, target clientui.SessionExecutionTarget) bool {
 	if target.Worktree == nil {
 		switch entry.Variant {
-		case serverapi.WorktreeTopologyVariantRegistered:
+		case worktreecontract.TopologyVariantRegistered:
 			return entry.Registered.Git.IsMain
-		case serverapi.WorktreeTopologyVariantExternal:
+		case worktreecontract.TopologyVariantExternal:
 			return entry.External.Git.IsMain
 		default:
 			return false
@@ -103,23 +103,23 @@ func topologyIsCurrent(entry serverapi.WorktreeTopologyEntry, target clientui.Se
 	return worktreeID != nil && strings.TrimSpace(*worktreeID) == strings.TrimSpace(target.Worktree.ID)
 }
 
-func (s *Service) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+func (s *Service) ResolveWorktreeSelector(ctx context.Context, req worktreecontract.SelectorResolveRequest) (worktreecontract.SelectorResolveResponse, error) {
 	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeSelectorPreviewResponse{}, err
+		return worktreecontract.SelectorResolveResponse{}, err
 	}
 	resolution, err := s.resolveWorktreeSelector(ctx, req.SessionID, req.Selector)
 	if err != nil {
-		return serverapi.WorktreeSelectorPreviewResponse{}, err
+		return worktreecontract.SelectorResolveResponse{}, err
 	}
 	projected, err := projectWorktreeList(resolution.entries, &resolution.target)
 	if err != nil {
-		return serverapi.WorktreeSelectorPreviewResponse{}, err
+		return worktreecontract.SelectorResolveResponse{}, err
 	}
-	return serverapi.WorktreeSelectorPreviewResponse{Worktree: projected[resolution.match.index]}, nil
+	return worktreecontract.SelectorResolveResponse{Worktree: projected[resolution.match.index]}, nil
 }
 
 type worktreeSelectorResolution struct {
-	entries []serverapi.WorktreeTopologyEntry
+	entries []worktreecontract.TopologyEntry
 	match   topologySelectorMatch
 	target  clientui.SessionExecutionTarget
 }
@@ -140,41 +140,41 @@ func (s *Service) resolveWorktreeSelector(ctx context.Context, sessionID string,
 	return worktreeSelectorResolution{entries: entries, match: match, target: workspaceCtx.target}, nil
 }
 
-func (s *Service) PreviewWorktreeDelete(ctx context.Context, req serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
+func (s *Service) PreviewWorktreeDelete(ctx context.Context, req worktreecontract.DeletePreviewRequest) (worktreecontract.DeletePreviewResponse, error) {
 	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
+		return worktreecontract.DeletePreviewResponse{}, err
 	}
 	resolution, err := s.resolveWorktreeSelector(ctx, req.SessionID, req.Selector)
 	if err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
+		return worktreecontract.DeletePreviewResponse{}, err
 	}
 	deletionSelector, err := resolution.match.entry.DeletionSelector()
 	if err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
+		return worktreecontract.DeletePreviewResponse{}, err
 	}
 	cleanliness, err := s.evaluateDeleteCleanliness(ctx, resolution.match.entry)
 	if err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
+		return worktreecontract.DeletePreviewResponse{}, err
 	}
-	response := serverapi.WorktreeDeletePreviewResponse{
+	response := worktreecontract.DeletePreviewResponse{
 		Worktree:         resolution.match.entry,
 		DeletionSelector: deletionSelector,
 		Cleanliness:      cleanliness,
 	}
 	if err := response.Validate(); err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
+		return worktreecontract.DeletePreviewResponse{}, err
 	}
 	return response, nil
 }
 
-func gitFactsFromEntry(entry GitWorktree) serverapi.WorktreeGitFacts {
-	facts := serverapi.WorktreeGitFacts{
+func gitFactsFromEntry(entry GitWorktree) worktreecontract.GitFacts {
+	facts := worktreecontract.GitFacts{
 		CanonicalRoot: strings.TrimSpace(entry.Root),
 		HeadObject:    strings.TrimSpace(entry.HeadOID),
 		Detached:      entry.Detached,
 		Bare:          entry.Bare,
 		IsMain:        entry.IsMain,
-		PathAvailable: PathAvailability(entry.Root) == serverapi.WorktreePathAvailabilityAvailable,
+		PathAvailable: PathAvailability(entry.Root) == worktreecontract.PathAvailabilityAvailable,
 	}
 	if entry.Branch != nil {
 		branchRef := entry.Branch.Ref()
@@ -191,8 +191,8 @@ func gitFactsFromEntry(entry GitWorktree) serverapi.WorktreeGitFacts {
 	return facts
 }
 
-func kentFactsFromRecord(record metadata.WorktreeRecord) serverapi.WorktreeKentFacts {
-	facts := serverapi.WorktreeKentFacts{
+func kentFactsFromRecord(record metadata.WorktreeRecord) worktreecontract.KentFacts {
+	facts := worktreecontract.KentFacts{
 		WorktreeID:    strings.TrimSpace(record.ID),
 		CanonicalRoot: strings.TrimSpace(record.CanonicalRoot),
 		DisplayName:   strings.TrimSpace(record.DisplayName),
@@ -205,22 +205,22 @@ func kentFactsFromRecord(record metadata.WorktreeRecord) serverapi.WorktreeKentF
 	return facts
 }
 
-func registeredTopologyEntry(item syncedWorktree) serverapi.WorktreeTopologyEntry {
-	return serverapi.WorktreeTopologyEntry{
-		Variant: serverapi.WorktreeTopologyVariantRegistered,
-		Registered: &serverapi.WorktreeRegisteredFacts{
+func registeredTopologyEntry(item syncedWorktree) worktreecontract.TopologyEntry {
+	return worktreecontract.TopologyEntry{
+		Variant: worktreecontract.TopologyVariantRegistered,
+		Registered: &worktreecontract.RegisteredFacts{
 			Git:  gitFactsFromEntry(item.git),
 			Kent: kentFactsFromRecord(item.record),
 		},
 	}
 }
 
-func topologyEntryByWorktreeID(entries []serverapi.WorktreeTopologyEntry, worktreeID string) (serverapi.WorktreeTopologyEntry, bool) {
+func topologyEntryByWorktreeID(entries []worktreecontract.TopologyEntry, worktreeID string) (worktreecontract.TopologyEntry, bool) {
 	for _, entry := range entries {
 		id := topologyWorktreeID(entry)
 		if id != nil && strings.TrimSpace(*id) == strings.TrimSpace(worktreeID) {
 			return entry, true
 		}
 	}
-	return serverapi.WorktreeTopologyEntry{}, false
+	return worktreecontract.TopologyEntry{}, false
 }

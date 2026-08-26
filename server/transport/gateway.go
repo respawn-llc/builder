@@ -26,6 +26,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/serverjsoncontract"
+	"core/shared/worktreecontract"
 
 	"github.com/google/uuid"
 )
@@ -669,7 +670,7 @@ func protocolError(err error) (int, string) {
 	if errors.Is(err, serverapi.ErrRuntimeNoFinalAnswer) {
 		return protocol.ErrCodeRuntimeNoFinalAnswer, message
 	}
-	if errors.Is(err, serverapi.ErrWorktreeBlocked) {
+	if errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
 		return protocol.ErrCodeWorktreeBlocked, message
 	}
 	if errors.Is(err, serverapi.ErrStreamUnavailable) {

@@ -7,14 +7,14 @@ import (
 	"strings"
 	"unicode"
 
-	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 var ErrMainWorkspaceNotDeletable = errors.New("main workspace is not deletable")
 
 type Item struct {
-	Entry         serverapi.WorktreeListEntry
+	Entry         worktreecontract.ListEntry
 	DisplayName   string
 	CanonicalRoot string
 	WorktreeID    *string
@@ -26,7 +26,7 @@ type Item struct {
 	CreatedBranch bool
 }
 
-func ProjectItems(entries []serverapi.WorktreeListEntry) ([]Item, error) {
+func ProjectItems(entries []worktreecontract.ListEntry) ([]Item, error) {
 	out := make([]Item, 0, len(entries))
 	for _, entry := range entries {
 		item, err := ProjectItem(entry)
@@ -38,13 +38,13 @@ func ProjectItems(entries []serverapi.WorktreeListEntry) ([]Item, error) {
 	return out, nil
 }
 
-func ProjectItem(entry serverapi.WorktreeListEntry) (Item, error) {
+func ProjectItem(entry worktreecontract.ListEntry) (Item, error) {
 	if err := entry.Validate(); err != nil {
 		return Item{}, err
 	}
 	item := Item{Entry: entry, IsCurrent: entry.Projection.IsCurrent}
 	switch entry.Topology.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
+	case worktreecontract.TopologyVariantRegistered:
 		git := entry.Topology.Registered.Git
 		kent := entry.Topology.Registered.Kent
 		item.DisplayName = kent.DisplayName
@@ -55,14 +55,14 @@ func ProjectItem(entry serverapi.WorktreeListEntry) (Item, error) {
 		item.IsMain = git.IsMain
 		item.Managed = kent.Managed
 		item.CreatedBranch = kent.CreatedBranch
-	case serverapi.WorktreeTopologyVariantExternal:
+	case worktreecontract.TopologyVariantExternal:
 		git := entry.Topology.External.Git
 		item.DisplayName = filepath.Base(git.CanonicalRoot)
 		item.CanonicalRoot = git.CanonicalRoot
 		item.BranchName = git.BranchName
 		item.Detached = git.Detached
 		item.IsMain = git.IsMain
-	case serverapi.WorktreeTopologyVariantMissing:
+	case worktreecontract.TopologyVariantMissing:
 		kent := entry.Topology.Missing.Kent
 		item.DisplayName = kent.DisplayName
 		item.CanonicalRoot = kent.CanonicalRoot
@@ -75,7 +75,7 @@ func ProjectItem(entry serverapi.WorktreeListEntry) (Item, error) {
 	return item, nil
 }
 
-func ProjectSelectorPreview(response serverapi.WorktreeSelectorPreviewResponse) (Item, error) {
+func ProjectSelectorPreview(response worktreecontract.SelectorResolveResponse) (Item, error) {
 	return ProjectItem(response.Worktree)
 }
 
@@ -150,5 +150,5 @@ func ResolveCurrentDeletionTarget(entries []Item) (Item, error) {
 			return item, nil
 		}
 	}
-	return Item{}, serverapi.ErrWorktreeNotFound
+	return Item{}, worktreecontract.ErrWorktreeNotFound
 }

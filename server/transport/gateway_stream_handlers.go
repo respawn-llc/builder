@@ -12,6 +12,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 type gatewaySubscription[Event any] interface {
@@ -225,7 +226,7 @@ func workflowProjectEventParams(evt serverapi.WorkflowProjectEvent) protocol.Wor
 	}}
 }
 
-func worktreeSetupEventParams(evt serverapi.WorktreeSetupEvent) protocol.WorktreeSetupEventParams {
+func worktreeSetupEventParams(evt worktreecontract.SetupEvent) protocol.WorktreeSetupEventParams {
 	if err := evt.Validate(); err != nil {
 		panic(fmt.Sprintf("serialize invalid worktree setup event: %v; event=%+v", err, evt))
 	}

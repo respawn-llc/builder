@@ -1,9 +1,8 @@
 package worktreeui
 
 import (
+	"core/shared/worktreecontract"
 	"testing"
-
-	"core/shared/serverapi"
 )
 
 func TestScheduleIncrementsTokenAndDebouncesNonEmptyQuery(t *testing.T) {
@@ -11,7 +10,7 @@ func TestScheduleIncrementsTokenAndDebouncesNonEmptyQuery(t *testing.T) {
 		ErrorText:     "old error",
 		SubmitPending: true,
 		Token:         7,
-		Resolution:    serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindExistingBranch},
+		Resolution:    worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindExistingBranch},
 	}, " main ")
 	if state.Token != 8 {
 		t.Fatalf("token = %d, want 8", state.Token)
@@ -34,7 +33,7 @@ func TestScheduleIncrementsTokenAndDebouncesNonEmptyQuery(t *testing.T) {
 }
 
 func TestScheduleEmptyQueryClearsResolutionWithoutDebounce(t *testing.T) {
-	state, outcome := Schedule(State{Token: 2, Resolution: serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindNewBranch}}, " ")
+	state, outcome := Schedule(State{Token: 2, Resolution: worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindNewBranch}}, " ")
 	if state.Token != 3 {
 		t.Fatalf("token = %d, want 3", state.Token)
 	}
@@ -70,7 +69,7 @@ func TestBeginSubmitValidatesAndMarksSubmitPending(t *testing.T) {
 }
 
 func TestDebounceReadyClearsEmptyQueryAndIgnoresStaleToken(t *testing.T) {
-	initial := State{Token: 2, Resolving: true, SubmitPending: true, ErrorText: "old", Resolution: serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindExistingBranch}}
+	initial := State{Token: 2, Resolving: true, SubmitPending: true, ErrorText: "old", Resolution: worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindExistingBranch}}
 	state, outcome := DebounceReady(initial, 1, "main")
 	if !outcome.Ignored {
 		t.Fatal("expected stale token ignored")
@@ -103,7 +102,7 @@ func TestDoneIgnoresStaleResponsesAndSubmitsPendingSuccess(t *testing.T) {
 	if state != initial {
 		t.Fatalf("state changed for stale query: %+v", state)
 	}
-	resolution := serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindExistingBranch}
+	resolution := worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindExistingBranch}
 	state, outcome = Done(initial, DoneInput{Token: 3, CurrentQuery: "main", ResponseQuery: "main", Resolution: resolution})
 	if outcome.Ignored || !outcome.Submit || outcome.SubmitKind != resolution.Kind {
 		t.Fatalf("outcome = %+v, want submit existing branch", outcome)
@@ -120,7 +119,7 @@ func TestDoneStoresFormattedError(t *testing.T) {
 		ResponseQuery: "main",
 		HasError:      true,
 		ErrorText:     "formatted error",
-		Resolution:    serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindExistingBranch},
+		Resolution:    worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindExistingBranch},
 	})
 	if outcome.Submit || outcome.Ignored {
 		t.Fatalf("outcome = %+v, want handled error without submit", outcome)

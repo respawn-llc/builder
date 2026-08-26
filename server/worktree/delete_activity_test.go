@@ -21,8 +21,8 @@ import (
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 type deleteInFlightStartLifecycle struct {
@@ -81,7 +81,7 @@ type deleteTargetState struct {
 }
 
 type deleteActivityResult struct {
-	result serverapi.WorktreeDeleteResult
+	result worktreecontract.DeleteResult
 	err    error
 }
 
@@ -242,7 +242,7 @@ func TestDeleteWorktreeRejectsInFlightStartAndCompletesUnrelatedWorktree(t *test
 	busyDeleted := deleteServiceTestWorktree(env, busy.WorktreeID)
 	select {
 	case result := <-busyDeleted:
-		if !errors.Is(result.err, serverapi.ErrWorktreeBlocked) {
+		if !errors.Is(result.err, worktreecontract.ErrWorktreeBlocked) {
 			t.Fatalf("DeleteWorktree busy target = %+v, %v; want ErrWorktreeBlocked", result.result, result.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -254,7 +254,7 @@ func TestDeleteWorktreeRejectsInFlightStartAndCompletesUnrelatedWorktree(t *test
 	unrelatedDeleted := deleteServiceTestWorktree(env, unrelated.WorktreeID)
 	select {
 	case result := <-unrelatedDeleted:
-		if result.err != nil || result.result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+		if result.err != nil || result.result.Kind != worktreecontract.DeleteResultKindCompleted {
 			t.Fatalf("DeleteWorktree unrelated = %+v, %v; want completed", result.result, result.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -318,7 +318,7 @@ func TestDeleteWorktreeRejectsLiveRunAndCompletesUnrelatedWorktree(t *testing.T)
 	busyDeleted := deleteServiceTestWorktree(env, busy.WorktreeID)
 	select {
 	case result := <-busyDeleted:
-		if !errors.Is(result.err, serverapi.ErrWorktreeBlocked) {
+		if !errors.Is(result.err, worktreecontract.ErrWorktreeBlocked) {
 			t.Fatalf("DeleteWorktree busy target = %+v, %v; want ErrWorktreeBlocked", result.result, result.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -329,7 +329,7 @@ func TestDeleteWorktreeRejectsLiveRunAndCompletesUnrelatedWorktree(t *testing.T)
 	unrelatedDeleted := deleteServiceTestWorktree(env, unrelated.WorktreeID)
 	select {
 	case result := <-unrelatedDeleted:
-		if result.err != nil || result.result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+		if result.err != nil || result.result.Kind != worktreecontract.DeleteResultKindCompleted {
 			t.Fatalf("DeleteWorktree unrelated = %+v, %v; want completed", result.result, result.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -395,7 +395,7 @@ func TestDeleteTaskWorktreeRejectsInFlightStartUnchanged(t *testing.T) {
 	}()
 	select {
 	case err := <-deleted:
-		if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+		if !errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
 			t.Fatalf("DeleteTaskWorktree error = %v, want ErrWorktreeBlocked", err)
 		}
 	case <-time.After(3 * time.Second):
@@ -427,11 +427,11 @@ func TestDeleteWorktreeScheduledCurrentTargetRetargetsOtherSession(t *testing.T)
 	if err != nil {
 		t.Fatalf("DeleteWorktree scheduled current target: %v", err)
 	}
-	if result.Kind != serverapi.WorktreeDeleteResultKindScheduled || result.Scheduled == nil || result.Scheduled.OperationID != request.OperationID {
+	if result.Kind != worktreecontract.DeleteResultKindScheduled || result.Scheduled == nil || result.Scheduled.OperationID != request.OperationID {
 		t.Fatalf("DeleteWorktree scheduled result = %+v", result)
 	}
 	outcome := waitForDeleteActivityTransitionOutcome(t, env.publisher)
-	if outcome.OperationID != request.OperationID || outcome.State != clientui.WorktreeTransitionCompleted {
+	if outcome.OperationID != clientui.WorktreeTransitionID(request.OperationID) || outcome.State != clientui.WorktreeTransitionCompleted {
 		t.Fatalf("scheduled delete outcome = %+v, want completed operation %q", outcome, request.OperationID)
 	}
 	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
@@ -461,12 +461,12 @@ func TestDeleteWorktreeScheduledCurrentTargetForceDeletesBranch(t *testing.T) {
 	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
 
 	request := worktreeDeleteRequest(env, target.WorktreeID)
-	request.BranchCleanupPolicy = serverapi.WorktreeBranchCleanupModeDeleteForce
+	request.BranchCleanupPolicy = worktreecontract.BranchCleanupModeDeleteForce
 	result, err := env.service.DeleteWorktree(env.ctx, request)
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if result.Kind != serverapi.WorktreeDeleteResultKindScheduled {
+	if result.Kind != worktreecontract.DeleteResultKindScheduled {
 		t.Fatalf("DeleteWorktree result = %+v, want scheduled", result)
 	}
 	outcome := waitForDeleteActivityTransitionOutcome(t, env.publisher)
@@ -486,11 +486,11 @@ func TestScheduledDeleteRechecksDirtyStateAndPublishesTypedPrecondition(t *testi
 	tests := []struct {
 		name              string
 		secondStatusError error
-		wantKind          clientui.WorktreeDirtyStateKind
+		wantKind          worktreecontract.DirtyStateKind
 		wantCount         int
 	}{
-		{name: "dirty", wantKind: clientui.WorktreeDirtyStateDirty, wantCount: 1},
-		{name: "unknown", secondStatusError: errors.New("status inspection failed"), wantKind: clientui.WorktreeDirtyStateUnknown},
+		{name: "dirty", wantKind: worktreecontract.DirtyStateDirty, wantCount: 1},
+		{name: "unknown", secondStatusError: errors.New("status inspection failed"), wantKind: worktreecontract.DirtyStateUnknown},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -498,14 +498,14 @@ func TestScheduledDeleteRechecksDirtyStateAndPublishesTypedPrecondition(t *testi
 			target := mustCreateWorktree(t, env, "feature/delete-scheduled-race-"+test.name)
 			updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
 			state := captureDeleteTargetState(t, env, env.session.Meta().SessionID, target)
-			preview, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+			preview, err := env.service.PreviewWorktreeDelete(env.ctx, worktreecontract.DeletePreviewRequest{
 				SessionID: env.session.Meta().SessionID,
 				Selector:  target.WorktreeID,
 			})
 			if err != nil {
 				t.Fatalf("PreviewWorktreeDelete: %v", err)
 			}
-			if preview.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+			if preview.Cleanliness.Kind != worktreecontract.DirtyStateClean {
 				t.Fatalf("preview cleanliness = %+v, want clean", preview.Cleanliness)
 			}
 
@@ -519,7 +519,7 @@ func TestScheduledDeleteRechecksDirtyStateAndPublishesTypedPrecondition(t *testi
 			select {
 			case result := <-deleteResult:
 				if result.err != nil ||
-					result.result.Kind != serverapi.WorktreeDeleteResultKindScheduled ||
+					result.result.Kind != worktreecontract.DeleteResultKindScheduled ||
 					result.result.Scheduled == nil {
 					t.Fatalf("DeleteWorktree = %+v, %v; want scheduled", result.result, result.err)
 				}

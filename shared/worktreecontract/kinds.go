@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/workflowcontract"
+
 	"github.com/google/uuid"
 )
 
@@ -40,23 +42,23 @@ func IsValidSetupRequirement(requirement SetupRequirement) bool {
 	return requirement == SetupRequirementRequired || requirement == SetupRequirementAlreadyCompleted
 }
 
-type SetupRecoveryDetail[OperationID ~[16]byte, ExecutionTarget interface{ Validate() error }] struct {
-	SetupOperationID         OperationID       `json:"setup_operation_id"`
-	Cause                    SetupFailureKind  `json:"cause"`
-	Diagnostic               string            `json:"diagnostic"`
-	ScriptPath               *string           `json:"script_path"`
-	SetupRequirement         SetupRequirement  `json:"setup_requirement"`
-	ExecutionTarget          ExecutionTarget   `json:"execution_target"`
-	RetainedWorktree         *RetainedWorktree `json:"retained_worktree"`
-	RetainedPreviousWorktree *RetainedWorktree `json:"retained_previous_worktree"`
+type SetupRecoveryDetail struct {
+	SetupOperationID         SetupOperationID
+	Cause                    SetupFailureKind
+	Diagnostic               string
+	ScriptPath               *string
+	SetupRequirement         SetupRequirement
+	ExecutionTarget          workflowcontract.ExecutionTargetSelection
+	RetainedWorktree         *RetainedWorktree
+	RetainedPreviousWorktree *RetainedWorktree
 }
 
 type RetainedWorktree struct {
-	WorktreeID string `json:"worktree_id"`
-	Root       string `json:"root"`
+	WorktreeID string
+	Root       string
 }
 
-func (d SetupRecoveryDetail[OperationID, ExecutionTarget]) Validate() error {
+func (d SetupRecoveryDetail) Validate() error {
 	setupOperationID := uuid.UUID(d.SetupOperationID)
 	switch {
 	case setupOperationID == uuid.Nil || setupOperationID.Version() != 4 || setupOperationID.Variant() != uuid.RFC4122:

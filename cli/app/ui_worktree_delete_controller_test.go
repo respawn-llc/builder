@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"core/cli/app/internal/worktreeui"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -144,9 +144,9 @@ func TestWorktreeDeleteControllerSubmitSchedulesSpinnerTick(t *testing.T) {
 			if len(client.deleteRequests) != 1 {
 				t.Fatalf("delete requests = %d, want 1", len(client.deleteRequests))
 			}
-			wantPolicy := serverapi.WorktreeBranchCleanupModeAutoIfKentCreated
+			wantPolicy := worktreecontract.BranchCleanupModeAutoIfKentCreated
 			if tt.deleteBranch {
-				wantPolicy = serverapi.WorktreeBranchCleanupModeDeleteSafe
+				wantPolicy = worktreecontract.BranchCleanupModeDeleteSafe
 			}
 			if got := client.deleteRequests[0]; got.Selector != "wt-feature" || got.BranchCleanupPolicy != wantPolicy {
 				t.Fatalf("delete request = %+v, want policy=%s for stable worktree ID", got, wantPolicy)
@@ -286,7 +286,7 @@ func TestWorktreeDeleteControllerSubmitsDelete(t *testing.T) {
 			if len(client.deleteRequests) != 1 {
 				t.Fatalf("delete requests = %d, want 1", len(client.deleteRequests))
 			}
-			if got := client.deleteRequests[0]; got.Selector != tc.wantSelector || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeAutoIfKentCreated || got.ForceFolderRemoval {
+			if got := client.deleteRequests[0]; got.Selector != tc.wantSelector || got.BranchCleanupPolicy != worktreecontract.BranchCleanupModeAutoIfKentCreated || got.ForceFolderRemoval {
 				t.Fatalf("delete request = %+v, want selector %q with worktree-only delete", got, tc.wantSelector)
 			}
 			deadline, ok := client.deleteCtx.Deadline()
@@ -318,7 +318,7 @@ func TestWorktreeDeleteControllerSubmitsDeleteBranch(t *testing.T) {
 	if len(client.deleteRequests) != 1 {
 		t.Fatalf("delete requests = %d, want 1", len(client.deleteRequests))
 	}
-	if got := client.deleteRequests[0]; got.Selector != "wt-feature" || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
+	if got := client.deleteRequests[0]; got.Selector != "wt-feature" || got.BranchCleanupPolicy != worktreecontract.BranchCleanupModeDeleteSafe {
 		t.Fatalf("delete request = %+v, want delete branch", got)
 	}
 }

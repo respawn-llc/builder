@@ -1,14 +1,13 @@
 package worktreeui
 
 import (
+	"core/shared/worktreecontract"
 	"errors"
 	"testing"
-
-	"core/shared/serverapi"
 )
 
 func TestRequestForExistingBranchUsesTargetAsBaseRef(t *testing.T) {
-	req, err := Request(" main ", "ignored", serverapi.WorktreeCreateTargetResolutionKindExistingBranch)
+	req, err := Request(" main ", "ignored", worktreecontract.CreateTargetResolutionKindExistingBranch)
 	if err != nil {
 		t.Fatalf("Request: %v", err)
 	}
@@ -18,7 +17,7 @@ func TestRequestForExistingBranchUsesTargetAsBaseRef(t *testing.T) {
 }
 
 func TestRequestForDetachedRefUsesTargetAsBaseRef(t *testing.T) {
-	req, err := Request(" HEAD~1 ", "ignored", serverapi.WorktreeCreateTargetResolutionKindDetachedRef)
+	req, err := Request(" HEAD~1 ", "ignored", worktreecontract.CreateTargetResolutionKindDetachedRef)
 	if err != nil {
 		t.Fatalf("Request: %v", err)
 	}
@@ -28,7 +27,7 @@ func TestRequestForDetachedRefUsesTargetAsBaseRef(t *testing.T) {
 }
 
 func TestRequestForNewBranchRequiresBaseRef(t *testing.T) {
-	req, err := Request(" feature/a ", " HEAD ", serverapi.WorktreeCreateTargetResolutionKindNewBranch)
+	req, err := Request(" feature/a ", " HEAD ", worktreecontract.CreateTargetResolutionKindNewBranch)
 	if err != nil {
 		t.Fatalf("Request: %v", err)
 	}
@@ -38,15 +37,15 @@ func TestRequestForNewBranchRequiresBaseRef(t *testing.T) {
 }
 
 func TestRequestRejectsBlankTarget(t *testing.T) {
-	if _, err := Request(" ", "HEAD", serverapi.WorktreeCreateTargetResolutionKindExistingBranch); err == nil || !errors.Is(err, ErrBranchTargetRequired) {
+	if _, err := Request(" ", "HEAD", worktreecontract.CreateTargetResolutionKindExistingBranch); err == nil || !errors.Is(err, ErrBranchTargetRequired) {
 		t.Fatalf("error = %v, want target required", err)
 	}
 }
 
 func TestRequestRejectsBlankBaseRefForNewBranch(t *testing.T) {
-	_, err := Request("feature/a", " ", serverapi.WorktreeCreateTargetResolutionKindNewBranch)
-	var typed *serverapi.WorktreeCreateError
-	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerBaseRef {
+	_, err := Request("feature/a", " ", worktreecontract.CreateTargetResolutionKindNewBranch)
+	var typed *worktreecontract.CreateError
+	if !errors.As(err, &typed) || typed.Owner != worktreecontract.CreateErrorOwnerBaseRef {
 		t.Fatalf("error = %T %v, want Base-ref-owned create error", err, err)
 	}
 }

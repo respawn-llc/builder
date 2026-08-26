@@ -2,28 +2,27 @@ package worktree
 
 import (
 	"context"
+	"core/shared/worktreecontract"
 	"sync"
 	"testing"
-
-	"core/shared/serverapi"
 )
 
 func TestSetupEventBrokerPublishCloseConcurrent(t *testing.T) {
 	broker := newSetupEventBroker()
-	setupID := serverapi.NewWorktreeSetupOperationID()
+	setupID := worktreecontract.NewSetupOperationID()
 	const subscribers = 64
-	subs := make([]serverapi.WorktreeSetupSubscription, 0, subscribers)
+	subs := make([]worktreecontract.SetupSubscription, 0, subscribers)
 	for i := 0; i < subscribers; i++ {
-		sub, err := broker.Subscribe(serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
+		sub, err := broker.Subscribe(worktreecontract.SetupSubscribeRequest{SetupOperationID: setupID})
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
 		subs = append(subs, sub)
 	}
-	evt := serverapi.WorktreeSetupEvent{
+	evt := worktreecontract.SetupEvent{
 		SetupOperationID: setupID,
-		Phase:            serverapi.WorktreeSetupPhaseStarted,
-		Started: &serverapi.WorktreeSetupStarted{
+		Phase:            worktreecontract.SetupPhaseStarted,
+		Started: &worktreecontract.SetupStarted{
 			SourceWorkspaceRoot: "/source",
 			WorktreeRoot:        "/worktree",
 			ScriptPath:          "/source/setup.sh",
@@ -49,16 +48,16 @@ func TestSetupEventBrokerPublishCloseConcurrent(t *testing.T) {
 
 func TestSetupEventBrokerUsesTypedSetupOperationIDKey(t *testing.T) {
 	broker := newSetupEventBroker()
-	setupID := serverapi.NewWorktreeSetupOperationID()
-	sub, err := broker.Subscribe(serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
+	setupID := worktreecontract.NewSetupOperationID()
+	sub, err := broker.Subscribe(worktreecontract.SetupSubscribeRequest{SetupOperationID: setupID})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer func() { _ = sub.Close() }()
-	broker.Publish(serverapi.WorktreeSetupEvent{
+	broker.Publish(worktreecontract.SetupEvent{
 		SetupOperationID: setupID,
-		Phase:            serverapi.WorktreeSetupPhaseStarted,
-		Started: &serverapi.WorktreeSetupStarted{
+		Phase:            worktreecontract.SetupPhaseStarted,
+		Started: &worktreecontract.SetupStarted{
 			SourceWorkspaceRoot: "/source",
 			WorktreeRoot:        "/worktree",
 			ScriptPath:          "/source/setup.sh",

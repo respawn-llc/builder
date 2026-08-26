@@ -16,6 +16,7 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 type routePolicyExecutor struct {
@@ -330,7 +331,7 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 
 func routeProjectWorkspaceBinding(params any) (string, string, bool) {
 	switch request := params.(type) {
-	case serverapi.WorktreeWorkspaceListRequest:
+	case worktreecontract.WorkspaceListRequest:
 		return request.ProjectID, request.WorkspaceID, true
 	default:
 		return "", "", false
@@ -365,23 +366,23 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.SessionRuntimeReleaseRequest:
 		return p.Attachment.SessionID, true
-	case serverapi.WorktreeListRequest:
+	case worktreecontract.ListRequest:
 		return p.SessionID, true
-	case serverapi.WorktreeStatusRequest:
+	case worktreecontract.StatusRequest:
 		return p.SessionID, true
-	case serverapi.WorktreeSelectorPreviewRequest:
+	case worktreecontract.SelectorResolveRequest:
 		return p.SessionID, true
-	case serverapi.WorktreeDeletePreviewRequest:
+	case worktreecontract.DeletePreviewRequest:
 		return p.SessionID, true
-	case serverapi.WorktreeCreateTargetResolveRequest:
+	case worktreecontract.CreateTargetResolveRequest:
 		return p.SessionID, true
-	case serverapi.WorktreeCreateRequest:
+	case worktreecontract.CreateRequest:
 		return p.SessionID, true
-	case serverapi.WorktreeEnterRequest:
+	case worktreecontract.EnterRequest:
 		return p.SessionID, true
-	case serverapi.WorktreeLeaveRequest:
+	case worktreecontract.LeaveRequest:
 		return p.SessionID, true
-	case serverapi.WorktreeDeleteRequest:
+	case worktreecontract.DeleteRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeSetSessionNameRequest:
 		return p.SessionID, true

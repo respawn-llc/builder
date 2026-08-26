@@ -13,7 +13,7 @@ import (
 
 	"core/server/metadata"
 	"core/shared/clientui"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 func TestProjectTopologyReturnsRegisteredExternalAndMissingInRequiredOrder(t *testing.T) {
@@ -54,14 +54,14 @@ func TestProjectTopologyReturnsRegisteredExternalAndMissingInRequiredOrder(t *te
 
 func TestResolveWorktreeSelectorUsesReadOnlyTopology(t *testing.T) {
 	env := newServiceTestEnv(t)
-	response, err := env.service.ResolveWorktreeSelector(env.ctx, serverapi.WorktreeSelectorPreviewRequest{
+	response, err := env.service.ResolveWorktreeSelector(env.ctx, worktreecontract.SelectorResolveRequest{
 		SessionID: env.session.Meta().SessionID,
 		Selector:  env.workspaceRoot,
 	})
 	if err != nil {
 		t.Fatalf("ResolveWorktreeSelector: %v", err)
 	}
-	if response.Worktree.Topology.Variant != serverapi.WorktreeTopologyVariantExternal ||
+	if response.Worktree.Topology.Variant != worktreecontract.TopologyVariantExternal ||
 		response.Worktree.Projection.Selector == "" {
 		t.Fatalf("selector preview = %+v", response)
 	}
@@ -71,20 +71,20 @@ func TestPreviewWorktreeDeleteResolvesCleanNonCurrentRegisteredTarget(t *testing
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-preview-clean")
 
-	response, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+	response, err := env.service.PreviewWorktreeDelete(env.ctx, worktreecontract.DeletePreviewRequest{
 		SessionID: env.session.Meta().SessionID,
 		Selector:  created.WorktreeID,
 	})
 	if err != nil {
 		t.Fatalf("PreviewWorktreeDelete: %v", err)
 	}
-	if response.Worktree.Variant != serverapi.WorktreeTopologyVariantRegistered {
+	if response.Worktree.Variant != worktreecontract.TopologyVariantRegistered {
 		t.Fatalf("preview topology = %+v, want registered", response.Worktree)
 	}
 	if response.DeletionSelector != created.WorktreeID {
 		t.Fatalf("preview deletion selector = %q, want %q", response.DeletionSelector, created.WorktreeID)
 	}
-	if response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+	if response.Cleanliness.Kind != worktreecontract.DirtyStateClean {
 		t.Fatalf("preview cleanliness = %+v, want clean", response.Cleanliness)
 	}
 	if err := response.Validate(); err != nil {
@@ -107,7 +107,7 @@ func TestPreviewWorktreeDeleteBindsExternalConfirmationToCanonicalRoot(t *testin
 		}
 	})
 
-	preview, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+	preview, err := env.service.PreviewWorktreeDelete(env.ctx, worktreecontract.DeletePreviewRequest{
 		SessionID: env.session.Meta().SessionID,
 		Selector:  branch,
 	})
@@ -115,7 +115,7 @@ func TestPreviewWorktreeDeleteBindsExternalConfirmationToCanonicalRoot(t *testin
 		t.Fatalf("PreviewWorktreeDelete: %v", err)
 	}
 	canonicalRootA := canonicalTestPath(t, rootA)
-	if preview.Worktree.Variant != serverapi.WorktreeTopologyVariantExternal ||
+	if preview.Worktree.Variant != worktreecontract.TopologyVariantExternal ||
 		preview.DeletionSelector != canonicalRootA {
 		t.Fatalf("external preview = %+v, want root %q", preview, canonicalRootA)
 	}
@@ -123,16 +123,16 @@ func TestPreviewWorktreeDeleteBindsExternalConfirmationToCanonicalRoot(t *testin
 	runGit(t, env.workspaceRoot, "worktree", "remove", "--force", rootA)
 	runGit(t, env.workspaceRoot, "worktree", "add", rootB, branch)
 
-	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
+	_, err = env.service.DeleteWorktree(env.ctx, worktreecontract.DeleteRequest{
+		TransitionHeader: worktreecontract.TransitionHeader{
+			OperationID: worktreecontract.NewOperationID(),
 			SessionID:   env.session.Meta().SessionID,
 		},
 		Selector:            preview.DeletionSelector,
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+		BranchCleanupPolicy: worktreecontract.BranchCleanupModeRetain,
 	})
-	var selectorErr *serverapi.WorktreeSelectorError
-	if !errors.As(err, &selectorErr) || selectorErr.Kind != serverapi.WorktreeSelectorErrorKindNotFound {
+	var selectorErr *worktreecontract.SelectorError
+	if !errors.As(err, &selectorErr) || selectorErr.Kind != worktreecontract.SelectorErrorKindNotFound {
 		t.Fatalf("DeleteWorktree error = %v, want typed selector-not-found for root A", err)
 	}
 	if _, err := os.Stat(rootB); err != nil {
@@ -183,14 +183,14 @@ func TestPreviewWorktreeDeleteClassifiesModifiedUntrackedAndMixedDirtyStates(t *
 			created := mustCreateWorktree(t, env, "feature/delete-preview-"+test.name)
 			test.prepare(t, created.CanonicalRoot)
 
-			response, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+			response, err := env.service.PreviewWorktreeDelete(env.ctx, worktreecontract.DeletePreviewRequest{
 				SessionID: env.session.Meta().SessionID,
 				Selector:  created.WorktreeID,
 			})
 			if err != nil {
 				t.Fatalf("PreviewWorktreeDelete: %v", err)
 			}
-			if response.Cleanliness.Kind != clientui.WorktreeDirtyStateDirty ||
+			if response.Cleanliness.Kind != worktreecontract.DirtyStateDirty ||
 				response.Cleanliness.DirtyFileCount == nil ||
 				*response.Cleanliness.DirtyFileCount != test.wantCount {
 				t.Fatalf("preview cleanliness = %+v, want dirty count %d", response.Cleanliness, test.wantCount)
@@ -208,14 +208,14 @@ func TestPreviewWorktreeDeleteHandlesInspectionFailureCancellationAndMainWorkspa
 			outputErr:  errors.New("status inspection failed"),
 		})
 
-		response, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+		response, err := env.service.PreviewWorktreeDelete(env.ctx, worktreecontract.DeletePreviewRequest{
 			SessionID: env.session.Meta().SessionID,
 			Selector:  "feature/delete-preview-unknown",
 		})
 		if err != nil {
 			t.Fatalf("PreviewWorktreeDelete: %v", err)
 		}
-		if response.Cleanliness.Kind != clientui.WorktreeDirtyStateUnknown ||
+		if response.Cleanliness.Kind != worktreecontract.DirtyStateUnknown ||
 			response.Cleanliness.UnknownCause == nil ||
 			strings.TrimSpace(*response.Cleanliness.UnknownCause) == "" {
 			t.Fatalf("preview cleanliness = %+v, want unknown diagnostic", response.Cleanliness)
@@ -233,7 +233,7 @@ func TestPreviewWorktreeDeleteHandlesInspectionFailureCancellationAndMainWorkspa
 			cancel:     cancel,
 		})
 
-		_, err := env.service.PreviewWorktreeDelete(ctx, serverapi.WorktreeDeletePreviewRequest{
+		_, err := env.service.PreviewWorktreeDelete(ctx, worktreecontract.DeletePreviewRequest{
 			SessionID: env.session.Meta().SessionID,
 			Selector:  "feature/delete-preview-canceled",
 		})
@@ -244,11 +244,11 @@ func TestPreviewWorktreeDeleteHandlesInspectionFailureCancellationAndMainWorkspa
 
 	t.Run("main workspace is blocked", func(t *testing.T) {
 		env := newServiceTestEnv(t)
-		_, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+		_, err := env.service.PreviewWorktreeDelete(env.ctx, worktreecontract.DeletePreviewRequest{
 			SessionID: env.session.Meta().SessionID,
 			Selector:  env.workspaceRoot,
 		})
-		if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+		if !errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
 			t.Fatalf("PreviewWorktreeDelete error = %v, want ErrWorktreeBlocked", err)
 		}
 	})
@@ -257,21 +257,21 @@ func TestPreviewWorktreeDeleteHandlesInspectionFailureCancellationAndMainWorkspa
 func TestPreviewWorktreeDeleteLeavesTopologyAndSubsequentOperationsUnchanged(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-preview-read-only")
-	before, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{
+	before, err := env.service.ListWorktrees(env.ctx, worktreecontract.ListRequest{
 		SessionID: env.session.Meta().SessionID,
 	})
 	if err != nil {
 		t.Fatalf("ListWorktrees before preview: %v", err)
 	}
 
-	if _, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+	if _, err := env.service.PreviewWorktreeDelete(env.ctx, worktreecontract.DeletePreviewRequest{
 		SessionID: env.session.Meta().SessionID,
 		Selector:  created.WorktreeID,
 	}); err != nil {
 		t.Fatalf("PreviewWorktreeDelete: %v", err)
 	}
 
-	after, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{
+	after, err := env.service.ListWorktrees(env.ctx, worktreecontract.ListRequest{
 		SessionID: env.session.Meta().SessionID,
 	})
 	if err != nil {
@@ -280,7 +280,7 @@ func TestPreviewWorktreeDeleteLeavesTopologyAndSubsequentOperationsUnchanged(t *
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("worktree list changed after read-only preview:\nbefore=%+v\nafter=%+v", before, after)
 	}
-	if _, err := env.service.ResolveWorktreeSelector(env.ctx, serverapi.WorktreeSelectorPreviewRequest{
+	if _, err := env.service.ResolveWorktreeSelector(env.ctx, worktreecontract.SelectorResolveRequest{
 		SessionID: env.session.Meta().SessionID,
 		Selector:  created.WorktreeID,
 	}); err != nil {
@@ -295,12 +295,12 @@ func TestPreviewWorktreeDeleteDoesNotHoldMutationLane(t *testing.T) {
 	env.service.git = NewGitInspector(runner)
 
 	type previewResult struct {
-		response serverapi.WorktreeDeletePreviewResponse
+		response worktreecontract.DeletePreviewResponse
 		err      error
 	}
 	previewDone := make(chan previewResult, 1)
 	go func() {
-		response, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+		response, err := env.service.PreviewWorktreeDelete(env.ctx, worktreecontract.DeletePreviewRequest{
 			SessionID: env.session.Meta().SessionID,
 			Selector:  target.WorktreeID,
 		})
@@ -314,24 +314,24 @@ func TestPreviewWorktreeDeleteDoesNotHoldMutationLane(t *testing.T) {
 	}
 
 	createDone := make(chan struct {
-		response serverapi.WorktreeCreateResponse
+		response worktreecontract.CreateResponse
 		err      error
 	}, 1)
 	go func() {
-		response, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		response, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+			SetupOperationID: worktreecontract.NewSetupOperationID(),
 			SessionID:        env.session.Meta().SessionID,
 			BaseRef:          "HEAD",
 			CreateBranch:     true,
 			BranchName:       "feature/delete-preview-independent-mutation",
 		})
 		createDone <- struct {
-			response serverapi.WorktreeCreateResponse
+			response worktreecontract.CreateResponse
 			err      error
 		}{response: response, err: err}
 	}()
 
-	var created serverapi.WorktreeCreateResponse
+	var created worktreecontract.CreateResponse
 	select {
 	case result := <-createDone:
 		if result.err != nil {
@@ -341,7 +341,7 @@ func TestPreviewWorktreeDeleteDoesNotHoldMutationLane(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("independent mutation waited for preview mutation lane")
 	}
-	if created.Worktree.Topology.Variant != serverapi.WorktreeTopologyVariantRegistered {
+	if created.Worktree.Topology.Variant != worktreecontract.TopologyVariantRegistered {
 		t.Fatalf("independent mutation worktree = %+v, want registered", created.Worktree)
 	}
 
@@ -351,7 +351,7 @@ func TestPreviewWorktreeDeleteDoesNotHoldMutationLane(t *testing.T) {
 		if result.err != nil {
 			t.Fatalf("PreviewWorktreeDelete: %v", result.err)
 		}
-		if result.response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+		if result.response.Cleanliness.Kind != worktreecontract.DirtyStateClean {
 			t.Fatalf("preview cleanliness = %+v, want clean", result.response.Cleanliness)
 		}
 	case <-time.After(3 * time.Second):
@@ -373,7 +373,7 @@ func TestListWorktreesProjectsSelectorsAndCurrentStateWithoutReconcilingMissingM
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
 
-	response, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{
+	response, err := env.service.ListWorktrees(env.ctx, worktreecontract.ListRequest{
 		SessionID: env.session.Meta().SessionID,
 	})
 	if err != nil {
@@ -385,7 +385,7 @@ func TestListWorktreesProjectsSelectorsAndCurrentStateWithoutReconcilingMissingM
 	if !response.Worktrees[0].Projection.IsCurrent {
 		t.Fatalf("main projection = %+v, want current", response.Worktrees[0].Projection)
 	}
-	if response.Worktrees[1].Topology.Variant != serverapi.WorktreeTopologyVariantMissing {
+	if response.Worktrees[1].Topology.Variant != worktreecontract.TopologyVariantMissing {
 		t.Fatalf("missing topology = %+v", response.Worktrees[1].Topology)
 	}
 	for index, entry := range response.Worktrees {
@@ -405,7 +405,7 @@ func TestListWorktreesProjectsSelectorsAndCurrentStateWithoutReconcilingMissingM
 func TestListWorkspaceWorktreesProjectsMarkerlessTopology(t *testing.T) {
 	env := newServiceTestEnv(t)
 
-	response, err := env.service.ListWorkspaceWorktrees(env.ctx, serverapi.WorktreeWorkspaceListRequest{
+	response, err := env.service.ListWorkspaceWorktrees(env.ctx, worktreecontract.WorkspaceListRequest{
 		ProjectID:   env.binding.ProjectID,
 		WorkspaceID: env.binding.WorkspaceID,
 	})
@@ -425,10 +425,10 @@ func TestListWorkspaceWorktreesProjectsMarkerlessTopology(t *testing.T) {
 
 func TestProjectWorktreeListProjectsSessionActionsAndExternalFallbackFromLoadedFacts(t *testing.T) {
 	branch := func(value string) *string { return &value }
-	external := func(root string, name *string, available, main bool) serverapi.WorktreeTopologyEntry {
-		return serverapi.WorktreeTopologyEntry{
-			Variant: serverapi.WorktreeTopologyVariantExternal,
-			External: &serverapi.WorktreeExternalFacts{Git: serverapi.WorktreeGitFacts{
+	external := func(root string, name *string, available, main bool) worktreecontract.TopologyEntry {
+		return worktreecontract.TopologyEntry{
+			Variant: worktreecontract.TopologyVariantExternal,
+			External: &worktreecontract.ExternalFacts{Git: worktreecontract.GitFacts{
 				CanonicalRoot: root,
 				HeadObject:    root + "-head",
 				BranchName:    name,
@@ -438,18 +438,18 @@ func TestProjectWorktreeListProjectsSessionActionsAndExternalFallbackFromLoadedF
 			}},
 		}
 	}
-	entries := []serverapi.WorktreeTopologyEntry{
+	entries := []worktreecontract.TopologyEntry{
 		external("/repo", branch("main"), true, true),
 		{
-			Variant: serverapi.WorktreeTopologyVariantRegistered,
-			Registered: &serverapi.WorktreeRegisteredFacts{
-				Git: serverapi.WorktreeGitFacts{
+			Variant: worktreecontract.TopologyVariantRegistered,
+			Registered: &worktreecontract.RegisteredFacts{
+				Git: worktreecontract.GitFacts{
 					CanonicalRoot: "/worktrees/registered",
 					HeadObject:    "registered-head",
 					BranchName:    branch("feature/registered"),
 					PathAvailable: true,
 				},
-				Kent: serverapi.WorktreeKentFacts{
+				Kent: worktreecontract.KentFacts{
 					WorktreeID:    "registered-id",
 					CanonicalRoot: "/worktrees/registered",
 					DisplayName:   "registered",
@@ -471,7 +471,7 @@ func TestProjectWorktreeListProjectsSessionActionsAndExternalFallbackFromLoadedF
 		t.Fatalf("project current registered: %v", err)
 	}
 	if currentRegistered[0].Projection.Switch == nil ||
-		currentRegistered[0].Projection.Switch.Kind != serverapi.WorktreeSwitchOperationLeaveMain ||
+		currentRegistered[0].Projection.Switch.Kind != worktreecontract.SwitchOperationLeaveMain ||
 		currentRegistered[0].Projection.Switch.Selector != nil {
 		t.Fatalf("non-current main projection = %+v, want leave-main", currentRegistered[0].Projection)
 	}
@@ -497,10 +497,10 @@ func TestProjectWorktreeListProjectsSessionActionsAndExternalFallbackFromLoadedF
 	}
 }
 
-func assertEnterAndDeleteProjection(t *testing.T, entry serverapi.WorktreeListEntry, deleteSelector string) {
+func assertEnterAndDeleteProjection(t *testing.T, entry worktreecontract.ListEntry, deleteSelector string) {
 	t.Helper()
 	if entry.Projection.Switch == nil ||
-		entry.Projection.Switch.Kind != serverapi.WorktreeSwitchOperationEnter ||
+		entry.Projection.Switch.Kind != worktreecontract.SwitchOperationEnter ||
 		entry.Projection.Switch.Selector == nil ||
 		*entry.Projection.Switch.Selector != entry.Projection.Selector ||
 		entry.Projection.DeletePreview == nil ||
@@ -512,7 +512,7 @@ func assertEnterAndDeleteProjection(t *testing.T, entry serverapi.WorktreeListEn
 func TestListWorkspaceWorktreesRejectsWorkspaceFromAnotherProject(t *testing.T) {
 	env := newServiceTestEnv(t)
 
-	_, err := env.service.ListWorkspaceWorktrees(env.ctx, serverapi.WorktreeWorkspaceListRequest{
+	_, err := env.service.ListWorkspaceWorktrees(env.ctx, worktreecontract.WorkspaceListRequest{
 		ProjectID:   "another-project",
 		WorkspaceID: env.binding.WorkspaceID,
 	})
@@ -549,8 +549,8 @@ func TestProjectTopologyRejectsDuplicateGitAndKentRoots(t *testing.T) {
 
 func TestCreateRegistersOnlyTheCreatedWorktreeWithoutReconcilingOtherTopology(t *testing.T) {
 	env := newServiceTestEnv(t)
-	response, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	response, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
+		SetupOperationID: worktreecontract.NewSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -567,19 +567,19 @@ func TestCreateRegistersOnlyTheCreatedWorktreeWithoutReconcilingOtherTopology(t 
 		t.Fatalf("records = %+v, want only created worktree", records)
 	}
 	assertEnterAndDeleteProjection(t, response.Worktree, records[0].ID)
-	list, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
+	list, err := env.service.ListWorktrees(env.ctx, worktreecontract.ListRequest{SessionID: env.session.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}
 	if len(list.Worktrees) != 2 ||
-		list.Worktrees[0].Topology.Variant != serverapi.WorktreeTopologyVariantExternal ||
-		list.Worktrees[1].Topology.Variant != serverapi.WorktreeTopologyVariantRegistered {
+		list.Worktrees[0].Topology.Variant != worktreecontract.TopologyVariantExternal ||
+		list.Worktrees[1].Topology.Variant != worktreecontract.TopologyVariantRegistered {
 		t.Fatalf("topology = %+v, want external main followed by registered created worktree", list.Worktrees)
 	}
 }
 
-func topologies(entries []serverapi.WorktreeListEntry) []serverapi.WorktreeTopologyEntry {
-	out := make([]serverapi.WorktreeTopologyEntry, 0, len(entries))
+func topologies(entries []worktreecontract.ListEntry) []worktreecontract.TopologyEntry {
+	out := make([]worktreecontract.TopologyEntry, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, entry.Topology)
 	}

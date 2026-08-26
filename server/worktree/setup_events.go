@@ -2,32 +2,31 @@ package worktree
 
 import (
 	"context"
+	"core/shared/worktreecontract"
 	"errors"
 	"fmt"
 	"io"
 	"sync"
-
-	"core/shared/serverapi"
 )
 
 type setupEventBroker struct {
 	mu          sync.Mutex
-	subscribers map[serverapi.WorktreeSetupOperationID]map[*setupSubscription]struct{}
+	subscribers map[worktreecontract.SetupOperationID]map[*setupSubscription]struct{}
 }
 
 type setupSubscription struct {
 	broker *setupEventBroker
-	id     serverapi.WorktreeSetupOperationID
-	events chan serverapi.WorktreeSetupEvent
+	id     worktreecontract.SetupOperationID
+	events chan worktreecontract.SetupEvent
 	mu     sync.Mutex
 	closed bool
 }
 
 func newSetupEventBroker() *setupEventBroker {
-	return &setupEventBroker{subscribers: make(map[serverapi.WorktreeSetupOperationID]map[*setupSubscription]struct{})}
+	return &setupEventBroker{subscribers: make(map[worktreecontract.SetupOperationID]map[*setupSubscription]struct{})}
 }
 
-func (b *setupEventBroker) Subscribe(req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+func (b *setupEventBroker) Subscribe(req worktreecontract.SetupSubscribeRequest) (worktreecontract.SetupSubscription, error) {
 	if b == nil {
 		return nil, errors.New("worktree setup broker is required")
 	}
@@ -35,7 +34,7 @@ func (b *setupEventBroker) Subscribe(req serverapi.WorktreeSetupSubscribeRequest
 		return nil, err
 	}
 	id := req.SetupOperationID
-	sub := &setupSubscription{broker: b, id: id, events: make(chan serverapi.WorktreeSetupEvent, 16)}
+	sub := &setupSubscription{broker: b, id: id, events: make(chan worktreecontract.SetupEvent, 16)}
 	b.mu.Lock()
 	if b.subscribers[id] == nil {
 		b.subscribers[id] = make(map[*setupSubscription]struct{})
@@ -45,7 +44,7 @@ func (b *setupEventBroker) Subscribe(req serverapi.WorktreeSetupSubscribeRequest
 	return sub, nil
 }
 
-func (b *setupEventBroker) Publish(evt serverapi.WorktreeSetupEvent) {
+func (b *setupEventBroker) Publish(evt worktreecontract.SetupEvent) {
 	if b == nil {
 		return
 	}
@@ -58,32 +57,32 @@ func (b *setupEventBroker) Publish(evt serverapi.WorktreeSetupEvent) {
 	for sub := range b.subscribers[id] {
 		subscribers = append(subscribers, sub)
 	}
-	if evt.Phase == serverapi.WorktreeSetupPhaseCompleted ||
-		evt.Phase == serverapi.WorktreeSetupPhaseNotRequired ||
-		evt.Phase == serverapi.WorktreeSetupPhaseFailed {
+	if evt.Phase == worktreecontract.SetupPhaseCompleted ||
+		evt.Phase == worktreecontract.SetupPhaseNotRequired ||
+		evt.Phase == worktreecontract.SetupPhaseFailed {
 		delete(b.subscribers, id)
 	}
 	b.mu.Unlock()
 	for _, sub := range subscribers {
 		sub.publish(evt)
-		if evt.Phase == serverapi.WorktreeSetupPhaseCompleted ||
-			evt.Phase == serverapi.WorktreeSetupPhaseNotRequired ||
-			evt.Phase == serverapi.WorktreeSetupPhaseFailed {
+		if evt.Phase == worktreecontract.SetupPhaseCompleted ||
+			evt.Phase == worktreecontract.SetupPhaseNotRequired ||
+			evt.Phase == worktreecontract.SetupPhaseFailed {
 			sub.Close()
 		}
 	}
 }
 
-func (s *setupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
+func (s *setupSubscription) Next(ctx context.Context) (worktreecontract.SetupEvent, error) {
 	if s == nil {
-		return serverapi.WorktreeSetupEvent{}, io.EOF
+		return worktreecontract.SetupEvent{}, io.EOF
 	}
 	select {
 	case <-ctx.Done():
-		return serverapi.WorktreeSetupEvent{}, ctx.Err()
+		return worktreecontract.SetupEvent{}, ctx.Err()
 	case evt, ok := <-s.events:
 		if !ok {
-			return serverapi.WorktreeSetupEvent{}, io.EOF
+			return worktreecontract.SetupEvent{}, io.EOF
 		}
 		return evt, nil
 	}
@@ -106,7 +105,7 @@ func (s *setupSubscription) Close() error {
 	return nil
 }
 
-func (s *setupSubscription) publish(evt serverapi.WorktreeSetupEvent) {
+func (s *setupSubscription) publish(evt worktreecontract.SetupEvent) {
 	if s == nil {
 		return
 	}
@@ -138,7 +137,7 @@ func (s *setupSubscription) removeFromBroker() {
 	s.broker.mu.Unlock()
 }
 
-func (s *Service) SubscribeWorktreeSetup(_ context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+func (s *Service) SubscribeWorktreeSetup(_ context.Context, req worktreecontract.SetupSubscribeRequest) (worktreecontract.SetupSubscription, error) {
 	if s == nil || s.setupBroker == nil {
 		return nil, errors.New("worktree setup broker is required")
 	}

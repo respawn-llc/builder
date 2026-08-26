@@ -1063,12 +1063,12 @@ func TestServiceTaskResumeDoesNotRepeatCompletedSetupAfterTargetLockFailure(t *t
 			root := workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}
 			return ExecutionTargetMaterialization{
 				RetainedRoot: &root,
-				SetupResult:  &worktree.WorktreeSetupResult{Completed: &serverapi.WorktreeSetupCompleted{}},
-				RetainedWorktree: &serverapi.WorktreeTopologyEntry{
-					Variant: serverapi.WorktreeTopologyVariantRegistered,
-					Registered: &serverapi.WorktreeRegisteredFacts{
-						Git: serverapi.WorktreeGitFacts{CanonicalRoot: worktreeRoot, HeadObject: commitOID},
-						Kent: serverapi.WorktreeKentFacts{
+				SetupResult:  &worktree.WorktreeSetupResult{Completed: &worktreecontract.SetupCompleted{}},
+				RetainedWorktree: &worktreecontract.TopologyEntry{
+					Variant: worktreecontract.TopologyVariantRegistered,
+					Registered: &worktreecontract.RegisteredFacts{
+						Git: worktreecontract.GitFacts{CanonicalRoot: worktreeRoot, HeadObject: commitOID},
+						Kent: worktreecontract.KentFacts{
 							WorktreeID: worktreeID, CanonicalRoot: worktreeRoot, DisplayName: task.Task.ShortID,
 						},
 					},
@@ -1156,7 +1156,7 @@ func TestServiceTaskResumeDoesNotRepeatCompletedSetupAfterTargetLockFailure(t *t
 }
 
 func TestTaskSetupObservationPublishesRetryReadyFailureOnlyAfterFinalization(t *testing.T) {
-	setupOperationID := serverapi.NewWorktreeSetupOperationID()
+	setupOperationID := worktreecontract.NewSetupOperationID()
 	recorder := &workflowTaskSetupEventRecorder{}
 	observation, err := newTaskSetupObservation(
 		setupOperationID,
@@ -1194,10 +1194,10 @@ func TestTaskSetupObservationPublishesRetryReadyFailureOnlyAfterFinalization(t *
 	if err := event.Validate(); err != nil {
 		t.Fatalf("setup event validation: %v", err)
 	}
-	if event.Phase != serverapi.WorktreeSetupPhaseFailed ||
+	if event.Phase != worktreecontract.SetupPhaseFailed ||
 		event.Failed == nil ||
-		event.Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
-		event.Failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
+		event.Failed.RetryReadiness != worktreecontract.SetupRetryReady ||
+		event.Failed.Cause.Kind != worktreecontract.SetupFailureTargetPreparation ||
 		event.Failed.ExecutionTarget == nil ||
 		event.Failed.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone {
 		t.Fatalf("setup event = %+v, want retry-ready target preparation failure", event)
@@ -2100,7 +2100,7 @@ type recordingExecutionTargetInfrastructure struct {
 	restoreTaskID             workflow.TaskID
 	restoreRequest            ExecutionTargetRestoreRequest
 	restoreRequests           chan<- ExecutionTargetRestoreRequest
-	setupOperationID          *serverapi.WorktreeSetupOperationID
+	setupOperationID          *worktreecontract.SetupOperationID
 	setupRequirements         []worktreecontract.SetupRequirement
 	materialize               func(workflow.TaskID) (ExecutionTargetMaterialization, error)
 	resolveErr                error
@@ -2129,19 +2129,19 @@ type workflowAttentionRecorder struct {
 
 type workflowTaskSetupEventRecorder struct {
 	mu     sync.Mutex
-	events []serverapi.WorktreeSetupEvent
+	events []worktreecontract.SetupEvent
 }
 
-func (r *workflowTaskSetupEventRecorder) PublishWorkflowTaskSetupEvent(event serverapi.WorktreeSetupEvent) {
+func (r *workflowTaskSetupEventRecorder) PublishWorkflowTaskSetupEvent(event worktreecontract.SetupEvent) {
 	r.mu.Lock()
 	r.events = append(r.events, event)
 	r.mu.Unlock()
 }
 
-func (r *workflowTaskSetupEventRecorder) recordedEvents() []serverapi.WorktreeSetupEvent {
+func (r *workflowTaskSetupEventRecorder) recordedEvents() []worktreecontract.SetupEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]serverapi.WorktreeSetupEvent(nil), r.events...)
+	return append([]worktreecontract.SetupEvent(nil), r.events...)
 }
 
 func (r *workflowAttentionRecorder) FinalizeTaskResolution(resolution workflowstore.TaskAttentionResolution) {

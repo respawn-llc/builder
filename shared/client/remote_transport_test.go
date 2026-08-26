@@ -24,9 +24,11 @@ import (
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -541,7 +543,7 @@ func TestRemoteSessionAttachmentSurvivesUnaryControlReconnect(t *testing.T) {
 				reportHandlerError(handlerErrs, "connection %d method = %q, want worktree status", connIndex, req.Method)
 				return
 			}
-			if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{}))); err != nil {
+			if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, worktreecontract.StatusResponse{}))); err != nil {
 				reportHandlerError(handlerErrs, "send worktree status response: %w", err)
 			}
 			return
@@ -559,7 +561,7 @@ func TestRemoteSessionAttachmentSurvivesUnaryControlReconnect(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	request := serverapi.WorktreeStatusRequest{SessionID: "session-1"}
+	request := worktreecontract.StatusRequest{SessionID: "session-1"}
 	if _, err := remote.GetWorktreeStatus(context.Background(), request); err != nil {
 		t.Fatalf("first GetWorktreeStatus: %v", err)
 	}

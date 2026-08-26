@@ -15,12 +15,12 @@ import (
 	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
-func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
+func (s *Service) DeleteWorktree(ctx context.Context, req worktreecontract.DeleteRequest) (worktreecontract.DeleteResult, error) {
 	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeDeleteResult{}, err
+		return worktreecontract.DeleteResult{}, err
 	}
 	transitionRequest := worktreeTransitionRequest{
 		operationID: req.OperationID,
@@ -31,81 +31,81 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		cleanup:     req.BranchCleanupPolicy,
 	}
 	if ack, ok := s.replayPendingWorktreeTransition(transitionRequest); ok {
-		return serverapi.WorktreeDeleteResult{
-			Kind:      serverapi.WorktreeDeleteResultKindScheduled,
+		return worktreecontract.DeleteResult{
+			Kind:      worktreecontract.DeleteResultKindScheduled,
 			Scheduled: &ack,
 		}, nil
 	}
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
 	if err != nil {
-		return serverapi.WorktreeDeleteResult{}, err
+		return worktreecontract.DeleteResult{}, err
 	}
 	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
 		release()
-		return serverapi.WorktreeDeleteResult{}, err
+		return worktreecontract.DeleteResult{}, err
 	}
 	match, err := resolveTopologySelector(topology, req.Selector)
 	if err != nil {
 		release()
-		return serverapi.WorktreeDeleteResult{}, err
+		return worktreecontract.DeleteResult{}, err
 	}
 	if _, err := match.entry.DeletionSelector(); err != nil {
 		release()
-		return serverapi.WorktreeDeleteResult{}, err
+		return worktreecontract.DeleteResult{}, err
 	}
 	if topologyIsCurrent(match.entry, workspaceCtx.target) {
 		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, match.entry, req.ForceFolderRemoval); err != nil {
 			release()
-			return serverapi.WorktreeDeleteResult{}, err
+			return worktreecontract.DeleteResult{}, err
 		}
 		deleteTarget, err := scheduledKentWorktreeTargetFromEntry(match.entry)
 		if err != nil {
 			release()
-			return serverapi.WorktreeDeleteResult{}, err
+			return worktreecontract.DeleteResult{}, err
 		}
 		release()
 		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, _ transitionAuthority, sync transitionTargetSync) error {
 			_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
 			return err
-		}, req.WorktreeTransitionHeader.Origin)
+		}, req.TransitionHeader.Origin)
 		if err != nil {
-			return serverapi.WorktreeDeleteResult{}, err
+			return worktreecontract.DeleteResult{}, err
 		}
-		return serverapi.WorktreeDeleteResult{
-			Kind:      serverapi.WorktreeDeleteResultKindScheduled,
+		return worktreecontract.DeleteResult{
+			Kind:      worktreecontract.DeleteResultKindScheduled,
 			Scheduled: &ack,
 		}, nil
 	}
 	defer release()
 	completed, err := s.executeDeleteLocked(ctx, workspaceCtx, match.entry, req, nil)
 	if err != nil {
-		return serverapi.WorktreeDeleteResult{}, err
+		return worktreecontract.DeleteResult{}, err
 	}
-	return serverapi.WorktreeDeleteResult{
-		Kind:      serverapi.WorktreeDeleteResultKindCompleted,
+	return worktreecontract.DeleteResult{
+		Kind:      worktreecontract.DeleteResultKindCompleted,
 		Completed: &completed,
 	}, nil
 }
 
 func (s *Service) executeScheduledDelete(
 	ctx context.Context,
-	req serverapi.WorktreeDeleteRequest,
+	req worktreecontract.DeleteRequest,
 	deleteTarget scheduledWorktreeTarget,
 	sync transitionTargetSync,
-) (serverapi.WorktreeDeleteCompletedResult, error) {
+) (worktreecontract.DeleteCompletedResult, error) {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	defer release()
 	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	entry, err := deleteTarget.resolve(topology)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	return s.executeDeleteLocked(ctx, workspaceCtx, entry, req, sync)
 }
@@ -113,20 +113,20 @@ func (s *Service) executeScheduledDelete(
 func (s *Service) executeDeleteLocked(
 	ctx context.Context,
 	workspaceCtx sessionWorkspaceContext,
-	entry serverapi.WorktreeTopologyEntry,
-	req serverapi.WorktreeDeleteRequest,
+	entry worktreecontract.TopologyEntry,
+	req worktreecontract.DeleteRequest,
 	currentSync transitionTargetSync,
-) (serverapi.WorktreeDeleteCompletedResult, error) {
+) (worktreecontract.DeleteCompletedResult, error) {
 	if _, err := entry.DeletionSelector(); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	target, record, err := s.deleteTarget(ctx, workspaceCtx, entry)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	retainRecord, err := s.retainManagedTaskWorktreeRecord(ctx, record)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	var targetRoot *string
 	if target != nil {
@@ -136,28 +136,28 @@ func (s *Service) executeDeleteLocked(
 	}
 	currentSessionID, err := deleteActivityCurrentSessionID(workspaceCtx.sessionID)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	activityLease, err := s.acquireDeleteTargetActivity(ctx, currentSessionID, record, targetRoot)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	defer activityLease.Close()
 	mutationCtx := activityLease.Context()
 	if err := s.ensureDeleteFolderRemovalAuthorized(ctx, entry, req.ForceFolderRemoval); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
 		retargetCompensation, err = s.retargetDeleteSessions(mutationCtx, workspaceCtx, *record, currentSync)
 		if err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
+			return worktreecontract.DeleteCompletedResult{}, err
 		}
 	}
 	leftoverRoot := missingLeftoverRoot(entry)
 	if target != nil {
 		var err error
-		if req.ForceFolderRemoval && entry.Variant == serverapi.WorktreeTopologyVariantRegistered &&
+		if req.ForceFolderRemoval && entry.Variant == worktreecontract.TopologyVariantRegistered &&
 			entry.Registered != nil && entry.Registered.Git.PrunableReason != nil {
 			err = s.git.ForceRemovePrunableWorktree(ctx, workspaceCtx.workspaceRoot, target.record.CanonicalRoot)
 		} else {
@@ -166,35 +166,35 @@ func (s *Service) executeDeleteLocked(
 		if err != nil {
 			var recoveryError *PrunableWorktreeRecoveryError
 			if errors.As(err, &recoveryError) && recoveryError.Destructive {
-				return serverapi.WorktreeDeleteCompletedResult{}, err
+				return worktreecontract.DeleteCompletedResult{}, err
 			}
-			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
+			return worktreecontract.DeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
 		}
 	}
 	if record != nil && !retainRecord {
 		if err := s.metadata.DeleteWorktreeRecordByID(ctx, record.ID); err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
+			return worktreecontract.DeleteCompletedResult{}, err
 		}
 	}
 	cleanup := s.cleanupDeletedBranch(ctx, workspaceCtx.workspaceRoot, entry, record, req.BranchCleanupPolicy)
-	result := serverapi.WorktreeDeleteCompletedResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}
+	result := worktreecontract.DeleteCompletedResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}
 	if err := result.Validate(); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return worktreecontract.DeleteCompletedResult{}, err
 	}
 	return result, nil
 }
 
 func (s *Service) ensureDeleteFolderRemovalAuthorized(
 	ctx context.Context,
-	entry serverapi.WorktreeTopologyEntry,
+	entry worktreecontract.TopologyEntry,
 	forceFolderRemoval bool,
 ) error {
 	dirtyState, err := s.evaluateDeleteCleanliness(ctx, entry)
 	if err != nil {
 		return err
 	}
-	if dirtyState.Kind != clientui.WorktreeDirtyStateClean && !forceFolderRemoval {
-		return &serverapi.WorktreeDeletePreconditionError{DirtyState: dirtyState}
+	if dirtyState.Kind != worktreecontract.DirtyStateClean && !forceFolderRemoval {
+		return &worktreecontract.DeletePreconditionError{DirtyState: dirtyState}
 	}
 	return nil
 }
@@ -202,10 +202,10 @@ func (s *Service) ensureDeleteFolderRemovalAuthorized(
 func (s *Service) deleteTarget(
 	ctx context.Context,
 	workspaceCtx sessionWorkspaceContext,
-	entry serverapi.WorktreeTopologyEntry,
+	entry worktreecontract.TopologyEntry,
 ) (*syncedWorktree, *metadata.WorktreeRecord, error) {
 	switch entry.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
+	case worktreecontract.TopologyVariantRegistered:
 		record, err := s.metadata.GetWorktreeRecordByID(ctx, entry.Registered.Kent.WorktreeID)
 		if err != nil {
 			return nil, nil, err
@@ -216,7 +216,7 @@ func (s *Service) deleteTarget(
 		}
 		target := syncedWorktree{record: record, git: gitEntry}
 		return &target, &record, nil
-	case serverapi.WorktreeTopologyVariantExternal:
+	case worktreecontract.TopologyVariantExternal:
 		gitEntry, err := gitWorktreeFromFacts(entry.External.Git)
 		if err != nil {
 			return nil, nil, err
@@ -230,7 +230,7 @@ func (s *Service) deleteTarget(
 			git: gitEntry,
 		}
 		return &target, nil, nil
-	case serverapi.WorktreeTopologyVariantMissing:
+	case worktreecontract.TopologyVariantMissing:
 		record, err := s.metadata.GetWorktreeRecordByID(ctx, entry.Missing.Kent.WorktreeID)
 		if err != nil {
 			return nil, nil, err
@@ -304,7 +304,7 @@ func (s *Service) acquireDeleteTargetActivity(
 			startBlock, err := s.acquireSessionStartAdmission(ctx, sessionIDs, sessionStartAdmissionTry)
 			if err != nil {
 				if errors.Is(err, sessionruntime.ErrSessionStartAdmissionBusy) {
-					return deleteTargetActivityLease{}, errors.Join(serverapi.ErrWorktreeBlocked, err)
+					return deleteTargetActivityLease{}, errors.Join(worktreecontract.ErrWorktreeBlocked, err)
 				}
 				return deleteTargetActivityLease{}, err
 			}
@@ -330,7 +330,7 @@ func (s *Service) acquireDeleteTargetActivity(
 	if worktreeRoot != nil {
 		if processBlockers := s.backgroundProcessBlockers(*worktreeRoot); len(processBlockers) > 0 {
 			lease.Close()
-			return deleteTargetActivityLease{}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
+			return deleteTargetActivityLease{}, errors.Join(worktreecontract.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
 		}
 	}
 	return lease, nil
@@ -348,7 +348,7 @@ func activeDeleteBlockerError(blockers []metadata.WorktreeSessionBlocker) error 
 		}
 		names = append(names, name)
 	}
-	return errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree is still targeted by active runs: %s", strings.Join(names, ", ")))
+	return errors.Join(worktreecontract.ErrWorktreeBlocked, fmt.Errorf("worktree is still targeted by active runs: %s", strings.Join(names, ", ")))
 }
 
 func (s *Service) retargetDeleteSessions(
@@ -391,8 +391,8 @@ func (s *Service) syncDeleteSession(
 	return s.syncExecutionTarget(ctx, sessionID, target, reminder)
 }
 
-func missingLeftoverRoot(entry serverapi.WorktreeTopologyEntry) *string {
-	if entry.Variant != serverapi.WorktreeTopologyVariantMissing {
+func missingLeftoverRoot(entry worktreecontract.TopologyEntry) *string {
+	if entry.Variant != worktreecontract.TopologyVariantMissing {
 		return nil
 	}
 	root := strings.TrimSpace(entry.Missing.Kent.CanonicalRoot)
@@ -405,26 +405,26 @@ func missingLeftoverRoot(entry serverapi.WorktreeTopologyEntry) *string {
 func (s *Service) cleanupDeletedBranch(
 	ctx context.Context,
 	workspaceRoot string,
-	entry serverapi.WorktreeTopologyEntry,
+	entry worktreecontract.TopologyEntry,
 	record *metadata.WorktreeRecord,
-	policy serverapi.WorktreeBranchCleanupMode,
-) serverapi.WorktreeBranchCleanupOutcome {
+	policy worktreecontract.BranchCleanupMode,
+) worktreecontract.BranchCleanupOutcome {
 	gitEntry, live, err := branchCleanupGitEntry(entry, record)
 	if err != nil {
-		return serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotApplicable}
+		return worktreecontract.BranchCleanupOutcome{Kind: worktreecontract.BranchCleanupOutcomeNotApplicable}
 	}
 	branchName, named := worktreeNamedBranch(gitEntry)
 	if !named {
-		return serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotApplicable}
+		return worktreecontract.BranchCleanupOutcome{Kind: worktreecontract.BranchCleanupOutcomeNotApplicable}
 	}
 	switch policy {
-	case serverapi.WorktreeBranchCleanupModeRetain:
-		return serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotRequested}
-	case serverapi.WorktreeBranchCleanupModeAutoIfKentCreated:
+	case worktreecontract.BranchCleanupModeRetain:
+		return worktreecontract.BranchCleanupOutcome{Kind: worktreecontract.BranchCleanupOutcomeNotRequested}
+	case worktreecontract.BranchCleanupModeAutoIfKentCreated:
 		if record == nil {
 			diagnostic := "Kent cannot prove this worktree created the branch"
-			return serverapi.WorktreeBranchCleanupOutcome{
-				Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+			return worktreecontract.BranchCleanupOutcome{
+				Kind:       worktreecontract.BranchCleanupOutcomeRetained,
 				BranchName: &branchName,
 				Diagnostic: &diagnostic,
 			}
@@ -432,59 +432,59 @@ func (s *Service) cleanupDeletedBranch(
 		createdBranch, proven, err := kentCreatedBranchForCleanup(*record, live)
 		if err != nil {
 			diagnostic := err.Error()
-			return serverapi.WorktreeBranchCleanupOutcome{
-				Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+			return worktreecontract.BranchCleanupOutcome{
+				Kind:       worktreecontract.BranchCleanupOutcomeRetained,
 				BranchName: &branchName,
 				Diagnostic: &diagnostic,
 			}
 		}
 		if !proven {
 			diagnostic := "Kent cannot prove this worktree created the branch"
-			return serverapi.WorktreeBranchCleanupOutcome{
-				Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+			return worktreecontract.BranchCleanupOutcome{
+				Kind:       worktreecontract.BranchCleanupOutcomeRetained,
 				BranchName: &branchName,
 				Diagnostic: &diagnostic,
 			}
 		}
 		branchName = createdBranch
-	case serverapi.WorktreeBranchCleanupModeDeleteSafe:
-	case serverapi.WorktreeBranchCleanupModeDeleteForce:
+	case worktreecontract.BranchCleanupModeDeleteSafe:
+	case worktreecontract.BranchCleanupModeDeleteForce:
 	default:
 		panic(fmt.Sprintf("invalid branch cleanup policy %q", policy))
 	}
-	force := policy == serverapi.WorktreeBranchCleanupModeDeleteForce
+	force := policy == worktreecontract.BranchCleanupModeDeleteForce
 	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, force); err != nil {
 		diagnostic := err.Error()
-		return serverapi.WorktreeBranchCleanupOutcome{
-			Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+		return worktreecontract.BranchCleanupOutcome{
+			Kind:       worktreecontract.BranchCleanupOutcomeRetained,
 			BranchName: &branchName,
 			Diagnostic: &diagnostic,
 		}
 	}
-	return serverapi.WorktreeBranchCleanupOutcome{
-		Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
+	return worktreecontract.BranchCleanupOutcome{
+		Kind:       worktreecontract.BranchCleanupOutcomeDeleted,
 		BranchName: &branchName,
 	}
 }
 
 func branchCleanupGitEntry(
-	entry serverapi.WorktreeTopologyEntry,
+	entry worktreecontract.TopologyEntry,
 	record *metadata.WorktreeRecord,
 ) (GitWorktree, *GitWorktree, error) {
 	switch entry.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
+	case worktreecontract.TopologyVariantRegistered:
 		live, err := gitWorktreeFromFacts(entry.Registered.Git)
 		if err != nil {
 			return GitWorktree{}, nil, err
 		}
 		return live, &live, nil
-	case serverapi.WorktreeTopologyVariantExternal:
+	case worktreecontract.TopologyVariantExternal:
 		live, err := gitWorktreeFromFacts(entry.External.Git)
 		if err != nil {
 			return GitWorktree{}, nil, err
 		}
 		return live, &live, nil
-	case serverapi.WorktreeTopologyVariantMissing:
+	case worktreecontract.TopologyVariantMissing:
 		if record == nil {
 			return GitWorktree{}, nil, nil
 		}

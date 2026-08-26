@@ -9,7 +9,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -170,9 +170,9 @@ type strictWorktreeClient struct {
 	enterCalls int
 }
 
-func (c *strictWorktreeClient) EnterWorktree(_ context.Context, request serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+func (c *strictWorktreeClient) EnterWorktree(_ context.Context, request worktreecontract.EnterRequest) (worktreecontract.ScheduledAcknowledgement, error) {
 	c.enterCalls++
-	return serverapi.WorktreeScheduledAcknowledgement{OperationID: request.OperationID}, nil
+	return worktreecontract.ScheduledAcknowledgement{OperationID: request.OperationID}, nil
 }
 
 func TestTUIStrictIOWorktreeSwitchRunsAsCommand(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	tuiinput "core/cli/tui/input"
 	"core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -77,9 +77,9 @@ type uiWorktreeCreateDialogState struct {
 	resolving        bool
 	submitPending    bool
 	resolveToken     uint64
-	resolution       serverapi.WorktreeCreateTargetResolution
+	resolution       worktreecontract.CreateTargetResolution
 	setupProgress    *uiWorktreeSetupProgressState
-	setupEvent       *serverapi.WorktreeSetupEvent
+	setupEvent       *worktreecontract.SetupEvent
 }
 
 type uiWorktreeSetupProgressState struct {
@@ -137,26 +137,26 @@ type uiWorktreeQueuedSwitch struct {
 
 type worktreeListDoneMsg struct {
 	token uint64
-	resp  serverapi.WorktreeListResponse
+	resp  worktreecontract.ListResponse
 	err   error
 }
 
 type worktreeDeleteTargetResolvedMsg struct {
 	generation         uint64
-	resp               serverapi.WorktreeSelectorPreviewResponse
+	resp               worktreecontract.SelectorResolveResponse
 	preferDeleteBranch bool
 	err                error
 }
 
 type worktreeCreateDoneMsg struct {
 	token uint64
-	resp  serverapi.WorktreeCreateResponse
+	resp  worktreecontract.CreateResponse
 	err   error
 }
 
 type worktreeSetupEventMsg struct {
 	token  uint64
-	event  serverapi.WorktreeSetupEvent
+	event  worktreecontract.SetupEvent
 	err    error
 	events <-chan worktreeSetupEventMsg
 }
@@ -164,14 +164,14 @@ type worktreeSetupEventMsg struct {
 type worktreeSwitchDoneMsg struct {
 	token  uint64
 	target string
-	ack    serverapi.WorktreeScheduledAcknowledgement
+	ack    worktreecontract.ScheduledAcknowledgement
 	err    error
 }
 
 type worktreeDeleteDoneMsg struct {
 	token  uint64
 	target string
-	resp   serverapi.WorktreeDeleteResult
+	resp   worktreecontract.DeleteResult
 	err    error
 }
 
@@ -297,14 +297,14 @@ func (m *uiModel) closeWorktreeDialog() {
 	m.worktrees.errorText = ""
 }
 
-func (m *uiModel) applyWorktreeListResponse(resp serverapi.WorktreeListResponse) error {
+func (m *uiModel) applyWorktreeListResponse(resp worktreecontract.ListResponse) error {
 	if m == nil {
 		return nil
 	}
 	if err := m.recordWorktreeSelection(); err != nil {
 		return err
 	}
-	m.worktrees.target = resp.Target
+	m.worktrees.target = clientSessionExecutionTarget(resp.Target)
 	entries, err := worktreeui.ProjectItems(resp.Worktrees)
 	if err != nil {
 		m.worktrees.entries = nil
@@ -343,6 +343,27 @@ func (m *uiModel) applyWorktreeListResponse(resp serverapi.WorktreeListResponse)
 		m.closeWorktreeDialog()
 	}
 	return nil
+}
+
+func clientSessionExecutionTarget(target worktreecontract.SessionExecutionTarget) clientui.SessionExecutionTarget {
+	var worktree *clientui.SessionExecutionWorktreeTarget
+	if target.Worktree != nil {
+		worktree = &clientui.SessionExecutionWorktreeTarget{
+			ID:           target.Worktree.ID,
+			Name:         target.Worktree.Name,
+			Root:         target.Worktree.Root,
+			Availability: target.Worktree.Availability,
+		}
+	}
+	return clientui.SessionExecutionTarget{
+		WorkspaceID:           target.WorkspaceID,
+		WorkspaceName:         target.WorkspaceName,
+		WorkspaceRoot:         target.WorkspaceRoot,
+		WorkspaceAvailability: clientui.ProjectAvailability(target.WorkspaceAvailability),
+		Worktree:              worktree,
+		CwdRelpath:            target.CwdRelpath,
+		EffectiveWorkdir:      target.EffectiveWorkdir,
+	}
 }
 
 func (m *uiModel) applyWorktreeIntent() tea.Cmd {
@@ -403,7 +424,7 @@ func resolveWorktreeDeleteIntentTarget(
 			return worktreeui.Item{}, err
 		}
 		if !ok {
-			return worktreeui.Item{}, serverapi.ErrWorktreeNotFound
+			return worktreeui.Item{}, worktreecontract.ErrWorktreeNotFound
 		}
 		return item, nil
 	default:
@@ -457,14 +478,14 @@ func (m *uiModel) suggestedWorktreeBranchFromEntries() string {
 	return ""
 }
 
-func (m *uiModel) worktreeCreateCmd(req serverapi.WorktreeCreateRequest) tea.Cmd {
+func (m *uiModel) worktreeCreateCmd(req worktreecontract.CreateRequest) tea.Cmd {
 	if m == nil {
 		return nil
 	}
 	m.worktrees.mutationToken++
 	token := m.worktrees.mutationToken
 	if err := req.SetupOperationID.Validate(); err != nil {
-		req.SetupOperationID = serverapi.NewWorktreeSetupOperationID()
+		req.SetupOperationID = worktreecontract.NewSetupOperationID()
 	}
 	m.worktrees.create.errorText = ""
 	m.worktrees.create.baseRefErrorText = ""
@@ -489,13 +510,13 @@ func (m *uiModel) worktreeCreateCmd(req serverapi.WorktreeCreateRequest) tea.Cmd
 	return tea.Batch(subscribeCmd, createCmd, worktreeSetupEventCmd(setupEvents))
 }
 
-func subscribeWorktreeSetupEvents(ctx context.Context, worktreeClient apicontract.WorktreeService, token uint64, setupOperationID serverapi.WorktreeSetupOperationID, ready chan<- error, events chan worktreeSetupEventMsg) {
+func subscribeWorktreeSetupEvents(ctx context.Context, worktreeClient apicontract.WorktreeService, token uint64, setupOperationID worktreecontract.SetupOperationID, ready chan<- error, events chan worktreeSetupEventMsg) {
 	defer close(events)
 	if worktreeClient == nil {
 		ready <- worktreeui.ErrClientUnavailable
 		return
 	}
-	subscription, err := worktreeClient.SubscribeWorktreeSetup(ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupOperationID})
+	subscription, err := worktreeClient.SubscribeWorktreeSetup(ctx, worktreecontract.SetupSubscribeRequest{SetupOperationID: setupOperationID})
 	if err != nil {
 		ready <- err
 		return
@@ -512,7 +533,7 @@ func subscribeWorktreeSetupEvents(ctx context.Context, worktreeClient apicontrac
 			return
 		}
 		events <- worktreeSetupEventMsg{token: token, event: event, events: events}
-		if event.Phase == serverapi.WorktreeSetupPhaseCompleted || event.Phase == serverapi.WorktreeSetupPhaseFailed {
+		if event.Phase == worktreecontract.SetupPhaseCompleted || event.Phase == worktreecontract.SetupPhaseFailed {
 			return
 		}
 	}
@@ -572,9 +593,9 @@ func (m *uiModel) worktreeDeleteCmd(target worktreeui.Item, deleteBranch bool) t
 	m.worktrees.deleteConfirm.submitting = true
 	service := m.worktreeMutationService()
 	selector, selectorErr := worktreeui.StableMutationSelector(target)
-	cleanupPolicy := serverapi.WorktreeBranchCleanupModeAutoIfKentCreated
+	cleanupPolicy := worktreecontract.BranchCleanupModeAutoIfKentCreated
 	if deleteBranch {
-		cleanupPolicy = serverapi.WorktreeBranchCleanupModeDeleteSafe
+		cleanupPolicy = worktreecontract.BranchCleanupModeDeleteSafe
 	}
 	return func() tea.Msg {
 		if selectorErr != nil {
