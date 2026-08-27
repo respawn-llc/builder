@@ -104,7 +104,7 @@ The node where new tasks enter a workflow. A start node is non-executable and ha
 
 ### Task Start
 
-An explicit operation that moves a newly created Task from start/backlog into its first executable current Node by applying the Start Node's outgoing Transition.
+An explicit server-owned operation that prepares a newly created Task's first execution while the Task remains at start/backlog, then atomically applies the Start Node's outgoing Transition once preparation succeeds.
 
 ### Terminal Node
 
