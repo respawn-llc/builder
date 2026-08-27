@@ -11,6 +11,7 @@ import (
 	"core/shared/serverapi"
 	"core/shared/worktreecontract"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -281,9 +282,9 @@ func newTestService(client *testWorktreeClient) Service {
 }
 
 func testWorktreeOperationID(t *testing.T) worktreecontract.OperationID {
-	id, err := worktreecontract.ParseOperationID("11111111-1111-4111-8111-111111111111")
-	if err != nil && t != nil {
-		t.Fatalf("ParseWorktreeOperationID: %v", err)
+	id := worktreecontract.OperationID(uuid.MustParse("11111111-1111-4111-8111-111111111111"))
+	if err := id.Validate(); err != nil && t != nil {
+		t.Fatalf("OperationID.Validate: %v", err)
 	}
 	return id
 }

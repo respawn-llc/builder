@@ -27,36 +27,18 @@ func registerWorktreeGatewayBinaryBindings(bindings map[string]gatewayBinaryBind
 	create := worktreepb.File_kent_api_worktree_worktree_proto.Services().ByName("CreateService")
 	transition := worktreepb.File_kent_api_worktree_worktree_proto.Services().ByName("TransitionService")
 	return errors.Join(
-		registerWorktreeUnary(bindings, status, "Get",
-			func() *worktreepb.StatusRequest { return &worktreepb.StatusRequest{} },
-			worktreeSessionScope[*worktreepb.StatusRequest],
-			apicontract.WorktreeService.GetWorktreeStatus,
-			worktreePlatformFailure[*worktreepb.StatusRequest]),
-		registerWorktreeUnary(bindings, list, "List",
-			func() *worktreepb.ListRequest { return &worktreepb.ListRequest{} },
-			worktreeSessionScope[*worktreepb.ListRequest],
-			apicontract.WorktreeService.ListWorktrees,
-			worktreePlatformFailure[*worktreepb.ListRequest]),
-		registerWorktreeUnary(bindings, list, "ListWorkspace",
-			func() *worktreepb.WorkspaceListRequest { return &worktreepb.WorkspaceListRequest{} },
-			worktreeWorkspaceScope,
-			apicontract.WorktreeService.ListWorkspaceWorktrees,
-			worktreeWorkspaceListFailure),
-		registerWorktreeUnary(bindings, selector, "Resolve",
-			func() *worktreepb.SelectorResolveRequest { return &worktreepb.SelectorResolveRequest{} },
-			worktreeSessionScope[*worktreepb.SelectorResolveRequest],
-			apicontract.WorktreeService.ResolveWorktreeSelector,
-			worktreeSelectorFailure[*worktreepb.SelectorResolveRequest]),
-		registerWorktreeUnary(bindings, deletePreview, "Get",
-			func() *worktreepb.DeletePreviewRequest { return &worktreepb.DeletePreviewRequest{} },
-			worktreeSessionScope[*worktreepb.DeletePreviewRequest],
-			apicontract.WorktreeService.PreviewWorktreeDelete,
-			worktreeDeletePreviewFailure),
-		registerWorktreeUnary(bindings, createTarget, "Resolve",
-			func() *worktreepb.CreateTargetResolveRequest { return &worktreepb.CreateTargetResolveRequest{} },
-			worktreeSessionScope[*worktreepb.CreateTargetResolveRequest],
-			apicontract.WorktreeService.ResolveWorktreeCreateTarget,
-			worktreePlatformFailure[*worktreepb.CreateTargetResolveRequest]),
+		registerWorktreeUnary(bindings, status, "Get", func() *worktreepb.StatusRequest { return &worktreepb.StatusRequest{} },
+			worktreeSessionScope[*worktreepb.StatusRequest], apicontract.WorktreeService.GetWorktreeStatus, worktreePlatformFailure[*worktreepb.StatusRequest]),
+		registerWorktreeUnary(bindings, list, "List", func() *worktreepb.ListRequest { return &worktreepb.ListRequest{} },
+			worktreeSessionScope[*worktreepb.ListRequest], apicontract.WorktreeService.ListWorktrees, worktreePlatformFailure[*worktreepb.ListRequest]),
+		registerWorktreeUnary(bindings, list, "ListWorkspace", func() *worktreepb.WorkspaceListRequest { return &worktreepb.WorkspaceListRequest{} },
+			worktreeWorkspaceScope, apicontract.WorktreeService.ListWorkspaceWorktrees, worktreeWorkspaceListFailure),
+		registerWorktreeUnary(bindings, selector, "Resolve", func() *worktreepb.SelectorResolveRequest { return &worktreepb.SelectorResolveRequest{} },
+			worktreeSessionScope[*worktreepb.SelectorResolveRequest], apicontract.WorktreeService.ResolveWorktreeSelector, worktreeSelectorFailure[*worktreepb.SelectorResolveRequest]),
+		registerWorktreeUnary(bindings, deletePreview, "Get", func() *worktreepb.DeletePreviewRequest { return &worktreepb.DeletePreviewRequest{} },
+			worktreeSessionScope[*worktreepb.DeletePreviewRequest], apicontract.WorktreeService.PreviewWorktreeDelete, worktreeDeletePreviewFailure),
+		registerWorktreeUnary(bindings, createTarget, "Resolve", func() *worktreepb.CreateTargetResolveRequest { return &worktreepb.CreateTargetResolveRequest{} },
+			worktreeSessionScope[*worktreepb.CreateTargetResolveRequest], apicontract.WorktreeService.ResolveWorktreeCreateTarget, worktreePlatformFailure[*worktreepb.CreateTargetResolveRequest]),
 		registerWorktreeUnary(bindings, create, "Create",
 			func() *worktreepb.CreateRequest { return &worktreepb.CreateRequest{} },
 			worktreeSessionScope[*worktreepb.CreateRequest],
@@ -65,60 +47,72 @@ func registerWorktreeGatewayBinaryBindings(bindings map[string]gatewayBinaryBind
 			func(_ *worktreepb.CreateRequest, err error) proto.Message {
 				return worktreeCreateFailure(nil, protoapi.ClassifyWorktreeCreateValidation(err))
 			}),
-		registerWorktreeUnary(bindings, transition, "Enter",
-			func() *worktreepb.EnterRequest { return &worktreepb.EnterRequest{} },
-			worktreeSessionScope[*worktreepb.EnterRequest],
-			apicontract.WorktreeService.EnterWorktree,
-			worktreeSelectorFailure[*worktreepb.EnterRequest]),
-		registerWorktreeUnary(bindings, transition, "Leave",
-			func() *worktreepb.LeaveRequest { return &worktreepb.LeaveRequest{} },
-			worktreeSessionScope[*worktreepb.LeaveRequest],
-			apicontract.WorktreeService.LeaveWorktree,
-			worktreePlatformFailure[*worktreepb.LeaveRequest]),
-		registerWorktreeUnary(bindings, transition, "Delete",
-			func() *worktreepb.DeleteRequest { return &worktreepb.DeleteRequest{} },
-			worktreeSessionScope[*worktreepb.DeleteRequest],
-			apicontract.WorktreeService.DeleteWorktree,
-			worktreeDeleteFailure),
+		registerWorktreeUnary(bindings, transition, "Enter", func() *worktreepb.EnterRequest { return &worktreepb.EnterRequest{} },
+			worktreeSessionScope[*worktreepb.EnterRequest], apicontract.WorktreeService.EnterWorktree, worktreeSelectorFailure[*worktreepb.EnterRequest]),
+		registerWorktreeUnary(bindings, transition, "Leave", func() *worktreepb.LeaveRequest { return &worktreepb.LeaveRequest{} },
+			worktreeSessionScope[*worktreepb.LeaveRequest], apicontract.WorktreeService.LeaveWorktree, worktreePlatformFailure[*worktreepb.LeaveRequest]),
+		registerWorktreeUnary(bindings, transition, "Delete", func() *worktreepb.DeleteRequest { return &worktreepb.DeleteRequest{} },
+			worktreeSessionScope[*worktreepb.DeleteRequest], apicontract.WorktreeService.DeleteWorktree, worktreeDeleteFailure),
 	)
 }
 
-func registerWorktreeSetupGatewayBinaryBinding(
-	bindings map[string]gatewayBinarySubscriptionBinding,
-) error {
+func registerWorktreeSetupGatewayBinaryBinding(bindings map[string]gatewayBinaryBinding) error {
 	service := worktreepb.File_kent_api_worktree_worktree_proto.Services().ByName("SetupService")
-	return registerGatewayBinarySubscription(
-		bindings,
-		service,
-		"Subscribe",
-		gatewayBinaryCoreActiveOrdinary,
-		func() *worktreepb.SetupSubscribeRequest { return &worktreepb.SetupSubscribeRequest{} },
-		nil,
-		func(
+	if service == nil {
+		return errors.New("generated SetupService descriptor is required")
+	}
+	method := service.Methods().ByName("Subscribe")
+	associated, err := protoapi.ResolveSubscriptionOperations(method)
+	if err != nil {
+		return err
+	}
+	start, err := protoapi.SuccessResult(method, &emptypb.Empty{})
+	if err != nil {
+		return err
+	}
+	bindings[associated.Subscribe.Name] = gatewayBinaryBinding{
+		operation:  associated.Subscribe,
+		associated: &associated,
+		policy:     gatewayBinaryCoreActiveOrdinary,
+		request:    func() proto.Message { return &worktreepb.SetupSubscribeRequest{} },
+		subscribe: func(
 			g *Gateway,
 			ctx context.Context,
 			_ *connectionState,
-			request *worktreepb.SetupSubscribeRequest,
-		) (apicontract.WorktreeSetupSubscription, error) {
+			message proto.Message,
+		) (gatewayBinarySubscriber, error) {
+			request, ok := message.(*worktreepb.SetupSubscribeRequest)
+			if !ok {
+				return nil, errors.New("worktree setup request type is invalid")
+			}
 			client := g.deps.WorktreeClient()
 			if client == nil {
 				return nil, errors.New("worktree client is required")
 			}
-			return client.SubscribeWorktreeSetup(ctx, request)
+			subscription, err := client.SubscribeWorktreeSetup(ctx, request)
+			return worktreeSetupGatewaySubscriber{WorktreeSetupSubscription: subscription}, err
 		},
-		func(
-			_ *Gateway,
-			_ *connectionState,
-			_ *worktreepb.SetupSubscribeRequest,
-			err error,
-		) proto.Message {
-			return worktreePlatformFailure[*worktreepb.SetupSubscribeRequest](nil, err)
+		failure: func(_ *Gateway, _ *connectionState, _ proto.Message, err error) proto.Message {
+			if details, ok := binaryServerNotReadyDetails(err); ok {
+				return gatewayBinaryFailureResult(method, details)
+			}
+			return gatewayBinaryFailureResult(
+				method,
+				worktreePlatformFailure[*worktreepb.SetupSubscribeRequest](nil, err),
+			)
 		},
-		func() *emptypb.Empty { return &emptypb.Empty{} },
-		func() *worktreepb.SetupEvent { return &worktreepb.SetupEvent{} },
-		func() *worktreepb.SetupCompletion { return &worktreepb.SetupCompletion{} },
-		worktreeSetupCompletion,
-	)
+		start:    start,
+		complete: func(err error) proto.Message { return worktreeSetupCompletion(err) },
+	}
+	return nil
+}
+
+type worktreeSetupGatewaySubscriber struct {
+	apicontract.WorktreeSetupSubscription
+}
+
+func (s worktreeSetupGatewaySubscriber) Next(ctx context.Context) (proto.Message, error) {
+	return s.WorktreeSetupSubscription.Next(ctx)
 }
 
 func registerWorktreeUnary[

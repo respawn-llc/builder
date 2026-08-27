@@ -8,6 +8,7 @@ import (
 	"core/cli/app/internal/worktreeui"
 	"core/shared/clientui"
 	"core/shared/invariant"
+	"core/shared/protoapi"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/worktreecontract"
 
@@ -325,7 +326,7 @@ func classifyWorktreeCreateError(err error, policy invariant.Policy) *worktreeCr
 	if err == nil {
 		return nil
 	}
-	if contractErr := validateWorktreeCreateErrorBoundary(err, "cli.worktree.create", policy); contractErr != nil {
+	if contractErr := protoapi.ValidateWorktreeCreateErrorBoundary(err, "cli.worktree.create", policy); contractErr != nil {
 		return &worktreeCreateErrorPlacement{
 			owner:      worktreecontract.CreateErrorOwnerForm,
 			diagnostic: runtimeattach.FormatSubmissionError(contractErr),
@@ -356,26 +357,6 @@ func classifyWorktreeCreateError(err error, policy invariant.Policy) *worktreeCr
 		owner:      worktreecontract.CreateErrorOwnerForm,
 		diagnostic: runtimeattach.FormatSubmissionError(err),
 	}
-}
-
-func validateWorktreeCreateErrorBoundary(err error, operation string, policy invariant.Policy) error {
-	contractErr := worktreecontract.ValidateCreateError(err, operation)
-	if contractErr == nil {
-		return nil
-	}
-	diagnostic := invariant.Diagnostic{
-		Scope: invariant.ScopeWorktreeContract,
-		Fields: map[invariant.Field]string{
-			invariant.FieldOperation:       strings.TrimSpace(operation),
-			invariant.FieldValidationCause: contractErr.Error(),
-		},
-	}
-	var typedContract *worktreecontract.CreateContractError
-	if errors.As(contractErr, &typedContract) && typedContract.Owner != nil {
-		diagnostic.Fields[invariant.FieldRawOwner] = string(*typedContract.Owner)
-	}
-	policy.Check(false, diagnostic)
-	return contractErr
 }
 
 func worktreeCreateInvariantPolicy(debugMode bool) invariant.Policy {

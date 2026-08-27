@@ -158,10 +158,9 @@ type gatewayRequestSchedule struct {
 }
 
 type gatewayEstablishedRequest struct {
-	legacy             *protocol.Request
-	binary             *gatewayBinaryRequest
-	binarySubscription *gatewayBinarySubscriptionRequest
-	failure            *sharedpb.TransportFailure
+	legacy  *protocol.Request
+	binary  *gatewayBinaryRequest
+	failure *sharedpb.TransportFailure
 }
 
 var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
@@ -366,7 +365,8 @@ func (g *Gateway) gatewayRequestScheduleForEstablished(request gatewayEstablishe
 	if request.legacy != nil {
 		return g.gatewayRequestScheduleFor(*request.legacy)
 	}
-	if request.binarySubscription != nil {
+	if request.binary != nil &&
+		request.binary.binding.operation.Options.Kind == sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION {
 		return gatewayRequestSchedule{kind: gatewayRequestScheduleSubscription}
 	}
 	if request.binary == nil {
@@ -435,10 +435,6 @@ func (g *Gateway) serveEstablishedRequest(
 	}
 	if request.binary != nil {
 		return g.serveBinaryRequest(conn, ctx, state, *request.binary)
-	}
-	if request.binarySubscription != nil {
-		g.serveBinarySubscriptionRequest(conn, ctx, state, *request.binarySubscription)
-		return false
 	}
 	panic("established Gateway request is required")
 }
@@ -606,11 +602,11 @@ func (g *Gateway) receiveEstablishedRequest(ctx context.Context, conn rpcwire.Co
 		}
 		return gatewayEstablishedRequest{legacy: &request}, nil
 	case rpcwire.FrameBinary:
-		request, subscription, failure := g.resolveBinaryRequest(frame.Payload)
+		request, failure := g.resolveBinaryRequest(frame.Payload)
 		if failure != nil {
 			return gatewayEstablishedRequest{failure: failure}, nil
 		}
-		return gatewayEstablishedRequest{binary: request, binarySubscription: subscription}, nil
+		return gatewayEstablishedRequest{binary: request}, nil
 	default:
 		return gatewayEstablishedRequest{}, fmt.Errorf("unsupported Gateway frame kind %d", frame.Kind)
 	}

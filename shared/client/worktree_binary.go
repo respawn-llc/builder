@@ -132,19 +132,7 @@ func (c *Remote) SubscribeWorktreeSetup(
 	request *worktreepb.SetupSubscribeRequest,
 ) (apicontract.WorktreeSetupSubscription, error) {
 	method := worktreeMethod("SetupService", "Subscribe")
-	return subscribeGeneratedBinary(
-		c,
-		ctx,
-		method,
-		request,
-		&worktreepb.SetupStartResult{},
-		func() *worktreepb.SetupEvent { return &worktreepb.SetupEvent{} },
-		func() *worktreepb.SetupCompletion { return &worktreepb.SetupCompletion{} },
-		func(result *worktreepb.SetupStartResult) error {
-			_, err := decodeGeneratedResult(method, result, worktreeError[*worktreepb.SetupStartError])
-			return err
-		},
-	)
+	return subscribeWorktreeSetupBinary(c, ctx, method, request)
 }
 
 func validateWorktreeAcknowledgement(

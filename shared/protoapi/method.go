@@ -6,6 +6,7 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 type Operation struct {
@@ -32,11 +33,7 @@ func ResolveSubscriptionOperations(descriptor protoreflect.MethodDescriptor) (Su
 	if subscribe.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
 		return SubscriptionOperations{}, fmt.Errorf("%s is not client-to-server", descriptor.FullName())
 	}
-	operations, err := Operations()
-	if err != nil {
-		return SubscriptionOperations{}, err
-	}
-	event, err := resolveAssociatedNotification(subscribe, "event", subscribe.Options.Event, operations)
+	event, err := resolveAssociatedNotification(subscribe, "event", subscribe.Options.Event)
 	if err != nil {
 		return SubscriptionOperations{}, err
 	}
@@ -44,7 +41,6 @@ func ResolveSubscriptionOperations(descriptor protoreflect.MethodDescriptor) (Su
 		subscribe,
 		"completion",
 		subscribe.Options.Completion,
-		operations,
 	)
 	if err != nil {
 		return SubscriptionOperations{}, err
@@ -56,37 +52,29 @@ func resolveAssociatedNotification(
 	subscribe Operation,
 	role string,
 	association *sharedpb.OperationAssociation,
-	operations []Operation,
 ) (Operation, error) {
 	if association == nil {
 		return Operation{}, fmt.Errorf("%s has no %s association", subscribe.Descriptor.FullName(), role)
 	}
-	name, err := ActiveOperationName(association.Package, association.Service, association.Method)
+	fullName := protoreflect.FullName(association.Package + "." + association.Service + "." + association.Method)
+	descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(fullName)
 	if err != nil {
 		return Operation{}, fmt.Errorf("%s %s association: %w", subscribe.Descriptor.FullName(), role, err)
 	}
-	var matches []Operation
-	for _, operation := range operations {
-		if operation.Name == name {
-			matches = append(matches, operation)
-		}
+	method, ok := descriptor.(protoreflect.MethodDescriptor)
+	if !ok {
+		return Operation{}, fmt.Errorf("%s %s association %q is not a method", subscribe.Descriptor.FullName(), role, fullName)
 	}
-	if len(matches) != 1 {
-		return Operation{}, fmt.Errorf(
-			"%s %s association %q resolves %d operations",
-			subscribe.Descriptor.FullName(),
-			role,
-			name,
-			len(matches),
-		)
+	operation, err := OperationFromDescriptor(method)
+	if err != nil {
+		return Operation{}, fmt.Errorf("%s %s association: %w", subscribe.Descriptor.FullName(), role, err)
 	}
-	operation := matches[0]
 	if operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION {
 		return Operation{}, fmt.Errorf(
 			"%s %s association %q is not a notification",
 			subscribe.Descriptor.FullName(),
 			role,
-			name,
+			operation.Name,
 		)
 	}
 	if operation.Options.Direction != sharedpb.Direction_DIRECTION_SERVER_TO_CLIENT {
@@ -94,7 +82,7 @@ func resolveAssociatedNotification(
 			"%s %s association %q is not server-to-client",
 			subscribe.Descriptor.FullName(),
 			role,
-			name,
+			operation.Name,
 		)
 	}
 	return operation, nil

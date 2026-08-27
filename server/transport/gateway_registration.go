@@ -9,14 +9,12 @@ import (
 	"core/shared/protoapi"
 
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
-	"google.golang.org/protobuf/proto"
 )
 
 type gatewayRegistration struct {
-	operations    map[string]protoapi.Operation
-	legacy        map[string]apicontract.Route
-	binary        map[string]gatewayBinaryBinding
-	subscriptions map[string]gatewayBinarySubscriptionBinding
+	operations map[string]protoapi.Operation
+	legacy     map[string]apicontract.Route
+	binary     map[string]gatewayBinaryBinding
 }
 
 func productionGatewayRegistration() (gatewayRegistration, error) {
@@ -25,9 +23,8 @@ func productionGatewayRegistration() (gatewayRegistration, error) {
 		return gatewayRegistration{}, err
 	}
 	registration := gatewayRegistration{
-		operations:    make(map[string]protoapi.Operation, len(operations)),
-		legacy:        make(map[string]apicontract.Route),
-		subscriptions: make(map[string]gatewayBinarySubscriptionBinding),
+		operations: make(map[string]protoapi.Operation, len(operations)),
+		legacy:     make(map[string]apicontract.Route),
 	}
 	legacyRoutes := make(map[string]apicontract.Route)
 	for _, route := range apicontract.Routes() {
@@ -52,9 +49,6 @@ func productionGatewayRegistration() (gatewayRegistration, error) {
 	if err != nil {
 		return gatewayRegistration{}, err
 	}
-	if err := registerWorktreeSetupGatewayBinaryBinding(registration.subscriptions); err != nil {
-		return gatewayRegistration{}, err
-	}
 	return registration, nil
 }
 
@@ -63,28 +57,12 @@ func (r gatewayRegistration) Validate() error {
 }
 
 func (r gatewayRegistration) validateAuthorityPartition(legacyRoutes []apicontract.Route) error {
-	for name, binding := range r.subscriptions {
-		operation, exists := r.operations[name]
-		if !exists {
-			return fmt.Errorf("binary subscription binding %q has no descriptor operation", name)
-		}
-		if err := r.validateBinarySubscriptionBinding(operation, binding); err != nil {
-			return err
-		}
-	}
 	usedLegacyRoutes := make(map[string]string, len(r.legacy))
 	for name, operation := range r.operations {
-		binding, unary := r.binary[name]
-		_, subscription := r.subscriptions[name]
-		notificationOwners, err := r.binarySubscriptionNotificationOwners(name)
-		if err != nil {
-			return err
-		}
-		binaryAuthorities := boolCount(unary) + boolCount(subscription) + notificationOwners
-		if binaryAuthorities > 1 {
-			return fmt.Errorf("operation %q has multiple binary authorities", name)
-		}
-		migrated := binaryAuthorities == 1
+		binding, binary := r.binary[name]
+		notification := operation.Options.Kind == sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION &&
+			operation.LegacyWireName == nil
+		migrated := binary || notification
 		route, legacy := r.legacy[name]
 		if migrated == legacy {
 			if migrated {
@@ -96,7 +74,7 @@ func (r gatewayRegistration) validateAuthorityPartition(legacyRoutes []apicontra
 			if operation.LegacyWireName != nil {
 				return fmt.Errorf("migrated operation %q retains legacy provenance %q", name, *operation.LegacyWireName)
 			}
-			if unary {
+			if binary {
 				if err := validateBinaryBinding(operation, binding); err != nil {
 					return err
 				}
@@ -150,10 +128,6 @@ func (r gatewayRegistration) AllowedPreAuthMethods() []string {
 			methods = append(methods, name)
 			continue
 		}
-		if _, migrated := r.subscriptions[name]; migrated {
-			methods = append(methods, name)
-			continue
-		}
 		if route, legacy := r.legacy[name]; legacy {
 			methods = append(methods, route.Method)
 		}
@@ -176,167 +150,10 @@ func (r gatewayRegistration) BinaryBinding(operation string) (gatewayBinaryBindi
 	return binding, exists
 }
 
-func (r gatewayRegistration) BinarySubscriptionBinding(operation string) (gatewayBinarySubscriptionBinding, bool) {
-	binding, exists := r.subscriptions[operation]
-	return binding, exists
-}
-
-func (r gatewayRegistration) validateBinarySubscriptionBinding(
-	operation protoapi.Operation,
-	binding gatewayBinarySubscriptionBinding,
-) error {
-	if binding.operation.Name != operation.Name ||
-		binding.operation.Descriptor.FullName() != operation.Descriptor.FullName() {
-		return fmt.Errorf("binary subscription binding %q has a mismatched method descriptor", operation.Name)
-	}
-	if binding.request == nil {
-		return fmt.Errorf("binary subscription binding %q has no request constructor", operation.Name)
-	}
-	if binding.start == nil {
-		return fmt.Errorf("binary subscription binding %q has no start-result mapper", operation.Name)
-	}
-	if binding.subscribe == nil {
-		return fmt.Errorf("binary subscription binding %q has no subscriber", operation.Name)
-	}
-	if binding.failure == nil {
-		return fmt.Errorf("binary subscription binding %q has no failure mapper", operation.Name)
-	}
-	if binding.event == nil {
-		return fmt.Errorf("binary subscription binding %q has no event encoder", operation.Name)
-	}
-	if binding.completion == nil || binding.complete == nil {
-		return fmt.Errorf("binary subscription binding %q has no completion encoder", operation.Name)
-	}
-	switch binding.policy {
-	case gatewayBinaryPreCoreOrdinary,
-		gatewayBinaryPreCoreExclusive,
-		gatewayBinaryCoreActiveOrdinary,
-		gatewayBinaryCoreActiveExclusive:
-	default:
-		return fmt.Errorf("binary subscription binding %q has no execution policy", operation.Name)
-	}
-	if operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION {
-		return fmt.Errorf(
-			"binary subscription binding %q has unsupported operation kind %s",
-			operation.Name,
-			operation.Options.Kind,
-		)
-	}
-	if operation.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
-		return fmt.Errorf("binary subscription binding %q is not client-to-server", operation.Name)
-	}
-	request := binding.request()
-	if request == nil || request.ProtoReflect().Descriptor().FullName() != operation.Descriptor.Input().FullName() {
-		return fmt.Errorf("binary subscription binding %q has a mismatched request type", operation.Name)
-	}
-	start, err := binding.start()
-	if err != nil {
-		return fmt.Errorf("binary subscription binding %q start result: %w", operation.Name, err)
-	}
-	if start == nil || start.ProtoReflect().Descriptor().FullName() != operation.Descriptor.Output().FullName() {
-		return fmt.Errorf("binary subscription binding %q has a mismatched start-result type", operation.Name)
-	}
-	associations, err := protoapi.ResolveSubscriptionOperations(operation.Descriptor)
-	if err != nil {
-		return err
-	}
-	if err := validateBinaryNotificationAssociation(operation.Name, "event", associations.Event, binding.event()); err != nil {
-		return err
-	}
-	if err := validateBinaryNotificationAssociation(
-		operation.Name,
-		"completion",
-		associations.Completion,
-		binding.completion(),
-	); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateBinaryNotificationAssociation(
-	owner string,
-	role string,
-	operation protoapi.Operation,
-	payload proto.Message,
-) error {
-	if operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION {
-		return fmt.Errorf(
-			"binary subscription binding %q %s association %q has operation kind %s",
-			owner,
-			role,
-			operation.Name,
-			operation.Options.Kind,
-		)
-	}
-	if operation.Options.Direction != sharedpb.Direction_DIRECTION_SERVER_TO_CLIENT {
-		return fmt.Errorf(
-			"binary subscription binding %q %s association %q is not server-to-client",
-			owner,
-			role,
-			operation.Name,
-		)
-	}
-	if payload == nil || payload.ProtoReflect().Descriptor().FullName() != operation.Descriptor.Input().FullName() {
-		return fmt.Errorf(
-			"binary subscription binding %q %s association %q has a mismatched payload type",
-			owner,
-			role,
-			operation.Name,
-		)
-	}
-	return nil
-}
-
-func (r gatewayRegistration) binarySubscriptionNotificationOwners(operation string) (int, error) {
-	owners := 0
-	for _, binding := range r.subscriptions {
-		associations, err := protoapi.ResolveSubscriptionOperations(binding.operation.Descriptor)
-		if err != nil {
-			return 0, err
-		}
-		if associations.Event.Name == operation {
-			owners++
-		}
-		if associations.Completion.Name == operation {
-			owners++
-		}
-	}
-	return owners, nil
-}
-
-func (r gatewayRegistration) BinarySubscriptionNotification(
-	operation string,
-) (protoapi.Operation, bool) {
-	for _, binding := range r.subscriptions {
-		associations, err := protoapi.ResolveSubscriptionOperations(binding.operation.Descriptor)
-		if err != nil {
-			continue
-		}
-		switch operation {
-		case associations.Event.Name:
-			return associations.Event, true
-		case associations.Completion.Name:
-			return associations.Completion, true
-		}
-	}
-	return protoapi.Operation{}, false
-}
-
-func boolCount(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
-}
-
 func validateBinaryBinding(operation protoapi.Operation, binding gatewayBinaryBinding) error {
 	if binding.operation.Name != operation.Name ||
 		binding.operation.Descriptor.FullName() != operation.Descriptor.FullName() {
 		return fmt.Errorf("binary binding %q has a mismatched method descriptor", operation.Name)
-	}
-	if binding.invoke == nil {
-		return fmt.Errorf("binary binding %q has no handler", operation.Name)
 	}
 	if binding.request == nil {
 		return fmt.Errorf("binary binding %q has no request constructor", operation.Name)
@@ -356,7 +173,17 @@ func validateBinaryBinding(operation protoapi.Operation, binding gatewayBinaryBi
 	if binding.failure == nil {
 		return fmt.Errorf("binary binding %q has no failure mapper", operation.Name)
 	}
-	if operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_UNARY {
+	switch operation.Options.Kind {
+	case sharedpb.OperationKind_OPERATION_KIND_UNARY:
+		if binding.invoke == nil || binding.subscribe != nil || binding.associated != nil {
+			return fmt.Errorf("binary unary binding %q has invalid handlers", operation.Name)
+		}
+	case sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION:
+		if binding.invoke != nil || binding.subscribe == nil || binding.associated == nil ||
+			binding.start == nil || binding.complete == nil {
+			return fmt.Errorf("binary subscription binding %q has invalid handlers", operation.Name)
+		}
+	default:
 		return fmt.Errorf("binary binding %q has unsupported operation kind %s", operation.Name, operation.Options.Kind)
 	}
 	return nil

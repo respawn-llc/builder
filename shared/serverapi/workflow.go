@@ -15,6 +15,7 @@ import (
 	"core/shared/workflowcontract"
 	"core/shared/workflowkey"
 	"core/shared/worktreecontract"
+	"github.com/google/uuid"
 )
 
 const (
@@ -914,49 +915,19 @@ type WorkflowTaskUpdateResponse struct {
 	Task WorkflowTaskSummary `json:"task"`
 }
 
-// WorkflowSetupOperationID is the JSON representation owned by the still-JSON
-// Workflow Task API.
-type WorkflowSetupOperationID worktreecontract.SetupOperationID
-
-func NewWorkflowSetupOperationID() WorkflowSetupOperationID {
-	return WorkflowSetupOperationID(worktreecontract.NewSetupOperationID())
+type WorkflowSetupOperationID struct {
+	uuid.UUID
 }
 
-func ParseWorkflowSetupOperationID(value string) (WorkflowSetupOperationID, error) {
-	parsed, err := worktreecontract.ParseSetupOperationID(value)
-	if err != nil {
-		return WorkflowSetupOperationID{}, err
-	}
-	return WorkflowSetupOperationID(parsed), nil
+func NewWorkflowSetupOperationID() WorkflowSetupOperationID {
+	return WorkflowSetupOperationID{UUID: uuid.New()}
 }
 
 func (id WorkflowSetupOperationID) Domain() worktreecontract.SetupOperationID {
-	return worktreecontract.SetupOperationID(id)
+	return worktreecontract.SetupOperationID(id.UUID)
 }
 
-func (id WorkflowSetupOperationID) Validate() error {
-	return id.Domain().Validate()
-}
-
-func (id WorkflowSetupOperationID) MarshalJSON() ([]byte, error) {
-	if err := id.Validate(); err != nil {
-		return nil, err
-	}
-	return json.Marshal(id.Domain().String())
-}
-
-func (id *WorkflowSetupOperationID) UnmarshalJSON(data []byte) error {
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	parsed, err := ParseWorkflowSetupOperationID(value)
-	if err != nil {
-		return err
-	}
-	*id = parsed
-	return nil
-}
+func (id WorkflowSetupOperationID) Validate() error { return id.Domain().Validate() }
 
 type WorkflowTaskStartRequest struct {
 	TaskID                     string                            `json:"task_id"`
@@ -1094,7 +1065,6 @@ type WorkflowSetupRetainedError struct {
 	ScriptPath               string                             `json:"script_path"`
 	Diagnostic               string                             `json:"diagnostic"`
 	RetainedPreviousWorktree *WorkflowRetainedPreviousWorktree  `json:"retained_previous_worktree"`
-	cause                    error
 }
 
 func (e *WorkflowSetupRetainedError) Error() string {
@@ -1102,13 +1072,6 @@ func (e *WorkflowSetupRetainedError) Error() string {
 		return worktreecontract.ErrWorktreeSetupRetained.Error()
 	}
 	return fmt.Sprintf("%s: %s", worktreecontract.ErrWorktreeSetupRetained, strings.TrimSpace(e.Diagnostic))
-}
-
-func (e *WorkflowSetupRetainedError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.cause
 }
 
 func (e *WorkflowSetupRetainedError) Is(target error) bool {
@@ -3033,11 +2996,11 @@ func (retained *workflowRetainedWorktreeSchema) domain() *worktreecontract.Retai
 }
 
 func (detail workflowSetupRecoveryDetailSchema) domain() worktreecontract.SetupRecoveryDetail[
-	WorkflowSetupOperationID,
+	worktreecontract.SetupOperationID,
 	WorkflowExecutionTargetSelection,
 ] {
-	return worktreecontract.SetupRecoveryDetail[WorkflowSetupOperationID, WorkflowExecutionTargetSelection]{
-		SetupOperationID:         detail.SetupOperationID,
+	return worktreecontract.SetupRecoveryDetail[worktreecontract.SetupOperationID, WorkflowExecutionTargetSelection]{
+		SetupOperationID:         detail.SetupOperationID.Domain(),
 		Cause:                    detail.Cause,
 		Diagnostic:               detail.Diagnostic,
 		ScriptPath:               detail.ScriptPath,

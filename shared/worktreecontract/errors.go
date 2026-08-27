@@ -104,9 +104,7 @@ func (e *SetupRetainedError) Unwrap() error {
 	return e.cause
 }
 
-func (e *SetupRetainedError) Is(target error) bool {
-	return target == ErrWorktreeSetupRetained
-}
+func (e *SetupRetainedError) Is(target error) bool { return target == ErrWorktreeSetupRetained }
 
 type DeletePreconditionError struct {
 	Details *worktreepb.DeletePreconditionDetails
@@ -163,7 +161,9 @@ type CreateError struct {
 func NewCreateError(owner CreateErrorOwner, diagnostic string, cause error) error {
 	result := &CreateError{Owner: owner, Diagnostic: diagnostic, cause: cause}
 	if err := result.Validate(); err != nil {
-		return NewCreateContractError("worktree.create.constructor", CreateErrorOwnerPointer(owner), diagnostic, err)
+		return &CreateContractError{
+			Operation: "worktree.create.constructor", Owner: &owner, Cause: err,
+		}
 	}
 	return result
 }
@@ -198,23 +198,9 @@ func (e *CreateError) Validate() error {
 }
 
 type CreateContractError struct {
-	Operation  string
-	Owner      *CreateErrorOwner
-	Diagnostic string
-	Cause      error
-}
-
-func CreateErrorOwnerPointer(owner CreateErrorOwner) *CreateErrorOwner {
-	return &owner
-}
-
-func NewCreateContractError(operation string, owner *CreateErrorOwner, diagnostic string, cause error) *CreateContractError {
-	return &CreateContractError{
-		Operation:  strings.TrimSpace(operation),
-		Owner:      owner,
-		Diagnostic: diagnostic,
-		Cause:      cause,
-	}
+	Operation string
+	Owner     *CreateErrorOwner
+	Cause     error
 }
 
 func (e *CreateContractError) Error() string {
@@ -238,9 +224,7 @@ func (e *CreateContractError) Unwrap() error {
 	return e.Cause
 }
 
-func (e *CreateContractError) Is(target error) bool {
-	return target == ErrWorktreeCreateContract
-}
+func (e *CreateContractError) Is(target error) bool { return target == ErrWorktreeCreateContract }
 
 func ValidateCreateError(err error, operation string) error {
 	var typed *CreateError
@@ -249,12 +233,12 @@ func ValidateCreateError(err error, operation string) error {
 	}
 	if validationErr := typed.Validate(); validationErr != nil {
 		var owner *CreateErrorOwner
-		diagnostic := validationErr.Error()
 		if typed != nil {
-			owner = CreateErrorOwnerPointer(typed.Owner)
-			diagnostic = typed.Diagnostic
+			owner = &typed.Owner
 		}
-		return NewCreateContractError(operation, owner, diagnostic, validationErr)
+		return &CreateContractError{
+			Operation: strings.TrimSpace(operation), Owner: owner, Cause: validationErr,
+		}
 	}
 	return nil
 }
