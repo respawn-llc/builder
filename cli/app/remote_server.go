@@ -114,10 +114,23 @@ func (s *remoteAppServer) ReattachSession(ctx context.Context, sessionID string)
 	if s == nil || s.remote == nil {
 		return errors.New("remote server is required")
 	}
-	binding, err := s.remote.ReattachSession(ctx, sessionID)
+	bound, err := remoteattach.BindSession(
+		ctx,
+		s.remote,
+		s.cfg,
+		sessionID,
+		config.ExplicitPersistenceRootID(s.cfg),
+	)
 	if err != nil {
 		return err
 	}
+	binding, present := bound.ProjectBinding()
+	if !present {
+		closeErr := bound.Close()
+		s.remote = nil
+		return errors.Join(errors.New("remote Session attachment binding is required"), closeErr)
+	}
+	s.remote = bound
 	s.retarget = sessionWorkspaceRetargetContextFromBinding(binding, s.presentation.Theme)
 	return nil
 }

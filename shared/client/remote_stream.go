@@ -234,8 +234,7 @@ func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID stri
 	route := mustRemoteRoute(method)
 	var additionalAttachmentIntent *remoteAttachmentIntent
 	if attachSession {
-		attachmentIntent, _ := c.attachmentState()
-		attachedSessionID, attachedToSession := attachmentIntent.sessionID()
+		attachedSessionID, attachedToSession := c.attachIntent.sessionID()
 		if attachedToSession && attachedSessionID != strings.TrimSpace(sessionID) {
 			return nil, rpccontract.Route{}, fmt.Errorf(
 				"remote is attached to session %q, cannot subscribe to session %q",

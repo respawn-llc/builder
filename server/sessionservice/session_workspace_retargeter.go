@@ -115,6 +115,8 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 		defer cancelRun()
 		offered := false
 		scheduled := false
+		failurePersisted := false
+		var failureCause error
 		runErr := s.authority.RunSessionMaintenanceAtStepBoundary(
 			runCtx,
 			plan.SessionID,
@@ -126,6 +128,18 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 			},
 			func(boundaryCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
 				_, applyErr := s.applyWorkspaceRetarget(boundaryCtx, req, store, activeRuntime, true)
+				if applyErr != nil {
+					failureCause = applyErr
+					reminder := rebindFailureReminder(plan, sourceTarget.EffectiveWorkdir, applyErr)
+					receipt, steerErr := activeRuntime.SteerSessionRebindFailure(reminder)
+					failurePersisted = receipt.Committed
+					if failurePersisted {
+						return errors.Join(applyErr, steerErr)
+					}
+					persistErr := store.SetSessionRebindReminder(&reminder)
+					failurePersisted = persistErr == nil
+					return errors.Join(applyErr, steerErr, persistErr)
+				}
 				return applyErr
 			},
 		)
@@ -135,7 +149,14 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 		if scheduled {
 			if runErr != nil {
 				persistCtx := context.WithoutCancel(runCtx)
-				if persistErr := s.persistRebindFailure(persistCtx, plan, sourceTarget.EffectiveWorkdir, runErr); persistErr != nil {
+				if failureCause == nil {
+					failureCause = runErr
+				}
+				if !failurePersisted {
+					persistErr := s.persistRebindFailure(persistCtx, plan, sourceTarget.EffectiveWorkdir, failureCause)
+					if persistErr == nil {
+						return
+					}
 					slog.ErrorContext(
 						persistCtx,
 						"persist scheduled Session rebind failure notice",
@@ -330,14 +351,6 @@ func (s *SessionWorkspaceRetargeter) persistRebindFailure(
 	workingDirectory string,
 	cause error,
 ) error {
-	diagnostic := cause.Error()
-	reminder := session.SessionRebindReminder{
-		Kind:              session.SessionRebindReminderFailed,
-		SourceProject:     plan.SourceProject,
-		TargetProject:     plan.TargetProject,
-		WorkingDirectory:  &workingDirectory,
-		FailureDiagnostic: &diagnostic,
-	}
 	sessionID, err := runtimeids.ParseSessionID(plan.SessionID)
 	if err != nil {
 		return err
@@ -347,8 +360,36 @@ func (s *SessionWorkspaceRetargeter) persistRebindFailure(
 		return err
 	}
 	return s.authority.WithSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error {
-		return store.SetSessionRebindReminder(&reminder)
+		return persistRebindFailure(store, plan, workingDirectory, cause)
 	})
+}
+
+func persistRebindFailure(
+	store *session.Store,
+	plan metadata.SessionWorkspaceRetargetPlan,
+	workingDirectory string,
+	cause error,
+) error {
+	if store == nil {
+		return errors.New("session store is required")
+	}
+	reminder := rebindFailureReminder(plan, workingDirectory, cause)
+	return store.SetSessionRebindReminder(&reminder)
+}
+
+func rebindFailureReminder(
+	plan metadata.SessionWorkspaceRetargetPlan,
+	workingDirectory string,
+	cause error,
+) session.SessionRebindReminder {
+	diagnostic := cause.Error()
+	return session.SessionRebindReminder{
+		Kind:              session.SessionRebindReminderFailed,
+		SourceProject:     plan.SourceProject,
+		TargetProject:     plan.TargetProject,
+		WorkingDirectory:  &workingDirectory,
+		FailureDiagnostic: &diagnostic,
+	}
 }
 
 func (s *SessionWorkspaceRetargeter) ownedBackgroundProcessActive(sessionID string) (bool, error) {

@@ -104,13 +104,9 @@ message SessionRetargetWorkspaceRequest {
 }
 
 message SessionRetargetWorkspaceSuccess {
-  oneof result {
-    option (buf.validate.oneof).required = true;
-
-    kent.api.project.ProjectBinding binding = 1;
-    kent.api.worktree.ScheduledAcknowledgement scheduled = 3;
-  }
+  kent.api.project.ProjectBinding binding = 1;
   bool workspace_binding_created = 2;
+  kent.api.worktree.ScheduledAcknowledgement scheduled = 3;
 }
 
 message ProjectReference {

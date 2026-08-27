@@ -20,7 +20,15 @@ import (
 type ActiveRuntimeMaintenance struct {
 	PreviousFilesystemContext tools.FilesystemContext
 	Replace                   func(tools.FilesystemContext) error
+	steerSessionRebindFailure func(session.SessionRebindReminder) (session.CommitReceipt, error)
 	retire                    bool
+}
+
+func (m *ActiveRuntimeMaintenance) SteerSessionRebindFailure(reminder session.SessionRebindReminder) (session.CommitReceipt, error) {
+	if m == nil || m.steerSessionRebindFailure == nil {
+		return session.CommitReceipt{}, errors.New("active runtime Session rebind failure steering is unavailable")
+	}
+	return m.steerSessionRebindFailure(reminder)
 }
 
 func (m *ActiveRuntimeMaintenance) RetireRuntime() {
@@ -231,6 +239,7 @@ func runActiveRuntimeMaintenance(
 			currentContext = next.Clone()
 			return nil
 		},
+		steerSessionRebindFailure: engine.SteerSessionRebindFailure,
 	}
 	callbackErr := fn(maintenance)
 	active = false

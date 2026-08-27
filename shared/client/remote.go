@@ -14,7 +14,6 @@ import (
 	"core/shared/config"
 	"core/shared/protoapi"
 	authpb "core/shared/protoapi/gen/kent/api/auth"
-	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
@@ -288,57 +287,10 @@ func (c *Remote) ProjectBinding() (ProjectAttachment, bool) {
 }
 
 func (c *Remote) projectBinding() (ProjectAttachment, bool) {
-	_, attachment := c.attachmentState()
-	return remoteAttachmentProjectBinding(attachment)
-}
-
-func (c *Remote) attachmentState() (*remoteAttachmentIntent, *remoteAttachment) {
 	if c == nil {
-		return nil, nil
+		return ProjectAttachment{}, false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.attachIntent, c.attachment
-}
-
-func (c *Remote) ReattachSession(ctx context.Context, sessionID string) (ProjectAttachment, error) {
-	intent, err := newRemoteSessionAttachmentIntent(sessionID)
-	if err != nil {
-		return ProjectAttachment{}, err
-	}
-	request, _ := intent.sessionRequest()
-	method, err := connectionMethod("AttachSession")
-	if err != nil {
-		return ProjectAttachment{}, err
-	}
-	result := &connectionpb.AttachSessionResult{}
-	if err := c.callBinaryControl(
-		ctx,
-		method,
-		&connectionpb.AttachSessionRequest{SessionId: request.sessionID},
-		result,
-	); err != nil {
-		return ProjectAttachment{}, err
-	}
-	if failure := result.GetError(); failure != nil {
-		return ProjectAttachment{}, fmt.Errorf("attach session: %w", attachSessionGeneratedError(failure))
-	}
-	response, err := attachmentResponseFromGenerated(result.GetSuccess())
-	if err != nil {
-		return ProjectAttachment{}, err
-	}
-	if err := intent.validateResponse(response); err != nil {
-		return ProjectAttachment{}, err
-	}
-	binding, present := remoteAttachmentProjectBinding(&response)
-	if !present {
-		return ProjectAttachment{}, errors.New("session reattach omitted Project binding")
-	}
-	c.mu.Lock()
-	c.attachIntent = intent
-	c.attachment = &response
-	c.mu.Unlock()
-	return binding, nil
+	return remoteAttachmentProjectBinding(c.attachment)
 }
 
 func callUnscopedRPC[Req any, Resp any](c *Remote, ctx context.Context, method string, req Req) (Resp, error) {
@@ -1035,7 +987,7 @@ func (c *Remote) ensureControl(ctx context.Context) (*remoteControlConn, error) 
 		_ = c.control.Close()
 		c.control = nil
 	}
-	conn, cleanup, state, err := c.openSetupRPCConn(ctx, nil, c.attachIntent, c.attachment)
+	conn, cleanup, state, err := c.openSetupRPCConn(ctx, nil)
 	if err != nil {
 		return nil, err
 	}

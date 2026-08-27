@@ -1082,53 +1082,6 @@ func remoteTestRegisteredWorktreeEntry(t *testing.T, sessionScoped bool) servera
 	return entry
 }
 
-func TestRemoteReattachSessionUpdatesBindingOnSameControlConnection(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		acceptRemoteHandshake(t, ws)
-		for index, expected := range []struct {
-			sessionID     string
-			projectID     string
-			workspaceID   string
-			workspaceRoot string
-		}{
-			{sessionID: "session-a", projectID: "project-a", workspaceID: "workspace-a", workspaceRoot: "/workspace-a"},
-			{sessionID: "session-b", projectID: "project-b", workspaceID: "workspace-b", workspaceRoot: "/workspace-b"},
-		} {
-			request := acceptRemoteSessionAttachmentOrClosed(
-				t,
-				ws,
-				expected.projectID,
-				expected.workspaceID,
-				expected.workspaceRoot,
-			)
-			if request == nil {
-				t.Fatalf("attach Session %d closed unexpectedly", index)
-			}
-			if request.SessionId != expected.sessionID {
-				t.Fatalf("attach Session %d = %q, want %q", index, request.SessionId, expected.sessionID)
-			}
-		}
-	})
-
-	remote, err := DialRemoteURLForSession(context.Background(), "ws"+server.URL[len("http"):], "session-a")
-	if err != nil {
-		t.Fatalf("DialRemoteURLForSession: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	binding, err := remote.ReattachSession(context.Background(), "session-b")
-	if err != nil {
-		t.Fatalf("ReattachSession: %v", err)
-	}
-	current, present := remote.ProjectBinding()
-	if !present ||
-		binding.ProjectID != "project-b" ||
-		current.ProjectID != "project-b" ||
-		current.WorkspaceRoot != "/workspace-b" {
-		t.Fatalf("binding after ReattachSession = returned %+v current %+v/%t", binding, current, present)
-	}
-}
-
 func TestProtocolErrorMapsSentinelCodes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
