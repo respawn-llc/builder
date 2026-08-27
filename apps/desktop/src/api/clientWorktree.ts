@@ -6,7 +6,7 @@ import type { JsonValue } from "./json";
 import { rpcErrorCodes } from "./rpcErrorCodes";
 import * as worktree from "./schemas/worktree";
 import type { RpcCallOptions, RpcTransport } from "./transport";
-import { decodeWorktreeSetupRetainedError, type RetainedPreviousWorktree } from "./worktreeSetup";
+import { decodeWorktreeSetupRetainedError, WorktreeError } from "./worktreeFailure";
 import { parseWorktreeOperationID } from "./worktreeOperationID";
 
 export const getWorktreeStatus = async (transport: RpcTransport, sessionID: string) =>
@@ -195,26 +195,6 @@ const errorSchemas = {
     cleanliness: value.dirty_state,
   })),
 };
-type ErrorSchema = (typeof errorSchemas)[keyof typeof errorSchemas];
-export type WorktreeErrorDetail =
-  | Readonly<z.output<ErrorSchema>>
-  | Readonly<{ kind: "blocked" }>
-  | Readonly<{
-      kind: "setup_retained";
-      worktree: worktree.RegisteredWorktreeTopology;
-      scriptPath: string;
-      diagnostic: string;
-      retainedPreviousWorktree: RetainedPreviousWorktree | null;
-    }>;
-export class WorktreeError extends RpcError {
-  constructor(
-    rpcError: RpcError,
-    readonly detail: WorktreeErrorDetail,
-  ) {
-    super(rpcError);
-    this.name = "WorktreeError";
-  }
-}
 function hasWorktreeErrorSchema(code: number): code is keyof typeof errorSchemas {
   return Object.hasOwn(errorSchemas, code);
 }

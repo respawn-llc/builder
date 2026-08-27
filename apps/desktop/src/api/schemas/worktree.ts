@@ -166,6 +166,7 @@ export const worktreeTopologySchema = z
   });
 export type WorktreeTopology = Output<typeof worktreeTopologySchema>;
 export type RegisteredWorktreeTopology = Extract<WorktreeTopology, { variant: "registered" }>;
+export type RetainedPreviousWorktree = Readonly<{ worktree: RegisteredWorktreeTopology }>;
 export const registeredWorktreeTopologySchema = worktreeTopologySchema.refine(
   (value): value is RegisteredWorktreeTopology => value.variant === "registered",
   { message: "Expected a registered Worktree topology." },
@@ -309,6 +310,26 @@ export function requireWorktreeAuthority(value: unknown, authority: AuthorityKin
     throw new TypeError(`Worktree ${authority} requires decoded authority.`);
   }
   return value;
+}
+
+export function projectWorktreeSwitch(
+  value: { kind: "enter"; selector: string } | { kind: "leave"; selector: null },
+): WorktreeSwitch {
+  return decoded("switch", value);
+}
+
+export function projectWorktreeDeletePreview(
+  value: Omit<WorktreeDeletePreview, never>,
+): WorktreeDeletePreview {
+  return decoded("delete", value);
+}
+
+export function projectWorktreeCreateTargetResolution(
+  value:
+    | { kind: "new_branch"; input: string; resolvedRef: null }
+    | { kind: "existing_branch" | "detached_ref"; input: string; resolvedRef: string },
+): WorktreeCreateTargetResolution {
+  return decoded("create", value);
 }
 export type WorktreeCreateInput = Readonly<{
   sessionID: string;

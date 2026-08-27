@@ -9,7 +9,12 @@ import {
 } from "./descriptorRpc";
 import { TransportError } from "./errors";
 import type { JsonValue } from "./json";
-import { unaryConnectionPolicy, type DescMethod, type MessageShape } from "@app/server-api-contract";
+import {
+  unaryConnectionPolicy,
+  type DescMessage,
+  type DescMethod,
+  type MessageShape,
+} from "@app/server-api-contract";
 import { z } from "zod";
 import {
   delay,
@@ -19,6 +24,7 @@ import {
   parseFrame,
   responseSchema,
   sendSocketDescriptorRequest,
+  runSocketDescriptorSubscription,
   sendSocketRequest,
   setupSocket,
   socketRequestError,
@@ -28,6 +34,8 @@ import {
 import type {
   RpcCallOptions,
   DescriptorRpcTransport,
+  DescriptorSubscriptionContract,
+  DescriptorSubscriptionHandler,
   RpcDedicatedCallOptions,
   RpcEventHandler,
   RpcSubscription,
@@ -154,6 +162,26 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     void this.#openSubscription(method, params, handler, controller.signal);
     return {
       close() {
+        controller.abort();
+      },
+    };
+  }
+
+  subscribeDescriptor<
+    Method extends DescMethod,
+    EventDescriptor extends DescMessage,
+    CompletionDescriptor extends DescMessage,
+    Event,
+  >(
+    method: Method,
+    request: MessageShape<Method["input"]>,
+    contract: DescriptorSubscriptionContract<Method, EventDescriptor, CompletionDescriptor, Event>,
+    handler: DescriptorSubscriptionHandler<Event>,
+  ): RpcSubscription {
+    const controller = new AbortController();
+    void this.#openDescriptorSubscription({ method, request, contract, handler, signal: controller.signal });
+    return {
+      close: () => {
         controller.abort();
       },
     };
@@ -403,6 +431,52 @@ class JsonRpcWebSocketTransport implements RpcTransport {
         if (abortSignalWasRequested(signal)) {
           return;
         }
+        handler.onError(error instanceof Error ? error : new TransportError("Subscription failed."));
+        await delay(Math.min(subscriptionReconnectBaseMs * 2 ** attempt, subscriptionReconnectMaxMs), signal);
+        attempt += 1;
+      }
+    }
+  }
+
+  async #openDescriptorSubscription<
+    Method extends DescMethod,
+    EventDescriptor extends DescMessage,
+    CompletionDescriptor extends DescMessage,
+    Event,
+  >(
+    input: Readonly<{
+      method: Method;
+      request: MessageShape<Method["input"]>;
+      contract: DescriptorSubscriptionContract<Method, EventDescriptor, CompletionDescriptor, Event>;
+      handler: DescriptorSubscriptionHandler<Event>;
+      signal: AbortSignal;
+    }>,
+  ): Promise<void> {
+    const { method, request, contract, handler, signal } = input;
+    let attempt = 0;
+    while (!signal.aborted) {
+      try {
+        const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs);
+        try {
+          if (abortSignalWasRequested(signal)) return;
+          signal.addEventListener(
+            "abort",
+            () => {
+              socket.close();
+            },
+            { once: true },
+          );
+          await setupSocket(socket, {
+            timeoutMilliseconds: rpcRequestTimeoutMs,
+            expectedRootId: this.#expectedRootId,
+          });
+          await runSocketDescriptorSubscription({ socket, method, request, contract, handler, signal });
+          return;
+        } finally {
+          socket.close();
+        }
+      } catch (error) {
+        if (abortSignalWasRequested(signal)) return;
         handler.onError(error instanceof Error ? error : new TransportError("Subscription failed."));
         await delay(Math.min(subscriptionReconnectBaseMs * 2 ** attempt, subscriptionReconnectMaxMs), signal);
         attempt += 1;

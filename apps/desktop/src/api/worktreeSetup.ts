@@ -1,12 +1,19 @@
 import { z } from "zod";
 
-import { ContractError, RpcError } from "./errors";
-import { rpcErrorCodes } from "./rpcErrorCodes";
+import { ContractError } from "./errors";
 import { parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
-import { registeredWorktreeTopologySchema, type RegisteredWorktreeTopology } from "./schemas/worktree";
+import {
+  registeredWorktreeTopologySchema,
+  type RegisteredWorktreeTopology,
+  type RetainedPreviousWorktree,
+} from "./schemas/worktree";
 import { workflowExecutionTargetSelectionSchema } from "./schemas/workflowExecutionTarget";
 import type { RpcEventHandler, RpcSubscription, RpcTransport } from "./transport";
 import type { WorkflowExecutionTargetSelection } from "./workflowExecutionTarget";
+import { retainedPreviousWorktreeSchema } from "./worktreeFailure";
+
+export { retainedPreviousWorktreeSchema };
+export type { RetainedPreviousWorktree };
 
 const nonBlank = z.string().trim().min(1);
 const nullableNonBlank = nonBlank.nullable();
@@ -18,12 +25,6 @@ const setupOperationIDSchema = z.string().transform((value, context): SetupOpera
     return z.NEVER;
   }
 });
-
-export type RetainedPreviousWorktree = Readonly<{ worktree: RegisteredWorktreeTopology }>;
-
-export const retainedPreviousWorktreeSchema: z.ZodType<RetainedPreviousWorktree> = z
-  .object({ worktree: registeredWorktreeTopologySchema })
-  .strict();
 
 export type TaskSetupRecovery = Readonly<{
   setupOperationID: SetupOperationID;
@@ -189,52 +190,6 @@ const worktreeSetupFailureWireSchema: z.ZodType<WorktreeSetupFailure> = z
     retainedWorktree: value.retained_worktree,
     retainedPreviousWorktree: value.retained_previous_worktree,
   }));
-
-export class WorktreeSetupRetainedError extends RpcError {
-  readonly worktree: RegisteredWorktreeTopology;
-  readonly scriptPath: string;
-  readonly diagnostic: string;
-  readonly retainedPreviousWorktree: RetainedPreviousWorktree | null;
-
-  constructor(
-    rpcError: RpcError,
-    facts: Readonly<{
-      worktree: RegisteredWorktreeTopology;
-      scriptPath: string;
-      diagnostic: string;
-      retainedPreviousWorktree: RetainedPreviousWorktree | null;
-    }>,
-  ) {
-    super(rpcError);
-    this.worktree = facts.worktree;
-    this.scriptPath = facts.scriptPath;
-    this.diagnostic = facts.diagnostic;
-    this.retainedPreviousWorktree = facts.retainedPreviousWorktree;
-  }
-}
-
-const retainedErrorSchema = z
-  .object({
-    type: z.literal("worktree_setup_retained"),
-    worktree: registeredWorktreeTopologySchema,
-    script_path: nonBlank,
-    diagnostic: nonBlank,
-    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
-  })
-  .strict();
-
-export function decodeWorktreeSetupRetainedError(error: unknown): WorktreeSetupRetainedError | null {
-  if (!(error instanceof RpcError) || error.code !== rpcErrorCodes.worktreeSetupRetained) return null;
-  const parsed = retainedErrorSchema.safeParse(error.data);
-  return parsed.success
-    ? new WorktreeSetupRetainedError(error, {
-        worktree: parsed.data.worktree,
-        scriptPath: parsed.data.script_path,
-        diagnostic: parsed.data.diagnostic,
-        retainedPreviousWorktree: parsed.data.retained_previous_worktree,
-      })
-    : null;
-}
 
 export type WorktreeSetupPhase = "started" | "completed" | "not_required" | "failed";
 type SetupEvent<Phase extends WorktreeSetupPhase, Payload> = Readonly<

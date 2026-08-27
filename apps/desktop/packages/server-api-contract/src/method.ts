@@ -1,5 +1,12 @@
-import { getOption, hasOption, type DescMethod } from "@bufbuild/protobuf";
-import { kent_method, type KentMethodOptions, UnaryConnection } from "./gen/kent/api/shared/foundation_pb.js";
+import { getOption, hasOption, type DescFile, type DescMethod } from "@bufbuild/protobuf";
+import {
+  Direction,
+  kent_method,
+  OperationKind,
+  type KentMethodOptions,
+  type OperationAssociation,
+  UnaryConnection,
+} from "./gen/kent/api/shared/foundation_pb.js";
 
 export type UnaryConnectionPolicy = "multiplexed" | "dedicated";
 
@@ -26,6 +33,62 @@ export function unaryConnectionPolicy(method: DescMethod): UnaryConnectionPolicy
       return "dedicated";
     case UnaryConnection.UNSPECIFIED:
       throw new Error(`${operationName(method)} has no unary connection policy`);
+  }
+}
+
+export type SubscriptionAssociations = Readonly<{
+  event: DescMethod;
+  completion: DescMethod;
+}>;
+
+export function subscriptionAssociations(method: DescMethod): SubscriptionAssociations {
+  const operation = operationName(method);
+  const options = methodOptions(method);
+  if (options.kind !== OperationKind.SUBSCRIPTION || options.direction !== Direction.CLIENT_TO_SERVER) {
+    throw new Error(`${operation} is not a client-to-server subscription`);
+  }
+  const event = resolveAssociation(method.parent.file, options.event, "event", operation);
+  const completion = resolveAssociation(method.parent.file, options.completion, "completion", operation);
+  requireNotification(event, "event", operation);
+  requireNotification(completion, "completion", operation);
+  return { event, completion };
+}
+
+function resolveAssociation(
+  file: DescFile,
+  association: OperationAssociation | undefined,
+  kind: "event" | "completion",
+  operation: string,
+): DescMethod {
+  if (association === undefined) {
+    throw new Error(`${operation} has no ${kind} association`);
+  }
+  const matches: DescMethod[] = [];
+  const visited = new Set<DescFile>();
+  const visit = (candidate: DescFile) => {
+    if (visited.has(candidate)) return;
+    visited.add(candidate);
+    if (candidate.proto.package === association.package) {
+      for (const service of candidate.services) {
+        if (service.name !== association.service) continue;
+        for (const method of service.methods) {
+          if (method.name === association.method) matches.push(method);
+        }
+      }
+    }
+    for (const dependency of candidate.dependencies) visit(dependency);
+  };
+  visit(file);
+  if (matches.length !== 1 || matches[0] === undefined) {
+    throw new Error(`${operation} ${kind} association does not resolve to one method`);
+  }
+  return matches[0];
+}
+
+function requireNotification(method: DescMethod, kind: "event" | "completion", subscription: string): void {
+  const options = methodOptions(method);
+  if (options.kind !== OperationKind.NOTIFICATION || options.direction !== Direction.SERVER_TO_CLIENT) {
+    throw new Error(`${subscription} ${kind} association is not a server-to-client notification`);
   }
 }
 

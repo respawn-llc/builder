@@ -42,6 +42,24 @@ export function encodeDescriptorCall<Method extends DescMethod>(
   };
 }
 
+export function encodeDescriptorSubscriptionCall<Method extends DescMethod>(
+  method: Method,
+  request: MessageShape<Method["input"]>,
+  correlation: string,
+): Readonly<{ operation: string; bytes: Uint8Array }> {
+  const operation = operationName(method);
+  const payload = encode(method.input, request);
+  return {
+    operation,
+    bytes: encodeEnvelope({
+      frame: {
+        case: "call",
+        value: { operation, correlation, payload },
+      },
+    }),
+  };
+}
+
 export function decodeDescriptorResponse(bytes: Uint8Array): DescriptorResponse {
   const envelope = decodeEnvelope(bytes);
   switch (envelope.frame.case) {

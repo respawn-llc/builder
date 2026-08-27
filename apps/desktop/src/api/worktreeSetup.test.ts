@@ -1,12 +1,22 @@
 import { z } from "zod";
+import { create } from "@app/server-api-contract";
+import { AuthRequiredDetailsSchema } from "@app/server-api-contract/gen/kent/api/auth/auth_pb";
+import {
+  SetupCompletionSchema,
+  SetupEventSchema,
+  SetupRetryReadiness,
+  SetupService,
+  SetupStartResultSchema,
+} from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 
 import { ApiClient } from "./client";
-import { ContractError } from "./errors";
+import { ContractError, RpcError, errorMessage } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { subscriptionCompleteMethod } from "./jsonRpcSocket";
 import { newSetupOperationID, parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEvent } from "./worktreeSetup";
 import { parseTaskSetupRecoveryDetail, worktreeSetupEventParamsSchema } from "./worktreeSetup";
+import { subscribeBinaryWorktreeSetup } from "./worktreeSetupBinary";
 
 const setupOperationIDWireSchema = z.string().transform((value, ctx): SetupOperationID => {
   try {
@@ -26,7 +36,279 @@ function parseSetupMutationParams(value: unknown): Readonly<{ setupOperationID: 
   return { setupOperationID: parsed.setup_operation_id };
 }
 
+function successfulBinarySetupTransport(): FakeRpcTransport {
+  return new FakeRpcTransport([
+    {
+      subscriptionDescriptor: SetupService.method.subscribe,
+      startResult: create(SetupStartResultSchema, {
+        outcome: { case: "success", value: {} },
+      }),
+    },
+  ]);
+}
+
 describe("worktree setup API", () => {
+  it("prepares typed descriptor setup completion and one-shot late callback suppression", () => {
+    const transport = new FakeRpcTransport([
+      {
+        subscriptionDescriptor: SetupService.method.subscribe,
+        startResult: create(SetupStartResultSchema, {
+          outcome: { case: "success", value: {} },
+        }),
+      },
+    ]);
+    const events: WorktreeSetupEvent[] = [];
+    const completions: string[] = [];
+    const errors: Error[] = [];
+    subscribeBinaryWorktreeSetup(transport, setupID, {
+      onEvent: (event) => events.push(event),
+      onComplete: () => completions.push("complete"),
+      onError: (error) => errors.push(error),
+    });
+    transport.openDescriptor(SetupService.method.subscribe);
+    transport.emitDescriptor(
+      SetupService.method.subscribe,
+      SetupService.method.event,
+      create(SetupEventSchema, {
+        setupOperationId: setupIDWire,
+        phase: {
+          case: "started",
+          value: {
+            sourceWorkspaceRoot: "/source",
+            worktreeRoot: "/worktree",
+            scriptPath: "/setup.sh",
+          },
+        },
+      }),
+    );
+    transport.emitDescriptor(
+      SetupService.method.subscribe,
+      SetupService.method.event,
+      create(SetupEventSchema, {
+        setupOperationId: setupIDWire,
+        phase: { case: "completed", value: {} },
+      }),
+    );
+    transport.completeDescriptor(
+      SetupService.method.subscribe,
+      SetupService.method.complete,
+      create(SetupCompletionSchema),
+    );
+    transport.failDescriptor(SetupService.method.subscribe, new Error("late"));
+
+    expect(events.map(({ phase }) => phase)).toEqual(["started", "completed"]);
+    expect(completions).toEqual(["complete"]);
+    expect(errors).toEqual([]);
+    expect(transport.descriptorSubscriptionStarts).toMatchObject([
+      {
+        descriptor: SetupService.method.subscribe,
+        request: { setupOperationId: setupIDWire },
+      },
+    ]);
+  });
+
+  it("preserves typed non-zero descriptor completion through the error path", () => {
+    const transport = new FakeRpcTransport([
+      {
+        subscriptionDescriptor: SetupService.method.subscribe,
+        startResult: create(SetupStartResultSchema, {
+          outcome: { case: "success", value: {} },
+        }),
+      },
+    ]);
+    const observed: string[] = [];
+    subscribeBinaryWorktreeSetup(transport, setupID, {
+      onEvent() {
+        return;
+      },
+      onComplete() {
+        observed.push("complete");
+      },
+      onError(error) {
+        observed.push(error.message);
+      },
+    });
+    transport.openDescriptor(SetupService.method.subscribe);
+    transport.completeDescriptor(
+      SetupService.method.subscribe,
+      SetupService.method.complete,
+      create(SetupCompletionSchema, { code: 409, diagnostic: "stream gap" }),
+    );
+
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toContain("stream gap");
+  });
+
+  it("projects generated setup start failures before they reach the feature handler", () => {
+    const transport = new FakeRpcTransport([
+      {
+        subscriptionDescriptor: SetupService.method.subscribe,
+        startResult: create(SetupStartResultSchema, {
+          outcome: {
+            case: "error",
+            value: {
+              code: "auth_required",
+              detail: {
+                case: "authRequired",
+                value: create(AuthRequiredDetailsSchema),
+              },
+            },
+          },
+        }),
+      },
+    ]);
+    const errors: Error[] = [];
+    subscribeBinaryWorktreeSetup(transport, setupID, {
+      onEvent() {
+        return;
+      },
+      onComplete() {
+        return;
+      },
+      onError(error) {
+        errors.push(error);
+      },
+    });
+
+    transport.openDescriptor(SetupService.method.subscribe);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(RpcError);
+    expect(errorMessage(errors[0])).not.toContain("failed with code auth_required");
+  });
+
+  it("projects every generated setup failure cause", () => {
+    const cases = [
+      {
+        expected: "process_exit",
+        event: create(SetupEventSchema, {
+          setupOperationId: setupIDWire,
+          phase: {
+            case: "failed",
+            value: {
+              retryReadiness: SetupRetryReadiness.WORKTREE_SETUP_RETRY_READY,
+              cause: {
+                cause: {
+                  case: "processExit",
+                  value: { exitCode: 7, stdout: "output", stderr: "failure" },
+                },
+              },
+              diagnostic: "failed",
+              scriptPath: "/setup.sh",
+              retainedWorktree: binaryRegisteredWorktree,
+            },
+          },
+        }),
+      },
+      {
+        expected: "timeout",
+        event: create(SetupEventSchema, {
+          setupOperationId: setupIDWire,
+          phase: {
+            case: "failed",
+            value: {
+              retryReadiness: SetupRetryReadiness.WORKTREE_SETUP_RETRY_READY,
+              cause: { cause: { case: "timeout", value: {} } },
+              diagnostic: "failed",
+              scriptPath: "/setup.sh",
+              retainedWorktree: binaryRegisteredWorktree,
+            },
+          },
+        }),
+      },
+      {
+        expected: "target_preparation",
+        event: create(SetupEventSchema, {
+          setupOperationId: setupIDWire,
+          phase: {
+            case: "failed",
+            value: {
+              retryReadiness: SetupRetryReadiness.WORKTREE_SETUP_RETRY_READY,
+              cause: { cause: { case: "targetPreparation", value: {} } },
+              diagnostic: "failed",
+            },
+          },
+        }),
+      },
+      {
+        expected: "interruption_persistence",
+        event: create(SetupEventSchema, {
+          setupOperationId: setupIDWire,
+          phase: {
+            case: "failed",
+            value: {
+              retryReadiness: SetupRetryReadiness.WORKTREE_SETUP_NON_RETRYABLE,
+              cause: { cause: { case: "interruptionPersistence", value: {} } },
+              diagnostic: "failed",
+            },
+          },
+        }),
+      },
+      {
+        expected: "canceled",
+        event: create(SetupEventSchema, {
+          setupOperationId: setupIDWire,
+          phase: {
+            case: "failed",
+            value: {
+              retryReadiness: SetupRetryReadiness.WORKTREE_SETUP_NON_RETRYABLE,
+              cause: { cause: { case: "canceled", value: {} } },
+              diagnostic: "failed",
+            },
+          },
+        }),
+      },
+      {
+        expected: "controller_shutdown",
+        event: create(SetupEventSchema, {
+          setupOperationId: setupIDWire,
+          phase: {
+            case: "failed",
+            value: {
+              retryReadiness: SetupRetryReadiness.WORKTREE_SETUP_NON_RETRYABLE,
+              cause: { cause: { case: "controllerShutdown", value: {} } },
+              diagnostic: "failed",
+            },
+          },
+        }),
+      },
+      {
+        expected: "operational",
+        event: create(SetupEventSchema, {
+          setupOperationId: setupIDWire,
+          phase: {
+            case: "failed",
+            value: {
+              retryReadiness: SetupRetryReadiness.WORKTREE_SETUP_NON_RETRYABLE,
+              cause: { cause: { case: "operational", value: {} } },
+              diagnostic: "failed",
+            },
+          },
+        }),
+      },
+    ];
+
+    for (const { expected, event } of cases) {
+      const transport = successfulBinarySetupTransport();
+      const observed: WorktreeSetupEvent[] = [];
+      subscribeBinaryWorktreeSetup(transport, setupID, {
+        onEvent(value) {
+          observed.push(value);
+        },
+        onComplete() {
+          return;
+        },
+        onError(error) {
+          throw error;
+        },
+      });
+      transport.openDescriptor(SetupService.method.subscribe);
+      transport.emitDescriptor(SetupService.method.subscribe, SetupService.method.event, event);
+
+      expect(observed).toMatchObject([{ phase: "failed", failed: { cause: { kind: expected } } }]);
+    }
+  });
+
   it("decodes every setup failure cause and rejects contradictory payloads", () => {
     const causes = [
       [
@@ -266,6 +548,23 @@ describe("worktree setup API", () => {
 
 const setupIDWire = "123e4567-e89b-42d3-a456-426614174000";
 const setupID = parseSetupOperationID(setupIDWire);
+const binaryRegisteredWorktree = {
+  git: {
+    canonicalRoot: "/worktree",
+    headObject: "abc",
+    detached: true,
+    bare: false,
+    isMain: false,
+    pathAvailable: true,
+  },
+  kent: {
+    worktreeId: "worktree-1",
+    canonicalRoot: "/worktree",
+    displayName: "worktree",
+    managed: true,
+    createdBranch: false,
+  },
+} as const;
 const retainedWorktree = {
   variant: "registered",
   registered: {

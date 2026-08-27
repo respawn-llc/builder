@@ -241,6 +241,20 @@ class BootstrapErrorTransport implements DescriptorRpcTransport {
     throw this.#error;
   }
 
+  subscribeDescriptor(
+    _method: never,
+    _request: never,
+    _contract: never,
+    handler: { onError(error: Error): void },
+  ): RpcSubscription {
+    handler.onError(this.#error);
+    return {
+      close() {
+        return;
+      },
+    };
+  }
+
   async callDedicated(): Promise<unknown> {
     throw this.#error;
   }

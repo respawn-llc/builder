@@ -1,6 +1,15 @@
 import { z } from "zod";
 
-import { create, operationName, type DescMethod, type MessageShape } from "@app/server-api-contract";
+import {
+  create,
+  decode,
+  decodeEnvelope,
+  operationName,
+  subscriptionAssociations,
+  type DescMessage,
+  type DescMethod,
+  type MessageShape,
+} from "@app/server-api-contract";
 import { ConnectionService } from "@app/server-api-contract/gen/kent/api/connection/connection_pb";
 
 import {
@@ -9,11 +18,17 @@ import {
   completeDescriptorResponse,
   decodeDescriptorResponse,
   encodeDescriptorCall,
+  encodeDescriptorSubscriptionCall,
 } from "./descriptorRpc";
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, TransportError } from "./errors";
 import { jsonValueSchema, type JsonValue } from "./json";
 import { protobufRpcError } from "./protobufRpc";
-import type { RpcEventHandler } from "./transport";
+import type {
+  DescriptorSubscriptionContract,
+  DescriptorSubscriptionHandler,
+  DescriptorTerminalOutcome,
+  RpcEventHandler,
+} from "./transport";
 
 export const protocolVersion = __KENT_PROTOCOL_VERSION__;
 export const jsonRpcVersion = "2.0";
@@ -114,6 +129,137 @@ export async function sendSocketDescriptorRequest<Method extends DescMethod>(
     },
     options,
   );
+}
+
+export async function runSocketDescriptorSubscription<
+  Method extends DescMethod,
+  EventDescriptor extends DescMessage,
+  CompletionDescriptor extends DescMessage,
+  Event,
+>(
+  input: Readonly<{
+    socket: WebSocket;
+    method: Method;
+    request: MessageShape<Method["input"]>;
+    contract: DescriptorSubscriptionContract<Method, EventDescriptor, CompletionDescriptor, Event>;
+    handler: DescriptorSubscriptionHandler<Event>;
+    signal: AbortSignal;
+  }>,
+): Promise<void> {
+  const { socket, method, request, contract, handler, signal } = input;
+  const associations = subscriptionAssociations(method);
+  requireAssociatedDescriptor(associations.event.input, contract.eventDescriptor, "event");
+  requireAssociatedDescriptor(associations.completion.input, contract.completionDescriptor, "completion");
+  const correlation = `${method.name}-${Date.now().toString()}`;
+  const { operation, bytes } = encodeDescriptorSubscriptionCall(method, request, correlation);
+  return new Promise((resolve, reject) => {
+    let acknowledged = false;
+    let terminal: DescriptorTerminalOutcome | null = null;
+    let settled = false;
+    const cleanup = () => {
+      socket.removeEventListener("message", message);
+      socket.removeEventListener("close", close);
+      socket.removeEventListener("error", error);
+      signal.removeEventListener("abort", abort);
+    };
+    const finish = (failure?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (failure === undefined) resolve();
+      else reject(failure);
+    };
+    const terminalError = (outcome: Extract<DescriptorTerminalOutcome, { kind: "error" }>) =>
+      new TransportError(
+        `${operation} subscription completed with code ${outcome.code.toString()}: ${outcome.diagnostic}`,
+      );
+    const settleTerminal = () => {
+      if (terminal === null) return;
+      finish(terminal.kind === "normal" ? undefined : terminalError(terminal));
+    };
+    const handleResponse = (frame: Uint8Array) => {
+      const response = decodeDescriptorResponse(frame);
+      if (response.correlation !== correlation) return;
+      contract.projectStart(completeDescriptorResponse(method, correlation, response));
+      acknowledged = true;
+      if (terminal === null) handler.onOpen?.();
+      else settleTerminal();
+    };
+    const handleNotification = (
+      notification: Readonly<{ operation: string; payload?: Uint8Array | undefined }>,
+    ) => {
+      if (notification.payload === undefined) {
+        throw new TransportError(`${notification.operation} notification payload is required.`);
+      }
+      if (notification.operation === operationName(associations.event)) {
+        handler.onEvent(contract.projectEvent(decode(contract.eventDescriptor, notification.payload)));
+        return;
+      }
+      if (notification.operation === operationName(associations.completion)) {
+        terminal = contract.classifyCompletion(decode(contract.completionDescriptor, notification.payload));
+        handler.onTerminal(terminal);
+        socket.close();
+        if (acknowledged) settleTerminal();
+        return;
+      }
+      throw new TransportError(`${operation} received unexpected notification ${notification.operation}.`);
+    };
+    const message = (event: MessageEvent<unknown>) => {
+      try {
+        const frame = binaryFrameBytes(event.data);
+        if (frame === undefined) {
+          throw new TransportError(`${operation} subscription received a non-binary frame.`);
+        }
+        const envelope = decodeEnvelope(frame);
+        switch (envelope.frame.case) {
+          case "result":
+          case "transportFailure":
+            handleResponse(frame);
+            return;
+          case "notificationEvent":
+            handleNotification(envelope.frame.value);
+            return;
+          case "call":
+          case undefined:
+            throw new TransportError(`${operation} subscription received an unexpected envelope.`);
+        }
+      } catch (cause) {
+        socket.close();
+        finish(cause instanceof Error ? cause : new TransportError(`${operation} subscription failed.`));
+      }
+    };
+    const close = () => {
+      if (signal.aborted) finish();
+      else if (terminal !== null && acknowledged) settleTerminal();
+      else finish(new TransportError("Subscription socket closed."));
+    };
+    const error = () => {
+      finish(new TransportError("Subscription socket failed."));
+    };
+    const abort = () => {
+      socket.close();
+      finish();
+    };
+    socket.addEventListener("message", message);
+    socket.addEventListener("close", close, { once: true });
+    socket.addEventListener("error", error, { once: true });
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      socket.send(binaryFramePayload(bytes));
+    } catch (cause) {
+      finish(cause instanceof Error ? cause : new TransportError(`${operation} request failed to send.`));
+    }
+  });
+}
+
+function requireAssociatedDescriptor(
+  associated: DescMessage,
+  projected: DescMessage,
+  kind: "event" | "completion",
+): void {
+  if (associated !== projected) {
+    throw new TransportError(`Descriptor subscription ${kind} projector does not match its association.`);
+  }
 }
 
 export function parseFrame(data: string): unknown {

@@ -1,5 +1,41 @@
 import { FakeRpcTransport } from "@/test-support/api";
+import { create } from "@app/server-api-contract";
+import { ProjectAvailability } from "@app/server-api-contract/gen/kent/api/project/project_pb";
+import {
+  CreateResultSchema,
+  CreateService,
+  CreateTargetResolutionKind,
+  CreateTargetResolveResultSchema,
+  CreateTargetService,
+  DeletePreviewResultSchema,
+  DeletePreviewService,
+  DeleteResultSchema,
+  DirtyStateKind,
+  EnterResultSchema,
+  LeaveResultSchema,
+  ListResultSchema,
+  ListService,
+  SelectorResolveResultSchema,
+  SelectorService,
+  StatusProblemKind,
+  StatusResultSchema,
+  StatusService,
+  SwitchOperationKind,
+  TransitionService,
+  WorkspaceListResultSchema,
+} from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 import { ApiClient } from "./client";
+import {
+  createBinaryWorktree,
+  deleteBinaryWorktree,
+  getBinaryWorktreeStatus,
+  listBinaryWorkspaceWorktrees,
+  listBinaryWorktrees,
+  previewBinaryWorktreeDelete,
+  resolveBinaryWorktreeCreateTarget,
+  resolveBinaryWorktreeSelector,
+  switchBinaryWorktree,
+} from "./clientWorktreeBinary";
 import {
   decodeWorktreeError,
   type JsonValue,
@@ -73,6 +109,50 @@ const entry = {
     delete_preview: { selector: "worktree-1" },
   },
 } as const;
+const protoTarget = {
+  workspaceId: "workspace-1",
+  workspaceName: "Workspace",
+  workspaceRoot: "/repo",
+  workspaceAvailability: ProjectAvailability.AVAILABLE,
+  cwdRelpath: ".",
+  effectiveWorkdir: "/repo",
+} as const;
+const protoTopology = {
+  topology: {
+    case: "registered",
+    value: {
+      git: {
+        canonicalRoot: "/repo/feature",
+        headObject: "abc123",
+        branchRef: "refs/heads/feature",
+        branchName: "feature",
+        detached: false,
+        bare: false,
+        isMain: false,
+        pathAvailable: true,
+      },
+      kent: {
+        worktreeId: "worktree-1",
+        canonicalRoot: "/repo/feature",
+        displayName: "feature",
+        managed: true,
+        createdBranch: true,
+      },
+    },
+  },
+} as const;
+const protoEntry = {
+  topology: protoTopology,
+  projection: {
+    selector: "feature",
+    isCurrent: false,
+    switch: {
+      kind: SwitchOperationKind.WORKTREE_SWITCH_OPERATION_ENTER,
+      selector: "feature",
+    },
+    deletePreview: { selector: "worktree-1" },
+  },
+} as const;
 const resolution = (value: unknown) =>
   worktreeCreateTargetResolutionResponseSchema.parse({ resolution: value }).resolution;
 const preview = (cleanliness: unknown, worktree: unknown = topology) =>
@@ -83,6 +163,206 @@ const preview = (cleanliness: unknown, worktree: unknown = topology) =>
   });
 afterEach(() => vi.restoreAllMocks());
 describe("Desktop Worktree client", () => {
+  it("prepares generated status calls without changing production composition", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        descriptor: StatusService.method.get,
+        result: create(StatusResultSchema, {
+          outcome: {
+            case: "success",
+            value: {
+              target: {
+                workspaceId: "workspace-1",
+                workspaceName: "Workspace",
+                workspaceRoot: "/repo",
+                workspaceAvailability: ProjectAvailability.AVAILABLE,
+                cwdRelpath: ".",
+                effectiveWorkdir: "/repo",
+              },
+              worktree: { recordedRoot: "/repo" },
+              problems: [
+                {
+                  kind: StatusProblemKind.WORKTREE_STATUS_PROBLEM_ROOT_MISSING,
+                  root: "/repo",
+                },
+              ],
+            },
+          },
+        }),
+      },
+    ]);
+
+    await expect(getBinaryWorktreeStatus(transport, "session-1")).resolves.toMatchObject({
+      target: { workspaceID: "workspace-1" },
+      worktree: { recordedRoot: "/repo", observedRoot: null },
+      problems: [{ kind: "root_missing", root: "/repo" }],
+    });
+    expect(transport.descriptorCalls).toMatchObject([
+      { descriptor: StatusService.method.get, request: { sessionId: "session-1" } },
+    ]);
+    expect(transport.calls).toEqual([]);
+  });
+
+  it("prepares every generated Worktree read without changing production composition", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        descriptor: ListService.method.list,
+        result: create(ListResultSchema, {
+          outcome: { case: "success", value: { target: protoTarget, worktrees: [protoEntry] } },
+        }),
+      },
+      {
+        descriptor: ListService.method.listWorkspace,
+        result: create(WorkspaceListResultSchema, {
+          outcome: {
+            case: "success",
+            value: { workspaceId: "workspace-1", worktrees: [protoEntry] },
+          },
+        }),
+      },
+      {
+        descriptor: SelectorService.method.resolve,
+        result: create(SelectorResolveResultSchema, {
+          outcome: { case: "success", value: { worktree: protoEntry } },
+        }),
+      },
+      {
+        descriptor: CreateTargetService.method.resolve,
+        result: create(CreateTargetResolveResultSchema, {
+          outcome: {
+            case: "success",
+            value: {
+              resolution: {
+                input: "feature",
+                kind: CreateTargetResolutionKind.WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH,
+              },
+            },
+          },
+        }),
+      },
+      {
+        descriptor: DeletePreviewService.method.get,
+        result: create(DeletePreviewResultSchema, {
+          outcome: {
+            case: "success",
+            value: {
+              worktree: protoTopology,
+              deletionSelector: "worktree-1",
+              cleanliness: { kind: DirtyStateKind.DIRTY_STATE_CLEAN },
+            },
+          },
+        }),
+      },
+    ]);
+
+    await expect(listBinaryWorktrees(transport, "session-1")).resolves.toMatchObject({
+      worktrees: [{ selector: "feature" }],
+    });
+    await expect(listBinaryWorkspaceWorktrees(transport, "project-1", "workspace-1")).resolves.toMatchObject({
+      workspaceID: "workspace-1",
+      worktrees: [{ selector: "feature" }],
+    });
+    await expect(resolveBinaryWorktreeSelector(transport, "session-1", "feature")).resolves.toMatchObject({
+      worktree: { selector: "feature" },
+    });
+    await expect(resolveBinaryWorktreeCreateTarget(transport, "session-1", "feature")).resolves.toMatchObject(
+      { resolution: { kind: "new_branch", input: "feature" } },
+    );
+    await expect(previewBinaryWorktreeDelete(transport, "session-1", "feature")).resolves.toMatchObject({
+      deletionSelector: "worktree-1",
+      cleanliness: { kind: "clean" },
+    });
+
+    expect(transport.calls).toEqual([]);
+    expect(transport.descriptorCalls.map(({ descriptor }) => descriptor)).toEqual([
+      ListService.method.list,
+      ListService.method.listWorkspace,
+      SelectorService.method.resolve,
+      CreateTargetService.method.resolve,
+      DeletePreviewService.method.get,
+    ]);
+  });
+
+  it("prepares every generated Worktree mutation without changing production composition", async () => {
+    const setupOperationID = newSetupOperationID();
+    vi.spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce(ids[0])
+      .mockReturnValueOnce(ids[1])
+      .mockReturnValueOnce(ids[2]);
+    const transport = new FakeRpcTransport([
+      {
+        descriptor: CreateService.method.create,
+        result: create(CreateResultSchema, {
+          outcome: {
+            case: "success",
+            value: { target: protoTarget, worktree: protoEntry },
+          },
+        }),
+      },
+      {
+        descriptor: TransitionService.method.enter,
+        result: create(EnterResultSchema, {
+          outcome: { case: "success", value: { operationId: ids[0] } },
+        }),
+      },
+      {
+        descriptor: TransitionService.method.leave,
+        result: create(LeaveResultSchema, {
+          outcome: { case: "success", value: { operationId: ids[1] } },
+        }),
+      },
+      {
+        descriptor: TransitionService.method.delete,
+        result: create(DeleteResultSchema, {
+          outcome: {
+            case: "success",
+            value: { result: { case: "scheduled", value: { operationId: ids[2] } } },
+          },
+        }),
+      },
+    ]);
+    const existing = resolution({
+      kind: "existing_branch",
+      input: "feature",
+      resolved_ref: "refs/heads/feature",
+    });
+    const enter = worktreeListEntrySchema.parse(entry).switchOperation;
+    const leave = worktreeListEntrySchema.parse({
+      ...entry,
+      projection: { ...entry.projection, switch: { kind: "leave" } },
+    }).switchOperation;
+    if (enter === null || leave === null) throw new Error("fixture omitted Switch authority");
+
+    await expect(
+      createBinaryWorktree(transport, {
+        sessionID: "session-1",
+        setupOperationID,
+        resolution: existing,
+        baseRef: null,
+      }),
+    ).resolves.toMatchObject({ worktree: { selector: "feature" } });
+    await expect(switchBinaryWorktree(transport, "session-1", enter)).resolves.toMatchObject({
+      operationID: parseWorktreeOperationID(ids[0]),
+    });
+    await expect(switchBinaryWorktree(transport, "session-1", leave)).resolves.toMatchObject({
+      operationID: parseWorktreeOperationID(ids[1]),
+    });
+    await expect(
+      deleteBinaryWorktree(transport, "session-1", preview({ kind: "clean" }), "confirm"),
+    ).resolves.toMatchObject({
+      kind: "scheduled",
+      acknowledgement: { operationID: parseWorktreeOperationID(ids[2]) },
+    });
+
+    expect(transport.calls).toEqual([]);
+    expect(transport.descriptorCalls.map(({ descriptor }) => descriptor)).toEqual([
+      CreateService.method.create,
+      TransitionService.method.enter,
+      TransitionService.method.leave,
+      TransitionService.method.delete,
+    ]);
+  });
+
   it("decodes exact Session reads and every topology/status fact", async () => {
     const topologies = [
       topology,
