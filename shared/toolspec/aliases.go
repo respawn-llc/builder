@@ -282,6 +282,9 @@ func resolveModelToolNameFromCatalog(spelling string, active map[ID]bool, filter
 		if len(active) > 0 && !active[spec.id] {
 			continue
 		}
+		if !spec.variations {
+			continue
+		}
 		for _, candidate := range modelToolAcceptedSpellings(spec) {
 			if strings.EqualFold(spelling, candidate) {
 				return spec.id, modelToolNameMatchCaseInsensitive, true
@@ -410,7 +413,10 @@ func validateToolAliasCatalog(catalog toolAliasCatalog, registered []ID) {
 				continue
 			}
 			for _, spelling := range modelToolAcceptedSpellings(spec) {
-				key := strings.ToLower(spelling)
+				key := spelling
+				if spec.variations {
+					key = strings.ToLower(spelling)
+				}
 				if previous, exists := seen[key]; exists && previous != id {
 					panic("tool aliases resolve to different registered tools")
 				}

@@ -165,7 +165,7 @@ func TestResolveModelToolNameUsesPublishedToolWhenAliasCollides(t *testing.T) {
 }
 
 func TestResolveModelToolNameDoesNotExpandRetainedHostedOrWorkflowNames(t *testing.T) {
-	for _, name := range []string{"completeNode", "complete-node", "WEB-SEARCH", "webSearch"} {
+	for _, name := range []string{"COMPLETE_NODE", "completeNode", "complete-node", "WEB_SEARCH", "WEB-SEARCH", "webSearch"} {
 		if got, ok := ResolveModelToolName(name, nil); ok {
 			t.Fatalf("ResolveModelToolName(%q) = %q, true; retained names must remain exact", name, got)
 		}
