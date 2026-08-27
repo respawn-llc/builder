@@ -452,9 +452,6 @@ func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt 
 	if evt.Kind == runtime.EventRuntimeActivityChanged {
 		return r.publishCurrentRuntimeActivity(entry.ref.SessionID().String())
 	}
-	if evt.Kind == runtime.EventSessionIdentityChanged {
-		return r.publishSessionIdentity(entry)
-	}
 	if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
 		messages, err := runtimeview.TranscriptMessagesFromRuntimeEventChecked(evt)
 		if err != nil {
@@ -484,14 +481,6 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string) error {
 	if entry == nil {
 		return nil
 	}
-	return r.publishSessionIdentity(entry)
-}
-
-func (r *RuntimeRegistry) publishSessionIdentity(entry *authorityRuntimeEntry) error {
-	if r == nil || entry == nil {
-		return nil
-	}
-	id := entry.ref.SessionID().String()
 	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
 		identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
 		if err != nil {
@@ -542,11 +531,7 @@ func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, ses
 }
 
 func runtimeEventShouldPublishSessionStatus(evt runtime.Event) bool {
-	return evt.ContextUsage != nil ||
-		evt.GoalStatus != nil ||
-		evt.Compaction != nil ||
-		evt.Kind == runtime.EventAssistantMessage ||
-		evt.Kind == runtime.EventSessionStatusChanged
+	return evt.ContextUsage != nil || evt.GoalStatus != nil || evt.Compaction != nil || evt.Kind == runtime.EventAssistantMessage
 }
 
 func transcriptEventRequiresVisibleSubscriber(evt runtime.Event) bool {

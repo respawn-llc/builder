@@ -33,8 +33,6 @@ const (
 	EventToolCallCompleted          EventKind = "tool_call_completed"
 	EventToolCallAborted            EventKind = "tool_call_aborted"
 	EventRuntimeActivityChanged     EventKind = "runtime_activity_changed"
-	EventSessionIdentityChanged     EventKind = "session_identity_changed"
-	EventSessionStatusChanged       EventKind = "session_status_changed"
 	EventInFlightClearFailed        EventKind = "in_flight_clear_failed"
 	EventCompactionStarted          EventKind = "context_compaction_started"
 	EventCompactionCompleted        EventKind = "context_compaction_completed"

@@ -458,11 +458,7 @@ func TestDefinitelyUncommittedStateOnlyChatSettingsStopBeforeLiveProjection(t *t
 
 func TestCommittedControlFeedbackCallerCancellationStopsOnlyWait(t *testing.T) {
 	store := mustCreateTestSession(t)
-	events := make(chan EventKind, 4)
-	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
-		Model:   "gpt-5",
-		OnEvent: func(event Event) { events <- event.Kind },
-	})
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
 	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("pause Runtime FIFO: %v", err)
 	}
@@ -499,40 +495,27 @@ func TestCommittedControlFeedbackCallerCancellationStopsOnlyWait(t *testing.T) {
 	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 1 {
 		t.Fatalf("accepted control feedback projected rows: %+v", rows)
 	}
-	for {
-		select {
-		case kind := <-events:
-			if kind == EventSessionStatusChanged {
-				return
-			}
-		default:
-			t.Fatal("accepted control mutation did not publish Session status after caller cancellation")
-		}
-	}
 }
 
 func TestRuntimeSetterCallerCancellationStopsOnlyWait(t *testing.T) {
 	tests := []struct {
-		name        string
-		apply       func(context.Context, *Engine) error
-		applied     func(*Engine) bool
-		publication EventKind
+		name    string
+		apply   func(context.Context, *Engine) error
+		applied func(*Engine) bool
 	}{
 		{
 			name: "Session name",
 			apply: func(ctx context.Context, engine *Engine) error {
 				return engine.SetSessionName(ctx, "renamed")
 			},
-			applied:     func(engine *Engine) bool { return engine.SessionName() == "renamed" },
-			publication: EventSessionIdentityChanged,
+			applied: func(engine *Engine) bool { return engine.SessionName() == "renamed" },
 		},
 		{
 			name: "Thinking",
 			apply: func(ctx context.Context, engine *Engine) error {
 				return engine.SetThinkingLevel(ctx, "low")
 			},
-			applied:     func(engine *Engine) bool { return engine.ThinkingLevel() == "low" },
-			publication: EventSessionStatusChanged,
+			applied: func(engine *Engine) bool { return engine.ThinkingLevel() == "low" },
 		},
 		{
 			name: "Auto-compaction",
@@ -540,20 +523,17 @@ func TestRuntimeSetterCallerCancellationStopsOnlyWait(t *testing.T) {
 				_, _, err := engine.SetAutoCompactionEnabled(ctx, false)
 				return err
 			},
-			applied:     func(engine *Engine) bool { return !engine.AutoCompactionEnabled() },
-			publication: EventSessionStatusChanged,
+			applied: func(engine *Engine) bool { return !engine.AutoCompactionEnabled() },
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := mustCreateTestSession(t)
-			events := make(chan EventKind, 1)
 			engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
 				Model:                   "gpt-5",
 				ThinkingLevel:           "high",
 				SupportedThinkingValues: []string{"low", "high"},
-				OnEvent:                 func(event Event) { events <- event.Kind },
 			})
 			if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
 				t.Fatalf("pause Runtime FIFO: %v", err)
@@ -583,14 +563,6 @@ func TestRuntimeSetterCallerCancellationStopsOnlyWait(t *testing.T) {
 			}
 			if !test.applied(engine) {
 				t.Fatal("accepted setter did not continue after caller cancellation")
-			}
-			select {
-			case kind := <-events:
-				if kind != test.publication {
-					t.Fatalf("setter publication = %q, want %q", kind, test.publication)
-				}
-			default:
-				t.Fatal("accepted setter did not publish after caller cancellation")
 			}
 		})
 	}
