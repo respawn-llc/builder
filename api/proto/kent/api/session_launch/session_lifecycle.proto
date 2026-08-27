@@ -484,7 +484,7 @@ service SessionLifecycleService {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      scope_policy: SCOPE_POLICY_SESSION_DRAFT_HANDOFF_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
       legacy_wire_name: "session.persistInputDraft"

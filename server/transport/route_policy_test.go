@@ -128,6 +128,31 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, latestFinalRoute, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign latest final answer unexpectedly allowed")
 	}
+	draftRoute := routeForTest(t, protocol.MethodSessionPersistInputDraft)
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		draftRoute,
+		serverapi.SessionPersistInputDraftRequest{
+			ClientRequestID: "rebind-draft",
+			SessionID:       fixture.reboundSessionID,
+			Input:           "preserved draft",
+		},
+	); err != nil {
+		t.Fatalf("rebind source project draft handoff: %v", err)
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		draftRoute,
+		serverapi.SessionPersistInputDraftRequest{
+			ClientRequestID: "foreign-draft",
+			SessionID:       fixture.foreignSessionID,
+			Input:           "must remain inaccessible",
+		},
+	); err == nil {
+		t.Fatal("unrelated foreign-project draft mutation unexpectedly allowed")
+	}
 	typedSessionID, err := runtimeids.ParseSessionID(fixture.ownSessionID)
 	if err != nil {
 		t.Fatalf("parse execution-environment session ID: %v", err)
@@ -479,6 +504,7 @@ type routePolicyFixture struct {
 	bindingB         metadata.Binding
 	ownSessionID     string
 	foreignSessionID string
+	reboundSessionID string
 	workspaceB       string
 }
 
@@ -534,6 +560,24 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 	if err := foreignStore.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable foreign: %v", err)
 	}
+	reboundStore, err := session.Create(
+		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
+		"workspace-b",
+		resolvedB.Config.WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create rebound: %v", err)
+	}
+	if err := reboundStore.SetSessionRebindReminder(&session.SessionRebindReminder{
+		Kind:          session.SessionRebindReminderSucceeded,
+		SourceProject: serverapi.ProjectReference{ID: bindingA.ProjectID, Name: bindingA.ProjectName},
+		TargetProject: serverapi.ProjectReference{ID: bindingB.ProjectID, Name: bindingB.ProjectName},
+	}); err != nil {
+		t.Fatalf("SetSessionRebindReminder rebound: %v", err)
+	}
+	if err := reboundStore.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable rebound: %v", err)
+	}
 	gateway, err := NewGateway(appCore, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -545,6 +589,7 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 		bindingB:         bindingB,
 		ownSessionID:     ownStore.Meta().SessionID,
 		foreignSessionID: foreignStore.Meta().SessionID,
+		reboundSessionID: reboundStore.Meta().SessionID,
 		workspaceB:       resolvedB.Config.WorkspaceRoot,
 	}
 }

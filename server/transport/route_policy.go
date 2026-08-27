@@ -256,6 +256,8 @@ func (e routePolicyExecutor) authorizeScopeFacts(
 			return nil
 		}
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
+	case rpccontract.ScopeSessionDraftHandoffProject:
+		return e.gateway.requireSessionDraftHandoffProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionAttachedProject:
 		return e.gateway.requireSessionInAttachedProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeAttachedSession:
@@ -295,6 +297,7 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 	case rpccontract.ScopeAttachSession,
 		rpccontract.ScopeSessionActiveProject,
 		rpccontract.ScopeSessionActiveProjectIfSet,
+		rpccontract.ScopeSessionDraftHandoffProject,
 		rpccontract.ScopeSessionAttachedProject,
 		rpccontract.ScopeAttachedSession,
 		rpccontract.ScopeGoalSession,
@@ -501,6 +504,56 @@ func (g *Gateway) requireSessionInActiveProject(ctx context.Context, state *conn
 		return err
 	}
 	if !belongs {
+		return sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
+	}
+	return nil
+}
+
+func (g *Gateway) requireSessionDraftHandoffProject(ctx context.Context, state *connectionState, sessionID string) error {
+	projectID, err := g.activeProjectID(ctx, state)
+	if err != nil {
+		return err
+	}
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return errors.New("session id is required")
+	}
+	metadataStore := g.deps.MetadataStore()
+	if metadataStore == nil {
+		return errors.New("metadata store is required")
+	}
+	belongs, err := metadataStore.SessionBelongsToProject(ctx, trimmedSessionID, projectID)
+	if err != nil {
+		return err
+	}
+	if belongs {
+		return nil
+	}
+	record, err := session.ResolvePersistedSessionRecord(ctx, metadataStore, trimmedSessionID)
+	if err != nil {
+		return err
+	}
+	reminder := record.Meta.RebindReminder
+	if reminder == nil {
+		return sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
+	}
+	normalized, err := session.NormalizeSessionRebindReminder(*reminder)
+	if err != nil {
+		return err
+	}
+	if normalized.Kind != session.SessionRebindReminderSucceeded ||
+		normalized.SourceProject.ID != projectID {
+		return sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
+	}
+	belongsToTarget, err := metadataStore.SessionBelongsToProject(
+		ctx,
+		trimmedSessionID,
+		normalized.TargetProject.ID,
+	)
+	if err != nil {
+		return err
+	}
+	if !belongsToTarget {
 		return sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
 	}
 	return nil

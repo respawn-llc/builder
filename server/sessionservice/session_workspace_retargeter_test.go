@@ -340,7 +340,7 @@ type selfRetargetRuntimeClient struct {
 	requests []llm.Request
 }
 
-func (c *selfRetargetRuntimeClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+func (c *selfRetargetRuntimeClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.requests = append(c.requests, request)
 	if len(c.requests) == 1 {
 		if err := c.run(); err != nil {
@@ -378,7 +378,7 @@ type queuedFailureRetargetRuntimeClient struct {
 	requests      []llm.Request
 }
 
-func (c *queuedFailureRetargetRuntimeClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+func (c *queuedFailureRetargetRuntimeClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, request)
 	index := len(c.requests)

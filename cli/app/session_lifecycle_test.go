@@ -232,25 +232,22 @@ func TestRuntimeReleaseUsesFinalModelPolicyAndPreservesErrors(t *testing.T) {
 	})
 }
 
-func TestReopenRetargetedSessionReleasesSourceRuntimeAndPersistsDraftAfterDestinationAttachment(t *testing.T) {
+func TestReopenRetargetedSessionPersistsDraftBeforeReleasingSourceRuntime(t *testing.T) {
 	sourceRemoteOpen := true
 	released := false
 	var persistedDraft string
 	sourceLifecycle := &recordingSessionLifecycleClient{
-		persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-			return serverapi.SessionPersistInputDraftResponse{}, errors.New("Session is outside the source Project")
-		},
-	}
-	destinationLifecycle := &recordingSessionLifecycleClient{
 		persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+			if released {
+				return serverapi.SessionPersistInputDraftResponse{}, errors.New("source runtime was released before draft persistence")
+			}
 			persistedDraft = req.Input
 			return serverapi.SessionPersistInputDraftResponse{}, nil
 		},
 	}
 	var server *reattachSessionLifecycleServer
 	server = &reattachSessionLifecycleServer{
-		lifecycle:           sourceLifecycle,
-		reattachedLifecycle: destinationLifecycle,
+		lifecycle: sourceLifecycle,
 		reattach: func(context.Context, string) error {
 			if !released {
 				return errors.New("source runtime owner is still attached")
@@ -288,6 +285,46 @@ func TestReopenRetargetedSessionReleasesSourceRuntimeAndPersistsDraftAfterDestin
 	}
 	if target := requireSessionOpenDestination(t, next); target != sessionID {
 		t.Fatalf("reopen destination = %q, want %q", target, sessionID)
+	}
+}
+
+func TestReopenRetargetedSessionPreservesDraftWhenDestinationReattachmentFails(t *testing.T) {
+	reattachErr := errors.New("destination unavailable")
+	var persistedDraft string
+	server := &reattachSessionLifecycleServer{
+		lifecycle: &recordingSessionLifecycleClient{
+			persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+				persistedDraft = req.Input
+				return serverapi.SessionPersistInputDraftResponse{}, nil
+			},
+		},
+		reattach: func(context.Context, string) error {
+			return reattachErr
+		},
+	}
+	released := false
+	runtimePlan := &runtimeLaunchPlan{close: func() error {
+		released = true
+		return nil
+	}}
+	model := newUIModelDefaults(nil)
+	testSetMainInput(model, "draft survives failed reattachment")
+
+	_, err := reopenRetargetedSession(
+		context.Background(),
+		server,
+		runtimePlan,
+		"11111111-1111-4111-8111-111111111111",
+		model,
+	)
+	if !errors.Is(err, reattachErr) {
+		t.Fatalf("reopen error = %v, want %v", err, reattachErr)
+	}
+	if !released {
+		t.Fatal("source runtime was not released")
+	}
+	if persistedDraft != "draft survives failed reattachment" {
+		t.Fatalf("persisted draft = %q, want preserved composer input", persistedDraft)
 	}
 }
 
