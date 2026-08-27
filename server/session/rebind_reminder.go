@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func NormalizeSessionRebindReminder(reminder SessionRebindReminder) (SessionRebindReminder, error) {
@@ -86,15 +87,8 @@ func SessionRebindReminderEqual(left, right SessionRebindReminder) bool {
 	if left.Kind != right.Kind || left.SourceProject != right.SourceProject || left.TargetProject != right.TargetProject {
 		return false
 	}
-	if !optionalStringEqual(left.WorkingDirectory, right.WorkingDirectory) {
+	if !textutil.EqualOptional(left.WorkingDirectory, right.WorkingDirectory) {
 		return false
 	}
-	return optionalStringEqual(left.FailureDiagnostic, right.FailureDiagnostic)
-}
-
-func optionalStringEqual(left, right *string) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
+	return textutil.EqualOptional(left.FailureDiagnostic, right.FailureDiagnostic)
 }

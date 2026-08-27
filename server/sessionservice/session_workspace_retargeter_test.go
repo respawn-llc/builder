@@ -772,6 +772,35 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	}
 }
 
+func TestSessionWorkspaceRetargeterTreatsCommittedIdentityPublicationFailureAsNotificationOnly(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	fixture.openRuntime(t)
+	targetProjectID := fixture.targetProject.ProjectID
+	req := metadata.SessionWorkspaceRetargetRequest{
+		SessionID:     fixture.child.Meta().SessionID,
+		WorkspaceRoot: fixture.targetWorkspaceRoot,
+		ProjectID:     &targetProjectID,
+	}
+	publicationErr := errors.New("identity projection unavailable")
+	retargeter := NewSessionWorkspaceRetargeter(
+		fixture.metadata,
+		fixture.authority,
+		retargetIdentityPublisherFunc(func(string) error { return publicationErr }),
+		retargetProcessSource{},
+	)
+
+	result, err := retargeter.RetargetWorkspace(context.Background(), req)
+	if err != nil {
+		t.Fatalf("committed RetargetWorkspace reported notification failure: %v", err)
+	}
+	if result.Binding.ProjectID != targetProjectID {
+		t.Fatalf("target project = %q, want %q", result.Binding.ProjectID, targetProjectID)
+	}
+	if fixture.runtimeAvailable(t) {
+		t.Fatal("cross-Project retarget retained the source Runtime")
+	}
+}
+
 func TestSessionWorkspaceRetargeterRejectsBackgroundProcessWithoutMovingArtifact(t *testing.T) {
 	fixture := newRealSessionRetargetFixture(t, false)
 	targetProjectID := fixture.targetProject.ProjectID

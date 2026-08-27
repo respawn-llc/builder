@@ -570,6 +570,14 @@ func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) err
 }
 
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
+	return e.steerWithCommitReceiptForIdentity(steeringStepIdentityFor(stepID), intent)
+}
+
+func (e *Engine) steerWithoutStepWithCommitReceipt(intent steeringIntent) (session.CommitReceipt, error) {
+	return e.steerWithCommitReceiptForIdentity(steeringStepIdentity{}, intent)
+}
+
+func (e *Engine) steerWithCommitReceiptForIdentity(identity steeringStepIdentity, intent steeringIntent) (session.CommitReceipt, error) {
 	if len(intent.items) != 1 {
 		return session.CommitReceipt{}, fmt.Errorf(
 			"commit receipt requires exactly one steering item (items=%d)",
@@ -578,15 +586,33 @@ func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (s
 	}
 	receipt := session.CommitReceipt{}
 	intent.items[0].commitReceipt = &receipt
-	err := e.steer(stepID, intent)
+	if e.closed.Load() {
+		return session.CommitReceipt{}, ErrEngineClosed
+	}
+	err := e.steerOrderedForIdentity(identity, intent)
 	return receipt, err
 }
 
-func (e *Engine) steerWithoutStepWithCommitReceipt(intent steeringIntent) (session.CommitReceipt, error) {
-	return e.steerWithCommitReceipt("", intent)
+func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
+	return e.steerOrderedForIdentity(steeringStepIdentityFor(stepID), intents...)
 }
 
-func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
+type steeringStepIdentity struct {
+	stepID *string
+}
+
+func steeringStepIdentityFor(stepID string) steeringStepIdentity {
+	return steeringStepIdentity{stepID: textutil.OptionalExactString(stepID)}
+}
+
+func (s steeringStepIdentity) value() string {
+	if s.stepID == nil {
+		return ""
+	}
+	return *s.stepID
+}
+
+func (e *Engine) steerOrderedForIdentity(identity steeringStepIdentity, intents ...steeringIntent) error {
 	ordered := make([]steeringIntent, 0, len(intents))
 	for _, intent := range intents {
 		if len(intent.items) == 0 {
@@ -604,7 +630,7 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	})
 	for _, intent := range ordered {
 		for _, item := range intent.items {
-			if err := e.applySteeringItem(stepID, item); err != nil {
+			if err := e.applySteeringItem(identity, item); err != nil {
 				return err
 			}
 			if item.historyReplace == nil {
@@ -647,7 +673,8 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 	return outcome, nil
 }
 
-func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
+func (e *Engine) applySteeringItem(identity steeringStepIdentity, item steeringItem) error {
+	stepID := identity.value()
 	if item.compactionActivity != nil {
 		activity := item.compactionActivity
 		if activity.active {

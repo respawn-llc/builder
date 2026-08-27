@@ -109,8 +109,16 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 		)
 		err = nil
 	}
+	if publicationErr != nil {
+		slog.ErrorContext(
+			context.WithoutCancel(ctx),
+			"publish committed Session rebind identity",
+			"session_id", plan.SessionID,
+			"error", publicationErr,
+		)
+	}
 	closeErr := releaseStarts.Close(context.Background())
-	return result, errors.Join(err, publicationErr, closeErr)
+	return result, errors.Join(err, closeErr)
 }
 
 func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
