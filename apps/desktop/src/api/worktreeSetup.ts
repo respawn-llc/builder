@@ -1,62 +1,82 @@
-import { type RegisteredWorktreeTopology, type RetainedPreviousWorktree } from "./schemas/worktree";
+import { create } from "@app/server-api-contract";
+import {
+  SetupCompletionSchema,
+  SetupEventSchema,
+  SetupService,
+  type SetupEvent,
+} from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
+
+import { requireWorktreeSuccess } from "./clientWorktree";
+import { ContractError } from "./errors";
 import type { SetupOperationID } from "./setupOperationID";
-import type { WorkflowExecutionTargetSelection } from "./workflowExecutionTarget";
-
-type WorktreeSetupOutput = Readonly<{ stdout: string | null; stderr: string | null }>;
-export type WorktreeSetupFailureCause =
-  | (Readonly<{ kind: "process_exit"; exitCode: number }> & WorktreeSetupOutput)
-  | (Readonly<{ kind: "timeout" }> & WorktreeSetupOutput)
-  | Readonly<{
-      kind:
-        | "target_preparation"
-        | "interruption_persistence"
-        | "canceled"
-        | "controller_shutdown"
-        | "operational";
-    }>;
-export type WorktreeSetupFailure = Readonly<{
-  retryReadiness: "retry_ready" | "non_retryable";
-  cause: WorktreeSetupFailureCause;
-  diagnostic: string;
-  scriptPath: string | null;
-  executionTarget: WorkflowExecutionTargetSelection | null;
-  retainedWorktree: RegisteredWorktreeTopology | null;
-  retainedPreviousWorktree: RetainedPreviousWorktree | null;
-}>;
-
-export type WorktreeSetupPhase = "started" | "completed" | "not_required" | "failed";
-type SetupEvent<Phase extends WorktreeSetupPhase, Payload> = Readonly<
-  { setupOperationID: SetupOperationID; phase: Phase } & Payload
->;
-export type WorktreeSetupEvent =
-  | SetupEvent<
-      "started",
-      {
-        started: Readonly<{
-          sourceWorkspaceRoot: string;
-          worktreeRoot: string;
-          scriptPath: string;
-        }>;
-      }
-    >
-  | SetupEvent<
-      "completed",
-      { completed: Readonly<{ retainedPreviousWorktree: RetainedPreviousWorktree | null }> }
-    >
-  | SetupEvent<
-      "not_required",
-      {
-        notRequired: Readonly<{
-          reason: "no_target_preparation" | "no_configured_script";
-          retainedPreviousWorktree: RetainedPreviousWorktree | null;
-        }>;
-      }
-    >
-  | SetupEvent<"failed", { failed: WorktreeSetupFailure }>;
+import type { DescriptorRpcTransport, RpcSubscription } from "./transport";
 
 export type WorktreeSetupEventHandler = Readonly<{
   onOpen?(): void;
-  onEvent(event: WorktreeSetupEvent): void;
+  onEvent(event: SetupEvent): void;
   onComplete(): void;
   onError(error: Error): void;
 }>;
+
+export function subscribeWorktreeSetup(
+  transport: DescriptorRpcTransport,
+  setupOperationID: SetupOperationID,
+  handler: WorktreeSetupEventHandler,
+): RpcSubscription {
+  let subscription: RpcSubscription | null = null;
+  let finished = false;
+  const finish = (notify?: () => void) => {
+    if (finished) return;
+    finished = true;
+    subscription?.close();
+    notify?.();
+  };
+  const method = SetupService.method.subscribe;
+  subscription = transport.subscribeDescriptor(
+    method,
+    create(method.input, { setupOperationId: setupOperationID.toJSONValue() }),
+    {
+      eventDescriptor: SetupEventSchema,
+      completionDescriptor: SetupCompletionSchema,
+      projectStart(result) {
+        requireWorktreeSuccess(method, result);
+      },
+      projectEvent(event) {
+        return event;
+      },
+      classifyCompletion(completion) {
+        return completion.code === undefined
+          ? { kind: "normal" }
+          : { kind: "error", code: completion.code, diagnostic: required(completion.diagnostic) };
+      },
+    },
+    {
+      ...(handler.onOpen === undefined
+        ? {}
+        : {
+            onOpen() {
+              if (!finished) handler.onOpen?.();
+            },
+          }),
+      onEvent(event) {
+        if (finished) return;
+        handler.onEvent(event);
+        if (event.phase.case !== "started") finish(handler.onComplete);
+      },
+      onTerminal(outcome) {
+        if (outcome.kind === "normal") finish(handler.onComplete);
+      },
+      onError(error) {
+        finish(() => {
+          handler.onError(error);
+        });
+      },
+    },
+  );
+  return { close: finish };
+}
+
+function required<Value>(value: Value | undefined): Value {
+  if (value === undefined) throw new ContractError("Required Worktree setup fact is missing.");
+  return value;
+}

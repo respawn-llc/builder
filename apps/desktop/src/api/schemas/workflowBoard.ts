@@ -21,7 +21,10 @@ import type {
   WorkflowBoard,
   ProjectWorkflowLink,
 } from "../models";
-import { retainedPreviousWorktreeSchema, type RetainedPreviousWorktree } from "../worktreeSetup";
+import { ContractError, RpcError } from "../errors";
+import { rpcErrorCodes } from "../rpcErrorCodes";
+import { parseSetupOperationID, type SetupOperationID } from "../setupOperationID";
+import type { WorkflowExecutionTargetSelection } from "../workflowExecutionTarget";
 import {
   attentionItemSchema,
   boardCardSchema,
@@ -40,6 +43,7 @@ import {
 } from "./common";
 import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
+import { workflowExecutionTargetSelectionSchema } from "./workflowExecutionTarget";
 import { labelIDListSchema } from "./workflowLabels";
 import { taskDependenciesSchema } from "./taskDependencies";
 export { projectTaskGroupCountsSchema, taskListPageSchema } from "./projectTasks";
@@ -49,6 +53,162 @@ export {
   taskDependencyListResponseSchema,
   taskDependencyRemoveResponseSchema,
 } from "./taskDependencies";
+
+const nullableNonBlank = nonBlankString.nullable();
+const workflowGitFactsSchema = z
+  .object({
+    canonical_root: nonBlankString,
+    head_object: nonBlankString,
+    branch_ref: nullableNonBlank,
+    branch_name: nullableNonBlank,
+    detached: z.boolean(),
+    bare: z.boolean(),
+    locked_reason: nullableNonBlank,
+    prunable_reason: nullableNonBlank,
+    is_main: z.boolean(),
+    path_available: z.boolean(),
+  })
+  .strict()
+  .transform((value) => ({
+    canonicalRoot: value.canonical_root,
+    headObject: value.head_object,
+    branchRef: value.branch_ref,
+    branchName: value.branch_name,
+    detached: value.detached,
+    bare: value.bare,
+    lockedReason: value.locked_reason,
+    prunableReason: value.prunable_reason,
+    isMain: value.is_main,
+    pathAvailable: value.path_available,
+  }));
+const workflowKentFactsSchema = z
+  .object({
+    worktree_id: nonBlankString,
+    canonical_root: nonBlankString,
+    display_name: nonBlankString,
+    managed: z.boolean(),
+    created_branch: z.boolean(),
+    origin_session_id: nullableNonBlank,
+  })
+  .strict()
+  .transform((value) => ({
+    worktreeID: value.worktree_id,
+    canonicalRoot: value.canonical_root,
+    displayName: value.display_name,
+    managed: value.managed,
+    createdBranch: value.created_branch,
+    originSessionID: value.origin_session_id,
+  }));
+const workflowRegisteredWorktreeSchema = z
+  .object({
+    variant: z.literal("registered"),
+    registered: z.object({ git: workflowGitFactsSchema, kent: workflowKentFactsSchema }).strict(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.registered.git.canonicalRoot !== value.registered.kent.canonicalRoot) {
+      context.addIssue({ code: "custom", message: "Registered Worktree roots must match." });
+    }
+  })
+  .transform((value) => ({ variant: value.variant, ...value.registered }));
+export type WorkflowRegisteredWorktree = z.output<typeof workflowRegisteredWorktreeSchema>;
+export type RetainedPreviousWorktree = Readonly<{ worktree: WorkflowRegisteredWorktree }>;
+const retainedPreviousWorktreeSchema: z.ZodType<RetainedPreviousWorktree> = z
+  .object({ worktree: workflowRegisteredWorktreeSchema })
+  .strict();
+
+export type TaskSetupRecovery = Readonly<{
+  setupOperationID: SetupOperationID;
+  cause: "process_exit" | "timeout" | "target_preparation" | "operational";
+  diagnostic: string;
+  scriptPath: string | null;
+  executionTarget: WorkflowExecutionTargetSelection;
+  retainedWorktree: Readonly<{ worktreeID: string; root: string }> | null;
+  retainedPreviousWorktree: Readonly<{ worktreeID: string; root: string }> | null;
+}>;
+const recoveryWorktreeSchema = z
+  .object({ worktree_id: nonBlankString, root: nonBlankString })
+  .strict()
+  .transform((value) => ({ worktreeID: value.worktree_id, root: value.root }));
+const setupOperationIDSchema = z.string().transform((value, context): SetupOperationID => {
+  try {
+    return parseSetupOperationID(value);
+  } catch {
+    context.addIssue({ code: "custom", message: "Setup operation id must be a UUID v4." });
+    return z.NEVER;
+  }
+});
+const taskSetupRecoverySchema: z.ZodType<TaskSetupRecovery> = z
+  .object({
+    setup_operation_id: setupOperationIDSchema,
+    cause: z.enum(["process_exit", "timeout", "target_preparation", "operational"]),
+    diagnostic: nonBlankString,
+    script_path: nullableNonBlank,
+    setup_requirement: z.enum(["required", "already_completed"]),
+    execution_target: workflowExecutionTargetSelectionSchema,
+    retained_worktree: recoveryWorktreeSchema.nullable(),
+    retained_previous_worktree: recoveryWorktreeSchema.nullable(),
+  })
+  .strict()
+  .transform((value) => ({
+    setupOperationID: value.setup_operation_id,
+    cause: value.cause,
+    diagnostic: value.diagnostic,
+    scriptPath: value.script_path,
+    executionTarget: value.execution_target,
+    retainedWorktree: value.retained_worktree,
+    retainedPreviousWorktree: value.retained_previous_worktree,
+  }));
+const taskSetupRecoveryEnvelopeSchema = z.object({ setup_recovery: taskSetupRecoverySchema.optional() }).loose();
+
+export function parseTaskSetupRecoveryDetail(detailJSON: string | null): TaskSetupRecovery | null {
+  if (detailJSON === null) return null;
+  let detail: unknown;
+  try {
+    detail = JSON.parse(detailJSON);
+  } catch {
+    throw new ContractError("Task setup recovery detail was not valid JSON.");
+  }
+  const parsed = taskSetupRecoveryEnvelopeSchema.safeParse(detail);
+  if (!parsed.success) throw new ContractError("Task setup recovery detail did not match GUI contract.");
+  return parsed.data.setup_recovery ?? null;
+}
+
+export class WorktreeSetupRetainedError extends RpcError {
+  constructor(
+    rpcError: RpcError,
+    readonly worktree: WorkflowRegisteredWorktree,
+    readonly scriptPath: string,
+    readonly diagnostic: string,
+    readonly retainedPreviousWorktree: RetainedPreviousWorktree | null,
+  ) {
+    super(rpcError);
+    this.name = "WorktreeSetupRetainedError";
+  }
+}
+const retainedErrorSchema = z
+  .object({
+    type: z.literal("worktree_setup_retained"),
+    worktree: workflowRegisteredWorktreeSchema,
+    script_path: nonBlankString,
+    diagnostic: nonBlankString,
+    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
+  })
+  .strict();
+
+export function decodeWorktreeSetupRetainedError(error: unknown): WorktreeSetupRetainedError | null {
+  if (!(error instanceof RpcError) || error.code !== rpcErrorCodes.worktreeSetupRetained) return null;
+  const parsed = retainedErrorSchema.safeParse(error.data);
+  return parsed.success
+    ? new WorktreeSetupRetainedError(
+        error,
+        parsed.data.worktree,
+        parsed.data.script_path,
+        parsed.data.diagnostic,
+        parsed.data.retained_previous_worktree,
+      )
+    : null;
+}
 
 const boardGroupsSchema = z
   .array(boardGroupSchema)

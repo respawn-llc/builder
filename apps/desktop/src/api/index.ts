@@ -70,19 +70,19 @@ export type { TaskSearchErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
-export { parseWorktreeOperationID, type WorktreeOperationID } from "./worktreeOperationID";
 export type * from "./schemas/worktree";
 export { rpcErrorCodes } from "./rpcErrorCodes";
-export { WorktreeError, WorktreeSetupRetainedError } from "./worktreeFailure";
-export type { WorktreeErrorDetail } from "./worktreeFailure";
+export { WorktreeError } from "./clientWorktree";
+export type { WorktreeErrorDetail } from "./clientWorktree";
 export { workflowIDSchema } from "./schemas/workflowID";
 export { nonBlankString } from "./schemas/common";
+export type { WorktreeSetupEventHandler } from "./worktreeSetup";
 export {
-  type WorktreeSetupEvent,
-  type WorktreeSetupEventHandler,
-  type WorktreeSetupPhase,
-} from "./worktreeSetup";
-export { parseTaskSetupRecoveryDetail, type TaskSetupRecovery } from "./schemas/workflowWorktree";
+  decodeWorktreeSetupRetainedError,
+  parseTaskSetupRecoveryDetail,
+  WorktreeSetupRetainedError,
+  type TaskSetupRecovery,
+} from "./schemas/workflowBoard";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
 export { workflowLabelMaxIDs } from "./workflowLabelContract";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
