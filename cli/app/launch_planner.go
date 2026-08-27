@@ -78,9 +78,7 @@ func (p *runtimeLaunchPlan) Rewire(ctx context.Context, source runtimeAttachment
 	if p.updateRequest != nil {
 		p.updateRequest(runtimeAttachmentRequest(plan))
 	}
-	if p.stopEventStreams != nil {
-		p.stopEventStreams()
-	}
+	p.stopStreams()
 	wiring, stop, err := prepareSharedRuntimeWiring(ctx, source.RuntimeAttachmentClients(), plan, p.reactivator)
 	if err != nil {
 		return err
@@ -89,6 +87,12 @@ func (p *runtimeLaunchPlan) Rewire(ctx context.Context, source runtimeAttachment
 	p.Wiring = wiring
 	p.stopEventStreams = func() { stopOnce.Do(stop) }
 	return nil
+}
+
+func (p *runtimeLaunchPlan) stopStreams() {
+	if p != nil && p.stopEventStreams != nil {
+		p.stopEventStreams()
+	}
 }
 
 func validateLaunchSessionTitle(value *string) (*string, error) {
@@ -115,9 +119,7 @@ func (p *runtimeLaunchPlan) closeWithPolicy(detachOnly bool) error {
 		return nil
 	}
 	p.closeOnce.Do(func() {
-		if p.stopEventStreams != nil {
-			p.stopEventStreams()
-		}
+		p.stopStreams()
 		if detachOnly && p.detachClose != nil {
 			p.closeErr = p.detachClose()
 		} else if p.close != nil {

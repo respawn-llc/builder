@@ -234,6 +234,9 @@ func TestRuntimeAttachmentRewireKeepsOwnerAndGenerationUntilFinalClose(t *testin
 	if err != nil {
 		t.Fatalf("prepareSharedRuntime: %v", err)
 	}
+	if plan.stopStreams(); releaseCalls != 0 {
+		t.Fatalf("stopping source streams released Runtime owner %d times", releaseCalls)
+	}
 	if err := plan.Rewire(context.Background(), server, sessionLaunchPlan{
 		SessionID:      "session-transfer",
 		ActiveSettings: config.Settings{Model: "target-model"},

@@ -81,12 +81,20 @@ func (g *Gateway) resolveSessionAttachmentTarget(ctx context.Context, state *con
 		}
 		return clientui.SessionExecutionTarget{}, metadata.Binding{}, err
 	}
+	return target, binding, nil
+}
+
+func (g *Gateway) resolveSessionAttachmentTargetInActiveProject(ctx context.Context, state *connectionState, sessionID string) (clientui.SessionExecutionTarget, metadata.Binding, error) {
+	target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID)
+	if err != nil {
+		return clientui.SessionExecutionTarget{}, metadata.Binding{}, err
+	}
 	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
 	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
 		activeProjectID = strings.TrimSpace(state.attachedProject)
 	}
 	if activeProjectID != "" && strings.TrimSpace(binding.ProjectID) != activeProjectID {
-		return clientui.SessionExecutionTarget{}, metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
+		return clientui.SessionExecutionTarget{}, metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: strings.TrimSpace(sessionID)}
 	}
 	return target, binding, nil
 }
@@ -121,7 +129,7 @@ func (g *Gateway) promptCommandWorkspaceRootForState(ctx context.Context, state 
 	if sessionID == nil {
 		return state.attachedWorkspaceRoot, nil
 	}
-	target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID.String())
+	target, binding, err := g.resolveSessionAttachmentTargetInActiveProject(ctx, state, sessionID.String())
 	if err != nil {
 		return "", err
 	}

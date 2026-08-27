@@ -193,8 +193,8 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		rpccontract.ScopeAttachSession,
 		"AttachSession",
 		routeScopeParams{sessionID: fixture.foreignSessionID},
-	); err == nil {
-		t.Fatal("attach foreign session unexpectedly allowed")
+	); err != nil {
+		t.Fatalf("attach foreign-Project session: %v", err)
 	}
 }
 

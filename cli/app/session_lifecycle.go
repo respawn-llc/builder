@@ -213,6 +213,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			target := transition.SessionRetargetSuccess
 			current, present := handoff.ProjectBinding()
 			if sessionRetargetBindingChanged(current, present, target) {
+				runtimePlan.stopStreams()
 				if _, err := handoff.ReattachSession(ctx, plan.SessionID); err != nil {
 					return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
 				}
