@@ -2693,7 +2693,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	if err := service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
 		SessionID: store.Meta().SessionID,
 		RequestID: runtimeids.NewCompactionRequestID(),
-		Args:      "compact",
+		Admission: serverapi.ManualCompactionAdmission{RestorationInput: "/compact"},
 	}); err != nil {
 		t.Fatalf("CompactContext scheduling: %v", err)
 	}
@@ -2801,20 +2801,23 @@ func TestServiceInterruptRejectsPendingSteeringBeforeStoppingActiveRun(t *testin
 	waitForRuntimeControlIdle(t, engine)
 }
 
-func TestServiceDiscardQueuedUserMessageIsRuntimeOnly(t *testing.T) {
+func TestServiceRemovePendingWorkIsRuntimeOnly(t *testing.T) {
 	ctx := context.Background()
 	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
 	queued := mustQueueRuntimeControlMessage(t, engine, "discard runtime only")
-	discardReq := serverapi.RuntimeDiscardQueuedUserMessageRequest{
-		SessionID:   sessionStore.Meta().SessionID,
-		QueueItemID: queued.ID,
-	}
-	discarded, err := service.DiscardQueuedUserMessage(ctx, discardReq)
+	queueItemID, err := runtimeids.ParseQueueItemID(queued.ID)
 	if err != nil {
-		t.Fatalf("DiscardQueuedUserMessage: %v", err)
+		t.Fatal(err)
 	}
-	if !discarded.Discarded {
-		t.Fatal("expected runtime discard to remove pending queue item")
+	removed, err := service.RemovePendingWork(ctx, serverapi.RuntimeRemovePendingWorkRequest{
+		SessionID: sessionStore.Meta().SessionID,
+		ItemID:    queueItemID,
+	})
+	if err != nil {
+		t.Fatalf("RemovePendingWork: %v", err)
+	}
+	if removed.Restoration.Message == nil || removed.Restoration.Message.Text != "discard runtime only" {
+		t.Fatalf("restoration = %+v", removed.Restoration)
 	}
 	if engine.HasQueuedUserWork() {
 		t.Fatal("expected runtime queue item removed")

@@ -147,10 +147,6 @@ func (c *reconnectRetryRuntimeControlClient) Interrupt(_ context.Context, req se
 	return c.interruptResp, nil
 }
 
-func (c *reconnectRetryRuntimeControlClient) DiscardQueuedUserMessage(context.Context, serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-	return serverapi.RuntimeDiscardQueuedUserMessageResponse{}, nil
-}
-
 func (c *reconnectRetryRuntimeControlClient) RecordPromptHistory(_ context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

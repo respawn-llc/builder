@@ -506,12 +506,6 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 		ToolCallID: "tool-1",
 		ToolName:   "shell",
 	}}
-	queuedText := "queued hydration"
-	hydration.QueuedMessages = []clientui.TranscriptQueuedMessageState{{
-		QueueItemID: runtimeids.NewQueueItemID(),
-		Status:      clientui.QueuedUserMessageAccepted,
-		Text:        &queuedText,
-	}}
 	hydration.PendingPrompts = []clientui.TranscriptPrompt{
 		testQuestionPrompt("prompt-1", "Approve hydration?", "yes"),
 	}

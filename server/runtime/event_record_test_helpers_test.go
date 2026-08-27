@@ -73,12 +73,3 @@ func mustQueuedUserMessageText(t *testing.T, item QueuedUserMessage) string {
 	}
 	return text
 }
-
-func mustDiscardQueuedUserMessage(
-	t *testing.T,
-	engine *Engine,
-	queueItemID string,
-) bool {
-	t.Helper()
-	return engine.DiscardQueuedUserMessage(queueItemID)
-}

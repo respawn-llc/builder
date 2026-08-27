@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"core/cli/tui/transcriptrender"
@@ -194,7 +195,11 @@ func (l uiViewLayout) queuedVisibleMessages() ([]queuedPaneEntry, int) {
 }
 
 func (l uiViewLayout) queuedMessages() []queuedPaneEntry {
-	entries := make([]queuedPaneEntry, 0, len(l.model.queued)+len(l.model.injectedQueue))
+	pending := pendingWorkInputs(l.model.pendingWork)
+	entries := make([]queuedPaneEntry, 0, len(pending)+len(l.model.queued)+len(l.model.injectedQueue))
+	for _, item := range pending {
+		entries = append(entries, queuedPaneEntry{ongoingLiveInput: item})
+	}
 	for _, message := range l.model.queued {
 		entries = append(entries, queuedPaneEntry{ongoingLiveInput: ongoingLiveInput{Text: message.Text, Disposition: ongoingLiveInputQueued}})
 	}
@@ -204,6 +209,7 @@ func (l uiViewLayout) queuedMessages() []queuedPaneEntry {
 		}
 		entries = append(entries, queuedPaneEntry{ongoingLiveInput: ongoingLiveInput{Text: message.Text, Disposition: ongoingLiveInputSteering}})
 	}
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Disposition < entries[j].Disposition })
 	return entries
 }
 

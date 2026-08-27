@@ -14,11 +14,15 @@ import (
 )
 
 func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandResult commands.Result, queuePosition preSubmitQueuePosition) (tea.Model, tea.Cmd) {
-	return c.applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult, queuePosition, activeSubmitOriginDirect)
+	return c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(commandResult, queuePosition, activeSubmitOriginDirect, "")
 }
 
 func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult commands.Result, queuePosition preSubmitQueuePosition, origin activeSubmitOrigin) (tea.Model, tea.Cmd) {
-	return c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(commandResult, queuePosition, origin, nil)
+	return c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(commandResult, queuePosition, origin, "")
+}
+
+func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(commandResult commands.Result, queuePosition preSubmitQueuePosition, origin activeSubmitOrigin, submittedText string) (tea.Model, tea.Cmd) {
+	return c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(commandResult, queuePosition, origin, nil, submittedText)
 }
 
 func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(
@@ -26,6 +30,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 	queuePosition preSubmitQueuePosition,
 	origin activeSubmitOrigin,
 	submissionOrder *inputSubmissionOrder,
+	submittedText string,
 ) (tea.Model, tea.Cmd) {
 	m := c.model
 	if commandResult.PromptCommand != nil {
@@ -132,7 +137,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 		next, cmd := c.handleQuestionsCommand(commandResult.QuestionsMode)
 		return next, sequenceCmds(prefixCmd, cmd)
 	case commands.ActionCompact:
-		return m, sequenceCmds(prefixCmd, c.startCompaction(commandResult.Args))
+		return m, sequenceCmds(prefixCmd, c.startCompaction(submittedText, commandResult.Args))
 	case commands.ActionStatus:
 		return m, sequenceCmds(prefixCmd, c.startStatusFlowCmd())
 	case commands.ActionGoal:

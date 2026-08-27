@@ -620,6 +620,10 @@ func protocolError(resp *protocol.ResponseError) error {
 		return serverapi.DecodeManualCompactionError(resp.Code, resp.Data)
 	case protocol.ErrCodeManualCompactionActive:
 		return serverapi.DecodeManualCompactionError(resp.Code, resp.Data)
+	case protocol.ErrCodePendingWorkNotPending:
+		return serverapi.DecodePendingWorkNotPendingError(resp.Data)
+	case protocol.ErrCodePendingWorkCapacity:
+		return serverapi.DecodePendingWorkCapacityError(resp.Data)
 	case protocol.ErrCodeStreamUnavailable:
 		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:
@@ -678,6 +682,10 @@ func decodeRuntimeCommandNotAcceptedError(data json.RawMessage) error {
 	case protocol.ErrCodeManualCompactionActive:
 		if !errors.Is(cause, serverapi.ErrManualCompactionActive) {
 			return errors.New("runtime command not-accepted response contains invalid manual-compaction cause data")
+		}
+	case protocol.ErrCodePendingWorkCapacity:
+		if !errors.Is(cause, serverapi.ErrPendingWorkCapacity) {
+			return errors.New("runtime command not-accepted response contains invalid Pending Work capacity cause data")
 		}
 	}
 	return errors.Join(serverapi.ErrRuntimeCommandNotAccepted, cause)

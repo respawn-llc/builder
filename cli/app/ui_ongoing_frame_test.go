@@ -8,6 +8,7 @@ import (
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"core/shared/runtimeinput"
 )
 
 func TestOngoingFrameInputUsesOperatorLocalSectionsAndCursor(t *testing.T) {
@@ -101,7 +102,7 @@ func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *te
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedMessageState)); err != nil {
+	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePendingWorkReplaced)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
 
@@ -134,7 +135,7 @@ func TestOngoingTranscriptControllerPreservesWrappedDisplayCursorTargetWithPrepe
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedMessageState)); err != nil {
+	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePendingWorkReplaced)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
 
@@ -242,6 +243,7 @@ func TestOngoingFrameInputKeepsServerBackedQueuedStateTranscriptOwned(t *testing
 func TestOngoingFrameInputStillRendersClientLocalQueuedMessages(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
 	m.queueInput("queued before server acceptance")
+	m.pendingWork = runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "server pending")}}
 
 	frame := m.ongoingFrameInput()
 
@@ -249,8 +251,8 @@ func TestOngoingFrameInputStillRendersClientLocalQueuedMessages(t *testing.T) {
 	if !ok {
 		t.Fatal("local queued section missing")
 	}
-	if len(section.StyledLines) != 1 || len(section.StyledLines[0].Spans) == 0 {
-		t.Fatalf("local queued styled lines = %+v, want one typed line", section.StyledLines)
+	if len(section.StyledLines) != 2 || len(section.StyledLines[0].Spans) == 0 {
+		t.Fatalf("merged queued styled lines = %+v, want server and local lines", section.StyledLines)
 	}
 	span := section.StyledLines[0].Spans[0]
 	role, semantic := span.Style.Role()

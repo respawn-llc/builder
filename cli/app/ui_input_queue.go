@@ -462,13 +462,14 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 		if _, knownCommand := m.commandRegistry.Command(text); knownCommand {
 			if commandResult := m.commandRegistry.Execute(text); commandResult.Handled {
 				if commandResult.Action == commands.ActionCompact {
-					return finalizeSlashCommandCmd(commandResult.Action, c.startCompaction(commandResult.Args), m.recordPromptHistory(text))
+					return finalizeSlashCommandCmd(commandResult.Action, c.startCompaction(text, commandResult.Args), m.recordPromptHistory(text))
 				}
 				_, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(
 					commandResult,
 					preSubmitQueueFront,
 					activeSubmitOriginQueued,
 					&item.submissionOrder,
+					text,
 				)
 				var recordCmd tea.Cmd
 				if commandResult.PromptCommand == nil {
@@ -584,7 +585,7 @@ func (m *uiModel) discardInjectedRuntimeQueueCommand(localID, serverID string, t
 			token:     token,
 			localID:   localID,
 			serverID:  serverID,
-			discarded: client.DiscardQueuedUserMessage(serverID),
+			discarded: client.RemovePendingWork(serverID),
 		}
 	}
 }
@@ -625,6 +626,11 @@ func (m *uiModel) hasEnqueuedInjectedRuntimeWork() bool {
 		}
 	}
 	return false
+}
+
+func (m *uiModel) applyPendingWorkReplacement(pending runtimeinput.PendingWork) tea.Cmd {
+	m.pendingWork = pending
+	return nil
 }
 
 func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreateDoneMsg) (tea.Model, tea.Cmd) {

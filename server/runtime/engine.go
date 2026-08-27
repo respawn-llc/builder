@@ -511,27 +511,35 @@ func (e *Engine) QueueUserMessage(ctx context.Context, text string) (QueuedUserM
 }
 
 func (e *Engine) queueUserMessage(ctx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return awaitEngineRuntimeOperation(ctx, e, func(context.Context) (QueuedUserMessage, error) {
-		return e.queueUserMessageRaw(text, forceAutoDrain, accept)
+	return awaitEngineRuntimeOperation(ctx, e, func(operationCtx context.Context) (QueuedUserMessage, error) {
+		return e.queueUserMessageRaw(operationCtx, text, forceAutoDrain, accept)
 	})
 }
 
-func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
+	if err := e.requirePendingWorkCapacity(); err != nil {
+		return QueuedUserMessage{}, err
+	}
+	association := queuedUserMessageAssociation{admission: runtimeOperationSequence(operationCtx)}
 	if !forceAutoDrain {
 		var item QueuedUserMessage
 		committed, err := runCommandAcceptance(accept, func() (bool, error) {
 			e.outputMutationMu.Lock()
 			defer e.outputMutationMu.Unlock()
 			var queueErr error
-			item, queueErr = e.messageFlow.QueueUserMessage(text)
+			item, queueErr = e.messageFlow.QueueUserMessage(text, association)
 			if queueErr != nil {
 				return false, queueErr
 			}
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 			return true, nil
 		})
-		return item, commandAcceptanceResult(committed, err)
+		if err := commandAcceptanceResult(committed, err); err != nil {
+			return QueuedUserMessage{}, err
+		}
+		e.publishPendingWorkSnapshot()
+		return item, nil
 	}
 	liveItem := QueuedUserMessage{
 		ID:      runtimeids.NewQueueItemID().String(),
@@ -548,7 +556,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 			}
 			livePublication = true
 			e.outputMutationMu.Lock()
-			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem)
+			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem, association)
 			if queueErr != nil {
 				e.outputMutationMu.Unlock()
 				queueItemID := mustQueueItemID(liveItem.ID)
@@ -572,6 +580,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 			} else {
 				e.scheduleQueuedUserInjectionsIfIdle()
 			}
+			e.publishPendingWorkSnapshot()
 			return item, nil
 		}
 		if livePublication {
@@ -593,7 +602,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		e.outputMutationMu.Lock()
 		defer e.outputMutationMu.Unlock()
 		var queueErr error
-		item, queueErr = e.messageFlow.QueueUserMessage(text)
+		item, queueErr = e.messageFlow.QueueUserMessage(text, association)
 		if queueErr != nil {
 			return false, queueErr
 		}
@@ -605,6 +614,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 	}
 	e.markQueuedUserInjectionForAutoDrain(item.ID)
 	e.scheduleQueuedUserInjectionsIfIdle()
+	e.publishPendingWorkSnapshot()
 	return item, nil
 }
 
@@ -630,19 +640,6 @@ func activeKindUsesLiveRun(kind ActiveKind) bool {
 
 func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
 	return kind.Valid() && kind != ActiveKindRuntimeMaintenance
-}
-
-func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
-	e.ensureOrchestrationCollaborators()
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
-	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)
-	if discarded {
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageDiscarded, "", false)
-	}
-	return discarded
 }
 
 func (e *Engine) Interrupt() error {

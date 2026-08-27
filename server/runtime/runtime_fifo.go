@@ -62,6 +62,17 @@ type runtimeOperation struct {
 	unavailable func()
 }
 
+type runtimeOperationSequenceKey struct{}
+
+func withRuntimeOperationSequence(ctx context.Context, sequence uint64) context.Context {
+	return context.WithValue(ctx, runtimeOperationSequenceKey{}, sequence)
+}
+
+func runtimeOperationSequence(ctx context.Context) uint64 {
+	sequence, _ := ctx.Value(runtimeOperationSequenceKey{}).(uint64)
+	return sequence
+}
+
 type runtimeOperationFIFO struct {
 	mu            sync.Mutex
 	ready         *sync.Cond
@@ -401,7 +412,7 @@ func (f *runtimeOperationFIFO) run() {
 		f.currentCancel = cancel
 		f.mu.Unlock()
 
-		operation.execute(ctx)
+		operation.execute(withRuntimeOperationSequence(ctx, operation.sequence))
 		cancel()
 
 		f.mu.Lock()
