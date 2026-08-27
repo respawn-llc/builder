@@ -1083,10 +1083,6 @@ func (t WorkflowRegisteredWorktreeTopology) Validate() error {
 	return nil
 }
 
-func (r WorkflowRetainedPreviousWorktree) Validate() error {
-	return r.Worktree.Validate()
-}
-
 type WorkflowSetupRetainedError struct {
 	Worktree                 WorkflowRegisteredWorktreeTopology `json:"worktree"`
 	ScriptPath               string                             `json:"script_path"`
@@ -1127,7 +1123,7 @@ func (e *WorkflowSetupRetainedError) Validate() error {
 		return err
 	}
 	if e.RetainedPreviousWorktree != nil {
-		if err := e.RetainedPreviousWorktree.Validate(); err != nil {
+		if err := e.RetainedPreviousWorktree.Worktree.Validate(); err != nil {
 			return err
 		}
 	}
