@@ -10,11 +10,9 @@ import (
 // ResolvePolicy is the sole authority for the effective Context window,
 // automatic threshold, and Compaction Mode after Agent-role settings and
 // provider capabilities have been resolved.
-// A nil effectiveCapabilities means that no provider contract is available,
-// so the configured Compaction Mode remains authoritative.
 func ResolvePolicy(
 	settings config.Settings,
-	effectiveCapabilities *llm.ProviderCapabilities,
+	effectiveCapabilities llm.ProviderCapabilities,
 	locked *session.LockedContract,
 ) Policy {
 	configuredWindow := settings.ModelContextWindow
@@ -28,7 +26,7 @@ func ResolvePolicy(
 			window = locked.ContextWindow
 		}
 		if lockedCapabilities, present := llm.ProviderCapabilitiesFromLocked(locked); present {
-			capabilities = &lockedCapabilities
+			capabilities = lockedCapabilities
 		}
 	}
 	threshold := min(max(settings.ContextCompactionThresholdTokens, 0), window)
@@ -57,21 +55,20 @@ func ApplyPolicy(settings config.Settings, policy Policy) config.Settings {
 
 func effectiveCompactionMode(
 	configured config.CompactionMode,
-	capabilities *llm.ProviderCapabilities,
+	capabilities llm.ProviderCapabilities,
 ) serverapi.ChatContextCompactionMode {
-	supportsProviderNative := capabilities != nil && capabilities.SupportsResponsesCompact
 	switch configured {
 	case config.CompactionModeNone:
 		return serverapi.ChatContextCompactionModeDisabled
 	case config.CompactionModeLocal:
 		return serverapi.ChatContextCompactionModeLocal
 	case config.CompactionModeNative:
-		if capabilities == nil || supportsProviderNative {
+		if capabilities.SupportsResponsesCompact {
 			return serverapi.ChatContextCompactionModeProviderNative
 		}
 		return serverapi.ChatContextCompactionModeLocal
 	default:
-		if supportsProviderNative {
+		if capabilities.SupportsResponsesCompact {
 			return serverapi.ChatContextCompactionModeProviderNative
 		}
 		return serverapi.ChatContextCompactionModeLocal

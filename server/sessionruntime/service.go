@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/server/chatcontext"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runlog"
 	"core/server/runtimewire"
@@ -153,14 +151,9 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		autoCompaction := effective.AutoCompaction
 		req.QuestionsEnabled = &questions
 		req.AutoCompactionEnabled = &autoCompaction
-		var capabilities *llm.ProviderCapabilities
-		if resolved, present := llm.ProviderCapabilitiesFromOverride(req.ActiveSettings.ProviderCapabilities); present {
-			capabilities = &resolved
+		if locked := store.Meta().Locked; locked != nil && locked.ContextWindow > 0 {
+			req.ActiveSettings.ModelContextWindow = locked.ContextWindow
 		}
-		req.ActiveSettings = chatcontext.ApplyPolicy(
-			req.ActiveSettings,
-			chatcontext.ResolvePolicy(req.ActiveSettings, capabilities, store.Meta().Locked),
-		)
 		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())
 		if planErr != nil {
 			return nil, nil, planErr

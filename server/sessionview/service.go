@@ -172,9 +172,8 @@ func (s *Service) readDormantSessionChatContext(ctx context.Context, sessionID r
 		completedCount = int64(*snapshot.Facts.CompletedCompactionCount)
 	}
 	manualEligible := snapshot.Facts.ManualCompactEligible != nil && *snapshot.Facts.ManualCompactEligible
-	capabilities := provider.Capabilities
 	return chatcontext.Project(chatcontext.ProjectionInput{
-		Policy:                   chatcontext.ResolvePolicy(current.Settings, &capabilities, snapshot.Meta.Locked),
+		Policy:                   chatcontext.ResolvePolicy(current.Settings, provider.Capabilities, snapshot.Meta.Locked),
 		UsedTokens:               usedTokens,
 		AutoCompactionEnabled:    current.AutoCompactionEnabled,
 		CompletedCompactionCount: completedCount,

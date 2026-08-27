@@ -16,8 +16,7 @@ func TestResolvePolicyUsesUnlockedFinalSettings(t *testing.T) {
 	settings.ContextCompactionThresholdTokens = 180_000
 	settings.CompactionMode = config.CompactionModeNative
 
-	capabilities := llm.ProviderCapabilities{SupportsResponsesCompact: true}
-	got := ResolvePolicy(settings, &capabilities, nil)
+	got := ResolvePolicy(settings, llm.ProviderCapabilities{SupportsResponsesCompact: true}, nil)
 
 	want := Policy{
 		ContextWindowTokens:      200_000,
@@ -43,11 +42,10 @@ func TestResolvePolicyPreservesLockedContinuityAndCurrentThreshold(t *testing.T)
 		},
 	}
 
-	capabilities := llm.ProviderCapabilities{
+	got := ResolvePolicy(settings, llm.ProviderCapabilities{
 		ProviderID:               "chatgpt-codex",
 		SupportsResponsesCompact: true,
-	}
-	got := ResolvePolicy(settings, &capabilities, locked)
+	}, locked)
 
 	if got.ContextWindowTokens != 120_000 ||
 		got.AutomaticThresholdTokens != 120_000 ||
@@ -59,41 +57,25 @@ func TestResolvePolicyPreservesLockedContinuityAndCurrentThreshold(t *testing.T)
 func TestResolvePolicyCompactionModes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name       string
-		mode       config.CompactionMode
-		providerID string
-		supports   bool
-		want       serverapi.ChatContextCompactionMode
+		name     string
+		mode     config.CompactionMode
+		supports bool
+		want     serverapi.ChatContextCompactionMode
 	}{
-		{name: "disabled", mode: config.CompactionModeNone, providerID: "test-provider", supports: true, want: serverapi.ChatContextCompactionModeDisabled},
-		{name: "local", mode: config.CompactionModeLocal, providerID: "test-provider", supports: true, want: serverapi.ChatContextCompactionModeLocal},
-		{name: "provider native", mode: config.CompactionModeNative, providerID: "test-provider", supports: true, want: serverapi.ChatContextCompactionModeProviderNative},
-		{name: "unsupported native falls back locally", mode: config.CompactionModeNative, providerID: "test-provider", supports: false, want: serverapi.ChatContextCompactionModeLocal},
+		{name: "disabled", mode: config.CompactionModeNone, supports: true, want: serverapi.ChatContextCompactionModeDisabled},
+		{name: "local", mode: config.CompactionModeLocal, supports: true, want: serverapi.ChatContextCompactionModeLocal},
+		{name: "provider native", mode: config.CompactionModeNative, supports: true, want: serverapi.ChatContextCompactionModeProviderNative},
+		{name: "unsupported native falls back locally", mode: config.CompactionModeNative, supports: false, want: serverapi.ChatContextCompactionModeLocal},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			settings := config.DefaultOnboardingSettings()
 			settings.CompactionMode = test.mode
-			capabilities := llm.ProviderCapabilities{
-				ProviderID:               test.providerID,
-				SupportsResponsesCompact: test.supports,
-			}
-			got := ResolvePolicy(settings, &capabilities, nil)
+			got := ResolvePolicy(settings, llm.ProviderCapabilities{SupportsResponsesCompact: test.supports}, nil)
 			if got.CompactionMode != test.want {
 				t.Fatalf("CompactionMode = %q, want %q", got.CompactionMode, test.want)
 			}
 		})
-	}
-}
-
-func TestResolvePolicyPreservesConfiguredCompactionWithoutCapabilities(t *testing.T) {
-	t.Parallel()
-	settings := config.DefaultOnboardingSettings()
-	settings.CompactionMode = config.CompactionModeNative
-
-	got := ResolvePolicy(settings, nil, nil)
-	if got.CompactionMode != serverapi.ChatContextCompactionModeProviderNative {
-		t.Fatalf("CompactionMode = %q, want configured provider-native mode", got.CompactionMode)
 	}
 }
 
@@ -115,7 +97,7 @@ func TestResolvePolicyNormalizesThresholdAndConfiguredWindow(t *testing.T) {
 			settings := config.DefaultOnboardingSettings()
 			settings.ModelContextWindow = test.window
 			settings.ContextCompactionThresholdTokens = test.threshold
-			got := ResolvePolicy(settings, nil, nil)
+			got := ResolvePolicy(settings, llm.ProviderCapabilities{}, nil)
 			if got.AutomaticThresholdTokens != test.want {
 				t.Fatalf("AutomaticThresholdTokens = %d, want %d", got.AutomaticThresholdTokens, test.want)
 			}
