@@ -26,8 +26,8 @@ func TestCodexTurnStateUsesInitialHTTPHeaderAndIgnoresMetadata(t *testing.T) {
 
 	dispatch := newTestCodexDispatch(t)
 	transport := newCanonicalOAuthTestTransport(t, server)
-	if _, err := transport.GenerateStreamWithEvents(context.Background(), testCodexOpenAIRequest(dispatch), StreamCallbacks{}); err != nil {
-		t.Fatalf("GenerateStreamWithEvents: %v", err)
+	if _, err := transport.Generate(context.Background(), testCodexOpenAIRequest(dispatch), StreamCallbacks{}); err != nil {
+		t.Fatalf("Generate: %v", err)
 	}
 	if got, ok := dispatch.currentTurnState(); !ok || got != "header-state" {
 		t.Fatalf("turn state = (%q, %v), want initial HTTP header", got, ok)
@@ -60,11 +60,6 @@ const completedResponseSSEJSON = `{"type":"response.completed","response":{"usag
 func writeCompletedResponseSSE(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", completedResponseSSEJSON)
-}
-
-func writeCompletedResponseJSON(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
 }
 
 func newTestCodexDispatch(t *testing.T) *CodexDispatchContext {

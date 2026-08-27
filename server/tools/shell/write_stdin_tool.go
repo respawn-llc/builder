@@ -33,8 +33,9 @@ const (
 )
 
 type WriteStdinTool struct {
-	outputLimit int
-	background  *Manager
+	outputLimit          int
+	oversizedOutputGuard oversizedOutputGuard
+	background           *Manager
 }
 
 type writeStdinOutput struct {
@@ -45,11 +46,15 @@ type writeStdinOutput struct {
 	BackgroundExitCode  *int   `json:"background_exit_code,omitempty"`
 }
 
-func NewWriteStdinTool(outputLimit int, background *Manager) *WriteStdinTool {
+func NewWriteStdinTool(outputLimit int, contextWindowTokens int, background *Manager) *WriteStdinTool {
 	if outputLimit <= 0 {
 		outputLimit = defaultLimit
 	}
-	return &WriteStdinTool{outputLimit: outputLimit, background: background}
+	return &WriteStdinTool{
+		outputLimit:          outputLimit,
+		oversizedOutputGuard: newOversizedOutputGuard(contextWindowTokens),
+		background:           background,
+	}
 }
 
 func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
@@ -89,6 +94,12 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 	if strings.TrimSpace(result.ToolError) != "" {
 		return tools.ErrorResultWith(c, formatToolError(result.Warning, result.ToolError), marshalNoHTMLEscape), nil
 	}
+	presentation := shellResultPresentationDelta(
+		result.RawOutputRequested,
+		result.Truncated,
+		false,
+		result.ExitCode,
+	)
 	body, marshalErr := marshalNoHTMLEscape(writeStdinOutput{
 		Output:              formatExecResponse(result),
 		BackgroundSessionID: in.SessionID,
@@ -99,16 +110,20 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 	if marshalErr != nil {
 		return tools.Result{}, marshalErr
 	}
+	var completedBackgroundSessionID *int
+	if result.Backgrounded && !result.Running && result.ExitCode != nil {
+		completedBackgroundSessionID = textutil.Value(in.SessionID)
+	}
+	if guarded, ok := t.oversizedOutputGuard.FailedResult(c, in.MaxOutputTokens, string(body), result.OutputPath, presentation); ok {
+		guarded.CompletedBackgroundSessionID = completedBackgroundSessionID
+		return guarded, nil
+	}
 	toolResult := tools.Result{
-		CallID: c.ID,
-		Name:   c.Name,
-		Output: body,
-		PresentationDelta: shellResultPresentationDelta(
-			result.RawOutputRequested,
-			result.Truncated,
-			false,
-			result.ExitCode,
-		),
+		CallID:                       c.ID,
+		Name:                         c.Name,
+		Output:                       body,
+		PresentationDelta:            presentation,
+		CompletedBackgroundSessionID: completedBackgroundSessionID,
 	}
 	return toolResult, nil
 }

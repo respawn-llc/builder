@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
@@ -53,12 +52,11 @@ func TestRuntimeUserTurnInputRejectsInvalidCardinality(t *testing.T) {
 
 func TestRuntimeSubmitUserTurnRequestUsesInputAndRejectsMissingInput(t *testing.T) {
 	req := RuntimeSubmitUserTurnRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       "session-1",
-		Input:           runtimeinput.Text("hello"),
+		SessionID: "session-1",
+		Input:     runtimeinput.Text("hello"),
 	}
 	if err := req.Validate(); err != nil {
-		t.Fatalf("Validate valid input: %v", err)
+		t.Fatalf("Validate valid request: %v", err)
 	}
 	req.Input = RuntimeUserTurnInput{}
 	if err := req.Validate(); err == nil {

@@ -8,7 +8,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/sessionruntime"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -17,7 +16,7 @@ import (
 
 func BuildCurrentNodeRuntimeConfig(
 	input workflowstore.CurrentNodeStartContext,
-	lease sessionruntime.WorkflowExecutionLease,
+	scopeID runtimeids.ExecutionScopeID,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	completionMode workflowruntime.CompletionMode,
 	maxInvalidCompletionAttempts int,
@@ -29,16 +28,10 @@ func BuildCurrentNodeRuntimeConfig(
 	if err != nil {
 		return nil, err
 	}
-	contract, err := workflowruntime.NewCompletionContract(
-		workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("prepare current node completion contract: %w", err)
-	}
 	return &workflowruntime.CurrentNodeExecutionConfig{
-		ScopeID:                      lease.ScopeID(),
+		ScopeID:                      scopeID,
 		TaskPromptDelivery:           taskPromptDelivery,
-		Contract:                     contract,
+		Contract:                     workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)},
 		CompletionMode:               completionMode,
 		MaxInvalidCompletionAttempts: maxInvalidCompletionAttempts,
 		UseAutomaticToolChoice:       !useRequiredToolCalls,

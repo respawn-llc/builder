@@ -3,13 +3,12 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -29,48 +28,36 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 			remoteCompactionReplacement(1_000, 100, 2_500),
 		},
 	}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:               "gpt-5",
 		CompactionMode:      "native",
 		ContextWindowTokens: 2_500,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	restoreStep := setTestActiveStep(engine, "input")
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	if err := engine.steer("tool", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
-			ID:    "call-1",
-			Name:  string(toolspec.ToolExecCommand),
-			Input: json.RawMessage(`{"command":"pwd"}`),
-		}}}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+		ID:    "call-1",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"pwd"}`),
+	}}}})); err != nil {
 		t.Fatalf("persist tool call: %v", err)
 	}
-	if err := engine.steer("tool", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{
-			Role:       llm.RoleTool,
-			ToolCallID: textutil.Value("call-1"),
-			Name:       textutil.Value(string(toolspec.ToolExecCommand)),
-			Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 4_000) + `"}`),
-		}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
+		Role:       llm.RoleTool,
+		ToolCallID: textutil.Value("call-1"),
+		Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+		Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 4_000) + `"}`),
+	}})); err != nil {
 		t.Fatalf("persist tool output: %v", err)
 	}
+	restoreStep()
 
 	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact context after overflow: %v", err)
+		t.Fatalf("schedule compaction after overflow: %v", err)
 	}
+	waitEngineLifecycleTasks(t, engine)
 	if len(client.compactionCalls) != 2 || len(client.calls) != 0 {
 		t.Fatalf(
 			"remote/local compaction calls = %d/%d, want two/zero",
@@ -78,7 +65,6 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 			len(client.calls),
 		)
 	}
-	assertFreshCompactionDispatchesWithSameMetadata(t, client.compactionCalls, llm.CodexRequestKindCompaction)
 	for _, item := range client.compactionCalls[1].InputItems {
 		if item.Type == llm.ResponseItemTypeFunctionCallOutput &&
 			item.CallID != nil &&
@@ -90,81 +76,6 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 	t.Fatal("overflow retry omitted collapsed typed tool output")
 }
 
-func TestRemoteCompactionInheritsEffectiveFastMode(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := &fakeCompactionClient{
-		compactionResponses: []llm.CompactionResponse{remoteCompactionReplacement(1_000, 100, 2_500)},
-		caps: llm.ProviderCapabilities{
-			ProviderID:               "chatgpt-codex",
-			SupportsResponsesAPI:     true,
-			SupportsResponsesCompact: true,
-			IsOpenAIFirstParty:       true,
-		},
-	}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
-		Model:           "gpt-5.6-sol",
-		CompactionMode:  "native",
-		FastModeEnabled: true,
-	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
-		t.Fatalf("persist compaction input: %v", err)
-	}
-
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact context: %v", err)
-	}
-	if len(client.compactionCalls) != 1 {
-		t.Fatalf("compaction calls = %d, want one", len(client.compactionCalls))
-	}
-	if !client.compactionCalls[0].FastMode {
-		t.Fatal("remote compaction did not inherit effective Fast Mode")
-	}
-}
-
-func TestRemoteCompactionTransientRetryReusesUnchangedDispatchState(t *testing.T) {
-	withCompactionRetryDelays(t, []time.Duration{0})
-	store := mustCreateTestSession(t)
-	client := &fakeCompactionClient{
-		compactionErrors: []error{
-			errors.New("temporary provider failure"),
-			nil,
-		},
-		compactionResponses: []llm.CompactionResponse{remoteCompactionReplacement(1_000, 100, 2_500)},
-	}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
-		Model:          "gpt-5",
-		CompactionMode: "native",
-	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
-		t.Fatalf("persist compaction input: %v", err)
-	}
-
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact context: %v", err)
-	}
-	if len(client.compactionCalls) != 2 {
-		t.Fatalf("compaction calls = %d, want transient retry", len(client.compactionCalls))
-	}
-	first := client.compactionCalls[0].CodexDispatch
-	second := client.compactionCalls[1].CodexDispatch
-	if first == nil || second == nil {
-		t.Fatal("transient retry omitted Codex dispatch state")
-	}
-	if first != second {
-		t.Fatal("unchanged transient retry allocated a fresh dispatch-state handle")
-	}
-}
-
 func TestRemoteCompactionFailureAndCheckpointFallback(t *testing.T) {
 	t.Run("non-overflow provider 400 fails without replacement or fallback", func(t *testing.T) {
 		store, client, engine := newRemoteCompactionFixture(t, &llm.ProviderAPIError{
@@ -172,11 +83,19 @@ func TestRemoteCompactionFailureAndCheckpointFallback(t *testing.T) {
 			StatusCode: 400,
 			Code:       llm.UnifiedErrorCodeUnknown,
 		})
+		var events []Event
+		engine.cfg.OnEvent = func(event Event) {
+			events = append(events, event)
+		}
+		if err := engine.CompactContext(context.Background(), ""); err != nil {
+			t.Fatalf("schedule compaction: %v", err)
+		}
+		waitEngineLifecycleTasks(t, engine)
 		assertRemoteCompactionFailureWithoutReplacementOrFallback(
 			t,
 			store,
 			client,
-			engine.CompactContext(context.Background(), ""),
+			events,
 			1,
 		)
 	})
@@ -187,22 +106,23 @@ func TestRemoteCompactionFailureAndCheckpointFallback(t *testing.T) {
 			StatusCode: 404,
 			Code:       llm.UnifiedErrorCodeUnknown,
 		})
-		err := engine.CompactContext(context.Background(), "")
-		var providerErr *llm.ProviderAPIError
-		if !errors.As(err, &providerErr) {
-			t.Fatalf("compaction error type = %T, want ProviderAPIError", err)
+		var events []Event
+		engine.cfg.OnEvent = func(event Event) {
+			events = append(events, event)
 		}
-		if providerErr.StatusCode != 404 {
-			t.Fatalf("provider error status = %d, want 404", providerErr.StatusCode)
+		if err := engine.CompactContext(context.Background(), ""); err != nil {
+			t.Fatalf("schedule compaction: %v", err)
 		}
-		assertRemoteCompactionFailureWithoutReplacementOrFallback(t, store, client, err, 1)
+		waitEngineLifecycleTasks(t, engine)
+		assertRemoteCompactionFailureWithoutReplacementOrFallback(t, store, client, events, 1)
 	})
 
 	t.Run("missing checkpoint falls back to local", func(t *testing.T) {
 		_, client, engine := newRemoteCompactionFixture(t, nil)
 		if err := engine.CompactContext(context.Background(), ""); err != nil {
-			t.Fatalf("compact context: %v", err)
+			t.Fatalf("schedule compaction: %v", err)
 		}
+		waitEngineLifecycleTasks(t, engine)
 		summaries := 0
 		for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
 			if item.Type == llm.ResponseItemTypeMessage &&
@@ -243,18 +163,15 @@ func newRemoteCompactionFixture(
 			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 		}},
 	}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:          "gpt-5",
 		CompactionMode: "native",
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	restoreStep := setTestActiveStep(engine, "input")
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
+	restoreStep()
 	return store, client, engine
 }
 
@@ -262,12 +179,12 @@ func assertRemoteCompactionFailureWithoutReplacementOrFallback(
 	t *testing.T,
 	store *session.Store,
 	client *fakeCompactionClient,
-	err error,
+	events []Event,
 	wantRemoteCalls int,
 ) {
 	t.Helper()
-	if err == nil {
-		t.Fatal("compact context succeeded after provider failure")
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("compaction events = %+v, want failed event", events)
 	}
 	if len(client.compactionCalls) != wantRemoteCalls || len(client.calls) != 0 {
 		t.Fatalf(

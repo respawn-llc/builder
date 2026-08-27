@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -42,9 +43,9 @@ func TestGenerateWithRetryClient_DoesNotInventCompactionCauseWithoutPriorLineage
 		t.Fatalf("reopen store: %v", err)
 	}
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 12}}}}
-	eng := mustNewTestEngine(t, reopened, client, newTestToolRegistry(t), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeVerbose})
+	eng := mustNewTestEngine(t, reopened, client, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeVerbose})
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest(reopened.Meta().SessionID, "beta"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest(reopened.Meta().SessionID, "beta")); err != nil {
 		t.Fatalf("generate after reopen: %v", err)
 	}
 

@@ -445,14 +445,12 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 				}
 			}
 			for _, message := range append(test.persistedMessages, llm.Message{Role: llm.RoleUser, Content: textutil.Value("continue")}) {
-				if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+				if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 					t.Fatalf("append message: %v", err)
 				}
 			}
 			completeManualEligibilityAgentStep(t, eng)
-			if err := eng.CompactContext(context.Background(), ""); err != nil {
-				t.Fatalf("compact: %v", err)
-			}
+			scheduleManualCompactionAndWait(t, eng)
 
 			headlessCount := 0
 			exitCount := 0

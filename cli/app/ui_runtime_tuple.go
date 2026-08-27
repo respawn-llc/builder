@@ -88,6 +88,7 @@ func runtimeTupleMatchesView(candidate runtimeTupleCandidate, view clientui.Runt
 
 func runtimeActivitiesEqual(left, right clientui.RuntimeActivity) bool {
 	if left.State != right.State ||
+		left.Reviewer != right.Reviewer ||
 		left.QueueAccepting != right.QueueAccepting ||
 		left.DiagnosticRecovery != right.DiagnosticRecovery {
 		return false

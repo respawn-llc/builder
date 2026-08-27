@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
@@ -15,7 +14,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/worktreecontract"
 )
 
 type ActiveRuntimeMaintenance struct {
@@ -59,11 +57,21 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 func (a *Authority) RunWorktreeTransition(
 	ctx context.Context,
 	sessionID string,
-	origin *worktreecontract.RuntimeStepOrigin,
-	fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+	transition clientui.WorktreeTransitionKind,
+	fn func(
+		context.Context,
+		func(func() error) error,
+		func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error,
+		func(clientui.WorktreeTransitionOutcome) error,
+	) error,
 ) error {
 	if fn == nil {
 		return nil
+	}
+	switch transition {
+	case clientui.WorktreeTransitionEnter, clientui.WorktreeTransitionLeave:
+	default:
+		return errors.New("worktree transition kind is invalid")
 	}
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
@@ -71,79 +79,59 @@ func (a *Authority) RunWorktreeTransition(
 	}
 	return a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
 		if resource == nil {
-			if origin != nil {
-				return false, worktreecontract.NewImmediateTransitionError(
-					worktreecontract.ImmediateTransitionOriginInactive,
-					runtimeUnavailableErr(id.String()),
-				)
-			}
-			return false, fn(runCtx, func(apply func() error) error { return apply() }, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-				if err := context.Cause(syncCtx); err != nil {
-					return err
-				}
-				_, normalizedReminder, err := normalizeTarget(target, reminder)
-				if err != nil || normalizedReminder == nil {
-					return err
-				}
-				return store.SetWorktreeReminderState(normalizedReminder)
-			})
-		}
-		if origin == nil {
-			var retire bool
-			err := engine.RunWorktreeTransition(runCtx, func() error {
-				active := true
-				defer func() { active = false }()
-				return fn(runCtx, func(apply func() error) error { return apply() }, func(_ context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-					if !active {
-						return errors.New("worktree transition target synchronizer is no longer active")
-					}
-					normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
-					if err != nil {
+			return false, fn(
+				runCtx,
+				func(apply func() error) error { return apply() },
+				func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+					if err := context.Cause(syncCtx); err != nil {
 						return err
 					}
-					var syncErr error
-					retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
-					return syncErr
-				})
-			})
-			return retire, err
-		}
-		activeStep := runtimeactivity.ActiveStepFromProvider(engine)
-		if activeStep == nil || activeStep.RunID != origin.RunID || activeStep.StepID != origin.StepID {
-			return false, worktreecontract.NewImmediateTransitionError(
-				worktreecontract.ImmediateTransitionOriginInactive,
-				runtime.ErrActiveStepInactive,
+					_, normalizedReminder, err := normalizeTarget(target, reminder)
+					if err != nil || normalizedReminder == nil {
+						return err
+					}
+					return store.SetWorktreeReminderState(normalizedReminder)
+				},
+				func(clientui.WorktreeTransitionOutcome) error { return nil },
 			)
 		}
-		active := true
-		defer func() { active = false }()
-		authority := func(apply func() error) error {
-			if !active {
-				return runtime.ErrActiveStepInactive
-			}
-			return engine.ApplyForActiveStep(origin.StepID, apply)
-		}
 		retire := false
-		err := fn(runCtx, authority, func(_ context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-			if !active {
-				return runtime.ErrActiveStepInactive
-			}
-			normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
-			if err != nil {
-				return err
-			}
-			var syncErr error
-			retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
-			return syncErr
+		err := engine.RunWorktreeTransition(runCtx, func() error {
+			active := true
+			defer func() { active = false }()
+			return fn(
+				runCtx,
+				func(apply func() error) error { return apply() },
+				func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+					return engine.ApplyWorktreeTransitionTerminal(syncCtx, func(operationCtx context.Context) error {
+						if err := context.Cause(operationCtx); err != nil {
+							return err
+						}
+						if !active {
+							return errors.New("worktree transition target synchronizer is no longer active")
+						}
+						normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
+						if err != nil {
+							return err
+						}
+						var syncErr error
+						retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
+						return syncErr
+					})
+				},
+				func(outcome clientui.WorktreeTransitionOutcome) error {
+					if !active {
+						return errors.New("worktree transition failure synchronizer is no longer active")
+					}
+					return engine.SteerWorktreeTransitionFailure(outcome)
+				},
+			)
 		})
-		if err != nil {
-			kind := worktreecontract.ImmediateTransitionApplyFailed
-			if errors.Is(err, runtime.ErrActiveStepInactive) {
-				kind = worktreecontract.ImmediateTransitionOriginInactive
-			}
-			return retire, worktreecontract.NewImmediateTransitionError(kind, err)
+		if errors.Is(err, runtime.ErrReviewerRunning) ||
+			errors.Is(err, runtime.ErrWorktreeDeleteBlockedByQueuedWork) {
+			err = errors.Join(serverapi.ErrWorktreeBlocked, err)
 		}
-		return retire, nil
+		return retire, err
 	})
 }
 
@@ -212,16 +200,6 @@ func (a *Authority) ClearWorktreeReminder(ctx context.Context, sessionID string)
 	})
 }
 
-func (a *Authority) SteerWorktreeTransitionFailure(ctx context.Context, sessionID string, outcome clientui.WorktreeTransitionOutcome) error {
-	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-	if err != nil {
-		return err
-	}
-	return a.WithCurrentRuntime(ctx, id, func(_ context.Context, engine *runtime.Engine) error {
-		return engine.SteerWorktreeTransitionFailure(outcome)
-	})
-}
-
 func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID string) (bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -243,15 +221,63 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 		return false, nil
 	}
 	resource.mu.Lock()
-	active := resource.state != AgentResourceReady ||
-		resource.current != nil ||
-		len(resource.steps) != 0
+	state := resource.state
+	current := resource.current
+	steps := resource.steps
 	engine := resource.engine
 	resource.mu.Unlock()
+	snapshot := engine.ActiveRun()
+	maintenanceStep := steps != 0 && snapshot != nil && snapshot.ActiveKind == runtime.ActiveKindRuntimeMaintenance
+	active := state != AgentResourceReady ||
+		current != nil ||
+		(steps != 0 && !maintenanceStep)
 	if !active && engine != nil {
-		active = engine.HasActiveLiveRunGroup()
+		liveRun := engine.HasActiveLiveRunGroup()
+		if snapshot != nil && snapshot.ActiveKind == runtime.ActiveKindRuntimeMaintenance {
+			liveRun = false
+		}
+		active = liveRun ||
+			engine.HasPendingRuntimeOperations() ||
+			engine.HasQueuedUserWork() ||
+			engine.HasScheduledQueuedUserWork() ||
+			engine.CurrentNodeExecutionConfigured() ||
+			engine.ReviewerRunning()
 	}
 	return active, nil
+}
+
+func (a *Authority) RetireIdleRuntime(ctx context.Context, sessionID string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return false, err
+	}
+	gate := a.gateFor(id)
+	if err := gate.lock.LockContext(ctx); err != nil {
+		return false, err
+	}
+	defer gate.lock.Unlock()
+	a.mu.Lock()
+	resource := a.resources[id]
+	a.mu.Unlock()
+	if resource == nil {
+		return true, nil
+	}
+	resource.mu.Lock()
+	if resource.state != AgentResourceReady ||
+		resource.current != nil ||
+		resource.pins != 0 ||
+		resource.callbacks != 0 ||
+		resource.steps != 0 ||
+		resource.engine == nil ||
+		!resource.engine.BeginRetirement() {
+		resource.mu.Unlock()
+		return false, nil
+	}
+	closed, err := a.closeAdmittedResourceLocked(ctx, resource)
+	return closed, err
 }
 
 func (a *Authority) routeBackgroundEvent(event shelltool.Event) bool {

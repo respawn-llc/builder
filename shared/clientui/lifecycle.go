@@ -81,44 +81,6 @@ func (s RunLifecycle) IsGoalLoopRunning() bool {
 	return s.Phase == RunLifecycleRunning && s.Mode == RunModeGoalLoop
 }
 
-type ReviewerLifecycle string
-
-const (
-	ReviewerLifecycleIdle            ReviewerLifecycle = "idle"
-	ReviewerLifecycleRunningBlocking ReviewerLifecycle = "running_blocking"
-	ReviewerLifecycleRunningAsync    ReviewerLifecycle = "running_async"
-)
-
-func NewReviewerLifecycle(running bool, blocking bool) (ReviewerLifecycle, error) {
-	if !running {
-		if blocking {
-			return "", fmt.Errorf("reviewer cannot block while idle")
-		}
-		return ReviewerLifecycleIdle, nil
-	}
-	if blocking {
-		return ReviewerLifecycleRunningBlocking, nil
-	}
-	return ReviewerLifecycleRunningAsync, nil
-}
-
-func (s ReviewerLifecycle) Validate() error {
-	switch s {
-	case "", ReviewerLifecycleIdle, ReviewerLifecycleRunningBlocking, ReviewerLifecycleRunningAsync:
-		return nil
-	default:
-		return fmt.Errorf("unsupported reviewer lifecycle %q", s)
-	}
-}
-
-func (s ReviewerLifecycle) IsRunning() bool {
-	return s == ReviewerLifecycleRunningBlocking || s == ReviewerLifecycleRunningAsync
-}
-
-func (s ReviewerLifecycle) IsBlocking() bool {
-	return s == ReviewerLifecycleRunningBlocking
-}
-
 type RuntimeConnectionLifecycle string
 
 const (

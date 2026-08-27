@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 
@@ -34,18 +33,20 @@ type CurrentNodeAutomaticIntent struct {
 }
 
 type CurrentNodeCompletionResult struct {
-	Mutation                 workflow.CurrentNodeMutationResult
-	Handoff                  CompletionHandoff
-	AutomaticIntents         []CurrentNodeAutomaticIntent
-	PendingApproval          *workflow.PendingApproval
-	SessionReuse             *workflow.SessionReuseAnalysisInput
-	PostCompletionEligible   bool
-	retainedTargetInvariants []workflow.RetainedTargetInvariantDetail
-	legacyFallbacks          []legacyContinuationSourceFallbackDetail
+	Mutation                   workflow.CurrentNodeMutationResult
+	Handoff                    CompletionHandoff
+	AutomaticIntents           []CurrentNodeAutomaticIntent
+	PendingApproval            *workflow.PendingApproval
+	SessionReuseClassification workflow.SessionReuseClassification
+	SourceSessionID            *runtimeids.SessionID
+	PostCompletionEligible     bool
+	legacyFallbacks            []legacyContinuationSourceFallbackDetail
 }
 
-func (r CurrentNodeCompletionResult) Committed() bool {
-	return r.PendingApproval != nil || len(r.Mutation.Removed) != 0
+type CurrentNodeCompletionOutcome struct {
+	CommitReceipt session.CommitReceipt
+	CurrentNodeCompletionResult
+	PostCommitDiagnostic error
 }
 
 // ErrCurrentNodeCompletionSelectorAmbiguous means a completion selector
@@ -57,29 +58,6 @@ var ErrCurrentNodeCompletionSelectorAmbiguous = errors.New("current node complet
 type IdleCurrentNodeSelector struct {
 	TaskID    *workflow.TaskID
 	SessionID *runtimeids.SessionID
-}
-
-func (s *Store) publishCommittedCurrentNodeCompletionEvent(
-	ctx context.Context,
-	source workflow.CurrentNodeReference,
-) {
-	err := s.publishCurrentNodeTaskEvent(
-		ctx,
-		source.TaskID,
-		serverapi.WorkflowProjectEventActionCompleted,
-	)
-	if err == nil {
-		return
-	}
-	attrs := []any{
-		"task_id", source.TaskID,
-		"node_id", source.NodeID,
-		"error", err,
-	}
-	if branchKey, branchScoped := source.TransitionBranchKey(); branchScoped {
-		attrs = append(attrs, "transition_branch_key", branchKey)
-	}
-	slog.Warn("record committed Current Node completion event diagnostic", attrs...)
 }
 
 // ResolveIdleExecutableCurrentNode selects exactly one current executable node
@@ -156,48 +134,51 @@ func (s *Store) ResolveIdleExecutableCurrentNode(ctx context.Context, selector I
 	}
 }
 
-func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompletionRequest) (result CurrentNodeCompletionResult, resultErr error) {
+func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompletionRequest) (outcome CurrentNodeCompletionOutcome, resultErr error) {
 	defer func() {
 		reportWorkflowInvariantError(s.invariantPolicy, resultErr)
 	}()
+	definitelyUncommitted := func(err error) (CurrentNodeCompletionOutcome, error) {
+		return CurrentNodeCompletionOutcome{}, session.DefinitelyUncommittedMutation(err)
+	}
 	prepared, err := prepareCurrentNodeCompletionRequest(req)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	task, err := s.queries.GetTask(ctx, string(prepared.Source.TaskID))
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	definition, workflowRecord, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	if err := s.preflightInitialExecution(definition); err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	source, err := currentNodeDefinitionNode(definition, prepared.Source.NodeID)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	if !executableNodeKind(source.Kind()) {
-		return CurrentNodeCompletionResult{}, errors.New("current node is not executable")
+		return definitelyUncommitted(errors.New("current node is not executable"))
 	}
 	group, targets, err := currentNodeCompletionTransition(definition, source, prepared.TransitionID)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	connection, err := s.db.Conn(ctx)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	defer func() { _ = connection.Close() }()
 	lifecycle := sqlitelifecyclegen.New(connection)
 	if err := lifecycle.SetBusyTimeout15Seconds(ctx); err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	defer func() { _ = lifecycle.SetBusyTimeout5Seconds(context.Background()) }()
 	if err := lifecycle.BeginImmediate(ctx); err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	nowTime := s.now().UTC()
 	now := nowTime.UnixMilli()
@@ -217,19 +198,63 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	q := sqlitegen.New(connection)
 	currentSource, err := s.currentNodeForReference(ctx, q, prepared.Source)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	if _, pending, err := currentNodePendingApprovalID(ctx, q, currentSource.Reference); err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	} else if pending {
-		return CurrentNodeCompletionResult{}, ErrCurrentNodePendingApproval
+		return definitelyUncommitted(ErrCurrentNodePendingApproval)
 	}
 	issues, err := s.currentNodeCompletionOutputIssues(ctx, q, definition, group, source, targets, currentSource, prepared.OutputValues)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	if len(issues) > 0 {
-		return CurrentNodeCompletionResult{}, CompletionValidationError{Issues: issues}
+		return definitelyUncommitted(CompletionValidationError{Issues: issues})
+	}
+	workflowID := task.WorkflowID
+	event := WorkflowEventRecord{
+		ProjectID:       &task.ProjectID,
+		WorkflowID:      &workflowID,
+		Resource:        serverapi.WorkflowProjectEventResourceTask,
+		Action:          serverapi.WorkflowProjectEventActionCompleted,
+		PrimaryEntityID: string(prepared.Source.TaskID),
+	}
+	finish := func(
+		result CurrentNodeCompletionResult,
+		acceptedBranches []workflow.Edge,
+	) (CurrentNodeCompletionOutcome, error) {
+		result, err = completeCurrentNodePostTurnFacts(
+			ctx,
+			q,
+			definition,
+			currentSource,
+			acceptedBranches,
+			source.Kind() == workflow.NodeKindAgent,
+			result,
+		)
+		if err != nil {
+			return definitelyUncommitted(err)
+		}
+		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
+			return definitelyUncommitted(err)
+		}
+		if err := commit(); err != nil {
+			return CurrentNodeCompletionOutcome{}, err
+		}
+		outcome := CurrentNodeCompletionOutcome{
+			CommitReceipt:               session.CommitReceipt{Committed: true},
+			CurrentNodeCompletionResult: result,
+		}
+		for _, detail := range result.legacyFallbacks {
+			reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, detail)
+		}
+		if len(result.Mutation.Removed) != 0 {
+			if err := s.PublishWorkflowEvent(ctx, event); err != nil {
+				outcome.PostCommitDiagnostic = fmt.Errorf("publish current node task event: %w", err)
+			}
+		}
+		return outcome, nil
 	}
 	if len(targets) > 1 {
 		result, err := completeCurrentNodeFanout(
@@ -249,26 +274,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			nowTime,
 		)
 		if err != nil {
-			return CurrentNodeCompletionResult{}, err
+			return definitelyUncommitted(err)
 		}
-		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, completionTargetEdges(targets))
-		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
-		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
-			return CurrentNodeCompletionResult{}, err
-		}
-		if err := commit(); err != nil {
-			return CurrentNodeCompletionResult{}, err
-		}
-		for _, detail := range result.retainedTargetInvariants {
-			reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, detail)
-		}
-		for _, detail := range result.legacyFallbacks {
-			reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, detail)
-		}
-		if len(result.Mutation.Removed) > 0 {
-			s.publishCommittedCurrentNodeCompletionEvent(ctx, prepared.Source)
-		}
-		return result, nil
+		return finish(result, completionTargetEdges(targets))
 	}
 	target := targets[0]
 	if target.Node.Kind() == workflow.NodeKindJoin {
@@ -285,26 +293,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			nowTime,
 		)
 		if err != nil {
-			return CurrentNodeCompletionResult{}, err
+			return definitelyUncommitted(err)
 		}
-		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
-			return CurrentNodeCompletionResult{}, err
-		}
-		if err := commit(); err != nil {
-			return CurrentNodeCompletionResult{}, err
-		}
-		for _, detail := range result.retainedTargetInvariants {
-			reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, detail)
-		}
-		for _, detail := range result.legacyFallbacks {
-			reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, detail)
-		}
-		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
-		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
-		if len(result.Mutation.Removed) > 0 {
-			s.publishCommittedCurrentNodeCompletionEvent(ctx, prepared.Source)
-		}
-		return result, nil
+		return finish(result, []workflow.Edge{target.Edge})
 	}
 	materializedTarget, err := materializeCompletionTargetCurrentNode(
 		ctx,
@@ -322,13 +313,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		currentNodeReferenceBranchKey(currentSource.Reference),
 	)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	targetCurrentNode := materializedTarget.CurrentNode
 	if target.Edge.RequiresApproval {
-		if materializedTarget.Invariant != nil {
-			checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, *materializedTarget.Invariant)
-		}
 		if materializedTarget.LegacyFallback != nil {
 			checkLegacyContinuationSourceBeforeMutation(s.invariantPolicy, *materializedTarget.LegacyFallback)
 		}
@@ -345,82 +333,55 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			nowTime,
 		)
 		if err != nil {
-			return CurrentNodeCompletionResult{}, err
+			return definitelyUncommitted(err)
 		}
 		if err := insertPendingApproval(ctx, q, approval); err != nil {
-			return CurrentNodeCompletionResult{}, err
+			return definitelyUncommitted(err)
 		}
-		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
-			return CurrentNodeCompletionResult{}, err
-		}
-		if err := commit(); err != nil {
-			return CurrentNodeCompletionResult{}, err
-		}
-		if materializedTarget.Invariant != nil {
-			reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, *materializedTarget.Invariant)
+		result := CurrentNodeCompletionResult{
+			PendingApproval:        &approval,
+			PostCompletionEligible: source.Kind() == workflow.NodeKindAgent,
 		}
 		if materializedTarget.LegacyFallback != nil {
-			reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, *materializedTarget.LegacyFallback)
+			result.legacyFallbacks = []legacyContinuationSourceFallbackDetail{*materializedTarget.LegacyFallback}
 		}
-		return CurrentNodeCompletionResult{
-			PendingApproval:        &approval,
-			SessionReuse:           newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge}),
-			PostCompletionEligible: source.Kind() == workflow.NodeKindAgent,
-		}, nil
-	}
-	if materializedTarget.Invariant != nil {
-		checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, *materializedTarget.Invariant)
+		return finish(result, []workflow.Edge{target.Edge})
 	}
 	if materializedTarget.LegacyFallback != nil {
 		checkLegacyContinuationSourceBeforeMutation(s.invariantPolicy, *materializedTarget.LegacyFallback)
 	}
 	handoff, err := currentNodeCompletionHandoff(source, target.Node)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	removed, err := deleteTaskCurrentNode(ctx, q, prepared.Source)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
 	if removed != 1 {
-		return CurrentNodeCompletionResult{}, sql.ErrNoRows
-	}
-	if err := updateActiveFanoutBranchContinuationSource(ctx, q, prepared.Source, targetCurrentNode.ContinuationSource); err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(sql.ErrNoRows)
 	}
 	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode, nowTime); err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return definitelyUncommitted(err)
 	}
-	if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
-	if err := commit(); err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
-	if materializedTarget.Invariant != nil {
-		reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, *materializedTarget.Invariant)
-	}
-	if materializedTarget.LegacyFallback != nil {
-		reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, *materializedTarget.LegacyFallback)
-	}
-	result = CurrentNodeCompletionResult{
+	result := CurrentNodeCompletionResult{
 		Mutation: workflow.CurrentNodeMutationResult{
 			Removed: []workflow.CurrentNodeReference{prepared.Source},
 			Created: []workflow.CurrentNode{targetCurrentNode},
 		},
-		Handoff:                handoff,
-		SessionReuse:           newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge}),
-		PostCompletionEligible: source.Kind() == workflow.NodeKindAgent,
+		Handoff: handoff,
+	}
+	if materializedTarget.LegacyFallback != nil {
+		result.legacyFallbacks = []legacyContinuationSourceFallbackDetail{*materializedTarget.LegacyFallback}
 	}
 	if executableNodeKind(target.Node.Kind()) {
 		intent, err := newCurrentNodeAutomaticIntent(targetCurrentNode.Reference, target.Node)
 		if err != nil {
-			return CurrentNodeCompletionResult{}, err
+			return definitelyUncommitted(err)
 		}
 		result.AutomaticIntents = []CurrentNodeAutomaticIntent{intent}
 	}
-	s.publishCommittedCurrentNodeCompletionEvent(ctx, prepared.Source)
-	return result, nil
+	return finish(result, []workflow.Edge{target.Edge})
 }
 
 func completionTargetEdges(targets []currentNodeCompletionTarget) []workflow.Edge {
@@ -431,16 +392,33 @@ func completionTargetEdges(targets []currentNodeCompletionTarget) []workflow.Edg
 	return edges
 }
 
-func newSessionReuseAnalysisInput(
+func completeCurrentNodePostTurnFacts(
+	ctx context.Context,
+	q *sqlitegen.Queries,
 	definition workflow.Definition,
 	currentSource workflow.CurrentNode,
 	acceptedBranches []workflow.Edge,
-) *workflow.SessionReuseAnalysisInput {
-	return &workflow.SessionReuseAnalysisInput{
+	postCompletionEligible bool,
+	result CurrentNodeCompletionResult,
+) (CurrentNodeCompletionResult, error) {
+	analysis := workflow.SessionReuseAnalysisInput{
 		Workflow:             definition,
 		AcceptedBranches:     append([]workflow.Edge(nil), acceptedBranches...),
 		CompletedCurrentNode: currentSource,
 	}
+	references := workflow.SessionReuseAssociationReferences(analysis)
+	associations, err := loadSessionReuseAssociations(ctx, q, references)
+	if err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	analysis.RetainedAssociations = associations
+	result.SessionReuseClassification = workflow.ClassifyWorkflowSessionReuse(analysis)
+	if currentSource.SessionID != nil {
+		sourceSessionID := *currentSource.SessionID
+		result.SourceSessionID = &sourceSessionID
+	}
+	result.PostCompletionEligible = postCompletionEligible
+	return result, nil
 }
 
 func prepareCurrentNodeCompletionRequest(req CurrentNodeCompletionRequest) (CurrentNodeCompletionRequest, error) {
@@ -648,7 +626,6 @@ type transitionTargetMaterializationRequest struct {
 
 type transitionTargetMaterialization struct {
 	CurrentNode    workflow.CurrentNode
-	Invariant      *workflow.RetainedTargetInvariantDetail
 	LegacyFallback *legacyContinuationSourceFallbackDetail
 }
 
@@ -770,9 +747,6 @@ func materializeTransitionTargetCurrentNode(
 		return transitionTargetMaterialization{}, err
 	}
 	materialized := transitionTargetMaterialization{CurrentNode: currentNode}
-	if detail, ok := contextResolution.invariantDetail(); ok {
-		materialized.Invariant = &detail
-	}
 	materialized.LegacyFallback = contextResolution.legacyFallback
 	return materialized, nil
 }

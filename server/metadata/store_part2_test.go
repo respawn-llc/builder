@@ -648,6 +648,25 @@ func newMetadataTestStore(t *testing.T) (*Store, config.App, Binding) {
 	return newMetadataTestStoreForBoundWorkspace(t, t.TempDir())
 }
 
+func newFileBackedMetadataTestStore(t *testing.T) (*Store, config.App, Binding) {
+	t.Helper()
+	cfg := loadMetadataTestConfig(t, t.TempDir(), filepath.Join(t.TempDir(), "persistence"))
+	store, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("Open metadata test store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close metadata test store: %v", err)
+		}
+	})
+	binding, err := store.RegisterWorkspaceBinding(context.Background(), cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	return store, cfg, binding
+}
+
 func newMetadataTestStoreForBoundWorkspace(t *testing.T, workspace string) (*Store, config.App, Binding) {
 	t.Helper()
 	store, cfg := newMetadataTestStoreForWorkspace(t, workspace)

@@ -9,8 +9,8 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-	"core/shared/worktreecontract"
 	"encoding/json"
 	"errors"
 	"os"
@@ -30,17 +30,17 @@ func TestDeleteWorktreeBlocksWhenBackgroundProcessUsesDescendantPath(t *testing.
 	env.processes.snapshots = []shelltool.Snapshot{{ID: "proc-1", Command: "sleep 30", Workdir: filepath.Join(busy.CanonicalRoot, "tmp"), Running: true}}
 
 	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, busy.WorktreeID))
-	if !errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
+	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
 	}
-	snapshots := env.processes.List()
+	snapshots := env.processes.CurrentSnapshots()
 	if len(snapshots) != 1 || !snapshots[0].Running {
 		t.Fatalf("background process snapshot changed after blocked delete: %+v", snapshots)
 	}
 	state.assertUnchanged(t, env, busySession.Meta().SessionID, busy.WorktreeID)
 
 	result, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, unrelated.WorktreeID))
-	if err != nil || result.Kind != worktreecontract.DeleteResultKindCompleted {
+	if err != nil {
 		t.Fatalf("DeleteWorktree unrelated = %+v, %v; want completed", result, err)
 	}
 }
@@ -330,7 +330,7 @@ func waitForFileLines(t *testing.T, path string) []string {
 	return strings.Split(text, "\n")
 }
 
-func nextSetupTerminalEvent(t *testing.T, sub worktreecontract.SetupSubscription) worktreecontract.SetupEvent {
+func nextSetupTerminalEvent(t *testing.T, sub serverapi.WorktreeSetupSubscription) serverapi.WorktreeSetupEvent {
 	t.Helper()
 	deadline, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -339,7 +339,7 @@ func nextSetupTerminalEvent(t *testing.T, sub worktreecontract.SetupSubscription
 		if err != nil {
 			t.Fatalf("setup event: %v", err)
 		}
-		if evt.Phase == worktreecontract.SetupPhaseCompleted || evt.Phase == worktreecontract.SetupPhaseFailed {
+		if evt.Phase == serverapi.WorktreeSetupPhaseCompleted || evt.Phase == serverapi.WorktreeSetupPhaseFailed {
 			return evt
 		}
 	}
@@ -381,8 +381,8 @@ type serviceTestWorktree struct {
 
 func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) serviceTestWorktree {
 	t.Helper()
-	resp, err := env.service.CreateWorktree(env.ctx, worktreecontract.CreateRequest{
-		SetupOperationID: worktreecontract.NewSetupOperationID(),
+	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -394,14 +394,11 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 	return worktreeViewFromListEntryForTest(resp.Worktree)
 }
 
-func worktreeDeleteRequest(env *serviceTestEnv, worktreeID string) worktreecontract.DeleteRequest {
-	return worktreecontract.DeleteRequest{
-		TransitionHeader: worktreecontract.TransitionHeader{
-			OperationID: worktreecontract.NewOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+func worktreeDeleteRequest(env *serviceTestEnv, worktreeID string) serverapi.WorktreeDeleteRequest {
+	return serverapi.WorktreeDeleteRequest{
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            worktreeID,
-		BranchCleanupPolicy: worktreecontract.BranchCleanupModeRetain,
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	}
 }
 
@@ -416,16 +413,16 @@ func updateServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, sessionID
 	}
 }
 
-func mustListWorktrees(t *testing.T, env *serviceTestEnv) worktreecontract.ListResponse {
+func mustListWorktrees(t *testing.T, env *serviceTestEnv) serverapi.WorktreeListResponse {
 	t.Helper()
-	resp, err := env.service.ListWorktrees(env.ctx, worktreecontract.ListRequest{SessionID: env.session.Meta().SessionID})
+	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}
 	return resp
 }
 
-func findWorktreeByID(t *testing.T, worktrees []worktreecontract.ListEntry, worktreeID string) serviceTestWorktree {
+func findWorktreeByID(t *testing.T, worktrees []serverapi.WorktreeListEntry, worktreeID string) serviceTestWorktree {
 	t.Helper()
 	for _, entry := range worktrees {
 		if worktreeIDFromListEntry(entry) == worktreeID {
@@ -436,21 +433,21 @@ func findWorktreeByID(t *testing.T, worktrees []worktreecontract.ListEntry, work
 	return serviceTestWorktree{}
 }
 
-func worktreeIDFromListEntry(entry worktreecontract.ListEntry) string {
+func worktreeIDFromListEntry(entry serverapi.WorktreeListEntry) string {
 	switch entry.Topology.Variant {
-	case worktreecontract.TopologyVariantRegistered:
+	case serverapi.WorktreeTopologyVariantRegistered:
 		return entry.Topology.Registered.Kent.WorktreeID
-	case worktreecontract.TopologyVariantMissing:
+	case serverapi.WorktreeTopologyVariantMissing:
 		return entry.Topology.Missing.Kent.WorktreeID
 	default:
 		return ""
 	}
 }
 
-func worktreeViewFromListEntryForTest(entry worktreecontract.ListEntry) serviceTestWorktree {
+func worktreeViewFromListEntryForTest(entry serverapi.WorktreeListEntry) serviceTestWorktree {
 	view := serviceTestWorktree{IsCurrent: entry.Projection.IsCurrent}
 	switch entry.Topology.Variant {
-	case worktreecontract.TopologyVariantRegistered:
+	case serverapi.WorktreeTopologyVariantRegistered:
 		git := entry.Topology.Registered.Git
 		kent := entry.Topology.Registered.Kent
 		view.WorktreeID = kent.WorktreeID
@@ -463,7 +460,7 @@ func worktreeViewFromListEntryForTest(entry worktreecontract.ListEntry) serviceT
 		view.Managed = kent.Managed
 		view.CreatedBranch = kent.CreatedBranch
 		view.OriginSessionID = pointerValue(kent.OriginSessionID)
-	case worktreecontract.TopologyVariantExternal:
+	case serverapi.WorktreeTopologyVariantExternal:
 		git := entry.Topology.External.Git
 		view.CanonicalRoot = git.CanonicalRoot
 		view.DisplayName = filepath.Base(git.CanonicalRoot)
@@ -471,7 +468,7 @@ func worktreeViewFromListEntryForTest(entry worktreecontract.ListEntry) serviceT
 		view.BranchName = pointerValue(git.BranchName)
 		view.Detached = git.Detached
 		view.IsMain = git.IsMain
-	case worktreecontract.TopologyVariantMissing:
+	case serverapi.WorktreeTopologyVariantMissing:
 		kent := entry.Topology.Missing.Kent
 		view.WorktreeID = kent.WorktreeID
 		view.DisplayName = kent.DisplayName

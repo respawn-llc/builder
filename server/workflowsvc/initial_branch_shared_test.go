@@ -9,36 +9,27 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowruntime"
-	"core/server/workflowstore"
 )
 
 type initialBranchControllerRunner struct{}
 
-func (initialBranchControllerRunner) StartCurrentNode(
+func (initialBranchControllerRunner) StartAgentCurrentNode(
 	context.Context,
 	workflow.CurrentNodeReference,
 	workflowruntime.TaskPromptDelivery,
-	*workflowexecution.CurrentNodeClassifiedAssignment,
-	sessionruntime.WorkflowExecutionLease,
+	workflowexecution.CurrentNodeAssignmentSteer,
+	func(),
 	workflowruntime.Controller,
-) error {
-	return errors.New("runner must not start after branch preparation failure")
+) (sessionruntime.ExecutionHandle, error) {
+	return nil, errors.New("runner must not start after branch preparation failure")
 }
 
-type concurrentResumeControllerRunner struct {
-	release <-chan struct{}
-}
-
-func (runner concurrentResumeControllerRunner) StartCurrentNode(
+func (initialBranchControllerRunner) PrepareScriptPublication(
 	context.Context,
 	workflow.CurrentNodeReference,
-	workflowruntime.TaskPromptDelivery,
-	*workflowexecution.CurrentNodeClassifiedAssignment,
-	sessionruntime.WorkflowExecutionLease,
 	workflowruntime.Controller,
-) error {
-	<-runner.release
-	return errors.New("concurrent Resume test runner released")
+) (workflowexecution.CurrentNodeScriptPublication, error) {
+	return nil, errors.New("runner must not prepare publication after branch preparation failure")
 }
 
 type initialBranchControllerSteerer struct{}
@@ -48,17 +39,6 @@ func (initialBranchControllerSteerer) SteerCurrentNodeAssignment(
 	workflow.CurrentNodeReference,
 ) (workflowexecution.CurrentNodeAssignmentSteer, error) {
 	return initialBranchControllerSteer{}, nil
-}
-
-func (initialBranchControllerSteerer) PrepareManualMoveAssignments(
-	context.Context,
-	[]workflowstore.CurrentNodeStartContext,
-) (
-	workflowstore.ManualMoveTargetAssignmentPreparation,
-	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
-	error,
-) {
-	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
 }
 
 type initialBranchControllerSteer struct{}

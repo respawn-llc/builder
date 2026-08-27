@@ -35,6 +35,14 @@ const (
 	executionPhaseFinalizing
 )
 
+type workflowExecutionActivity uint8
+
+const (
+	workflowExecutionNotRunning workflowExecutionActivity = iota
+	workflowExecutionQueued
+	workflowExecutionRunning
+)
+
 type ExecutionPromptSnapshot struct {
 	Scope     ExecutionScope
 	Request   tools.AskQuestionRequest
@@ -65,7 +73,28 @@ type execution struct {
 
 	phase executionPhase
 
+	protocolViolations int64
+	onRetire           func()
+
 	closeResource bool
+}
+
+func (e *execution) workflowActivity() (workflowExecutionActivity, error) {
+	switch e.phase {
+	case executionPhaseQueued:
+		return workflowExecutionQueued, nil
+	case executionPhaseRunning:
+		return workflowExecutionRunning, nil
+	default:
+		if e.phase < executionPhaseQueued || e.phase > executionPhaseFinalizing {
+			return workflowExecutionNotRunning, fmt.Errorf(
+				"workflow execution scope %s has invalid phase %d",
+				e.scope.ID(),
+				e.phase,
+			)
+		}
+		return workflowExecutionNotRunning, nil
+	}
 }
 
 type executionHandle struct {
@@ -150,15 +179,10 @@ func (e *execution) stopError() error {
 }
 
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
-	drainErr := e.drainQueuedWorkBeforeRetirement(runErr, stopErr)
 	cleanupErr := e.cleanup()
-	e.retire()
-
+	cleanupErr = errors.Join(cleanupErr, e.retire())
 	authority := e.authority
 	executionErr := runErr
-	if drainErr != nil {
-		executionErr = errors.Join(executionErr, drainErr)
-	}
 	abort, abortErr := runtimeAbortFromError(runErr)
 	if abortErr != nil {
 		executionErr = errors.Join(executionErr, abortErr)
@@ -196,10 +220,10 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	e.resultMu.Lock()
 	e.result = result
 	e.runErr = finalErr
-	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr, abortErr)
+	e.stopErr = errors.Join(stopErr, cleanupErr, closeErr, abortErr)
 	e.resultMu.Unlock()
-	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
-		authority.executionFinalized.ExecutionFinalized(e.scope)
+	if e.onRetire != nil {
+		e.onRetire()
 	}
 	close(e.done)
 }
@@ -222,29 +246,22 @@ func runtimeAbortFromError(err error) (bool, error) {
 	return true, nil
 }
 
-func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {
-	if e.resource == nil ||
-		!e.closeResource ||
-		runErr != nil ||
-		stopErr != nil ||
-		context.Cause(e.ctx) != nil {
-		return nil
-	}
-	return e.resource.withEngine(e.ctx, e.resource.ref, func(ctx context.Context, engine *runtime.Engine) error {
-		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
-	})
-}
-
-func (e *execution) retire() {
+func (e *execution) retire() error {
 	authority := e.authority
 	e.exactMu.Lock()
 	defer e.exactMu.Unlock()
 	authority.mu.Lock()
+	removedScope := false
 	if authority.byScope[e.scope.ID()] == e {
 		delete(authority.byScope, e.scope.ID())
+		removedScope = true
 	}
-	e.retireWorkflowLocked()
+	var err error
+	if removedScope {
+		err = e.retireWorkflowLocked()
+	}
 	authority.mu.Unlock()
+	return err
 }
 
 // beginWorkflowFinalization removes a terminal Script from workflow liveness
@@ -252,37 +269,48 @@ func (e *execution) retire() {
 // finalizer. A Script becomes terminal when its process exits or Start fails.
 // Its finalizer can still prove Current Node ownership, but no longer
 // authorizes Interrupt or appears in queued/running read models.
-func (e *execution) beginWorkflowFinalization() {
+func (e *execution) beginWorkflowFinalization() error {
 	e.exactMu.Lock()
 	defer e.exactMu.Unlock()
 	e.authority.mu.Lock()
 	if e.authority.byScope[e.scope.ID()] != e {
 		e.authority.mu.Unlock()
-		return
+		return nil
 	}
-	if e.phase != executionPhaseQueued && e.phase != executionPhaseRunning {
+	if e.phase != executionPhaseRunning {
 		e.authority.mu.Unlock()
-		panic(fmt.Sprintf(
-			"workflow execution scope %s began finalization from phase %d",
-			e.scope.ID(),
-			e.phase,
-		))
+		return e.authority.invariant(
+			"begin Script execution finalization",
+			fmt.Errorf("scope=%s phase=%d", e.scope.ID(), e.phase),
+		)
+	}
+	if e.scope.Kind() != ExecutionScopeScript {
+		e.authority.mu.Unlock()
+		return e.authority.invariant(
+			"begin Script execution finalization",
+			fmt.Errorf("scope=%s kind=%d", e.scope.ID(), e.scope.Kind()),
+		)
 	}
 	e.phase = executionPhaseFinalizing
-	e.retireWorkflowLocked()
+	err := e.retireWorkflowLocked()
 	e.authority.mu.Unlock()
+	return err
 }
 
-func (e *execution) retireWorkflowLocked() {
+func (e *execution) retireWorkflowLocked() error {
 	workflowRef, hasWorkflow := e.scope.Workflow()
 	if !hasWorkflow {
-		return
+		return nil
 	}
 	workflowKey, err := workflowExecutionKeyFor(workflowRef)
 	if err != nil {
-		panic(fmt.Sprintf("retire workflow execution scope %s: %v", e.scope.ID(), err))
+		return e.authority.invariant(
+			"retire Workflow execution association",
+			fmt.Errorf("scope=%s: %w", e.scope.ID(), err),
+		)
 	}
 	e.authority.removeWorkflowExecutionLocked(workflowRef, workflowKey, e)
+	return nil
 }
 
 func (e *execution) cleanup() error {
@@ -291,8 +319,6 @@ func (e *execution) cleanup() error {
 	if e.workflow != nil {
 		bindingErr = e.workflow.Close()
 		e.workflow = nil
-	} else if e.resource != nil {
-		bindingErr = e.resource.engine.FinishCurrentNodeExecutionActivation()
 	}
 	if e.resource == nil {
 		return errors.Join(promptErr, bindingErr)
@@ -392,7 +418,7 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	}
 	snapshot := ExecutionPromptSnapshot{
 		Scope:     s.scope,
-		Request:   cloneExecutionPromptRequest(req),
+		Request:   req.Clone(),
 		CreatedAt: time.Now().UTC(),
 	}
 	entry := &executionPromptEntry{
@@ -555,7 +581,7 @@ func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) 
 	if s.feed == nil {
 		return nil
 	}
-	return s.feed.PromptPendingScope(snapshot.Scope, cloneExecutionPromptRequest(snapshot.Request), snapshot.CreatedAt)
+	return s.feed.PromptPendingScope(snapshot.Scope, snapshot.Request.Clone(), snapshot.CreatedAt)
 }
 
 func (s *executionPromptStore) publishResolved(snapshot ExecutionPromptSnapshot) error {
@@ -602,25 +628,6 @@ func (a *Authority) sessionExecution(sessionID runtimeids.SessionID) *execution 
 }
 
 func cloneExecutionPromptSnapshot(snapshot ExecutionPromptSnapshot) ExecutionPromptSnapshot {
-	snapshot.Request = cloneExecutionPromptRequest(snapshot.Request)
+	snapshot.Request = snapshot.Request.Clone()
 	return snapshot
-}
-
-func cloneExecutionPromptRequest(req tools.AskQuestionRequest) tools.AskQuestionRequest {
-	req.Suggestions = append([]string(nil), req.Suggestions...)
-	req.ApprovalOptions = append([]tools.AskQuestionApprovalOption(nil), req.ApprovalOptions...)
-	if req.QuestionBatch != nil {
-		batch := *req.QuestionBatch
-		batch.BatchPromptIDs = append([]string(nil), req.QuestionBatch.BatchPromptIDs...)
-		req.QuestionBatch = &batch
-	}
-	if req.AttentionTarget != nil {
-		target := *req.AttentionTarget
-		if target.Focus != nil {
-			focus := *target.Focus
-			target.Focus = &focus
-		}
-		req.AttentionTarget = &target
-	}
-	return req
 }

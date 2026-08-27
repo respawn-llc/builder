@@ -288,51 +288,6 @@ func TestTaskSearchReflectsTaskAndCommentMutationsImmediately(t *testing.T) {
 	assertTaskSearchEmpty(t, fixture.ctx, search, request)
 }
 
-func TestTaskSearchSearchKeepsLiteralResponseCoherentDuringCanonicalMutation(t *testing.T) {
-	fixture, search := newTaskSearchFixture(t, false)
-	task := createTaskSearchTask(t, fixture, "Snapshot", "before needle after")
-	request := taskSearchRequest("needle")
-	started := make(chan struct{})
-	mutationsDone := make(chan error, 1)
-	go func() {
-		close(started)
-		for index := range 128 {
-			body := "replacement"
-			if index%2 == 0 {
-				body = "before needle after"
-			}
-			if _, err := fixture.store.UpdateTask(fixture.ctx, workflowstore.UpdateTaskRequest{
-				TaskID: task.ID,
-				Body:   &body,
-			}); err != nil {
-				mutationsDone <- err
-				return
-			}
-		}
-		mutationsDone <- nil
-	}()
-	<-started
-	for index := range 128 {
-		response, err := search.Search(fixture.ctx, request)
-		if err != nil {
-			t.Fatalf("Search during canonical mutation %d: %v", index, err)
-		}
-		if len(response.Groups) == 0 {
-			continue
-		}
-		if len(response.Groups) != 1 ||
-			response.Groups[0].TaskID != string(task.ID) ||
-			len(response.Groups[0].Hits) != 1 ||
-			response.Groups[0].Hits[0].Literal == nil ||
-			response.Groups[0].Hits[0].Literal.Match != "needle" {
-			t.Fatalf("Search during canonical mutation %d = %+v, want a complete pre-mutation hit or no match", index, response)
-		}
-	}
-	if err := <-mutationsDone; err != nil {
-		t.Fatalf("canonical mutation: %v", err)
-	}
-}
-
 func TestTaskSearchFiltersDurableCurrentNodeStatuses(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -416,27 +371,43 @@ func TestTaskSearchFiltersQueuedAndRunningCurrentNodeExecutions(t *testing.T) {
 	fixture, search := newTaskSearchFixture(t, false)
 	queued := startTaskSearchTask(t, fixture, createTaskSearchTask(t, fixture, "Queued", "needle"))
 	running := startTaskSearchTask(t, fixture, createTaskSearchTask(t, fixture, "Running", "needle"))
-	queuedLease := newTaskSearchLease(t, fixture, queued)
-	runningLease := newTaskSearchLease(t, fixture, running)
-	queuedHandle := startTaskSearchScript(t, fixture, shellPath, &queuedLease)
-	runningHandle := startTaskSearchScript(t, fixture, shellPath, &runningLease)
+	runningHandle := startTaskSearchScript(t, fixture, shellPath, running)
 	t.Cleanup(func() {
-		queuedLease.Cancel()
 		runningHandle.RequestStop()
-		_, _ = queuedHandle.Wait(context.Background())
 		_, _ = runningHandle.Wait(context.Background())
 	})
-	runningLease.Release()
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshots, snapshotErr := fixture.authority.CurrentProjectWorkflowTaskExecutionSnapshots(fixture.binding.ProjectID, fixture.workflowID)
+		snapshots, snapshotErr := fixture.authority.CurrentWorkflowTaskExecutionSnapshots()
 		if snapshotErr != nil {
 			return false
 		}
-		return len(snapshots[queued.task.ID].Executions) == 1 &&
-			snapshots[queued.task.ID].Executions[0].Queued &&
-			len(snapshots[running.task.ID].Executions) == 1 &&
+		return len(snapshots[running.task.ID].Executions) == 1 &&
 			!snapshots[running.task.ID].Executions[0].Queued
-	}, "timed out waiting for queued and running Current Node executions")
+	}, "timed out waiting for running Current Node execution")
+	snapshots, err := fixture.authority.CurrentScopedTaskExecutionSnapshots(
+		fixture.binding.ProjectID,
+		fixture.workflowID,
+		[]workflow.TaskID{running.task.ID, queued.task.ID},
+	)
+	if err != nil {
+		t.Fatalf("CurrentScopedTaskExecutionSnapshots: %v", err)
+	}
+	projection, err := NewTaskStatusProjection(
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{
+			observation: workflowexecution.WorkflowTaskExecutionObservation{
+				Executions: snapshots,
+				ConcurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{
+					queued.task.ID: {queued.currentNode},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	search = newTaskSearch(t, fixture.metadata, projection)
 	for _, test := range []struct {
 		task workflowstore.TaskRecord
 		kind serverapi.WorkflowTaskStatusKind
@@ -455,12 +426,11 @@ func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 	task := createTaskSearchTask(t, fixture, "Question", "needle")
 	question := fixture.startCurrentNodeQuestion(t, startTaskSearchTask(t, fixture, task))
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
-		currentNodeViewStatusObservationSource{
-			authority:  question.authority,
-			quiescence: fixture.quiescence,
+		&currentNodeViewStatusObservationSource{
+			authority: question.authority,
+			blocked:   fixture.quiescence.blocked,
 		},
 	)
 	if err != nil {
@@ -482,7 +452,6 @@ func TestTaskSearchProjectsLiveSessionApprovalStatus(t *testing.T) {
 	started := fixture.startTask(t, "Approval execution")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
@@ -587,31 +556,32 @@ func startTaskSearchTask(t *testing.T, fixture currentNodeViewFixture, task work
 	return startedCurrentNodeViewTask{task: task, currentNode: started.Mutation.Created[0].Reference}
 }
 
-func newTaskSearchLease(t *testing.T, fixture currentNodeViewFixture, started startedCurrentNodeViewTask) sessionruntime.WorkflowExecutionLease {
+func startTaskSearchScript(
+	t *testing.T,
+	fixture currentNodeViewFixture,
+	shellPath string,
+	started startedCurrentNodeViewTask,
+) sessionruntime.ExecutionHandle {
 	t.Helper()
-	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   fixture.binding.ProjectID,
-		WorkflowID:  fixture.workflowID,
-		CurrentNode: started.currentNode,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	return lease
-}
-
-func startTaskSearchScript(t *testing.T, fixture currentNodeViewFixture, shellPath string, lease *sessionruntime.WorkflowExecutionLease) sessionruntime.ExecutionHandle {
-	t.Helper()
-	handle, err := fixture.authority.StartScriptExecution(fixture.ctx, sessionruntime.ScriptExecutionRequest{
-		Workflow: lease,
+	detached, err := fixture.authority.PrepareDetachedScriptExecution(fixture.ctx, sessionruntime.DetachedScriptExecutionRequest{
+		Workflow: sessionruntime.WorkflowExecutionRef{
+			ProjectID:   fixture.binding.ProjectID,
+			WorkflowID:  fixture.workflowID,
+			CurrentNode: started.currentNode,
+		},
 		Command: sessionruntime.ScriptCommand{
 			Path: shellPath,
 			Args: []string{"-c", "while :; do sleep 1; done"},
 		},
 	})
 	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
+		t.Fatalf("PrepareDetachedScriptExecution: %v", err)
 	}
+	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("Publish detached Script execution: %v", err)
+	}
+	launch()
 	return handle
 }
 

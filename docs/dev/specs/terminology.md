@@ -54,6 +54,10 @@ The target-selection provenance locked to a task when its first executable actio
 
 The directory Kent uses as the working directory and relative-path base for a Task's executable Nodes. It is the Task's source workspace when the Task uses no managed worktree and the managed worktree root otherwise.
 
+### Worktree Base Dir
+
+The server-configured canonical directory within which every Kent-managed Worktree root must resolve. The `worktrees.base_dir` setting configures it.
+
 ### Working Directory
 
 The directory Kent uses as the shell working directory and relative-path base for a Session's tools. It may be the Session's Execution Target Root or one of its descendant directories.
@@ -100,7 +104,7 @@ The node where new tasks enter a workflow. A start node is non-executable and ha
 
 ### Task Start
 
-An explicit operation that moves a newly created Task from start/backlog into its first executable current Node by applying the Start Node's outgoing Transition.
+An explicit server-owned operation that prepares a newly created Task's first execution while the Task remains at start/backlog, then atomically applies the Start Node's outgoing Transition once preparation succeeds.
 
 ### Terminal Node
 
@@ -168,7 +172,7 @@ Per-transition-branch policy for the next node's execution context:
 
 ### Context Source
 
-Per-Transition-Branch policy deciding which Session supplies context for continuation modes. `immediate_source` selects the source Current Node's Session. `node:<node_key>` selects that Node's current retained Session. `previous_target` and `previous_target_or_new` select the target's current retained Session only when its recorded source is the exact active Context Source Session; otherwise Kent starts fresh according to the owning Workflow contract. While parallel work is active, selection stays within the source Current Node's Transition Branch Key.
+Per-Transition-Branch policy deciding which retained Session supplies context for continuation modes. `immediate_source` uses the Session bound to the source Current Node during normal completion; during Manual Move it falls back to the latest retained unscoped Session associated with the selected Transition's source Node. `node:<node_key>` selects the latest retained Session associated with a guaranteed-prior agent Node. `previous_target` selects the latest retained Session associated with the Transition Branch target and requires that one exists. `previous_target_or_new` selects that Session when one exists and otherwise starts a new Session. While parallel work is active, every selection is scoped to the same Transition Branch Key as the source Current Node.
 
 ### Workflow Pre-Compaction
 
@@ -354,23 +358,15 @@ Recovery that erases the Mutable Band, reopens the Session, and appends the acti
 
 ### Active Session Runtime
 
-The shared live resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An available but idle Session is not a live execution.
+The shared process-local resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An Active Session Runtime may be Idle, with no live Exact Execution Scope, or Executing, with one live Exact Execution Scope and Run. A durable Session may have no Active Session Runtime.
 
 ### RuntimeActivity
 
 The authoritative live status of a Session. It reports whether the Session is unavailable, starting, idle, running, awaiting a live Question or Approval, finishing, or closing. It also identifies exclusive work such as a user turn, Goal continuation, Workflow execution, compaction, shell command, or background step. Running and waiting require a matching Exact Execution Scope. Saved state and client-local assumptions cannot make a Session appear active.
 
-### Runtime Command
+### Steering Intent
 
-The ordered operation through which model-visible human input, Workflow completion, Goals, and technical input enter an Exact Execution Scope. Runtime Commands determine acceptance, ordering, replacement by newer input, and whether rejected input returns to the user's draft. Answers to a live Question resolve that Question directly.
-
-### Completion Fence
-
-The point at which Workflow completion can become final for an Exact Execution Scope or one unambiguous idle executable Current Node. Human input accepted before the Completion Fence replaces pending completion and continues the same execution. Input that arrives after the fence is rejected, and the client restores its draft.
-
-### Runtime Gate
-
-A temporary guard that blocks conflicting changes while Workflow Execution changes live execution state. A Runtime Gate is lost on restart.
+A typed request accepted by an Active Session Runtime to apply one Session mutation in acceptance order. While an Agent Step executes, a Steering Intent that needs a Step Boundary waits for that boundary. An Idle Runtime may apply it immediately. A Steering Intent carries only its concrete operation and acknowledgement or result. It has no generic request identity, replay, or reconciliation behavior.
 
 ### Append Certainty
 
@@ -380,17 +376,21 @@ The result that tells Kent whether a Session change became durable. Kent never s
 
 The increasing Session value that orders live status, prompts, main-view updates, and interruption results. Clients ignore updates older than the newest value they have accepted. A Read Model Version orders facts; it is not a transcript position.
 
-### PendingModelRecovery
-
-Saved recovery information for a model-visible step that was interrupted or crashed. Pending Model Recovery can identify unfinished tool calls for later repair. It never proves that execution is live or makes a client show the Session as busy.
-
 ### Forced Local Detach
 
 The second-`Ctrl+C` exit path while an Interrupt is pending for the same Run and Step. The TUI exits and detaches without force-closing the shared Active Session Runtime. A different Running Run or Step sends its own Interrupt instead.
 
+### Run
+
+The process-local identity of one live model-loop run inside an Exact Execution Scope. A Run contains one or more Agent Steps and remains distinct from the durable Session and Workflow Task.
+
 ### Agent Step
 
-One provider request/response iteration in the runtime loop, including returned tool calls and their committed results. A user steer ends the current Agent Step and starts a new Agent Step within the same Agent Turn.
+The protected interval from one provider-request start through its response and every tool call and committed tool result caused by that response, ending when Kent is ready to make another provider request. Model context, tool surface, execution target, Working Directory, validation state, and already-steered input remain fixed during the Agent Step.
+
+### Workflow-Completed Agent Step
+
+An Agent Step whose terminal Workflow completion has committed while caused tool calls or results are still finishing. It retains the originating Exact Execution Scope, Run, and Agent Step provenance. It permits only remaining caused tool/result handling and matching same-Step exact Goal admission. It is not interruptible and accepts no prompt answer, exact steer, or duplicate Workflow completion.
 
 ### Result Group
 
@@ -402,7 +402,7 @@ A complete agent run from a user submission until the runtime returns to idle. A
 
 ### Step Boundary
 
-The interval after the current Agent Step commits tool-result handling and before the next provider request or steered Agent Step begins. Transitions that affect the next Agent Step become authoritative at this boundary.
+The interval after one Agent Step ends and before another provider request begins. The Active Session Runtime applies accepted short Session mutations before it chooses compaction, an ordinary Agent Step, or idle as its next state.
 
 ### Queue
 
@@ -412,15 +412,11 @@ The user-facing TUI action that holds user messages until the current turn ends.
 
 The user-facing TUI action that injects a message to take effect after the current step ends, mid-turn between steps, rather than waiting for the turn to finish.
 
-### Steer Queue
-
-The ordered set of Steer operations that wait for the current Agent Step to finish. User steering, drained Queue messages, worktree changes, Workflow output, mode changes, and errors use the same ordering behavior.
-
 ### Equal Full-Control Attach
 
 Every client attached to a Session has the same control capabilities over the shared Active Session Runtime. Kent has no controller client, limited-control client, read-only attachment, or client lease.
 
-Client connection state is not Session state. A client connection or disconnection for any reason never starts, stops, pauses, cancels, closes, replays, restores, or otherwise changes a Session, Agent Turn, Goal, Queue, Steer, worktree operation, or accepted command. Only an accepted command changes server state. The server publishes every event without using subscriber count as a condition: zero connected clients do not suppress publication, and every connected client receives each applicable broadcast.
+Client connection state is not server-work state. A client connection, disconnection, request cancellation, request closure, navigation, or UI closure never starts, stops, pauses, cancels, closes, retries, replays, restores, duplicates, authorizes, or otherwise changes a Session, Agent Turn, Goal, Queue, Steer, Worktree operation, Workflow operation, or other accepted server command. Only the server-owned operation lifecycle changes server work. The server publishes every event without using subscriber count as a condition: zero connected clients do not suppress publication, and every connected client receives each applicable broadcast.
 
 ### Goal
 

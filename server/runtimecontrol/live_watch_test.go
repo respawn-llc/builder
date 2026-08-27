@@ -18,6 +18,15 @@ import (
 	"core/shared/textutil"
 )
 
+func mustRuntimeControlStepID(t *testing.T) runtimeids.StepID {
+	t.Helper()
+	id, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("ParseStepID: %v", err)
+	}
+	return id
+}
+
 type liveWatchAskViewStub struct {
 	asks []clientui.PendingAsk
 }
@@ -80,7 +89,7 @@ func newLiveWatchBlockingClient() *liveWatchBlockingClient {
 	return &liveWatchBlockingClient{started: make(chan struct{})}
 }
 
-func (c *liveWatchBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *liveWatchBlockingClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	<-ctx.Done()
 	return llm.Response{}, context.Cause(ctx)
@@ -103,7 +112,7 @@ func newLiveWatchReleasableFinalClient() *liveWatchReleasableFinalClient {
 	}
 }
 
-func (c *liveWatchReleasableFinalClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *liveWatchReleasableFinalClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	select {
 	case <-c.release:
@@ -352,7 +361,7 @@ func TestLiveWatchTerminalCompletionWinsWhileRunIsBlocked(t *testing.T) {
 
 func TestLiveWatchReturnsInterruptedOutcomeWhenRunStops(t *testing.T) {
 	client := newLiveWatchBlockingClient()
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	runDone := make(chan error, 1)
 	go func() {
 		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-interrupt", "hello"))
@@ -376,9 +385,14 @@ func TestLiveWatchReturnsInterruptedOutcomeWhenRunStops(t *testing.T) {
 	}()
 	<-observed.subscribed
 
-	stopped, err := engine.TryInterruptActiveRun()
-	if err != nil || !stopped {
-		t.Fatalf("TryInterruptActiveRun stopped=%t err=%v", stopped, err)
+	stopResponse, err := service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
+		SessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("LiveStop: %v", err)
+	}
+	if stopResponse.Status != serverapi.RuntimeLiveStopStatusStopped {
+		t.Fatalf("LiveStop status = %q, want %q", stopResponse.Status, serverapi.RuntimeLiveStopStatusStopped)
 	}
 	if err := <-watchErr; err != nil {
 		t.Fatalf("LiveWatch: %v", err)

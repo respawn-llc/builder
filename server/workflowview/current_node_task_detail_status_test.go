@@ -20,15 +20,11 @@ func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	calls := 0
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		countingTaskStatusLiveObservationSource{
-			source: currentNodeViewStatusObservationSource{
-				authority:  fixture.authority,
-				quiescence: fixture.quiescence,
-			},
-			calls: &calls,
+			source: fixture.quiescence,
+			calls:  &calls,
 		},
 	)
 	if err != nil {
@@ -100,27 +96,27 @@ func TestTaskDetailMaterializesAndOrdersLiveScripts(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Live Scripts")
 	scriptNodeIDs := []workflow.NodeID{
-		workflow.NodeID(uuid.NewString()),
-		workflow.NodeID(uuid.NewString()),
+		workflow.NodeID("node-" + uuid.NewString()),
+		workflow.NodeID("node-" + uuid.NewString()),
 	}
 	slices.Sort(scriptNodeIDs)
 	scriptPaths := []string{"scripts/a.sh", "scripts/b.sh"}
-	joinNodeID := workflow.NodeID(uuid.NewString())
-	splitAEdgeID := workflow.EdgeID(uuid.NewString())
-	splitBEdgeID := workflow.EdgeID(uuid.NewString())
-	joinAEdgeID := workflow.EdgeID(uuid.NewString())
-	joinBEdgeID := workflow.EdgeID(uuid.NewString())
-	finishEdgeID := workflow.EdgeID(uuid.NewString())
+	joinNodeID := workflow.NodeID("node-" + uuid.NewString())
+	splitAEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
+	splitBEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
+	joinAEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
+	joinBEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
+	finishEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
 	nodes := []workflowstore.NodeRecord{
 		{ID: scriptNodeIDs[0], WorkflowID: fixture.workflowID, Key: "script_a", Kind: workflow.NodeKindScript, DisplayName: "Script A", ScriptPath: scriptPaths[0]},
 		{ID: scriptNodeIDs[1], WorkflowID: fixture.workflowID, Key: "script_b", Kind: workflow.NodeKindScript, DisplayName: "Script B", ScriptPath: scriptPaths[1]},
 		{ID: joinNodeID, WorkflowID: fixture.workflowID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join", JoinInputProviders: []workflow.JoinInputProvider{{InputName: "joined", ProviderEdgeID: joinAEdgeID}}},
 	}
 	groupIDs := []workflow.TransitionGroupID{
-		workflow.TransitionGroupID(uuid.NewString()),
-		workflow.TransitionGroupID(uuid.NewString()),
-		workflow.TransitionGroupID(uuid.NewString()),
-		workflow.TransitionGroupID(uuid.NewString()),
+		workflow.TransitionGroupID("group-" + uuid.NewString()),
+		workflow.TransitionGroupID("group-" + uuid.NewString()),
+		workflow.TransitionGroupID("group-" + uuid.NewString()),
+		workflow.TransitionGroupID("group-" + uuid.NewString()),
 	}
 	groups := []workflowstore.TransitionGroupRecord{
 		{ID: groupIDs[0], WorkflowID: fixture.workflowID, SourceNodeID: fixture.agentNodeID, TransitionID: "split", DisplayName: "Split"},
@@ -250,7 +246,6 @@ func taskDetailWithObservation(
 ) *TaskDetail {
 	t.Helper()
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{observation: observation},
@@ -581,7 +576,6 @@ func TestTaskListPreservesAllLiveAttentionThroughCanonicalStatus(t *testing.T) {
 	started := fixture.startTask(t, "Live question and approval")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
@@ -661,7 +655,6 @@ func TestTaskListProjectsDurableDoneRunningAndQueued(t *testing.T) {
 		t.Fatalf("CompleteCurrentNode: %v", err)
 	}
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{

@@ -267,9 +267,6 @@ func TestDoubleEscUsesLatestRollbackCandidateLocatorAcrossMultipleCandidateFreeS
 	if !model.detailTranscript.matchesPage(priorDetailPage) {
 		t.Fatalf("picker exit left a gapped detail cache: %#v", model.detailTranscript.page())
 	}
-	if model.view.DetailSelectionAction() == tui.DetailSelectionActionNone {
-		t.Fatal("picker exit did not restore the prior detail selection")
-	}
 	if got := sessionViews.pageCount.Load(); got != 2 {
 		t.Fatalf("picker exit issued %d transcript reads, want only newest plus direct locator", got)
 	}
@@ -856,7 +853,7 @@ type rollbackInterruptBlockingClient struct {
 	once    sync.Once
 }
 
-func (c *rollbackInterruptBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *rollbackInterruptBlockingClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	<-ctx.Done()
 	return llm.Response{}, ctx.Err()

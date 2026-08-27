@@ -101,8 +101,7 @@ type uiStatusOverlayState struct {
 type uiGoalOverlayState struct {
 	open             bool
 	scroll           int
-	goal             *clientui.Goal
-	pending          *clientui.GoalPreview
+	goal             *clientui.RuntimeGoal
 	confirmMode      string
 	confirmSelection int
 	pendingObjective string

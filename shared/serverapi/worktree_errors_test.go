@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/shared/clientui"
 	"core/shared/invariant"
 	"core/shared/protocol"
 	"core/shared/worktreecontract"
@@ -19,8 +20,8 @@ func TestWorktreeActionErrorsRenderTypedDiagnostics(t *testing.T) {
 	}
 
 	dirtyFileCount := 7
-	dirty := &WorktreeDeletePreconditionError{DirtyState: worktreecontract.DirtyState{
-		Kind:           worktreecontract.DirtyStateDirty,
+	dirty := &WorktreeDeletePreconditionError{DirtyState: clientui.WorktreeDirtyState{
+		Kind:           clientui.WorktreeDirtyStateDirty,
 		DirtyFileCount: &dirtyFileCount,
 	}}
 	if rendered := dirty.Error(); !strings.Contains(rendered, strconv.Itoa(dirtyFileCount)) {
@@ -28,8 +29,8 @@ func TestWorktreeActionErrorsRenderTypedDiagnostics(t *testing.T) {
 	}
 
 	unknownCause := "git status exited with code 128"
-	unknown := &WorktreeDeletePreconditionError{DirtyState: worktreecontract.DirtyState{
-		Kind:         worktreecontract.DirtyStateUnknown,
+	unknown := &WorktreeDeletePreconditionError{DirtyState: clientui.WorktreeDirtyState{
+		Kind:         clientui.WorktreeDirtyStateUnknown,
 		UnknownCause: &unknownCause,
 	}}
 	if rendered := unknown.Error(); !strings.Contains(rendered, unknownCause) {
@@ -49,15 +50,6 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 			FallbackIdentity: "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
 		}},
 	}
-	operationID := worktreecontract.NewOperationID()
-	pending := &WorktreeTransitionPendingError{
-		SessionID:          "session",
-		PendingOperationID: operationID,
-	}
-	immediate := NewWorktreeImmediateTransitionError(
-		WorktreeImmediateTransitionOriginInactive,
-		errors.New("originating step ended"),
-	)
 	retained := &WorktreeSetupRetainedError{
 		Worktree: WorktreeTopologyEntry{
 			Variant: WorktreeTopologyVariantRegistered,
@@ -74,13 +66,13 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		Diagnostic: "setup exited unsuccessfully",
 	}
 	precondition := &WorktreeDeletePreconditionError{
-		DirtyState: worktreecontract.DirtyState{
-			Kind:         worktreecontract.DirtyStateUnknown,
+		DirtyState: clientui.WorktreeDirtyState{
+			Kind:         clientui.WorktreeDirtyStateUnknown,
 			UnknownCause: stringPointer("status probe failed"),
 		},
 	}
 
-	for _, source := range []protocol.StructuredRPCError{selector, pending, immediate, retained, precondition} {
+	for _, source := range []protocol.StructuredRPCError{selector, retained, precondition} {
 		if source.RPCErrorCode() >= 0 {
 			t.Fatalf("%T protocol error code = %d, want implementation-defined error code", source, source.RPCErrorCode())
 		}
@@ -96,27 +88,6 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 	}
 	if selectorError.Input != selector.Input || len(selectorError.Candidates) != 1 || selectorError.Candidates[0].FallbackIdentity != selector.Candidates[0].FallbackIdentity {
 		t.Fatalf("selector facts changed: %+v", selectorError)
-	}
-
-	decodedPending := DecodeWorktreeRPCError(pending.RPCErrorData(), pending.Error())
-	var pendingError *WorktreeTransitionPendingError
-	if !errors.As(decodedPending, &pendingError) {
-		t.Fatalf("pending decode = %T, want WorktreeTransitionPendingError", decodedPending)
-	}
-	if !errors.Is(decodedPending, ErrWorktreeTransitionPending) {
-		t.Fatalf("pending decode does not preserve pending state: %v", decodedPending)
-	}
-	if pendingError.SessionID != pending.SessionID || pendingError.PendingOperationID != operationID {
-		t.Fatalf("pending facts changed: %+v", pendingError)
-	}
-
-	decodedImmediate := DecodeWorktreeRPCError(immediate.RPCErrorData(), immediate.Error())
-	var immediateError *WorktreeImmediateTransitionError
-	if !errors.As(decodedImmediate, &immediateError) {
-		t.Fatalf("immediate decode = %T, want WorktreeImmediateTransitionError", decodedImmediate)
-	}
-	if immediateError.Kind != WorktreeImmediateTransitionOriginInactive {
-		t.Fatalf("immediate kind = %q, want origin inactive", immediateError.Kind)
 	}
 
 	decodedRetained := DecodeWorktreeRPCError(retained.RPCErrorData(), retained.Error())
@@ -139,7 +110,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 	if !errors.Is(decodedPrecondition, ErrWorktreeDeletePrecondition) {
 		t.Fatalf("precondition decode does not preserve delete precondition: %v", decodedPrecondition)
 	}
-	if preconditionError.DirtyState.Kind != worktreecontract.DirtyStateUnknown || preconditionError.DirtyState.UnknownCause == nil {
+	if preconditionError.DirtyState.Kind != clientui.WorktreeDirtyStateUnknown || preconditionError.DirtyState.UnknownCause == nil {
 		t.Fatalf("dirty-state facts changed: %+v", preconditionError)
 	}
 }
@@ -151,20 +122,15 @@ func TestWorktreeStructuredErrorsRejectInvalidTypedData(t *testing.T) {
 	}).Validate(); err == nil {
 		t.Fatal("ambiguous selector error without candidates validated")
 	}
-	if err := worktreecontract.ValidateDirtyState(worktreecontract.DirtyStateClean, nil, nil); err != nil {
+	if err := worktreecontract.ValidateDirtyState(clientui.WorktreeDirtyStateClean, nil, nil); err != nil {
 		t.Fatalf("payloadless clean dirty-state rejected: %v", err)
 	}
 	if err := worktreecontract.ValidateDirtyState(
-		worktreecontract.DirtyStateUnknown,
+		clientui.WorktreeDirtyStateUnknown,
 		integerPointer(1),
 		stringPointer("status unavailable"),
 	); err == nil {
 		t.Fatal("unknown dirty-state with a count validated")
-	}
-	if err := (&WorktreeTransitionPendingError{
-		PendingOperationID: worktreecontract.NewOperationID(),
-	}).Validate(); err == nil {
-		t.Fatal("pending transition without session validated")
 	}
 }
 

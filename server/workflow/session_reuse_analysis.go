@@ -19,9 +19,8 @@ const (
 // SessionReuseAssociation is bounded retained provenance supplied by the
 // Workflow store. Associations are ordered from oldest to newest.
 type SessionReuseAssociation struct {
-	SessionID       runtimeids.SessionID
-	SourceSessionID runtimeids.SessionID
-	CurrentNode     CurrentNodeReference
+	SessionID   runtimeids.SessionID
+	CurrentNode CurrentNodeReference
 }
 
 // SessionReuseAnalysisInput contains the execution-valid graph slice needed
@@ -413,18 +412,18 @@ func (a sessionReuseAnalyzer) resolveContextSource(
 			return reuseLineageUnknown, runtimeids.SessionID{}, false, true
 		}
 		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
-		lineage, association, found := a.associatedLineage(state, lookupBranch, nodeID, true, false)
+		lineage, association, found := a.associatedLineage(state, lookupBranch, nodeID, true)
 		if !found {
 			return lineage, runtimeids.SessionID{}, false, true
 		}
 		return lineage, association.SessionID, true, true
 	case ContextSourcePreviousTarget:
 		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
-		lineage, _, found := a.associatedLineage(state, lookupBranch, NodeIDOf(target), false, true)
+		lineage, _, found := a.associatedLineage(state, lookupBranch, NodeIDOf(target), false)
 		return lineage, state.activeSourceSessionID, state.activeSourceKnown, found
 	case ContextSourcePreviousTargetOrNew:
 		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
-		lineage, _, found := a.associatedLineage(state, lookupBranch, NodeIDOf(target), true, true)
+		lineage, _, found := a.associatedLineage(state, lookupBranch, NodeIDOf(target), true)
 		if !found {
 			return reuseLineageOther, runtimeids.SessionID{}, false, true
 		}
@@ -450,7 +449,6 @@ func (a sessionReuseAnalyzer) associatedLineage(
 	branch reuseBranch,
 	nodeID NodeID,
 	optional bool,
-	retainedTarget bool,
 ) (reuseLineage, SessionReuseAssociation, bool) {
 	status, overwrittenPath := state.overwritten[reuseOverwriteKey{nodeID: nodeID, branch: branch}]
 	if overwrittenPath && status == reuseOverwriteDefinite {
@@ -462,11 +460,6 @@ func (a sessionReuseAnalyzer) associatedLineage(
 			association.CurrentNode.NodeID != nodeID ||
 			!sameReuseBranch(branch, association.CurrentNode) {
 			continue
-		}
-		if retainedTarget &&
-			(!state.activeSourceKnown || association.SourceSessionID.IsZero() ||
-				association.SourceSessionID != state.activeSourceSessionID) {
-			return reuseLineageOther, association, true
 		}
 		if association.SessionID == a.completedSessionID {
 			if overwrittenPath && status == reuseOverwriteMaybe {
@@ -957,6 +950,13 @@ func validateStaticContinuationSources(def Definition, start NodeID) []EdgeID {
 		}
 	}
 	return result
+}
+
+// RequiresExactActiveContinuationSource reports whether execution beginning at
+// start can reach a transition that needs the incoming active Session before
+// another Agent establishes or selects one.
+func RequiresExactActiveContinuationSource(def Definition, start NodeID) bool {
+	return len(validateStaticContinuationSources(def, start)) > 0
 }
 
 func newStaticSessionReuseAnalyzer(def Definition) sessionReuseAnalyzer {

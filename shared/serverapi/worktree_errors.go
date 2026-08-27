@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/worktreecontract"
 )
@@ -14,7 +15,6 @@ var (
 	ErrWorktreeSelectorNotFound    = errors.New("worktree selector not found")
 	ErrWorktreeSelectorAmbiguous   = errors.New("worktree selector is ambiguous")
 	ErrWorktreeSelectorUnavailable = errors.New("worktree selector is unavailable")
-	ErrWorktreeTransitionPending   = errors.New("a worktree transition is already pending for this session")
 	ErrWorktreeSetupRetained       = errors.New("worktree setup failed after worktree creation")
 	ErrWorktreeDeletePrecondition  = errors.New("worktree deletion requires additional authorization")
 )
@@ -126,96 +126,6 @@ func (candidate WorktreeSelectorCandidate) Validate() error {
 	return nil
 }
 
-type WorktreeTransitionPendingError struct {
-	SessionID          string                       `json:"session_id"`
-	PendingOperationID worktreecontract.OperationID `json:"pending_operation_id"`
-}
-
-type WorktreeImmediateTransitionErrorKind string
-
-const (
-	WorktreeImmediateTransitionOriginInactive WorktreeImmediateTransitionErrorKind = "origin_inactive"
-	WorktreeImmediateTransitionApplyFailed    WorktreeImmediateTransitionErrorKind = "apply_failed"
-	worktreeImmediateTransitionErrorMessage                                        = "worktree transition could not become authoritative before command completion"
-)
-
-type WorktreeImmediateTransitionError struct {
-	Kind  WorktreeImmediateTransitionErrorKind `json:"kind"`
-	Cause error                                `json:"-"`
-}
-
-func NewWorktreeImmediateTransitionError(kind WorktreeImmediateTransitionErrorKind, cause error) *WorktreeImmediateTransitionError {
-	if cause != nil {
-		cause = fmt.Errorf("%s: %w", worktreeImmediateTransitionErrorMessage, cause)
-	}
-	return &WorktreeImmediateTransitionError{Kind: kind, Cause: cause}
-}
-
-func (e *WorktreeImmediateTransitionError) Error() string {
-	if e == nil || e.Cause == nil {
-		return worktreeImmediateTransitionErrorMessage
-	}
-	return e.Cause.Error()
-}
-
-func (e *WorktreeImmediateTransitionError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
-}
-
-func (e *WorktreeImmediateTransitionError) RPCErrorCode() int {
-	return protocol.ErrCodeWorktreeImmediateTransition
-}
-
-func (e *WorktreeImmediateTransitionError) RPCErrorData() json.RawMessage {
-	if e == nil {
-		return nil
-	}
-	return marshalRPCErrorData(struct {
-		Type string                               `json:"type"`
-		Kind WorktreeImmediateTransitionErrorKind `json:"kind"`
-	}{Type: "worktree_immediate_transition", Kind: e.Kind})
-}
-
-func (e *WorktreeTransitionPendingError) Error() string {
-	return ErrWorktreeTransitionPending.Error()
-}
-
-func (e *WorktreeTransitionPendingError) Is(target error) bool {
-	return target == ErrWorktreeTransitionPending
-}
-
-func (e *WorktreeTransitionPendingError) RPCErrorCode() int {
-	return protocol.ErrCodeWorktreeTransitionPending
-}
-
-func (e *WorktreeTransitionPendingError) RPCErrorData() json.RawMessage {
-	if e == nil {
-		return nil
-	}
-	return marshalRPCErrorData(struct {
-		Type               string                       `json:"type"`
-		SessionID          string                       `json:"session_id"`
-		PendingOperationID worktreecontract.OperationID `json:"pending_operation_id"`
-	}{
-		Type:               "worktree_transition_pending",
-		SessionID:          e.SessionID,
-		PendingOperationID: e.PendingOperationID,
-	})
-}
-
-func (e *WorktreeTransitionPendingError) Validate() error {
-	if e == nil {
-		return errors.New("worktree transition pending error is required")
-	}
-	if err := validateRequiredSessionID(e.SessionID); err != nil {
-		return err
-	}
-	return e.PendingOperationID.Validate()
-}
-
 type WorktreeSetupRetainedError struct {
 	Worktree                 WorktreeTopologyEntry     `json:"worktree"`
 	ScriptPath               string                    `json:"script_path"`
@@ -303,7 +213,7 @@ func (e *WorktreeSetupRetainedError) Validate() error {
 }
 
 type WorktreeDeletePreconditionError struct {
-	DirtyState worktreecontract.DirtyState `json:"dirty_state"`
+	DirtyState clientui.WorktreeDirtyState `json:"dirty_state"`
 }
 
 func (e *WorktreeDeletePreconditionError) Error() string {
@@ -312,7 +222,7 @@ func (e *WorktreeDeletePreconditionError) Error() string {
 		return base
 	}
 	switch e.DirtyState.Kind {
-	case worktreecontract.DirtyStateDirty:
+	case clientui.WorktreeDirtyStateDirty:
 		if e.DirtyState.DirtyFileCount != nil && *e.DirtyState.DirtyFileCount > 0 {
 			return fmt.Sprintf(
 				"%s: %d modified or untracked file(s); force folder removal to continue",
@@ -320,7 +230,7 @@ func (e *WorktreeDeletePreconditionError) Error() string {
 				*e.DirtyState.DirtyFileCount,
 			)
 		}
-	case worktreecontract.DirtyStateUnknown:
+	case clientui.WorktreeDirtyStateUnknown:
 		if e.DirtyState.UnknownCause != nil {
 			cause := strings.TrimSpace(*e.DirtyState.UnknownCause)
 			if cause != "" {
@@ -349,7 +259,7 @@ func (e *WorktreeDeletePreconditionError) RPCErrorData() json.RawMessage {
 	}
 	return marshalRPCErrorData(struct {
 		Type       string                      `json:"type"`
-		DirtyState worktreecontract.DirtyState `json:"dirty_state"`
+		DirtyState clientui.WorktreeDirtyState `json:"dirty_state"`
 	}{
 		Type:       "worktree_delete_precondition",
 		DirtyState: e.DirtyState,
@@ -390,32 +300,6 @@ func DecodeWorktreeRPCError(data json.RawMessage, message string) error {
 			return fallbackWorktreeRPCError(message)
 		}
 		return result
-	case "worktree_transition_pending":
-		var payload struct {
-			Type               string                       `json:"type"`
-			SessionID          string                       `json:"session_id"`
-			PendingOperationID worktreecontract.OperationID `json:"pending_operation_id"`
-		}
-		if err := json.Unmarshal(data, &payload); err != nil {
-			return fallbackWorktreeRPCError(message)
-		}
-		result := &WorktreeTransitionPendingError{
-			SessionID:          payload.SessionID,
-			PendingOperationID: payload.PendingOperationID,
-		}
-		if err := result.Validate(); err != nil {
-			return fallbackWorktreeRPCError(message)
-		}
-		return result
-	case "worktree_immediate_transition":
-		var result WorktreeImmediateTransitionError
-		if err := json.Unmarshal(data, &result); err != nil ||
-			(result.Kind != WorktreeImmediateTransitionOriginInactive && result.Kind != WorktreeImmediateTransitionApplyFailed) ||
-			strings.TrimSpace(message) == "" {
-			return fallbackWorktreeRPCError(message)
-		}
-		result.Cause = errors.New(message)
-		return &result
 	case "worktree_setup_retained":
 		var payload struct {
 			Type                     string                `json:"type"`
@@ -448,7 +332,7 @@ func DecodeWorktreeRPCError(data json.RawMessage, message string) error {
 	case "worktree_delete_precondition":
 		var payload struct {
 			Type       string                      `json:"type"`
-			DirtyState worktreecontract.DirtyState `json:"dirty_state"`
+			DirtyState clientui.WorktreeDirtyState `json:"dirty_state"`
 		}
 		if err := json.Unmarshal(data, &payload); err != nil {
 			return fallbackWorktreeRPCError(message)

@@ -23,7 +23,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -46,16 +45,16 @@ type recordingPromptHistoryStore struct {
 	entries []metadata.PromptHistoryEntry
 }
 
-func (s *recordingPromptHistoryStore) RecordPromptHistoryEntry(_ context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error) {
+func (s *recordingPromptHistoryStore) RecordPromptHistoryEntry(_ context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error) {
 	s.entries = append(s.entries, entry)
-	return metadata.PromptHistoryRecord{}, true, nil
+	return metadata.PromptHistoryRecord{}, nil
 }
 
 type blockingPromptHistoryStore struct{}
 
-func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, _ metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error) {
+func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, _ metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error) {
 	<-ctx.Done()
-	return metadata.PromptHistoryRecord{}, false, ctx.Err()
+	return metadata.PromptHistoryRecord{}, ctx.Err()
 }
 
 type fixedSessionExecutionTargetResolver struct {
@@ -166,8 +165,8 @@ func TestRunPromptProgressFromRuntimeEventPublishesUserVisibleEvents(t *testing.
 			event: runtime.Event{
 				Kind: runtime.EventQueuedUserMessageStatus,
 				QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
-					Status:      runtime.QueuedUserMessageAccepted,
-					RestoreText: "use the safer migration",
+					Status: runtime.QueuedUserMessageAccepted,
+					Text:   "use the safer migration",
 				},
 			},
 			wantKind: serverapi.RunPromptProgressKindSteeredMessage,
@@ -209,7 +208,7 @@ func TestRunPromptProgressFromRuntimeEventDropsOperationalSpam(t *testing.T) {
 	for _, event := range []runtime.Event{
 		{Kind: runtime.EventToolCallStarted},
 		{Kind: runtime.EventToolCallCompleted},
-		{Kind: runtime.EventReviewerCompleted},
+		{Kind: runtime.EventRuntimeActivityChanged},
 		{
 			Kind: runtime.EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
@@ -230,14 +229,12 @@ func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T
 		name string
 		req  serverapi.RunPromptRequest
 	}{
-		{name: "missing request id", req: serverapi.RunPromptRequest{Intent: validIntent, Prompt: "work"}},
-		{name: "blank prompt", req: serverapi.RunPromptRequest{ClientRequestID: "request-1", Intent: validIntent, Prompt: " \n "}},
-		{name: "invalid intent", req: serverapi.RunPromptRequest{ClientRequestID: "request-1", Prompt: "work"}},
+		{name: "blank prompt", req: serverapi.RunPromptRequest{Intent: validIntent, Prompt: " \n "}},
+		{name: "invalid intent", req: serverapi.RunPromptRequest{Prompt: "work"}},
 		{name: "reserved role", req: serverapi.RunPromptRequest{
-			ClientRequestID: "request-1",
-			Intent:          validIntent,
-			Prompt:          "work",
-			Overrides:       serverapi.RunPromptOverrides{AgentRole: &reservedRole},
+			Intent:    validIntent,
+			Prompt:    "work",
+			Overrides: serverapi.RunPromptOverrides{AgentRole: &reservedRole},
 		}},
 	}
 
@@ -255,7 +252,6 @@ func newTestHeadlessSessionLaunch(
 	cfg config.App,
 	containerDir string,
 	authManager *auth.Manager,
-	authority *sessionruntime.Authority,
 	persistences ...*sessiontest.Persistence,
 ) *sessionlaunch.Service {
 	persistence := sessiontest.NewPersistence()
@@ -273,7 +269,7 @@ func newTestHeadlessSessionLaunch(
 			CwdRelpath:       ".",
 			EffectiveWorkdir: cfg.WorkspaceRoot,
 		}},
-	}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority)
+	}).WithAuthStateReader(authManager)
 }
 
 type fixedProjectWorkspaceBoundaryResolver struct{ root string }
@@ -407,7 +403,7 @@ func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promp
 		store:     store,
 		authority: authority,
 		client: NewInProcessRunPromptClient(HeadlessBootstrap{
-			SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
+			SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 			RuntimeAuthority: authority,
 			PromptHistory:    history,
 		}),
@@ -486,14 +482,13 @@ func TestHeadlessSiblingWorkspacePatchUsesProjectBoundary(t *testing.T) {
 			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
-		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		}).WithAuthStateReader(authManager),
 		RuntimeAuthority: authority,
 	})
 	sessionID := mustRunPromptSessionID(t, store.Meta().SessionID)
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID: "headless-sibling-workspace",
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
-		Prompt:          "write to the sibling Workspace",
+		Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		Prompt: "write to the sibling Workspace",
 	}, nil)
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)
@@ -649,14 +644,13 @@ func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsum
 			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
-		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		}).WithAuthStateReader(authManager),
 		RuntimeAuthority:       authority,
 		PromptHistory:          meta,
 		ManagedWorktreeBaseDir: managedBase,
 	})
 	parentID := parent.Meta().SessionID
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID: "inherited-target-without-reminder",
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, parentID))),
 		CallerSessionID: &parentID,
 		Prompt:          "verify the inherited execution target",
@@ -808,7 +802,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 		PersistedSessions:        meta,
 		ProjectWorkspaceBoundary: meta,
-	}).WithRuntimeAuthority(authority)
+	})
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    sessionLauncher,
 		RuntimeAuthority: authority,
@@ -817,7 +811,6 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	role := "hidden"
 	parentID := parent.Meta().SessionID
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID: "workflow-denial-1",
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, parentID))),
 		CallerSessionID: &parentID,
 		Prompt:          "delegate this",
@@ -835,7 +828,6 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	blockedRole := "blocked"
 	beforeOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID: "ordinary-blocked-target-denial",
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, ordinaryCallerID))),
 		CallerSessionID: &ordinaryCallerID,
 		Prompt:          "delegate this",
@@ -868,7 +860,6 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	}
 	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID: "workflow-selected-denial-1",
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, selectedBefore.SessionID)),
 		CallerSessionID: &parentID,
 		Prompt:          "continue selected",
@@ -1000,7 +991,7 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
-		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		}).WithAuthStateReader(authManager),
 		RuntimeAuthority: authority,
 		PromptHistory:    meta,
 	})
@@ -1008,7 +999,6 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	worker := "worker"
 	var sessionStarted int
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID: "workflow-allowed-custom",
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, parentID))),
 		CallerSessionID: &parentID,
 		Prompt:          "delegate this",
@@ -1071,7 +1061,6 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	for _, test := range ordinaryTests {
 		t.Run("ordinary non-callable caller "+test.name, func(t *testing.T) {
 			response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
-				ClientRequestID: "ordinary-non-callable-" + test.name,
 				Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, ordinaryParentID))),
 				CallerSessionID: &ordinaryParentID,
 				Prompt:          "delegate this",
@@ -1123,12 +1112,6 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	}
 
 	var providerCalls atomic.Int32
-	concurrentStarted := make(chan struct{})
-	concurrentRelease := make(chan struct{})
-	var concurrentReleaseOnce sync.Once
-	releaseConcurrent := func() {
-		concurrentReleaseOnce.Do(func() { close(concurrentRelease) })
-	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
@@ -1136,19 +1119,10 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 		if got := r.Header.Get("Authorization"); got == "" {
 			t.Fatal("expected authorization header")
 		}
-		call := providerCalls.Add(1)
-		if call == 2 {
-			close(concurrentStarted)
-			<-concurrentRelease
-			modelstub.WriteCompletedResponseStream(w, "concurrent replay", 1, 1)
-			return
-		}
+		providerCalls.Add(1)
 		modelstub.WriteCompletedResponseStream(w, "from persisted continuation", 1, 1)
 	}))
-	defer func() {
-		releaseConcurrent()
-		server.Close()
-	}()
+	defer server.Close()
 
 	if err := store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: textutil.Value(server.URL)}); err != nil {
 		t.Fatalf("set continuation context: %v", err)
@@ -1171,16 +1145,15 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	history := &recordingPromptHistoryStore{}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		RuntimeAuthority: authority,
 		PromptHistory:    history,
 	})
 
 	var progresses []serverapi.RunPromptProgress
 	request := serverapi.RunPromptRequest{
-		ClientRequestID: "  continuation-direct-1  ",
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
-		Prompt:          "  hello  ",
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+		Prompt: "  hello  ",
 	}
 	response, err := client.RunPrompt(context.Background(), request, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 		progresses = append(progresses, progress)
@@ -1206,46 +1179,19 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	if err != nil {
 		t.Fatalf("replayed RunPrompt: %v", err)
 	}
-	if replayed.SessionID != response.SessionID || replayed.Result != response.Result || providerCalls.Load() != 1 {
-		t.Fatalf("replayed response=%+v provider calls=%d, want memoized %+v/1", replayed, providerCalls.Load(), response)
+	if replayed.SessionID != response.SessionID || replayed.Result != response.Result || providerCalls.Load() != 2 {
+		t.Fatalf("repeated response=%+v provider calls=%d, want a second direct operation", replayed, providerCalls.Load())
 	}
-	if len(history.entries) != 1 || history.entries[0].SourceID != "continuation-direct-1" || history.entries[0].Text != "hello" {
-		t.Fatalf("prompt history = %+v, want one normalized entry", history.entries)
+	if len(history.entries) != 2 {
+		t.Fatalf("prompt history = %+v, want one entry per direct operation", history.entries)
 	}
 	mismatch := request
 	mismatch.Prompt = "different"
-	if _, err := client.RunPrompt(context.Background(), mismatch, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("mismatched replay error = %v, want request-id conflict", err)
+	if _, err := client.RunPrompt(context.Background(), mismatch, nil); err != nil {
+		t.Fatalf("repeated request with changed input: %v", err)
 	}
-
-	concurrent := request
-	concurrent.ClientRequestID = "concurrent-request"
-	concurrent.Prompt = "concurrent"
-	results := make(chan serverapi.RunPromptResponse, 2)
-	errs := make(chan error, 2)
-	for range 2 {
-		go func() {
-			got, err := client.RunPrompt(context.Background(), concurrent, nil)
-			results <- got
-			errs <- err
-		}()
-	}
-	select {
-	case <-concurrentStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for concurrent provider request")
-	}
-	releaseConcurrent()
-	for range 2 {
-		if err := <-errs; err != nil {
-			t.Fatalf("concurrent replay: %v", err)
-		}
-		if got := <-results; got.Result != "concurrent replay" {
-			t.Fatalf("concurrent response = %+v", got)
-		}
-	}
-	if providerCalls.Load() != 2 {
-		t.Fatalf("provider calls = %d, want one initial and one concurrent call", providerCalls.Load())
+	if providerCalls.Load() != 3 {
+		t.Fatalf("provider calls = %d, want three explicit operations", providerCalls.Load())
 	}
 }
 
@@ -1260,10 +1206,9 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 
 		fixture := newSelectedRunPromptFixture(t, server.URL, &blockingPromptHistoryStore{})
 		_, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-			ClientRequestID: "history-timeout",
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
-			Prompt:          "hello",
-			Timeout:         100 * time.Millisecond,
+			Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
+			Prompt:  "hello",
+			Timeout: 100 * time.Millisecond,
 		}, nil)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("RunPrompt error = %v, want deadline exceeded", err)
@@ -1296,10 +1241,9 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		done := make(chan result, 1)
 		go func() {
 			response, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-				ClientRequestID: "run-timeout",
-				Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
-				Prompt:          "hello",
-				Timeout:         5 * time.Second,
+				Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
+				Prompt:  "hello",
+				Timeout: 5 * time.Second,
 			}, nil)
 			done <- result{response: response, err: err}
 		}()
@@ -1365,9 +1309,8 @@ func TestInProcessRunPromptPublishesCommentaryBeforeHeadlessAskFollowupFails(t *
 	fixture := newSelectedRunPromptFixture(t, server.URL, nil)
 	var progresses []serverapi.RunPromptProgress
 	response, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "ask-followup-failure",
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
-		Prompt:          "ask before failing",
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
+		Prompt: "ask before failing",
 	}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 		progresses = append(progresses, progress)
 	}))
@@ -1479,14 +1422,13 @@ func TestInProcessRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgro
 	}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, background, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		RuntimeAuthority: authority,
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "active-shell-policy-1",
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
-		Prompt:          "run the shell probe",
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+		Prompt: "run the shell probe",
 	}, nil)
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)
@@ -1658,14 +1600,13 @@ func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	authManager := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now)
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		RuntimeAuthority: authority,
 	})
 
 	_, err = client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "goal-reject-1",
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
-		Prompt:          "continue",
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+		Prompt: "continue",
 	}, nil)
 	if !errors.Is(err, ErrHeadlessGoalSession) {
 		t.Fatalf("RunPrompt error = %v, want ErrHeadlessGoalSession", err)
@@ -1715,16 +1656,15 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 	}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		RuntimeAuthority: authority,
 	})
 
 	done := make(chan error, 1)
 	go func() {
 		_, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-			ClientRequestID: "runtime-cleanup-1",
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
-			Prompt:          "hello",
+			Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+			Prompt: "hello",
 		}, nil)
 		done <- err
 	}()
@@ -1798,14 +1738,13 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		RuntimeAuthority: authority,
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "locked-direct-1",
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
-		Prompt:          "hello",
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+		Prompt: "hello",
 		Overrides: serverapi.RunPromptOverrides{
 			Model: "override-model",
 			Tools: "patch",

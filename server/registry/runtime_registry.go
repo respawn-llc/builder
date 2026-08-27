@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core/server/attentionnotify"
@@ -23,14 +25,13 @@ import (
 )
 
 type RuntimeRegistry struct {
-	authorityMu                sync.RWMutex
-	authorityBySession         map[string]*authorityRuntimeEntry
+	authorityMu                sync.Mutex
+	authorityBySession         sync.Map
 	authorityChanged           chan struct{}
 	sleepObserverMu            sync.Mutex
 	sleepObserver              func(active bool)
 	runStateMu                 sync.Mutex
 	blockingActivitySessions   map[string]bool
-	readModels                 *runtimeactivity.CoordinatorCache
 	pendingPrompts             *pendingPromptStore
 	attentionBroker            *attentionnotify.Broker
 	questionBatches            *attentionnotify.QuestionBatchTracker
@@ -45,13 +46,14 @@ type authorityRuntimeEntry struct {
 	engine      *runtime.Engine
 	sessionFeed *sessionFeedSequencer
 	retain      func() (io.Closer, error)
+	mainView    atomic.Pointer[clientui.RuntimeMainView]
 
-	mu             sync.Mutex
-	lifecycle      authorityRuntimeEntryLifecycle
-	feedReady      bool
-	nextRetention  uint64
-	retentions     map[uint64]io.Closer
-	readModelUnpin func()
+	publicationMu sync.Mutex
+	mu            sync.Mutex
+	lifecycle     authorityRuntimeEntryLifecycle
+	feedReady     bool
+	nextRetention uint64
+	retentions    map[uint64]io.Closer
 }
 
 type authorityRuntimeEntryLifecycle uint8
@@ -64,11 +66,9 @@ const (
 
 func NewRuntimeRegistry() *RuntimeRegistry {
 	return &RuntimeRegistry{
-		authorityBySession:       make(map[string]*authorityRuntimeEntry),
 		authorityChanged:         make(chan struct{}),
 		blockingActivitySessions: make(map[string]bool),
-		readModels:               runtimeactivity.NewCoordinatorCache(runtimeactivity.DefaultCoordinatorCacheLimit),
-		pendingPrompts:           newPendingPromptStore(),
+		pendingPrompts:           &pendingPromptStore{},
 	}
 }
 
@@ -100,7 +100,7 @@ func (r *RuntimeRegistry) ResourceReady(
 		retentions:  make(map[uint64]io.Closer),
 	}
 	r.authorityMu.Lock()
-	if existing := r.authorityBySession[sessionID]; existing != nil {
+	if existing := r.authorityEntryBySession(sessionID); existing != nil {
 		r.authorityMu.Unlock()
 		return fmt.Errorf(
 			"authority runtime resource %s generation %d cannot replace registered generation %d",
@@ -109,21 +109,15 @@ func (r *RuntimeRegistry) ResourceReady(
 			existing.ref.Generation(),
 		)
 	}
-	r.authorityBySession[sessionID] = entry
+	r.authorityBySession.Store(sessionID, entry)
 	r.authorityMu.Unlock()
-	if r.readModels != nil {
-		entry.readModelUnpin = r.readModels.Pin(sessionID)
-	}
 	if err := r.publishCurrentRuntimeActivity(sessionID); err != nil {
 		r.authorityMu.Lock()
-		if r.authorityBySession[sessionID] == entry {
-			delete(r.authorityBySession, sessionID)
+		if r.authorityEntryBySession(sessionID) == entry {
+			r.authorityBySession.Delete(sessionID)
 			r.signalAuthorityChangeLocked()
 		}
 		r.authorityMu.Unlock()
-		if entry.readModelUnpin != nil {
-			entry.readModelUnpin()
-		}
 		return fmt.Errorf("initialize authority runtime feed for session %s: %w", sessionID, err)
 	}
 	entry.mu.Lock()
@@ -134,7 +128,7 @@ func (r *RuntimeRegistry) ResourceReady(
 	entry.mu.Unlock()
 	if ready {
 		r.authorityMu.Lock()
-		if r.authorityBySession[sessionID] == entry {
+		if r.authorityEntryBySession(sessionID) == entry {
 			r.signalAuthorityChangeLocked()
 		}
 		r.authorityMu.Unlock()
@@ -154,15 +148,19 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	if entry == nil {
 		return nil
 	}
+	entry.publicationMu.Lock()
 	entry.mu.Lock()
 	if entry.lifecycle != authorityRuntimeEntryReady {
 		entry.mu.Unlock()
+		entry.publicationMu.Unlock()
 		return nil
 	}
 	entry.lifecycle = authorityRuntimeEntryDraining
 	retentions := entry.retentions
 	entry.retentions = nil
 	entry.mu.Unlock()
+	entry.mainView.Store(nil)
+	entry.publicationMu.Unlock()
 
 	sessionID := ref.SessionID().String()
 	r.pendingPrompts.CloseSession(sessionID, func(snapshot PendingPromptSnapshot) {
@@ -189,14 +187,11 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 		retentionErr = errors.Join(retentionErr, retention.Close())
 	}
 	r.authorityMu.Lock()
-	if r.authorityBySession[sessionID] == entry {
-		delete(r.authorityBySession, sessionID)
+	if r.authorityEntryBySession(sessionID) == entry {
+		r.authorityBySession.Delete(sessionID)
 		r.signalAuthorityChangeLocked()
 	}
 	r.authorityMu.Unlock()
-	if entry.readModelUnpin != nil {
-		entry.readModelUnpin()
-	}
 	return errors.Join(retentionErr, err)
 }
 
@@ -204,9 +199,14 @@ func (r *RuntimeRegistry) authorityEntryBySession(sessionID string) *authorityRu
 	if r == nil {
 		return nil
 	}
-	r.authorityMu.RLock()
-	entry := r.authorityBySession[strings.TrimSpace(sessionID)]
-	r.authorityMu.RUnlock()
+	value, ok := r.authorityBySession.Load(strings.TrimSpace(sessionID))
+	if !ok {
+		return nil
+	}
+	entry, ok := value.(*authorityRuntimeEntry)
+	if !ok {
+		panic("authority Runtime index contains an invalid entry")
+	}
 	return entry
 }
 
@@ -216,7 +216,7 @@ func (r *RuntimeRegistry) authorityEntryAndChange(sessionID string) (*authorityR
 	if r.authorityChanged == nil {
 		r.authorityChanged = make(chan struct{})
 	}
-	return r.authorityBySession[strings.TrimSpace(sessionID)], r.authorityChanged
+	return r.authorityEntryBySession(sessionID), r.authorityChanged
 }
 
 func (r *RuntimeRegistry) signalAuthorityChangeLocked() {
@@ -305,99 +305,53 @@ func (r *RuntimeRegistry) WithTranscriptContractViolationPanic(enabled bool) *Ru
 	return r
 }
 
-func (r *RuntimeRegistry) RuntimeActivity(sessionID string) (clientui.RuntimeActivity, error) {
-	id := strings.TrimSpace(sessionID)
-	if r == nil || id == "" {
-		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
-	}
-	snapshot, err := r.RuntimeReadModelSnapshot(context.Background(), id)
-	if err != nil {
-		return clientui.RuntimeActivity{}, err
-	}
-	return snapshot.Activity, nil
-}
-
-func (r *RuntimeRegistry) RuntimeReadModelSnapshot(ctx context.Context, sessionID string) (runtimeactivity.ResponseSnapshot, error) {
-	update, err := r.runtimeReadModelFeedSnapshot(ctx, sessionID)
-	if err != nil {
-		return runtimeactivity.ResponseSnapshot{}, err
-	}
-	return runtimeactivity.ResponseSnapshot{
-		Version:  update.Version,
-		Activity: update.Activity,
-	}, nil
-}
-
-func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(ctx context.Context) ([]runtimeactivity.ActiveSessionSnapshot, error) {
+func (r *RuntimeRegistry) ActiveRuntimeActivitySnapshots(context.Context) ([]runtimeactivity.ActiveSessionSnapshot, error) {
 	if r == nil {
 		return []runtimeactivity.ActiveSessionSnapshot{}, nil
 	}
-	r.runStateMu.Lock()
-	sessionIDs := make([]string, 0, len(r.blockingActivitySessions))
-	for sessionID := range r.blockingActivitySessions {
-		sessionIDs = append(sessionIDs, sessionID)
-	}
-	r.runStateMu.Unlock()
-	sort.Strings(sessionIDs)
-
-	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		snapshot, err := r.RuntimeReadModelSnapshot(ctx, sessionID)
-		if err != nil {
-			return nil, err
+	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0)
+	r.authorityBySession.Range(func(_, value any) bool {
+		entry, ok := value.(*authorityRuntimeEntry)
+		if !ok {
+			panic("Runtime Main View index contains an invalid entry")
 		}
-		if !snapshot.Activity.ActiveForControl() {
-			continue
+		view := entry.mainView.Load()
+		if view == nil || !view.Activity.ActiveForControl() {
+			return true
 		}
 		snapshots = append(snapshots, runtimeactivity.ActiveSessionSnapshot{
-			SessionID: sessionID,
-			Activity:  snapshot.Activity,
+			SessionID: entry.ref.SessionID().String(),
+			Activity:  cloneRuntimeActivity(view.Activity),
 		})
-	}
+		return true
+	})
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].SessionID < snapshots[j].SessionID
+	})
 	return snapshots, nil
 }
 
-func (r *RuntimeRegistry) RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error) {
-	return r.runtimeReadModelFeedSnapshot(ctx, sessionID)
-}
-
-func (r *RuntimeRegistry) runtimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error) {
+func (r *RuntimeRegistry) RuntimeReadModelFeedSnapshot(_ context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error) {
 	id := strings.TrimSpace(sessionID)
 	if r == nil || id == "" {
-		return runtimeactivity.BuildFeedSnapshot(id, func() (runtimeactivity.ResolverSnapshot, error) {
-			return runtimeactivity.ResolverSnapshot{}, nil
-		})
+		return runtimeactivity.BuildFeedSnapshot(
+			runtimeactivity.NextReadModelVersion(id),
+			runtimeactivity.ResolverSnapshot{},
+		)
 	}
-	return r.readModelFeedSnapshot(id, func() (runtimeactivity.ResolverSnapshot, error) {
-		resolver, err := r.runtimeActivityResolverSnapshot(ctx, id)
-		if err != nil {
-			return runtimeactivity.ResolverSnapshot{}, err
-		}
-		return resolver, nil
-	})
-}
-
-func (r *RuntimeRegistry) readModelFeedSnapshot(sessionID string, build runtimeactivity.SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
-	if r == nil || r.readModels == nil {
-		return runtimeactivity.BuildFeedSnapshot(sessionID, build)
-	}
-	return r.readModels.WithFeedSnapshot(sessionID, build)
+	resolver := r.runtimeActivityResolverSnapshot(id)
+	return runtimeactivity.BuildFeedSnapshot(runtimeactivity.NextReadModelVersion(id), resolver)
 }
 
 func (r *RuntimeRegistry) unavailableRuntimeReadModelFeedSnapshot(sessionID string) (clientui.RuntimeReadModelUpdate, error) {
 	id := strings.TrimSpace(sessionID)
-	return r.readModelFeedSnapshot(id, func() (runtimeactivity.ResolverSnapshot, error) {
-		return runtimeactivity.ResolverSnapshot{}, nil
-	})
+	return runtimeactivity.BuildFeedSnapshot(runtimeactivity.NextReadModelVersion(id), runtimeactivity.ResolverSnapshot{})
 }
 
-func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(ctx context.Context, sessionID string) (runtimeactivity.ResolverSnapshot, error) {
+func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(sessionID string) runtimeactivity.ResolverSnapshot {
 	id := strings.TrimSpace(sessionID)
 	if r == nil || id == "" {
-		return runtimeactivity.ResolverSnapshot{}, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
+		return runtimeactivity.ResolverSnapshot{}
 	}
 	var engine *runtime.Engine
 	if entry := r.authorityEntryBySession(id); entry != nil {
@@ -407,11 +361,14 @@ func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(ctx context.Context, s
 	snapshot.Active = runtimeactivity.ActiveStepFromProvider(engine)
 	if engine != nil {
 		snapshot.LiveRunActive = engine.HasActiveLiveRunGroup()
+		if engine.ReviewerRunning() {
+			snapshot.Reviewer = clientui.ReviewerActivityRunning
+		}
 	}
 	if len(r.pendingPrompts.List(id)) > 0 {
 		snapshot.PromptWait = true
 	}
-	return snapshot, nil
+	return snapshot
 }
 
 func (r *RuntimeRegistry) RuntimeActivityRegistrySnapshot(sessionID string) runtimeactivity.RegistrySnapshot {
@@ -451,7 +408,7 @@ func (r *RuntimeRegistry) publishCurrentRuntimeActivity(sessionID string) error 
 		return nil
 	}
 	id := strings.TrimSpace(sessionID)
-	update, err := r.runtimeReadModelFeedSnapshot(context.Background(), id)
+	update, err := r.RuntimeReadModelFeedSnapshot(context.Background(), id)
 	if err != nil {
 		return err
 	}
@@ -463,12 +420,15 @@ func (r *RuntimeRegistry) PublishRuntimeEventToAll(evt runtime.Event) error {
 	if r == nil {
 		return nil
 	}
-	r.authorityMu.RLock()
-	authorityEntries := make([]*authorityRuntimeEntry, 0, len(r.authorityBySession))
-	for _, entry := range r.authorityBySession {
+	authorityEntries := make([]*authorityRuntimeEntry, 0)
+	r.authorityBySession.Range(func(_, value any) bool {
+		entry, ok := value.(*authorityRuntimeEntry)
+		if !ok {
+			panic("authority Runtime index contains an invalid entry")
+		}
 		authorityEntries = append(authorityEntries, entry)
-	}
-	r.authorityMu.RUnlock()
+		return true
+	})
 	for _, entry := range authorityEntries {
 		if err := r.publishRuntimeEvent(entry, evt); err != nil {
 			return err
@@ -489,6 +449,9 @@ func (r *RuntimeRegistry) PublishAuthorityRuntimeEvent(ref runtimeids.SessionRes
 }
 
 func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt runtime.Event) error {
+	if evt.Kind == runtime.EventRuntimeActivityChanged {
+		return r.publishCurrentRuntimeActivity(entry.ref.SessionID().String())
+	}
 	if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
 		messages, err := runtimeview.TranscriptMessagesFromRuntimeEventChecked(evt)
 		if err != nil {
@@ -498,15 +461,13 @@ func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt 
 		entry.sessionFeed.Publish(messages)
 	}
 	if runtimeEventShouldPublishSessionStatus(evt) {
-		if err := entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+		return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
 			status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 			if err != nil {
 				return nil, err
 			}
 			return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)}, nil
-		}); err != nil {
-			return err
-		}
+		})
 	}
 	return nil
 }
@@ -520,7 +481,7 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string) error {
 	if entry == nil {
 		return nil
 	}
-	return entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
 		identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
 		if err != nil {
 			return nil, err
@@ -542,7 +503,7 @@ func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
 	if entry == nil {
 		return nil
 	}
-	return entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
 		status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 		if err != nil {
 			return nil, err
@@ -581,10 +542,26 @@ func (r *RuntimeRegistry) PublishRuntimeReadModelUpdate(sessionID string, update
 	if r == nil {
 		return
 	}
-	if authorityEntry := r.authorityEntryBySession(sessionID); authorityEntry != nil {
-		authorityEntry.sessionFeed.PublishRuntimeReadModel(update)
-		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, update.Activity.ActiveForControl())
+	entry := r.authorityEntryBySession(sessionID)
+	if entry == nil {
+		return
 	}
+	if err := update.Validate(); err != nil {
+		panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
+	}
+	entry.publicationMu.Lock()
+	defer entry.publicationMu.Unlock()
+	current := entry.mainView.Load()
+	if current != nil &&
+		(current.Version == update.Version || current.Version.NewerThan(update.Version)) {
+		return
+	}
+	publicationErr := r.publishRuntimeMainViewLocked(entry, update.Version, update.Activity)
+	if publicationErr != nil {
+		log.Printf("publish Runtime Main View for Session %q: %v", strings.TrimSpace(sessionID), publicationErr)
+	}
+	entry.sessionFeed.PublishRuntimeReadModel(update)
+	r.updateAggregateRuntimeActivityForAuthority(sessionID, entry, update.Activity.ActiveForControl())
 }
 
 func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome) {
@@ -766,14 +743,14 @@ func (r *RuntimeRegistry) updateAggregateRuntimeActivityForAuthority(sessionID s
 	if lifecycle == authorityRuntimeEntryRetired && activeForControl {
 		return false
 	}
-	r.authorityMu.RLock()
-	current := r.authorityBySession[id]
+	r.authorityMu.Lock()
+	current := r.authorityEntryBySession(id)
 	if current != entry && (activeForControl || current != nil) {
-		r.authorityMu.RUnlock()
+		r.authorityMu.Unlock()
 		return false
 	}
 	r.updateAggregateRuntimeActivityState(id, activeForControl)
-	r.authorityMu.RUnlock()
+	r.authorityMu.Unlock()
 	return true
 }
 

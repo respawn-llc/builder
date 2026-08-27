@@ -21,7 +21,7 @@ type serviceFakeLLM struct {
 	responses []llm.Response
 }
 
-func (f *serviceFakeLLM) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (f *serviceFakeLLM) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	if len(f.responses) == 0 {
 		return llm.Response{}, nil
 	}
@@ -78,15 +78,15 @@ func (r staticExecutionTargetResolver) ResolveSessionExecutionTarget(context.Con
 	return r.target, nil
 }
 
-type failingSessionStoreResolver struct {
+type failingPersistedSessionResolver struct {
 	err error
 }
 
-func (r failingSessionStoreResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	return nil, r.err
+func (r failingPersistedSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
+	return session.PersistedSessionRecord{}, r.err
 }
 
-func (c *serviceBlockingLLM) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *serviceBlockingLLM) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	select {
 	case <-ctx.Done():
@@ -105,14 +105,14 @@ func (*serviceBlockingLLM) ProviderCapabilities(context.Context) (llm.ProviderCa
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }
 
-func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
+func TestServiceGetSessionMainViewReturnsCompletedRuntimeProjectionWhileRunIsBlocked(t *testing.T) {
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	client := &serviceBlockingLLM{started: started, release: release}
 	fixture := newSessionViewRuntimeFixture(t, store, client)
-	svc := NewService(newTestSessionResolver(store), fixture.activity, fixture.authority, nil)
+	svc := NewService(newTestSessionResolver(store), fixture.activity, nil)
 	handle := fixture.startUserTurn(t, "run tools")
 	select {
 	case <-started:
@@ -124,8 +124,8 @@ func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
-	if resp.MainView.Activity.State != clientui.RuntimeActivityRunning {
-		t.Fatalf("expected live running activity, got %+v", resp.MainView.Activity)
+	if resp.MainView.Activity.State == clientui.RuntimeActivityUnavailable {
+		t.Fatalf("expected completed Runtime Main View, got %+v", resp.MainView.Activity)
 	}
 	close(release)
 	if _, err := handle.Wait(context.Background()); err != nil {
@@ -136,7 +136,7 @@ func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
 func TestServiceGetSessionMainViewDoesNotRequireStoreResolutionForLiveRuntime(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
-	response, err := NewService(failingSessionStoreResolver{err: errors.New("store unavailable")}, fixture.activity, fixture.authority, nil).
+	response, err := NewService(failingPersistedSessionResolver{err: errors.New("store unavailable")}, fixture.activity, nil).
 		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get live main view: %v", err)
@@ -161,10 +161,13 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	}
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleUser, "hello", nil, nil)
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleAssistant, "final answer", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
+	}
+	if err := resp.MainView.Activity.Validate(); err != nil {
+		t.Fatalf("validate dormant session activity: %v", err)
 	}
 	if resp.MainView.Session.SessionID != store.Meta().SessionID || resp.MainView.Session.SessionName != "incident triage" {
 		t.Fatalf("unexpected dormant session view: %+v", resp.MainView.Session)
@@ -181,7 +184,8 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if resp.MainView.Status.Goal == nil || resp.MainView.Status.Goal.Status != clientui.RuntimeGoalStatusActive || resp.MainView.Status.Goal.Objective != "ship dormant goal" {
 		t.Fatalf("unexpected dormant goal status: %+v", resp.MainView.Status.Goal)
 	}
-	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
+	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable ||
+		resp.MainView.Activity.Reviewer != clientui.ReviewerActivityInactive {
 		t.Fatalf("dormant activity = %+v, want unavailable", resp.MainView.Activity)
 	}
 }
@@ -195,7 +199,7 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 		CwdRelpath:       ".",
 		EffectiveWorkdir: dir,
 	}
-	svc := NewService(newTestSessionResolver(store), nil, nil, staticExecutionTargetResolver{target: target})
+	svc := NewService(newTestSessionResolver(store), nil, staticExecutionTargetResolver{target: target})
 
 	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
@@ -210,13 +214,13 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 }
 
 func TestServiceRequiresSessionStoreResolverForDormantReads(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil)
+	svc := NewService(nil, nil, nil)
 
-	if _, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: "session-1"}); err == nil || !errors.Is(err, errSessionStoreResolverRequired) {
-		t.Fatalf("expected explicit session store resolver error for main view, got %v", err)
+	if _, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: "session-1"}); err == nil || !errors.Is(err, session.ErrPersistedSessionResolverRequired) {
+		t.Fatalf("expected explicit persisted Session resolver error for main view, got %v", err)
 	}
-	if _, err := svc.SessionTranscriptTailEntries(context.Background(), "session-1"); err == nil || !errors.Is(err, errSessionStoreResolverRequired) {
-		t.Fatalf("expected explicit session store resolver error for transcript tail entries, got %v", err)
+	if _, err := svc.SessionTranscriptTailEntries(context.Background(), "session-1"); err == nil || !errors.Is(err, session.ErrPersistedSessionResolverRequired) {
+		t.Fatalf("expected explicit persisted Session resolver error for transcript tail entries, got %v", err)
 	}
 }
 
@@ -227,7 +231,7 @@ func TestServiceWithCacheWarningModeChangesSubsequentDormantReads(t *testing.T) 
 		Scope:  session.CacheScopeConversation,
 		Reason: session.CacheWarningReasonNonPostfix,
 	})
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 
 	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
@@ -251,7 +255,7 @@ func TestServiceSessionTranscriptTailEntriesObservesRevisionAdvance(t *testing.T
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
 	appendSessionViewMessage(t, store, "11111111-1111-4111-8111-111111111111", session.MessageRoleAssistant, "line 0", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 
 	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
@@ -282,7 +286,7 @@ func TestServiceDormantHistoryReplacementStartsNewTranscriptSegment(t *testing.T
 		Mode:   session.CompactionModeAuto,
 	})
 
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 
 	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
@@ -315,7 +319,7 @@ func TestServiceSessionTranscriptTailEntriesKeepsDormantPersistedCompactionSumma
 		Text:       sessionViewStringPointer("condensed summary"),
 	})
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleDeveloper, "Last user message before handoff\n\ncarry this forward", nil, sessionViewMessageTypePointer(session.MessageTypeCompactionPreservedUserMessage))
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 
 	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
@@ -337,9 +341,6 @@ func TestServiceDormantReadsDoNotMutatePersistedEvents(t *testing.T) {
 	store := newSessionViewStore(t, dir, "ws", dir)
 	const stepID = "11111111-1111-4111-8111-111111111111"
 	appendSessionViewMessage(t, store, stepID, session.MessageRoleUser, "hello", nil, nil)
-	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-1", StepID: stepID, Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("set pending recovery: %v", err)
-	}
 
 	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
 	eventLog, err := store.MaterializeEventLog()
@@ -355,7 +356,7 @@ func TestServiceDormantReadsDoNotMutatePersistedEvents(t *testing.T) {
 		t.Fatalf("read events file before: %v", err)
 	}
 
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)

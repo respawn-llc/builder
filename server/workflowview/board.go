@@ -134,59 +134,49 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		offset = *req.Offset
 	}
 	workspaceContext := boardProjectWorkspaceContext(project)
-	var definition definitionSnapshot
-	var tasks []sqlitegen.TaskRecord
-	var dependencyProgressByTaskID map[string]*serverapi.WorkflowTaskDependencyProgress
-	var projectedByTaskID map[workflow.TaskID]TaskStatusProjectionResult
-	var hasExtra bool
-	err = b.projection.WithDurableSnapshot(ctx, func(durable *TaskStatusDurableSnapshot) error {
-		var err error
-		definition, err = durable.Definition(ctx, workflowID)
-		if err != nil {
-			return err
-		}
-		if _, ok := workflowNodesByID(definition.api)[nodeID]; !ok {
-			return errors.New("node_id is invalid for workflow")
-		}
-		rows, err := durable.BoardNodeTasks(ctx, sqlitegen.ListBoardNodeTasksParams{
-			ProjectID:            projectID,
-			WorkflowID:           workflowID,
-			NodeID:               nodeID,
-			LabelFilterKind:      labelFilterArgs.kind,
-			LabelFilterMode:      labelFilterArgs.mode,
-			LabelIdsJson:         labelFilterArgs.labelIDsJSON,
-			ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
-			DependencyFilter:     workflowTaskDependencyFilterQueryArg(req.DependencyFilter),
-			SortField:            string(sortSelection.Field),
-			SortDirection:        string(sortSelection.Direction),
-			OffsetRows:           int64(offset),
-			LimitRows:            int64(pageSize),
-		})
-		if err != nil {
-			return err
-		}
-		dependencyProgressByTaskID, err = boardDependencyProgressByTaskID(rows)
-		if err != nil {
-			return err
-		}
-		tasks = boardNodeTaskRecords(rows)
-		hasExtra = len(tasks) > pageSize
-		if hasExtra {
-			tasks = tasks[:pageSize]
-		}
-		taskIDs := workflowTaskIDs(taskIDs(tasks))
-		observation, err := b.projection.Observe(taskIDs)
-		if err != nil {
-			return err
-		}
-		projectedByTaskID, err = b.projection.Project(ctx, observation, durable, taskIDs)
-		return err
+	definition, err := b.projection.definition(ctx, b.queries, workflowID)
+	if err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
+	if _, ok := workflowNodesByID(definition.api)[nodeID]; !ok {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, errors.New("node_id is invalid for workflow")
+	}
+	rows, err := b.queries.ListBoardNodeTasks(ctx, sqlitegen.ListBoardNodeTasksParams{
+		ProjectID:            projectID,
+		WorkflowID:           workflowID,
+		NodeID:               nodeID,
+		LabelFilterKind:      labelFilterArgs.kind,
+		LabelFilterMode:      labelFilterArgs.mode,
+		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
+		ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
+		DependencyFilter:     workflowTaskDependencyFilterQueryArg(req.DependencyFilter),
+		SortField:            string(sortSelection.Field),
+		SortDirection:        string(sortSelection.Direction),
+		OffsetRows:           int64(offset),
+		LimitRows:            int64(pageSize),
 	})
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	taskIDStrings := taskIDs(tasks)
-	labelsByTask, err := loadTaskLabelsByTask(ctx, b.queries, taskIDStrings)
+	dependencyProgressByTaskID, err := boardDependencyProgressByTaskID(rows)
+	if err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
+	tasks := boardNodeTaskRecords(rows)
+	hasExtra := len(tasks) > pageSize
+	if hasExtra {
+		tasks = tasks[:pageSize]
+	}
+	projectTaskIDs := workflowTaskIDs(taskIDs(tasks))
+	observation, err := b.projection.Observe(projectTaskIDs)
+	if err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
+	projectedByTaskID, err := b.projection.Project(ctx, observation, b.queries, projectTaskIDs)
+	if err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
+	labelsByTask, err := loadTaskLabelsByTask(ctx, b.queries, taskIDs(tasks))
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}

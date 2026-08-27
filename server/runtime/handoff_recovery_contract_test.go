@@ -15,21 +15,11 @@ import (
 func TestForkedSessionRecoversCompletedTriggerHandoff(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first")}})); err != nil {
 		t.Fatalf("persist first user message: %v", err)
 	}
 	handoffCall := persistSuccessfulTriggerHandoff(t, engine, "fork-handoff")
-	if err := engine.steer("anchor", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("fork anchor")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "anchor", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("fork anchor")}})); err != nil {
 		t.Fatalf("persist fork anchor: %v", err)
 	}
 
@@ -65,7 +55,7 @@ func TestTriggerHandoffRejectsUnavailableAdmissionWithoutQueueing(t *testing.T) 
 			name: "auto compaction disabled",
 			setup: func(engine *Engine) {
 				engine.compactionRuntimeState().SetSoonReminderIssued(true)
-				engine.SetAutoCompactionEnabled(false)
+				engine.SetAutoCompactionEnabled(context.Background(), false)
 			},
 			want: errHandoffDisabledByUser,
 		},

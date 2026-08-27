@@ -19,7 +19,10 @@ import (
 	goosedatabase "github.com/pressly/goose/v3/database"
 )
 
-const metadataSQLiteConnectionPoolSize = 8
+const (
+	metadataSQLiteConnectionPoolSize      = 8
+	metadataSQLiteBusyTimeoutMilliseconds = 15000
+)
 
 // Goose logger is process-wide; metadata owns this setting and currently keeps
 // routine migration status output silent unless debug logging is explicitly enabled.
@@ -167,7 +170,7 @@ func metadataSQLiteDSN(databasePath string) (string, error) {
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "synchronous(NORMAL)")
-	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", metadataSQLiteBusyTimeoutMilliseconds))
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
@@ -179,6 +182,7 @@ func metadataSQLiteReadOnlyDSN(databasePath string) (string, error) {
 	}
 	q := url.Values{}
 	q.Add("mode", "ro")
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", metadataSQLiteBusyTimeoutMilliseconds))
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }

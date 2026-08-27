@@ -352,6 +352,26 @@ message SessionPlanRequest {
   RunPromptOverrides overrides = 4;
 }
 
+message SessionRuntimeChatSettings {
+  string supervisor = 1 [(buf.validate.field).string.min_len = 1];
+  string thinking = 2 [(buf.validate.field).string.min_len = 1];
+  bool fast = 3;
+  bool questions = 4;
+  bool auto_compaction = 5;
+}
+
+message SessionRuntimeAgentSelection {
+  string agent = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.runtime_agent_selection_nonblank"
+      message: "agent must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  SessionRuntimeChatSettings baseline = 2 [(buf.validate.field).required = true];
+}
+
 message SessionPlan {
   string session_id = 1 [
     (buf.validate.field).string.uuid = true,
@@ -377,6 +397,7 @@ message SessionPlan {
   bool auto_compaction_enabled = 9;
   bool thinking_override_explicit = 10;
   SourceReport source = 11 [(buf.validate.field).required = true];
+  SessionRuntimeAgentSelection activation_agent_selection = 12;
 }
 
 message SessionPlanSuccess {

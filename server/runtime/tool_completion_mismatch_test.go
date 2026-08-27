@@ -19,10 +19,13 @@ import (
 func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		Debug: true,
 	})
+	stepID := runtimeTestStepID("step-delete")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	result := mismatchedDeletionCompletion(t, engine)
 
 	defer func() {
@@ -53,24 +56,27 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 		}
 	}()
 
-	_, _ = engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+	_, _ = engine.steerWithCommitReceipt(runtimeTestStepID("step-delete"), steerToolCompletionIntent(result))
 }
 
 func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 	})
+	stepID := runtimeTestStepID("step-delete")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	result := mismatchedDeletionCompletion(t, engine)
 
-	if err := engine.steer("step-delete", steerToolCompletionIntent(result)); err != nil {
+	if err := engine.steer(runtimeTestStepID("step-delete"), steerToolCompletionIntent(result)); err != nil {
 		t.Fatalf("persist release fallback: %v", err)
 	}
 	assertDeletionMismatchFallback(t, engine, store, result)
 
 	reopened := mustOpenTestSession(t, store.Dir())
-	restored := mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 	})
 	assertDeletionMismatchFallback(t, restored, reopened, result)
@@ -80,15 +86,17 @@ func TestToolCompletionDeletionMismatchDoesNotApplyUncommittedFallback(t *testin
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	var emitted []Event
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { emitted = append(emitted, event) },
 	})
+	restoreStep := setTestActiveStep(engine, "step-delete")
+	defer restoreStep()
 	result := mismatchedDeletionCompletion(t, engine)
 	emitted = nil
 	blocker := mustBlockTestEventLogAppends(t, store)
 
-	receipt, err := engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+	receipt, err := engine.steerWithCommitReceipt(runtimeTestStepID("step-delete"), steerToolCompletionIntent(result))
 	if err == nil || receipt.Committed {
 		t.Fatalf("uncommitted fallback outcome: receipt=%+v err=%v", receipt, err)
 	}
@@ -122,15 +130,17 @@ func TestToolCompletionDeletionMismatchAppliesCommittedFallbackAfterObserverErro
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	var emitted []Event
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { emitted = append(emitted, event) },
 	})
+	restoreStep := setTestActiveStep(engine, "step-delete")
+	defer restoreStep()
 	result := mismatchedDeletionCompletion(t, engine)
 	emitted = nil
 	gate.FailNext(observerErr)
 
-	receipt, err := engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+	receipt, err := engine.steerWithCommitReceipt(runtimeTestStepID("step-delete"), steerToolCompletionIntent(result))
 	if !receipt.Committed || !errors.Is(err, observerErr) {
 		t.Fatalf("committed fallback outcome: receipt=%+v err=%v", receipt, err)
 	}
@@ -168,6 +178,9 @@ func TestExecuteToolCallsCommitsCompletionDiagnosticInResultGroup(t *testing.T) 
 		}),
 		Config{Model: "gpt-5"},
 	)
+	stepID := runtimeTestStepID("step-delete")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	call := llm.ToolCall{
 		ID:          "deletion-call",
 		Name:        string(toolspec.ToolPatch),
@@ -175,7 +188,7 @@ func TestExecuteToolCallsCommitsCompletionDiagnosticInResultGroup(t *testing.T) 
 		CustomInput: textutil.Value("*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"),
 	}
 
-	results, err := engine.executeToolCalls(t.Context(), "step-delete", []llm.ToolCall{call})
+	results, err := engine.executeToolCalls(t.Context(), stepID, []llm.ToolCall{call})
 	if err != nil {
 		t.Fatalf("execute mismatched deletion tool: %v", err)
 	}
@@ -204,21 +217,14 @@ func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 		CustomInput: textutil.Value("*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"),
 	}
 	normalized := normalizeToolCallForTranscript(call, engine.transcriptWorkingDir())
-	if err := engine.steer(
-		"step-delete",
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventNone,
-			true,
-			[]llm.Message{{
-				Role:      llm.RoleAssistant,
-				ToolCalls: []llm.ToolCall{normalized},
-			}},
-		),
+	if err := engine.steer(runtimeTestStepID("step-delete"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{normalized},
+	}}),
 	); err != nil {
 		t.Fatalf("persist deletion call: %v", err)
 	}
-	if err := engine.transcriptRuntimeState().RecordLiveToolStart("step-delete", normalized); err != nil {
+	if err := engine.transcriptRuntimeState().RecordLiveToolStart(runtimeTestStepID("step-delete"), normalized); err != nil {
 		t.Fatalf("record live deletion call: %v", err)
 	}
 	return mismatchedDeletionResult(call.ID)
@@ -243,6 +249,7 @@ func mismatchedDeletionResult(callID string) tools.Result {
 
 func assertDeletionMismatchFallback(t *testing.T, engine *Engine, store *session.Store, result tools.Result) {
 	t.Helper()
+	stepID := runtimeTestStepID("step-delete")
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {
 		t.Fatalf("read bounded mismatch records: %v", err)
@@ -294,9 +301,9 @@ func assertDeletionMismatchFallback(t *testing.T, engine *Engine, store *session
 	for _, row := range snapshot.CommittedRows {
 		switch row.Kind {
 		case TranscriptCommittedRowFactTool:
-			toolRow = row.StepID == "step-delete"
+			toolRow = row.StepID != nil && *row.StepID == stepID
 		case TranscriptCommittedRowFactNotice:
-			noticeRow = row.StepID == "step-delete" &&
+			noticeRow = row.StepID != nil && *row.StepID == stepID &&
 				row.Notice != nil &&
 				row.Notice.Reason == transcript.NoticeReasonRuntimeDiagnostic
 		}

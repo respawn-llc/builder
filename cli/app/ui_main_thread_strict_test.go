@@ -78,9 +78,8 @@ func (c *strictRuntimeClient) SubmitRuntimeInput(_ context.Context, request clie
 	c.submitCalls++
 	return clientui.UserTurnSubmission{
 		Queued: clientui.QueuedUserMessage{
-			ID:              c.submitQueuedID,
-			Text:            runtimeSubmitInputText(request),
-			ClientRequestID: request.ClientRequestID.String(),
+			ID:   c.submitQueuedID,
+			Text: runtimeSubmitInputText(request),
 		},
 	}, nil
 }
@@ -207,7 +206,8 @@ func setStrictTestRuntimeBusy(t *testing.T, m *uiModel) {
 		t.Fatalf("parse step id: %v", err)
 	}
 	if err := m.applyRuntimeActivityProjection(clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityRunning,
+		State:    clientui.RuntimeActivityRunning,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID: runID, StepID: stepID, ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 		},

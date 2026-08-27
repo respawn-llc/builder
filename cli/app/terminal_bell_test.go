@@ -313,77 +313,6 @@ func TestBellHooksToolHeavyTurnCompletion(t *testing.T) {
 	}
 }
 
-func TestBellHooksSupervisorTurnUsesPreFeedbackPreview(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-	preFeedback := "original answer before review"
-	followUp := "distinct answer after review"
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, preFeedback))
-	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateRunning))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, followUp))
-	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
-	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
-	hooks.OnTurnQueueDrained()
-
-	if ringer.notifications != 1 {
-		t.Fatalf("supervisor turn emitted %d notifications, want one", ringer.notifications)
-	}
-	if len(ringer.messages) != 1 {
-		t.Fatalf("supervisor turn retained %d messages, want one", len(ringer.messages))
-	}
-	if got := ringer.messages[0]; got != defaultSessionTitle+": "+preFeedback {
-		t.Fatalf("supervisor notification = %q, want pre-feedback preview", got)
-	}
-}
-
-func TestBellHooksSupervisorToolThresholdSpansReview(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, "answer before review"))
-	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateRunning))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, "answer after review"))
-	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
-	hooks.OnTurnQueueDrained()
-	if ringer.total() != 0 {
-		t.Fatalf("supervisor turn notified before step finish")
-	}
-
-	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
-	hooks.OnTurnQueueDrained()
-	if ringer.notifications != 1 {
-		t.Fatalf("split-threshold supervisor turn emitted %d notifications, want one", ringer.notifications)
-	}
-}
-
-func TestBellHooksBlankFinalFollowUpPreservesTurn(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-	preFeedback := "answer preserved across silent review"
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, preFeedback))
-	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateRunning))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(1, " \n\t"))
-	hooks.OnTranscriptMessage(bellLiveRunNoFinalMessage())
-	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
-	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
-	hooks.OnTurnQueueDrained()
-
-	if ringer.notifications != 1 {
-		t.Fatalf("silent reviewer follow-up emitted %d notifications, want one", ringer.notifications)
-	}
-	if got := ringer.messages[0]; got != defaultSessionTitle+": "+preFeedback {
-		t.Fatalf("silent reviewer notification = %q, want preserved pre-feedback preview", got)
-	}
-}
-
 func TestBellHooksQueuedTurnsUseLatestPreviewAndEarlierEligibility(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
@@ -601,14 +530,6 @@ func bellAssistantFinalMessageWithText(step int, text string) clientui.Transcrip
 		Assistant: &clientui.TranscriptAssistantRow{
 			StepID: bellTestStepID(step), Text: text, Phase: transcript.AssistantPhaseFinal,
 		},
-	}))
-
-}
-
-func bellReviewerStateMessage(step int, state clientui.ReviewerState) clientui.TranscriptMessage {
-	return clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptReviewerState{
-		StepID: bellTestStepID(step),
-		State:  state,
 	}))
 
 }

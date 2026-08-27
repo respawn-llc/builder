@@ -73,20 +73,13 @@ func prepareSimpleResultGroupCall(
 	callID string,
 ) {
 	t.Helper()
+	stepID = runtimeTestStepID(stepID)
 	call := normalizeToolCallForTranscript(llm.ToolCall{
 		ID:    callID,
 		Name:  string(toolspec.ToolExecCommand),
 		Input: []byte(`{"cmd":"true"}`),
 	}, engine.transcriptWorkingDir())
-	if err := engine.steer(
-		stepID,
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventNone,
-			true,
-			[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
-		),
-	); err != nil {
+	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
 		t.Fatalf("persist result group call %s: %v", callID, err)
 	}
 	if err := engine.transcriptRuntimeState().RecordLiveToolStart(stepID, call); err != nil {
@@ -100,15 +93,14 @@ func reportAndFlushSimpleResultGroup(
 	collector *resultGroupCollector,
 	callID string,
 ) error {
+	stepID = runtimeTestStepID(stepID)
 	var outcome *resultGroupReportOutcome
-	return engine.steer(
-		stepID,
-		steerResultGroupReportIntent(
-			collector,
-			callID,
-			testResultGroupUnit(callID),
-			&outcome,
-		),
+	return engine.steer(stepID, steerResultGroupReportIntent(
+		collector,
+		callID,
+		testResultGroupUnit(callID),
+		&outcome,
+	),
 		steerResultGroupFlushIntent(collector, ResultGroupFlushQuestion),
 	)
 }
@@ -271,12 +263,14 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	calls := []llm.ToolCall{
 		{ID: "first", Name: string(toolspec.ToolExecCommand), Input: []byte(`{"cmd":"one"}`)},
 		{ID: "second", Name: string(toolspec.ToolExecCommand), Input: []byte(`{"cmd":"two"}`)},
@@ -285,19 +279,11 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 	for index, call := range calls {
 		normalized[index] = normalizeToolCallForTranscript(call, engine.transcriptWorkingDir())
 	}
-	if err := engine.steer(
-		"step",
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventNone,
-			true,
-			[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: normalized}},
-		),
-	); err != nil {
+	if err := engine.steer(runtimeTestStepID("step"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: normalized}})); err != nil {
 		t.Fatalf("persist result group calls: %v", err)
 	}
 	for _, call := range normalized {
-		if err := engine.transcriptRuntimeState().RecordLiveToolStart("step", call); err != nil {
+		if err := engine.transcriptRuntimeState().RecordLiveToolStart(runtimeTestStepID("step"), call); err != nil {
 			t.Fatalf("record live tool %s: %v", call.ID, err)
 		}
 	}
@@ -310,18 +296,16 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 	}
 	appendsBefore, _ := observer.snapshot()
 	var secondOutcome *resultGroupReportOutcome
-	if err := engine.steer(
-		"step",
-		steerResultGroupReportIntent(
-			collector,
-			"second",
-			resultGroupUnit{result: tools.Result{
-				CallID: "second",
-				Name:   toolspec.ToolExecCommand,
-				Output: []byte(`{"second":true}`),
-			}},
-			&secondOutcome,
-		),
+	if err := engine.steer(runtimeTestStepID("step"), steerResultGroupReportIntent(
+		collector,
+		"second",
+		resultGroupUnit{result: tools.Result{
+			CallID: "second",
+			Name:   toolspec.ToolExecCommand,
+			Output: []byte(`{"second":true}`),
+		}},
+		&secondOutcome,
+	),
 		steerResultGroupFlushIntent(collector, ResultGroupFlushQuestion),
 	); err != nil {
 		t.Fatalf("report later result: %v", err)
@@ -336,18 +320,16 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 		)
 	}
 	var firstOutcome *resultGroupReportOutcome
-	if err := engine.steer(
-		"step",
-		steerResultGroupReportIntent(
-			collector,
-			"first",
-			resultGroupUnit{result: tools.Result{
-				CallID: "first",
-				Name:   toolspec.ToolExecCommand,
-				Output: []byte(`{"first":true}`),
-			}},
-			&firstOutcome,
-		),
+	if err := engine.steer(runtimeTestStepID("step"), steerResultGroupReportIntent(
+		collector,
+		"first",
+		resultGroupUnit{result: tools.Result{
+			CallID: "first",
+			Name:   toolspec.ToolExecCommand,
+			Output: []byte(`{"first":true}`),
+		}},
+		&firstOutcome,
+	),
 		steerResultGroupFlushIntent(collector, ResultGroupFlushQuestion),
 	); err != nil {
 		t.Fatalf("report first result and flush prefix: %v", err)

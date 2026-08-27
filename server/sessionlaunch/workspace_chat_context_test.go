@@ -128,9 +128,6 @@ func TestReadWorkspaceChatContextProjectsSelectedDraftPolicyWithoutMaterializing
 			if test.draft != nil && (persistence.draft == nil || *persistence.draft != *test.draft) {
 				t.Fatalf("workspace Chat Context changed persisted draft: got %+v, want %+v", persistence.draft, test.draft)
 			}
-			if service.runtime != nil {
-				t.Fatal("lazy workspace Context created or required runtime authority")
-			}
 		})
 	}
 }

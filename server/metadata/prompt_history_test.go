@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -18,29 +17,21 @@ func TestPromptHistoryRecordsAndListsByInsertionSequence(t *testing.T) {
 	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
 	now := time.UnixMilli(123).UTC()
 
-	first, inserted, err := store.RecordPromptHistoryEntry(ctx, PromptHistoryEntry{
+	first, err := store.RecordPromptHistoryEntry(ctx, PromptHistoryEntry{
 		SessionID: sessionID,
-		SourceID:  "req-1",
 		Text:      "first",
 		CreatedAt: now,
 	})
 	if err != nil {
 		t.Fatalf("record first: %v", err)
 	}
-	if !inserted {
-		t.Fatal("expected first insert")
-	}
-	second, inserted, err := store.RecordPromptHistoryEntry(ctx, PromptHistoryEntry{
+	second, err := store.RecordPromptHistoryEntry(ctx, PromptHistoryEntry{
 		SessionID: sessionID,
-		SourceID:  "req-2",
 		Text:      "second",
 		CreatedAt: now,
 	})
 	if err != nil {
 		t.Fatalf("record second: %v", err)
-	}
-	if !inserted {
-		t.Fatal("expected second insert")
 	}
 	if first.Sequence >= second.Sequence {
 		t.Fatalf("sequences not increasing: first=%d second=%d", first.Sequence, second.Sequence)
@@ -66,15 +57,12 @@ func TestPromptHistoryReadsNewestRecordedTailWithoutPruningPersistence(t *testin
 	for index := range entryCount {
 		entry := PromptHistoryEntry{
 			SessionID: sessionID,
-			SourceID:  fmt.Sprintf("req-%03d", index),
 			Text:      fmt.Sprintf("prompt-%03d", index),
 			CreatedAt: time.UnixMilli(int64(entryCount - index)).UTC(),
 		}
 		entries = append(entries, entry)
-		if _, inserted, err := store.RecordPromptHistoryEntry(ctx, entry); err != nil {
+		if _, err := store.RecordPromptHistoryEntry(ctx, entry); err != nil {
 			t.Fatalf("record prompt %d: %v", index, err)
-		} else if !inserted {
-			t.Fatalf("record prompt %d returned existing row", index)
 		}
 	}
 
@@ -92,44 +80,35 @@ func TestPromptHistoryReadsNewestRecordedTailWithoutPruningPersistence(t *testin
 		}
 	}
 
-	existing, inserted, err := store.RecordPromptHistoryEntry(ctx, entries[0])
+	repeated, err := store.RecordPromptHistoryEntry(ctx, entries[0])
 	if err != nil {
-		t.Fatalf("replay omitted oldest prompt: %v", err)
+		t.Fatalf("repeat omitted oldest prompt: %v", err)
 	}
-	if inserted {
-		t.Fatal("replay omitted oldest prompt inserted a new row")
-	}
-	if existing.SourceID != entries[0].SourceID || existing.Text != entries[0].Text {
-		t.Fatalf("replayed omitted prompt = %+v, want source_id=%q text=%q", existing, entries[0].SourceID, entries[0].Text)
+	if repeated.Sequence <= int64(entryCount) || repeated.Text != entries[0].Text {
+		t.Fatalf("repeated omitted prompt = %+v, want a new appended row for %q", repeated, entries[0].Text)
 	}
 }
 
-func TestPromptHistoryConflictRequiresEquivalentPayload(t *testing.T) {
+func TestPromptHistoryRepeatedExplicitInvocationAppendsDistinctRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
 	entry := PromptHistoryEntry{
 		SessionID: sessionID,
-		SourceID:  "req-1",
 		Text:      "/status",
 	}
 
-	if _, _, err := store.RecordPromptHistoryEntry(ctx, entry); err != nil {
+	first, err := store.RecordPromptHistoryEntry(ctx, entry)
+	if err != nil {
 		t.Fatalf("record initial: %v", err)
 	}
-	_, inserted, err := store.RecordPromptHistoryEntry(ctx, entry)
+	second, err := store.RecordPromptHistoryEntry(ctx, entry)
 	if err != nil {
-		t.Fatalf("record equivalent replay: %v", err)
+		t.Fatalf("record repeated invocation: %v", err)
 	}
-	if inserted {
-		t.Fatal("expected equivalent replay to return existing row")
-	}
-
-	entry.Text = "/resume"
-	_, _, err = store.RecordPromptHistoryEntry(ctx, entry)
-	if !errors.Is(err, ErrPromptHistoryConflict) {
-		t.Fatalf("mismatched replay error = %v, want ErrPromptHistoryConflict", err)
+	if second.Sequence <= first.Sequence {
+		t.Fatalf("repeated invocation did not append: first=%+v second=%+v", first, second)
 	}
 }
 
@@ -139,18 +118,14 @@ func TestQueuedPromptHistoryRecordsPlainPromptRow(t *testing.T) {
 	store, cfg, binding := newMetadataTestStore(t)
 	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
 
-	record, inserted, err := store.RecordPromptHistoryEntry(ctx, PromptHistoryEntry{
+	record, err := store.RecordPromptHistoryEntry(ctx, PromptHistoryEntry{
 		SessionID: sessionID,
-		SourceID:  "req-queue-1",
 		Text:      "queued text",
 	})
 	if err != nil {
 		t.Fatalf("record queued: %v", err)
 	}
-	if !inserted {
-		t.Fatal("expected queued prompt insert")
-	}
-	if record.SessionID != sessionID || record.SourceID != "req-queue-1" || record.Text != "queued text" {
+	if record.SessionID != sessionID || record.Text != "queued text" {
 		t.Fatalf("queued record = %+v", record)
 	}
 

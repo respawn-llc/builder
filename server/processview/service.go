@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/server/requestmemo"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -20,15 +19,10 @@ type ProcessSource interface {
 
 type ProcessViewService struct {
 	processes ProcessSource
-	kills     *requestmemo.Memo[killRequestMemoRequest, serverapi.ProcessKillResponse]
-}
-
-type killRequestMemoRequest struct {
-	ProcessID string
 }
 
 func NewProcessViewService(processes ProcessSource) *ProcessViewService {
-	return &ProcessViewService{processes: processes, kills: requestmemo.New[killRequestMemoRequest, serverapi.ProcessKillResponse]()}
+	return &ProcessViewService{processes: processes}
 }
 
 func (s *ProcessViewService) ListProcesses(_ context.Context, req serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
@@ -73,13 +67,10 @@ func (s *ProcessViewService) KillProcess(ctx context.Context, req serverapi.Proc
 	if s == nil || s.processes == nil {
 		return serverapi.ProcessKillResponse{}, fmt.Errorf("process source is required")
 	}
-	memoReq := killRequestMemoRequest{ProcessID: strings.TrimSpace(req.ProcessID)}
-	return s.kills.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, func(a killRequestMemoRequest, b killRequestMemoRequest) bool { return a.ProcessID == b.ProcessID }, func(ctx context.Context) (serverapi.ProcessKillResponse, error) {
-		if err := ctx.Err(); err != nil {
-			return serverapi.ProcessKillResponse{}, err
-		}
-		return serverapi.ProcessKillResponse{}, s.processes.Kill(memoReq.ProcessID)
-	})
+	if err := ctx.Err(); err != nil {
+		return serverapi.ProcessKillResponse{}, err
+	}
+	return serverapi.ProcessKillResponse{}, s.processes.Kill(strings.TrimSpace(req.ProcessID))
 }
 
 func (s *ProcessViewService) GetInlineOutput(_ context.Context, req serverapi.ProcessInlineOutputRequest) (serverapi.ProcessInlineOutputResponse, error) {

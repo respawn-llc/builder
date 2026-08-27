@@ -103,7 +103,7 @@ func TestOpenByIDUsesPersistedSessionResolver(t *testing.T) {
 
 func TestOpenByIDRejectsWithoutPersistedSessionResolver(t *testing.T) {
 	root := t.TempDir()
-	if _, err := OpenByID(root, "missing-session"); err == nil || !errors.Is(err, errPersistedSessionResolverRequired) {
+	if _, err := OpenByID(root, "missing-session"); err == nil || !errors.Is(err, ErrPersistedSessionResolverRequired) {
 		t.Fatalf("expected missing resolver error, got %v", err)
 	}
 }

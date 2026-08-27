@@ -69,14 +69,6 @@ type currentNodeRunnerClient interface {
 
 type currentNodeAssignmentSteererFactory func(*Starter) workflowexecution.CurrentNodeAssignmentSteerer
 
-type committedDiagnosticCurrentNodeAssignmentSteerer struct {
-	delegate   *Starter
-	call       atomic.Int64
-	targetCall int64
-	diagnostic error
-	matched    atomic.Bool
-}
-
 type failingManualMoveAssignmentSteerer struct {
 	delegate *Starter
 	cause    error
@@ -153,40 +145,6 @@ func (s diagnosticManualMoveAssignmentSteerer) PrepareManualMoveAssignments(
 	}
 	preparation.Diagnostic = s.diagnostic
 	return preparation, steers, nil
-}
-
-func (s *committedDiagnosticCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
-	ctx context.Context,
-	reference workflow.CurrentNodeReference,
-) (workflowexecution.CurrentNodeAssignmentSteer, error) {
-	prepared, err := s.delegate.SteerCurrentNodeAssignment(ctx, reference)
-	if err != nil {
-		return nil, err
-	}
-	if s.call.Add(1) != s.targetCall {
-		return prepared, nil
-	}
-	agent, ok := prepared.(*currentNodeAgentAssignmentSteer)
-	if !ok {
-		return nil, fmt.Errorf("prepared target assignment has type %T, want Agent assignment", prepared)
-	}
-	agent.completion = agentruntime.CompletedWorkflowAssignmentSteer(
-		session.CommitReceipt{Committed: true},
-		s.diagnostic,
-	)
-	s.matched.Store(true)
-	return agent, nil
-}
-
-func (s *committedDiagnosticCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
-	ctx context.Context,
-	inputs []workflowstore.CurrentNodeStartContext,
-) (
-	workflowstore.ManualMoveTargetAssignmentPreparation,
-	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
-	error,
-) {
-	return s.delegate.PrepareManualMoveAssignments(ctx, inputs)
 }
 
 func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResponse {
@@ -346,24 +304,10 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	}
 	fixture.runtimes = registry.NewRuntimeRegistry()
 	var controller *workflowexecution.CurrentNodeController
-	var finalizationMu sync.Mutex
-	var finalizationWG sync.WaitGroup
-	finalizationClosed := false
 	fixture.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
 		StoreOptions:    storeOptions,
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			finalizationMu.Lock()
-			if finalizationClosed {
-				finalizationMu.Unlock()
-				return
-			}
-			finalizationWG.Add(1)
-			finalizationMu.Unlock()
-			defer finalizationWG.Done()
-			controller.ExecutionFinalized(scope)
-		}),
-		PromptFeed: fixture.runtimes,
+		PromptFeed:      fixture.runtimes,
 		EventFeed: func(resource runtimeids.SessionResourceRef, event agentruntime.Event) {
 			fixture.runtimes.PublishAuthorityRuntimeEvent(resource, event)
 		},
@@ -371,9 +315,6 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: fixture.runtimes},
 	})
 	t.Cleanup(func() {
-		finalizationMu.Lock()
-		finalizationClosed = true
-		finalizationMu.Unlock()
 		if fixture.controller != nil {
 			if err := fixture.controller.Close(); fixture.controllerClose != nil {
 				if !errors.Is(err, fixture.controllerClose) {
@@ -383,7 +324,6 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 				t.Errorf("close current node controller: %v", err)
 			}
 		}
-		finalizationWG.Wait()
 		if fixture.starter != nil {
 			if err := fixture.starter.Close(); err != nil {
 				t.Errorf("close workflow starter: %v", err)
@@ -429,7 +369,6 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	}
 	fixture.controller = controller
 	projection, err := workflowview.NewTaskStatusProjection(
-		metadataStore,
 		store,
 		workflowview.NewTaskProjector(),
 		controller,
@@ -519,10 +458,7 @@ func (f *currentNodeRunnerFixture) restartRuntime(t *testing.T) {
 	f.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: f.cfg.PersistenceRoot,
 		StoreOptions:    storeOptions,
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			f.controller.ExecutionFinalized(scope)
-		}),
-		PromptFeed: f.runtimes,
+		PromptFeed:      f.runtimes,
 		EventFeed: func(resource runtimeids.SessionResourceRef, event agentruntime.Event) {
 			f.runtimes.PublishAuthorityRuntimeEvent(resource, event)
 		},
@@ -611,11 +547,11 @@ func (f *currentNodeRunnerFixture) waitForTaskQuiescence(t *testing.T, taskID wo
 	t.Helper()
 	deadline := time.Now().Add(currentNodeRunnerWait)
 	for time.Now().Before(deadline) {
-		quiescence, err := f.controller.CurrentTaskQuiescence([]workflow.TaskID{taskID})
+		observation, err := f.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
 		if err != nil {
 			t.Fatalf("inspect Task quiescence: %v", err)
 		}
-		if quiescence[taskID] {
+		if observation.Quiescence[taskID] {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -1009,7 +945,7 @@ func TestApprovalAppliesStrictPreviousTargetOnceAfterSourceRetires(t *testing.T)
 	implementation := f.startTask(t, task)
 	approval := f.waitForPendingApproval(t, task.ID)
 	f.waitForTaskQuiescence(t, task.ID)
-	retained, err := f.store.CurrentTaskSessionForNode(context.Background(), implementation)
+	retained, err := f.store.LatestTaskSessionForNode(context.Background(), implementation)
 	if err != nil {
 		t.Fatalf("resolve retained implementation: %v", err)
 	}
@@ -2006,130 +1942,6 @@ func TestPostTurnCompactionDiagnosticReleasesAssignedSuccessor(t *testing.T) {
 	}
 }
 
-func TestWorkflowRunnerCancellationDuringPostTurnFinalizationFinalizesInterruptedSourceScope(t *testing.T) {
-	client := NewCompactingScriptedClient(
-		llm.ProviderCapabilities{
-			ProviderID:               "test",
-			SupportsResponsesAPI:     true,
-			SupportsResponsesCompact: true,
-			SupportsPromptCacheKey:   true,
-		},
-		[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("completed review")},
-		ScriptedFinalAnswer(`{"transition":"rework","commentary":"changes requested"}`),
-	)
-	f := newCurrentNodeRunnerFixtureWithPersistenceGate(t, client)
-	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
-	threshold := 1
-	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
-	var postCompactionObservation atomic.Bool
-	compactionFinalizationStarted, releaseCompactionFinalization := f.persistenceGate.BlockWhen(func(session.PersistedStoreSnapshot) bool {
-		if len(client.CompactionCalls()) == 0 {
-			return false
-		}
-		return postCompactionObservation.Swap(true)
-	})
-	t.Cleanup(releaseCompactionFinalization)
-	workflowID := createCurrentNodeTwoStepWorkflowWithTransition(
-		t,
-		f.store,
-		"Approval post-turn cancellation",
-		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the implementation."},
-		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Address the review findings."},
-		currentNodeLinearTransition{
-			id:               "rework",
-			mode:             workflow.ContextModeContinueSession,
-			requiresApproval: true,
-			contextSource:    workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
-		},
-	)
-	task := f.createTask(t, workflowID)
-	source := f.startTask(t, task)
-
-	select {
-	case <-compactionFinalizationStarted:
-	case <-time.After(currentNodeRunnerWait):
-		t.Fatal("post-turn compaction finalization did not reach the cancellation gate")
-	}
-	if len(client.CompactionCalls()) != 1 {
-		t.Fatalf("post-turn compactions before cancellation = %d, want one committed replacement", len(client.CompactionCalls()))
-	}
-	execution, exists := f.authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   f.projectID,
-		WorkflowID:  workflowID,
-		CurrentNode: source,
-	})
-	if !exists {
-		t.Fatal("post-turn finalization had no live exact execution scope")
-	}
-	if !execution.RequestStop() {
-		t.Fatal("post-turn finalization exact execution scope was already stopped")
-	}
-	releaseCompactionFinalization()
-	stopContext, cancelStop := context.WithTimeout(context.Background(), currentNodeRunnerWait)
-	defer cancelStop()
-	if err := execution.Stop(stopContext); err != nil &&
-		!errors.Is(err, context.Canceled) {
-		t.Fatalf("stop workflow exact execution scope: %v", err)
-	}
-	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 &&
-			nodes[0].Reference.Equal(source) &&
-			nodes[0].Scheduling != nil &&
-			nodes[0].Scheduling.Interruption != nil
-	})
-	f.waitForTaskQuiescence(t, source.TaskID)
-	approval := f.waitForPendingApproval(t, task.ID)
-	pending, err := f.store.ListPendingApprovals(context.Background(), task.ID)
-	if err != nil {
-		t.Fatalf("list pending Approval after cancellation: %v", err)
-	}
-	if len(pending) != 1 || pending[0].ID != approval.ID {
-		t.Fatalf("pending Approvals after cancellation = %+v, want held source Approval", pending)
-	}
-	association, err := f.store.CurrentTaskSessionForNode(context.Background(), source)
-	if err != nil {
-		t.Fatalf("resolve canceled source Session: %v", err)
-	}
-	persisted, err := f.metadata.ResolvePersistedSession(context.Background(), association.SessionID.String())
-	if err != nil {
-		t.Fatalf("resolve canceled source persisted Session: %v", err)
-	}
-	sourceStore, err := session.Open(persisted.SessionDir, f.metadata.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("open canceled source Session: %v", err)
-	}
-	eventLog, err := sourceStore.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize canceled source event log: %v", err)
-	}
-	window, err := eventLog.ReadNewestSegmentBackward(func(record session.EventRecord) bool {
-		payload, err := record.Payload()
-		if err != nil {
-			return false
-		}
-		replacement, ok := payload.(session.HistoryReplacementRecord)
-		return ok && replacement.Mode == session.CompactionModeWorkflowPostCompletion
-	})
-	if err != nil {
-		t.Fatalf("read canceled source replacement segment: %v", err)
-	}
-	replacementCommitted := false
-	for _, record := range window.Records {
-		payload, err := record.Payload()
-		if err != nil {
-			t.Fatalf("decode canceled source replacement record: %v", err)
-		}
-		replacement, ok := payload.(session.HistoryReplacementRecord)
-		if ok && replacement.Mode == session.CompactionModeWorkflowPostCompletion {
-			replacementCommitted = true
-			break
-		}
-	}
-	if !replacementCommitted {
-		t.Fatal("cancellation lost the committed Workflow Post-Compaction replacement")
-	}
-}
-
 func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
@@ -2292,14 +2104,6 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 			len(f.client.Requests()) == 2
 	})
 	f.waitForTaskQuiescence(t, currentNode.TaskID)
-	if err := f.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *agentruntime.Engine) error {
-		if !engine.CurrentNodeExecutionConfigured() {
-			t.Fatal("finalized workflow execution discarded the retained Session contract")
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("attached Resource Generation was replaced on Resume: %v", err)
-	}
 }
 
 func requestAdvertisesTool(request llm.Request, id toolspec.ID) bool {
@@ -2487,75 +2291,6 @@ func TestCurrentNodeContinuationModesReuseTheRetainedSession(t *testing.T) {
 	}
 }
 
-func TestAutomaticCommittedAssignmentDiagnosticStartsRealAgentExactlyOnce(t *testing.T) {
-	sourceResponseStarted := make(chan struct{})
-	sourceResponseRelease := make(chan struct{})
-	var releaseSource sync.Once
-	t.Cleanup(func() {
-		releaseSource.Do(func() { close(sourceResponseRelease) })
-	})
-	client := NewScriptedClient(
-		llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
-		ScriptedRuntimeStep{
-			BeforeResponse: func(ctx context.Context) error {
-				close(sourceResponseStarted)
-				select {
-				case <-sourceResponseRelease:
-					return nil
-				case <-ctx.Done():
-					return context.Cause(ctx)
-				}
-			},
-			Response: ScriptedFinalAnswer(`{"transition":"next","commentary":"source complete"}`).Response,
-		},
-		ScriptedFinalAnswer(`{"commentary":"target complete"}`),
-	)
-	diagnostic := errors.New("target assignment observer diagnostic")
-	assignmentSteerer := &committedDiagnosticCurrentNodeAssignmentSteerer{
-		targetCall: 2,
-		diagnostic: diagnostic,
-	}
-	f := newCurrentNodeRunnerFixtureWithAssignmentSteerer(
-		t,
-		client,
-		func(starter *Starter) workflowexecution.CurrentNodeAssignmentSteerer {
-			assignmentSteerer.delegate = starter
-			return assignmentSteerer
-		},
-	)
-	f.controllerClose = diagnostic
-	workflowID := createCurrentNodeTwoStepWorkflow(
-		t,
-		f.store,
-		"Automatic committed assignment diagnostic",
-		workflow.ContextModeNewSession,
-		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the source."},
-		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Complete the target."},
-	)
-	task := f.createTask(t, workflowID)
-	source := f.startTask(t, task)
-	select {
-	case <-sourceResponseStarted:
-	case <-time.After(currentNodeRunnerWait):
-		t.Fatal("source Current Node did not reach its model response")
-	}
-	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 && nodes[0].Reference.Equal(source) && nodes[0].SessionID != nil
-	})
-
-	releaseSource.Do(func() { close(sourceResponseRelease) })
-	f.waitForModelRequestsWithin(t, 2, 3*time.Second)
-	if !assignmentSteerer.matched.Load() {
-		t.Fatal("target assignment observer diagnostic was not exercised")
-	}
-	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 && nodes[0].Scheduling == nil
-	})
-	if requests := client.Requests(); len(requests) != 2 {
-		t.Fatalf("model requests = %d, want one source and one target execution", len(requests))
-	}
-}
-
 func TestInitialStartCommittedAssignmentDiagnosticInterruptsWithoutStartingRuntime(t *testing.T) {
 	diagnostic := errors.New("initial assignment observer diagnostic")
 	var diagnosticMatched atomic.Bool
@@ -2599,7 +2334,7 @@ func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing
 	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && !nodes[0].Reference.IsBranchScoped() && nodes[0].Scheduling == nil
 	})
-	sourceAssociation, err := f.store.CurrentTaskSessionForNode(context.Background(), source)
+	sourceAssociation, err := f.store.LatestTaskSessionForNode(context.Background(), source)
 	if err != nil {
 		t.Fatalf("resolve source Session association: %v", err)
 	}
@@ -2609,7 +2344,7 @@ func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing
 		if err != nil {
 			t.Fatalf("create branch %q Current Node reference: %v", branchKey, err)
 		}
-		association, err := f.store.CurrentTaskSessionForNode(context.Background(), reference)
+		association, err := f.store.LatestTaskSessionForNode(context.Background(), reference)
 		if err != nil {
 			t.Fatalf("resolve branch %q Session association: %v", branchKey, err)
 		}
@@ -2681,7 +2416,7 @@ func TestWorkflowPostCompletionCompactsFanoutSourceBeforeBranchClones(t *testing
 			requests[2].PromptCacheKey,
 		)
 	}
-	sourceAssociation, err := f.store.CurrentTaskSessionForNode(context.Background(), source)
+	sourceAssociation, err := f.store.LatestTaskSessionForNode(context.Background(), source)
 	if err != nil {
 		t.Fatalf("resolve source Session association: %v", err)
 	}
@@ -2691,7 +2426,7 @@ func TestWorkflowPostCompletionCompactsFanoutSourceBeforeBranchClones(t *testing
 		if err != nil {
 			t.Fatalf("create branch %q Current Node reference: %v", branchKey, err)
 		}
-		association, err := f.store.CurrentTaskSessionForNode(context.Background(), reference)
+		association, err := f.store.LatestTaskSessionForNode(context.Background(), reference)
 		if err != nil {
 			t.Fatalf("resolve branch %q Session association: %v", branchKey, err)
 		}

@@ -9,18 +9,12 @@ import (
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/textutil"
-	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type uiLogger interface {
 	Logf(format string, args ...any)
-}
-
-func (m *uiModel) clearReviewerState() {
-	m.setReviewerRunning(false)
-	m.setReviewerBlocking(false)
 }
 
 func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) tea.Model {
@@ -242,19 +236,16 @@ func (m *uiModel) inputController() uiInputController {
 	return uiInputController{model: m}
 }
 
-func worktreeDeleteSuccessStatus(target string, result worktreecontract.DeleteResult) string {
-	if result.Kind == worktreecontract.DeleteResultKindScheduled {
-		return "Scheduled deletion of worktree " + strings.TrimSpace(target)
-	}
+func worktreeDeleteSuccessStatus(target string, result serverapi.WorktreeDeleteResult) string {
 	status := "Deleted worktree " + strings.TrimSpace(target)
-	if result.Completed != nil && result.Completed.Cleanup.Diagnostic != nil {
-		status += ". Kept branch: " + strings.TrimSpace(*result.Completed.Cleanup.Diagnostic)
+	if result.Cleanup.Diagnostic != nil {
+		status += ". Kept branch: " + strings.TrimSpace(*result.Cleanup.Diagnostic)
 	}
 	return status
 }
 
-func worktreeDeleteForceConfirmation(state worktreecontract.DirtyState) string {
-	if state.Kind == worktreecontract.DirtyStateDirty && state.DirtyFileCount != nil {
+func worktreeDeleteForceConfirmation(state clientui.WorktreeDirtyState) string {
+	if state.Kind == clientui.WorktreeDirtyStateDirty && state.DirtyFileCount != nil {
 		return fmt.Sprintf("Worktree has %d modified or untracked file(s). Press Delete again to force folder removal.", *state.DirtyFileCount)
 	}
 	return "Worktree cleanliness could not be determined. Press Delete again to force folder removal."

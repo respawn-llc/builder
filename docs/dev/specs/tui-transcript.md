@@ -28,7 +28,7 @@
 - Transcript failures never become fake empty or idle state.
 - A sequence gap, connection loss, or buffered-event overflow starts Scratch Rehydration. Terminal resize repaints only the Mutable Band and leaves Immutable Area reflow to the terminal.
 - Scratch rehydration never restarts the TUI process, clears immutable scrollback, compares against emitted lines, or suppresses duplicate-looking output.
-- Scratch rehydration emits committed assistant commentary and final answers from their full saved Markdown through the same stable projection as ordinary assistant messages. The compact ongoing assistant preview rule does not apply to rehydrated assistant messages.
+- Live streaming, ordinary committed emission, startup hydration, and Scratch Rehydration emit every user turn, assistant commentary turn, and assistant final turn from its complete source Markdown. These paths never substitute condensed text, a compact label, a line-limited preview, or an ellipsis for that source.
 - Assistant finalization matches the committed entry to its Streaming Message identity and compares only with the active stream source. If committed text extends the streamed source, Ongoing Mode emits only the missing suffix. Any other mismatch without a real connection gap is a developer error.
 - **Pending tool activity lives only in the Mutable Band. It shows a loading spinner until Kent commits the completed tool row to Scrollback.**
 - Messages in TUI use icon-like, single-symbol glyphs: `@` for web search, `§` for Reviewer feedback, `⇄` for file edits (edit/patch tools), `$` for shell tool calls including failed shell exits, `⚠` for warnings, `!` for Reviewer errors, other error notices, and default tool errors, `ℹ` for ongoing-visible neutral notices (such as goal and worktree messages), and `?` for questions.
@@ -48,7 +48,7 @@
 
 - Detail mode is an expandable transcript inspector.
 - Collapsed detail is default presentation mode.
-- User and assistant messages show at most the first 3 rendered lines when collapsed.
+- User turns, assistant commentary turns, and assistant final turns remain complete while Detail is collapsed. They do not become expandable merely to reveal omitted text.
 - Tool calls show the same first input line used by ongoing previews.
 - Detail Mode shows only completed tool results. A tool row includes its typed input facts and output. It does not show a separate raw tool-call record.
 - A backgrounded shell invocation stays compact while Detail is collapsed. Expanding it reveals its full command input and any tool output committed by the server.
@@ -119,11 +119,10 @@
 - Reviewer feedback uses `O` when `reviewer.verbose_output` is enabled and `OC` when it is disabled. Every nonempty Reviewer result creates one feedback row when the suggestions are issued, before the follow-up begins. `O` renders the complete ordered Markdown suggestion list in ongoing scrollback without truncation or ellipsis. `OC` renders the suggestion count in ongoing and collapsed Detail; expanded Detail renders the complete ordered Markdown suggestion list.
 - A successful Reviewer follow-up creates a separate `OC` outcome row after the follow-up. The outcome reports whether Kent applied the suggestions or made no changes.
 - Reviewer errors use `O` and show their complete failure detail.
-- Reviewer running and completion lifecycle events create no transcript row.
+- Reviewer running and completion lifecycle create no transcript row.
 - `background_notice`: `OC`
 - `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
-- Provider-model mismatch warnings are `D` by default and `O` when debug mode is enabled.
 - Compaction-Preserved User Message: `D`.
 - `headless_mode`: `D`
 - `headless_mode_exit`: `D`
@@ -156,7 +155,7 @@
 - Syntax-highlighted output must not emit backgrounds unless explicitly intended, such as diff add/remove decoration.
 - Formatted text uses app foreground as base text color.
 - Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
-- User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Assistant commentary and final turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
+- User turns render their full submitted text in every TUI transcript mode, including multiline prompts that invoke slash commands. Assistant commentary and final turns render their full model output in every TUI transcript mode. Streaming, ordinary emission, startup hydration, Scratch Rehydration, collapsed Detail, and expanded Detail all preserve the complete source. The TUI never uses condensed text, compact labels, line limits, or ellipses for user or assistant rows.
 - A transcript message with type `agent_steer` uses the `❯` symbol and full-strength foreground Markdown styling. Ongoing renders the complete model-visible message. Collapsed Detail uses the ordinary compact preview, and expanded Detail renders the complete model-visible message.
 - `agents.md`, `skills`, `subagents`, `environment`, `compaction_summary`, `headless_mode`, `headless_mode_exit`, `active_goal_continuation`, and `workflow_mode` render selected content as Markdown. `handoff_future_message` and Compaction-Preserved User Messages remain plaintext.
 - Stable ongoing user and final/streamed assistant Markdown emits width-independent logical lines so the terminal owns prose wrapping and copied prose contains no width-generated line breaks. Markdown soft line breaks flow as spaces; hard breaks and preformatted source boundaries remain explicit. GFM tables render through the Markdown library at the terminal width in effect when they enter scrollback, using continuous Unicode `│`, `─`, and `┼` separators without an outer frame.
@@ -173,14 +172,7 @@
 - `subagents` developer-context rows use the faint foreground system-notice style.
 - Reviewer feedback rows use success text. Reviewer error rows use error text.
 - Cache warnings and non-interrupting warnings use warning text. Compaction reminders use warning text in ongoing and collapsed Detail, and normal notice text when expanded.
-- A provider-model mismatch warning reads `The provider served the request with <served model> instead of <Session Contract model>` in collapsed presentation.
 - Error rows use the Error color for both symbol and text, including interruption rows. Error rows may retain faintness when their presentation requires it.
-- One shared transcript renderer selects the complete content and layout for every error-severity notice from its typed reason.
-- A runtime-diagnostic error uses its complete diagnostic detail. A legacy-untyped error uses its complete legacy text when present.
-- A legacy-untyped error without complete legacy text is valid only for a worktree-enter or worktree-exit message with typed Worktree context. Every other metadata-only legacy-untyped error is invalid.
-- A cache-warning error uses its typed cache-warning text. A compaction error uses its typed detail when present and otherwise uses its typed compaction summary. A tool-output-repair error uses its typed repair text.
-- Error-severity notices ignore compact labels, condensed text, source paths, and other compact preview fields, including for metadata-only legacy errors. They wrap to transcript width without ellipsis in every Ongoing and Detail render mode.
-- Non-error rows retain their existing mode-specific compact or full content and layout rules.
 - Background shell completion notices use full-strength foreground text and remain separate transcript rows from shell tool calls/results, but join the tool-activity visual group so no blank separator appears between them.
 - Moving a shell to the background ends its mutable live-tool presentation. The backgrounded tool row remains in immutable ongoing scrollback, and completion is represented by a separate immutable notice.
 - The rendering matrix applies to ongoing and detail modes. Mode-specific compact/full rules may change which content is selected. Expanded compaction summary and reminder content uses the normal notice role; other selected content retains its semantic role.
@@ -207,19 +199,18 @@
 - Queue/send hotkey is `Tab`; `Ctrl+Enter` is a compatibility alias.
 - Known `Ctrl+Enter` CSI encodings normalize to the same queue action.
 - Clipboard paste hotkeys are `Ctrl+V`, `Ctrl+D`, `Alt+V`, and `Alt+D`; explicit system clipboard reads save images to temporary PNG files and insert the path, or insert text at the active cursor. Terminal bracketed paste remains ordinary text input and never causes a system clipboard read.
-- Mid-run steering is soft-insert only at safe boundaries after current tool completion.
+- Runtime acceptance, protected Agent Steps, Steering drains, and the separate post-turn Queue follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification.
 - Steering submissions never lock the input box; each `Enter` while busy queues another steering message.
-- Pending steering and pending user messages are strict FIFO.
 - Live-band queued inputs use secondary/faint styling; live-band steering inputs use primary styling.
 - A pending steer issued from another Session shows its complete wrapped message.
-- Multiple queued human steering messages flushed at one boundary coalesce into one user message separated by blank lines. Each queued steer issued from another Session remains a separate message.
-- Pending queues have no fixed count limit and are lost on process exit.
+- Each queued human Steering message remains a separate FIFO user message. Each queued steer issued from another Session remains a separate message.
+- Pending queues are lost on process exit. The backend overload invariant is owned by the Runtime Steering specification.
 - A mid-turn message becomes durable only when Kent delivers it.
 - The server-published Run lifecycle is the TUI liveness authority for `Ctrl+C`: while the Run lifecycle is Running, the TUI sends Interrupt; otherwise it exits. A second `Ctrl+C` while Interrupt is still pending for that same Run exits locally. A later Running lifecycle with a different Run or Step identity sends a new Interrupt. The server revalidates that Interrupt targets an active Agent Turn. A submission already sent to the server may start or continue after the client detaches.
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
 - Resume after interrupt requires explicit user text.
-- Session reopening after a crash or durability-failure retirement follows the fresh-resource recovery contract in `core-runtime-tools.md`. The TUI does not expose a stale tool call as live; otherwise it restores normal state.
+- Session reopening refreshes committed Session state from the server. The TUI does not restore process-local Steering or expose a stale tool call as live.
 - Failed prompt-history navigation emits plain terminal BEL with no transient UI notification.
 
 ## Worktree Management
@@ -227,7 +218,7 @@
 - Worktree-management product language uses `workspace`, not `repo`.
 - Changing worktrees keeps the Session identity stable. It changes only the workspace, optional worktree, and relative working directory used for execution.
 - `/worktree` has no separate teleport-root abstraction.
-- Bare `/worktree` and `/wt` open the Worktree list, including during an active Agent Step.
+- Bare `/worktree` opens the Worktree list.
 - `/worktree new` and `/worktree create` enter one smart-target create dialog. Raw `/worktree create <branch> [path]` bypass is unsupported.
 - Create dialog auto-suggests target name only from sanitized session name. It does not fall back to current branch, main, or generic placeholder.
 - Create dialog has no explicit new/existing selector. Kent resolves typed `Branch or ref` asynchronously and shows `new branch`, `existing branch`, or `detached ref`.
@@ -238,9 +229,10 @@
 - Only one modification can apply to a worktree at a time.
 - A competing modification waits for the earlier modification and then evaluates the current state again.
 - If the earlier operation deleted the worktree, a later request to enter it fails because the worktree is absent. A later request to delete it again succeeds without another change.
-- Deletion fails immediately if a targeting Session is running or has begun to start. Kent does not wait for that work.
-- After deletion starts, new work for targeting Sessions is rejected until Kent finishes Session retargeting and Git removal.
-- Kent retargets idle targeting Sessions to the main worktree only after deletion is eligible to proceed.
+- Deletion fails immediately if a targeting Active Session Runtime is executing, processing or holding pending Session mutations, has selected or begun provider or tool work, or remains retained for Workflow control.
+- Kent does not wait for or stop work that blocks deletion.
+- A targeting Idle Active Session Runtime is retired before its Session is retargeted as dormant and the Worktree is removed.
+- If human input becomes accepted first, deletion fails. If deletion retires and retargets first, later input uses the new target.
 - A rejected deletion leaves Session targets, Kent worktree information, Git state, and branch state unchanged.
 - A busy target does not delay create, enter, leave, or delete operations for unrelated worktrees.
 - Worktree list returns one complete result in Git's native order. It does not use pagination.
@@ -251,9 +243,8 @@
 - Worktree deletion retargets Sessions before it removes the worktree.
 - A Kent background shell process in the worktree blocks deletion immediately. Kent does not wait or retry automatically.
 - A busy deletion reports `worktree blocked`. It is not a successful deletion and includes no blocker-detail payload.
-- Deleting the requesting Session's current worktree is scheduled first. The request acknowledges scheduling before Kent checks blockers. The scheduled deletion then checks current state again before removal.
 - Branch cleanup is conservative/best-effort. Normal TUI deletion only auto-attempts branch deletion when provenance proves Kent created the branch. Explicit TUI Delete + Branch is available for every branch-backed worktree and uses safe branch deletion.
-- New worktrees default under `worktrees.base_dir`, rooted under Kent persistence state by default.
+- New worktrees default under the Worktree Base Dir, which is rooted under Kent persistence state by default.
 - After a target change, shell execution and relative file paths use the new Working Directory.
 - Containment checks for `edit`, `patch`, and `view_image` use the new Execution Target Root.
 - Tools without filesystem-path behavior use neither path authority.
@@ -263,12 +254,19 @@
 - Creating a worktree and completing setup does not change the Session target.
 - After successful TUI creation, the TUI applies the ordinary enter operation.
 - Setup failure keeps the Session on its previous worktree, preserves the created worktree for inspection or repair, and shows a foreground error.
-- TUI enter and leave actions return before an active Agent Step finishes.
-- Each Session can have one pending worktree target change.
-- An identical retry returns the existing acknowledgement. A different target change is rejected while one is pending.
-- Kent applies the target change between Agent Steps before queued user work.
-- Attached clients receive the final success or failure. A successful change becomes model-visible through the ordinary worktree reminder.
-- Pending worktree target changes are lost on server shutdown or restart and are never resumed. Reconnecting clients refresh Worktree status.
+- TUI enter and leave actions return the domain Worktree Operation acknowledgement without waiting for an active Agent Step or the Worktree transition to finish.
+- For an Active Session Runtime, each enter or leave is an independent Session mutation.
+- Kent accepts an enter or leave without waiting for the transition.
+- The Worktree owner later applies the target, Working Directory, tool environment, and reminder or failure.
+- Accepted human messages retain their own first-in, first-out order, but a Worktree transition takes the next eligible boundary before human model work that is still queued and has not started.
+- A Worktree transition never preempts an Agent Step already running.
+- After that Agent Step ends, Worktree applies before another ordinary continuation.
+- Human messages remain accepted while Worktree is in progress.
+- Repeated Worktree requests receive no matching-retry response, pending-operation deduplication, or different-target busy rejection.
+- Attached clients receive the final success or failure.
+- A successful change becomes model-visible through the ordinary worktree reminder.
+- An accepted Worktree transition that has not applied is lost on server shutdown or restart and is never resumed.
+- Reconnecting clients refresh Worktree status.
 - Worktree status is observational and target-local. If the recorded worktree directory, branch/ref, or Git binding is missing, status returns the recorded target with typed warnings and does not repair or retarget the session. Status has no selector field; branch and display facts are informational. Status and list omit dirty and ahead/behind state; delete probes dirty state only for the selected live worktree.
 - Deleting a missing registered worktree moves its current Session to main, removes only stale Kent information, and leaves any directory that Git does not recognize as a linked worktree untouched.
 - Worktree setup timeout is configured by `worktrees.setup_timeout_seconds`. The default is 60 seconds. Unset timeout uses the default; a configured timeout of zero or less disables the timeout.
@@ -285,7 +283,7 @@
 - Built-ins: `/logout`, `/login`, `/exit`, `/new`, `/resume`, `/compact`, `/name`, `/thinking`, `/fast`, `/review`, `/init`, `/supervisor`, `/autocompaction`, `/questions`, `/status`, `/goal`, `/ps`, `/worktree` (alias `/wt`), `/copy`, `/back`.
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
 - Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` detach this TUI from the current Session without interrupting its Active Session Runtime.
-- Non-run-safe known commands while busy are rejected with transient status-line error. Bare `/worktree` and `/wt` are local-picker exceptions; Worktree commands with arguments remain non-run-safe.
+- Runtime-affecting known commands remain accepted while an Agent Step or another Runtime operation is active and enter Steering. Client-local navigation, overlays, reads, and detach actions remain with their direct owners.
 - `/resume` always enters the session picker, including when no other session exists. The originating attachment is released before the picker opens. A picker `Ctrl+C` leaves that run ownerless; it issues no second release and no interrupt.
 - `/copy` is always visible and reads the newest committed assistant final answer from the active transcript segment. It never uses client status or rendered terminal output as a fallback.
 - The durable final-answer read walks backward only within the active transcript segment and stops at the newest committed assistant final answer or a valid compaction boundary, whichever appears first. A valid boundary returns true absence and its carried pre-compaction answer is not reused.
@@ -323,10 +321,10 @@
 
 - Ring terminal bell when a new `ask_question` is shown.
 - Ring on turn end only if the TUI observed at least two tool calls for an eligible turn.
-- A Reviewer-reviewed turn-end notification is requested only after the Reviewer workflow completes, and every turn-end notification is requested only after the local queued prompt drain is fully idle.
+- Every turn-end notification is requested only after the local queued prompt drain is fully idle.
 - Notifications never delay queued model work.
 - If transcript delivery lags, Kent can omit a notification, delay it until a later Queue drain, or use an earlier observed preview.
-- When the TUI observes a Reviewer-reviewed turn boundary before notification, its preview uses the final answer produced before Reviewer feedback is addressed.
+- Reviewer activity does not defer or otherwise change turn-end notification eligibility or preview selection.
 - A queued prompt drain emits at most one turn-end notification when any observed turn in the drain meets the two-tool threshold, using the last final answer observed by the TUI even when that turn has fewer than two tool calls.
 - Turn-end text includes assistant preview when available, else `<session title>: turn complete`.
 - Ask notifications include `<session title>: Question: <question>` or `<session title>: Action required: <question>`.
@@ -377,13 +375,23 @@
 ## Reviewer
 
 - Post-turn reviewer exists behind config and defaults to `reviewer.frequency = "edits"`.
-- Reviewer runs only after completed assistant final handoff and only if the turn executed at least one tool call.
+- Reviewer runs only after an eligible completed assistant answer.
 - The Reviewer receives shorter tool output than the main agent.
 - Reviewer contract is minimal JSON `{"suggestions":["..."]}`; invalid payloads are ignored non-fatally.
-- A Reviewer generation failure creates one expanded Reviewer error row. Reviewer running and completion create no transcript row.
-- If suggestions exist, Kent creates the Reviewer feedback row immediately and then runs one extra main-agent follow-up. The row preserves the ordered Markdown suggestions and uses their count as its compact summary.
+- Kent shows the main answer without waiting for Reviewer.
+- Input and ordinary model or tool work remain available while review runs.
+- The TUI status line shows `review` only while the server's live Reviewer activity is `running`.
+- The TUI does not infer Reviewer activity from transcript rows, notifications, or ordinary Runtime activity.
+- Reviewer status is best-effort live state.
+- Reconnect, Runtime replacement, or restart may show no earlier review.
+- Reviewer running and completion create no transcript row.
+- A Reviewer generation failure creates one expanded Reviewer error row later when the Runtime can still receive it.
+- If suggestions exist, Kent later creates one Reviewer feedback row and requests one ordinary main-agent follow-up.
+- The Reviewer feedback row preserves the ordered Markdown suggestions and uses their count as its compact summary.
 - A follow-up that returns a nonblank final answer succeeds. Kent shows that answer and then creates a separate Reviewer outcome row that reports the suggestions as applied.
 - An explicitly blank silent follow-up succeeds without another assistant answer. Kent then creates a separate Reviewer outcome row that reports no changes applied.
 - `reviewer.verbose_output` controls only the TUI's initial feedback presentation: enabled uses `O`, disabled uses `OC`. It never controls whether the feedback row exists.
 - If Kent cannot apply nonempty Reviewer feedback, the issued feedback row remains visible and the engine and Session fail. This includes a missing follow-up answer; an explicitly blank follow-up final answer is successful, not missing.
-- The Reviewer runs once and does not review its own follow-up.
+- Only one Reviewer runs at a time.
+- Another eligible answer is skipped rather than queued.
+- Reviewer does not review its own follow-up.

@@ -14,6 +14,7 @@ type RuntimeReadModelUpdate struct {
 type RuntimeActivity struct {
 	State              RuntimeActivityState
 	ActiveStep         *RuntimeActiveStep
+	Reviewer           ReviewerActivity
 	QueueAccepting     bool
 	DiagnosticRecovery bool
 }
@@ -35,6 +36,9 @@ func (u RuntimeReadModelUpdate) Validate() error {
 }
 
 func (a RuntimeActivity) Validate() error {
+	if err := a.Reviewer.Validate(); err != nil {
+		return err
+	}
 	switch a.State {
 	case RuntimeActivityUnavailable,
 		RuntimeActivityStarting,

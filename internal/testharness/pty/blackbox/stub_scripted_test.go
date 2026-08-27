@@ -50,7 +50,7 @@ func TestScriptedResponsesReconcilesCumulativeFunctionAndCustomDeliveries(t *tes
 	if stub.ScriptedRequestCount() != 3 || stub.RemainingScriptedSteps() != 0 {
 		t.Fatalf("script observations: requests=%d remaining=%d", stub.ScriptedRequestCount(), stub.RemainingScriptedSteps())
 	}
-	_, err := provider.Generate(context.Background(), request(sessionID, append(third, functionResult...)))
+	_, err := provider.Generate(context.Background(), request(sessionID, append(third, functionResult...)), llm.StreamCallbacks{})
 	if err == nil {
 		t.Fatal("duplicate appended delivery succeeded")
 	}
@@ -148,7 +148,7 @@ func TestScriptedResponsesRejectsConcurrentSameLineageWithoutCommittingRejectedI
 	}
 	firstResult := make(chan result, 1)
 	go func() {
-		response, err := provider.(llm.StreamEventsClient).GenerateStreamWithEvents(
+		response, err := provider.Generate(
 			context.Background(),
 			request(sessionID, firstInput),
 			llm.StreamCallbacks{},
@@ -159,7 +159,7 @@ func TestScriptedResponsesRejectsConcurrentSameLineageWithoutCommittingRejectedI
 		t.Fatalf("WaitUntilScriptedActive: %v", err)
 	}
 
-	if _, err := provider.(llm.StreamEventsClient).GenerateStreamWithEvents(
+	if _, err := provider.Generate(
 		context.Background(),
 		request(sessionID, prepared(messageItem("rejected concurrent input"))),
 		llm.StreamCallbacks{},
@@ -204,12 +204,12 @@ func TestScriptedResponsesDoesNotCommitGloballyRejectedConcurrentLineage(t *test
 		firstStep,
 		scriptedllm.FinalAnswer("second"),
 	}})
-	provider := providerClient(t, stub).(llm.StreamEventsClient)
+	provider := providerClient(t, stub)
 	activeSession := runtimeids.NewSessionID().String()
 	rejectedSession := runtimeids.NewSessionID().String()
 	firstErr := make(chan error, 1)
 	go func() {
-		_, err := provider.GenerateStreamWithEvents(
+		_, err := provider.Generate(
 			context.Background(),
 			request(activeSession, prepared(messageItem("active"))),
 			llm.StreamCallbacks{},
@@ -220,7 +220,7 @@ func TestScriptedResponsesDoesNotCommitGloballyRejectedConcurrentLineage(t *test
 		t.Fatalf("WaitUntilScriptedActive: %v", err)
 	}
 
-	if _, err := provider.GenerateStreamWithEvents(
+	if _, err := provider.Generate(
 		context.Background(),
 		request(rejectedSession, prepared(messageItem("rejected"))),
 		llm.StreamCallbacks{},
@@ -232,7 +232,7 @@ func TestScriptedResponsesDoesNotCommitGloballyRejectedConcurrentLineage(t *test
 		t.Fatalf("active request: %v", err)
 	}
 
-	response, err := provider.GenerateStreamWithEvents(
+	response, err := provider.Generate(
 		context.Background(),
 		request(rejectedSession, prepared(messageItem("accepted retry"))),
 		llm.StreamCallbacks{},
@@ -272,7 +272,7 @@ func TestScriptedResponsesPreservesConcurrentMainAndSupervisorLineages(t *testin
 	errs := make(chan error, 2)
 	for _, lineage := range []string{sessionID, sessionID + "/supervisor"} {
 		go func() {
-			_, err := provider.(llm.StreamEventsClient).GenerateStreamWithEvents(
+			_, err := provider.Generate(
 				context.Background(),
 				request(lineage, prepared(messageItem(lineage))),
 				llm.StreamCallbacks{},
@@ -318,10 +318,17 @@ func TestScriptedResponsesRejectsInvalidCumulativeInputAndDeliveries(t *testing.
 		requireGenerateError(t, provider, id, two[:1])
 	})
 	t.Run("unknown call ID", func(t *testing.T) {
-		stub := startScriptedStub(t, scriptedllm.Script{Steps: []scriptedllm.Step{scriptedllm.FinalAnswer("unused")}})
-		requireGenerateError(t, providerClient(t, stub), runtimeids.NewSessionID().String(), prepared(toolOutput(
+		call := llm.ToolCall{ID: "known", Name: "exec_command", Input: json.RawMessage(`{}`)}
+		stub := startScriptedStub(t, scriptedllm.Script{Steps: []scriptedllm.Step{
+			scriptedllm.ToolBatch("", call), scriptedllm.FinalAnswer("unused"),
+		}})
+		provider := providerClient(t, stub)
+		id := runtimeids.NewSessionID().String()
+		input := prepared(messageItem("before"))
+		response := generate(t, provider, id, input)
+		requireGenerateError(t, provider, id, appendItems(input, response.OutputItems, prepared(toolOutput(
 			llm.ToolCall{ID: "unknown", Name: "exec_command"}, json.RawMessage(`{}`),
-		)))
+		))))
 	})
 	t.Run("wrong output kind", func(t *testing.T) {
 		call := llm.ToolCall{ID: "call", Name: "exec_command", Input: json.RawMessage(`{}`)}
@@ -352,7 +359,7 @@ func TestScriptedResponsesHandlesMultipleResultsStreamingErrorsAndMetadata(t *te
 		calls := generate(t, provider, id, input)
 		var deltas []string
 		started := time.Now()
-		result, err := provider.(llm.StreamEventsClient).GenerateStreamWithEvents(context.Background(), request(id,
+		result, err := provider.Generate(context.Background(), request(id,
 			appendItems(input, calls.OutputItems,
 				prepared(toolOutput(first, json.RawMessage(`{}`))),
 				prepared(toolOutput(second, json.RawMessage(`{}`))),
@@ -376,7 +383,7 @@ func TestScriptedResponsesHandlesMultipleResultsStreamingErrorsAndMetadata(t *te
 		ctx, cancel := context.WithCancel(context.Background())
 		errs := make(chan error, 1)
 		go func() {
-			_, err := providerClient(t, stub).(llm.StreamEventsClient).GenerateStreamWithEvents(
+			_, err := providerClient(t, stub).Generate(
 				ctx, request(runtimeids.NewSessionID().String(), prepared(messageItem("cancel"))), llm.StreamCallbacks{},
 			)
 			errs <- err
@@ -492,7 +499,7 @@ func request(sessionID string, items []llm.ResponseItem) llm.Request {
 
 func generate(t *testing.T, client llm.Client, sessionID string, items []llm.ResponseItem) llm.Response {
 	t.Helper()
-	response, err := client.(llm.StreamEventsClient).GenerateStreamWithEvents(
+	response, err := client.Generate(
 		context.Background(), request(sessionID, items), llm.StreamCallbacks{},
 	)
 	if err != nil {
@@ -503,7 +510,7 @@ func generate(t *testing.T, client llm.Client, sessionID string, items []llm.Res
 
 func requireGenerateError(t *testing.T, client llm.Client, sessionID string, items []llm.ResponseItem) {
 	t.Helper()
-	if _, err := client.Generate(context.Background(), request(sessionID, items)); err == nil {
+	if _, err := client.Generate(context.Background(), request(sessionID, items), llm.StreamCallbacks{}); err == nil {
 		t.Fatal("Generate succeeded")
 	}
 }

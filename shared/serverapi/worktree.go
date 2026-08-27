@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/worktreecontract"
 
 	"github.com/google/uuid"
@@ -204,6 +203,16 @@ type WorktreeBranchCleanupOutcome struct {
 	Diagnostic *string                          `json:"diagnostic,omitempty"`
 }
 
+type WorktreeOperationID = clientui.WorktreeTransitionID
+
+func NewWorktreeOperationID() WorktreeOperationID {
+	return clientui.NewWorktreeTransitionID()
+}
+
+func ParseWorktreeOperationID(value string) (WorktreeOperationID, error) {
+	return clientui.ParseWorktreeTransitionID(value)
+}
+
 type WorktreeSelectorPreviewRequest struct {
 	SessionID string `json:"session_id"`
 	Selector  string `json:"selector"`
@@ -225,20 +234,14 @@ type WorktreeDeletePreviewRequest struct {
 type WorktreeDeletePreviewResponse struct {
 	Worktree         WorktreeTopologyEntry       `json:"worktree"`
 	DeletionSelector string                      `json:"deletion_selector"`
-	Cleanliness      worktreecontract.DirtyState `json:"cleanliness"`
+	Cleanliness      clientui.WorktreeDirtyState `json:"cleanliness"`
 }
 
 // WorktreeTransitionHeader is the shared execution identity for every
 // operation that may switch a Session's worktree target.
 type WorktreeTransitionHeader struct {
-	OperationID worktreecontract.OperationID `json:"operation_id"`
-	SessionID   string                       `json:"session_id"`
-	Origin      *RuntimeStepOrigin           `json:"origin,omitempty"`
-}
-
-type RuntimeStepOrigin struct {
-	RunID  string `json:"run_id"`
-	StepID string `json:"step_id"`
+	OperationID WorktreeOperationID `json:"operation_id"`
+	SessionID   string              `json:"session_id"`
 }
 
 type WorktreeEnterRequest struct {
@@ -251,32 +254,19 @@ type WorktreeLeaveRequest struct {
 }
 
 type WorktreeDeleteRequest struct {
-	WorktreeTransitionHeader
+	SessionID           string                    `json:"session_id"`
 	Selector            string                    `json:"selector"`
 	ForceFolderRemoval  bool                      `json:"force_folder_removal"`
 	BranchCleanupPolicy WorktreeBranchCleanupMode `json:"branch_cleanup_policy"`
 }
 
 type WorktreeScheduledAcknowledgement struct {
-	OperationID worktreecontract.OperationID `json:"operation_id"`
-}
-
-type WorktreeDeleteResultKind string
-
-const (
-	WorktreeDeleteResultKindCompleted WorktreeDeleteResultKind = "completed"
-	WorktreeDeleteResultKindScheduled WorktreeDeleteResultKind = "scheduled"
-)
-
-type WorktreeDeleteCompletedResult struct {
-	Cleanup      WorktreeBranchCleanupOutcome `json:"cleanup"`
-	LeftoverRoot *string                      `json:"leftover_root,omitempty"`
+	OperationID WorktreeOperationID `json:"operation_id"`
 }
 
 type WorktreeDeleteResult struct {
-	Kind      WorktreeDeleteResultKind          `json:"kind"`
-	Completed *WorktreeDeleteCompletedResult    `json:"completed,omitempty"`
-	Scheduled *WorktreeScheduledAcknowledgement `json:"scheduled,omitempty"`
+	Cleanup      WorktreeBranchCleanupOutcome `json:"cleanup"`
+	LeftoverRoot *string                      `json:"leftover_root,omitempty"`
 }
 
 func (f WorktreeGitFacts) Validate() error {
@@ -557,7 +547,7 @@ func (response WorktreeDeletePreviewResponse) Validate() error {
 		return err
 	}
 	if response.Worktree.Variant == WorktreeTopologyVariantMissing &&
-		response.Cleanliness.Kind != worktreecontract.DirtyStateClean {
+		response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
 		return errors.New("missing worktree deletion preview must be clean")
 	}
 	return nil
@@ -570,17 +560,7 @@ func (header WorktreeTransitionHeader) Validate() error {
 	if err := validateRequiredSessionID(header.SessionID); err != nil {
 		return err
 	}
-	if header.Origin != nil {
-		return header.Origin.Validate()
-	}
 	return nil
-}
-
-func (origin RuntimeStepOrigin) Validate() error {
-	if err := runtimeids.ValidateUUIDv4(origin.RunID, "run_id"); err != nil {
-		return err
-	}
-	return runtimeids.ValidateUUIDv4(origin.StepID, "step_id")
 }
 
 func (request WorktreeEnterRequest) Validate() error {
@@ -598,7 +578,7 @@ func (request WorktreeLeaveRequest) Validate() error {
 }
 
 func (request WorktreeDeleteRequest) Validate() error {
-	if err := request.WorktreeTransitionHeader.Validate(); err != nil {
+	if err := validateRequiredSessionID(request.SessionID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(request.Selector) == "" {
@@ -611,7 +591,7 @@ func (ack WorktreeScheduledAcknowledgement) Validate() error {
 	return ack.OperationID.Validate()
 }
 
-func (result WorktreeDeleteCompletedResult) Validate() error {
+func (result WorktreeDeleteResult) Validate() error {
 	if err := result.Cleanup.Validate(); err != nil {
 		return err
 	}
@@ -619,33 +599,6 @@ func (result WorktreeDeleteCompletedResult) Validate() error {
 		return errors.New("leftover_root must not be empty")
 	}
 	return nil
-}
-
-func (result WorktreeDeleteResult) Validate() error {
-	payloadCount := 0
-	if result.Completed != nil {
-		payloadCount++
-	}
-	if result.Scheduled != nil {
-		payloadCount++
-	}
-	if payloadCount != 1 {
-		return errors.New("worktree delete result requires exactly one payload")
-	}
-	switch result.Kind {
-	case WorktreeDeleteResultKindCompleted:
-		if result.Completed == nil {
-			return errors.New("completed delete result requires completed payload")
-		}
-		return result.Completed.Validate()
-	case WorktreeDeleteResultKindScheduled:
-		if result.Scheduled == nil {
-			return errors.New("scheduled delete result requires scheduled payload")
-		}
-		return result.Scheduled.Validate()
-	default:
-		return errors.New("worktree delete result kind is invalid")
-	}
 }
 
 func parseWorktreeUUIDV4(value string, field string) (uuid.UUID, error) {

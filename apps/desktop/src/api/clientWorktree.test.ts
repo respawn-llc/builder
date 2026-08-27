@@ -411,20 +411,18 @@ describe("Desktop Worktree client", () => {
       { kind: "retained", branch_name: "feature", diagnostic: "still checked out" },
     ]) {
       const result = worktreeDeleteResultSchema.parse({
-        kind: "completed",
-        completed: { cleanup },
+        cleanup,
       });
-      if (result.kind !== "completed") throw new Error("fixture was not completed");
       expect(result.leftoverRoot).toBeNull();
       if (result.cleanup.kind === "retained") {
         expect(result.cleanup.diagnostic).toBe(cleanup.diagnostic ?? null);
       }
     }
     const completed = worktreeDeleteResultSchema.parse({
-      kind: "completed",
-      completed: { cleanup: { kind: "not_requested" }, leftover_root: "/repo/feature" },
+      cleanup: { kind: "not_requested" },
+      leftover_root: "/repo/feature",
     });
-    expect(completed.kind === "completed" ? completed.leftoverRoot : null).toBe("/repo/feature");
+    expect(completed.leftoverRoot).toBe("/repo/feature");
     expect(
       worktreeCleanlinessSchema.parse({ kind: "unknown", unknown_cause: " inspection failed " }),
     ).toEqual({ kind: "unknown", unknownCause: " inspection failed " });
@@ -453,13 +451,12 @@ describe("Desktop Worktree client", () => {
         }),
       () =>
         worktreeDeleteResultSchema.parse({
-          kind: "completed",
-          completed: { cleanup: { kind: "retained", branch_name: "feature", diagnostic: null } },
+          cleanup: { kind: "retained", branch_name: "feature", diagnostic: null },
         }),
       () =>
         worktreeDeleteResultSchema.parse({
-          kind: "completed",
-          completed: { cleanup: { kind: "not_requested" }, leftover_root: "" },
+          cleanup: { kind: "not_requested" },
+          leftover_root: "",
         }),
       () => worktreeScheduledAcknowledgementSchema.parse({ operation_id: "invalid" }),
     );
@@ -488,19 +485,11 @@ describe("Desktop Worktree client", () => {
       { method: "worktree.leave", result: { operation_id: ids[1] } },
       {
         method: "worktree.delete",
-        handler: (_params, index) => ({
-          kind: "scheduled",
-          scheduled: { operation_id: ids[index + 2] },
-        }),
+        result: { cleanup: { kind: "not_requested" } },
       },
     ]);
     const client = new ApiClient(transport);
-    vi.spyOn(crypto, "randomUUID")
-      .mockReturnValueOnce(ids[0])
-      .mockReturnValueOnce(ids[1])
-      .mockReturnValueOnce(ids[2])
-      .mockReturnValueOnce(ids[3])
-      .mockReturnValueOnce(ids[4]);
+    vi.spyOn(crypto, "randomUUID").mockReturnValueOnce(ids[0]).mockReturnValueOnce(ids[1]);
     const invokeCreate = async (
       authority: typeof existing,
       baseRef: string | null,
@@ -543,6 +532,9 @@ describe("Desktop Worktree client", () => {
       { force_folder_removal: false, branch_cleanup_policy: "auto_if_kent_created" },
       { force_folder_removal: true, branch_cleanup_policy: "auto_if_kent_created" },
     ]);
+    for (const { params } of mutations.slice(5)) {
+      expect(params).not.toHaveProperty("operation_id");
+    }
     expect(Object.getPrototypeOf(newBranch)).not.toBe(Object.prototype);
     expect(Reflect.get(newBranch, "constructor")).toBeUndefined();
     if (branchless.topology.variant !== "registered") throw new Error("fixture was not registered");
@@ -587,11 +579,6 @@ describe("Desktop Worktree client", () => {
         ? { candidates: [{ variant: "external", selector: "feature", fallback_identity: "/repo/feature" }] }
         : {}),
     });
-    const pending = {
-      type: "worktree_transition_pending",
-      session_id: "session-1",
-      pending_operation_id: ids[0],
-    };
     const retained = {
       type: "worktree_setup_retained",
       worktree: topology,
@@ -599,7 +586,6 @@ describe("Desktop Worktree client", () => {
       diagnostic: "setup failed",
       retained_previous_worktree: null,
     };
-    const immediate = (kind: string) => ({ type: "worktree_immediate_transition", kind });
     const precondition = (dirty_state: JsonValue) => ({
       type: "worktree_delete_precondition",
       dirty_state,
@@ -611,9 +597,6 @@ describe("Desktop Worktree client", () => {
       [rpcErrorCodes.worktreeSelector, selector("unavailable"), "selector"],
       [rpcErrorCodes.worktreeCreate, { owner: "base_ref", diagnostic: "invalid" }, "create"],
       [rpcErrorCodes.worktreeCreate, { owner: "form", diagnostic: "invalid" }, "create"],
-      [rpcErrorCodes.worktreeTransitionPending, pending, "transition_pending"],
-      [rpcErrorCodes.worktreeImmediateTransition, immediate("origin_inactive"), "immediate_transition"],
-      [rpcErrorCodes.worktreeImmediateTransition, immediate("apply_failed"), "immediate_transition"],
       [rpcErrorCodes.worktreeSetupRetained, retained, "setup_retained"],
       [
         rpcErrorCodes.worktreeDeletePrecondition,
@@ -631,8 +614,6 @@ describe("Desktop Worktree client", () => {
       [rpcErrorCodes.worktreeBlocked, {}],
       [rpcErrorCodes.worktreeSelector, { ...selector("ambiguous"), candidates: [] }],
       [rpcErrorCodes.worktreeCreate, { owner: "base_ref", diagnostic: "" }],
-      [rpcErrorCodes.worktreeTransitionPending, { ...pending, pending_operation_id: "invalid" }],
-      [rpcErrorCodes.worktreeImmediateTransition, immediate("invalid")],
       [
         rpcErrorCodes.worktreeSetupRetained,
         { ...retained, worktree: { variant: "external", external: { git } } },

@@ -111,21 +111,20 @@ func (d *TaskDetail) GetTaskByShortID(ctx context.Context, shortID string) (serv
 
 func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serverapi.WorkflowTaskDetail, error) {
 	taskID := workflow.TaskID(task.ID)
-	var projected TaskStatusProjectionResult
-	var projectedDependencies serverapi.WorkflowTaskDependencies
-	if err := d.projection.WithSnapshot(ctx, []workflow.TaskID{taskID}, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
-		results, err := d.projection.Project(ctx, observation, durable, []workflow.TaskID{taskID})
-		if err != nil {
-			return err
-		}
-		var ok bool
-		projected, ok = results[taskID]
-		if !ok {
-			return fmt.Errorf("task status projection omitted Task %q", task.ID)
-		}
-		projectedDependencies, err = d.dependencies.projectTaskDependenciesWithSnapshot(ctx, task.ID, observation, durable)
-		return err
-	}); err != nil {
+	observation, err := d.projection.Observe([]workflow.TaskID{taskID})
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
+	results, err := d.projection.Project(ctx, observation, d.queries, []workflow.TaskID{taskID})
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
+	projected, ok := results[taskID]
+	if !ok {
+		return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task status projection omitted Task %q", task.ID)
+	}
+	projectedDependencies, err := d.dependencies.projectTaskDependencies(ctx, task.ID, observation, d.queries)
+	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
 	task = projected.Task

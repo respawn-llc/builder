@@ -893,7 +893,7 @@ func createProjectViewSession(t testing.TB, store *metadata.Store, cfg config.Ap
 
 type projectViewTestLLMClient struct{}
 
-func (projectViewTestLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (projectViewTestLLMClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 

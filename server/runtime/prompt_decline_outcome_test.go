@@ -37,8 +37,11 @@ func TestDeclinedQuestionProducesErrorToolCompletionWithoutSyntheticUserMessage(
 			},
 		},
 	)
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 
-	results, err := engine.executeToolCalls(context.Background(), "step-1", []llm.ToolCall{{
+	results, err := engine.executeToolCalls(context.Background(), stepID, []llm.ToolCall{{
 		ID:    "question-1",
 		Name:  string(toolspec.ToolAskQuestion),
 		Input: json.RawMessage(`{"question":"Proceed?"}`),
@@ -96,8 +99,11 @@ func TestDeclinedQuestionAllowsPreparedSuccessorToMaterialize(t *testing.T) {
 			},
 		},
 	)
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 
-	results, err := engine.executeToolCalls(context.Background(), "step-1", []llm.ToolCall{
+	results, err := engine.executeToolCalls(context.Background(), stepID, []llm.ToolCall{
 		{
 			ID:    "question-1",
 			Name:  string(toolspec.ToolAskQuestion),

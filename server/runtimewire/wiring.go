@@ -2,7 +2,6 @@ package runtimewire
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -50,7 +49,6 @@ type RuntimeWiringOptions struct {
 	Client                              llm.Client
 	ClientFactory                       RuntimeClientFactory
 	ReviewerClientFactory               RuntimeClientFactory
-	CurrentNodeExecution                *workflowruntime.CurrentNodeExecutionConfig
 	WorkflowPrompt                      *workflowruntime.PromptContract
 	AskQuestionBatchSkipped             func(askquestion.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
@@ -80,12 +78,6 @@ func NewRuntimeWiringWithBackground(
 	background *shelltool.Manager,
 	opts RuntimeWiringOptions,
 ) (*RuntimeWiring, error) {
-	if opts.QuestionsEnabled == nil {
-		return nil, errors.New("effective Session Questions setting is required")
-	}
-	if opts.AutoCompactionEnabled == nil {
-		return nil, errors.New("effective Session Auto-compaction setting is required")
-	}
 	if opts.Client != nil && opts.ClientFactory != nil {
 		return nil, ErrRuntimeClientFactoryConflict
 	}
@@ -108,6 +100,7 @@ func NewRuntimeWiringWithBackground(
 		Enabled:                  enabledTools,
 		MinimumExecToBgTime:      time.Duration(active.MinimumExecToBgSeconds) * time.Second,
 		ShellOutputMaxChars:      active.ShellOutputMaxChars,
+		ModelContextWindow:       active.ModelContextWindow,
 		AllowNonCwdEdits:         active.AllowNonCwdEdits,
 		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
 		Logger:                   logger,
@@ -205,7 +198,7 @@ func NewRuntimeWiringWithBackground(
 			return
 		}
 		if total == 1 || total%100 == 0 {
-			logger.Logf("runtime.event.drop count=%d kind=%s step_id=%s", total, evt.Kind, evt.StepID)
+			logger.Logf("runtime.event.drop count=%d kind=%s", total, evt.Kind)
 		}
 	})
 	promptReloader := opts.PromptFacingSnapshotReloader
@@ -227,6 +220,7 @@ func NewRuntimeWiringWithBackground(
 		Temperature:                     1,
 		MaxTokens:                       0,
 		ThinkingLevel:                   active.ThinkingLevel,
+		SupportedThinkingValues:         launch.SupportedChatThinkingValues(active.Model, active.ThinkingLevel),
 		ModelCapabilities:               llm.LockedModelCapabilitiesForConfig(active.Model, active.ModelCapabilities),
 		FastModeEnabled:                 active.PriorityRequestMode,
 		WebSearchMode:                   active.WebSearch,
@@ -247,7 +241,6 @@ func NewRuntimeWiringWithBackground(
 		QuestionsEnabled:                textutil.Pointer(opts.QuestionsEnabled),
 		HeadlessMode:                    opts.Headless,
 		ToolPreambles:                   active.ToolPreambles,
-		CurrentNodeExecution:            opts.CurrentNodeExecution,
 		WorkflowPrompt:                  opts.WorkflowPrompt,
 		AskQuestionBatchSkipped:         opts.AskQuestionBatchSkipped,
 		TranscriptWorkingDir:            workingDirectory,
@@ -402,3 +395,5 @@ func providerCapabilitiesOverridePtr(override config.ProviderCapabilitiesOverrid
 	}
 	return &caps
 }
+
+func boolRef(v bool) *bool { return &v }

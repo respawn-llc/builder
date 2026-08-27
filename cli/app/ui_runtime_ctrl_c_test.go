@@ -33,7 +33,8 @@ func TestRuntimeCtrlCInterruptsRestartedAgentLoopInsteadOfQuitting(t *testing.T)
 		t.Fatalf("parse restarted Step id: %v", err)
 	}
 	if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityRunning,
+		State:    clientui.RuntimeActivityRunning,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 			RunID:      restartedRunID,
@@ -100,16 +101,13 @@ func TestRuntimeCtrlCUsesServerRunningLifecycleWithoutActiveKindPolicy(t *testin
 		clientui.RuntimeActivityActiveKindWorkflowTurn,
 		clientui.RuntimeActivityActiveKindGoalLoop,
 		clientui.RuntimeActivityActiveKindCompaction,
-		clientui.RuntimeActivityActiveKindPreSubmitCompaction,
-		clientui.RuntimeActivityActiveKindUserShell,
-		clientui.RuntimeActivityActiveKindBackground,
-		clientui.RuntimeActivityActiveKindRuntimeMaintenance,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			client := &runtimeControlFakeClient{}
 			model := newProjectedClosedUIModel(client)
 			if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
-				State: clientui.RuntimeActivityRunning,
+				State:    clientui.RuntimeActivityRunning,
+				Reviewer: clientui.ReviewerActivityInactive,
 				ActiveStep: &clientui.RuntimeActiveStep{
 					ActiveKind: kind,
 					RunID:      ongoingTestRunID(),
@@ -144,7 +142,10 @@ func TestRuntimeCtrlCExitsWheneverServerRuntimeIsNotRunning(t *testing.T) {
 	} {
 		t.Run(string(state), func(t *testing.T) {
 			model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
-			if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: state}); err != nil {
+			if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
+				State:    state,
+				Reviewer: clientui.ReviewerActivityInactive,
+			}); err != nil {
 				t.Fatalf("apply %s activity: %v", state, err)
 			}
 
@@ -172,7 +173,8 @@ func TestRuntimeCtrlCInterruptsAwaitingQuestionInsteadOfQuitting(t *testing.T) {
 		t.Fatalf("parse Step id: %v", err)
 	}
 	if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityAwaitingPrompt,
+		State:    clientui.RuntimeActivityAwaitingPrompt,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 			RunID:      runID,

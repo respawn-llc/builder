@@ -21,6 +21,7 @@ import {
   HomeListCard,
   InfiniteListBoundary,
   IslandTabs,
+  LoadingState,
   VirtualizedInfiniteList,
 } from "@/ui";
 import { OverlappingCrossfade } from "./OverlappingCrossfade";
@@ -38,6 +39,7 @@ export function HomeProjectContent({
   sessionsVisible: boolean;
   sidebarMode: SidebarMode;
 }>) {
+  const { t } = useTranslation();
   const { api } = useAppServices();
   const navigation = useAppNavigation();
   const [taskListViewMemory] = useState(createProjectTasksViewMemory);
@@ -50,6 +52,9 @@ export function HomeProjectContent({
     clearLastProjectRoute(projectID);
     void navigation.selectHomeProject(null);
   }, [navigation, projectID, projectQuery.error]);
+  if (projectQuery.isPending) {
+    return <LoadingState appearanceDelayMs={0} reveal={false} title={t("states.loading")} />;
+  }
   return sessionsVisible ? (
     <ProjectContentTabs
       projectID={projectID}

@@ -31,8 +31,6 @@ func (s *ServerStatusService) GetReadiness(ctx context.Context, _ *emptypb.Empty
 		settings = s.settings
 	}
 	authRequired := authservice.StartupAuthRequired(settings)
-	// Identity-independent providers must not consult the auth store: a corrupt
-	// OpenAI credential file cannot block a custom provider's server readiness.
 	if authRequired && s != nil && s.authManager != nil {
 		state, err := s.authManager.Load(ctx)
 		if err != nil {

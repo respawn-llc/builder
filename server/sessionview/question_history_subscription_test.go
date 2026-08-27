@@ -35,7 +35,7 @@ func TestQuestionHistorySubscriptionProjectsNewestAnsweredQuestions(t *testing.T
 		&session.QuestionAnswerRecord{Freeform: sessionViewStringPointer("freeform")},
 	))
 
-	sub, err := NewService(newTestSessionResolver(store), nil, nil, nil).
+	sub, err := NewService(newTestSessionResolver(store), nil, nil).
 		SubscribeQuestionHistory(t.Context(), serverapi.QuestionHistorySubscribeRequest{
 			SessionID: store.Meta().SessionID, MaxHandoffs: 2,
 		})
@@ -88,7 +88,7 @@ func TestQuestionHistorySubscriptionOmissionEmptyAndCancellation(t *testing.T) {
 	if _, err := store.MaterializeEventLog(); err != nil {
 		t.Fatalf("materialize event log: %v", err)
 	}
-	sub, err := NewService(newTestSessionResolver(store), nil, nil, nil).
+	sub, err := NewService(newTestSessionResolver(store), nil, nil).
 		SubscribeQuestionHistory(t.Context(), serverapi.QuestionHistorySubscribeRequest{
 			SessionID: store.Meta().SessionID, MaxHandoffs: 1,
 		})
@@ -104,7 +104,7 @@ func TestQuestionHistorySubscriptionOmissionEmptyAndCancellation(t *testing.T) {
 		t.Fatalf("close empty subscription: %v", err)
 	}
 
-	sub, err = NewService(newTestSessionResolver(store), nil, nil, nil).
+	sub, err = NewService(newTestSessionResolver(store), nil, nil).
 		SubscribeQuestionHistory(t.Context(), serverapi.QuestionHistorySubscribeRequest{
 			SessionID: store.Meta().SessionID, MaxHandoffs: 1,
 		})
@@ -131,7 +131,7 @@ func TestQuestionHistorySubscriptionUsesOnlyPersistedResolver(t *testing.T) {
 		SessionDir: store.Dir(),
 		Meta:       sessionViewMetaPointer(store.Meta()),
 	}}
-	sub, err := NewService(resolver, nil, nil, nil).
+	sub, err := NewService(resolver, nil, nil).
 		SubscribeQuestionHistory(t.Context(), serverapi.QuestionHistorySubscribeRequest{
 			SessionID: store.Meta().SessionID, MaxHandoffs: 1,
 		})
@@ -189,7 +189,7 @@ func TestQuestionHistorySubscriptionChecksCancellationWhileSkippingRecords(t *te
 			Freeform: sessionViewStringPointer("ignored"),
 		},
 	})
-	sub, err := NewService(newTestSessionResolver(store), nil, nil, nil).
+	sub, err := NewService(newTestSessionResolver(store), nil, nil).
 		SubscribeQuestionHistory(t.Context(), serverapi.QuestionHistorySubscribeRequest{
 			SessionID: store.Meta().SessionID, MaxHandoffs: 1,
 		})
@@ -244,7 +244,7 @@ func TestQuestionHistorySubscriptionPullsThroughLargeSingleWindow(t *testing.T) 
 		t.Fatalf("append large single-window fixture: receipt=%+v error=%v", receipt, err)
 	}
 
-	sub, err := NewService(newTestSessionResolver(store), nil, nil, nil).
+	sub, err := NewService(newTestSessionResolver(store), nil, nil).
 		SubscribeQuestionHistory(t.Context(), serverapi.QuestionHistorySubscribeRequest{
 			SessionID: store.Meta().SessionID, MaxHandoffs: 1,
 		})
@@ -265,10 +265,6 @@ func TestQuestionHistorySubscriptionPullsThroughLargeSingleWindow(t *testing.T) 
 
 type persistedOnlySessionResolver struct {
 	record session.PersistedSessionRecord
-}
-
-func (r persistedOnlySessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	panic("Question history must not resolve a Session Store")
 }
 
 func (r persistedOnlySessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {

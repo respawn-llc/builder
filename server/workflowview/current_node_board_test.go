@@ -8,11 +8,10 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
-func TestBoardProjectsStartedCurrentNode(t *testing.T) {
+func TestBoardProjectsQuiescentCurrentNodeAsDeletable(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Board task")
 
@@ -47,17 +46,13 @@ func TestBoardProjectsStartedCurrentNode(t *testing.T) {
 		t.Fatalf("board cards = %+v, want one Current Node card", cards.Cards)
 	}
 	card := cards.Cards[0]
-	for _, nodeID := range card.ActiveNodeIDs {
-		if _, err := runtimeids.GraphEntityIDBlob(nodeID); err != nil {
-			t.Fatalf("board card active Node ID %q is not canonical UUIDv4: %v", nodeID, err)
-		}
-	}
 	if card.TaskID != string(started.task.ID) ||
 		len(card.ActiveNodeIDs) != 1 ||
 		card.ActiveNodeIDs[0] != string(fixture.agentNodeID) ||
 		card.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
-		card.Actions.CanStart {
-		t.Fatalf("board card = %+v, want started Current Node projection", card)
+		card.Actions.CanStart ||
+		!card.Actions.CanDelete {
+		t.Fatalf("board card = %+v, want deletable quiescent Current Node projection", card)
 	}
 }
 
@@ -68,7 +63,6 @@ func TestBoardDoesNotResolveLiveSessionLabelsForMultipleCards(t *testing.T) {
 		fixture.startTask(t, "Board live B"),
 	}
 	executions := make(map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot, len(started))
-	quiescence := make(map[workflow.TaskID]bool, len(started))
 	for _, task := range started {
 		sessionID := fixture.bindCurrentNodeSession(t, task)
 		if _, err := fixture.metadata.DB().ExecContext(
@@ -89,16 +83,13 @@ func TestBoardDoesNotResolveLiveSessionLabelsForMultipleCards(t *testing.T) {
 				Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
 			}},
 		}
-		quiescence[task.task.ID] = false
 	}
 	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
 			observation: workflowexecution.WorkflowTaskExecutionObservation{
 				Executions: executions,
-				Quiescence: quiescence,
 			},
 		},
 	)
@@ -127,6 +118,11 @@ func TestBoardDoesNotResolveLiveSessionLabelsForMultipleCards(t *testing.T) {
 	}
 	if len(page.Cards) != len(started) {
 		t.Fatalf("board cards = %d, want %d", len(page.Cards), len(started))
+	}
+	for _, card := range page.Cards {
+		if card.Actions.CanDelete {
+			t.Fatalf("board card actions = %+v, want unknown quiescence to disable deletion", card.Actions)
+		}
 	}
 }
 

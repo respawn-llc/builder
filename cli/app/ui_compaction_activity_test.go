@@ -15,7 +15,8 @@ func TestRuntimeActivityOwnsCompactionStatus(t *testing.T) {
 			model := newProjectedStaticUIModel()
 
 			if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
-				State: clientui.RuntimeActivityRunning,
+				State:    clientui.RuntimeActivityRunning,
+				Reviewer: clientui.ReviewerActivityInactive,
 				ActiveStep: &clientui.RuntimeActiveStep{
 					RunID:      ongoingTestRunID(),
 					StepID:     ongoingTestStepID(),
@@ -38,6 +39,7 @@ func TestRuntimeActivityOwnsCompactionStatus(t *testing.T) {
 
 			if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
 				State:          clientui.RuntimeActivityRegisteredIdle,
+				Reviewer:       clientui.ReviewerActivityInactive,
 				QueueAccepting: true,
 			}); err != nil {
 				t.Fatalf("apply idle activity: %v", err)

@@ -132,13 +132,12 @@ func TestServiceWorkflowGraphSavePendingApprovalDeletionIsBlocked(t *testing.T) 
 	task := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
 		ProjectID: binding.ProjectID, WorkflowID: &workflowID, Title: "Pending Approval reference", LabelIDs: []string{},
 	})
-	startWorkflowServiceTask(t, ctx, service, task.Task.ID)
-	service.currentNodeExecution = newWorkflowGraphAtomicCompletionExecution(service)
-	completed, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
-		ActorKind: serverapi.WorkflowTaskCompleteActorUser, TaskID: task.Task.ID,
-		TransitionID: "next", OutputValues: map[string]string{"prior_summary": "approved"}, Force: true,
+	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	source := workflowServiceCurrentNodeReference(t, workflow.TaskID(task.Task.ID), started.CurrentNodes[0])
+	completed, err := service.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+		Source: source, TransitionID: "next", OutputValues: map[string]string{"prior_summary": "approved"},
 	})
-	if err != nil || completed.PendingApprovalID == nil {
+	if err != nil || completed.PendingApproval == nil {
 		t.Fatalf("CompleteWorkflowTask = %+v, err = %v", completed, err)
 	}
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
@@ -171,20 +170,23 @@ func TestServiceWorkflowGraphSaveAllowsCompletedSessionProvenanceDeletion(t *tes
 	taskID := workflow.TaskID(task.Task.ID)
 	reference := workflowServiceCurrentNodeReference(t, taskID, started.CurrentNodes[0])
 	sessionID := bindWorkflowServiceSessionToTask(t, service, metadataStore, binding, taskID, started.CurrentNodes[0])
-	service.currentNodeExecution = newWorkflowGraphAtomicCompletionExecution(service)
+	service.currentNodeExecution = newManualMoveExecutionStub(service)
 	completed, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
 		ActorKind: serverapi.WorkflowTaskCompleteActorUser, TaskID: task.Task.ID, TransitionID: "next",
 		OutputValues: map[string]string{"prior_summary": "completed"}, Force: true,
 	})
 	implementNodeID := workflowServiceNodeIDByKey(t, beforeCompletion, "implement")
-	if err != nil || len(completed.CurrentNodes) != 1 || completed.CurrentNodes[0].NodeID != implementNodeID {
+	if err != nil || completed.ForcedMove == nil || completed.ForcedMove.Outcome.Applied == nil ||
+		len(completed.ForcedMove.Outcome.Applied.CurrentNodes) != 1 ||
+		completed.ForcedMove.Outcome.Applied.CurrentNodes[0].NodeID != implementNodeID {
 		t.Fatalf("CompleteWorkflowTask = %+v, err = %v", completed, err)
 	}
 	completed, err = service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
 		ActorKind: serverapi.WorkflowTaskCompleteActorUser, TaskID: task.Task.ID, TransitionID: "done", Force: true,
 	})
-	if err != nil || len(completed.CurrentNodes) != 1 ||
-		completed.CurrentNodes[0].NodeID != workflowServiceNodeIDByKind(t, beforeCompletion, "terminal") {
+	if err != nil || completed.ForcedMove == nil || completed.ForcedMove.Outcome.Applied == nil ||
+		len(completed.ForcedMove.Outcome.Applied.CurrentNodes) != 1 ||
+		completed.ForcedMove.Outcome.Applied.CurrentNodes[0].NodeID != workflowServiceNodeIDByKind(t, beforeCompletion, "terminal") {
 		t.Fatalf("complete implement Node = %+v, err = %v", completed, err)
 	}
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
@@ -197,36 +199,10 @@ func TestServiceWorkflowGraphSaveAllowsCompletedSessionProvenanceDeletion(t *tes
 	if owner, err := service.store.TaskIDForSession(ctx, sessionID); err != nil || owner == nil || *owner != taskID {
 		t.Fatalf("retained Session owner = %v, err = %v", owner, err)
 	}
-	if association, err := service.store.CurrentTaskSessionForNode(ctx, reference); err != nil ||
+	if association, err := service.store.LatestTaskSessionForNode(ctx, reference); err != nil ||
 		association.SessionID != sessionID || !association.CurrentNode.Equal(reference) {
 		t.Fatalf("retained Session association = %+v, err = %v", association, err)
 	}
-}
-
-type workflowGraphAtomicCompletionExecution struct {
-	*currentNodeCompletionExecutionStub
-}
-
-func newWorkflowGraphAtomicCompletionExecution(service *Service) *workflowGraphAtomicCompletionExecution {
-	return &workflowGraphAtomicCompletionExecution{
-		currentNodeCompletionExecutionStub: &currentNodeCompletionExecutionStub{store: service.store},
-	}
-}
-
-func (e *workflowGraphAtomicCompletionExecution) CompleteIdleCurrentNode(
-	ctx context.Context,
-	selector workflowstore.IdleCurrentNodeSelector,
-	transitionID string,
-	outputValues map[string]string,
-	commentary string,
-) (workflowstore.CurrentNodeCompletionResult, error) {
-	source, err := e.store.ResolveIdleExecutableCurrentNode(ctx, selector)
-	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, err
-	}
-	return e.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
-		Source: source.Reference, TransitionID: transitionID, OutputValues: outputValues, Commentary: commentary,
-	})
 }
 
 func workflowGraphDraftWithoutNode(

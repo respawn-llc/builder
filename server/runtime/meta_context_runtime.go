@@ -120,12 +120,12 @@ func (e *Engine) activeMetaContextBuilder(model string, skillPolicy config.Skill
 		withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
 }
 
-func (e *Engine) steerMetaContextIfChanged(stepID string, priority steeringPriority, messages []llm.Message) error {
-	_, err := e.steerMetaContextIfChangedWithReceipt(stepID, priority, messages)
+func (e *Engine) steerMetaContextIfChanged(stepID string, messages []llm.Message) error {
+	_, err := e.steerMetaContextIfChangedWithReceipt(stepID, messages)
 	return err
 }
 
-func (e *Engine) steerMetaContextIfChangedWithReceipt(stepID string, priority steeringPriority, messages []llm.Message) (session.CommitReceipt, error) {
+func (e *Engine) steerMetaContextIfChangedWithReceipt(stepID string, messages []llm.Message) (session.CommitReceipt, error) {
 	if len(messages) == 0 {
 		return session.CommitReceipt{}, nil
 	}
@@ -140,7 +140,7 @@ func (e *Engine) steerMetaContextIfChangedWithReceipt(stepID string, priority st
 	if len(pending) == 0 {
 		return session.CommitReceipt{}, nil
 	}
-	intent := steerMessagesWithPersistenceIntent(priority, steeringMessageEventDefault, true, pending)
+	intent := steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, pending)
 	receipt := session.CommitReceipt{}
 	intent.items[len(intent.items)-1].commitReceipt = &receipt
 	return receipt, e.steer(stepID, intent)
@@ -392,7 +392,45 @@ func (e *Engine) steerBaseMetaContext(
 	_, err = e.steerMetaContextBuildResult(stepID, metaResult)
 	return err
 }
+
+func (e *Engine) steerRuntimeBaseMetaContext(
+	builder metaContextBuilder,
+	invocationContext config.SubagentInvocationContext,
+) error {
+	metaResult, err := buildBaseMetaContext(builder, invocationContext, e.store.Meta().WorktreeReminder)
+	if err != nil {
+		return err
+	}
+	return e.steerRuntime(metaContextSteeringIntents(metaResult)...)
+}
+
+func (e *Engine) steerDormantBaseMetaContext(
+	builder metaContextBuilder,
+	invocationContext config.SubagentInvocationContext,
+) error {
+	metaResult, err := buildBaseMetaContext(builder, invocationContext, e.store.Meta().WorktreeReminder)
+	if err != nil {
+		return err
+	}
+	_, err = e.steerDormantMetaContextBuildResult(metaResult)
+	return err
+}
+
+func buildBaseMetaContext(
+	builder metaContextBuilder,
+	invocationContext config.SubagentInvocationContext,
+	worktreeReminder *session.WorktreeReminderState,
+) (metaContextBuildResult, error) {
+	options := baseMetaContextBuildOptions(true)
+	options.SubagentInvocationContext = invocationContext
+	options.WorktreeReminder = session.CloneWorktreeReminderState(worktreeReminder)
+	return builder.Build(options)
+}
+
 func (e *Engine) steerMetaContextBuildResult(stepID string, metaResult metaContextBuildResult) (session.CommitReceipt, error) {
+	if e == nil || e.closed.Load() {
+		return session.CommitReceipt{}, ErrEngineClosed
+	}
 	if warning := strings.TrimSpace(strings.Join(metaResult.SkillWarnings, "\n")); warning != "" {
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityOngoing,
@@ -404,9 +442,48 @@ func (e *Engine) steerMetaContextBuildResult(stepID string, metaResult metaConte
 	}
 	return e.steerMetaContextIfChangedWithReceipt(
 		stepID,
-		steeringPriorityRuntimeContext,
 		metaResult.Projection().Messages(),
 	)
+}
+
+func (e *Engine) steerDormantMetaContextBuildResult(metaResult metaContextBuildResult) (session.CommitReceipt, error) {
+	if e == nil || e.closed.Load() {
+		return session.CommitReceipt{}, ErrEngineClosed
+	}
+	intents := metaContextSteeringIntents(metaResult)
+	if len(intents) == 0 {
+		return session.CommitReceipt{}, nil
+	}
+	provenance := sessionSteeringProvenance()
+	for _, intent := range intents[:len(intents)-1] {
+		if err := e.steerOrdered(provenance, intent); err != nil {
+			return session.CommitReceipt{}, err
+		}
+	}
+	last := intents[len(intents)-1]
+	receipt := session.CommitReceipt{}
+	last.items[len(last.items)-1].commitReceipt = &receipt
+	return receipt, e.steerOrdered(provenance, last)
+}
+
+func metaContextSteeringIntents(metaResult metaContextBuildResult) []steeringIntent {
+	intents := make([]steeringIntent, 0, 2)
+	if warning := strings.TrimSpace(strings.Join(metaResult.SkillWarnings, "\n")); warning != "" {
+		intents = append(intents, steerLocalEntryIntent(storedLocalEntry{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Role:       string(transcript.EntryRoleWarning),
+			Text:       warning,
+		}))
+	}
+	if messages := metaResult.Projection().Messages(); len(messages) > 0 {
+		intents = append(intents, steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			messages,
+		))
+	}
+	return intents
 }
 
 // steerHeadlessModeTransitionIfNeeded reconciles the launch mode with the
@@ -430,7 +507,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 		if err != nil {
 			return err
 		}
-		if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Headless); err != nil {
+		if err := e.steerMetaContextIfChanged(stepID, metaResult.Headless); err != nil {
 			return err
 		}
 		return e.store.SetHeadlessActive(true)
@@ -439,7 +516,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 	if err != nil {
 		return err
 	}
-	if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.HeadlessExit); err != nil {
+	if err := e.steerMetaContextIfChanged(stepID, metaResult.HeadlessExit); err != nil {
 		return err
 	}
 	return e.store.SetHeadlessActive(false)
@@ -457,7 +534,7 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 		if err != nil {
 			return err
 		}
-		return e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Workflow)
+		return e.steerMetaContextIfChanged(stepID, metaResult.Workflow)
 	})
 }
 

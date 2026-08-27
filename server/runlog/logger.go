@@ -182,9 +182,11 @@ func FormatTranscriptRuntimeEventDiagnostic(sessionID string, evt runtime.Event)
 		"session_id":            strings.TrimSpace(sessionID),
 		"path":                  "runtime_event",
 		"kind":                  string(evt.Kind),
-		"step_id":               strings.TrimSpace(evt.StepID),
 		"event_digest":          runtimeEventDigest(evt),
 		"assistant_delta_chars": fmt.Sprintf("%d", len(evt.AssistantDelta)),
+	}
+	if evt.StepID != nil {
+		fields["step_id"] = runtimeEventStepID(evt.StepID)
 	}
 	if evt.ReasoningDelta != nil {
 		fields["reasoning_role"] = strings.TrimSpace(evt.ReasoningDelta.Role)
@@ -196,10 +198,14 @@ func FormatTranscriptRuntimeEventDiagnostic(sessionID string, evt runtime.Event)
 func runtimeEventDigest(evt runtime.Event) string {
 	parts := []string{
 		string(evt.Kind),
-		evt.StepID,
 		evt.AssistantDelta,
 		evt.UserMessage,
 		strings.Join(evt.UserMessageBatch, "\x1e"),
+	}
+	if evt.StepID == nil {
+		parts = append(parts, "step_id_absent")
+	} else {
+		parts = append(parts, "step_id", runtimeEventStepID(evt.StepID))
 	}
 	if evt.ReasoningDelta != nil {
 		parts = append(parts, evt.ReasoningDelta.Role, evt.ReasoningDelta.Text)
@@ -227,23 +233,24 @@ func runtimeEventDigest(evt runtime.Event) string {
 }
 
 func FormatRuntimeEvent(evt runtime.Event) string {
+	stepID := runtimeEventStepID(evt.StepID)
 	switch evt.Kind {
 	case runtime.EventAssistantDelta:
-		return fmt.Sprintf("runtime.event kind=%s step_id=%s delta_chars=%d", evt.Kind, evt.StepID, len(evt.AssistantDelta))
+		return fmt.Sprintf("runtime.event kind=%s step_id=%s delta_chars=%d", evt.Kind, stepID, len(evt.AssistantDelta))
 	case runtime.EventAssistantDeltaReset:
-		return fmt.Sprintf("runtime.event kind=%s step_id=%s", evt.Kind, evt.StepID)
+		return fmt.Sprintf("runtime.event kind=%s step_id=%s", evt.Kind, stepID)
 	case runtime.EventAssistantMessage:
 		messageChars := 0
 		if evt.Message.Content != nil {
 			messageChars = len(*evt.Message.Content)
 		}
-		return fmt.Sprintf("runtime.event kind=%s step_id=%s message_chars=%d", evt.Kind, evt.StepID, messageChars)
+		return fmt.Sprintf("runtime.event kind=%s step_id=%s message_chars=%d", evt.Kind, stepID, messageChars)
 	case runtime.EventModelResponse:
 		if evt.ModelResponse != nil {
 			return fmt.Sprintf(
 				"runtime.event kind=%s step_id=%s phase=%s assistant_chars=%d tool_calls=%d output_items=%d output_types=%q",
 				evt.Kind,
-				evt.StepID,
+				stepID,
 				evt.ModelResponse.AssistantPhase,
 				evt.ModelResponse.AssistantChars,
 				evt.ModelResponse.ToolCallsCount,
@@ -252,39 +259,25 @@ func FormatRuntimeEvent(evt runtime.Event) string {
 			)
 		}
 	case runtime.EventUserMessageFlushed:
-		return fmt.Sprintf("runtime.event kind=%s step_id=%s user_chars=%d", evt.Kind, evt.StepID, len(evt.UserMessage))
+		return fmt.Sprintf("runtime.event kind=%s step_id=%s user_chars=%d", evt.Kind, stepID, len(evt.UserMessage))
 	case runtime.EventToolCallStarted:
 		if evt.ToolCall != nil {
-			return fmt.Sprintf("runtime.event kind=%s step_id=%s call_id=%s name=%s", evt.Kind, evt.StepID, evt.ToolCall.ID, evt.ToolCall.Name)
+			return fmt.Sprintf("runtime.event kind=%s step_id=%s call_id=%s name=%s", evt.Kind, stepID, evt.ToolCall.ID, evt.ToolCall.Name)
 		}
 	case runtime.EventToolCallCompleted:
 		if evt.ToolResult != nil {
-			return fmt.Sprintf("runtime.event kind=%s step_id=%s call_id=%s name=%s is_error=%t", evt.Kind, evt.StepID, evt.ToolResult.CallID, evt.ToolResult.Name, evt.ToolResult.IsError)
-		}
-	case runtime.EventReviewerCompleted:
-		if evt.Reviewer != nil {
-			line := fmt.Sprintf(
-				"runtime.event kind=%s step_id=%s outcome=%s suggestions=%d",
-				evt.Kind,
-				evt.StepID,
-				evt.Reviewer.Outcome,
-				evt.Reviewer.SuggestionsCount,
-			)
-			if strings.TrimSpace(evt.Reviewer.Error) != "" {
-				line += fmt.Sprintf(" err=%q", evt.Reviewer.Error)
-			}
-			return line
+			return fmt.Sprintf("runtime.event kind=%s step_id=%s call_id=%s name=%s is_error=%t", evt.Kind, stepID, evt.ToolResult.CallID, evt.ToolResult.Name, evt.ToolResult.IsError)
 		}
 	case runtime.EventInFlightClearFailed, runtime.EventPromptHistoryPersistFailed:
 		if strings.TrimSpace(evt.Error) != "" {
-			return fmt.Sprintf("runtime.event kind=%s step_id=%s err=%q", evt.Kind, evt.StepID, evt.Error)
+			return fmt.Sprintf("runtime.event kind=%s step_id=%s err=%q", evt.Kind, stepID, evt.Error)
 		}
 	case runtime.EventCompactionStarted, runtime.EventCompactionCompleted, runtime.EventCompactionFailed:
 		if evt.Compaction != nil {
 			line := fmt.Sprintf(
 				"runtime.event kind=%s step_id=%s mode=%s engine=%s provider=%s count=%d",
 				evt.Kind,
-				evt.StepID,
+				stepID,
 				evt.Compaction.Mode,
 				evt.Compaction.Engine,
 				evt.Compaction.Provider,
@@ -300,7 +293,7 @@ func FormatRuntimeEvent(evt runtime.Event) string {
 		}
 	case runtime.EventRunStateChanged:
 		if evt.RunState != nil {
-			return fmt.Sprintf("runtime.event kind=%s step_id=%s run_phase=%s", evt.Kind, evt.StepID, evt.RunState.Lifecycle.Phase)
+			return fmt.Sprintf("runtime.event kind=%s step_id=%s run_phase=%s", evt.Kind, stepID, evt.RunState.Lifecycle.Phase)
 		}
 	case runtime.EventBackgroundUpdated:
 		if evt.Background != nil {
@@ -311,5 +304,16 @@ func FormatRuntimeEvent(evt runtime.Event) string {
 			return line
 		}
 	}
-	return fmt.Sprintf("runtime.event kind=%s step_id=%s", evt.Kind, evt.StepID)
+	return fmt.Sprintf("runtime.event kind=%s step_id=%s", evt.Kind, stepID)
+}
+
+func runtimeEventStepID(stepID *string) string {
+	if stepID == nil {
+		return "absent"
+	}
+	normalized := strings.TrimSpace(*stepID)
+	if normalized == "" {
+		return "invalid-empty"
+	}
+	return normalized
 }

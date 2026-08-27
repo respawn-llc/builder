@@ -17,7 +17,7 @@ func TestShouldAutoCompactAccountsForMessagesAppendedAfterLastUsage(t *testing.T
 		AutoCompactTokenLimit: 300,
 	})
 	engine.setLastUsage(llm.Usage{InputTokens: 120, WindowTokens: 2_000})
-	if err := engine.steer("active-tail", steerMessagesWithPersistenceIntent(
+	if err := engine.steer(runtimeTestStepID("active-tail"), steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -40,7 +40,7 @@ func TestShouldAutoCompactUsesModelVisibleEncryptedReasoningEstimate(t *testing.
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 1_500,
 	})
-	if err := engine.steer("reasoning-history", steerMessagesWithPersistenceIntent(
+	if err := engine.steer(runtimeTestStepID("reasoning-history"), steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -83,7 +83,7 @@ func TestShouldCompactBeforeUserMessageUsesEstimatedPromptGrowth(t *testing.T) {
 		AutoCompactTokenLimit:         950,
 		PreSubmitCompactionLeadTokens: 50,
 	})
-	if err := engine.steer("existing", steerMessagesWithPersistenceIntent(
+	if err := engine.steer(runtimeTestStepID("existing"), steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -106,13 +106,13 @@ func TestShouldCompactBeforeUserMessageUsesEstimatedPromptGrowth(t *testing.T) {
 
 func TestShouldAutoCompactPrefersConfiguredThresholdOverResolvedContextWindow(t *testing.T) {
 	t.Parallel()
-	client := &contextWindowClient{contextWindow: 1_000}
+	client := &preciseCompactionClient{contextWindow: 1_000}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 360_000,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -149,7 +149,7 @@ func TestShouldAutoCompactStaysFalseFarBelowThreshold(t *testing.T) {
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 100_000,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+	if err := engine.steer(runtimeTestStepID("input"), steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,

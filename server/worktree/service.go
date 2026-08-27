@@ -15,7 +15,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/requestmemo"
+	"core/server/mutationlane"
 	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
@@ -42,7 +42,7 @@ type runtimePublisher interface {
 }
 
 type processSource interface {
-	List() []shelltool.Snapshot
+	CurrentSnapshots() []shelltool.Snapshot
 }
 
 type ServiceOptions struct {
@@ -63,13 +63,13 @@ type Service struct {
 	setupTimeoutSeconds int
 	resolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
 	setupBroker         *setupEventBroker
-	workspaceMutations  *requestmemo.MutationLaneRegistry[string]
+	workspaceMutations  *mutationlane.MutationLaneRegistry[string]
 
 	transitionCtx     context.Context
 	cancelTransitions context.CancelFunc
 	transitionMu      sync.Mutex
-	transitions       map[string]pendingWorktreeTransition
 	transitionWG      sync.WaitGroup
+	transitionTails   map[string]chan struct{}
 	transitionsClosed bool
 }
 
@@ -363,10 +363,10 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 		setupTimeoutSeconds: opts.SetupTimeoutSeconds,
 		resolveSetup:        opts.ResolveSetup,
 		setupBroker:         newSetupEventBroker(),
-		workspaceMutations:  requestmemo.NewMutationLaneRegistry[string](),
+		workspaceMutations:  mutationlane.NewMutationLaneRegistry[string](),
 		transitionCtx:       transitionCtx,
 		cancelTransitions:   cancelTransitions,
-		transitions:         make(map[string]pendingWorktreeTransition),
+		transitionTails:     make(map[string]chan struct{}),
 	}
 }
 
@@ -1510,7 +1510,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if err := s.ensureNoOtherNonTerminalTasksManageWorktree(ctx, taskID, record); err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
-	activityLease, err := s.acquireDeleteTargetActivity(ctx, nil, &record, &record.CanonicalRoot)
+	activityLease, err := s.acquireDeleteTargetActivity(ctx, &record, &record.CanonicalRoot)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
@@ -1544,7 +1544,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	retargetCompensation, err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
 		workspaceID:   record.WorkspaceID,
 		workspaceRoot: workspaceRoot,
-	}, record, nil)
+	}, record)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
@@ -2102,7 +2102,7 @@ func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) 
 	}
 }
 
-func (s *Service) acquireWorkspaceMutationLease(ctx context.Context, workspaceID string) (*requestmemo.MutationLaneLease[string], error) {
+func (s *Service) acquireWorkspaceMutationLease(ctx context.Context, workspaceID string) (*mutationlane.MutationLaneLease[string], error) {
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	if s == nil {
 		return nil, errors.New("worktree service is required")
@@ -2152,7 +2152,7 @@ func (s *Service) backgroundProcessBlockers(worktreeRoot string) []string {
 	if err != nil {
 		return []string{strings.TrimSpace(worktreeRoot)}
 	}
-	entries := s.processes.List()
+	entries := s.processes.CurrentSnapshots()
 	blockers := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.Running {

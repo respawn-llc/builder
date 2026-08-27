@@ -36,6 +36,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		script                    map[string]any
 		env                       []string
 		inputs                    []pty.InputEvent
+		phaseInputs               []pty.PhaseInputEvent
 		frameInputs               []pty.FrameInputSequence
 		resizes                   []pty.DriverResizeEvent
 		frameResizes              []pty.FrameResizeEvent
@@ -60,19 +61,15 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"served_model": "served-model",
 				"final":        "normal mismatch answer",
 			},
+			phaseInputs: []pty.PhaseInputEvent{{
+				Phase: pty.PhaseScenarioFinalApplied,
+				After: modelMismatchCompletionDrain,
+				Bytes: []byte(detailFrameShiftTab),
+			}},
 			frameInputs: []pty.FrameInputSequence{{
-				Phase: pty.PhaseScenarioComplete,
+				Phase: pty.PhaseDetailInitialPageApplied,
 				Inputs: []pty.FrameInput{
-					{
-						Readiness:  pty.ReadinessRendererFrame,
-						AfterPhase: phasePointer(pty.PhaseScenarioFinalApplied),
-						Bytes:      []byte(detailFrameShiftTab),
-					},
-					{
-						Readiness:  pty.ReadinessRendererFrame,
-						AfterPhase: phasePointer(pty.PhaseDetailInitialPageApplied),
-						Bytes:      []byte(detailFrameUp),
-					},
+					{Readiness: pty.ReadinessRendererFrame, Bytes: []byte(detailFrameUp)},
 					{Readiness: pty.ReadinessRendererFrame, Bytes: []byte(detailFrameTab)},
 					{Readiness: pty.ReadinessNormalBufferRestored, Bytes: []byte{0x03, 0x03}},
 				},
@@ -183,7 +180,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				tc.script,
 				tc.env,
 				ptyFixtureInputPlan{
-					scheduled: tc.inputs, frameSequences: tc.frameInputs, frameResizes: tc.frameResizes,
+					scheduled: tc.inputs, phaseInputs: tc.phaseInputs, frameSequences: tc.frameInputs, frameResizes: tc.frameResizes,
 					completionInFrameSequence: tc.completionInFrameSequence,
 				},
 				tc.resizes,
@@ -280,6 +277,7 @@ func toolSeed(name string, callID string, input map[string]any, condensed string
 
 type ptyFixtureInputPlan struct {
 	scheduled                 []pty.InputEvent
+	phaseInputs               []pty.PhaseInputEvent
 	frameSequences            []pty.FrameInputSequence
 	frameResizes              []pty.FrameResizeEvent
 	completionInFrameSequence bool
@@ -323,6 +321,7 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 			Bytes: input.Bytes,
 		})
 	}
+	phaseInputs = append(phaseInputs, inputPlan.phaseInputs...)
 	if !inputPlan.completionInFrameSequence && len(inputPlan.frameResizes) == 0 {
 		phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
 			Phase: completionPhase,
@@ -349,10 +348,10 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 
 func assertScenarioDetailWarningRows(t *testing.T, capture pty.Capture, expected int) {
 	t.Helper()
-	if len(capture.FrameInputDispatches) < 4 {
-		t.Fatalf("detail frame input dispatches = %d, want at least 4", len(capture.FrameInputDispatches))
+	if len(capture.FrameInputDispatches) < 3 {
+		t.Fatalf("detail frame input dispatches = %d, want at least 3", len(capture.FrameInputDispatches))
 	}
-	exitDispatch := capture.FrameInputDispatches[2]
+	exitDispatch := capture.FrameInputDispatches[1]
 	screens, err := pty.ReplayCheckpointScreens(capture, []pty.ReplayCheckpoint{{
 		ByteOffset: exitDispatch.ReadyBoundaryEndByteOffset,
 	}})
@@ -360,12 +359,27 @@ func assertScenarioDetailWarningRows(t *testing.T, capture pty.Capture, expected
 		t.Fatalf("replay detail screen: %v", err)
 	}
 	if got := countProviderModelMismatchScreenRows(screens[0]); got != expected {
-		t.Fatalf("detail warning row count = %d, want %d", got, expected)
+		t.Fatalf(
+			"detail warning row count = %d, want %d; screen=%q",
+			got,
+			expected,
+			nonBlankScreenRows(screens[0]),
+		)
 	}
 }
 
-func phasePointer(phase pty.PhaseKind) *pty.PhaseKind {
-	return &phase
+func nonBlankScreenRows(screen pty.ScreenSnapshot) []string {
+	rows := make([]string, 0, len(screen.Cells))
+	for _, row := range screen.Cells {
+		var text strings.Builder
+		for _, cell := range row {
+			text.WriteString(cell.Content)
+		}
+		if text := strings.TrimSpace(text.String()); text != "" {
+			rows = append(rows, text)
+		}
+	}
+	return rows
 }
 
 func scenarioOperationWindow(analysis pty.Analysis) (pty.OperationWindow, error) {

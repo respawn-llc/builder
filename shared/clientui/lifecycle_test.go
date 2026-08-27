@@ -35,27 +35,9 @@ func TestLifecycleConstructorsRejectImpossibleCombinations(t *testing.T) {
 	if _, err := NewRunLifecycle(RunLifecycleIdle, RunModeGoalLoop); err == nil {
 		t.Fatal("expected idle goal-loop run lifecycle to be rejected")
 	}
-	if _, err := NewReviewerLifecycle(false, true); err == nil {
-		t.Fatal("expected blocking idle reviewer lifecycle to be rejected")
-	}
 }
 
 func TestRuntimeSubLifecycleTransitionTables(t *testing.T) {
-	reviewer, err := NewReviewerLifecycle(true, true)
-	if err != nil {
-		t.Fatalf("reviewer start rejected: %v", err)
-	}
-	if !reviewer.IsRunning() || !reviewer.IsBlocking() {
-		t.Fatalf("reviewer start = %q, want running blocking", reviewer)
-	}
-	reviewer, err = NewReviewerLifecycle(false, false)
-	if err != nil {
-		t.Fatalf("reviewer completion rejected: %v", err)
-	}
-	if reviewer.IsRunning() || reviewer.IsBlocking() {
-		t.Fatalf("reviewer complete = %q, want idle", reviewer)
-	}
-
 	connection := NewRuntimeConnectionLifecycle(true)
 	if !connection.IsDisconnected() {
 		t.Fatal("expected controller reconnect loss to mark disconnected")

@@ -2,9 +2,9 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -19,13 +19,14 @@ type defaultBackgroundNoticeScheduler struct {
 	steps  exclusiveStepLifecycle
 
 	mu        sync.Mutex
-	pending   []queuedBackgroundNotice
+	pending   []*queuedBackgroundNotice
 	scheduled bool
 }
 
 type queuedBackgroundNotice struct {
 	sessionID string
 	intent    steeringIntent
+	ready     bool
 }
 
 func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
@@ -59,17 +60,38 @@ func (e *Engine) SteerBackgroundContinuationFailure(err error) error {
 }
 
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
-	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
-		b.engine.surfaceRunError(err)
-		return
-	}
+	queueNotice = queueNotice && evt.Type.IsTerminal()
+	var notice *queuedBackgroundNotice
 	if queueNotice {
-		b.QueueBackgroundShellContinuation(evt)
+		notice = b.stageDeveloperNotice(backgroundShellDeveloperNotice(evt))
+	}
+	_, accepted := trySubmitEngineRuntimeOperation(b.engine, func(context.Context) (struct{}, error) {
+		if err := b.recordBackgroundShellUpdateRaw(evt); err != nil {
+			if queueNotice {
+				b.ConsumePendingBackgroundNotice(evt.ID)
+			}
+			b.engine.surfaceRunErrorRaw(err)
+			return struct{}{}, nil
+		}
+		if queueNotice {
+			b.activateDeveloperNotice(notice)
+		}
+		return struct{}{}, nil
+	})
+	if !accepted && queueNotice {
+		b.ConsumePendingBackgroundNotice(evt.ID)
 	}
 }
 
 func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
-	return b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
+	return b.engine.steerRuntime(steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
+}
+
+func (b *defaultBackgroundNoticeScheduler) recordBackgroundShellUpdateRaw(evt BackgroundShellEvent) error {
+	return b.engine.steerOrderedRaw(
+		sessionSteeringProvenance(),
+		steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}),
+	)
 }
 
 func (b *defaultBackgroundNoticeScheduler) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
@@ -134,18 +156,62 @@ func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message)
 }
 
 func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message, schedule bool) {
-	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
+	notice := b.appendDeveloperNotice(msg, true)
+	if notice == nil || !schedule || (b.steps != nil && b.steps.IsBusy()) {
 		return
 	}
-	shouldSchedule := false
+	b.scheduleReadyNotice()
+}
+
+func (b *defaultBackgroundNoticeScheduler) stageDeveloperNotice(msg llm.Message) *queuedBackgroundNotice {
+	return b.appendDeveloperNotice(msg, false)
+}
+
+func (b *defaultBackgroundNoticeScheduler) appendDeveloperNotice(msg llm.Message, ready bool) *queuedBackgroundNotice {
+	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
+		return nil
+	}
 	sessionID, _ := textutil.OptionalTrimmed(msg.Name)
-	notice := queuedBackgroundNotice{
+	notice := &queuedBackgroundNotice{
 		sessionID: sessionID,
 		intent:    steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
+		ready:     ready,
 	}
 	b.mu.Lock()
 	b.pending = append(b.pending, notice)
-	if schedule && !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
+	b.mu.Unlock()
+	return notice
+}
+
+func (b *defaultBackgroundNoticeScheduler) activateDeveloperNotice(notice *queuedBackgroundNotice) {
+	if notice == nil {
+		return
+	}
+	shouldSchedule := false
+	b.mu.Lock()
+	for _, pending := range b.pending {
+		if pending != notice {
+			continue
+		}
+		pending.ready = true
+		if !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
+			b.scheduled = true
+			shouldSchedule = true
+		}
+		break
+	}
+	b.mu.Unlock()
+	if shouldSchedule {
+		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
+			b.clearScheduled()
+		}
+	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) scheduleReadyNotice() {
+	shouldSchedule := false
+	b.mu.Lock()
+	if hasReadyBackgroundNotice(b.pending) && !b.scheduled {
 		b.scheduled = true
 		shouldSchedule = true
 	}
@@ -157,21 +223,29 @@ func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message,
 	}
 }
 
-func (b *defaultBackgroundNoticeScheduler) drainPendingNotices() []queuedBackgroundNotice {
+func (b *defaultBackgroundNoticeScheduler) drainPendingNotices() []*queuedBackgroundNotice {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	pending := append([]queuedBackgroundNotice(nil), b.pending...)
-	b.pending = nil
+	pending := make([]*queuedBackgroundNotice, 0, len(b.pending))
+	staged := b.pending[:0]
+	for _, notice := range b.pending {
+		if notice.ready {
+			pending = append(pending, notice)
+		} else {
+			staged = append(staged, notice)
+		}
+	}
+	b.pending = staged
 	b.scheduled = false
 	return pending
 }
 
-func (b *defaultBackgroundNoticeScheduler) restorePendingNotices(notices []queuedBackgroundNotice) {
+func (b *defaultBackgroundNoticeScheduler) restorePendingNotices(notices []*queuedBackgroundNotice) {
 	if len(notices) == 0 {
 		return
 	}
 	b.mu.Lock()
-	b.pending = append(append([]queuedBackgroundNotice(nil), notices...), b.pending...)
+	b.pending = append(append([]*queuedBackgroundNotice(nil), notices...), b.pending...)
 	b.scheduled = false
 	b.mu.Unlock()
 }
@@ -203,7 +277,12 @@ func (b *defaultBackgroundNoticeScheduler) flushPendingNotices(stepID string) (i
 func (b *defaultBackgroundNoticeScheduler) HasPendingNotices() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return len(b.pending) > 0
+	for _, notice := range b.pending {
+		if notice.ready {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(sessionID string) bool {
@@ -224,7 +303,7 @@ func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(sessio
 		filtered = append(filtered, notice)
 	}
 	b.pending = filtered
-	if len(b.pending) == 0 {
+	if !hasReadyBackgroundNotice(b.pending) {
 		b.scheduled = false
 	}
 	return removed
@@ -236,7 +315,7 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 	}
 	shouldSchedule := false
 	b.mu.Lock()
-	if len(b.pending) > 0 && !b.scheduled {
+	if hasReadyBackgroundNotice(b.pending) && !b.scheduled {
 		b.scheduled = true
 		shouldSchedule = true
 	}
@@ -248,24 +327,27 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 	}
 }
 
-type harvestedBackgroundCompletion struct {
-	SessionID  int  `json:"background_session_id"`
-	Running    bool `json:"background_running"`
-	Background bool `json:"backgrounded"`
+type invalidBackgroundCompletionProvenanceError struct {
+	SessionID int
 }
 
-func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
-	if res.IsError || res.Name != toolspec.ToolWriteStdin {
-		return "", false
+func (e invalidBackgroundCompletionProvenanceError) Error() string {
+	return fmt.Sprintf(
+		"write_stdin completion provenance has invalid session ID %d",
+		e.SessionID,
+	)
+}
+
+func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool, error) {
+	if res.Name != toolspec.ToolWriteStdin || res.CompletedBackgroundSessionID == nil {
+		return "", false, nil
 	}
-	var out harvestedBackgroundCompletion
-	if err := json.Unmarshal(res.Output, &out); err != nil {
-		return "", false
+	if *res.CompletedBackgroundSessionID <= 0 {
+		return "", false, invalidBackgroundCompletionProvenanceError{
+			SessionID: *res.CompletedBackgroundSessionID,
+		}
 	}
-	if out.SessionID <= 0 || out.Running || !out.Background {
-		return "", false
-	}
-	return fmt.Sprintf("%d", out.SessionID), true
+	return strconv.Itoa(*res.CompletedBackgroundSessionID), true, nil
 }
 
 func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) *resultGroupFatal {
@@ -313,14 +395,29 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 	return assistant, err
 }
 
-func (b *defaultBackgroundNoticeScheduler) pendingSnapshot() []queuedBackgroundNotice {
+func (b *defaultBackgroundNoticeScheduler) pendingSnapshot() []*queuedBackgroundNotice {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return append([]queuedBackgroundNotice(nil), b.pending...)
+	pending := make([]*queuedBackgroundNotice, 0, len(b.pending))
+	for _, notice := range b.pending {
+		if notice.ready {
+			pending = append(pending, notice)
+		}
+	}
+	return pending
 }
 
 func (b *defaultBackgroundNoticeScheduler) clearScheduled() {
 	b.mu.Lock()
 	b.scheduled = false
 	b.mu.Unlock()
+}
+
+func hasReadyBackgroundNotice(notices []*queuedBackgroundNotice) bool {
+	for _, notice := range notices {
+		if notice.ready {
+			return true
+		}
+	}
+	return false
 }

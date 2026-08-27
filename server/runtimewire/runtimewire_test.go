@@ -1095,6 +1095,7 @@ func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *
 		Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
 		MinimumExecToBgTime: 50 * time.Millisecond,
 		ShellOutputMaxChars: 16_000,
+		ModelContextWindow:  200_000,
 		SupportsVision:      true,
 		Background:          manager,
 	})
@@ -1389,6 +1390,24 @@ func TestNewLocalToolRegistryBindingRejectsEmptyWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestNewLocalToolRegistryBindingRejectsNonPositiveContextWindowForShellTools(t *testing.T) {
+	for _, toolID := range []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWriteStdin} {
+		t.Run(string(toolID), func(t *testing.T) {
+			_, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+				FilesystemContext:   runtimeWireFilesystemContext(t, t.TempDir()),
+				Enabled:             []toolspec.ID{toolID},
+				ModelContextWindow:  0,
+				MinimumExecToBgTime: 15 * time.Second,
+				ShellOutputMaxChars: 16_000,
+				SupportsVision:      true,
+			})
+			if err == nil {
+				t.Fatal("accepted non-positive model context window for shell tool")
+			}
+		})
+	}
+}
+
 func TestNewFilesystemContextValidatesNamedRoots(t *testing.T) {
 	t.Parallel()
 	executionRoot := t.TempDir()
@@ -1619,6 +1638,7 @@ func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Log
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
+		ModelContextWindow:  200_000,
 		SupportsVision:      true,
 		Logger:              logger,
 	})
@@ -1635,6 +1655,7 @@ func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, config
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
+		ModelContextWindow:  200_000,
 		AllowNonCwdEdits:    allowNonCwdEdits,
 		SupportsVision:      true,
 		GlobalConfigDir:     configRoot,
@@ -1652,6 +1673,7 @@ func newRuntimeWireBinding(t *testing.T, workspace string, enabled ...toolspec.I
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
+		ModelContextWindow:  200_000,
 		SupportsVision:      true,
 	})
 	if err != nil {
@@ -1727,7 +1749,7 @@ type runtimewireCaptureClient struct {
 	calls     []llm.Request
 }
 
-func (f *runtimewireCaptureClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+func (f *runtimewireCaptureClient) Generate(ctx context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	if err := ctx.Err(); err != nil {
 		return llm.Response{}, err
 	}
@@ -1752,7 +1774,7 @@ func (f *runtimewireCaptureClient) CallCount() int {
 	return len(f.calls)
 }
 
-func (f *busyToggleFakeClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (f *busyToggleFakeClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	if err := ctx.Err(); err != nil {
 		return llm.Response{}, err
 	}

@@ -29,7 +29,7 @@ const (
 
 type projectionFastClient struct{}
 
-func (projectionFastClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (projectionFastClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, errors.New("not implemented")
 }
 
@@ -39,7 +39,7 @@ func (projectionFastClient) ProviderCapabilities(context.Context) (llm.ProviderC
 
 type projectionUnavailableFastClient struct{}
 
-func (projectionUnavailableFastClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (projectionUnavailableFastClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, errors.New("not implemented")
 }
 
@@ -56,7 +56,7 @@ func newProjectionBlockingClient() *projectionBlockingClient {
 	return &projectionBlockingClient{started: make(chan struct{}), release: make(chan struct{})}
 }
 
-func (c *projectionBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *projectionBlockingClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	select {
 	case <-c.started:
 	default:
@@ -76,7 +76,7 @@ func (c *projectionBlockingClient) ProviderCapabilities(context.Context) (llm.Pr
 
 type projectionUsageClient struct{}
 
-func (projectionUsageClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (projectionUsageClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{InputTokens: 900, OutputTokens: 100, WindowTokens: 400_000},
@@ -122,10 +122,6 @@ func TestActivityFromRuntimeSnapshotCopiesRuntimeOwnedActiveKinds(t *testing.T) 
 		{name: "workflow turn", kind: runtime.ActiveKindWorkflowTurn, want: clientui.RuntimeActivityActiveKindWorkflowTurn},
 		{name: "goal loop", kind: runtime.ActiveKindGoalLoop, want: clientui.RuntimeActivityActiveKindGoalLoop},
 		{name: "compaction", kind: runtime.ActiveKindCompaction, want: clientui.RuntimeActivityActiveKindCompaction},
-		{name: "pre-submit compaction", kind: runtime.ActiveKindPreSubmitCompaction, want: clientui.RuntimeActivityActiveKindPreSubmitCompaction},
-		{name: "user shell", kind: runtime.ActiveKindUserShell, want: clientui.RuntimeActivityActiveKindUserShell},
-		{name: "background", kind: runtime.ActiveKindBackground, want: clientui.RuntimeActivityActiveKindBackground},
-		{name: "runtime maintenance", kind: runtime.ActiveKindRuntimeMaintenance, want: clientui.RuntimeActivityActiveKindRuntimeMaintenance},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -148,7 +144,7 @@ func TestActivityFromRuntimeSnapshotCopiesRuntimeOwnedActiveKinds(t *testing.T) 
 func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
 	client := newProjectionBlockingClient()
 	engine := newRuntimeViewEngine(t, newRuntimeViewStore(t), client, runtime.Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("ship feature", session.GoalActorUser); err != nil {
+	if _, err := engine.SetGoal(t.Context(), "ship feature", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
 	if err := engine.StartGoalLoop(); err != nil {
@@ -224,8 +220,12 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	); err != nil {
 		t.Fatalf("append assistant message: %v", err)
 	}
-	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	if err := eng.SetThinkingLevel("high"); err != nil {
+	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{
+		Model:                   "gpt-5",
+		ContextWindowTokens:     400_000,
+		SupportedThinkingValues: []string{"high"},
+	})
+	if err := eng.SetThinkingLevel(t.Context(), "high"); err != nil {
 		t.Fatalf("set thinking level: %v", err)
 	}
 	if changed, err := eng.SetFastModeEnabled(true); err != nil {
@@ -233,7 +233,9 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	} else if !changed {
 		t.Fatal("expected fast mode enable to report changed=true")
 	}
-	if changed, enabled := eng.SetAutoCompactionEnabled(false); !changed || enabled {
+	if changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false); err != nil {
+		t.Fatalf("disable auto-compaction: %v", err)
+	} else if !changed || enabled {
 		t.Fatalf("expected auto-compaction disabled, changed=%v enabled=%v", changed, enabled)
 	}
 
@@ -276,7 +278,11 @@ func TestSessionViewFromRuntimeOmitsDefaultAgentRole(t *testing.T) {
 func mainViewFromRuntimeForTest(t *testing.T, eng *runtime.Engine) clientui.RuntimeMainView {
 	t.Helper()
 	version := clientui.ReadModelVersion{Epoch: "runtimeview-test", Generation: 1, Sequence: 1}
-	activity := clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true}
+	activity := clientui.RuntimeActivity{
+		State:          clientui.RuntimeActivityRegisteredIdle,
+		Reviewer:       clientui.ReviewerActivityInactive,
+		QueueAccepting: true,
+	}
 	view, err := MainViewFromRuntimeActivity(eng, version, activity)
 	if err != nil {
 		t.Fatalf("project runtime main view: %v", err)
@@ -288,7 +294,9 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	store := newRuntimeViewStore(t)
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{
 		Model: "gpt-5",
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+	})
+	binding, err := eng.BindCurrentNodeExecution(
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: runtimeids.NewExecutionScopeID(),
 			Instructions: workflowruntime.TaskInstructions{
 				CurrentNode: workflow.CurrentNodeReference{
@@ -298,7 +306,11 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 				WorkflowID: testsetup.WorkflowID(t, "runtimeview-projection"),
 			},
 		},
-	})
+	)
+	if err != nil {
+		t.Fatalf("BindCurrentNodeExecution: %v", err)
+	}
+	t.Cleanup(func() { _ = binding.Close() })
 	view := mainViewFromRuntimeForTest(t, eng)
 	if view.Status.WorkflowSession == nil {
 		t.Fatalf("workflow status = %+v, want active workflow session", view.Status)

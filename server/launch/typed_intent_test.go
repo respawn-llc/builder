@@ -87,44 +87,6 @@ func TestTypedLaunchIntentRejectsInvalidIdentity(t *testing.T) {
 	}
 }
 
-func TestPlannerOnlyInteractiveOpenExistingPromotesSubagentToMain(t *testing.T) {
-	t.Run("interactive resumes as main", func(t *testing.T) {
-		planner, containerDir, persistence := newTypedIntentPlanner(t)
-		target := createTypedIntentSession(t, containerDir, sessioncontract.SessionCategorySubagent, persistence)
-		targetID := mustTypedIntentSessionID(t, target.Meta().SessionID)
-
-		plan, err := planner.PlanSession(context.Background(), SessionRequest{
-			Mode:   ModeInteractive,
-			Intent: serverapi.OpenExistingSessionLaunchIntent(targetID),
-		})
-		if err != nil {
-			t.Fatalf("plan interactive resume: %v", err)
-		}
-		meta := testStoreForPlannerPlan(t, planner, plan).Meta()
-		if meta.Category == nil || *meta.Category != sessioncontract.SessionCategoryMain {
-			t.Fatalf("interactive resumed category = %v, want main", meta.Category)
-		}
-	})
-
-	t.Run("headless resumes as subagent", func(t *testing.T) {
-		planner, containerDir, persistence := newTypedIntentPlanner(t)
-		target := createTypedIntentSession(t, containerDir, sessioncontract.SessionCategorySubagent, persistence)
-		targetID := mustTypedIntentSessionID(t, target.Meta().SessionID)
-
-		plan, err := planner.PlanSession(context.Background(), SessionRequest{
-			Mode:   ModeHeadless,
-			Intent: serverapi.OpenExistingSessionLaunchIntent(targetID),
-		})
-		if err != nil {
-			t.Fatalf("plan headless resume: %v", err)
-		}
-		meta := testStoreForPlannerPlan(t, planner, plan).Meta()
-		if meta.Category == nil || *meta.Category != sessioncontract.SessionCategorySubagent {
-			t.Fatalf("headless resumed category = %v, want subagent", meta.Category)
-		}
-	})
-}
-
 func newTypedIntentPlanner(t *testing.T) (Planner, string, *sessiontest.Persistence) {
 	t.Helper()
 	root := t.TempDir()

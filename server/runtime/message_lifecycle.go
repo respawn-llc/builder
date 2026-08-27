@@ -11,6 +11,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -50,7 +51,8 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 	}
 	generationsByStep := make(map[string][]*restoredToolGeneration)
 	for _, record := range activeWindow.Records {
-		stepID, _ := textutil.OptionalExact(record.StepID())
+		stepIDPointer := record.StepID()
+		stepID, _ := textutil.OptionalExact(stepIDPointer)
 		payload, err := record.Payload()
 		if err != nil {
 			return err
@@ -68,7 +70,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if provenanceErr != nil {
 				return fmt.Errorf("restore session message provenance: %w", provenanceErr)
 			}
-			if err := e.transcriptRuntimeState().AppendMessage(stepID, msg, &provenance); err != nil {
+			if err := e.transcriptRuntimeState().AppendMessage(stepIDPointer, msg, &provenance); err != nil {
 				return fmt.Errorf("restore session message projection: %w", err)
 			}
 			if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
@@ -124,7 +126,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if entry.DiagnosticKey != nil {
 				e.diagnosticDedupeStore().RestoreLocal(*entry.DiagnosticKey)
 			}
-			restored := *localEntryChatEntryForStep(entry, stepID)
+			restored := *localEntryChatEntryForStep(entry, stepIDPointer)
 			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
 			if provenanceErr != nil {
 				return fmt.Errorf("restore session local entry provenance: %w", provenanceErr)
@@ -175,11 +177,11 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				replacement.CompactionNumber,
 			)
 			for index := range projectedEntries {
-				projectedEntries[index].StepID = stepID
+				projectedEntries[index].StepID = exactStepIDPointer(stepID)
 			}
 			projectedEntries = assignHistoryReplacementEntryProvenance(projectedEntries, &provenance)
 			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
-				stepID,
+				record.StepID(),
 				replacement.Items,
 				replacement.CommittedEntryStart,
 				projectedEntries,
@@ -196,7 +198,8 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if replacement.CompactionNumber != nil && *replacement.CompactionNumber > 0 {
 				e.compactionRuntimeState().SetCount(*replacement.CompactionNumber)
 			} else {
-				e.compactionRuntimeState().IncrementCount()
+				count := e.compactionRuntimeState().IncrementCount()
+				e.persistCompletedCompactionFactsBestEffort(stepID, count)
 			}
 			rollbackLocator.ObserveHistoryReplacement(replacement)
 			recoveredHandoff.ClearSatisfiedByCompaction()
@@ -458,7 +461,6 @@ func queuedUserMessagesForFlush(messages []queuedUserMessage) ([]QueuedUserMessa
 	for _, message := range messages {
 		item := message.message
 		item.ID = strings.TrimSpace(item.ID)
-		item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
 		text, err := queuedUserMessageText(item)
 		if err != nil {
 			return nil, err
@@ -495,7 +497,6 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	var pending []queuedUserMessage
-	m.engine.outputMutationMu.Lock()
 	switch selected := selection.(type) {
 	case allPendingUserInjectionSelection:
 		pending = m.queue.Drain()
@@ -504,10 +505,8 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 			pending = m.queue.DrainByID(selected.queueItemIDs)
 		}
 	default:
-		m.engine.outputMutationMu.Unlock()
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
-	m.engine.outputMutationMu.Unlock()
 	return m.commitPendingUserInjections(stepID, pending)
 }
 
@@ -515,23 +514,17 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 	e := m.engine
 	result := userInjectionCommitResult{disposition: userInjectionFlushContinue}
 
-	// Recheck immediately before commit because a live-run stop can race the drain.
-	pending = e.dropStoppedLiveRunQueueItems(pending)
 	groups, err := queuedUserMessageFlushGroups(pending)
 	if err != nil {
 		return result, err
 	}
 	for groupIndex, group := range groups {
-		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(group.pending, func() error {
-			receipt, persistErr := e.steerWithCommitReceipt(
-				stepID,
-				steerQueuedUserMessageFlushIntent(group.message, group.batch, group.queueItems),
-			)
-			result.receipt = receipt
-			return persistErr
-		})
+		receipt, err := e.steerWithCommitReceipt(
+			stepID,
+			steerQueuedUserMessageFlushIntent(group.message, group.batch, group.queueItems),
+		)
+		result.receipt = receipt
 		if err != nil {
-			e.unmarkQueuedUserInjectionForAutoDrainSet(result.queueItemIDs)
 			if !result.receipt.Committed {
 				tail := make([]queuedUserMessage, 0, len(groups)-groupIndex)
 				for _, remaining := range groups[groupIndex:] {
@@ -548,22 +541,6 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 			}
 			return result, err
 		}
-		if !publishAllowed {
-			e.outputMutationMu.Lock()
-			tailItems := make([]QueuedUserMessage, 0)
-			for _, remaining := range groups[groupIndex:] {
-				tailItems = append(tailItems, remaining.queueItems...)
-			}
-			for _, item := range tailItems {
-				e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-				e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
-			}
-			e.outputMutationMu.Unlock()
-			e.unmarkQueuedUserInjectionForAutoDrainSet(result.queueItemIDs)
-			e.completeLiveRunQueueItems(queuedUserMessageIDSet(tailItems))
-			result.disposition = userInjectionFlushStopped
-			return result, nil
-		}
 		if result.queueItemIDs == nil {
 			result.queueItemIDs = queuedUserMessageIDSet(group.queueItems)
 		} else {
@@ -574,24 +551,35 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 		result.startedStep = result.startedStep || startsAgentStep(group.message)
 		result.flushed++
 	}
-	for _, item := range pending {
-		e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
-	}
 	return result, nil
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error) {
+func (m *defaultMessageLifecycle) QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
-	return m.queue.Queue(text, clientRequestID)
+	return m.queue.Queue(text, association...)
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error) {
+func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
-	return m.queue.QueueItem(item)
+	return m.queue.QueueItem(item, association...)
+}
+
+func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByScope(scopeID runtimeids.ExecutionScopeID) []interruptedHumanSteering {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	return m.queue.DrainByScope(scopeID)
+}
+
+func (m *defaultMessageLifecycle) DrainInterruptedUserInjections() []interruptedHumanSteering {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	return m.queue.DrainInterrupted()
 }
 
 func (m *defaultMessageLifecycle) DrainPendingUserInjections() []QueuedUserMessage {

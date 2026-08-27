@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
@@ -19,12 +20,15 @@ func TestCompactionSoonReminderRemainsSingleShotAcrossAdmissionToggle(t *testing
 	})
 	seedReminderUsage(t, engine)
 
-	engine.SetAutoCompactionEnabled(false)
+	engine.SetAutoCompactionEnabled(t.Context(), false)
 	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "disabled"); err != nil {
 		t.Fatalf("append disabled reminder: %v", err)
 	}
-	engine.SetAutoCompactionEnabled(true)
-	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "enabled"); err != nil {
+	engine.SetAutoCompactionEnabled(t.Context(), true)
+	stepID := runtimeTestStepID("enabled")
+	if err := runTestActiveStep(engine, stepID, func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), stepID)
+	}); err != nil {
 		t.Fatalf("append enabled reminder: %v", err)
 	}
 	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "duplicate"); err != nil {
@@ -44,7 +48,10 @@ func TestReopenPreservesCompactionSoonReminderAdmission(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
 	seedReminderUsage(t, engine)
-	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "issued"); err != nil {
+	stepID := runtimeTestStepID("issued")
+	if err := runTestActiveStep(engine, stepID, func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), stepID)
+	}); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 
@@ -66,12 +73,7 @@ func TestForkBeforeReminderDoesNotInheritReminderAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist fork anchor: %v", err)
 	}
 	if err := engine.persistCompactionSoonReminderIssued(true); err != nil {
@@ -96,24 +98,17 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("before")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("before")}})); err != nil {
 		t.Fatalf("persist seed: %v", err)
 	}
 	seedReminderUsage(t, engine)
-	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "issued"); err != nil {
+	stepID := runtimeTestStepID("issued")
+	if err := runTestActiveStep(engine, stepID, func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), stepID)
+	}); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
-	if err := engine.steer("anchor", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "anchor", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after")}})); err != nil {
 		t.Fatalf("persist fork anchor: %v", err)
 	}
 
@@ -136,7 +131,7 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 
 func newReminderRecoveryEngine(t *testing.T, store *session.Store, client llm.Client, onEvent func(Event)) *Engine {
 	t.Helper()
-	return mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	return mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 1_000,

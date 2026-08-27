@@ -236,7 +236,7 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	if _, err := remote.GetInlineOutput(context.Background(), serverapi.ProcessInlineOutputRequest{ProcessID: foreignResult.SessionID, MaxChars: 128}); err == nil {
 		t.Fatal("expected foreign process inline output to be rejected")
 	}
-	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ClientRequestID: "kill-foreign", ProcessID: foreignResult.SessionID}); err == nil {
+	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: foreignResult.SessionID}); err == nil {
 		t.Fatal("expected foreign process kill to be rejected")
 	}
 	if _, err := remote.GetProcess(context.Background(), serverapi.ProcessGetRequest{ProcessID: ownResult.SessionID}); err != nil {

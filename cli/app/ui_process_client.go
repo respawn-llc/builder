@@ -8,8 +8,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 type backgroundUIProcessClient struct {
@@ -57,7 +55,7 @@ func (c backgroundUIProcessClient) ListProcesses(ctx context.Context) ([]clientu
 func (c backgroundUIProcessClient) KillProcess(ctx context.Context, id string) error {
 	id = strings.TrimSpace(id)
 	if c.control != nil {
-		_, err := c.control.KillProcess(ctx, serverapi.ProcessKillRequest{ClientRequestID: uuid.NewString(), ProcessID: id})
+		_, err := c.control.KillProcess(ctx, serverapi.ProcessKillRequest{ProcessID: id})
 		if err != nil {
 			return err
 		}

@@ -41,15 +41,6 @@ func testEdgeID(alias string) workflow.EdgeID {
 	return workflow.EdgeID(testGraphEntityID(alias))
 }
 
-func testGraphEntityBlob(t *testing.T, value string) []byte {
-	t.Helper()
-	raw, err := runtimeids.GraphEntityIDBlob(value)
-	if err != nil {
-		t.Fatalf("encode graph entity ID %q: %v", value, err)
-	}
-	return raw
-}
-
 func removeWorkflowGraphSaveEdgesTouchingNode(def workflow.Definition, edges []EdgeRecord, nodeID workflow.NodeID) []EdgeRecord {
 	sourceByGroup := map[workflow.TransitionGroupID]workflow.NodeID{}
 	for _, group := range def.TransitionGroups {

@@ -401,10 +401,10 @@ func TestPersistedSessionOpenRequiresResolver(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "session-1")
 	writeSessionFixtureEvents(t, sessionDir, nil)
-	if _, err := Open(sessionDir); !errors.Is(err, errPersistedSessionResolverRequired) {
+	if _, err := Open(sessionDir); !errors.Is(err, ErrPersistedSessionResolverRequired) {
 		t.Fatalf("Open error = %v, want resolver required", err)
 	}
-	if _, err := OpenByID(root, "session-1"); !errors.Is(err, errPersistedSessionResolverRequired) {
+	if _, err := OpenByID(root, "session-1"); !errors.Is(err, ErrPersistedSessionResolverRequired) {
 		t.Fatalf("OpenByID error = %v, want resolver required", err)
 	}
 }

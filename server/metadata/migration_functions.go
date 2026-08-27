@@ -23,13 +23,13 @@ const migrationPriorParametersFunction = "kent_migration_prior_transition_parame
 const migrationPriorNodeValuesFunction = "kent_migration_prior_node_values_v1"
 const migrationWorkflowIDBlobFunction = "kent_migration_workflow_id_blob_v1"
 const migrationWorkflowIDTextFunction = "kent_migration_workflow_id_text_v1"
+const migrationGraphEntityIDBlobFunction = "kent_migration_graph_entity_id_blob_v1"
 const migrationWorkflowRunHistoryCutoverIrreversibleFunction = "kent_workflow_run_history_cutover_is_irreversible"
 const migrationCurrentNodePriorValuesIrreversibleFunction = "kent_current_node_prior_transition_parameters_are_irreversible"
 const migrationWorkflowSessionAgentRoleIrreversibleFunction = "kent_workflow_session_agent_role_backfill_is_irreversible"
 const migrationCurrentNodeAgentExecutionFunction = "kent_migration_current_node_agent_execution_v1"
 const migrationCurrentNodeAgentExecutionValidationFunction = "kent_migration_current_node_agent_execution_validation_v1"
 const migrationPendingApprovalAgentExecutionValidationFunction = "kent_migration_pending_approval_agent_execution_validation_v1"
-const migrationGraphEntityIDBlobFunction = "kent_migration_graph_entity_id_blob_v1"
 
 func migrationAgentExecutionSelection(
 	contextMode workflow.ContextMode,
@@ -172,11 +172,19 @@ func migrationGraphEntityIDBlob(_ *sqlitedriver.FunctionContext, args []driver.V
 	if strings.TrimSpace(location) == "" {
 		return nil, errors.New("graph identity migration location is required")
 	}
-	value, err := runtimeids.MigrateGraphEntityIDBlob(raw)
-	if err != nil {
-		return nil, fmt.Errorf("graph identity migration failure at %s: %w", location, err)
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("graph identity migration failure at %s: graph entity ID must not be blank", location)
 	}
-	return value, nil
+	if parsed, parseErr := uuid.Parse(raw); parseErr == nil {
+		if parsed == uuid.Nil {
+			return nil, fmt.Errorf("graph identity migration failure at %s: graph entity ID must not be zero", location)
+		}
+		if parsed.String() == raw && parsed.Version() == 4 && parsed.Variant() == uuid.RFC4122 {
+			return append([]byte(nil), parsed[:]...), nil
+		}
+	}
+	generated := uuid.New()
+	return append([]byte(nil), generated[:]...), nil
 }
 
 func migrationCurrentNodeAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
@@ -923,7 +931,7 @@ func migrationCurrentInputValues(_ *sqlitedriver.FunctionContext, args []driver.
 	if err != nil {
 		return nil, fmt.Errorf("current input migration failure: %s: %w", context, err)
 	}
-	bindings, err := decodeMigrationInputBindings(bindingsJSON)
+	bindings, err := decodeLegacyMigrationInputBindings(bindingsJSON)
 	if err != nil {
 		return nil, fmt.Errorf("current input migration failure: %s: %w", context, err)
 	}
@@ -983,12 +991,16 @@ func migrationCurrentInputValues(_ *sqlitedriver.FunctionContext, args []driver.
 	return string(encoded), nil
 }
 
-func decodeMigrationInputBindings(raw string) ([]workflow.InputBinding, error) {
-	var bindings []workflow.InputBinding
-	if err := json.Unmarshal([]byte(raw), &bindings); err != nil {
+func decodeLegacyMigrationInputBindings(raw string) ([]workflow.InputBinding, error) {
+	bindings := []workflow.InputBinding{}
+	if err := json.Unmarshal([]byte(raw), &bindings); err == nil {
+		return bindings, nil
+	}
+	legacyEmpty := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &legacyEmpty); err != nil {
 		return nil, fmt.Errorf("decode input bindings: %w", err)
 	}
-	if bindings == nil {
+	if len(legacyEmpty) != 0 {
 		return nil, errors.New("input bindings must be an array")
 	}
 	return bindings, nil

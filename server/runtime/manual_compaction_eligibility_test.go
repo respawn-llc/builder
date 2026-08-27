@@ -1,8 +1,6 @@
 package runtime
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"core/server/llm"
@@ -29,9 +27,13 @@ func TestManualCompactionRequiresToolCallSinceLatestCompaction(t *testing.T) {
 	})
 	engine.compactionRuntimeState().SetManualCompactionEligible(false)
 
-	err := engine.CompactContext(context.Background(), "")
-	if !errors.Is(err, ErrManualCompactionTooSoon) {
-		t.Fatalf("fresh-session compaction error = %v, want too-soon", err)
+	var events []Event
+	engine.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	scheduleManualCompactionAndWait(t, engine)
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("fresh-session compaction events = %+v, want failed event", events)
 	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -55,9 +57,7 @@ func TestManualCompactionAcceptsAfterAgentStepBoundary(t *testing.T) {
 	})
 	completeManualEligibilityAgentStep(t, engine)
 
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compaction after editing tool call: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 	client.mu.Lock()
 	if len(client.calls) != 1 {
 		client.mu.Unlock()

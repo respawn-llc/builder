@@ -25,7 +25,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -37,7 +37,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- eng.AppendCommittedEntry("system", "first")
+		firstDone <- eng.AppendCommittedEntry(t.Context(), "system", "first")
 	}()
 	select {
 	case <-firstEntered:
@@ -47,7 +47,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- eng.AppendCommittedEntry("system", "second")
+		secondDone <- eng.AppendCommittedEntry(t.Context(), "system", "second")
 	}()
 	select {
 	case err := <-secondDone:
@@ -88,7 +88,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -97,12 +97,15 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 		},
 	})
 	eng.ensureOrchestrationCollaborators()
+	stepID := runtimeTestStepID("cache-step")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
 
 	cachePersistEntered, releaseCachePersist := gate.BlockNext()
 
 	cacheDone := make(chan error, 1)
 	go func() {
-		cacheDone <- eng.observePromptCacheResponse("cache-step", preparedCacheRequestObservation{
+		cacheDone <- eng.observePromptCacheResponse(stepID, preparedCacheRequestObservation{
 			request: persistedCacheRequestObserved{
 				DigestVersion: requestCacheDigestVersion,
 				CacheKey:      "session-1/cache-key",
@@ -125,7 +128,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 
 	appendDone := make(chan error, 1)
 	go func() {
-		appendDone <- eng.AppendCommittedEntry("system", "feedback")
+		appendDone <- eng.AppendCommittedEntry(t.Context(), "system", "feedback")
 	}()
 	select {
 	case err := <-appendDone:
@@ -169,12 +172,15 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
 
-	if err := eng.observePromptCacheResponse("step-1", preparedCacheRequestObservation{
+	if err := eng.observePromptCacheResponse(stepID, preparedCacheRequestObservation{
 		request: persistedCacheRequestObserved{
 			DigestVersion: requestCacheDigestVersion,
 			CacheKey:      "session-1/cache-key",
@@ -200,12 +206,12 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 			{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ps"}`)},
 		},
 	}
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistant})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistant})); err != nil {
 		t.Fatalf("persist assistant message: %v", err)
 	}
 	assistantEntries := VisibleChatEntriesFromMessage(assistant)
 	assistantStart := eng.CommittedTranscriptEntryCount() - len(assistantEntries)
-	if err := eng.steer("step-1", steerCommittedAssistantMessageIntent(assistant, &committedAssistantCoordinate{start: assistantStart})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerCommittedAssistantMessageIntent(assistant, &committedAssistantCoordinate{start: assistantStart})); err != nil {
 		t.Fatalf("publish assistant message: %v", err)
 	}
 
@@ -248,7 +254,7 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 	replacementEventEntered := make(chan struct{})
 	releaseReplacementEvent := make(chan struct{})
 	var replacementOnce sync.Once
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			if evt.Kind == EventLocalEntryAdded && evt.LocalEntry != nil && evt.LocalEntry.Text == "summary" {
@@ -257,10 +263,13 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 			}
 		},
 	})
+	stepID := runtimeTestStepID("compact-step")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
 
 	replaceDone := make(chan error, 1)
 	go func() {
-		_, err := newCompactionPersistence(eng).replaceHistory("compact-step", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
+		_, err := newCompactionPersistence(eng).replaceHistory(stepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
 			Role:        llm.RoleDeveloper,
 			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
 			Content:     textutil.Value("summary"),
@@ -275,7 +284,7 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 
 	appendDone := make(chan error, 1)
 	go func() {
-		appendDone <- eng.AppendCommittedEntry("system", "feedback")
+		appendDone <- eng.AppendCommittedEntry(t.Context(), "system", "feedback")
 	}()
 	select {
 	case err := <-appendDone:
@@ -304,18 +313,21 @@ func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T)
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
 
 	call := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
 		t.Fatalf("append assistant message: %v", err)
 	}
 	result := tools.Result{CallID: call.ID, Name: toolspec.ToolExecCommand, Output: json.RawMessage(`{"output":"/tmp","exit_code":0,"truncated":false}`)}
-	if err := eng.steer("step-1", steerToolCompletionIntent(result)); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerToolCompletionIntent(result)); err != nil {
 		t.Fatalf("persist tool completion: %v", err)
 	}
 
 	start := len(events)
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(call.ID), Name: textutil.Value(string(result.Name)), Content: textutil.Value(string(result.Output))}})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(call.ID), Name: textutil.Value(string(result.Name)), Content: textutil.Value(string(result.Output))}})); err != nil {
 		t.Fatalf("append tool mirror message: %v", err)
 	}
 	if got := events[start:]; len(got) != 0 {
@@ -327,10 +339,12 @@ func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *te
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 
 	toolMessage := llm.Message{
 		Role:       llm.RoleTool,
@@ -338,10 +352,10 @@ func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *te
 		Name:       textutil.Value(string(toolspec.ToolExecCommand)),
 		Content:    textutil.Value(string(mustJSON(map[string]any{"output": "done", "exit_code": 0, "truncated": false}))),
 	}
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{toolMessage})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{toolMessage})); err != nil {
 		t.Fatalf("append visible tool message: %v", err)
 	}
-	if err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{Role: "system", Text: "local note"})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerLocalEntryIntent(storedLocalEntry{Role: "system", Text: "local note"})); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
 
@@ -374,13 +388,16 @@ func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
 	executor := defaultStepExecutor{
 		engine: eng,
 	}
 
 	_, _, err := executor.materializeFinalAnswerToolCalls(
 		context.Background(),
-		"step-1",
+		stepID,
 		acceptedResponseCalls{
 			local: []llm.ToolCall{{
 				ID:    "call-1",
@@ -392,11 +409,12 @@ func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry
 				index:  0,
 			}},
 		},
+		stepLoopOptions{},
 	)
 	if err != nil {
 		t.Fatalf("materialize final-answer tool calls: %v", err)
 	}
-	if err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{Role: "reasoning", Text: "local note"})); err != nil {
+	if err := eng.steer(runtimeTestStepID("step-1"), steerLocalEntryIntent(storedLocalEntry{Role: "reasoning", Text: "local note"})); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
 
@@ -439,11 +457,10 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 
-	if err := withActiveTestRun(t, eng, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, err := eng.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
-		return err
-	}); err != nil {
+	if _, err := eng.runStepLoopWithOptions(context.Background(), runtimeTestStepID("step-1"), "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -500,11 +517,10 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 
-	if err := withActiveTestRun(t, eng, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, err := eng.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
-		return err
-	}); err != nil {
+	if _, err := eng.runStepLoopWithOptions(context.Background(), runtimeTestStepID("step-1"), "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -566,7 +582,7 @@ func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *test
 		t.Fatalf("append message after provider-empty assistant: %v", err)
 	}
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	var hydration TranscriptHydrationSnapshot
 	if err := eng.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
 		hydration = snapshot
@@ -577,12 +593,14 @@ func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *test
 	if len(hydration.CommittedRows) != 2 {
 		t.Fatalf("hydrated rows = %+v, want only messages surrounding provider-empty assistant", hydration.CommittedRows)
 	}
-	if hydration.CommittedRows[0].StepID != beforeStepID ||
+	if hydration.CommittedRows[0].StepID == nil ||
+		*hydration.CommittedRows[0].StepID != beforeStepID ||
 		hydration.CommittedRows[0].User == nil ||
 		hydration.CommittedRows[0].User.Text != "before" {
 		t.Fatalf("hydrated row before provider-empty assistant = %+v", hydration.CommittedRows[0])
 	}
-	if hydration.CommittedRows[1].StepID != afterStepID ||
+	if hydration.CommittedRows[1].StepID == nil ||
+		*hydration.CommittedRows[1].StepID != afterStepID ||
 		hydration.CommittedRows[1].User == nil ||
 		hydration.CommittedRows[1].User.Text != "after" {
 		t.Fatalf("hydrated row after provider-empty assistant = %+v", hydration.CommittedRows[1])
@@ -593,17 +611,20 @@ func TestHistoryReplacementPublishesCompactionPreservedUserMessageBeforeLocalEnt
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	compactionStepID := runtimeTestStepID("compact-step")
+	restoreStep := setTestActiveStep(eng, compactionStepID)
+	defer restoreStep()
 
 	carryover, ok := compactionPreservedUserMessage("keep the active requirement")
 	if !ok {
 		t.Fatal("expected non-empty compaction-preserved user message")
 	}
 	receipt, err := newCompactionPersistence(eng).replaceHistory(
-		"compact-step",
+		compactionStepID,
 		"local",
 		compactionModeManual,
 		llm.ItemsFromMessages([]llm.Message{
@@ -614,7 +635,7 @@ func TestHistoryReplacementPublishesCompactionPreservedUserMessageBeforeLocalEnt
 	if err != nil || !receipt.Committed {
 		t.Fatalf("replace history receipt=%+v error=%v", receipt, err)
 	}
-	if err := eng.steer("compact-step", steerLocalEntryIntent(storedLocalEntry{Role: "compaction_summary", Text: "summary"})); err != nil {
+	if err := eng.steer(compactionStepID, steerLocalEntryIntent(storedLocalEntry{Role: "compaction_summary", Text: "summary"})); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
 

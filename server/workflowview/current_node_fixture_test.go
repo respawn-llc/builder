@@ -17,6 +17,7 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -38,7 +39,7 @@ type currentNodeViewFixture struct {
 	agentNodeID       workflow.NodeID
 	authority         *sessionruntime.Authority
 	dependencyCounter *TaskDependencyCounter
-	quiescence        *currentNodeViewQuiescence
+	quiescence        *currentNodeViewStatusObservationSource
 	projection        *TaskStatusProjection
 	board             *Board
 	detail            *TaskDetail
@@ -48,12 +49,8 @@ type currentNodeViewFixture struct {
 }
 
 type currentNodeViewStatusObservationSource struct {
-	authority  *sessionruntime.Authority
-	quiescence currentNodeViewQuiescenceSource
-}
-
-type currentNodeViewQuiescenceSource interface {
-	CurrentTaskQuiescence([]workflow.TaskID) (map[workflow.TaskID]bool, error)
+	authority *sessionruntime.Authority
+	blocked   map[workflow.TaskID]bool
 }
 
 func (s currentNodeViewStatusObservationSource) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
@@ -61,9 +58,9 @@ func (s currentNodeViewStatusObservationSource) ObserveWorkflowTaskExecutions(ta
 	if err != nil {
 		return workflowexecution.WorkflowTaskExecutionObservation{}, err
 	}
-	quiescence, err := s.quiescence.CurrentTaskQuiescence(taskIDs)
-	if err != nil {
-		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	quiescence := make(map[workflow.TaskID]bool, len(taskIDs))
+	for _, taskID := range taskIDs {
+		quiescence[taskID] = !s.blocked[taskID]
 	}
 	return workflowexecution.WorkflowTaskExecutionObservation{
 		Executions: executions,
@@ -142,7 +139,10 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		PersistenceRoot: cfg.PersistenceRoot,
 		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
 	})
-	quiescence := &currentNodeViewQuiescence{blocked: map[workflow.TaskID]bool{}}
+	quiescence := &currentNodeViewStatusObservationSource{
+		authority: authority,
+		blocked:   map[workflow.TaskID]bool{},
+	}
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
 			t.Errorf("close fixture authority: %v", err)
@@ -150,13 +150,9 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 	})
 	projector := NewTaskProjector()
 	projection, err := NewTaskStatusProjection(
-		metadataStore,
 		store,
 		projector,
-		currentNodeViewStatusObservationSource{
-			authority:  authority,
-			quiescence: quiescence,
-		},
+		quiescence,
 	)
 	if err != nil {
 		t.Fatalf("NewTaskStatusProjection: %v", err)
@@ -207,18 +203,6 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		search:            search,
 		activity:          activity,
 	}
-}
-
-type currentNodeViewQuiescence struct {
-	blocked map[workflow.TaskID]bool
-}
-
-func (q *currentNodeViewQuiescence) CurrentTaskQuiescence(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {
-	result := make(map[workflow.TaskID]bool, len(taskIDs))
-	for _, taskID := range taskIDs {
-		result[taskID] = !q.blocked[taskID]
-	}
-	return result, nil
 }
 
 func (f currentNodeViewFixture) startTask(t *testing.T, title string) startedCurrentNodeViewTask {
@@ -361,11 +345,8 @@ func (f currentNodeViewFixture) setCurrentNodeInterruptedAt(
 	unixMs int64,
 ) {
 	t.Helper()
-	nodeID, err := runtimeids.GraphEntityIDBlob(string(reference.NodeID))
-	if err != nil {
-		t.Fatalf("encode Current Node ID: %v", err)
-	}
 	branchKey, branchScoped := reference.TransitionBranchKey()
+	var err error
 	if branchScoped {
 		_, err = f.metadata.DB().ExecContext(
 			f.ctx,
@@ -374,7 +355,7 @@ SET interrupted_at_unix_ms = ?
 WHERE task_id = ? AND node_id = ? AND transition_branch_key = ?`,
 			unixMs,
 			string(reference.TaskID),
-			nodeID,
+			string(reference.NodeID),
 			string(branchKey),
 		)
 	} else {
@@ -385,7 +366,7 @@ SET interrupted_at_unix_ms = ?
 WHERE task_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
 			unixMs,
 			string(reference.TaskID),
-			nodeID,
+			string(reference.NodeID),
 		)
 	}
 	if err != nil {
@@ -427,20 +408,24 @@ func (f currentNodeViewFixture) startCurrentNodePrompt(
 	t.Helper()
 	authority, plan := f.newAgentAuthority(t)
 	sessionID := f.bindCurrentNodeSession(t, started)
-	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+	workflowRef := sessionruntime.WorkflowExecutionRef{
 		ProjectID:   f.binding.ProjectID,
 		WorkflowID:  f.workflowID,
 		CurrentNode: started.currentNode,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}
-	lease.Release()
 	handle, err := authority.StartAgentExecution(f.ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: mustOpenCurrentNodeViewSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   &lease,
-		Resource:   sessionruntime.OpenAgentResource{},
+		Workflow: &sessionruntime.WorkflowAgentExecution{
+			Reference: workflowRef,
+			Config: &workflowruntime.CurrentNodeExecutionConfig{
+				Instructions: workflowruntime.TaskInstructions{
+					CurrentNode: workflowRef.CurrentNode,
+					WorkflowID:  workflowRef.WorkflowID,
+				},
+			},
+		},
+		Resource: sessionruntime.OpenAgentResource{},
 		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
 			_, awaitErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
 			return awaitErr
@@ -558,6 +543,8 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 	agentNodeID := workflow.NodeID(runtimeids.NewGraphEntityID())
 	startGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	doneGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	startEdgeID := workflow.EdgeID(runtimeids.NewGraphEntityID())
+	doneEdgeID := workflow.EdgeID(runtimeids.NewGraphEntityID())
 	workflowfixture.SaveStoreGraph(t, t.Context(), store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindStart)
 		terminalNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
@@ -571,14 +558,14 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 		)
 		request.Edges = append(request.Edges,
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
+				ID: startEdgeID, WorkflowID: created.ID,
 				TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentNodeID,
 				AssigneeSelection: workflow.AssigneeSelectionConfigured,
 				ThinkingSelection: workflow.ThinkingSelectionConfigured,
 				ContextMode:       workflow.ContextModeNewSession, PromptTemplate: "Do work.",
 			},
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
+				ID: doneEdgeID, WorkflowID: created.ID,
 				TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalNodeID,
 				AssigneeSelection: workflow.AssigneeSelectionConfigured,
 				ThinkingSelection: workflow.ThinkingSelectionConfigured,
@@ -674,7 +661,7 @@ func mustOpenCurrentNodeViewSessionDescriptor(t *testing.T, sessionID runtimeids
 
 type currentNodeViewLLMClient struct{}
 
-func (currentNodeViewLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (currentNodeViewLLMClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 

@@ -15,7 +15,6 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
-	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -34,7 +33,6 @@ type AgentRuntimePlanOptions struct {
 	Client                              llm.Client
 	ClientFactory                       runtimewire.RuntimeClientFactory
 	ReviewerClientFactory               runtimewire.RuntimeClientFactory
-	CurrentNodeExecution                *workflowruntime.CurrentNodeExecutionConfig
 	AskQuestionBatchSkipped             func(tools.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
@@ -43,6 +41,7 @@ type AgentRuntimePlanOptions struct {
 	OnLoggingFailure                    func(string)
 	StartLogLines                       []string
 	RecoveredWarningProvider            func() (string, bool, error)
+	AgentSelection                      *session.ChatAgentSelection
 }
 
 type AgentRuntimePlan struct {
@@ -69,6 +68,10 @@ func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, err
 	options.FilesystemContext = options.FilesystemContext.Clone()
 	options.QuestionsEnabled = textutil.Pointer(options.QuestionsEnabled)
 	options.AutoCompactionEnabled = textutil.Pointer(options.AutoCompactionEnabled)
+	if options.AgentSelection != nil {
+		selection := *options.AgentSelection
+		options.AgentSelection = &selection
+	}
 	if options.ProviderCapabilitiesOverride != nil {
 		value := *options.ProviderCapabilitiesOverride
 		options.ProviderCapabilitiesOverride = &value
@@ -81,7 +84,7 @@ func cloneAgentRuntimeSettings(settings config.Settings) config.Settings {
 	cloned.SystemPromptFiles = append([]config.SystemPromptFile(nil), settings.SystemPromptFiles...)
 	cloned.EnabledTools = maps.Clone(settings.EnabledTools)
 	cloned.SkillToggles = maps.Clone(settings.SkillToggles)
-	cloned.Shell.PostprocessHook = textutil.Pointer(settings.Shell.PostprocessHook)
+	cloned.Shell.PostprocessHook = cloneStringPointer(settings.Shell.PostprocessHook)
 	if settings.Subagents != nil {
 		cloned.Subagents = make(map[string]config.SubagentRole, len(settings.Subagents))
 		for name, role := range settings.Subagents {
@@ -94,7 +97,16 @@ func cloneAgentRuntimeSettings(settings config.Settings) config.Settings {
 	return cloned
 }
 
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
 type authorityRuntimeOptions struct {
+	debug             bool
 	persistenceRoot   string
 	authManager       *auth.Manager
 	background        *shelltool.Manager
@@ -111,6 +123,7 @@ type runtimeStoreAdmission struct {
 
 func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOptions {
 	return authorityRuntimeOptions{
+		debug:             options.Debug,
 		persistenceRoot:   options.PersistenceRoot,
 		authManager:       options.AuthManager,
 		background:        options.Background,
@@ -158,6 +171,9 @@ func (a *Authority) buildAgentResource(
 	}
 	if plan == nil {
 		return nil, errors.New("agent runtime plan is required")
+	}
+	if _, err := applyAgentSelection(store, plan.options.AgentSelection); err != nil {
+		return nil, err
 	}
 	if err := appendRecoveredWarning(store, plan.options.RecoveredWarningProvider); err != nil {
 		return nil, err
@@ -242,7 +258,6 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		Client:                              options.Client,
 		ClientFactory:                       options.ClientFactory,
 		ReviewerClientFactory:               options.ReviewerClientFactory,
-		CurrentNodeExecution:                options.CurrentNodeExecution,
 		AskQuestionBatchSkipped:             options.AskQuestionBatchSkipped,
 		PromptFacingSnapshotReloader:        options.PromptFacingSnapshotReloader,
 		ProviderCapabilitiesOverride:        options.ProviderCapabilitiesOverride,

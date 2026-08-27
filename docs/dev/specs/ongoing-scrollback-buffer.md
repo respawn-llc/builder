@@ -25,7 +25,7 @@
 - Ongoing Mode consumes one ordered, sequence-numbered transcript subscription. Opening the subscription delivers hydration first. Every later received event has the next per-subscription sequence number. Each event is complete and committed assistant entries identify the Streaming Message that they finalize.
 - Each received event has one outcome: render it now, hold it in arrival order while another surface owns the terminal, start Scratch Rehydration after a sequence gap, or surface a developer error.
 - No other outcome exists. A received event must never be skipped, dropped, deduplicated, merged with another event, reordered relative to arrival order, partially applied, or held back to await a matching or confirming event.
-- A prompt admitted concurrently with Session resource draining may be absent from the closing subscription; Scratch Rehydration reloads authoritative prompt state after reopening.
+- A prompt admitted concurrently with Session resource draining may be absent from the closing subscription; Scratch Rehydration reissues the pending-prompt read after reopening.
 - Committed tool lines join the open group in server emission order. There is no client-side reordering or frontier between parallel tool calls. Visual grouping follows the Grouping And Separators section and never changes arrival order.
 - During live operation the client must not issue transcript reads of any kind: no page requests, tail requests, gap fills, refreshes, recovery reads, or committed-advance re-reads. The ongoing surface reads from the server through exactly one mechanism: opening the subscription, which is also the scratch-rehydration mechanism. Detail-mode history paging is a separate surface and is not available to ongoing rendering.
 
@@ -52,6 +52,7 @@
 ## Assistant Streaming
 
 - Streaming Markdown uses the complete assistant source received so far. The width-aware volatile tail remains in the Mutable Band. Closed blocks that cannot change become stable Logical Lines and promote into the Immutable Area.
+- Streaming, committed emission, and hydration preserve every received character of assistant commentary and final output. Terminal wrapping and stable Markdown promotion may change row boundaries, but they never replace, truncate, ellipsize, or omit assistant source content.
 - Markdown Promotion accounts for constructs that can restyle or reflow preceding rows. The active source line and any open construct whose visible rows can change remain volatile until Kent proves them stable; a table can wait for its closing row.
 - Promotion is monotonic. The promotion boundary never moves backward past rows already appended to the immutable area. If re-rendering the source would change an already-promoted row, that is a developer error, not a trigger to rewrite, restyle, or re-emit.
 - Stable prose contains no line breaks generated from terminal width. Markdown soft line breaks flow as spaces; authored hard breaks and authored preformatted line boundaries remain logical line boundaries. GFM tables are the width-formatted Markdown exception and use the terminal width at promotion.
@@ -99,7 +100,7 @@
   - A large paste filled the screen.
 - Outside the exhaustive trigger list, a bug is never resolved by re-emitting committed state, in any code path, under any severity.
 - Rehydration erases only the Mutable Band, reopens the Session, and appends the received active segment below existing Scrollback. It never clears Scrollback, changes emitted content, or compares the received segment with existing terminal output. Duplicate-looking output after rehydration is acceptable.
-- Only the operator's local input and navigation state survives rehydration. Kent reloads fresh server-authoritative transcript, RuntimeActivity, Session identity and status, execution target, active execution, reasoning, Reviewer, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state from the reopened Session. A runtime transport failure keeps the TUI open under the connection-loss contract while Kent retries reopening the subscription. Any other rehydration failure exits the TUI with a clear error; it does not fabricate empty state or continue with stale state.
+- Only the operator's local input and navigation state survives rehydration. Kent reopens the ordered transcript subscription and independently reloads the latest completed server-owned projections for RuntimeActivity, Session identity and status, execution target, active execution, reasoning, Reviewer, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state. Those non-transcript projections may be stale or represent different completed moments. A runtime transport failure keeps the TUI open under the connection-loss contract while Kent retries reopening the subscription. Any other rehydration failure exits the TUI with a clear error; it does not fabricate empty state.
 
 ## Errors
 

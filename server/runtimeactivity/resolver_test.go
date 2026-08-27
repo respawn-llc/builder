@@ -74,10 +74,7 @@ func TestResolveRuntimeActivityCopiesEveryRuntimeOwnedActiveKind(t *testing.T) {
 		clientui.RuntimeActivityActiveKindWorkflowTurn,
 		clientui.RuntimeActivityActiveKindGoalLoop,
 		clientui.RuntimeActivityActiveKindCompaction,
-		clientui.RuntimeActivityActiveKindPreSubmitCompaction,
-		clientui.RuntimeActivityActiveKindUserShell,
 		clientui.RuntimeActivityActiveKindBackground,
-		clientui.RuntimeActivityActiveKindRuntimeMaintenance,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			activity, err := ResolveRuntimeActivity(ResolverSnapshot{
@@ -147,28 +144,24 @@ func TestResolveRuntimeActivityTreatsOpenLiveRunGroupAsBlocking(t *testing.T) {
 	}
 }
 
-func TestCoordinatorSnapshotsPermitResponseOnlyVersionHoles(t *testing.T) {
-	cache := NewCoordinatorCache(4)
-	first, err := cache.Snapshot("session-1", ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
+func TestReadModelVersionsPermitSequenceHoles(t *testing.T) {
+	first, err := BuildFeedSnapshot(NextReadModelVersion("sequence-holes"), ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
 	if err != nil {
 		t.Fatalf("first snapshot: %v", err)
 	}
-	hole := cache.Next("session-1")
-	second, err := cache.Snapshot("session-1", ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
+	hole := NextReadModelVersion("sequence-holes")
+	second, err := BuildFeedSnapshot(NextReadModelVersion("sequence-holes"), ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})
 	if err != nil {
 		t.Fatalf("second snapshot: %v", err)
 	}
 	if !hole.NewerThan(first.Version) || !second.Version.NewerThan(hole) {
-		t.Fatalf("versions did not preserve response-only hole ordering: first=%+v hole=%+v second=%+v", first.Version, hole, second.Version)
+		t.Fatalf("versions did not preserve hole ordering: first=%+v hole=%+v second=%+v", first.Version, hole, second.Version)
 	}
 }
 
-func TestCoordinatorBuildsCanonicalFeedSnapshot(t *testing.T) {
-	cache := NewCoordinatorCache(4)
-	update, err := cache.WithFeedSnapshot("session-feed", func() (ResolverSnapshot, error) {
-		return ResolverSnapshot{
-			Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
-		}, nil
+func TestReadModelVersionBuildsCanonicalFeedSnapshot(t *testing.T) {
+	update, err := BuildFeedSnapshot(NextReadModelVersion("canonical-feed"), ResolverSnapshot{
+		Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
 	})
 	if err != nil {
 		t.Fatalf("build canonical feed snapshot: %v", err)
@@ -178,25 +171,6 @@ func TestCoordinatorBuildsCanonicalFeedSnapshot(t *testing.T) {
 	}
 	if update.Activity.State != clientui.RuntimeActivityRegisteredIdle || !update.Activity.QueueAccepting {
 		t.Fatalf("canonical activity = %+v", update.Activity)
-	}
-}
-
-func TestCoordinatorCacheEvictsDormantSessionsWithGenerationRollover(t *testing.T) {
-	cache := NewCoordinatorCache(1)
-	first := cache.Next("session-1")
-	_ = cache.Next("session-2")
-	second := cache.Next("session-1")
-	if first.Epoch != second.Epoch {
-		t.Fatalf("same cache epoch changed: first=%+v second=%+v", first, second)
-	}
-	if second.Generation == first.Generation {
-		t.Fatalf("recreated coordinator must receive a new generation, first=%+v second=%+v", first, second)
-	}
-	if cache.IsCurrent("session-1", first) {
-		t.Fatalf("old generation event must be rejected after eviction/recreate")
-	}
-	if !cache.IsCurrent("session-1", second) {
-		t.Fatalf("current generation event was rejected: %+v", second)
 	}
 }
 

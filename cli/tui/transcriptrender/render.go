@@ -61,7 +61,7 @@ func renderCommittedRow(
 			Group: clientui.TranscriptRowUser,
 			Lines: renderUserAssistantTextBlock(
 				StyleRoleUser,
-				userAssistantDisplayText(row.User.Text, optionalString(row.User.CondensedText), mode),
+				row.User.Text,
 				width,
 				mode,
 				linkPresentation,
@@ -72,7 +72,7 @@ func renderCommittedRow(
 			Group: clientui.TranscriptRowAssistant,
 			Lines: renderUserAssistantTextBlock(
 				StyleRoleAssistant,
-				userAssistantDisplayText(row.Assistant.Text, optionalString(row.Assistant.CondensedText), mode),
+				row.Assistant.Text,
 				width,
 				mode,
 				linkPresentation,
@@ -166,20 +166,6 @@ func reviewerFeedbackText(suggestions []string) string {
 	return text.String()
 }
 
-// userAssistantDisplayText selects compact vs full source for user/assistant
-// rows. Normal ongoing and collapsed detail prefer the server-provided
-// CondensedText when present. Stable ongoing and detail-expanded rendering use
-// the full Markdown source.
-func userAssistantDisplayText(text, condensed string, mode Mode) string {
-	if modeUsesFullUserAssistantText(mode) {
-		return text
-	}
-	if compact := strings.TrimSpace(condensed); compact != "" {
-		return compact
-	}
-	return text
-}
-
 func optionalString(value *string) string {
 	if value == nil {
 		return ""
@@ -214,33 +200,6 @@ func renderUserAssistantTextBlock(
 			),
 			width,
 			false,
-			mode,
-			toolMeta{},
-		)
-	}
-	if modeUsesCompactTextBlock(mode) {
-		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
-			lines := RenderMarkdownLinesWithLinkPresentation(
-				role,
-				text,
-				contentWidth(role, width),
-				linkPresentation,
-			)
-			if len(lines) > 3 {
-				lines = lines[:3]
-			}
-			return attachPrefixWithMeta(role, lines, width, false, mode, toolMeta{})
-		}
-		return attachPrefixWithMeta(
-			role,
-			RenderMarkdownLinesWithLinkPresentation(
-				role,
-				firstDisplayLine(text),
-				contentWidth(role, width),
-				linkPresentation,
-			),
-			width,
-			len(strings.Split(text, "\n")) > 1,
 			mode,
 			toolMeta{},
 		)
@@ -969,14 +928,6 @@ func cacheWarningNoticeText(data *clientui.TranscriptCacheWarning) string {
 		Reason:          transcript.CacheWarningReason(strings.TrimSpace(data.Reason)),
 		LostInputTokens: data.LostInputTokens,
 	})
-}
-
-func roleAllowsThreeLinePreview(role StyleRole) bool {
-	return role == StyleRoleUser || role == StyleRoleAssistant
-}
-
-func modeUsesFullUserAssistantText(mode Mode) bool {
-	return mode == ModeOngoingFull || mode == ModeOngoingStable || mode == ModeDetailExpanded
 }
 
 func modeUsesCompactTextBlock(mode Mode) bool {

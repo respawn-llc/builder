@@ -2,6 +2,7 @@ package workflowstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"slices"
 	"sync"
@@ -268,7 +269,7 @@ WHERE approval_id = ?`,
 		}
 		policyImpact, err := store.queries.GetWorkflowEdgeParameterEditPolicyImpact(ctx, sqlitegen.GetWorkflowEdgeParameterEditPolicyImpactParams{
 			WorkflowID: workflowID,
-			EdgeID:     string(approvalEdge.ID),
+			EdgeID:     sql.NullString{String: string(approvalEdge.ID), Valid: true},
 		})
 		if err != nil {
 			t.Fatalf("%s GetWorkflowEdgeParameterEditPolicyImpact: %v", label, err)
@@ -1066,7 +1067,7 @@ func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
 	if taskOwner == nil || *taskOwner != task.ID {
 		t.Fatalf("retained Session owner = %v, want Task %q", taskOwner, task.ID)
 	}
-	association, err := store.CurrentTaskSessionForNode(ctx, agentReference)
+	association, err := store.LatestTaskSessionForNode(ctx, agentReference)
 	if err != nil {
 		t.Fatalf("CurrentTaskSessionForNode after node removal: %v", err)
 	}

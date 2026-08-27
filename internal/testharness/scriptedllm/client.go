@@ -53,27 +53,12 @@ func NewClient(script Script) *Client {
 	}
 }
 
-func (c *Client) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
-	outcome, err := c.GenerateWithOutcome(ctx, req)
+func (c *Client) Generate(ctx context.Context, req llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
+	outcome, err := c.GenerateOutcome(ctx, req, callbacks)
 	return outcome.Response, err
 }
 
-func (c *Client) GenerateWithOutcome(ctx context.Context, req llm.Request) (GenerationOutcome, error) {
-	step, finish, err := c.nextStep(req)
-	if err != nil {
-		return GenerationOutcome{Admission: RequestNotAdmitted}, err
-	}
-	defer finish()
-	response, err := c.completeStep(ctx, req, step, nil)
-	return GenerationOutcome{Response: response, Admission: RequestAdmitted}, err
-}
-
-func (c *Client) GenerateStreamWithEvents(ctx context.Context, req llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
-	outcome, err := c.GenerateStreamWithEventsOutcome(ctx, req, callbacks)
-	return outcome.Response, err
-}
-
-func (c *Client) GenerateStreamWithEventsOutcome(
+func (c *Client) GenerateOutcome(
 	ctx context.Context,
 	req llm.Request,
 	callbacks llm.StreamCallbacks,
@@ -240,7 +225,6 @@ func validateExpectedToolResults(req llm.Request, expected []ExpectedToolResult)
 }
 
 var _ llm.Client = (*Client)(nil)
-var _ llm.StreamEventsClient = (*Client)(nil)
 var _ llm.CompactionClient = (*Client)(nil)
 var _ llm.ProviderCapabilitiesClient = (*Client)(nil)
 var _ llm.ModelContextWindowClient = (*Client)(nil)
