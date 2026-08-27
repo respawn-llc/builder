@@ -28,7 +28,7 @@ func TestNewManagerRejectsNilPostprocessor(t *testing.T) {
 func TestExecCommandSanitizesAnsiInDefaultProcessing(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 
 	result := callExecCommand(t, execTool, "ansi-sanitized", map[string]any{
 		"cmd":           "printf '\\033[31mred\\033[0m\\rblue\\007'",
@@ -48,7 +48,7 @@ func TestExecCommandSanitizesAnsiInDefaultProcessing(t *testing.T) {
 func TestExecCommandRawPreservesAnsi(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 
 	result := callExecCommand(t, execTool, "ansi-raw", map[string]any{
 		"cmd":           "printf '\\033[31mred\\033[0m'",
@@ -77,7 +77,7 @@ func TestExecCommandPostprocessingNonePreservesAnsi(t *testing.T) {
 		t.Fatalf("new manager: %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 
 	result := callExecCommand(t, execTool, "ansi-none", map[string]any{
 		"cmd":           "printf '\\033[31mred\\033[0m'",
@@ -97,8 +97,8 @@ func TestExecCommandPostprocessingNonePreservesAnsi(t *testing.T) {
 func TestRawBackgroundOutputPathsPreserveAnsi(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	stdinTool := NewWriteStdinTool(16_000, manager)
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
+	stdinTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	result := callExecCommand(t, execTool, "raw-bg", map[string]any{
 		"cmd":           "printf '\\033[31mhello\\033[0m\\n'; sleep 0.3; printf '\\033[32mdone\\033[0m'",

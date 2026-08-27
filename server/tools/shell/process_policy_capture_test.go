@@ -26,7 +26,7 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 		}
 		return true
 	})
-	tool := NewExecCommandToolWithConfig(workspace, 16_000, manager, "owner", ExecCommandToolConfig{
+	tool := NewExecCommandToolWithConfig(workspace, 16_000, 200_000, manager, "owner", ExecCommandToolConfig{
 		Postprocessor:        replacementRunner(t, "RUNTIME"),
 		ExecutionCorrelation: &correlation,
 	})
@@ -67,7 +67,7 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 	if err != nil {
 		t.Fatalf("background process ID: %v", err)
 	}
-	stdinTool := NewWriteStdinTool(16_000, manager)
+	stdinTool := NewWriteStdinTool(16_000, 200_000, manager)
 	completed := callWriteStdin(t, stdinTool, "correlated-release", map[string]any{
 		"session_id":    processID,
 		"chars":         "release\n",
@@ -106,7 +106,7 @@ func TestExecCommandUsesRuntimeBoundPolicyForForegroundCompletion(t *testing.T) 
 	noneRunner := mustPostprocessRunner(t, postprocess.Settings{Mode: config.ShellPostprocessingModeNone})
 	runtimeRunner := replacementRunner(t, "RUNTIME")
 
-	noneTool := NewExecCommandToolWithPostprocessor(workspace, 16_000, manager, "none-owner", noneRunner)
+	noneTool := NewExecCommandToolWithPostprocessor(workspace, 16_000, 200_000, manager, "none-owner", noneRunner)
 	noneResult := callExecCommand(t, noneTool, "none-foreground", map[string]any{
 		"cmd":           "printf foreground",
 		"shell":         "/bin/sh",
@@ -120,7 +120,7 @@ func TestExecCommandUsesRuntimeBoundPolicyForForegroundCompletion(t *testing.T) 
 		t.Fatalf("none-mode foreground output = %q, want foreground", got)
 	}
 
-	runtimeTool := NewExecCommandToolWithPostprocessor(workspace, 16_000, manager, "runtime-owner", runtimeRunner)
+	runtimeTool := NewExecCommandToolWithPostprocessor(workspace, 16_000, 200_000, manager, "runtime-owner", runtimeRunner)
 	runtimeResult := callExecCommand(t, runtimeTool, "hook-foreground", map[string]any{
 		"cmd":           "printf foreground",
 		"shell":         "/bin/sh",
@@ -140,9 +140,9 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 	manager := newManagerWithPostprocessor(t, replacementRunner(t, "BOOTSTRAP"))
 	runnerA := replacementRunner(t, "RUNTIME_A")
 	runnerB := replacementRunner(t, "RUNTIME_B")
-	toolA := NewExecCommandToolWithPostprocessor(workspace, 16_000, manager, "owner-a", runnerA)
-	toolB := NewExecCommandToolWithPostprocessor(workspace, 16_000, manager, "owner-b", runnerB)
-	pollTool := NewWriteStdinTool(16_000, manager)
+	toolA := NewExecCommandToolWithPostprocessor(workspace, 16_000, 200_000, manager, "owner-a", runnerA)
+	toolB := NewExecCommandToolWithPostprocessor(workspace, 16_000, 200_000, manager, "owner-b", runnerB)
+	pollTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	startA := callExecCommand(t, toolA, "a-background", map[string]any{
 		"cmd":           "printf early; sleep 0.2; printf late",
@@ -228,8 +228,8 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newManagerWithPostprocessor(t, replacementRunner(t, "BOOTSTRAP"))
-	tool := NewExecCommandToolWithPostprocessor(workspace, 16_000, manager, "raw-owner", replacementRunner(t, "RUNTIME"))
-	pollTool := NewWriteStdinTool(16_000, manager)
+	tool := NewExecCommandToolWithPostprocessor(workspace, 16_000, 200_000, manager, "raw-owner", replacementRunner(t, "RUNTIME"))
+	pollTool := NewWriteStdinTool(16_000, 200_000, manager)
 
 	foreground := callExecCommand(t, tool, "raw-foreground", map[string]any{
 		"cmd":           "printf '\\033[31mforeground\\033[0m'",
@@ -287,9 +287,9 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 func TestSharedManagerKeepsGlobalLifecycleAcrossCapturedPolicies(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newManagerWithPostprocessor(t, replacementRunner(t, "BOOTSTRAP"))
-	toolA := NewExecCommandToolWithPostprocessor(workspace, 16_000, manager, "owner-a", replacementRunner(t, "RUNTIME_A"))
-	toolB := NewExecCommandToolWithPostprocessor(workspace, 16_000, manager, "owner-b", replacementRunner(t, "RUNTIME_B"))
-	pollTool := NewWriteStdinTool(16_000, manager)
+	toolA := NewExecCommandToolWithPostprocessor(workspace, 16_000, 200_000, manager, "owner-a", replacementRunner(t, "RUNTIME_A"))
+	toolB := NewExecCommandToolWithPostprocessor(workspace, 16_000, 200_000, manager, "owner-b", replacementRunner(t, "RUNTIME_B"))
+	pollTool := NewWriteStdinTool(16_000, 200_000, manager)
 	events := make(chan Event, 4)
 	manager.SetEventHandler(func(event Event) bool {
 		if event.Type != EventCompleted && event.Type != EventKilled {

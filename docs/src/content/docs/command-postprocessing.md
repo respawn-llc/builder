@@ -28,6 +28,8 @@ Allowed values:
 
 In `builtin`, `user`, and `all`, Kent's final model-visible command-output pass limits each line to 1,000 Unicode code points; oversized lines keep only their prefix and end with `… [N characters omitted]`, where `N` is exact. This runs after user-hook replacement; `none` bypasses the limit, and Kent operational warnings are not command-output lines.
 
+Kent applies an oversized-output guard when both an explicit `max_output_tokens` request is greater than half the active model context window and the processed model-visible result is estimated above that threshold. The command executes normally and its complete output remains in the shell log, while the model receives a failed tool result that omits command output and identifies the retained log path; each later call is evaluated independently.
+
 ## Protocol
 
 ### Input

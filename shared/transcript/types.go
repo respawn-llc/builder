@@ -132,7 +132,7 @@ func ApplyToolResultPresentationDelta(
 func NormalizeToolCallMeta(in ToolCallMeta) ToolCallMeta {
 	out := in
 	toolID, knownTool := toolspec.ParseID(out.ToolName)
-	knownShellTool := knownTool && (toolID == toolspec.ToolExecCommand || toolID == toolspec.ToolWriteStdin)
+	knownShellTool := knownTool && toolspec.IsShellTool(toolID)
 	if out.Presentation == "" {
 		switch {
 		case out.RenderBehavior == ToolCallRenderBehaviorShell || out.IsShell || knownShellTool:

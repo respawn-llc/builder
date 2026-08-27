@@ -327,7 +327,7 @@ func (f realSessionRetargetFixture) runtimeAvailable(t *testing.T) bool {
 
 type retargetRuntimeClient struct{}
 
-func (retargetRuntimeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (retargetRuntimeClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 

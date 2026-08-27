@@ -528,10 +528,8 @@ func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrende
 		return ongoingRenderMode(row)
 	}
 	switch row.Assistant.Phase {
-	case transcript.AssistantPhaseFinal:
+	case transcript.AssistantPhaseCommentary, transcript.AssistantPhaseFinal:
 		return transcriptrender.ModeOngoingStable
-	case transcript.AssistantPhaseCommentary:
-		return ongoingRenderMode(row)
 	default:
 		panic(fmt.Sprintf("ongoing committed row has unclassified assistant phase %q", row.Assistant.Phase))
 	}

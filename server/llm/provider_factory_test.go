@@ -126,7 +126,7 @@ func TestNewProviderClient_OpenAIClientPathCompressesCodexRequest(t *testing.T) 
 		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
-	}); err != nil {
+	}, StreamCallbacks{}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if requestEncoding != "zstd" {
@@ -169,7 +169,7 @@ func TestNewProviderClient_AuthManagerOAuthPathCompressesCodexRequest(t *testing
 		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
-	}); err != nil {
+	}, StreamCallbacks{}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if requestEncoding != "zstd" {

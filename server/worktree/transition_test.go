@@ -52,7 +52,7 @@ func (o *worktreeStepBoundaryObserver) ObservePersistedStore(
 	return o.err
 }
 
-func (c *worktreeStepBoundaryClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+func (c *worktreeStepBoundaryClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, llm.Request{Items: llm.CloneResponseItems(request.Items)})
 	call := len(c.requests)

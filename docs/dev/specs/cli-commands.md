@@ -448,6 +448,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - Task start, resume, approve, and move never prompt interactively.
 - Selection-required output identifies the reason and concrete rerun flags.
 - Task start exposes the same typed outcome in JSON.
+- `kent task start` reports success only after the server's atomic Start cutover. If the command stops waiting or loses its connection first, the server operation continues; the CLI does not replay it and a later command reads authoritative Task state.
 - `kent task edit <task>` changes a Task's title, body, or source workspace.
 - Task edit requires at least one of `--title`, `--body`, `--body-file`, or `--source-workspace`.
 - Task edit preserves the current title when `--title` is absent.

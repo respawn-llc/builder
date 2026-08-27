@@ -60,7 +60,7 @@ func completedStreamEvent(delay time.Duration) pacedStreamEvent {
 	return pacedStreamEvent{delay: delay, data: `{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done"}]}]}}`}
 }
 
-func TestOAuthGenerateStreamSurvivesConfiguredHTTPClientTimeout(t *testing.T) {
+func TestOAuthGenerateSurvivesConfiguredHTTPClientTimeout(t *testing.T) {
 	transport := newPacedStreamTransport(t, completedStreamEvent(150*time.Millisecond), pacedStreamEvent{data: `[DONE]`})
 	transport.Auth = oauthStaticAuth{}
 	transport.BaseURLExplicit = true
@@ -74,7 +74,7 @@ func TestOAuthGenerateStreamSurvivesConfiguredHTTPClientTimeout(t *testing.T) {
 	response, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-	})
+	}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("OAuth Generate was truncated by HTTP client timeout: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestOAuthGenerateStreamSurvivesConfiguredHTTPClientTimeout(t *testing.T) {
 	}
 }
 
-func TestGenerateStream_HealthyLongStreamSurvivesTotalWallClockBeyondIdle(t *testing.T) {
+func TestGenerate_HealthyLongStreamSurvivesTotalWallClockBeyondIdle(t *testing.T) {
 	idle := 500 * time.Millisecond
 	gap := 80 * time.Millisecond
 	client := newPacedWatchdogClient(t, idle,
@@ -98,7 +98,7 @@ func TestGenerateStream_HealthyLongStreamSurvivesTotalWallClockBeyondIdle(t *tes
 		pacedStreamEvent{delay: 0, data: `[DONE]`},
 	)
 
-	resp, err := client.GenerateStreamWithEvents(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
+	resp, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("healthy long stream failed: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestGenerateStream_HealthyLongStreamSurvivesTotalWallClockBeyondIdle(t *tes
 	}
 }
 
-func TestGenerateStream_StalledStreamReturnsStallSentinel(t *testing.T) {
+func TestGenerate_StalledStreamReturnsStallSentinel(t *testing.T) {
 	client := newPacedWatchdogClient(t, 120*time.Millisecond,
 		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`},
 		completedStreamEvent(5*time.Second),
@@ -115,7 +115,7 @@ func TestGenerateStream_StalledStreamReturnsStallSentinel(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	_, err := client.GenerateStreamWithEvents(ctx, Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
+	_, err := client.Generate(ctx, Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected stall error")
 	}
@@ -133,7 +133,7 @@ func TestGenerateStream_StalledStreamReturnsStallSentinel(t *testing.T) {
 	}
 }
 
-func TestGenerateStream_ParentCancelIsDistinguishableFromStall(t *testing.T) {
+func TestGenerate_ParentCancelIsDistinguishableFromStall(t *testing.T) {
 	client := newPacedWatchdogClient(t, 5*time.Second,
 		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`},
 		completedStreamEvent(5*time.Second),
@@ -146,7 +146,7 @@ func TestGenerateStream_ParentCancelIsDistinguishableFromStall(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := client.GenerateStreamWithEvents(ctx, Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
+	_, err := client.Generate(ctx, Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}
@@ -155,7 +155,7 @@ func TestGenerateStream_ParentCancelIsDistinguishableFromStall(t *testing.T) {
 	}
 }
 
-func TestGenerateStream_StallAfterCompletedSalvagesResponse(t *testing.T) {
+func TestGenerate_StallAfterCompletedSalvagesResponse(t *testing.T) {
 	client := newPacedWatchdogClient(t, time.Second,
 		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`},
 		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_text.delta","delta":"Done"}`},
@@ -163,7 +163,7 @@ func TestGenerateStream_StallAfterCompletedSalvagesResponse(t *testing.T) {
 		pacedStreamEvent{delay: 5 * time.Second, data: `[DONE]`},
 	)
 
-	resp, err := client.GenerateStreamWithEvents(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
+	resp, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("a fully-received response must not be discarded as a stall: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestGenerateStream_StallAfterCompletedSalvagesResponse(t *testing.T) {
 	}
 }
 
-func TestGenerateStream_CallerCancelAfterCompletedIsNotSalvaged(t *testing.T) {
+func TestGenerate_CallerCancelAfterCompletedIsNotSalvaged(t *testing.T) {
 	client := newPacedWatchdogClient(t, 5*time.Second,
 		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`},
 		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_text.delta","delta":"Done"}`},
@@ -186,7 +186,7 @@ func TestGenerateStream_CallerCancelAfterCompletedIsNotSalvaged(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := client.GenerateStreamWithEvents(ctx, Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
+	_, err := client.Generate(ctx, Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("caller cancellation after a completed event must not be salvaged into a successful response")
 	}
@@ -195,7 +195,7 @@ func TestGenerateStream_CallerCancelAfterCompletedIsNotSalvaged(t *testing.T) {
 	}
 }
 
-func TestGenerateStream_TransportEmitsActivityHeartbeatPerEvent(t *testing.T) {
+func TestGenerate_TransportEmitsActivityHeartbeatPerEvent(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
 		`{"type":"response.output_text.delta","delta":"Done"}`,
@@ -204,10 +204,10 @@ func TestGenerateStream_TransportEmitsActivityHeartbeatPerEvent(t *testing.T) {
 	)
 
 	var beats atomic.Int32
-	if _, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: textutil.Value("test-session"), ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+	if _, err := transport.Generate(context.Background(), OpenAIRequest{SessionID: textutil.Value("test-session"), ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
 		OnStreamActivity: func() { beats.Add(1) },
 	}); err != nil {
-		t.Fatalf("GenerateStreamWithEvents failed: %v", err)
+		t.Fatalf("Generate failed: %v", err)
 	}
 	if got := beats.Load(); got != 3 {
 		t.Fatalf("activity beats = %d, want one per streamed event (3)", got)

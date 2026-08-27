@@ -21,7 +21,7 @@ type serviceFakeLLM struct {
 	responses []llm.Response
 }
 
-func (f *serviceFakeLLM) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (f *serviceFakeLLM) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	if len(f.responses) == 0 {
 		return llm.Response{}, nil
 	}
@@ -86,7 +86,7 @@ func (r failingPersistedSessionResolver) ResolvePersistedSession(context.Context
 	return session.PersistedSessionRecord{}, r.err
 }
 
-func (c *serviceBlockingLLM) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *serviceBlockingLLM) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	select {
 	case <-ctx.Done():

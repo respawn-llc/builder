@@ -52,6 +52,7 @@
 ## Assistant Streaming
 
 - Streaming Markdown uses the complete assistant source received so far. The width-aware volatile tail remains in the Mutable Band. Closed blocks that cannot change become stable Logical Lines and promote into the Immutable Area.
+- Streaming, committed emission, and hydration preserve every received character of assistant commentary and final output. Terminal wrapping and stable Markdown promotion may change row boundaries, but they never replace, truncate, ellipsize, or omit assistant source content.
 - Markdown Promotion accounts for constructs that can restyle or reflow preceding rows. The active source line and any open construct whose visible rows can change remain volatile until Kent proves them stable; a table can wait for its closing row.
 - Promotion is monotonic. The promotion boundary never moves backward past rows already appended to the immutable area. If re-rendering the source would change an already-promoted row, that is a developer error, not a trigger to rewrite, restyle, or re-emit.
 - Stable prose contains no line breaks generated from terminal width. Markdown soft line breaks flow as spaces; authored hard breaks and authored preformatted line boundaries remain logical line boundaries. GFM tables are the width-formatted Markdown exception and use the terminal width at promotion.

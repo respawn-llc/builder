@@ -16,12 +16,7 @@ type countingFailingStreamClient struct {
 	err   error
 }
 
-func (c *countingFailingStreamClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	c.calls.Add(1)
-	return llm.Response{}, c.err
-}
-
-func (c *countingFailingStreamClient) GenerateStreamWithEvents(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
+func (c *countingFailingStreamClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	c.calls.Add(1)
 	return llm.Response{}, c.err
 }
@@ -96,7 +91,7 @@ type retryingEventsClient struct {
 	attempts int
 }
 
-func (c *retryingEventsClient) GenerateStreamWithEvents(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
+func (c *retryingEventsClient) Generate(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
 	c.attempts++
 	callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "x"})
 	callbacks.OnReasoningSummaryDelta(llm.ReasoningSummaryDelta{Text: "x"})

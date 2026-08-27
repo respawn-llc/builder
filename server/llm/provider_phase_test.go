@@ -64,7 +64,7 @@ func TestOpenAIClientProjectsProviderPhaseFromOneAuthoritativeFact(t *testing.T)
 		},
 	})
 
-	resp, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic})
+	resp, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestGenerateDecodesAbsentProviderPhaseStructurally(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := NewOpenAIClient(newProviderPhaseResponseTransport(t, tt.phaseField))
-			resp, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "compatible-model", ToolChoiceMode: ToolChoiceModeAutomatic})
+			resp, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "compatible-model", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 			if err != nil {
 				t.Fatalf("generate: %v", err)
 			}
@@ -116,7 +116,7 @@ func TestGenerateRejectsInvalidProviderPhaseContracts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := NewOpenAIClient(newProviderPhaseResponseTransport(t, tt.phaseField))
-			_, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "compatible-model", ToolChoiceMode: ToolChoiceModeAutomatic})
+			_, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "compatible-model", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 			if err == nil {
 				t.Fatal("expected provider contract error")
 			}
@@ -131,14 +131,14 @@ func TestGenerateRejectsInvalidProviderPhaseContracts(t *testing.T) {
 	}
 }
 
-func TestGenerateStreamAccumulatesOutputItemProviderPhase(t *testing.T) {
+func TestGenerateAccumulatesOutputItemProviderPhase(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Working"}]}}`,
 		`{"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":2,"total_tokens":4},"output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Working"}]}]}}`,
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
+	resp, err := transport.Generate(context.Background(), OpenAIRequest{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("generate stream: %v", err)
 	}
@@ -147,14 +147,14 @@ func TestGenerateStreamAccumulatesOutputItemProviderPhase(t *testing.T) {
 	}
 }
 
-func TestGenerateStreamAggregatesCompletedResponseProviderPhase(t *testing.T) {
+func TestGenerateAggregatesCompletedResponseProviderPhase(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}`,
 		`{"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":2,"total_tokens":4},"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done"}]}]}}`,
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
+	resp, err := transport.Generate(context.Background(), OpenAIRequest{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("generate stream: %v", err)
 	}
@@ -167,7 +167,7 @@ type providerPhaseProjectionTransport struct {
 	response OpenAIResponse
 }
 
-func (t providerPhaseProjectionTransport) Generate(context.Context, OpenAIRequest) (OpenAIResponse, error) {
+func (t providerPhaseProjectionTransport) Generate(context.Context, OpenAIRequest, StreamCallbacks) (OpenAIResponse, error) {
 	return t.response, nil
 }
 
@@ -182,8 +182,8 @@ func newProviderPhaseResponseTransport(t *testing.T, phaseField string) *HTTPTra
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"id":"resp_phase","object":"response","output":[{"type":"message","id":"msg_phase","role":"assistant"%s,"status":"completed","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, phaseField)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_phase\",\"object\":\"response\",\"output\":[{\"type\":\"message\",\"id\":\"msg_phase\",\"role\":\"assistant\"%s,\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\ndata: [DONE]\n\n", phaseField)
 	}))
 	t.Cleanup(server.Close)
 

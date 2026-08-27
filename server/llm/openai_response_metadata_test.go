@@ -10,41 +10,34 @@ import (
 	"testing"
 )
 
-type responseMetadataMode bool
-
-const responseMetadataStreaming responseMetadataMode = true
-
 func TestOpenAIClientSelectsServedModelMetadata(t *testing.T) {
 	tests := []struct {
 		name           string
-		mode           responseMetadataMode
 		createdModel   string
 		completedModel string
 		headers        http.Header
 		want           *string
 	}{
 		{
-			name:           "non-streaming standard model wins",
+			name:           "standard model wins",
 			completedModel: " standard-model ",
 			headers:        http.Header{"Openai-Model": {"header-model"}, "X-Openai-Model": {"fallback-model"}},
 			want:           stringPointer("standard-model"),
 		},
 		{
-			name:    "non-streaming provider header priority",
+			name:    "provider header priority",
 			headers: http.Header{"Openai-Model": {" ", " routed-model "}, "X-Openai-Model": {"fallback-model"}},
 			want:    stringPointer("routed-model"),
 		},
 		{
-			name:           "streaming first standard model wins",
-			mode:           responseMetadataStreaming,
+			name:           "stream first standard model wins",
 			createdModel:   " created-model ",
 			completedModel: "completed-model",
 			headers:        http.Header{"Openai-Model": {"header-model"}},
 			want:           stringPointer("created-model"),
 		},
 		{
-			name:           "streaming completed standard model wins",
-			mode:           responseMetadataStreaming,
+			name:           "stream completed standard model wins",
 			completedModel: " completed-model ",
 			headers:        http.Header{"Openai-Model": {"header-model"}},
 			want:           stringPointer("completed-model"),
@@ -55,14 +48,11 @@ func TestOpenAIClientSelectsServedModelMetadata(t *testing.T) {
 			var capturedModel string
 			transport := newResponseMetadataTransport(t, test.headers, func(w http.ResponseWriter, request *http.Request) {
 				capturedModel = decodeRequestedModel(t, request)
-				writeSuccessfulMetadataResponse(t, w, test.mode, test.createdModel, test.completedModel)
+				writeSuccessfulMetadataResponse(t, w, test.createdModel, test.completedModel)
 			})
 			request := Request{SessionID: stringPointer("metadata-session"), Model: "requested-model", ToolChoiceMode: ToolChoiceModeAutomatic}
 			client := NewOpenAIClient(transport)
-			response, err := client.Generate(context.Background(), request)
-			if test.mode == responseMetadataStreaming {
-				response, err = client.GenerateStreamWithEvents(context.Background(), request, StreamCallbacks{})
-			}
+			response, err := client.Generate(context.Background(), request, StreamCallbacks{})
 			if err != nil {
 				t.Fatalf("generate: %v", err)
 			}
@@ -86,35 +76,26 @@ func TestOpenAIClientParsesStrictReasoningIncludedHeader(t *testing.T) {
 		{name: "explicit true", value: stringPointer(" true "), want: true},
 		{name: "absent"},
 	}
-	for _, mode := range []responseMetadataMode{false, responseMetadataStreaming} {
-		for _, header := range headers {
-			modeName := "non-streaming"
-			if mode == responseMetadataStreaming {
-				modeName = "streaming"
+	for _, header := range headers {
+		t.Run(header.name, func(t *testing.T) {
+			responseHeaders := make(http.Header)
+			if header.value != nil {
+				responseHeaders.Set("x-reasoning-included", *header.value)
 			}
-			t.Run(modeName+"/"+header.name, func(t *testing.T) {
-				responseHeaders := make(http.Header)
-				if header.value != nil {
-					responseHeaders.Set("x-reasoning-included", *header.value)
-				}
-				transport := newResponseMetadataTransport(t, responseHeaders, func(w http.ResponseWriter, _ *http.Request) {
-					writeSuccessfulMetadataResponse(t, w, mode, "", "")
-				})
-
-				request := Request{SessionID: stringPointer("metadata-session"), Model: "requested-model", ToolChoiceMode: ToolChoiceModeAutomatic}
-				client := NewOpenAIClient(transport)
-				response, err := client.Generate(context.Background(), request)
-				if mode == responseMetadataStreaming {
-					response, err = client.GenerateStreamWithEvents(context.Background(), request, StreamCallbacks{})
-				}
-				if err != nil {
-					t.Fatalf("generate: %v", err)
-				}
-				if response.ReasoningIncluded != header.want {
-					t.Fatalf("reasoning included = %v, want %v", response.ReasoningIncluded, header.want)
-				}
+			transport := newResponseMetadataTransport(t, responseHeaders, func(w http.ResponseWriter, _ *http.Request) {
+				writeSuccessfulMetadataResponse(t, w, "", "")
 			})
-		}
+
+			request := Request{SessionID: stringPointer("metadata-session"), Model: "requested-model", ToolChoiceMode: ToolChoiceModeAutomatic}
+			client := NewOpenAIClient(transport)
+			response, err := client.Generate(context.Background(), request, StreamCallbacks{})
+			if err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+			if response.ReasoningIncluded != header.want {
+				t.Fatalf("reasoning included = %v, want %v", response.ReasoningIncluded, header.want)
+			}
+		})
 	}
 }
 
@@ -175,17 +156,12 @@ func decodeRequestedModel(t *testing.T, request *http.Request) string {
 	return payload.Model
 }
 
-func writeSuccessfulMetadataResponse(t *testing.T, w http.ResponseWriter, mode responseMetadataMode, createdModel string, completedModel string) {
+func writeSuccessfulMetadataResponse(t *testing.T, w http.ResponseWriter, createdModel string, completedModel string) {
 	t.Helper()
 	response := fmt.Sprintf(
 		`{"id":"resp_1","object":"response","model":%q,"output":[{"type":"message","id":"msg_1","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`,
 		completedModel,
 	)
-	if !bool(mode) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(response))
-		return
-	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	if createdModel != "" {
 		_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.created\",\"response\":{\"model\":%q}}\n\n", createdModel)

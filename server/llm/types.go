@@ -735,11 +735,7 @@ type ProviderCapabilitiesClient interface {
 }
 
 type Client interface {
-	Generate(ctx context.Context, request Request) (Response, error)
-}
-
-type StreamClient interface {
-	GenerateStream(ctx context.Context, request Request, onDelta func(text string)) (Response, error)
+	Generate(ctx context.Context, request Request, callbacks StreamCallbacks) (Response, error)
 }
 
 type AssistantDelta struct {
@@ -763,10 +759,6 @@ type StreamCallbacks struct {
 	OnAssistantDelta        func(delta AssistantDelta)
 	OnReasoningSummaryDelta func(delta ReasoningSummaryDelta)
 	OnStreamActivity        func()
-}
-
-type StreamEventsClient interface {
-	GenerateStreamWithEvents(ctx context.Context, request Request, callbacks StreamCallbacks) (Response, error)
 }
 
 type ModelContextWindowClient interface {
