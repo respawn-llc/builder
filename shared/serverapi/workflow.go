@@ -1145,6 +1145,12 @@ func DecodeWorkflowSetupRetainedError(data json.RawMessage, message string) erro
 	if err := protocol.DecodeStrictJSON(data, &payload); err != nil || payload.Type != "worktree_setup_retained" {
 		return errors.New(strings.TrimSpace(message))
 	}
+	presence := struct {
+		RetainedPreviousWorktree json.RawMessage `json:"retained_previous_worktree"`
+	}{}
+	if err := json.Unmarshal(data, &presence); err != nil || len(presence.RetainedPreviousWorktree) == 0 {
+		return errors.New(strings.TrimSpace(message))
+	}
 	result := &payload.WorkflowSetupRetainedError
 	if err := result.Validate(); err != nil {
 		return errors.New(strings.TrimSpace(message))
