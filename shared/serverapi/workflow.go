@@ -1060,48 +1060,37 @@ type WorkflowWorktreeKentFacts struct {
 	OriginSessionID *string `json:"origin_session_id"`
 }
 
-func (f WorkflowWorktreeGitFacts) Validate() error {
-	if strings.TrimSpace(f.CanonicalRoot) == "" || strings.TrimSpace(f.HeadObject) == "" {
-		return errors.New("workflow worktree Git canonical_root and head_object are required")
-	}
-	for _, fact := range []*string{f.BranchRef, f.BranchName, f.LockedReason, f.PrunableReason} {
-		if fact != nil && strings.TrimSpace(*fact) == "" {
-			return errors.New("optional workflow worktree Git facts must be non-blank")
-		}
-	}
-	return nil
-}
-
-func (f WorkflowWorktreeKentFacts) Validate() error {
-	if strings.TrimSpace(f.WorktreeID) == "" ||
-		strings.TrimSpace(f.CanonicalRoot) == "" ||
-		strings.TrimSpace(f.DisplayName) == "" {
-		return errors.New("workflow worktree Kent worktree_id, canonical_root, and display_name are required")
-	}
-	if f.OriginSessionID != nil && strings.TrimSpace(*f.OriginSessionID) == "" {
-		return errors.New("workflow worktree origin_session_id must be non-blank")
-	}
-	return nil
-}
-
-func (f WorkflowRegisteredWorktreeFacts) Validate() error {
-	if err := f.Git.Validate(); err != nil {
-		return err
-	}
-	if err := f.Kent.Validate(); err != nil {
-		return err
-	}
-	if f.Git.CanonicalRoot != f.Kent.CanonicalRoot {
-		return errors.New("workflow registered worktree Git and Kent canonical roots must match")
-	}
-	return nil
-}
-
 func (t WorkflowRegisteredWorktreeTopology) Validate() error {
 	if t.Variant != "registered" || t.Registered == nil {
 		return errors.New("workflow retained worktree must be registered")
 	}
-	return t.Registered.Validate()
+	facts := t.Registered
+	for _, required := range []string{
+		facts.Git.CanonicalRoot,
+		facts.Git.HeadObject,
+		facts.Kent.WorktreeID,
+		facts.Kent.CanonicalRoot,
+		facts.Kent.DisplayName,
+	} {
+		if strings.TrimSpace(required) == "" {
+			return errors.New("workflow retained worktree required facts must be non-blank")
+		}
+	}
+	for _, optional := range []*string{
+		facts.Git.BranchRef,
+		facts.Git.BranchName,
+		facts.Git.LockedReason,
+		facts.Git.PrunableReason,
+		facts.Kent.OriginSessionID,
+	} {
+		if optional != nil && strings.TrimSpace(*optional) == "" {
+			return errors.New("workflow retained worktree optional facts must be non-blank")
+		}
+	}
+	if facts.Git.CanonicalRoot != facts.Kent.CanonicalRoot {
+		return errors.New("workflow retained worktree Git and Kent canonical roots must match")
+	}
+	return nil
 }
 
 func (r WorkflowRetainedPreviousWorktree) Validate() error {
