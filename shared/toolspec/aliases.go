@@ -162,6 +162,20 @@ func modelToolAliasSpelling(spec toolAliasSpec) []string {
 	return out
 }
 
+func modelToolAcceptedSpellings(spec toolAliasSpec) []string {
+	out := []string{string(spec.id)}
+	if spec.variations {
+		out = append(out, kebabCase(string(spec.id)), generatedCamelCase(string(spec.id)))
+	}
+	out = append(out, modelToolAliasSpelling(spec)...)
+	if spec.variations {
+		for _, alias := range spec.aliases {
+			out = append(out, generatedCamelCase(alias))
+		}
+	}
+	return uniqueStrings(out)
+}
+
 func generatedCamelCase(spelling string) string {
 	var out strings.Builder
 	upperNext := false
@@ -202,7 +216,7 @@ func parameterSpellings(spec parameterAliasSpec) []string {
 }
 
 func resolveModelToolName(name string, registered []ID) (ID, modelToolNameMatchStage, bool) {
-	spelling := strings.TrimSpace(name)
+	spelling := name
 	active := make(map[ID]bool, len(registered))
 	for _, id := range registered {
 		active[id] = true
@@ -268,12 +282,7 @@ func resolveModelToolNameFromCatalog(spelling string, active map[ID]bool, filter
 		if len(active) > 0 && !active[spec.id] {
 			continue
 		}
-		candidates := []string{string(spec.id)}
-		if spec.variations {
-			candidates = append(candidates, kebabCase(string(spec.id)), generatedCamelCase(string(spec.id)))
-		}
-		candidates = append(candidates, modelToolAliasSpelling(spec)...)
-		for _, candidate := range candidates {
+		for _, candidate := range modelToolAcceptedSpellings(spec) {
 			if strings.EqualFold(spelling, candidate) {
 				return spec.id, modelToolNameMatchCaseInsensitive, true
 			}
@@ -393,19 +402,14 @@ func buildConfigAliases() map[string]ID {
 	return out
 }
 
-func ValidateModelToolAliases(registered []ID) {
+func validateToolAliasCatalog(catalog toolAliasCatalog, registered []ID) {
 	seen := make(map[string]ID)
 	for _, id := range registered {
-		for _, spec := range modelToolAliases.tools {
+		for _, spec := range catalog.tools {
 			if spec.id != id {
 				continue
 			}
-			spellings := []string{string(spec.id)}
-			if spec.variations {
-				spellings = append(spellings, kebabCase(string(spec.id)), generatedCamelCase(string(spec.id)))
-			}
-			spellings = append(spellings, modelToolAliasSpelling(spec)...)
-			for _, spelling := range spellings {
+			for _, spelling := range modelToolAcceptedSpellings(spec) {
 				key := strings.ToLower(spelling)
 				if previous, exists := seen[key]; exists && previous != id {
 					panic("tool aliases resolve to different registered tools")
@@ -414,4 +418,8 @@ func ValidateModelToolAliases(registered []ID) {
 			}
 		}
 	}
+}
+
+func ValidateModelToolAliases(registered []ID) {
+	validateToolAliasCatalog(modelToolAliases, registered)
 }

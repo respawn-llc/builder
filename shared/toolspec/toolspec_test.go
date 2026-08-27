@@ -172,6 +172,14 @@ func TestResolveModelToolNameDoesNotExpandRetainedHostedOrWorkflowNames(t *testi
 	}
 }
 
+func TestResolveModelToolNameDoesNotTrimWhitespace(t *testing.T) {
+	for _, name := range []string{" exec_command ", " run_command ", " shell "} {
+		if got, ok := ResolveModelToolName(name, nil); ok {
+			t.Fatalf("ResolveModelToolName(%q) = %q, true; surrounding whitespace is not an alias", name, got)
+		}
+	}
+}
+
 func TestResolveModelParameterNameAcceptsApprovedAliasesAndGeneratedForms(t *testing.T) {
 	tests := []struct {
 		tool      ID
@@ -288,6 +296,15 @@ func TestResolveModelParameterNameCanonicalDerivedFormsTakePrecedence(t *testing
 }
 
 func TestAliasCatalogRejectsConflictingToolAndParameterAliases(t *testing.T) {
+	t.Run("semantic alias camel case", func(t *testing.T) {
+		catalog := newToolAliasCatalog([]toolAliasSpec{
+			{id: ToolExecCommand, aliases: []string{"foo_bar"}, variations: true},
+			{id: ToolEdit, aliases: []string{"fooBar"}, variations: true},
+		})
+		assertPanics(t, func() {
+			validateToolAliasCatalog(catalog, []ID{ToolExecCommand, ToolEdit})
+		})
+	})
 	t.Run("parameters", func(t *testing.T) {
 		assertPanics(t, func() {
 			newParameterAliasCatalog(ToolPatch, []parameterAliasSpec{
