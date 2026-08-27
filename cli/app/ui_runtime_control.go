@@ -42,9 +42,15 @@ func (m *uiModel) chatSettingsMutationCommand(operation serverapi.ChatSettingsMu
 	if !ok {
 		return nil
 	}
+	previousAgentRole := m.cachedRuntimeMainView().Session.AgentRole
 	return func() tea.Msg {
 		response, err := client.MutateChatSettings(operation)
-		return chatSettingsDoneMsg{operation: operation.Kind, response: response, err: err}
+		return chatSettingsDoneMsg{
+			operation:         operation.Kind,
+			response:          response,
+			previousAgentRole: previousAgentRole,
+			err:               err,
+		}
 	}
 }
 
@@ -59,6 +65,7 @@ func (m *uiModel) chatSettingsToggleCommand(
 	if !ok {
 		return nil
 	}
+	previousAgentRole := m.cachedRuntimeMainView().Session.AgentRole
 	return func() tea.Msg {
 		settings, err := client.ReadChatSettings()
 		if err != nil {
@@ -69,7 +76,12 @@ func (m *uiModel) chatSettingsToggleCommand(
 			return chatSettingsDoneMsg{operation: kind, err: err}
 		}
 		response, err := client.MutateChatSettings(operation)
-		return chatSettingsDoneMsg{operation: kind, response: response, err: err}
+		return chatSettingsDoneMsg{
+			operation:         kind,
+			response:          response,
+			previousAgentRole: previousAgentRole,
+			err:               err,
+		}
 	}
 }
 
@@ -159,7 +171,14 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
 	m.setRuntimeContextUsage(
 		m.currentRuntimeSessionID(),
-		runtimeContextUsageFromChatContext(response.Context, m.cachedRuntimeStatus().ContextUsage),
+		runtimeContextUsageFromChatContext(
+			response.Context,
+			m.cachedRuntimeStatus().ContextUsage,
+			chatSettingsAgentRolesEqual(
+				msg.previousAgentRole,
+				chatSettingsAgentRole(settings.SelectedAgent.Role),
+			),
+		),
 	)
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
 		reason := "Chat settings mutation rejected"

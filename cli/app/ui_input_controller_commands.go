@@ -260,11 +260,11 @@ func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, t
 		errText := "Usage: /fast [on|off|status]"
 		return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
-	if !available && requested != "off" {
-		return m, m.sendTransientStatusWithNoticeID("Fast mode is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-	}
 	if m.hasRuntimeClient() {
 		return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationFast, requested)
+	}
+	if !available && requested != "off" {
+		return m, m.sendTransientStatusWithNoticeID("Fast mode is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	targetEnabled := currentEnabled
 	switch requested {

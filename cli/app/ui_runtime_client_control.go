@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
@@ -41,6 +42,8 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
+	cachedView, _ := c.CachedMainView()
+	previousAgentRole := cachedView.Session.AgentRole
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
 	response, err := c.chatSettings.MutateChatSettings(ctx, serverapi.ChatSettingsMutationRequest{
@@ -51,9 +54,14 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
 	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		usage := runtimeContextUsageFromChatContext(response.Context, view.Status.ContextUsage)
+		agentRole := chatSettingsAgentRole(response.Settings.SelectedAgent.Role)
+		usage := runtimeContextUsageFromChatContext(
+			response.Context,
+			view.Status.ContextUsage,
+			chatSettingsAgentRolesEqual(previousAgentRole, agentRole),
+		)
 		view.Status.ThinkingLevel = response.Settings.SelectedAgent.Thinking
-		view.Session.AgentRole = chatSettingsAgentRole(response.Settings.SelectedAgent.Role)
+		view.Session.AgentRole = agentRole
 		view.Status.ReviewerFrequency = string(response.Settings.Supervisor.Value)
 		view.Status.ReviewerEnabled = response.Settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
 		view.Status.FastModeAvailable = response.Settings.Fast != nil
@@ -69,24 +77,45 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 
 func chatSettingsAgentRole(role string) *string {
 	role = strings.TrimSpace(role)
-	if role == "" {
+	if role == "" || strings.EqualFold(role, config.DefaultSubagentRole) {
 		return nil
 	}
 	return &role
 }
 
+func chatSettingsAgentRolesEqual(current, next *string) bool {
+	currentRole := ""
+	if current != nil {
+		currentRole = *current
+	}
+	nextRole := ""
+	if next != nil {
+		nextRole = *next
+	}
+	currentCanonical := chatSettingsAgentRole(currentRole)
+	nextCanonical := chatSettingsAgentRole(nextRole)
+	if currentCanonical == nil || nextCanonical == nil {
+		return currentCanonical == nil && nextCanonical == nil
+	}
+	return strings.EqualFold(*currentCanonical, *nextCanonical)
+}
+
 func runtimeContextUsageFromChatContext(
 	contextFacts serverapi.ChatContext,
 	current clientui.RuntimeContextUsage,
+	preserveCacheHit bool,
 ) clientui.RuntimeContextUsage {
-	return clientui.RuntimeContextUsage{
+	usage := clientui.RuntimeContextUsage{
 		UsedTokens:               int(contextFacts.UsedTokens),
 		WindowTokens:             int(contextFacts.ContextWindowTokens),
 		AutomaticThresholdTokens: int(contextFacts.AutomaticThresholdTokens),
 		HasAutomaticThreshold:    true,
-		CacheHitPercent:          current.CacheHitPercent,
-		HasCacheHitPercentage:    current.HasCacheHitPercentage,
 	}
+	if preserveCacheHit {
+		usage.CacheHitPercent = current.CacheHitPercent
+		usage.HasCacheHitPercentage = current.HasCacheHitPercentage
+	}
+	return usage
 }
 
 func runtimeRequestCallWithID[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, requestID string, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
