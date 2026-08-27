@@ -1065,24 +1065,14 @@ func (t WorkflowRegisteredWorktreeTopology) Validate() error {
 		return errors.New("workflow retained worktree must be registered")
 	}
 	facts := t.Registered
-	for _, required := range []string{
-		facts.Git.CanonicalRoot,
-		facts.Git.HeadObject,
-		facts.Kent.WorktreeID,
-		facts.Kent.CanonicalRoot,
-		facts.Kent.DisplayName,
-	} {
-		if strings.TrimSpace(required) == "" {
-			return errors.New("workflow retained worktree required facts must be non-blank")
-		}
+	if strings.TrimSpace(facts.Git.CanonicalRoot) == "" ||
+		strings.TrimSpace(facts.Git.HeadObject) == "" ||
+		strings.TrimSpace(facts.Kent.WorktreeID) == "" ||
+		strings.TrimSpace(facts.Kent.CanonicalRoot) == "" ||
+		strings.TrimSpace(facts.Kent.DisplayName) == "" {
+		return errors.New("workflow retained worktree required facts must be non-blank")
 	}
-	for _, optional := range []*string{
-		facts.Git.BranchRef,
-		facts.Git.BranchName,
-		facts.Git.LockedReason,
-		facts.Git.PrunableReason,
-		facts.Kent.OriginSessionID,
-	} {
+	for _, optional := range []*string{facts.Git.BranchRef, facts.Git.BranchName, facts.Git.LockedReason, facts.Git.PrunableReason, facts.Kent.OriginSessionID} {
 		if optional != nil && strings.TrimSpace(*optional) == "" {
 			return errors.New("workflow retained worktree optional facts must be non-blank")
 		}
