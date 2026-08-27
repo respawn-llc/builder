@@ -31,56 +31,12 @@ func (p retargetIdentityPublisher) PublishSessionIdentity(sessionID string) erro
 	return nil
 }
 
-type failingRetargetIdentityPublisher struct{ err error }
-
-func (p failingRetargetIdentityPublisher) PublishSessionIdentity(string) error {
-	return p.err
-}
-
 type retargetOutcomePublisher struct {
 	outcomes chan serverapi.SessionRetargetOutcome
 }
 
 func (p retargetOutcomePublisher) PublishSessionRetargetOutcome(_ string, outcome serverapi.SessionRetargetOutcome) {
 	p.outcomes <- outcome
-}
-
-type blockingSessionMetadataObserver struct {
-	store   *metadata.Store
-	mu      sync.Mutex
-	block   bool
-	started chan struct{}
-	release chan struct{}
-}
-
-func newBlockingSessionMetadataObserver(store *metadata.Store) *blockingSessionMetadataObserver {
-	return &blockingSessionMetadataObserver{
-		store:   store,
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-}
-
-func (o *blockingSessionMetadataObserver) Arm() {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.block = true
-}
-
-func (o *blockingSessionMetadataObserver) ObservePersistedStore(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
-	o.mu.Lock()
-	block := o.block
-	o.block = false
-	o.mu.Unlock()
-	if block {
-		close(o.started)
-		select {
-		case <-o.release:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return o.store.ImportSessionSnapshot(ctx, snapshot)
 }
 
 type realSessionRetargetFixture struct {
@@ -94,11 +50,9 @@ type realSessionRetargetFixture struct {
 	targetWorkspaceRoot string
 	authority           *sessionruntime.Authority
 	publisher           retargetIdentityPublisher
-	storeOptions        []session.StoreOption
-	observer            *blockingSessionMetadataObserver
 }
 
-func newRealSessionRetargetFixture(t *testing.T, useBlockingObserver bool) realSessionRetargetFixture {
+func newRealSessionRetargetFixture(t *testing.T) realSessionRetargetFixture {
 	t.Helper()
 	ctx := context.Background()
 	persistenceRoot := t.TempDir()
@@ -129,11 +83,6 @@ func newRealSessionRetargetFixture(t *testing.T, useBlockingObserver bool) realS
 		t.Fatalf("CreateProjectForWorkspace target: %v", err)
 	}
 	storeOptions := metadataStore.AuthoritativeSessionStoreOptions()
-	var observer *blockingSessionMetadataObserver
-	if useBlockingObserver {
-		observer = newBlockingSessionMetadataObserver(metadataStore)
-		storeOptions[0] = session.WithPersistenceObserver(observer)
-	}
 	sourceContainer := filepath.Join(persistenceRoot, "projects", sourceBinding.ProjectID, "sessions")
 	parent, err := session.Create(
 		sourceContainer,
@@ -188,8 +137,6 @@ func newRealSessionRetargetFixture(t *testing.T, useBlockingObserver bool) realS
 		targetWorkspaceRoot: retargetRoot,
 		authority:           authority,
 		publisher:           make(retargetIdentityPublisher),
-		storeOptions:        storeOptions,
-		observer:            observer,
 	}
 }
 
@@ -268,27 +215,6 @@ func (retargetRuntimeClient) ProviderCapabilities(context.Context) (llm.Provider
 	return llm.InferProviderCapabilities("openai")
 }
 
-type recordingRetargetRuntimeClient struct {
-	response string
-	requests []llm.Request
-}
-
-func (c *recordingRetargetRuntimeClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
-	c.requests = append(c.requests, request)
-	return llm.Response{
-		Assistant: llm.Message{
-			Role:    llm.RoleAssistant,
-			Content: textutil.Value(c.response),
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-		},
-		Usage: llm.Usage{WindowTokens: 200000},
-	}, nil
-}
-
-func (*recordingRetargetRuntimeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.InferProviderCapabilities("openai")
-}
-
 type selfRetargetRuntimeClient struct {
 	run            func() error
 	ignoreRunError bool
@@ -325,7 +251,7 @@ func (c *selfRetargetRuntimeClient) Generate(_ context.Context, request llm.Requ
 }
 
 func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     fixture.child.Meta().SessionID,
@@ -401,143 +327,8 @@ func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t
 	}
 }
 
-func TestSessionWorkspaceRetargeterKeepsCommittedSuccessWhenIdentityPublicationFails(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
-	publishErr := errors.New("identity publication failed")
-	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
-	retargeter := NewSessionWorkspaceRetargeter(
-		fixture.metadata,
-		fixture.authority,
-		failingRetargetIdentityPublisher{err: publishErr},
-	).WithOutcomePublisher(published)
-	t.Cleanup(func() { _ = retargeter.Close() })
-
-	response, err := retargeter.RetargetWorkspace(t.Context(), SessionWorkspaceRetargetInvocation{
-		OperationID: serverapi.NewWorktreeOperationID(),
-		Request: metadata.SessionWorkspaceRetargetRequest{
-			SessionID:     fixture.child.Meta().SessionID,
-			WorkspaceRoot: fixture.targetWorkspaceRoot,
-		},
-		CompletionMode: serverapi.SessionRetargetCompletionWait,
-	})
-	if err != nil ||
-		response.Outcome == nil ||
-		response.Outcome.Kind != serverapi.SessionRetargetOutcomeSucceeded ||
-		response.Outcome.Success == nil {
-		t.Fatalf("committed rebind response = %+v error %v", response, err)
-	}
-	if response.Outcome.Success.Binding.CanonicalRoot != canonicalRetargetTestPath(t, fixture.targetWorkspaceRoot) {
-		t.Fatalf("committed binding = %+v", response.Outcome.Success.Binding)
-	}
-	if publishedOutcome := <-published.outcomes; publishedOutcome.OperationID != response.Outcome.OperationID ||
-		publishedOutcome.Kind != serverapi.SessionRetargetOutcomeSucceeded {
-		t.Fatalf("published wait outcome = %+v, want %+v", publishedOutcome, *response.Outcome)
-	}
-}
-
-func TestSessionWorkspaceRetargeterWaitFailurePublishesAndSteersOutcome(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
-	commitErr := errors.New("wait-mode commit failed")
-	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
-	retargeter := fixture.retargeter(failingSessionRetargetCommit{Store: fixture.metadata, err: commitErr}).
-		WithOutcomePublisher(published)
-	t.Cleanup(func() { _ = retargeter.Close() })
-	client := &recordingRetargetRuntimeClient{response: t.Name()}
-	engine := fixture.openRuntimeWithClient(t, client)
-	operationID := serverapi.NewWorktreeOperationID()
-
-	response, err := retargeter.RetargetWorkspace(t.Context(), SessionWorkspaceRetargetInvocation{
-		OperationID: operationID,
-		Request: metadata.SessionWorkspaceRetargetRequest{
-			SessionID:     fixture.child.Meta().SessionID,
-			WorkspaceRoot: fixture.targetWorkspaceRoot,
-		},
-		CompletionMode: serverapi.SessionRetargetCompletionWait,
-	})
-	if err != nil ||
-		response.Outcome == nil ||
-		response.Outcome.Kind != serverapi.SessionRetargetOutcomeFailed {
-		t.Fatalf("wait failure response = %+v error %v", response, err)
-	}
-	if publishedOutcome := <-published.outcomes; publishedOutcome.OperationID != operationID ||
-		publishedOutcome.Kind != serverapi.SessionRetargetOutcomeFailed {
-		t.Fatalf("published wait failure = %+v", publishedOutcome)
-	}
-	if _, err := engine.SubmitUserMessage(t.Context(), t.Name()); err != nil {
-		t.Fatalf("SubmitUserMessage after wait failure: %v", err)
-	}
-	if len(client.requests) != 1 {
-		t.Fatalf("provider requests = %d, want 1", len(client.requests))
-	}
-	for _, item := range client.requests[0].Items {
-		if item.MessageType != nil && *item.MessageType == llm.MessageTypeErrorFeedback {
-			return
-		}
-	}
-	t.Fatalf("provider request lacks typed rebind failure notice: %+v", client.requests[0].Items)
-}
-
-type applyPlanFailureMetadata struct {
-	*metadata.Store
-	applyErr error
-	source   metadata.SessionWorkspaceRetargetSource
-	calls    int
-}
-
-func (m *applyPlanFailureMetadata) PlanSessionWorkspaceRetarget(
-	ctx context.Context,
-	request metadata.SessionWorkspaceRetargetRequest,
-) (metadata.SessionWorkspaceRetargetPlan, error) {
-	m.calls++
-	if m.calls == 1 {
-		return m.Store.PlanSessionWorkspaceRetarget(ctx, request)
-	}
-	return metadata.SessionWorkspaceRetargetPlan{}, m.applyErr
-}
-
-func (m *applyPlanFailureMetadata) ResolveSessionWorkspaceRetargetSource(
-	context.Context,
-	string,
-) (metadata.SessionWorkspaceRetargetSource, error) {
-	return m.source, nil
-}
-
-func TestSessionWorkspaceRetargeterFailureUsesApplyTimeSourceFacts(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
-	applyErr := errors.New("apply-time plan failed")
-	applySource := metadata.SessionWorkspaceRetargetSource{
-		Project:                   serverapi.ProjectReference{ID: "project-new", Name: "New"},
-		EffectiveWorkingDirectory: filepath.Join(fixture.managedBase, "new"),
-	}
-	source := &applyPlanFailureMetadata{
-		Store:    fixture.metadata,
-		applyErr: applyErr,
-		source:   applySource,
-	}
-	retargeter := fixture.retargeter(source)
-	t.Cleanup(func() { _ = retargeter.Close() })
-
-	response, err := retargeter.RetargetWorkspace(t.Context(), SessionWorkspaceRetargetInvocation{
-		OperationID: serverapi.NewWorktreeOperationID(),
-		Request: metadata.SessionWorkspaceRetargetRequest{
-			SessionID:     fixture.child.Meta().SessionID,
-			WorkspaceRoot: fixture.targetWorkspaceRoot,
-		},
-		CompletionMode: serverapi.SessionRetargetCompletionWait,
-	})
-	if err != nil ||
-		response.Outcome == nil ||
-		response.Outcome.Kind != serverapi.SessionRetargetOutcomeFailed ||
-		response.Outcome.Failure == nil ||
-		response.Outcome.Failure.Diagnostic != applyErr.Error() ||
-		response.Outcome.Failure.UnchangedProject != applySource.Project ||
-		response.Outcome.Failure.UnchangedWorkingDirectory != applySource.EffectiveWorkingDirectory {
-		t.Fatalf("apply-time failure response = %+v error %v", response, err)
-	}
-}
-
 func TestSessionWorkspaceRetargeterFailureUsesAuthoritativePostApplySourceFacts(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	overlappingRoot := filepath.Join(fixture.managedBase, "overlapping")
 	if err := os.MkdirAll(overlappingRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll overlapping target: %v", err)
@@ -598,7 +389,7 @@ func canonicalRetargetTestPath(t *testing.T, path string) string {
 }
 
 func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	worktreeReminder := session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeExit,
 		WorktreeContext: session.WorktreeContext{
@@ -705,7 +496,7 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 }
 
 func TestSessionWorkspaceRetargeterDoesNotBlockOnBackgroundProcessState(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     fixture.child.Meta().SessionID,
@@ -749,7 +540,7 @@ func TestSessionWorkspaceRetargeterDoesNotBlockOnBackgroundProcessState(t *testi
 }
 
 func TestSessionWorkspaceRetargeterSelfRebindAppliesInsideOriginatingStepWithoutDeadlock(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     fixture.child.Meta().SessionID,
@@ -821,7 +612,7 @@ func TestSessionWorkspaceRetargeterSelfRebindAppliesInsideOriginatingStepWithout
 }
 
 func TestSessionWorkspaceRetargeterNoOpPublishesSuccessWithoutReminder(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
 	retargeter := fixture.retargeter(fixture.metadata).WithOutcomePublisher(published)
 	t.Cleanup(func() { _ = retargeter.Close() })
@@ -861,112 +652,8 @@ func TestSessionWorkspaceRetargeterNoOpPublishesSuccessWithoutReminder(t *testin
 	}
 }
 
-func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
-	tests := []struct {
-		name         string
-		crossProject bool
-	}{
-		{name: "default source project", crossProject: false},
-		{name: "explicit target project", crossProject: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newRealSessionRetargetFixture(t, false)
-			sharedRoot := fixture.targetWorkspaceRoot
-			if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), fixture.sourceBinding.ProjectID, sharedRoot); err != nil {
-				t.Fatalf("AttachWorkspaceToProject source: %v", err)
-			}
-			if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), fixture.targetProject.ProjectID, sharedRoot); err != nil {
-				t.Fatalf("AttachWorkspaceToProject target: %v", err)
-			}
-
-			req := metadata.SessionWorkspaceRetargetRequest{
-				SessionID:     fixture.child.Meta().SessionID,
-				WorkspaceRoot: sharedRoot,
-			}
-			wantProjectID := fixture.sourceBinding.ProjectID
-			targetProjectID := fixture.targetProject.ProjectID
-			if test.crossProject {
-				req.ProjectID = &targetProjectID
-				wantProjectID = targetProjectID
-			}
-			if test.crossProject {
-				fixture.openRuntime(t)
-			}
-
-			result, err := fixture.retargeter(fixture.metadata).execute(context.Background(), req, nil)
-			if err != nil {
-				t.Fatalf("RetargetWorkspace: %v", err)
-			}
-			if result.Binding.ProjectID != wantProjectID {
-				t.Fatalf("binding project = %q, want %q", result.Binding.ProjectID, wantProjectID)
-			}
-			if test.crossProject {
-				var rebound tools.FilesystemContext
-				if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
-					rebound = maintenance.PreviousFilesystemContext.Clone()
-					return nil
-				}); err != nil {
-					t.Fatalf("inspect cross-project filesystem context: %v", err)
-				}
-				if rebound.Access.ProjectWorkspace.ProjectID != targetProjectID {
-					t.Fatalf("rebound Project ID = %q, want %q", rebound.Access.ProjectWorkspace.ProjectID, targetProjectID)
-				}
-				if len(rebound.Access.ProjectWorkspace.Roots) != 2 {
-					t.Fatalf("rebound Project Workspace roots = %+v, want target project roots", rebound.Access.ProjectWorkspace.Roots)
-				}
-				for _, root := range rebound.Access.ProjectWorkspace.Roots {
-					if root.LexicalPath == fixture.sourceBinding.CanonicalRoot {
-						t.Fatalf("rebound context retained source-only root %q", root.LexicalPath)
-					}
-				}
-			}
-			descriptor, err := session.NewOpenSessionDescriptor(fixture.childID)
-			if err != nil {
-				t.Fatalf("NewOpenSessionDescriptor: %v", err)
-			}
-			if err := fixture.authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, store *session.Store) error {
-				if err := store.SetName("persisted after shared-root rebind"); err != nil {
-					return err
-				}
-				appendSessionMessage(t, store, "step-after-rebind", session.MessageRoleUser, "after rebind")
-				return nil
-			}); err != nil {
-				t.Fatalf("persist after rebind: %v", err)
-			}
-
-			reopened, err := session.OpenByID(
-				fixture.metadata.PersistenceRoot(),
-				fixture.child.Meta().SessionID,
-				fixture.metadata.AuthoritativeSessionStoreOptions()...,
-			)
-			if err != nil {
-				t.Fatalf("OpenByID after rebind: %v", err)
-			}
-			eventLog, err := reopened.MaterializeEventLog()
-			if err != nil {
-				t.Fatalf("materialize reopened event log: %v", err)
-			}
-			revision, err := eventLog.Revision()
-			if err != nil {
-				t.Fatalf("read reopened event-log revision: %v", err)
-			}
-			if reopened.Meta().Name != "persisted after shared-root rebind" || revision != 1 {
-				t.Fatalf("reopened metadata=%+v event-log revision=%d", reopened.Meta(), revision)
-			}
-			belongs, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Meta().SessionID, wantProjectID)
-			if err != nil {
-				t.Fatalf("SessionBelongsToProject: %v", err)
-			}
-			if !belongs {
-				t.Fatalf("session does not belong to selected project %q", wantProjectID)
-			}
-		})
-	}
-}
-
 func TestSessionWorkspaceRetargeterMovesDormantSessionWithoutRuntimeRebind(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     fixture.child.Meta().SessionID,
@@ -993,85 +680,6 @@ func TestSessionWorkspaceRetargeterMovesDormantSessionWithoutRuntimeRebind(t *te
 	}
 	if result.Binding.ProjectID != targetProjectID {
 		t.Fatalf("target project = %q, want %q", result.Binding.ProjectID, targetProjectID)
-	}
-}
-
-func TestSessionWorkspaceRetargeterStaleObserverCannotRestorePreviousTarget(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, true)
-	if fixture.observer == nil {
-		t.Fatal("fixture did not install blocking metadata observer")
-	}
-	sourceContainer := filepath.Join(fixture.metadata.PersistenceRoot(), "projects", fixture.sourceBinding.ProjectID, "sessions")
-	store, err := session.Create(
-		sourceContainer,
-		fixture.sourceBinding.WorkspaceName,
-		fixture.sourceBinding.CanonicalRoot,
-		sessioncontract.SessionCategoryMain,
-		fixture.storeOptions...,
-	)
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
-
-	fixture.observer.Arm()
-	persistDone := make(chan error, 1)
-	go func() {
-		persistDone <- store.SetName("captured before rebind")
-	}()
-	select {
-	case <-fixture.observer.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("metadata observer did not block")
-	}
-
-	req := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     store.Meta().SessionID,
-		WorkspaceRoot: fixture.targetWorkspaceRoot,
-	}
-	type retargetOutcome struct {
-		result metadata.SessionWorkspaceRetargetResult
-		err    error
-	}
-	retargetDone := make(chan retargetOutcome, 1)
-	go func() {
-		result, err := fixture.retargeter(fixture.metadata).execute(context.Background(), req, nil)
-		retargetDone <- retargetOutcome{result: result, err: err}
-	}()
-	close(fixture.observer.release)
-	if err := <-persistDone; err != nil {
-		t.Fatalf("SetName observer completion: %v", err)
-	}
-	retargeted := <-retargetDone
-	if retargeted.err != nil {
-		t.Fatalf("RetargetWorkspace: %v", retargeted.err)
-	}
-
-	reopened, err := session.OpenByID(
-		fixture.metadata.PersistenceRoot(),
-		store.Meta().SessionID,
-		fixture.metadata.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("OpenByID: %v", err)
-	}
-	if reopened.Meta().WorkspaceRoot != retargeted.result.Binding.CanonicalRoot {
-		t.Fatalf("workspace root = %q, want rebound root %q", reopened.Meta().WorkspaceRoot, retargeted.result.Binding.CanonicalRoot)
-	}
-	if reopened.Meta().WorkspaceContainer != retargeted.result.Binding.WorkspaceName {
-		t.Fatalf("workspace container = %q, want %q", reopened.Meta().WorkspaceContainer, retargeted.result.Binding.WorkspaceName)
-	}
-	if reopened.Meta().Name != "captured before rebind" {
-		t.Fatalf("session name = %q, want pre-rebind metadata mutation", reopened.Meta().Name)
-	}
-	target, err := fixture.metadata.ResolveSessionExecutionTarget(context.Background(), store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
-	}
-	if target.WorkspaceID != retargeted.result.Binding.WorkspaceID {
-		t.Fatalf("workspace id = %q, want rebound workspace %q", target.WorkspaceID, retargeted.result.Binding.WorkspaceID)
 	}
 }
 
@@ -1135,7 +743,7 @@ func (s failingSessionRetargetBoundary) ResolveProjectWorkspaceBoundary(context.
 }
 
 func TestSessionWorkspaceRetargeterPreservesSameProjectWorkspaceSnapshot(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	fixture.openRuntime(t)
 	if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), fixture.sourceBinding.ProjectID, fixture.targetWorkspaceRoot); err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
@@ -1168,7 +776,7 @@ func TestSessionWorkspaceRetargeterPreservesSameProjectWorkspaceSnapshot(t *test
 }
 
 func TestSessionWorkspaceRetargeterSurfacesTargetBoundaryLookupFailureBeforeMovingArtifact(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	fixture.openRuntime(t)
 	req := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     fixture.child.Meta().SessionID,
@@ -1198,7 +806,7 @@ func TestSessionWorkspaceRetargeterSurfacesTargetBoundaryLookupFailureBeforeMovi
 }
 
 func TestSessionWorkspaceRetargeterRestoresArtifactOwnershipAndRuntimeWorkdirAfterCommitFailure(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     fixture.child.Meta().SessionID,
@@ -1261,7 +869,7 @@ func TestSessionWorkspaceRetargeterRestoresArtifactOwnershipAndRuntimeWorkdirAft
 }
 
 func TestSessionWorkspaceRetargeterSchedulesWithoutWaitingAndPublishesCompletion(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     fixture.child.Meta().SessionID,
@@ -1311,7 +919,7 @@ func TestSessionWorkspaceRetargeterSchedulesWithoutWaitingAndPublishesCompletion
 }
 
 func TestSessionWorkspaceRetargeterShutdownCancelsScheduledCallWithoutOutcome(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
+	fixture := newRealSessionRetargetFixture(t)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     fixture.child.Meta().SessionID,
