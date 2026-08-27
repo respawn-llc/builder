@@ -19,8 +19,7 @@ func (e *Engine) SteerSessionRebindFailure(reminder session.SessionRebindReminde
 	if !ok {
 		return session.CommitReceipt{}, errors.New("failed Session rebind reminder produced no model context")
 	}
-	return e.steerWithCommitReceipt(
-		"",
+	return e.steerWithoutStepWithCommitReceipt(
 		steerMessagesWithPersistenceIntent(
 			steeringPriorityNormal,
 			steeringMessageEventDefault,

@@ -582,6 +582,10 @@ func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (s
 	return receipt, err
 }
 
+func (e *Engine) steerWithoutStepWithCommitReceipt(intent steeringIntent) (session.CommitReceipt, error) {
+	return e.steerWithCommitReceipt("", intent)
+}
+
 func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	ordered := make([]steeringIntent, 0, len(intents))
 	for _, intent := range intents {
