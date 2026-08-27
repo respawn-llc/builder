@@ -42,8 +42,8 @@ func (m *uiModel) chatSettingsMutationCommand(operation serverapi.ChatSettingsMu
 	if !ok {
 		return nil
 	}
-	previousAgentRole := m.cachedRuntimeMainView().Session.AgentRole
 	return func() tea.Msg {
+		previousAgentRole := m.cachedRuntimeMainView().Session.AgentRole
 		response, err := client.MutateChatSettings(operation)
 		return chatSettingsDoneMsg{
 			operation:         operation.Kind,
@@ -65,7 +65,6 @@ func (m *uiModel) chatSettingsToggleCommand(
 	if !ok {
 		return nil
 	}
-	previousAgentRole := m.cachedRuntimeMainView().Session.AgentRole
 	return func() tea.Msg {
 		settings, err := client.ReadChatSettings()
 		if err != nil {
@@ -75,6 +74,7 @@ func (m *uiModel) chatSettingsToggleCommand(
 		if err != nil {
 			return chatSettingsDoneMsg{operation: kind, err: err}
 		}
+		previousAgentRole := m.cachedRuntimeMainView().Session.AgentRole
 		response, err := client.MutateChatSettings(operation)
 		return chatSettingsDoneMsg{
 			operation:         kind,
