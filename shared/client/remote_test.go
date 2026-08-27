@@ -821,7 +821,6 @@ func TestRemoteWorkflowProjectSubscriptionRejectsInvalidResourceActionCombinatio
 }
 
 func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
-	operationID := serverapi.NewWorktreeOperationID()
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -834,19 +833,23 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			t.Fatalf("unmarshal delete params: %v", err)
 		}
-		if params.OperationID != operationID ||
+		if params.SessionID != "session-1" ||
 			params.Selector != "wt-1" ||
 			params.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 			t.Fatalf("unexpected delete params: %+v", params)
 		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(req.Params, &fields); err != nil {
+			t.Fatalf("unmarshal delete fields: %v", err)
+		}
+		if _, exists := fields["operation_id"]; exists {
+			t.Fatal("delete request unexpectedly contains operation_id")
+		}
 		branchName := "feature-a"
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeDeleteResult{
-			Kind: serverapi.WorktreeDeleteResultKindCompleted,
-			Completed: &serverapi.WorktreeDeleteCompletedResult{
-				Cleanup: serverapi.WorktreeBranchCleanupOutcome{
-					Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
-					BranchName: &branchName,
-				},
+			Cleanup: serverapi.WorktreeBranchCleanupOutcome{
+				Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
+				BranchName: &branchName,
 			},
 		})); err != nil {
 			t.Fatalf("send delete response: %v", err)
@@ -860,17 +863,14 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.DeleteWorktree(context.Background(), serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: operationID,
-			SessionID:   "session-1",
-		},
+		SessionID:           "session-1",
 		Selector:            "wt-1",
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if resp.Completed == nil || resp.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
+	if resp.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
 		t.Fatalf("unexpected delete response: %+v", resp)
 	}
 }

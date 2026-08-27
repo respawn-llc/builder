@@ -82,7 +82,7 @@ func TestDeleteWorktreeCompletesNonCurrentDeletionAndRetainsBranch(t *testing.T)
 	created := mustCreateWorktree(t, env, "feature/delete-completed")
 	request := worktreeDeleteRequest(env, created.WorktreeID)
 	result, err := env.service.DeleteWorktree(env.ctx, request)
-	if err != nil || result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+	if err != nil {
 		t.Fatalf("DeleteWorktree = %+v, %v", result, err)
 	}
 	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
@@ -108,9 +108,7 @@ func TestDeleteWorktreeForceDeletesUnmergedBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if result.Kind != serverapi.WorktreeDeleteResultKindCompleted ||
-		result.Completed == nil ||
-		result.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
+	if result.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
 		t.Fatalf("DeleteWorktree result = %+v, want deleted branch", result)
 	}
 	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, created.BranchName); err != nil || exists {
@@ -168,20 +166,15 @@ func TestMissingWorktreeDeletePreviewIsCleanAndPreservesLeftoverRoot(t *testing.
 	}
 
 	result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            preview.DeletionSelector,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if result.Kind != serverapi.WorktreeDeleteResultKindCompleted ||
-		result.Completed == nil ||
-		result.Completed.LeftoverRoot == nil ||
-		*result.Completed.LeftoverRoot != canonicalTestPath(t, missingRoot) {
+	if result.LeftoverRoot == nil ||
+		*result.LeftoverRoot != canonicalTestPath(t, missingRoot) {
 		t.Fatalf("delete result = %+v, want completed leftover root", result)
 	}
 	if content, err := os.ReadFile(leftoverFile); err != nil || string(content) != "preserve" {

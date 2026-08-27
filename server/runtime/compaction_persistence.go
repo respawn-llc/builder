@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
 
@@ -24,15 +25,17 @@ func (p compactionPersistence) replaceHistory(stepID, engine string, mode compac
 
 func (p compactionPersistence) setActivity(
 	stepID string,
+	requestID *runtimeids.CompactionRequestID,
 	mode compactionMode,
 	count int,
 	active bool,
 ) error {
-	return p.engine.steer(stepID, steerCompactionActivityIntent(active, string(mode), count))
+	return p.engine.steer(stepID, steerCompactionActivityIntent(active, requestID, string(mode), count))
 }
 
 func (p compactionPersistence) emitStatus(
 	stepID string,
+	requestID *runtimeids.CompactionRequestID,
 	kind EventKind,
 	mode compactionMode,
 	engine, provider string,
@@ -43,6 +46,7 @@ func (p compactionPersistence) emitStatus(
 	e := p.engine
 	status := &CompactionStatus{
 		Mode:              string(mode),
+		RequestID:         requestID,
 		Engine:            strings.TrimSpace(engine),
 		Provider:          strings.TrimSpace(provider),
 		TrimmedItemsCount: textutil.Pointer(trimmed),

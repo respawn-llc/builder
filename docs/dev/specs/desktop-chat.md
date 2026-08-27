@@ -359,20 +359,18 @@
 - Confirming after a Dirty or Unknown preview authorizes force folder removal in the same click. Confirming after a Clean preview does not authorize force folder removal.
 - Deletion rechecks current state. The preview does not reserve the target, lock its state, or guarantee later deletion.
 - If a Clean preview races with the target becoming Dirty or Unknown, the server rejects that deletion. Desktop refreshes the preview in the same popup and requires a new informed confirmation.
-- If deletion fails before returning Completed or Scheduled for another reason, the popup stays open and shows the authoritative diagnostic in error-colored plain text.
+- If deletion fails for another reason, the popup stays open and shows the authoritative diagnostic in error-colored plain text.
 - After an immediate deletion failure, the existing confirmation actions become available again. Repeating Confirm is the retry after the operator addresses the failure.
 - Immediate deletion failure shows no separate Retry action and no Sonner while the popup remains open.
 - The delete popup remains dismissible while a Delete request is pending.
 - Dismissing the popup does not cancel the Delete request.
 - If a Delete request fails after its popup was dismissed, Desktop shows the authoritative diagnostic through Sonner and does not reopen the popup.
 - A clean-to-dirty rejection received after dismissal also uses Sonner. Reopening the delete flow starts a new preview.
-- Delete copies the TUI's two typed outcomes. The delete popup shows its ordinary request-scoped loading state only until the server returns Completed or Scheduled.
-- A Completed result closes the popup and refreshes the list.
-- A Scheduled result closes the popup back to the refreshed list. Desktop does not wait for current-Session retargeting or Git removal to finish.
-- Completed deletion, Scheduled deletion, and later successful transition completion show no Toast or other success notice.
-- If a Completed result reports that requested branch cleanup was retained or that a filesystem root remains, Desktop shows one warning Sonner with the typed branch or root fact and the authoritative diagnostic.
+- The delete popup shows its ordinary request-scoped loading state until the server finishes Session retargeting and Worktree removal.
+- A successful deletion closes the popup and refreshes the list.
+- Successful deletion shows no Toast or other success notice.
+- If the deletion result reports that requested branch cleanup was retained or that a filesystem root remains, Desktop shows one warning Sonner with the typed branch or root fact and the authoritative diagnostic.
 - Incomplete cleanup does not reopen the delete popup.
-- The later authoritative transition outcome refreshes target and list state and surfaces final failure through Sonner. Desktop adds no long-lived scheduled-deletion spinner.
 - A Missing row cannot switch and shows only its trash action. Deleting it applies the server's stale-record cleanup and current-Session retargeting behavior.
 - A detached available row can switch and shows its trash action, but its delete popup has no branch-cleanup item.
 - Worktree creation uses a focused child state within the same Worktree sidebar destination.

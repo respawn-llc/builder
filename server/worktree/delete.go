@@ -40,14 +40,11 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		return serverapi.WorktreeDeleteResult{}, err
 	}
 	defer release()
-	completed, err := s.executeDeleteLocked(ctx, workspaceCtx, match.entry, req)
+	result, err := s.executeDeleteLocked(ctx, workspaceCtx, match.entry, req)
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
 	}
-	return serverapi.WorktreeDeleteResult{
-		Kind:      serverapi.WorktreeDeleteResultKindCompleted,
-		Completed: &completed,
-	}, nil
+	return result, nil
 }
 
 func (s *Service) executeDeleteLocked(
@@ -55,17 +52,17 @@ func (s *Service) executeDeleteLocked(
 	workspaceCtx sessionWorkspaceContext,
 	entry serverapi.WorktreeTopologyEntry,
 	req serverapi.WorktreeDeleteRequest,
-) (serverapi.WorktreeDeleteCompletedResult, error) {
+) (serverapi.WorktreeDeleteResult, error) {
 	if _, err := entry.DeletionSelector(); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	target, record, err := s.deleteTarget(ctx, workspaceCtx, entry)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	retainRecord, err := s.retainManagedTaskWorktreeRecord(ctx, record)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	var targetRoot *string
 	if target != nil {
@@ -75,18 +72,18 @@ func (s *Service) executeDeleteLocked(
 	}
 	activityLease, err := s.acquireDeleteTargetActivity(ctx, record, targetRoot)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	defer activityLease.Close()
 	mutationCtx := activityLease.Context()
 	if err := s.ensureDeleteFolderRemovalAuthorized(ctx, entry, req.ForceFolderRemoval); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
 		retargetCompensation, err = s.retargetDeleteSessions(mutationCtx, workspaceCtx, *record)
 		if err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
+			return serverapi.WorktreeDeleteResult{}, err
 		}
 	}
 	leftoverRoot := missingLeftoverRoot(entry)
@@ -101,20 +98,20 @@ func (s *Service) executeDeleteLocked(
 		if err != nil {
 			var recoveryError *PrunableWorktreeRecoveryError
 			if errors.As(err, &recoveryError) && recoveryError.Destructive {
-				return serverapi.WorktreeDeleteCompletedResult{}, err
+				return serverapi.WorktreeDeleteResult{}, err
 			}
-			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
+			return serverapi.WorktreeDeleteResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
 		}
 	}
 	if record != nil && !retainRecord {
 		if err := s.metadata.DeleteWorktreeRecordByID(ctx, record.ID); err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
+			return serverapi.WorktreeDeleteResult{}, err
 		}
 	}
 	cleanup := s.cleanupDeletedBranch(ctx, workspaceCtx.workspaceRoot, entry, record, req.BranchCleanupPolicy)
-	result := serverapi.WorktreeDeleteCompletedResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}
+	result := serverapi.WorktreeDeleteResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}
 	if err := result.Validate(); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	return result, nil
 }

@@ -237,12 +237,9 @@ func (m *uiModel) inputController() uiInputController {
 }
 
 func worktreeDeleteSuccessStatus(target string, result serverapi.WorktreeDeleteResult) string {
-	if result.Kind == serverapi.WorktreeDeleteResultKindScheduled {
-		return "Scheduled deletion of worktree " + strings.TrimSpace(target)
-	}
 	status := "Deleted worktree " + strings.TrimSpace(target)
-	if result.Completed != nil && result.Completed.Cleanup.Diagnostic != nil {
-		status += ". Kept branch: " + strings.TrimSpace(*result.Completed.Cleanup.Diagnostic)
+	if result.Cleanup.Diagnostic != nil {
+		status += ". Kept branch: " + strings.TrimSpace(*result.Cleanup.Diagnostic)
 	}
 	return status
 }

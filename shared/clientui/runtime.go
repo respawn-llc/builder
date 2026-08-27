@@ -122,10 +122,14 @@ func (r RuntimeShellRequest) Validate() error {
 }
 
 type RuntimeCompactRequest struct {
-	Args string
+	RequestID runtimeids.CompactionRequestID
+	Args      string
 }
 
 func (r RuntimeCompactRequest) Validate() error {
+	if r.RequestID.IsZero() {
+		return errors.New("compaction request id is required")
+	}
 	return nil
 }
 

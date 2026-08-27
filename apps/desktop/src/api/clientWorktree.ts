@@ -84,22 +84,17 @@ export async function deleteWorktree(
   ) {
     throw new TypeError("Worktree Delete confirmation is invalid for this preview.");
   }
-  const id = parseWorktreeOperationID(crypto.randomUUID());
   const result = await call(
     transport,
     "worktree.delete",
     {
       ...session(sessionID),
-      operation_id: id.toJSONValue(),
       selector: authority.deletionSelector,
       force_folder_removal: authority.cleanliness.kind !== "clean",
       branch_cleanup_policy: choice === "confirm" ? "auto_if_kent_created" : "delete_safe",
     },
     { schema: worktree.worktreeDeleteResultSchema },
   );
-  if (result.kind === "scheduled") {
-    requireMatchingOperationID(id.toJSONValue(), result.acknowledgement);
-  }
   return result;
 }
 

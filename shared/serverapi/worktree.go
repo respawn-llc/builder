@@ -254,7 +254,7 @@ type WorktreeLeaveRequest struct {
 }
 
 type WorktreeDeleteRequest struct {
-	WorktreeTransitionHeader
+	SessionID           string                    `json:"session_id"`
 	Selector            string                    `json:"selector"`
 	ForceFolderRemoval  bool                      `json:"force_folder_removal"`
 	BranchCleanupPolicy WorktreeBranchCleanupMode `json:"branch_cleanup_policy"`
@@ -264,22 +264,9 @@ type WorktreeScheduledAcknowledgement struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 }
 
-type WorktreeDeleteResultKind string
-
-const (
-	WorktreeDeleteResultKindCompleted WorktreeDeleteResultKind = "completed"
-	WorktreeDeleteResultKindScheduled WorktreeDeleteResultKind = "scheduled"
-)
-
-type WorktreeDeleteCompletedResult struct {
+type WorktreeDeleteResult struct {
 	Cleanup      WorktreeBranchCleanupOutcome `json:"cleanup"`
 	LeftoverRoot *string                      `json:"leftover_root,omitempty"`
-}
-
-type WorktreeDeleteResult struct {
-	Kind      WorktreeDeleteResultKind          `json:"kind"`
-	Completed *WorktreeDeleteCompletedResult    `json:"completed,omitempty"`
-	Scheduled *WorktreeScheduledAcknowledgement `json:"scheduled,omitempty"`
 }
 
 func (f WorktreeGitFacts) Validate() error {
@@ -591,7 +578,7 @@ func (request WorktreeLeaveRequest) Validate() error {
 }
 
 func (request WorktreeDeleteRequest) Validate() error {
-	if err := request.WorktreeTransitionHeader.Validate(); err != nil {
+	if err := validateRequiredSessionID(request.SessionID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(request.Selector) == "" {
@@ -604,7 +591,7 @@ func (ack WorktreeScheduledAcknowledgement) Validate() error {
 	return ack.OperationID.Validate()
 }
 
-func (result WorktreeDeleteCompletedResult) Validate() error {
+func (result WorktreeDeleteResult) Validate() error {
 	if err := result.Cleanup.Validate(); err != nil {
 		return err
 	}
@@ -612,33 +599,6 @@ func (result WorktreeDeleteCompletedResult) Validate() error {
 		return errors.New("leftover_root must not be empty")
 	}
 	return nil
-}
-
-func (result WorktreeDeleteResult) Validate() error {
-	payloadCount := 0
-	if result.Completed != nil {
-		payloadCount++
-	}
-	if result.Scheduled != nil {
-		payloadCount++
-	}
-	if payloadCount != 1 {
-		return errors.New("worktree delete result requires exactly one payload")
-	}
-	switch result.Kind {
-	case WorktreeDeleteResultKindCompleted:
-		if result.Completed == nil {
-			return errors.New("completed delete result requires completed payload")
-		}
-		return result.Completed.Validate()
-	case WorktreeDeleteResultKindScheduled:
-		if result.Scheduled == nil {
-			return errors.New("scheduled delete result requires scheduled payload")
-		}
-		return result.Scheduled.Validate()
-	default:
-		return errors.New("worktree delete result kind is invalid")
-	}
 }
 
 func parseWorktreeUUIDV4(value string, field string) (uuid.UUID, error) {

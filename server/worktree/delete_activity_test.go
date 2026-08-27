@@ -298,7 +298,7 @@ func TestDeleteWorktreeRejectsInFlightStartAndCompletesUnrelatedWorktree(t *test
 	unrelatedDeleted := deleteServiceTestWorktree(env, unrelated.WorktreeID)
 	select {
 	case result := <-unrelatedDeleted:
-		if result.err != nil || result.result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+		if result.err != nil {
 			t.Fatalf("DeleteWorktree unrelated = %+v, %v; want completed", result.result, result.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -373,7 +373,7 @@ func TestDeleteWorktreeRejectsLiveRunAndCompletesUnrelatedWorktree(t *testing.T)
 	unrelatedDeleted := deleteServiceTestWorktree(env, unrelated.WorktreeID)
 	select {
 	case result := <-unrelatedDeleted:
-		if result.err != nil || result.result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+		if result.err != nil {
 			t.Fatalf("DeleteWorktree unrelated = %+v, %v; want completed", result.result, result.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -525,7 +525,7 @@ func TestDeleteWorktreeRetiresIdleRuntimeAndRetargetsSessionBeforePhysicalRemova
 
 	barrier.Unblock()
 	result := <-deleted
-	if result.Err != nil || result.Value.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+	if result.Err != nil {
 		t.Fatalf("DeleteWorktree = %+v, %v; want completed", result.Value, result.Err)
 	}
 	if _, err := os.Stat(target.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
@@ -610,9 +610,7 @@ func TestDeleteWorktreeCurrentTargetRetargetsOtherSession(t *testing.T) {
 	request := worktreeDeleteRequest(env, target.WorktreeID)
 
 	result, err := env.service.DeleteWorktree(env.ctx, request)
-	if err != nil ||
-		result.Kind != serverapi.WorktreeDeleteResultKindCompleted ||
-		result.Completed == nil {
+	if err != nil {
 		t.Fatalf("DeleteWorktree current target = %+v, %v; want completed", result, err)
 	}
 	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
@@ -643,12 +641,9 @@ func TestDeleteWorktreeCurrentTargetForceDeletesBranch(t *testing.T) {
 
 	request := worktreeDeleteRequest(env, target.WorktreeID)
 	request.BranchCleanupPolicy = serverapi.WorktreeBranchCleanupModeDeleteForce
-	result, err := env.service.DeleteWorktree(env.ctx, request)
+	_, err := env.service.DeleteWorktree(env.ctx, request)
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
-	}
-	if result.Kind != serverapi.WorktreeDeleteResultKindCompleted || result.Completed == nil {
-		t.Fatalf("DeleteWorktree result = %+v, want completed", result)
 	}
 	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, target.BranchName); err != nil || exists {
 		t.Fatalf("force-deleted branch exists=%v err=%v", exists, err)

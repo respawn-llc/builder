@@ -47,9 +47,10 @@ type TranscriptReasoningTraceState struct {
 }
 
 type TranscriptCompactionState struct {
-	StepID string
-	Mode   string
-	Count  int
+	StepID    string
+	RequestID *runtimeids.CompactionRequestID
+	Mode      string
+	Count     int
 }
 
 func (e *Engine) WithTranscriptHydrationSnapshot(fn func(TranscriptHydrationSnapshot) error) error {

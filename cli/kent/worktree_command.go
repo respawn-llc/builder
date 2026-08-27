@@ -298,19 +298,14 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	header, err := newWorktreeCommandTransitionHeader(sessionID)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
 	return withWorktreeCommandRemote(stderr, sessionID, func(remote apicontract.WorktreeService) int {
 		ctx, cancel := context.WithTimeout(context.Background(), worktreeMutationTimeout)
 		defer cancel()
 		result, err := remote.DeleteWorktree(ctx, serverapi.WorktreeDeleteRequest{
-			WorktreeTransitionHeader: header,
-			Selector:                 strings.TrimSpace(fs.Args()[0]),
-			ForceFolderRemoval:       *force,
-			BranchCleanupPolicy:      policy,
+			SessionID:           sessionID,
+			Selector:            strings.TrimSpace(fs.Args()[0]),
+			ForceFolderRemoval:  *force,
+			BranchCleanupPolicy: policy,
 		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -319,22 +314,16 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		if *jsonOut {
 			return writeCommandJSON(stdout, stderr, result)
 		}
-		if result.Kind == serverapi.WorktreeDeleteResultKindScheduled {
-			fmt.Fprintf(stdout, "Scheduled deletion: %s\n", result.Scheduled.OperationID.String())
-		} else {
-			fmt.Fprintln(stdout, "Deleted worktree")
-			if result.Completed != nil {
-				if result.Completed.Cleanup.Kind == serverapi.WorktreeBranchCleanupOutcomeRetained {
-					fmt.Fprintf(stdout, "Kept branch %s", *result.Completed.Cleanup.BranchName)
-					if result.Completed.Cleanup.Diagnostic != nil {
-						fmt.Fprintf(stdout, ": %s", *result.Completed.Cleanup.Diagnostic)
-					}
-					fmt.Fprintln(stdout)
-				}
-				if result.Completed.LeftoverRoot != nil {
-					fmt.Fprintf(stdout, "Left folder untouched: %s\n", *result.Completed.LeftoverRoot)
-				}
+		fmt.Fprintln(stdout, "Deleted worktree")
+		if result.Cleanup.Kind == serverapi.WorktreeBranchCleanupOutcomeRetained {
+			fmt.Fprintf(stdout, "Kept branch %s", *result.Cleanup.BranchName)
+			if result.Cleanup.Diagnostic != nil {
+				fmt.Fprintf(stdout, ": %s", *result.Cleanup.Diagnostic)
 			}
+			fmt.Fprintln(stdout)
+		}
+		if result.LeftoverRoot != nil {
+			fmt.Fprintf(stdout, "Left folder untouched: %s\n", *result.LeftoverRoot)
 		}
 		return 0
 	})

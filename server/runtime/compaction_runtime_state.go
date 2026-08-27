@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/runtimeids"
 )
 
 type workflowPostCompletionActivity uint8
@@ -107,6 +108,7 @@ func newCompactionRuntimeState() *compactionRuntimeState {
 
 func (s *compactionRuntimeState) SetActive(
 	stepID string,
+	requestID *runtimeids.CompactionRequestID,
 	mode string,
 	count int,
 ) {
@@ -115,9 +117,10 @@ func (s *compactionRuntimeState) SetActive(
 	}
 	s.mu.Lock()
 	s.active = &TranscriptCompactionState{
-		StepID: strings.TrimSpace(stepID),
-		Mode:   strings.TrimSpace(mode),
-		Count:  count,
+		StepID:    strings.TrimSpace(stepID),
+		RequestID: requestID,
+		Mode:      strings.TrimSpace(mode),
+		Count:     count,
 	}
 	s.mu.Unlock()
 }

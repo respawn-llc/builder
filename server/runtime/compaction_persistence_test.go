@@ -5,6 +5,7 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
 
@@ -28,6 +29,7 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 	defer restoreStep()
 	err := newCompactionPersistence(engine).emitStatus(
 		stepID,
+		nil,
 		EventCompactionFailed,
 		compactionModeAuto,
 		"remote",
@@ -61,6 +63,7 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
 	stepID := runtimeTestStepID("compact")
+	requestID := runtimeids.NewCompactionRequestID()
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
 	receipt, err := newCompactionPersistence(engine).replaceHistory(
@@ -75,7 +78,7 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 	if err != nil || !receipt.Committed {
 		t.Fatalf("replace history: receipt=%+v error=%v", receipt, err)
 	}
-	if err := newCompactionPersistence(engine).emitStatus(stepID, EventCompactionCompleted, compactionModeManual, "local", "openai", nil, 1, ""); err != nil {
+	if err := newCompactionPersistence(engine).emitStatus(stepID, &requestID, EventCompactionCompleted, compactionModeManual, "local", "openai", nil, 1, ""); err != nil {
 		t.Fatalf("emit completion status: %v", err)
 	}
 
@@ -89,8 +92,9 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 			}
 			localIndexes = append(localIndexes, index)
 		case EventCompactionCompleted:
-			if event.Compaction == nil {
-				t.Fatal("completion status is absent")
+			if event.Compaction == nil || event.Compaction.RequestID == nil ||
+				*event.Compaction.RequestID != requestID {
+				t.Fatalf("completion request identity = %+v, want %s", event.Compaction, requestID.String())
 			}
 			statusIndex = index
 		}
@@ -114,7 +118,7 @@ func TestAutoCompactionStatusEventDoesNotPublishCommittedEntryStart(t *testing.T
 	stepID := runtimeTestStepID("compact")
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
-	if err := newCompactionPersistence(engine).emitStatus(stepID, EventCompactionCompleted, compactionModeAuto, "local", "openai", nil, 1, ""); err != nil {
+	if err := newCompactionPersistence(engine).emitStatus(stepID, nil, EventCompactionCompleted, compactionModeAuto, "local", "openai", nil, 1, ""); err != nil {
 		t.Fatalf("emit auto completion status: %v", err)
 	}
 	if len(events) != 1 || events[0].Kind != EventCompactionCompleted || events[0].CommittedEntryStartSet {

@@ -63,7 +63,7 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 		}
 		return tea.Batch(stateCmd, m.handleOngoingResult(result), m.reconcileSpinnerTicking(true), connectionStatusCmd)
 	case ongoingTranscriptEventLoss:
-		m.pendingManualCompaction = false
+		m.pendingCompactionRequestIDs = nil
 		if runtimeattach.IsRuntimeConnectionError(event.Err) {
 			m.observeRuntimeRequestResult(event.Err)
 		}

@@ -48,20 +48,13 @@ const cleanup = z.discriminatedUnion("kind", [
     diagnostic: value.diagnostic,
   })),
 ]);
-export const worktreeDeleteResultSchema = z.union([
-  strict({
-    kind: z.literal("completed"),
-    completed: strict({ cleanup, leftover_root: optionalNonBlankString }),
-  }).transform((value) => ({
-    kind: value.kind,
-    cleanup: value.completed.cleanup,
-    leftoverRoot: value.completed.leftover_root,
-  })),
-  strict({
-    kind: z.literal("scheduled"),
-    scheduled: worktreeScheduledAcknowledgementSchema,
-  }).transform((value) => ({ kind: value.kind, acknowledgement: value.scheduled })),
-]);
+export const worktreeDeleteResultSchema = strict({
+  cleanup,
+  leftover_root: optionalNonBlankString,
+}).transform((value) => ({
+  cleanup: value.cleanup,
+  leftoverRoot: value.leftover_root,
+}));
 export type WorktreeDeleteResult = Output<typeof worktreeDeleteResultSchema>;
 export const worktreeCleanlinessSchema = z.discriminatedUnion("kind", [
   strict({ kind: z.literal("clean") }),

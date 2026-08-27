@@ -422,33 +422,15 @@ func TestWorktreeTransitionRequestsUseUUIDV4Correlation(t *testing.T) {
 	}
 }
 
-func TestWorktreeDeleteResultAndCleanupPoliciesAreDiscriminated(t *testing.T) {
-	operationID := NewWorktreeOperationID()
-	completed := WorktreeDeleteResult{
-		Kind: WorktreeDeleteResultKindCompleted,
-		Completed: &WorktreeDeleteCompletedResult{
-			Cleanup: WorktreeBranchCleanupOutcome{
-				Kind:       WorktreeBranchCleanupOutcomeDeleted,
-				BranchName: stringPointer("feature"),
-			},
+func TestWorktreeDeleteResultAndCleanupPoliciesAreValidated(t *testing.T) {
+	result := WorktreeDeleteResult{
+		Cleanup: WorktreeBranchCleanupOutcome{
+			Kind:       WorktreeBranchCleanupOutcomeDeleted,
+			BranchName: stringPointer("feature"),
 		},
 	}
-	if err := completed.Validate(); err != nil {
-		t.Fatalf("completed deletion result rejected: %v", err)
-	}
-	scheduled := WorktreeDeleteResult{
-		Kind:      WorktreeDeleteResultKindScheduled,
-		Scheduled: &WorktreeScheduledAcknowledgement{OperationID: operationID},
-	}
-	if err := scheduled.Validate(); err != nil {
-		t.Fatalf("scheduled deletion result rejected: %v", err)
-	}
-	if err := (WorktreeDeleteResult{
-		Kind:      WorktreeDeleteResultKindScheduled,
-		Completed: completed.Completed,
-		Scheduled: scheduled.Scheduled,
-	}).Validate(); err == nil {
-		t.Fatal("delete result with both payloads validated")
+	if err := result.Validate(); err != nil {
+		t.Fatalf("deletion result rejected: %v", err)
 	}
 	for _, policy := range []WorktreeBranchCleanupMode{
 		WorktreeBranchCleanupModeRetain,
@@ -478,9 +460,9 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
 		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}},
 		WorktreeDeleteRequest{
-			WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"},
-			Selector:                 "feature",
-			BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
+			SessionID:           "session",
+			Selector:            "feature",
+			BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
 		},
 	}
 	for _, request := range valid {
@@ -492,7 +474,7 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 		WorktreeSelectorPreviewRequest{SessionID: "session"},
 		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{SessionID: "session"}, Selector: "feature"},
 		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID}},
-		WorktreeDeleteRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
+		WorktreeDeleteRequest{SessionID: "session", Selector: "feature"},
 	}
 	for _, request := range invalid {
 		if err := request.Validate(); err == nil {
@@ -532,21 +514,6 @@ func TestWorktreeTransitionRequestsKeepFlatIdentity(t *testing.T) {
 				return request.WorktreeTransitionHeader
 			},
 		},
-		{
-			request: WorktreeDeleteRequest{
-				WorktreeTransitionHeader: header(),
-				Selector:                 "feature",
-				BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
-			},
-			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
-				t.Helper()
-				var request WorktreeDeleteRequest
-				if err := json.Unmarshal(data, &request); err != nil {
-					t.Fatalf("decode delete request: %v", err)
-				}
-				return request.WorktreeTransitionHeader
-			},
-		},
 	} {
 		t.Run(fmt.Sprintf("%T", testCase.request), func(t *testing.T) {
 			data, err := json.Marshal(testCase.request)
@@ -573,6 +540,24 @@ func TestWorktreeTransitionRequestsKeepFlatIdentity(t *testing.T) {
 				t.Fatalf("decoded header=%+v", decoded)
 			}
 		})
+	}
+}
+
+func TestWorktreeDeleteRequestOmitsTransitionOperationIdentity(t *testing.T) {
+	data, err := json.Marshal(WorktreeDeleteRequest{
+		SessionID:           "session",
+		Selector:            "feature",
+		BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
+	})
+	if err != nil {
+		t.Fatalf("marshal delete request: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("decode delete request fields: %v", err)
+	}
+	if _, exists := fields["operation_id"]; exists {
+		t.Fatal("delete request unexpectedly contains operation_id")
 	}
 }
 

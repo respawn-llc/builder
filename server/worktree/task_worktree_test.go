@@ -1545,10 +1545,7 @@ func TestDeleteWorktreeRecreatesNonTerminalTaskManagedWorktreeOnRestore(t *testi
 	task, created, _ := materializeAndLockTaskWorktree(t, env)
 
 	_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            taskWorktreeID(created.Worktree),
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
@@ -1609,10 +1606,7 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	}
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            taskWorktreeID(created.Worktree),
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})

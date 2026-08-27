@@ -95,13 +95,9 @@ func (s Service) Delete(
 	forceFolderRemoval bool,
 	cleanupPolicy serverapi.WorktreeBranchCleanupMode,
 ) (serverapi.WorktreeDeleteResult, error) {
-	operationID := s.operationID()
 	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeDeleteResult, error) {
 		return s.Client.DeleteWorktree(ctx, serverapi.WorktreeDeleteRequest{
-			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-				OperationID: operationID,
-				SessionID:   s.SessionID,
-			},
+			SessionID:           s.SessionID,
 			Selector:            strings.TrimSpace(selector),
 			ForceFolderRemoval:  forceFolderRemoval,
 			BranchCleanupPolicy: cleanupPolicy,

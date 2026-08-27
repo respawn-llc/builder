@@ -508,7 +508,7 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
 		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			_, compactErr := engine.CompactContextWithAcceptance(runCtx, req.Args, attempt.Accept)
+			_, compactErr := engine.CompactContextForRequestWithAcceptance(runCtx, req.RequestID, req.Args, attempt.Accept)
 			return compactErr
 		})
 		return struct{}{}, attempt.Accepted(), commandErr
