@@ -318,6 +318,8 @@ In Desktop, the route-scoped `Unblocked` chip shows Tasks with zero unsatisfied 
 
 Desktop boards sort each column by Updated, Created, Labels, or Short ID. The default is Updated descending; sorting is applied per column after active Labels and Unblocked filters, and Labels follow the Project catalog order.
 
+Project Tasks sort Active, Backlog, and Done together by Updated, Created, Status, Title, Labels, or Short ID. The default is Updated descending, and sort changes apply immediately while the server preserves the selected order.
+
 The CLI manages the same Project catalog with `kent task label create`, `list`, `move`, `rename`, and `delete`. `move` accepts exactly one placement: first, last, before another label, or after another label. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
 
 ### CLI Workflow And Task Scope

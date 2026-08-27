@@ -3,8 +3,7 @@ import { CheckCircle2Icon, FilterIcon, XIcon } from "lucide-react";
 
 import { taskLabelFilterConditionCount } from "@/api";
 import { LabelChooser, useProjectLabelFilter } from "@/shared/labels";
-import { Button, InteractiveChip, cx } from "@/ui";
-import { AnimatedBoardChipSummary } from "./BoardChipSummary";
+import { AnimatedChipSummary, Button, InteractiveChip, cx } from "@/ui";
 import { useBoardQuery } from "./BoardQueryRuntime";
 import { BoardSortChrome } from "./BoardSortChrome";
 
@@ -40,7 +39,7 @@ export function BoardFilterChrome() {
               tone={active ? "primary" : "neutral"}
             >
               <FilterIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
-              <AnimatedBoardChipSummary text={summary} />
+              <AnimatedChipSummary text={summary} />
             </InteractiveChip>
           }
         />

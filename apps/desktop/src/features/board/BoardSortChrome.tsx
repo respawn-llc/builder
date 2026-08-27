@@ -1,5 +1,5 @@
 import type { BoardNodeCardsSort } from "@/api";
-import { SortChrome } from "@/ui";
+import { TaskSortChrome } from "@/shared/task-sorting";
 import { useBoardQuery } from "./BoardQueryRuntime";
 
 export const boardSortFieldOptions = [
@@ -14,5 +14,5 @@ export const boardSortFieldOptions = [
 
 export function BoardSortChrome() {
   const { setSort, sort } = useBoardQuery();
-  return <SortChrome fieldOptions={boardSortFieldOptions} onSortChange={setSort} sort={sort} />;
+  return <TaskSortChrome fieldOptions={boardSortFieldOptions} onSortChange={setSort} sort={sort} />;
 }

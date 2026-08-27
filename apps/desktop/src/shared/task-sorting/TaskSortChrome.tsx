@@ -2,15 +2,20 @@ import { ArrowDownUpIcon } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { AnimatedChipSummary } from "./AnimatedChipSummary";
-import { InteractiveChip } from "./InteractiveChip";
-import { Popover, PopoverContent, PopoverTrigger } from "./radix/popover";
-import { RadioGroup, RadioGroupItem } from "./radix/radio-group";
-import { SegmentedControl } from "./SegmentedControl";
+import {
+  AnimatedChipSummary,
+  InteractiveChip,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  RadioGroup,
+  RadioGroupItem,
+  SegmentedControl,
+} from "@/ui";
 
 type SortDirection = "asc" | "desc";
 
-export function SortChrome<Field extends string>({
+export function TaskSortChrome<Field extends string>({
   fieldOptions,
   onSortChange,
   sort,

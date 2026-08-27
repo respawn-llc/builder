@@ -1,4 +1,4 @@
-import { SortChrome } from "@/ui";
+import { TaskSortChrome } from "@/shared/task-sorting";
 import { projectTaskSortFieldOptions, type ProjectTaskSort } from "./projectTaskSorting";
 
 export function ProjectSortChrome({
@@ -8,5 +8,7 @@ export function ProjectSortChrome({
   onSortChange(sort: ProjectTaskSort): void;
   sort: ProjectTaskSort;
 }>) {
-  return <SortChrome fieldOptions={projectTaskSortFieldOptions} onSortChange={onSortChange} sort={sort} />;
+  return (
+    <TaskSortChrome fieldOptions={projectTaskSortFieldOptions} onSortChange={onSortChange} sort={sort} />
+  );
 }

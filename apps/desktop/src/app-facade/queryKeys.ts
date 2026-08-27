@@ -164,11 +164,14 @@ export const queryKeys = {
   ],
   projectTaskListsRoot: (projectID: string) => ["task-list", projectID],
   projectTaskGroupCounts: (projectID: string) => ["task-list", projectID, "counts"],
-  projectTaskGroup: (projectID: string, group: "active" | "backlog" | "done", sort: WorkflowTaskListSort) => [
+  projectTaskGroupRoot: (projectID: string, group: "active" | "backlog" | "done") => [
     "task-list",
     projectID,
     "group",
     group,
+  ],
+  projectTaskGroup: (projectID: string, group: "active" | "backlog" | "done", sort: WorkflowTaskListSort) => [
+    ...queryKeys.projectTaskGroupRoot(projectID, group),
     sort.field,
     sort.direction,
   ],

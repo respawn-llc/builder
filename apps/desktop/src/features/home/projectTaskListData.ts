@@ -103,6 +103,7 @@ function useProjectTaskGroupData(
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   const queryKey = queryKeys.projectTaskGroup(projectID, group, sort);
+  const queryKeyRoot = queryKeys.projectTaskGroupRoot(projectID, group);
   const query = useInfiniteQuery<
     TaskListPage,
     Error,
@@ -153,11 +154,11 @@ function useProjectTaskGroupData(
     if (enabled) {
       return;
     }
+    dispatchGeneration({ kind: "disabled" });
     queryClient.removeQueries({
-      queryKey,
-      exact: true,
+      queryKey: queryKeyRoot,
     });
-  }, [enabled, queryClient, queryKey]);
+  }, [enabled, group, projectID, queryClient]);
   return projectTaskGroupData({
     displayedData: displayedData ?? undefined,
     enabled,
@@ -175,6 +176,7 @@ type ProjectTaskGenerationState = Readonly<{
 
 type ProjectTaskGenerationAction =
   | Readonly<{ data: InfiniteData<TaskListPage, number>; kind: "established"; sort: ProjectTaskSort }>
+  | Readonly<{ kind: "disabled" }>
   | Readonly<{ kind: "selected"; sort: ProjectTaskSort }>;
 
 const emptyGenerationState: ProjectTaskGenerationState = {
@@ -187,6 +189,9 @@ function projectTaskGenerationReducer(
   state: ProjectTaskGenerationState,
   action: ProjectTaskGenerationAction,
 ): ProjectTaskGenerationState {
+  if (action.kind === "disabled") {
+    return emptyGenerationState;
+  }
   if (action.kind === "selected") {
     return projectTaskSortsEqual(state.currentSort, action.sort)
       ? state

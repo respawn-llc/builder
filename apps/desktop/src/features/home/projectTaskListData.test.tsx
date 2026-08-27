@@ -400,6 +400,66 @@ describe("Project Task-list data ownership", () => {
     expect(result.current.active.tasks).toEqual([]);
   });
 
+  it("clears every selected sort generation when collapsing and reopening a group", async () => {
+    const pendingReplacement = deferred<TaskListPage>();
+    let mode: "initial" | "replacement" | "reopen-error" = "initial";
+    state.listPage = async (input) => {
+      if (mode === "reopen-error") {
+        throw new Error("reopen failed");
+      }
+      if (mode === "replacement" && input.sort?.[0]?.field === "created") {
+        return pendingReplacement.promise;
+      }
+      return pageResponse(taskGroupForInput(input), input.offset ?? 0);
+    };
+    const harness = createHarness();
+    const initialSort: ProjectTaskSort = defaultProjectTaskSort;
+    const { result, rerender } = renderHook(
+      ({ expanded, sort }) =>
+        useProjectTaskListData({
+          projectID: "project-1",
+          expanded: { active: expanded, backlog: false, done: false },
+          sort,
+        }),
+      {
+        initialProps: { expanded: true, sort: initialSort },
+        wrapper: ({ children }) => harness.render(children),
+      },
+    );
+
+    await waitFor(() => {
+      expect(result.current.active.tasks).toHaveLength(1);
+    });
+    mode = "replacement";
+    rerender({ expanded: true, sort: { field: "created", direction: "desc" } });
+    await waitFor(() => {
+      expect(result.current.active.isSortReplacement).toBe(true);
+    });
+    pendingReplacement.reject(new Error("replacement failed"));
+    await waitFor(() => {
+      expect(result.current.active.isError).toBe(true);
+    });
+
+    rerender({ expanded: false, sort: { field: "created", direction: "desc" } });
+    await waitFor(() => {
+      expect(
+        harness.queryClient
+          .getQueriesData({
+            queryKey: queryKeys.projectTaskGroupRoot("project-1", "active"),
+          })
+          .filter(([, data]) => data !== undefined),
+      ).toEqual([]);
+    });
+    expect(result.current.active.tasks).toEqual([]);
+
+    mode = "reopen-error";
+    rerender({ expanded: true, sort: { field: "created", direction: "desc" } });
+    await waitFor(() => {
+      expect(result.current.active.isError).toBe(true);
+    });
+    expect(result.current.active.tasks).toEqual([]);
+  });
+
   it("distinguishes a first-page failure from a retained next-edge failure", async () => {
     state.listPage = async () => {
       throw new Error("first page failed");
