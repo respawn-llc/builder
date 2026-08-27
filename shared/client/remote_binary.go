@@ -6,7 +6,9 @@ import (
 
 	"core/shared/protoapi"
 	"core/shared/rpcwire"
+	"core/shared/serverapi"
 
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
@@ -35,6 +37,14 @@ type generatedUnaryResult[Success any, Failure comparableProtoMessage] interface
 
 type generatedServerNotReadyFailure interface {
 	GetServerNotReady() *serverpb.ServerNotReadyDetails
+}
+
+type generatedAuthRequiredFailure interface {
+	GetAuthRequired() *authpb.AuthRequiredDetails
+}
+
+type generatedInternalFailure interface {
+	GetInternalFailure() *sharedpb.InternalFailureDetails
 }
 
 func (e remoteTransportFailureError) Error() string {
@@ -87,12 +97,23 @@ func decodeGeneratedResult[
 	if failure == zeroFailure {
 		return zeroSuccess, fmt.Errorf("%s classified a failure without an error value", method.FullName())
 	}
-	if typed, ok := any(failure).(generatedServerNotReadyFailure); ok {
-		if details := typed.GetServerNotReady(); details != nil {
-			return zeroSuccess, protoapi.ServerNotReadyFromProto(details)
-		}
+	if err, matched := generatedPlatformFailure(failure); matched {
+		return zeroSuccess, err
 	}
 	return zeroSuccess, decodeFailure(failure)
+}
+
+func generatedPlatformFailure[Failure comparableProtoMessage](failure Failure) (error, bool) {
+	if typed, ok := any(failure).(generatedAuthRequiredFailure); ok && typed.GetAuthRequired() != nil {
+		return serverapi.ErrServerAuthRequired, true
+	}
+	if typed, ok := any(failure).(generatedServerNotReadyFailure); ok && typed.GetServerNotReady() != nil {
+		return protoapi.ServerNotReadyFromProto(typed.GetServerNotReady()), true
+	}
+	if typed, ok := any(failure).(generatedInternalFailure); ok && typed.GetInternalFailure() != nil {
+		return protoapi.InternalFailureFromProto(typed.GetInternalFailure()), true
+	}
+	return nil, false
 }
 
 func (c *Remote) callBinaryControl(

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 
 	"core/shared/protoapi"
 	"core/shared/protocol"
@@ -16,14 +15,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
-
-type remoteBinarySubscription[Event proto.Message] struct {
-	conn          rpcwire.Conn
-	operations    protoapi.SubscriptionOperations
-	newEvent      func() Event
-	newCompletion func() binarySubscriptionCompletion
-	closeOnce     sync.Once
-}
 
 type binarySubscriptionCompletion interface {
 	proto.Message
@@ -45,7 +36,7 @@ func subscribeGeneratedBinary[
 	newEvent func() Event,
 	newCompletion func() Completion,
 	classifyStart func(StartResult) error,
-) (*remoteBinarySubscription[Event], error) {
+) (*remoteSubscription[Event], error) {
 	if newEvent == nil || newCompletion == nil || classifyStart == nil {
 		return nil, fmt.Errorf("generated %s subscription is incomplete", method.FullName())
 	}
@@ -72,24 +63,36 @@ func subscribeGeneratedBinary[
 		cleanup()
 		return nil, err
 	}
-	return &remoteBinarySubscription[Event]{
-		conn:          conn,
-		operations:    operations,
-		newEvent:      newEvent,
-		newCompletion: func() binarySubscriptionCompletion { return newCompletion() },
+	return &remoteSubscription[Event]{
+		conn: conn,
+		next: func(ctx context.Context, conn rpcwire.Conn) (Event, error) {
+			return nextGeneratedSubscriptionEvent(
+				ctx,
+				conn,
+				operations,
+				newEvent,
+				func() binarySubscriptionCompletion { return newCompletion() },
+			)
+		},
 	}, nil
 }
 
-func (s *remoteBinarySubscription[Event]) Next(ctx context.Context) (Event, error) {
+func nextGeneratedSubscriptionEvent[Event proto.Message](
+	ctx context.Context,
+	conn rpcwire.Conn,
+	operations protoapi.SubscriptionOperations,
+	newEvent func() Event,
+	newCompletion func() binarySubscriptionCompletion,
+) (Event, error) {
 	var zero Event
-	frame, err := receiveFrame(ctx, s.conn)
+	frame, err := receiveFrame(ctx, conn)
 	if err != nil {
 		return zero, serverapi.NormalizeStreamError(err)
 	}
 	if frame.Kind != rpcwire.FrameBinary {
 		return zero, errors.Join(serverapi.ErrStreamFailed, fmt.Errorf(
 			"operation %s received a JSON frame",
-			s.operations.Subscribe.Name,
+			operations.Subscribe.Name,
 		))
 	}
 	envelope, err := protoapi.DecodeEnvelope(frame.Payload)
@@ -100,22 +103,22 @@ func (s *remoteBinarySubscription[Event]) Next(ctx context.Context) (Event, erro
 	if notification == nil || notification.Payload == nil {
 		return zero, errors.Join(serverapi.ErrStreamFailed, fmt.Errorf(
 			"operation %s received an unexpected envelope",
-			s.operations.Subscribe.Name,
+			operations.Subscribe.Name,
 		))
 	}
 	switch notification.Operation {
-	case s.operations.Event.Name:
-		event := s.newEvent()
+	case operations.Event.Name:
+		event := newEvent()
 		if err := protoapi.Decode(notification.Payload, event); err != nil {
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
 		}
 		return event, nil
-	case s.operations.Completion.Name:
-		completion := s.newCompletion()
+	case operations.Completion.Name:
+		completion := newCompletion()
 		if err := protoapi.Decode(notification.Payload, completion); err != nil {
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
 		}
-		_ = s.Close()
+		_ = conn.Close()
 		if completion.GetCode() == 0 && strings.TrimSpace(completion.GetDiagnostic()) == "" {
 			return zero, io.EOF
 		}
@@ -126,21 +129,8 @@ func (s *remoteBinarySubscription[Event]) Next(ctx context.Context) (Event, erro
 	default:
 		return zero, errors.Join(serverapi.ErrStreamFailed, fmt.Errorf(
 			"operation %s received unexpected notification %s",
-			s.operations.Subscribe.Name,
+			operations.Subscribe.Name,
 			notification.Operation,
 		))
 	}
-}
-
-func (s *remoteBinarySubscription[Event]) Close() error {
-	if s == nil {
-		return nil
-	}
-	var closeErr error
-	s.closeOnce.Do(func() {
-		if s.conn != nil {
-			closeErr = s.conn.Close()
-		}
-	})
-	return closeErr
 }

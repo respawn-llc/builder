@@ -8,7 +8,6 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/protoapi"
-	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -40,11 +39,11 @@ func callWorktreeBinary[
 }
 
 func (c *Remote) GetWorktreeStatus(ctx context.Context, request *worktreepb.StatusRequest) (*worktreepb.StatusSuccess, error) {
-	return callWorktreeBinary(c, ctx, "StatusService", "Get", request, &worktreepb.StatusResult{}, worktreePlatformError[*worktreepb.StatusError])
+	return callWorktreeBinary(c, ctx, "StatusService", "Get", request, &worktreepb.StatusResult{}, worktreeError[*worktreepb.StatusError])
 }
 
 func (c *Remote) ListWorktrees(ctx context.Context, request *worktreepb.ListRequest) (*worktreepb.ListSuccess, error) {
-	success, err := callWorktreeBinary(c, ctx, "ListService", "List", request, &worktreepb.ListResult{}, worktreePlatformError[*worktreepb.ListError])
+	success, err := callWorktreeBinary(c, ctx, "ListService", "List", request, &worktreepb.ListResult{}, worktreeError[*worktreepb.ListError])
 	if err != nil {
 		return nil, err
 	}
@@ -56,12 +55,7 @@ func (c *Remote) ListWorktrees(ctx context.Context, request *worktreepb.ListRequ
 
 func (c *Remote) ListWorkspaceWorktrees(ctx context.Context, request *worktreepb.WorkspaceListRequest) (*worktreepb.WorkspaceListSuccess, error) {
 	success, err := callWorktreeBinary(c, ctx, "ListService", "ListWorkspace", request, &worktreepb.WorkspaceListResult{},
-		func(failure *worktreepb.WorkspaceListError) error {
-			if failure.GetWorkspaceNotRegistered() != nil {
-				return serverapi.ErrWorkspaceNotRegistered
-			}
-			return worktreePlatformError(failure)
-		})
+		worktreeError[*worktreepb.WorkspaceListError])
 	if err != nil {
 		return nil, err
 	}
@@ -80,12 +74,7 @@ func (c *Remote) ListWorkspaceWorktrees(ctx context.Context, request *worktreepb
 
 func (c *Remote) ResolveWorktreeSelector(ctx context.Context, request *worktreepb.SelectorResolveRequest) (*worktreepb.SelectorResolveSuccess, error) {
 	success, err := callWorktreeBinary(c, ctx, "SelectorService", "Resolve", request, &worktreepb.SelectorResolveResult{},
-		func(failure *worktreepb.SelectorResolveError) error {
-			if details := failure.GetSelectorError(); details != nil {
-				return &worktreecontract.SelectorError{Details: details}
-			}
-			return worktreePlatformError(failure)
-		})
+		worktreeError[*worktreepb.SelectorResolveError])
 	if err != nil {
 		return nil, err
 	}
@@ -97,25 +86,16 @@ func (c *Remote) ResolveWorktreeSelector(ctx context.Context, request *worktreep
 
 func (c *Remote) PreviewWorktreeDelete(ctx context.Context, request *worktreepb.DeletePreviewRequest) (*worktreepb.DeletePreviewSuccess, error) {
 	return callWorktreeBinary(c, ctx, "DeletePreviewService", "Get", request, &worktreepb.DeletePreviewResult{},
-		func(failure *worktreepb.DeletePreviewError) error {
-			switch {
-			case failure.GetSelectorError() != nil:
-				return &worktreecontract.SelectorError{Details: failure.GetSelectorError()}
-			case failure.GetWorktreeBlocked() != nil:
-				return newWorktreeBlockedError(failure.GetWorktreeBlocked())
-			default:
-				return worktreePlatformError(failure)
-			}
-		})
+		worktreeError[*worktreepb.DeletePreviewError])
 }
 
 func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, request *worktreepb.CreateTargetResolveRequest) (*worktreepb.CreateTargetResolveSuccess, error) {
-	return callWorktreeBinary(c, ctx, "CreateTargetService", "Resolve", request, &worktreepb.CreateTargetResolveResult{}, worktreePlatformError[*worktreepb.CreateTargetResolveError])
+	return callWorktreeBinary(c, ctx, "CreateTargetService", "Resolve", request, &worktreepb.CreateTargetResolveResult{}, worktreeError[*worktreepb.CreateTargetResolveError])
 }
 
 func (c *Remote) CreateWorktree(ctx context.Context, request *worktreepb.CreateRequest) (*worktreepb.CreateSuccess, error) {
 	success, err := callWorktreeBinary(c, ctx, "CreateService", "Create", request, &worktreepb.CreateResult{},
-		worktreeCreateError,
+		worktreeError[*worktreepb.CreateError],
 		protoapi.ClassifyWorktreeCreateValidation)
 	if err != nil {
 		return nil, err
@@ -127,7 +107,7 @@ func (c *Remote) CreateWorktree(ctx context.Context, request *worktreepb.CreateR
 }
 
 func (c *Remote) EnterWorktree(ctx context.Context, request *worktreepb.EnterRequest) (*worktreepb.ScheduledAcknowledgement, error) {
-	success, err := callWorktreeBinary(c, ctx, "TransitionService", "Enter", request, &worktreepb.EnterResult{}, worktreeSelectorError[*worktreepb.EnterError])
+	success, err := callWorktreeBinary(c, ctx, "TransitionService", "Enter", request, &worktreepb.EnterResult{}, worktreeError[*worktreepb.EnterError])
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +115,7 @@ func (c *Remote) EnterWorktree(ctx context.Context, request *worktreepb.EnterReq
 }
 
 func (c *Remote) LeaveWorktree(ctx context.Context, request *worktreepb.LeaveRequest) (*worktreepb.ScheduledAcknowledgement, error) {
-	success, err := callWorktreeBinary(c, ctx, "TransitionService", "Leave", request, &worktreepb.LeaveResult{}, worktreePlatformError[*worktreepb.LeaveError])
+	success, err := callWorktreeBinary(c, ctx, "TransitionService", "Leave", request, &worktreepb.LeaveResult{}, worktreeError[*worktreepb.LeaveError])
 	if err != nil {
 		return nil, err
 	}
@@ -144,18 +124,7 @@ func (c *Remote) LeaveWorktree(ctx context.Context, request *worktreepb.LeaveReq
 
 func (c *Remote) DeleteWorktree(ctx context.Context, request *worktreepb.DeleteRequest) (*worktreepb.DeleteSuccess, error) {
 	return callWorktreeBinary(c, ctx, "TransitionService", "Delete", request, &worktreepb.DeleteResult{},
-		func(failure *worktreepb.DeleteError) error {
-			switch {
-			case failure.GetSelectorError() != nil:
-				return &worktreecontract.SelectorError{Details: failure.GetSelectorError()}
-			case failure.GetWorktreeBlocked() != nil:
-				return newWorktreeBlockedError(failure.GetWorktreeBlocked())
-			case failure.GetDeletePrecondition() != nil:
-				return &worktreecontract.DeletePreconditionError{Details: failure.GetDeletePrecondition()}
-			default:
-				return worktreePlatformError(failure)
-			}
-		})
+		worktreeError[*worktreepb.DeleteError])
 }
 
 func (c *Remote) SubscribeWorktreeSetup(
@@ -172,7 +141,7 @@ func (c *Remote) SubscribeWorktreeSetup(
 		func() *worktreepb.SetupEvent { return &worktreepb.SetupEvent{} },
 		func() *worktreepb.SetupCompletion { return &worktreepb.SetupCompletion{} },
 		func(result *worktreepb.SetupStartResult) error {
-			_, err := decodeGeneratedResult(method, result, worktreePlatformError[*worktreepb.SetupStartError])
+			_, err := decodeGeneratedResult(method, result, worktreeError[*worktreepb.SetupStartError])
 			return err
 		},
 	)
@@ -193,54 +162,57 @@ func validateWorktreeAcknowledgement(
 	return success, nil
 }
 
-type worktreePlatformFailure interface {
+type worktreeFailure interface {
+	comparableProtoMessage
 	GetCode() string
-	GetInternalFailure() *sharedpb.InternalFailureDetails
 }
 
-type worktreeSelectorFailure interface {
-	worktreePlatformFailure
-	GetSelectorError() *worktreepb.SelectorErrorDetails
-}
-
-func worktreeSelectorError[Failure worktreeSelectorFailure](failure Failure) error {
-	if details := failure.GetSelectorError(); details != nil {
-		return &worktreecontract.SelectorError{Details: details}
-	}
-	return worktreePlatformError(failure)
-}
-
-func worktreePlatformError[Failure worktreePlatformFailure](failure Failure) error {
+func worktreeError[Failure worktreeFailure](failure Failure) error {
 	switch failure.GetCode() {
-	case "auth_required":
-		return serverapi.ErrServerAuthRequired
-	case "internal_failure":
-		return protoapi.InternalFailureFromProto(failure.GetInternalFailure())
-	default:
-		return generatedOperationFailure(failure.GetCode())
-	}
-}
-
-func worktreeCreateError(failure *worktreepb.CreateError) error {
-	switch {
-	case failure.GetCreateFailed() != nil:
-		details := failure.GetCreateFailed()
-		var owner worktreecontract.CreateErrorOwner
-		switch details.Owner {
-		case worktreepb.CreateErrorOwner_WORKTREE_CREATE_ERROR_OWNER_BASE_REF:
-			owner = worktreecontract.CreateErrorOwnerBaseRef
-		case worktreepb.CreateErrorOwner_WORKTREE_CREATE_ERROR_OWNER_FORM:
-			owner = worktreecontract.CreateErrorOwnerForm
-		default:
-			return generatedOperationFailure(failure.Code)
+	case "workspace_not_registered":
+		return serverapi.ErrWorkspaceNotRegistered
+	case "selector_error":
+		if typed, ok := any(failure).(interface {
+			GetSelectorError() *worktreepb.SelectorErrorDetails
+		}); ok && typed.GetSelectorError() != nil {
+			return &worktreecontract.SelectorError{Details: typed.GetSelectorError()}
 		}
-		return worktreecontract.NewCreateError(owner, details.Diagnostic, nil)
-	case failure.GetSetupRetained() != nil:
-		details := failure.GetSetupRetained()
-		return &worktreecontract.SetupRetainedError{Details: details}
-	default:
-		return worktreePlatformError(failure)
+	case "worktree_blocked":
+		if typed, ok := any(failure).(interface {
+			GetWorktreeBlocked() *worktreepb.BlockedDetails
+		}); ok && typed.GetWorktreeBlocked() != nil {
+			return newWorktreeBlockedError(typed.GetWorktreeBlocked())
+		}
+	case "delete_precondition":
+		if typed, ok := any(failure).(interface {
+			GetDeletePrecondition() *worktreepb.DeletePreconditionDetails
+		}); ok && typed.GetDeletePrecondition() != nil {
+			return &worktreecontract.DeletePreconditionError{Details: typed.GetDeletePrecondition()}
+		}
+	case "create_failed":
+		if typed, ok := any(failure).(interface {
+			GetCreateFailed() *worktreepb.CreateFailureDetails
+		}); ok && typed.GetCreateFailed() != nil {
+			details := typed.GetCreateFailed()
+			var owner worktreecontract.CreateErrorOwner
+			switch details.Owner {
+			case worktreepb.CreateErrorOwner_WORKTREE_CREATE_ERROR_OWNER_BASE_REF:
+				owner = worktreecontract.CreateErrorOwnerBaseRef
+			case worktreepb.CreateErrorOwner_WORKTREE_CREATE_ERROR_OWNER_FORM:
+				owner = worktreecontract.CreateErrorOwnerForm
+			default:
+				return generatedOperationFailure(failure.GetCode())
+			}
+			return worktreecontract.NewCreateError(owner, details.Diagnostic, nil)
+		}
+	case "setup_retained":
+		if typed, ok := any(failure).(interface {
+			GetSetupRetained() *worktreepb.SetupRetainedDetails
+		}); ok && typed.GetSetupRetained() != nil {
+			return &worktreecontract.SetupRetainedError{Details: typed.GetSetupRetained()}
+		}
 	}
+	return generatedOperationFailure(failure.GetCode())
 }
 
 func newWorktreeBlockedError(details *worktreepb.BlockedDetails) error {
