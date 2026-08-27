@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"core/prompts"
@@ -38,8 +39,6 @@ const (
 	handoffCompactionToolsDisabledMessage                  = "Tools are disabled during handoff. Do NOT attempt to call any tools. Produce only the requested summary."
 	handoffCompactionToolCallRetries                       = 3
 )
-
-var errRemoteCompactionMissingCheckpoint = errors.New("remote compaction output missing checkpoint item")
 
 var (
 	ErrManualCompactionTooSoon = serverapi.ErrManualCompactionTooSoon
@@ -585,10 +584,7 @@ func (e *Engine) compactNowWithAcceptance(
 		}
 	}
 	instructions := compactionInstructionsForMode(mode, instructionsInput)
-	preservedUserMessageText := ""
-	if mode == compactionModeManual && includePreservedUserMessage {
-		preservedUserMessageText = lastVisibleUserMessageSinceLatestCompaction(input)
-	}
+	preservedUserMessageText := lastVisibleUserMessageSinceLatestCompaction(input)
 	var result compactionResult
 	enginePlan := planner.enginePlan(planningSnapshot)
 	var requestKind *llm.CodexRequestKind
@@ -600,13 +596,42 @@ func (e *Engine) compactNowWithAcceptance(
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
 	if enginePlan.engineKind == compactionEngineRemote {
-		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions, dispatchFactory)
-		if err != nil && enginePlan.fallbackToLocalOnBadCheckpoint && errors.Is(err, errRemoteCompactionMissingCheckpoint) {
+		var remoteInput []llm.ResponseItem
+		result, remoteInput, err = e.compactRemote(ctx, stepID, input, providerID, instructions, dispatchFactory)
+		var checkpointErr *llm.CompactionCheckpointContractError
+		if err != nil && errors.As(err, &checkpointErr) {
+			if e.cfg.Debug {
+				panic(checkpointErr)
+			}
+			attrs := []slog.Attr{
+				slog.String("provider_id", providerID),
+				slog.String("checkpoint_reason", string(checkpointErr.Reason)),
+				slog.Int("compaction_count", checkpointErr.CompactionCount),
+				slog.Int("output_count", checkpointErr.OutputCount),
+				slog.Any("output_type_counts", checkpointErr.OutputTypeCounts),
+			}
+			var providerErr *llm.ProviderAPIError
+			if errors.As(err, &providerErr) {
+				attrs = append(attrs, slog.Int("status_code", providerErr.StatusCode))
+				if requestID, ok := textutil.OptionalTrimmed(providerErr.ProviderRequestID); ok {
+					attrs = append(attrs, slog.String("request_id", requestID))
+				}
+			}
+			slog.LogAttrs(ctx, slog.LevelError, "remote compaction returned a malformed checkpoint", attrs...)
+
 			localFactory, factoryErr := e.activeDispatchRequestFactory(stepID, nil)
 			if factoryErr != nil {
-				return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, factoryErr)
+				err = errors.Join(err, factoryErr)
+			} else {
+				localResult, localErr := e.compactLocal(ctx, stepID, remoteInput, providerID, instructions, mode, localFactory)
+				localResult.overflowRepair = result.overflowRepair.Add(localResult.overflowRepair)
+				result = localResult
+				if localErr != nil {
+					err = errors.Join(err, localErr)
+				} else {
+					err = nil
+				}
 			}
-			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, localFactory)
 		}
 	} else {
 		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, dispatchFactory)
@@ -626,6 +651,12 @@ func (e *Engine) compactNowWithAcceptance(
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
 	replacementItems := append(llm.ItemsFromMessages(postReplacementMeta.StablePrefix), llm.CloneResponseItems(result.items)...)
+	replacementItems = append(replacementItems, llm.ItemsFromMessages(postReplacementMeta.Environment)...)
+	if preservedUserMessageText != nil {
+		if preservedMessage, ok := compactionPreservedUserMessage(*preservedUserMessageText); ok {
+			replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{preservedMessage})...)
+		}
+	}
 	if mode == compactionModeHandoff {
 		if req := e.handoffRuntimeState().RequestSnapshot(); req != nil {
 			if futureMessage, ok := handoffFutureAgentMessage(req.futureAgentMessage); ok {
@@ -633,12 +664,6 @@ func (e *Engine) compactNowWithAcceptance(
 			}
 		}
 	}
-	if mode == compactionModeManual {
-		if preservedMessage, ok := compactionPreservedUserMessage(preservedUserMessageText); ok {
-			replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{preservedMessage})...)
-		}
-	}
-	replacementItems = append(replacementItems, llm.ItemsFromMessages(postReplacementMeta.Environment)...)
 	var replacementReceipt session.CommitReceipt
 	committed, replacementErr := runCommandAcceptance(accept, func() (bool, error) {
 		var err error
@@ -699,7 +724,7 @@ func (e *Engine) compactNowWithAcceptance(
 	return result, replacementReceipt, finalizationErr
 }
 
-func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) string {
+func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) *string {
 	start := 0
 	for i := len(items) - 1; i >= 0; i-- {
 		if !isCompactionBoundaryItem(items[i]) {
@@ -715,17 +740,16 @@ func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) strin
 			*item.Role != llm.RoleUser {
 			continue
 		}
-		if item.MessageType != nil &&
-			*item.MessageType == llm.MessageTypeCompactionSummary {
+		if item.MessageType != nil {
 			continue
 		}
 		content, present := textutil.OptionalTrimmed(item.Content)
 		if !present {
 			continue
 		}
-		return content
+		return textutil.Value(content)
 	}
-	return ""
+	return nil
 }
 
 func (e *Engine) handoffRuntimeState() *handoffRuntimeState {

@@ -168,9 +168,10 @@ func TestSkillsPolicyChangesOnlyAtMainContextReconstruction(t *testing.T) {
 		caps:      caps,
 		responses: []llm.Response{finalOutputItemResponse("disabled response")},
 		compactionResponses: []llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("condensed summary")},
-				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_skills_policy"), EncryptedContent: textutil.Value("encrypted")},
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				ID:               textutil.Value("cmp_skills_policy"),
+				EncryptedContent: textutil.Value("encrypted"),
 			},
 			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 		}},
@@ -240,9 +241,10 @@ func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{finalOutputItemResponse("enabled response")},
 		compactionResponses: []llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("condensed summary")},
-				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_live_reload_skills"), EncryptedContent: textutil.Value("encrypted")},
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				ID:               textutil.Value("cmp_live_reload_skills"),
+				EncryptedContent: textutil.Value("encrypted"),
 			},
 			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 		}},

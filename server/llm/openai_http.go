@@ -394,7 +394,8 @@ func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request O
 	if err != nil {
 		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, rawResp, err)
 	}
-	return OpenAICompactionResponse{OutputItems: []ResponseItem{checkpoint}, Usage: response.Usage}, nil
+	checkpoint = CloneResponseItems([]ResponseItem{checkpoint})[0]
+	return OpenAICompactionResponse{Checkpoint: checkpoint, Usage: response.Usage}, nil
 }
 
 func requireSingleEncryptedCompactionOutput(items []ResponseItem) (ResponseItem, error) {
@@ -407,10 +408,24 @@ func requireSingleEncryptedCompactionOutput(items []ResponseItem) (ResponseItem,
 		}
 	}
 	if len(compactions) != 1 {
-		return ResponseItem{}, fmt.Errorf("Responses compaction V2 requires exactly one compaction output (compaction_count=%d output_count=%d types=%v)", len(compactions), len(items), counts)
+		reason := CompactionCheckpointReasonZero
+		if len(compactions) > 1 {
+			reason = CompactionCheckpointReasonMultiple
+		}
+		return ResponseItem{}, &CompactionCheckpointContractError{
+			Reason:           reason,
+			CompactionCount:  len(compactions),
+			OutputCount:      len(items),
+			OutputTypeCounts: counts,
+		}
 	}
 	if _, ok := textutil.OptionalTrimmed(compactions[0].EncryptedContent); !ok {
-		return ResponseItem{}, fmt.Errorf("Responses compaction V2 compaction output is missing encrypted_content (compaction_count=1 output_count=%d types=%v)", len(items), counts)
+		return ResponseItem{}, &CompactionCheckpointContractError{
+			Reason:           CompactionCheckpointReasonMissingEncryptedContent,
+			CompactionCount:  len(compactions),
+			OutputCount:      len(items),
+			OutputTypeCounts: counts,
+		}
 	}
 	return compactions[0], nil
 }
