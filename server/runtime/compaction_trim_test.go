@@ -110,9 +110,10 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 			nil,
 		},
 		compactionResponses: []llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("seed")},
-				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				ID:               textutil.Value("cmp_1"),
+				EncryptedContent: textutil.Value("enc_1"),
 			},
 			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 10, WindowTokens: 2500},
 		}},
@@ -326,9 +327,10 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 	client := &fakeCompactionClient{
 		compactionErrors: []error{errors.New("temporary upstream failure"), nil},
 		compactionResponses: []llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("seed")},
-				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				ID:               textutil.Value("cmp_1"),
+				EncryptedContent: textutil.Value("enc_1"),
 			},
 			Usage: llm.Usage{CachedInputTokens: textutil.Value(123), InputTokens: 1000, WindowTokens: 200000},
 		}},

@@ -48,6 +48,9 @@ func TestWorkflowPostCompletionCompactionKeepsCompletedOutputAndDormantMetaConte
 	}})); err != nil {
 		t.Fatalf("persist previous workflow assignment: %v", err)
 	}
+	if err := steerTestActiveStep(engine, "user", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("workflow carryover")}})); err != nil {
+		t.Fatalf("persist workflow carryover prompt: %v", err)
+	}
 	if err := steerTestActiveStep(engine, "terminal", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:    llm.RoleAssistant,
 		Phase:   textutil.Value(llm.MessagePhaseFinal),
@@ -103,6 +106,7 @@ func TestWorkflowPostCompletionCompactionKeepsCompletedOutputAndDormantMetaConte
 	if workflowModes != 0 || compactionReminders != 0 {
 		t.Fatalf("dormant replacement retained workflow assignment meta: workflow_modes=%d reminders=%d", workflowModes, compactionReminders)
 	}
+	assertCompactionReplacementOrder(t, engine.transcriptRuntimeState().SnapshotItems(), false)
 
 	window, err := mustMaterializeTestEventLog(t, engine.store).ReadRecentRecords(16)
 	if err != nil {
@@ -510,6 +514,9 @@ func TestWorkflowPostCompletionCompactionUsesLocalGenerateClient(t *testing.T) {
 		tools.NewRegistry(),
 		Config{Model: "gpt-5", CompactionMode: "local"},
 	)
+	if err := steerTestActiveStep(engine, "user", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("local workflow carryover")}})); err != nil {
+		t.Fatalf("persist local workflow carryover prompt: %v", err)
+	}
 	if err := steerTestActiveStep(engine, "terminal", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:    llm.RoleAssistant,
 		Phase:   textutil.Value(llm.MessagePhaseFinal),
@@ -528,6 +535,7 @@ func TestWorkflowPostCompletionCompactionUsesLocalGenerateClient(t *testing.T) {
 	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("local workflow compaction did not commit its post-completion boundary")
 	}
+	assertCompactionReplacementOrder(t, engine.transcriptRuntimeState().SnapshotItems(), false)
 }
 
 func TestRemoteCompactionRefreshesWorkflowTaskAwareness(t *testing.T) {

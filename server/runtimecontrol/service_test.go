@@ -2652,7 +2652,6 @@ func TestServiceSubmitUserTurnPromptResolutionFailureDuringActiveRunReturnsWitho
 }
 
 func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testing.T) {
-	trimmed := 1
 	client := &blockingCompactionRuntimeControlClient{
 		runtimeControlFakeClient: runtimeControlFakeClient{
 			responses: []llm.Response{
@@ -2666,12 +2665,11 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 				},
 			},
 			compactionResponses: []llm.CompactionResponse{{
-				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
-					{Type: llm.ResponseItemTypeCompaction, EncryptedContent: textutil.Value("checkpoint")},
+				Checkpoint: llm.ResponseItem{
+					Type:             llm.ResponseItemTypeCompaction,
+					EncryptedContent: textutil.Value("checkpoint"),
 				},
-				Usage:             llm.Usage{WindowTokens: 200000},
-				TrimmedItemsCount: &trimmed,
+				Usage: llm.Usage{WindowTokens: 200000},
 			}},
 		},
 		started: make(chan struct{}),

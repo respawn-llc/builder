@@ -20,14 +20,14 @@ var (
 	errLocalCompactionToolCallEmptyID = errors.New("local compaction summary attempted tool call with empty id")
 )
 
-func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.ResponseItem, providerID string, instructions string, dispatchFactory dispatchRequestFactory) (compactionResult, error) {
+func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.ResponseItem, providerID string, instructions string, dispatchFactory dispatchRequestFactory) (compactionResult, []llm.ResponseItem, error) {
 	compactor, ok := e.llm.(llm.CompactionClient)
 	if !ok {
-		return compactionResult{}, errors.New("llm client does not support remote compaction")
+		return compactionResult{}, nil, errors.New("llm client does not support remote compaction")
 	}
 	locked, err := e.ensureLocked()
 	if err != nil {
-		return compactionResult{}, err
+		return compactionResult{}, nil, err
 	}
 	requestItems := llm.CloneResponseItems(input)
 	baseRequest := llm.CompactionRequest{
@@ -40,24 +40,19 @@ func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.R
 		baseRequest.PromptCacheKey = e.conversationPromptCacheKey(e.SessionID())
 	}
 
-	resp, _, repairStats, err := e.compactWithContextRepairRetry(ctx, stepID, compactor, baseRequest, dispatchFactory)
+	resp, sentInput, repairStats, err := e.compactWithContextRepairRetry(ctx, stepID, compactor, baseRequest, dispatchFactory)
 	if err != nil {
-		return compactionResult{}, err
+		return compactionResult{overflowRepair: repairStats, provider: providerID}, sentInput, err
 	}
 
-	sanitized, err := sanitizeRemoteCompactionOutput(resp.OutputItems)
-	if err != nil {
-		return compactionResult{}, err
-	}
-	replacement := llm.CloneResponseItems(sanitized)
+	replacement := []llm.ResponseItem{llm.CloneResponseItems([]llm.ResponseItem{resp.Checkpoint})[0]}
 	return compactionResult{
-		engine:            "remote",
-		items:             replacement,
-		usage:             resp.Usage,
-		trimmedItemsCount: textutil.Pointer(resp.TrimmedItemsCount),
-		overflowRepair:    repairStats,
-		provider:          providerID,
-	}, nil
+		engine:         "remote",
+		items:          replacement,
+		usage:          resp.Usage,
+		overflowRepair: repairStats,
+		provider:       providerID,
+	}, nil, nil
 }
 
 func compactionConversationWithPromptItems(items []llm.ResponseItem, instructions string) []llm.ResponseItem {
@@ -127,7 +122,7 @@ func (e *Engine) compactWithContextRepairRetry(
 			return resp, currentInput, repairStats, nil
 		}
 		if !llm.IsContextLengthOverflowError(err) || attempt == len(compactionOverflowRepairTargetPercents) {
-			return llm.CompactionResponse{}, nil, repairStats, err
+			return llm.CompactionResponse{}, currentInput, repairStats, err
 		}
 
 		targetSavedTokens := compactionOverflowRepairTargetTokens(contextWindowTokens, attempt+1)
@@ -136,7 +131,7 @@ func (e *Engine) compactWithContextRepairRetry(
 			// Only known tool payloads are safe to collapse here. Ordinary
 			// conversation history must not be trimmed or request-shaped at
 			// compaction time, so fail instead of retrying the same payload.
-			return llm.CompactionResponse{}, nil, repairStats, err
+			return llm.CompactionResponse{}, currentInput, repairStats, err
 		}
 		currentInput = nextInput
 		repairStats = repairStats.Add(repaired)

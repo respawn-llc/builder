@@ -29,8 +29,7 @@ const (
 )
 
 type compactionEnginePlan struct {
-	engineKind                     compactionEngineKind
-	fallbackToLocalOnBadCheckpoint bool
+	engineKind compactionEngineKind
 }
 
 type compactionPlanner struct{}
@@ -60,10 +59,7 @@ func (p *compactionPlanner) enginePlan(snapshot compactionPlanningSnapshot) comp
 	case serverapi.ChatContextCompactionModeDisabled:
 		return compactionEnginePlan{engineKind: compactionEngineNone}
 	case serverapi.ChatContextCompactionModeProviderNative:
-		return compactionEnginePlan{
-			engineKind:                     compactionEngineRemote,
-			fallbackToLocalOnBadCheckpoint: true,
-		}
+		return compactionEnginePlan{engineKind: compactionEngineRemote}
 	default:
 		return compactionEnginePlan{engineKind: compactionEngineLocal}
 	}

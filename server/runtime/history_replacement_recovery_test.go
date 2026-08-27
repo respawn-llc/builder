@@ -451,18 +451,10 @@ func newCommittedRemoteCompactionFixture(
 		client: &fakeCompactionClient{
 			inputTokenCount: 2_000,
 			compactionResponses: []llm.CompactionResponse{{
-				OutputItems: []llm.ResponseItem{
-					{
-						Type:        llm.ResponseItemTypeMessage,
-						Role:        textutil.Value(llm.RoleUser),
-						MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-						Content:     textutil.Value("summary"),
-					},
-					{
-						Type:             llm.ResponseItemTypeCompaction,
-						ID:               textutil.Value("cmp-1"),
-						EncryptedContent: textutil.Value("encrypted"),
-					},
+				Checkpoint: llm.ResponseItem{
+					Type:             llm.ResponseItemTypeCompaction,
+					ID:               textutil.Value("cmp-1"),
+					EncryptedContent: textutil.Value("encrypted"),
 				},
 				Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 			}},
@@ -820,18 +812,10 @@ func TestRemoteCompactionTaskAwarenessErrorDoesNotReplaceHistory(t *testing.T) {
 	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeCompactionClient{
 		compactionResponses: []llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{
-				{
-					Type:        llm.ResponseItemTypeMessage,
-					Role:        textutil.Value(llm.RoleUser),
-					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-					Content:     textutil.Value("summary"),
-				},
-				{
-					Type:             llm.ResponseItemTypeCompaction,
-					ID:               textutil.Value("cmp-1"),
-					EncryptedContent: textutil.Value("encrypted"),
-				},
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				ID:               textutil.Value("cmp-1"),
+				EncryptedContent: textutil.Value("encrypted"),
 			},
 			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 		}},

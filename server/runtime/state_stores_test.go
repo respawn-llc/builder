@@ -177,7 +177,7 @@ func TestCompactionPlannerAppliesFallbacksAndSelectsEngine(t *testing.T) {
 			name: "native provider compaction",
 			mode: "native",
 			caps: llm.ProviderCapabilities{SupportsResponsesCompact: true},
-			want: compactionEnginePlan{engineKind: compactionEngineRemote, fallbackToLocalOnBadCheckpoint: true},
+			want: compactionEnginePlan{engineKind: compactionEngineRemote},
 		},
 		{name: "native local fallback", mode: "native", want: compactionEnginePlan{engineKind: compactionEngineLocal}},
 		{name: "explicit local", mode: "local", caps: llm.ProviderCapabilities{SupportsResponsesCompact: true}, want: compactionEnginePlan{engineKind: compactionEngineLocal}},

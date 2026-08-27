@@ -79,9 +79,8 @@ type OpenAICompactionRequest struct {
 }
 
 type OpenAICompactionResponse struct {
-	OutputItems       []ResponseItem
-	Usage             Usage
-	TrimmedItemsCount *int
+	Checkpoint ResponseItem
+	Usage      Usage
 }
 
 type OpenAITransport interface {
@@ -191,9 +190,8 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 		return CompactionResponse{}, fmt.Errorf("openai compact: %w", err)
 	}
 	return CompactionResponse{
-		OutputItems:       CloneResponseItems(providerResp.OutputItems),
-		Usage:             providerResp.Usage,
-		TrimmedItemsCount: textutil.Pointer(providerResp.TrimmedItemsCount),
+		Checkpoint: CloneResponseItems([]ResponseItem{providerResp.Checkpoint})[0],
+		Usage:      providerResp.Usage,
 	}, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -399,6 +400,139 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	_, completion := repairCompletionRecord(t, store, "missing")
 	if !bytes.Equal(completion.Output, missingToolOutputInterruptedOutput) {
 		t.Fatalf("live compaction repair selected the wrong typed disposition: %s", completion.Output)
+	}
+}
+
+func TestCompactionCheckpointContractErrorReturnsExactRepairedInput(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	checkpointErr := &llm.CompactionCheckpointContractError{
+		Reason:           llm.CompactionCheckpointReasonZero,
+		CompactionCount:  0,
+		OutputCount:      0,
+		OutputTypeCounts: map[llm.ResponseItemType]int{},
+	}
+	client := &fakeCompactionClient{
+		compactionErrors: []error{
+			&llm.APIStatusError{StatusCode: 400},
+			&llm.ProviderAPIError{
+				ProviderID: "openai",
+				StatusCode: 502,
+				Code:       llm.UnifiedErrorCodeProviderContract,
+				Err:        checkpointErr,
+			},
+		},
+	}
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
+	request := llm.CompactionRequest{
+		Model:      "gpt-5",
+		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
+	}
+	var sentInput []llm.ResponseItem
+	err := withActiveTestRun(t, eng, ActiveKindCompaction, func(ctx context.Context, stepID string) error {
+		dispatchFactory, factoryErr := eng.activeDispatchRequestFactory(stepID, llm.CodexRequestKindCompaction.Optional())
+		if factoryErr != nil {
+			return factoryErr
+		}
+		var compactErr error
+		_, sentInput, _, compactErr = eng.compactWithContextRepairRetry(ctx, stepID, client, request, dispatchFactory)
+		return compactErr
+	})
+	if !errors.Is(err, checkpointErr) {
+		t.Fatalf("compaction error = %v, want checkpoint contract error", err)
+	}
+	if len(client.compactionCalls) != 2 {
+		t.Fatalf("compaction calls = %d, want initial missing-output retry plus malformed terminal result", len(client.compactionCalls))
+	}
+	if !reflect.DeepEqual(sentInput, client.compactionCalls[1].InputItems) {
+		t.Fatalf("returned sent input differs from malformed attempt\nreturned=%#v\nsent=%#v", sentInput, client.compactionCalls[1].InputItems)
+	}
+	if !repairRequestHasToolOutput(sentInput, "missing") {
+		t.Fatal("returned malformed-attempt input omitted synthetic tool output")
+	}
+}
+
+func TestMalformedRemoteCompactionFallbackUsesMissingToolRepairedInput(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeCompactionClient{
+		responses: []llm.Response{{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("local summary")},
+		}},
+		compactionErrors: []error{
+			&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"},
+			malformedCompactionProviderError(),
+		},
+	}
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+		Model:          "gpt-5",
+		CompactionMode: "native",
+	})
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{
+		ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`),
+	})
+
+	if err := eng.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("compact context: %v", err)
+	}
+	waitEngineLifecycleTasks(t, eng)
+	if len(client.compactionCalls) != 2 || len(client.calls) != 1 {
+		t.Fatalf("remote/local compaction calls = %d/%d, want two/one", len(client.compactionCalls), len(client.calls))
+	}
+	if !repairRequestHasToolOutput(client.compactionCalls[1].InputItems, "missing") {
+		t.Fatal("malformed remote attempt omitted synthetic tool output")
+	}
+	if !repairRequestHasToolOutput(client.calls[0].Items, "missing") {
+		t.Fatal("local fallback did not receive the exact missing-tool-repaired input")
+	}
+}
+
+func TestGenerationMissingToolOutputRebuildKeepsIdentityAndAllocatesFreshState(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeClient{
+		errors: []error{&llm.APIStatusError{StatusCode: 400}, nil},
+		responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("repaired"),
+			},
+		}},
+	}
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, engine, "seed", llm.ToolCall{
+		ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`),
+	})
+
+	err := engine.stepLifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
+		func(ctx context.Context, stepID string) error {
+			_, generateErr := engine.generateWithMissingToolOutputRepair(
+				ctx,
+				stepID,
+				func() (llm.Request, error) {
+					return engine.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
+				},
+				nil,
+				nil,
+				nil,
+			)
+			return generateErr
+		},
+	)
+	if err != nil {
+		t.Fatalf("generation missing-output repair: %v", err)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("generation calls = %d, want initial 400 plus repaired rebuild", len(client.calls))
+	}
+	first := client.calls[0].CodexDispatch
+	second := client.calls[1].CodexDispatch
+	if first == nil || second == nil || first == second {
+		t.Fatalf("generation retry dispatch states = %p/%p, want distinct non-nil states", first, second)
 	}
 }
 

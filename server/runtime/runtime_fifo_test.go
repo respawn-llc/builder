@@ -1152,17 +1152,9 @@ func TestManualCompactionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 	client := &heldRuntimeCompactionClient{
 		fakeCompactionClient: &fakeCompactionClient{
 			compactionResponses: []llm.CompactionResponse{{
-				OutputItems: []llm.ResponseItem{
-					{
-						Type:        llm.ResponseItemTypeMessage,
-						Role:        textutil.Value(llm.RoleUser),
-						MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-						Content:     textutil.Value("summary"),
-					},
-					{
-						Type:             llm.ResponseItemTypeCompaction,
-						EncryptedContent: textutil.Value("checkpoint"),
-					},
+				Checkpoint: llm.ResponseItem{
+					Type:             llm.ResponseItemTypeCompaction,
+					EncryptedContent: textutil.Value("checkpoint"),
 				},
 				Usage: llm.Usage{WindowTokens: 200000},
 			}},

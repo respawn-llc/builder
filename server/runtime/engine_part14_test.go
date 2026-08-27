@@ -69,9 +69,10 @@ func TestManualCompactionPreservesLastVisibleUserMessage(t *testing.T) {
 	client := &fakeCompactionClient{
 		compactionResponses: []llm.CompactionResponse{
 			{
-				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("condensed summary")},
-					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
+				Checkpoint: llm.ResponseItem{
+					Type:             llm.ResponseItemTypeCompaction,
+					ID:               textutil.Value("cmp_1"),
+					EncryptedContent: textutil.Value("enc_1"),
 				},
 				Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 			},
@@ -170,11 +171,11 @@ func TestManualLocalCompactionRebuildsCanonicalContextOrder(t *testing.T) {
 	if messages[3].MessageType == nil || *messages[3].MessageType != llm.MessageTypeCompactionSummary {
 		t.Fatalf("expected compaction summary after stable context, got %+v", messages[3])
 	}
-	if messages[4].MessageType == nil || *messages[4].MessageType != llm.MessageTypeCompactionPreservedUserMessage || !strings.Contains(messageContent(messages[4]), "please keep tests green") {
-		t.Fatalf("expected compaction-preserved user message after compaction output, got %+v", messages[4])
+	if messages[4].MessageType == nil || *messages[4].MessageType != llm.MessageTypeEnvironment {
+		t.Fatalf("expected environment after compaction output, got %+v", messages[4])
 	}
-	if messages[5].MessageType == nil || *messages[5].MessageType != llm.MessageTypeEnvironment {
-		t.Fatalf("expected environment after manual carryover, got %+v", messages[5])
+	if messages[5].MessageType == nil || *messages[5].MessageType != llm.MessageTypeCompactionPreservedUserMessage || !strings.Contains(messageContent(messages[5]), "please keep tests green") {
+		t.Fatalf("expected compaction-preserved user message after environment, got %+v", messages[5])
 	}
 }
 
