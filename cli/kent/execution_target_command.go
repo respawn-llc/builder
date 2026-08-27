@@ -5,35 +5,34 @@ import (
 	"strings"
 
 	"core/shared/serverapi"
-	"core/shared/workflowcontract"
 )
 
 const executionTargetSelectorHelp = "none, head, default-branch, or ref:<revision>"
 
-func parseTaskExecutionTargetSelector(raw string) (workflowcontract.ExecutionTargetSelection, error) {
+func parseTaskExecutionTargetSelector(raw string) (serverapi.WorkflowExecutionTargetSelection, error) {
 	trimmed := strings.TrimSpace(raw)
 	switch trimmed {
 	case "none":
-		return workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeNone}, nil
+		return serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone}, nil
 	case "head":
-		return workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeHead}, nil
+		return serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}, nil
 	case "default-branch":
-		return workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeDefaultBranch}, nil
+		return serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeDefaultBranch}, nil
 	}
 	if revision, ok := strings.CutPrefix(trimmed, "ref:"); ok {
 		revision = strings.TrimSpace(revision)
 		if revision == "" {
-			return workflowcontract.ExecutionTargetSelection{}, errors.New("execution target ref:<revision> requires a non-blank revision")
+			return serverapi.WorkflowExecutionTargetSelection{}, errors.New("execution target ref:<revision> requires a non-blank revision")
 		}
-		return workflowcontract.ExecutionTargetSelection{
-			Mode:      workflowcontract.ExecutionTargetModeCustomRef,
+		return serverapi.WorkflowExecutionTargetSelection{
+			Mode:      serverapi.WorkflowExecutionTargetModeCustomRef,
 			CustomRef: &revision,
 		}, nil
 	}
-	return workflowcontract.ExecutionTargetSelection{}, errors.New("execution target must be " + executionTargetSelectorHelp)
+	return serverapi.WorkflowExecutionTargetSelection{}, errors.New("execution target must be " + executionTargetSelectorHelp)
 }
 
-func parseOptionalTaskExecutionTarget(raw string, provided bool) (*workflowcontract.ExecutionTargetSelection, error) {
+func parseOptionalTaskExecutionTarget(raw string, provided bool) (*serverapi.WorkflowExecutionTargetSelection, error) {
 	if !provided {
 		return nil, nil
 	}
@@ -47,7 +46,7 @@ func parseOptionalTaskExecutionTarget(raw string, provided bool) (*workflowcontr
 func parseWorkflowExecutionTargetPolicySelector(raw string) (serverapi.WorkflowExecutionTargetConfiguration, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "ask-on-first-execution" {
-		return serverapi.WorkflowExecutionTargetConfiguration{Mode: workflowcontract.ExecutionTargetModeAskOnFirstExecution}, nil
+		return serverapi.WorkflowExecutionTargetConfiguration{Mode: serverapi.WorkflowExecutionTargetModeAskOnFirstExecution}, nil
 	}
 	selection, err := parseTaskExecutionTargetSelector(trimmed)
 	if err != nil {
@@ -61,15 +60,15 @@ func parseWorkflowExecutionTargetPolicySelector(raw string) (serverapi.WorkflowE
 
 func workflowExecutionTargetPolicySelector(policy serverapi.WorkflowExecutionTargetConfiguration) string {
 	switch policy.Mode {
-	case workflowcontract.ExecutionTargetModeAskOnFirstExecution:
+	case serverapi.WorkflowExecutionTargetModeAskOnFirstExecution:
 		return "ask-on-first-execution"
-	case workflowcontract.ExecutionTargetModeNone:
+	case serverapi.WorkflowExecutionTargetModeNone:
 		return "none"
-	case workflowcontract.ExecutionTargetModeHead:
+	case serverapi.WorkflowExecutionTargetModeHead:
 		return "head"
-	case workflowcontract.ExecutionTargetModeDefaultBranch:
+	case serverapi.WorkflowExecutionTargetModeDefaultBranch:
 		return "default-branch"
-	case workflowcontract.ExecutionTargetModeCustomRef:
+	case serverapi.WorkflowExecutionTargetModeCustomRef:
 		if policy.CustomRef != nil {
 			return "ref:" + *policy.CustomRef
 		}

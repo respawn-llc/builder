@@ -41,19 +41,6 @@ enum DirtyStateKind {
   DIRTY_STATE_UNKNOWN = 3;
 }
 
-enum TransitionKind {
-  TRANSITION_KIND_UNSPECIFIED = 0;
-  TRANSITION_KIND_ENTER = 1;
-  TRANSITION_KIND_LEAVE = 2;
-  TRANSITION_KIND_DELETE = 3;
-}
-
-enum TransitionState {
-  TRANSITION_STATE_UNSPECIFIED = 0;
-  TRANSITION_STATE_COMPLETED = 1;
-  TRANSITION_STATE_FAILED = 2;
-}
-
 enum BranchCleanupMode {
   WORKTREE_BRANCH_CLEANUP_MODE_UNSPECIFIED = 0;
   WORKTREE_BRANCH_CLEANUP_MODE_RETAIN = 1;
@@ -82,12 +69,6 @@ enum SelectorErrorKind {
   WORKTREE_SELECTOR_ERROR_KIND_NOT_FOUND = 1;
   WORKTREE_SELECTOR_ERROR_KIND_AMBIGUOUS = 2;
   WORKTREE_SELECTOR_ERROR_KIND_UNAVAILABLE = 3;
-}
-
-enum ImmediateTransitionErrorKind {
-  WORKTREE_IMMEDIATE_TRANSITION_UNSPECIFIED = 0;
-  WORKTREE_IMMEDIATE_TRANSITION_ORIGIN_INACTIVE = 1;
-  WORKTREE_IMMEDIATE_TRANSITION_APPLY_FAILED = 2;
 }
 
 enum CreateErrorOwner {
@@ -312,26 +293,6 @@ message BranchCleanupOutcome {
   };
 }
 
-message RuntimeStepOrigin {
-  string run_id = 1 [
-    (buf.validate.field).string.uuid = true,
-    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
-  ];
-  string step_id = 2 [
-    (buf.validate.field).string.uuid = true,
-    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
-  ];
-}
-
-message TransitionHeader {
-  string operation_id = 1 [
-    (buf.validate.field).string.uuid = true,
-    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
-  ];
-  string session_id = 2 [(buf.validate.field).string.min_len = 1];
-  optional RuntimeStepOrigin origin = 3;
-}
-
 message ScheduledAcknowledgement {
   string operation_id = 1 [
     (buf.validate.field).string.uuid = true,
@@ -395,29 +356,6 @@ message SelectorErrorDetails {
   };
 }
 
-message TransitionPendingDetails {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  string pending_operation_id = 2 [
-    (buf.validate.field).string.uuid = true,
-    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
-  ];
-}
-
-message ImmediateTransitionDetails {
-  ImmediateTransitionErrorKind kind = 1 [(buf.validate.field).enum = {
-    defined_only: true
-    not_in: [0]
-  }];
-  string diagnostic = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.immediate_transition_diagnostic_nonblank"
-      message: "diagnostic must be non-blank"
-      expression: "this.trim() != ''"
-    }
-  ];
-}
-
 message SetupRetainedDetails {
   RegisteredFacts worktree = 1 [(buf.validate.field).required = true];
   string script_path = 2 [(buf.validate.field).string.min_len = 1];
@@ -455,7 +393,7 @@ message BlockedDetails {
 }
 
 message StatusRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message StatusSuccess {
@@ -494,7 +432,7 @@ message StatusResult {
 }
 
 message ListRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message ListSuccess {
@@ -532,8 +470,8 @@ message ListResult {
 }
 
 message WorkspaceListRequest {
-  string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+  string project_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string workspace_id = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message WorkspaceListSuccess {
@@ -575,15 +513,8 @@ message WorkspaceListResult {
 }
 
 message SelectorResolveRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  string selector = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.selector_resolve_nonblank"
-      message: "selector must be non-blank"
-      expression: "this.trim() != ''"
-    }
-  ];
+  string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string selector = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message SelectorResolveSuccess {
@@ -624,15 +555,8 @@ message SelectorResolveResult {
 }
 
 message DeletePreviewRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  string selector = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.delete_preview_selector_nonblank"
-      message: "selector must be non-blank"
-      expression: "this.trim() != ''"
-    }
-  ];
+  string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string selector = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message DeletePreviewSuccess {
@@ -679,8 +603,8 @@ message DeletePreviewResult {
 }
 
 message CreateTargetResolveRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  string target = 2 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string target = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message CreateTargetResolution {
@@ -733,24 +657,41 @@ message CreateTargetResolveResult {
   }
 }
 
+message CreateSpec {
+  optional string base_ref = 1;
+  bool create_branch = 2;
+  optional string branch_name = 3;
+
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.create_spec.new_branch_branch_name_required"
+    message: "branch name is required when create_branch=true"
+    expression: "!this.create_branch || (has(this.branch_name) && this.branch_name.trim() != '')"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.create_spec.new_branch_base_ref_required"
+    message: "base ref is required when create_branch=true"
+    expression: "!this.create_branch || (has(this.base_ref) && this.base_ref.trim() != '')"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.create_spec.existing_target_base_ref_required"
+    message: "base ref is required when create_branch=false"
+    expression: "this.create_branch || (has(this.base_ref) && this.base_ref.trim() != '')"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.create_spec.existing_target_branch_name_forbidden"
+    message: "branch name must be empty when create_branch=false"
+    expression: "this.create_branch || !has(this.branch_name) || this.branch_name.trim() == ''"
+  };
+}
+
 message CreateRequest {
   string setup_operation_id = 1 [
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  string session_id = 2 [(buf.validate.field).string.min_len = 1];
-  optional string base_ref = 3 [(buf.validate.field).string.min_len = 1];
-  bool create_branch = 4;
-  optional string branch_name = 5 [(buf.validate.field).string.min_len = 1];
-  optional string root_path = 6 [(buf.validate.field).string.min_len = 1];
-
-  option (buf.validate.message).cel = {
-    id: "kent.worktree.create_spec"
-    message: "create branch requires base_ref and branch_name; existing target requires base_ref only"
-    expression:
-      "(this.create_branch && has(this.base_ref) && has(this.branch_name)) || "
-      "(!this.create_branch && has(this.base_ref) && !has(this.branch_name))"
-  };
+  string session_id = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  CreateSpec spec = 3 [(buf.validate.field).required = true];
+  optional string root_path = 4;
 }
 
 message CreateSuccess {
@@ -796,19 +737,20 @@ message CreateResult {
 }
 
 message EnterRequest {
-  TransitionHeader transition = 1 [(buf.validate.field).required = true];
-  string selector = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.enter_selector_nonblank"
-      message: "selector must be non-blank"
-      expression: "this.trim() != ''"
-    }
+  string operation_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
+  string session_id = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string selector = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message LeaveRequest {
-  TransitionHeader transition = 1 [(buf.validate.field).required = true];
+  string operation_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string session_id = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message EnterError {
@@ -820,14 +762,6 @@ message EnterError {
     SelectorErrorDetails selector_error = 2 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "selector_error"
-    }];
-    TransitionPendingDetails transition_pending = 3 [(kent.api.shared.kent_result_field) = {
-      role: RESULT_FIELD_ROLE_ERROR_DETAIL
-      error_code: "transition_pending"
-    }];
-    ImmediateTransitionDetails immediate_transition = 4 [(kent.api.shared.kent_result_field) = {
-      role: RESULT_FIELD_ROLE_ERROR_DETAIL
-      error_code: "immediate_transition"
     }];
     kent.api.shared.InternalFailureDetails internal_failure = 5 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
@@ -858,14 +792,6 @@ message LeaveError {
     (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
   ];
   oneof detail {
-    TransitionPendingDetails transition_pending = 2 [(kent.api.shared.kent_result_field) = {
-      role: RESULT_FIELD_ROLE_ERROR_DETAIL
-      error_code: "transition_pending"
-    }];
-    ImmediateTransitionDetails immediate_transition = 3 [(kent.api.shared.kent_result_field) = {
-      role: RESULT_FIELD_ROLE_ERROR_DETAIL
-      error_code: "immediate_transition"
-    }];
     kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "internal_failure"
@@ -890,15 +816,8 @@ message LeaveResult {
 }
 
 message DeleteRequest {
-  TransitionHeader transition = 1 [(buf.validate.field).required = true];
-  string selector = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.delete_selector_nonblank"
-      message: "selector must be non-blank"
-      expression: "this.trim() != ''"
-    }
-  ];
+  string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string selector = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   bool force_folder_removal = 3;
   BranchCleanupMode branch_cleanup_policy = 4 [(buf.validate.field).enum = {
     defined_only: true
@@ -906,17 +825,9 @@ message DeleteRequest {
   }];
 }
 
-message DeleteCompleted {
-  BranchCleanupOutcome cleanup = 1 [(buf.validate.field).required = true];
-  optional string leftover_root = 2 [(buf.validate.field).string.min_len = 1];
-}
-
 message DeleteSuccess {
-  oneof result {
-    option (buf.validate.oneof).required = true;
-    DeleteCompleted completed = 1;
-    ScheduledAcknowledgement scheduled = 2;
-  }
+  BranchCleanupOutcome cleanup = 1 [(buf.validate.field).required = true];
+  optional string leftover_root = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message DeleteError {
@@ -936,14 +847,6 @@ message DeleteError {
     DeletePreconditionDetails delete_precondition = 4 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "delete_precondition"
-    }];
-    TransitionPendingDetails transition_pending = 5 [(kent.api.shared.kent_result_field) = {
-      role: RESULT_FIELD_ROLE_ERROR_DETAIL
-      error_code: "transition_pending"
-    }];
-    ImmediateTransitionDetails immediate_transition = 6 [(kent.api.shared.kent_result_field) = {
-      role: RESULT_FIELD_ROLE_ERROR_DETAIL
-      error_code: "immediate_transition"
     }];
     kent.api.shared.InternalFailureDetails internal_failure = 7 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
@@ -1161,7 +1064,6 @@ service StatusService {
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.status"
     };
   }
 }
@@ -1174,7 +1076,6 @@ service ListService {
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.list"
     };
   }
   rpc ListWorkspace(WorkspaceListRequest) returns (WorkspaceListResult) {
@@ -1184,7 +1085,6 @@ service ListService {
       scope_policy: SCOPE_POLICY_PROJECT_WORKSPACE_BINDING
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.workspace.list"
     };
   }
 }
@@ -1197,7 +1097,6 @@ service SelectorService {
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.selector.resolve"
     };
   }
 }
@@ -1210,7 +1109,6 @@ service DeletePreviewService {
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.deletePreview"
     };
   }
 }
@@ -1223,7 +1121,6 @@ service CreateTargetService {
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.create_target.resolve"
     };
   }
 }
@@ -1236,7 +1133,6 @@ service CreateService {
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.create"
     };
   }
 }
@@ -1249,7 +1145,6 @@ service TransitionService {
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.enter"
     };
   }
   rpc Leave(LeaveRequest) returns (LeaveResult) {
@@ -1259,7 +1154,6 @@ service TransitionService {
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.leave"
     };
   }
   rpc Delete(DeleteRequest) returns (DeleteResult) {
@@ -1269,7 +1163,6 @@ service TransitionService {
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "worktree.delete"
     };
   }
 }
@@ -1291,7 +1184,6 @@ service SetupService {
         service: "SetupService"
         method: "Complete"
       }
-      legacy_wire_name: "worktree.setup.subscribe"
     };
   }
   rpc Event(SetupEvent) returns (google.protobuf.Empty) {
@@ -1300,7 +1192,6 @@ service SetupService {
       authentication_stage: AUTHENTICATION_STAGE_NONE
       scope_policy: SCOPE_POLICY_NOTIFICATION
       direction: DIRECTION_SERVER_TO_CLIENT
-      legacy_wire_name: "worktree.setup"
     };
   }
   rpc Complete(SetupCompletion) returns (google.protobuf.Empty) {
@@ -1309,7 +1200,6 @@ service SetupService {
       authentication_stage: AUTHENTICATION_STAGE_NONE
       scope_policy: SCOPE_POLICY_NOTIFICATION
       direction: DIRECTION_SERVER_TO_CLIENT
-      legacy_wire_name: "worktree.setup.complete"
     };
   }
 }

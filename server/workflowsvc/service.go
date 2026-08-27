@@ -20,7 +20,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
-	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
 )
 
@@ -56,14 +55,14 @@ type initiatingActionTargetDecision struct {
 
 type preparedInitiatingActionTarget struct {
 	candidate                *workflowstore.ExecutionTargetCandidate
-	retainedWorktree         *worktreecontract.TopologyEntry
-	retainedPreviousWorktree *worktreecontract.RetainedPreviousWorktree
+	retainedWorktree         *serverapi.WorktreeTopologyEntry
+	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
 	setupResult              *worktree.WorktreeSetupResult
 }
 
 type initiatingActionTargetPreflight struct {
 	context                workflowstore.TaskExecutionTargetContext
-	selection              workflowcontract.ExecutionTargetSelection
+	selection              workflow.ExecutionTargetSelection
 	explicit               bool
 	initialBranchAssertion *string
 	pendingBranchReplaced  bool
@@ -79,7 +78,7 @@ const (
 
 type initiatingActionRequest struct {
 	taskID                  workflow.TaskID
-	setupOperationID        *worktreecontract.SetupOperationID
+	setupOperationID        *serverapi.WorktreeSetupOperationID
 	requiresExecutionTarget bool
 	targetPreflight         initiatingActionTargetPreflight
 	afterTargetResolution   func() error
@@ -88,7 +87,7 @@ type initiatingActionRequest struct {
 type initiatingActionResult[T any] struct {
 	applied                  *T
 	selectionRequired        *serverapi.WorkflowExecutionTargetSelectionRequirement
-	retainedPreviousWorktree *worktreecontract.RetainedPreviousWorktree
+	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
 }
 
 type initiatingActionPreflight struct {
@@ -130,12 +129,12 @@ type InitialTaskBranchAssertionRequest struct {
 
 type ExecutionTargetResolveRequest struct {
 	SourceWorkspaceRoot string
-	Selection           workflowcontract.ExecutionTargetSelection
+	Selection           workflow.ExecutionTargetSelection
 }
 
 type ExecutionTargetMaterializeRequest struct {
 	TaskID                 workflow.TaskID
-	SetupOperationID       *worktreecontract.SetupOperationID
+	SetupOperationID       *serverapi.WorktreeSetupOperationID
 	Snapshot               workflowstore.ExecutionTargetSnapshot
 	SetupRequirement       worktreecontract.SetupRequirement
 	InitialBranchAssertion *string
@@ -144,13 +143,13 @@ type ExecutionTargetMaterializeRequest struct {
 type ExecutionTargetMaterialization struct {
 	RetainedRoot             *workflowstore.ManagedExecutionRoot
 	SetupResult              *worktree.WorktreeSetupResult
-	RetainedWorktree         *worktreecontract.TopologyEntry
-	RetainedPreviousWorktree *worktreecontract.RetainedPreviousWorktree
+	RetainedWorktree         *serverapi.WorktreeTopologyEntry
+	RetainedPreviousWorktree *serverapi.RetainedPreviousWorktree
 }
 
 type ExecutionTargetRestoreRequest struct {
 	TaskID                 workflow.TaskID
-	SetupOperationID       *worktreecontract.SetupOperationID
+	SetupOperationID       *serverapi.WorktreeSetupOperationID
 	InitialBranchAssertion *string
 }
 
@@ -167,7 +166,7 @@ type workflowAttentionFinalizer interface {
 }
 
 type workflowTaskSetupEventPublisher interface {
-	PublishWorkflowTaskSetupEvent(worktreecontract.SetupEvent)
+	PublishWorkflowTaskSetupEvent(serverapi.WorktreeSetupEvent)
 }
 
 const (
@@ -831,7 +830,6 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
-	setupOperationID := worktreecontract.SetupOperationID(req.SetupOperationID)
 	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
@@ -869,7 +867,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	}
 	target := preflight.target
 	if target.context.Task.ExecutionTarget == nil && !target.explicit &&
-		target.context.Policy.Mode == workflowcontract.ExecutionTargetModeAskOnFirstExecution {
+		target.context.Policy.Mode == workflow.ExecutionTargetModeAskOnFirstExecution {
 		return serverapi.WorkflowTaskStartResponse{
 			Outcome: serverapi.WorkflowTaskActionOutcomeSelectionRequired,
 			SelectionRequired: &serverapi.WorkflowExecutionTargetSelectionRequirement{
@@ -877,19 +875,19 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 			},
 		}, nil
 	}
-	observation, err := newTaskSetupObservation(setupOperationID, target.selection, s.setupEvents)
+	observation, err := newTaskSetupObservation(req.SetupOperationID, target.selection, s.setupEvents)
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
 	target.unavailable = initiatingActionTargetInterrupt
 	preparation := s.initiatingActionPreparation(
 		workflow.TaskID(req.TaskID),
-		setupOperationID,
+		req.SetupOperationID,
 		target,
 		observation,
 		func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
 			return s.prepareInitiatingActionTarget(
-				preparationCtx, workflow.TaskID(req.TaskID), &setupOperationID, target,
+				preparationCtx, workflow.TaskID(req.TaskID), &req.SetupOperationID, target,
 			)
 		},
 	)
@@ -918,7 +916,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 
 func (s *Service) initiatingActionPreparation(
 	taskID workflow.TaskID,
-	setupOperationID worktreecontract.SetupOperationID,
+	setupOperationID serverapi.WorktreeSetupOperationID,
 	target initiatingActionTargetPreflight,
 	observation *taskSetupObservation,
 	materialize func(context.Context) (preparedInitiatingActionTarget, error),
@@ -964,7 +962,7 @@ func (s *Service) initiatingActionPreparation(
 func (s *Service) prepareInitiatingActionTarget(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	setupOperationID *worktreecontract.SetupOperationID,
+	setupOperationID *serverapi.WorktreeSetupOperationID,
 	target initiatingActionTargetPreflight,
 ) (preparedInitiatingActionTarget, error) {
 	decision, preparationErr := s.initiatingActionTarget(ctx, taskID, setupOperationID, target)
@@ -982,7 +980,7 @@ func (s *Service) prepareInitiatingActionTarget(
 
 func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (*T, error)) (initiatingActionResult[T], error) {
 	var candidate *workflowstore.ExecutionTargetCandidate
-	var retainedPreviousWorktree *worktreecontract.RetainedPreviousWorktree
+	var retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
 	if req.requiresExecutionTarget {
 		targetDecision, err := service.initiatingActionTarget(ctx, req.taskID, req.setupOperationID, req.targetPreflight)
 		if err != nil {
@@ -1019,7 +1017,7 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 func (s *Service) preflightInitiatingActionTarget(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	explicit *workflowcontract.ExecutionTargetSelection,
+	explicit *serverapi.WorkflowExecutionTargetSelection,
 	requestedBranchName *string,
 ) (initiatingActionTargetPreflight, error) {
 	targetContext, err := s.store.GetTaskExecutionTargetContext(ctx, taskID)
@@ -1030,11 +1028,11 @@ func (s *Service) preflightInitiatingActionTarget(
 		if explicit != nil {
 			return initiatingActionTargetPreflight{}, workflowstore.ErrExecutionTargetAlreadyLocked
 		}
-		selection := workflowcontract.ExecutionTargetSelection{Mode: targetContext.Task.ExecutionTarget.Mode}
-		if selection.Mode == workflowcontract.ExecutionTargetModeCustomRef {
+		selection := workflow.ExecutionTargetSelection{Mode: targetContext.Task.ExecutionTarget.Mode}
+		if selection.Mode == workflow.ExecutionTargetModeCustomRef {
 			selection.CustomRef = targetContext.Task.ExecutionTarget.RequestedRef
 		}
-		if targetContext.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone {
+		if targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 			if s.executionTargets == nil {
 				return initiatingActionTargetPreflight{}, errExecutionTargetInfrastructureRequired
 			}
@@ -1050,23 +1048,23 @@ func (s *Service) preflightInitiatingActionTarget(
 			pendingBranchReplaced:  pendingBranchReplaced,
 		}, nil
 	}
-	selection := workflowcontract.ExecutionTargetSelection{
+	selection := workflow.ExecutionTargetSelection{
 		Mode:      targetContext.Policy.Mode,
 		CustomRef: targetContext.Policy.CustomRef,
 	}
-	if explicit == nil && targetContext.Policy.Mode == workflowcontract.ExecutionTargetModeAskOnFirstExecution {
+	if explicit == nil && targetContext.Policy.Mode == workflow.ExecutionTargetModeAskOnFirstExecution {
 		return initiatingActionTargetPreflight{
 			context:   targetContext,
 			selection: selection,
 		}, nil
 	}
 	if explicit != nil {
-		selection = workflowcontract.ExecutionTargetSelection{
-			Mode:      workflowcontract.ExecutionTargetMode(explicit.Mode),
+		selection = workflow.ExecutionTargetSelection{
+			Mode:      workflow.ExecutionTargetMode(explicit.Mode),
 			CustomRef: explicit.CustomRef,
 		}
 	}
-	if selection.Mode != workflowcontract.ExecutionTargetModeNone || targetContext.Task.ManagedWorktreeID != nil {
+	if selection.Mode != workflow.ExecutionTargetModeNone || targetContext.Task.ManagedWorktreeID != nil {
 		if s.executionTargets == nil {
 			return initiatingActionTargetPreflight{}, errExecutionTargetInfrastructureRequired
 		}
@@ -1087,10 +1085,10 @@ func (s *Service) preflightInitiatingActionTarget(
 func (s *Service) preflightInitialTaskBranch(
 	ctx context.Context,
 	targetContext workflowstore.TaskExecutionTargetContext,
-	selection workflowcontract.ExecutionTargetSelection,
+	selection workflow.ExecutionTargetSelection,
 	requestedBranchName *string,
 ) (*string, bool, error) {
-	if selection.Mode == workflowcontract.ExecutionTargetModeNone {
+	if selection.Mode == workflow.ExecutionTargetModeNone {
 		if requestedBranchName != nil {
 			return nil, false, &serverapi.WorkflowTaskInitialBranchError{
 				Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonNoManagedTarget,
@@ -1145,10 +1143,10 @@ func operationCannotCreateInitialWorktreeError(branchName string) *serverapi.Wor
 	}
 }
 
-func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID *worktreecontract.SetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
+func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID *serverapi.WorktreeSetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
 	targetContext := preflight.context
 	if targetContext.Task.ExecutionTarget != nil {
-		if targetContext.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone {
+		if targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 			if err := s.executionTargets.RestoreExecutionTarget(ctx, ExecutionTargetRestoreRequest{
 				TaskID:                 taskID,
 				SetupOperationID:       setupOperationID,
@@ -1172,13 +1170,13 @@ func (s *Service) resolveInitiatingActionTarget(
 	preflight initiatingActionTargetPreflight,
 ) (*workflowstore.ExecutionTargetSnapshot, *serverapi.WorkflowExecutionTargetSelectionRequirement, error) {
 	targetContext := preflight.context
-	if !preflight.explicit && targetContext.Policy.Mode == workflowcontract.ExecutionTargetModeAskOnFirstExecution {
+	if !preflight.explicit && targetContext.Policy.Mode == workflow.ExecutionTargetModeAskOnFirstExecution {
 		return nil, &serverapi.WorkflowExecutionTargetSelectionRequirement{
 			Reason: serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
 		}, nil
 	}
 	selection := preflight.selection
-	if selection.Mode == workflowcontract.ExecutionTargetModeNone {
+	if selection.Mode == workflow.ExecutionTargetModeNone {
 		if targetContext.Task.ManagedWorktreeID == nil {
 			return nil, nil, nil
 		}
@@ -1196,7 +1194,7 @@ func (s *Service) resolveInitiatingActionTarget(
 				return nil, requirement, nil
 			}
 		}
-		if preflight.explicit && selection.Mode == workflowcontract.ExecutionTargetModeCustomRef {
+		if preflight.explicit && selection.Mode == workflow.ExecutionTargetModeCustomRef {
 			if resolutionErr, ok := explicitExecutionTargetResolutionError(err); ok {
 				return nil, nil, resolutionErr
 			}
@@ -1215,7 +1213,7 @@ func (s *Service) resolveInitiatingActionTarget(
 func (s *Service) materializeInitiatingActionTarget(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	setupOperationID *worktreecontract.SetupOperationID,
+	setupOperationID *serverapi.WorktreeSetupOperationID,
 	preflight initiatingActionTargetPreflight,
 	snapshot *workflowstore.ExecutionTargetSnapshot,
 	setupRequirement worktreecontract.SetupRequirement,
@@ -1234,7 +1232,7 @@ func (s *Service) materializeInitiatingActionTarget(
 			retainedPreviousWorktree: materialization.RetainedPreviousWorktree,
 			setupResult:              materialization.SetupResult,
 		}
-		if snapshot.Mode == workflowcontract.ExecutionTargetModeNone {
+		if snapshot.Mode == workflow.ExecutionTargetModeNone {
 			prepared.candidate = &workflowstore.ExecutionTargetCandidate{
 				Snapshot: *snapshot,
 				Root:     workflowstore.ExecutionRoot{SourceWorkspaceID: targetContext.SourceWorkspaceID, SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot},
@@ -1262,7 +1260,7 @@ func (s *Service) materializeInitiatingActionTarget(
 	}
 	candidate := &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 		},
 		Root: workflowstore.ExecutionRoot{
@@ -1273,7 +1271,7 @@ func (s *Service) materializeInitiatingActionTarget(
 	return preparedInitiatingActionTarget{candidate: candidate}, nil
 }
 
-func configuredTargetSelectionRequirement(selection workflowcontract.ExecutionTargetSelection, err error) (*serverapi.WorkflowExecutionTargetSelectionRequirement, bool) {
+func configuredTargetSelectionRequirement(selection workflow.ExecutionTargetSelection, err error) (*serverapi.WorkflowExecutionTargetSelectionRequirement, bool) {
 	unavailable, ok := configuredExecutionTargetUnavailable(selection, err)
 	if !ok {
 		return nil, false
@@ -1282,7 +1280,7 @@ func configuredTargetSelectionRequirement(selection workflowcontract.ExecutionTa
 }
 
 func configuredExecutionTargetUnavailable(
-	selection workflowcontract.ExecutionTargetSelection,
+	selection workflow.ExecutionTargetSelection,
 	err error,
 ) (*workflow.ConfiguredExecutionTargetUnavailable, bool) {
 	cause, ok := executionTargetUnavailableCause(err)
@@ -1293,7 +1291,7 @@ func configuredExecutionTargetUnavailable(
 		Mode:  selection.Mode,
 		Cause: cause,
 	}
-	if selection.Mode == workflowcontract.ExecutionTargetModeCustomRef {
+	if selection.Mode == workflow.ExecutionTargetModeCustomRef {
 		requestedRef := *selection.CustomRef
 		unavailable.RequestedRef = &requestedRef
 	}
@@ -1304,7 +1302,7 @@ func configuredTargetSelectionRequirementFromUnavailable(
 	unavailable workflow.ConfiguredExecutionTargetUnavailable,
 ) *serverapi.WorkflowExecutionTargetSelectionRequirement {
 	configured := &serverapi.WorkflowExecutionTargetConfiguredTarget{
-		Mode: workflowcontract.ExecutionTargetMode(unavailable.Mode),
+		Mode: serverapi.WorkflowExecutionTargetMode(unavailable.Mode),
 	}
 	if unavailable.RequestedRef != nil {
 		requestedRef := *unavailable.RequestedRef
@@ -1360,7 +1358,7 @@ func configuredTargetResumeSelection(nodes []workflow.CurrentNode) (*serverapi.W
 	return nil, nil
 }
 
-func resumeSetupRequirement(nodes []workflow.CurrentNode, selection workflowcontract.ExecutionTargetSelection) (worktreecontract.SetupRequirement, error) {
+func resumeSetupRequirement(nodes []workflow.CurrentNode, selection workflow.ExecutionTargetSelection) (worktreecontract.SetupRequirement, error) {
 	for _, node := range nodes {
 		if node.Scheduling == nil || node.Scheduling.Interruption == nil {
 			continue
@@ -1483,7 +1481,6 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 	req serverapi.WorkflowTaskResumeRequest,
 	taskID workflow.TaskID,
 ) (serverapi.WorkflowTaskResumeResponse, error) {
-	setupOperationID := worktreecontract.SetupOperationID(req.SetupOperationID)
 	promoted, handled, err := s.currentNodeExecution.PromoteConcurrencyQueuedTask(ctx, taskID)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
@@ -1542,7 +1539,7 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
-	observation, err := newTaskSetupObservation(setupOperationID, target.selection, s.setupEvents)
+	observation, err := newTaskSetupObservation(req.SetupOperationID, target.selection, s.setupEvents)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
@@ -1565,14 +1562,14 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 		}
 		prepared := s.initiatingActionPreparation(
 			taskID,
-			setupOperationID,
+			req.SetupOperationID,
 			target,
 			observation,
 			func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
 				return s.materializeInitiatingActionTarget(
 					preparationCtx,
 					taskID,
-					&setupOperationID,
+					&req.SetupOperationID,
 					target,
 					snapshot,
 					setupRequirement,
@@ -1580,15 +1577,15 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 			},
 		)
 		preparation = &prepared
-	} else if target.context.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone {
+	} else if target.context.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 		prepared := s.initiatingActionPreparation(
 			taskID,
-			setupOperationID,
+			req.SetupOperationID,
 			target,
 			observation,
 			func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
 				return s.prepareInitiatingActionTarget(
-					preparationCtx, taskID, &setupOperationID, target,
+					preparationCtx, taskID, &req.SetupOperationID, target,
 				)
 			},
 		)
@@ -1841,7 +1838,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
 				CurrentNodes:             workflowview.ProjectCurrentNodes(noOpBeforeInterrupt.currentNodes),
-				RetainedPreviousWorktree: workflowRetainedPreviousWorktree(coordinated.retainedPreviousWorktree),
+				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
 			},
 		}, nil
 	}
@@ -1877,7 +1874,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
 				CurrentNodes:             workflowview.ProjectCurrentNodes(moved.CurrentNodes),
-				RetainedPreviousWorktree: workflowRetainedPreviousWorktree(coordinated.retainedPreviousWorktree),
+				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
 			},
 		}, nil
 	}
@@ -1889,7 +1886,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
 			CurrentNodes:             workflowview.ProjectCurrentNodes(moved.Mutation.Created),
-			RetainedPreviousWorktree: workflowRetainedPreviousWorktree(coordinated.retainedPreviousWorktree),
+			RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
 		},
 	}, nil
 }
@@ -2632,7 +2629,7 @@ func workflowExecutionTargetPolicyToAPI(policy workflow.ExecutionTargetPolicy) s
 		customRef = &value
 	}
 	return serverapi.WorkflowExecutionTargetConfiguration{
-		Mode:      workflowcontract.ExecutionTargetMode(policy.Mode),
+		Mode:      serverapi.WorkflowExecutionTargetMode(policy.Mode),
 		CustomRef: customRef,
 	}
 }
@@ -2644,7 +2641,7 @@ func workflowExecutionTargetPolicyFromAPI(policy serverapi.WorkflowExecutionTarg
 		customRef = &value
 	}
 	return workflow.ExecutionTargetPolicy{
-		Mode:      workflowcontract.ExecutionTargetMode(policy.Mode),
+		Mode:      workflow.ExecutionTargetMode(policy.Mode),
 		CustomRef: customRef,
 	}.Canonical()
 }

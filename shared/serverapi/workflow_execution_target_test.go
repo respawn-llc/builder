@@ -9,13 +9,12 @@ import (
 
 	"core/shared/protocol"
 	"core/shared/runtimeids"
-	"core/shared/workflowcontract"
 )
 
 func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 	customRef := "refs/tags/v1"
 	blankRef := " "
-	valid := workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeCustomRef, CustomRef: &customRef}
+	valid := WorkflowExecutionTargetSelection{Mode: WorkflowExecutionTargetModeCustomRef, CustomRef: &customRef}
 
 	for _, request := range []interface{ Validate() error }{
 		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
@@ -27,12 +26,12 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 		}
 	}
 
-	for _, selection := range []workflowcontract.ExecutionTargetSelection{
-		{Mode: workflowcontract.ExecutionTargetModeAskOnFirstExecution},
-		{Mode: workflowcontract.ExecutionTargetModeCustomRef},
-		{Mode: workflowcontract.ExecutionTargetModeCustomRef, CustomRef: &blankRef},
-		{Mode: workflowcontract.ExecutionTargetModeHead, CustomRef: &customRef},
-		{Mode: workflowcontract.ExecutionTargetMode("future")},
+	for _, selection := range []WorkflowExecutionTargetSelection{
+		{Mode: WorkflowExecutionTargetModeAskOnFirstExecution},
+		{Mode: WorkflowExecutionTargetModeCustomRef},
+		{Mode: WorkflowExecutionTargetModeCustomRef, CustomRef: &blankRef},
+		{Mode: WorkflowExecutionTargetModeHead, CustomRef: &customRef},
+		{Mode: WorkflowExecutionTargetMode("future")},
 	} {
 		if err := (WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &selection}).Validate(); err == nil {
 			t.Fatalf("selection %#v validated", selection)
@@ -129,7 +128,7 @@ func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 		ExpectedVersion: 1,
 		Metadata: &WorkflowGraphMetadata{
 			Name:                  "Workflow",
-			ExecutionTargetPolicy: &WorkflowExecutionTargetConfiguration{Mode: workflowcontract.ExecutionTargetModeCustomRef, CustomRef: &customRef},
+			ExecutionTargetPolicy: &WorkflowExecutionTargetConfiguration{Mode: WorkflowExecutionTargetModeCustomRef, CustomRef: &customRef},
 		},
 	}).Validate(); err != nil {
 		t.Fatalf("custom target policy metadata rejected: %v", err)
@@ -139,7 +138,7 @@ func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 		ExpectedVersion: 1,
 		Metadata: &WorkflowGraphMetadata{
 			Name:                  "Workflow",
-			ExecutionTargetPolicy: &WorkflowExecutionTargetConfiguration{Mode: workflowcontract.ExecutionTargetModeHead, CustomRef: &customRef},
+			ExecutionTargetPolicy: &WorkflowExecutionTargetConfiguration{Mode: WorkflowExecutionTargetModeHead, CustomRef: &customRef},
 		},
 	}).Validate(); err == nil {
 		t.Fatal("non-custom policy metadata accepted a custom ref")
@@ -150,7 +149,7 @@ func TestWorkflowExecutionTargetSelectionRequirementValidation(t *testing.T) {
 	configured := WorkflowExecutionTargetSelectionRequirement{
 		Reason: WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable,
 		ConfiguredTarget: &WorkflowExecutionTargetConfiguredTarget{
-			Mode: workflowcontract.ExecutionTargetModeDefaultBranch,
+			Mode: WorkflowExecutionTargetModeDefaultBranch,
 		},
 		UnavailableCause: WorkflowExecutionTargetUnavailableCauseDefaultBranchMissing,
 	}
@@ -258,7 +257,7 @@ func TestWorkflowTaskActionResponseValidatesDependencyConfirmationOutcome(t *tes
 
 func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) {
 	target := WorkflowExecutionTarget{
-		Mode:         workflowcontract.ExecutionTargetModeCustomRef,
+		Mode:         WorkflowExecutionTargetModeCustomRef,
 		RequestedRef: stringPointer("release/v1"),
 		ResolvedRef:  stringPointer("refs/remotes/origin/release/v1"),
 		CommitOID:    stringPointer("0123456789abcdef"),
@@ -285,7 +284,7 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 		}
 	}
 
-	none := WorkflowExecutionTarget{Mode: workflowcontract.ExecutionTargetModeNone, Provenance: WorkflowExecutionTargetProvenanceResolved}
+	none := WorkflowExecutionTarget{Mode: WorkflowExecutionTargetModeNone, Provenance: WorkflowExecutionTargetProvenanceResolved}
 	noneData, err := json.Marshal(none)
 	if err != nil {
 		t.Fatalf("marshal none target: %v", err)
@@ -321,7 +320,7 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 
 func TestWorkflowExecutionTargetContainsOnlyDurableFacts(t *testing.T) {
 	target := WorkflowExecutionTarget{
-		Mode:         workflowcontract.ExecutionTargetModeHead,
+		Mode:         WorkflowExecutionTargetModeHead,
 		RequestedRef: stringPointer("HEAD"),
 		CommitOID:    stringPointer("0123456789abcdef"),
 		Provenance:   WorkflowExecutionTargetProvenanceResolved,
@@ -404,7 +403,7 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 		CurrentScripts: []WorkflowTaskCurrentScript{},
 		Dependencies:   emptyWorkflowTaskDependenciesForTest(),
 		ExecutionTarget: &WorkflowExecutionTarget{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       WorkflowExecutionTargetModeNone,
 			Provenance: WorkflowExecutionTargetProvenanceResolved,
 		},
 	}}
@@ -413,7 +412,7 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	}
 	invalid := valid
 	invalid.Task.ExecutionTarget = &WorkflowExecutionTarget{
-		Mode:         workflowcontract.ExecutionTargetModeHead,
+		Mode:         WorkflowExecutionTargetModeHead,
 		RequestedRef: stringPointer("HEAD"),
 		Provenance:   WorkflowExecutionTargetProvenanceResolved,
 	}

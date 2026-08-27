@@ -6,265 +6,116 @@ import (
 	"strings"
 )
 
-var (
-	ErrWorktreeSelectorNotFound    = errors.New("worktree selector not found")
-	ErrWorktreeSelectorAmbiguous   = errors.New("worktree selector is ambiguous")
-	ErrWorktreeSelectorUnavailable = errors.New("worktree selector is unavailable")
-	ErrWorktreeTransitionPending   = errors.New("a worktree transition is already pending for this session")
-	ErrWorktreeSetupRetained       = errors.New("worktree setup failed after worktree creation")
-	ErrWorktreeDeletePrecondition  = errors.New("worktree deletion requires additional authorization")
-)
+var ErrWorktreeCreateContract = errors.New("invalid worktree create error contract")
 
-type SelectorErrorKind string
+type CreateErrorOwner string
 
 const (
-	SelectorErrorKindNotFound    SelectorErrorKind = "not_found"
-	SelectorErrorKindAmbiguous   SelectorErrorKind = "ambiguous"
-	SelectorErrorKindUnavailable SelectorErrorKind = "unavailable"
+	CreateErrorOwnerBaseRef CreateErrorOwner = "base_ref"
+	CreateErrorOwnerForm    CreateErrorOwner = "form"
 )
 
-type SelectorCandidate struct {
-	Variant          TopologyVariant
-	Selector         string
-	BranchName       *string
-	DisplayName      *string
-	FallbackIdentity string
+type CreateError struct {
+	Owner      CreateErrorOwner
+	Diagnostic string
+	cause      error
 }
 
-type SelectorError struct {
-	Kind       SelectorErrorKind
-	Input      string
-	Candidates []SelectorCandidate
-}
-
-func (e *SelectorError) Error() string {
-	if e == nil {
-		return "worktree selector error"
-	}
-	return "worktree selector error: " + string(e.Kind)
-}
-
-func (e *SelectorError) Is(target error) bool {
-	switch target {
-	case ErrWorktreeSelectorNotFound:
-		return e != nil && e.Kind == SelectorErrorKindNotFound
-	case ErrWorktreeSelectorAmbiguous:
-		return e != nil && e.Kind == SelectorErrorKindAmbiguous
-	case ErrWorktreeSelectorUnavailable:
-		return e != nil && e.Kind == SelectorErrorKindUnavailable
-	default:
-		return false
-	}
-}
-
-func (e *SelectorError) Validate() error {
-	if e == nil {
-		return errors.New("worktree selector error is required")
-	}
-	if strings.TrimSpace(e.Input) == "" {
-		return errors.New("worktree selector error input is required")
-	}
-	switch e.Kind {
-	case SelectorErrorKindNotFound, SelectorErrorKindUnavailable:
-		if len(e.Candidates) != 0 {
-			return errors.New("non-ambiguous selector error cannot contain candidates")
-		}
-	case SelectorErrorKindAmbiguous:
-		if len(e.Candidates) == 0 {
-			return errors.New("ambiguous selector error requires candidates")
-		}
-		for _, candidate := range e.Candidates {
-			if err := candidate.Validate(); err != nil {
-				return err
-			}
-		}
-	default:
-		return errors.New("worktree selector error kind is invalid")
-	}
-	return nil
-}
-
-func (candidate SelectorCandidate) Validate() error {
-	switch candidate.Variant {
-	case TopologyVariantRegistered, TopologyVariantExternal, TopologyVariantMissing:
-	default:
-		return errors.New("worktree selector candidate variant is invalid")
-	}
-	if strings.TrimSpace(candidate.Selector) == "" || strings.TrimSpace(candidate.FallbackIdentity) == "" {
-		return errors.New("worktree selector candidate requires selector and fallback_identity")
-	}
-	for _, fact := range []*string{candidate.BranchName, candidate.DisplayName} {
-		if fact != nil && strings.TrimSpace(*fact) == "" {
-			return errors.New("worktree selector candidate optional facts must not be empty")
-		}
-	}
-	return nil
-}
-
-type TransitionPendingError struct {
-	SessionID          string
-	PendingOperationID OperationID
-}
-
-type ImmediateTransitionErrorKind string
-
-const (
-	ImmediateTransitionOriginInactive       ImmediateTransitionErrorKind = "origin_inactive"
-	ImmediateTransitionApplyFailed          ImmediateTransitionErrorKind = "apply_failed"
-	worktreeImmediateTransitionErrorMessage                              = "worktree transition could not become authoritative before command completion"
-)
-
-type ImmediateTransitionError struct {
-	Kind  ImmediateTransitionErrorKind
-	Cause error
-}
-
-func NewImmediateTransitionError(kind ImmediateTransitionErrorKind, cause error) *ImmediateTransitionError {
-	if cause != nil {
-		cause = fmt.Errorf("%s: %w", worktreeImmediateTransitionErrorMessage, cause)
-	}
-	return &ImmediateTransitionError{Kind: kind, Cause: cause}
-}
-
-func (e *ImmediateTransitionError) Error() string {
-	if e == nil || e.Cause == nil {
-		return worktreeImmediateTransitionErrorMessage
-	}
-	return e.Cause.Error()
-}
-
-func (e *ImmediateTransitionError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
-}
-
-func (e *TransitionPendingError) Error() string {
-	return ErrWorktreeTransitionPending.Error()
-}
-
-func (e *TransitionPendingError) Is(target error) bool {
-	return target == ErrWorktreeTransitionPending
-}
-
-func (e *TransitionPendingError) Validate() error {
-	if e == nil {
-		return errors.New("worktree transition pending error is required")
-	}
-	if err := validateRequiredSessionID(e.SessionID); err != nil {
-		return err
-	}
-	return e.PendingOperationID.Validate()
-}
-
-type SetupRetainedError struct {
-	Worktree                 TopologyEntry
-	ScriptPath               string
-	Diagnostic               string
-	RetainedPreviousWorktree *RetainedPreviousWorktree
-	cause                    error
-}
-
-func NewSetupRetainedError(worktree TopologyEntry, scriptPath string, diagnostic string, cause error) (*SetupRetainedError, error) {
-	result := &SetupRetainedError{
-		Worktree:   worktree,
-		ScriptPath: scriptPath,
-		Diagnostic: diagnostic,
-		cause:      cause,
-	}
+func NewCreateError(owner CreateErrorOwner, diagnostic string, cause error) error {
+	result := &CreateError{Owner: owner, Diagnostic: diagnostic, cause: cause}
 	if err := result.Validate(); err != nil {
-		return nil, err
+		return NewCreateContractError("worktree.create.constructor", CreateErrorOwnerPointer(owner), diagnostic, err)
 	}
-	return result, nil
+	return result
 }
 
-func (e *SetupRetainedError) Error() string {
-	base := ErrWorktreeSetupRetained.Error()
-	if e == nil {
-		return base
+func (e *CreateError) Error() string {
+	if e == nil || strings.TrimSpace(e.Diagnostic) == "" {
+		return "worktree creation failed"
 	}
-	diagnostic := strings.TrimSpace(e.Diagnostic)
-	if diagnostic == "" {
-		return base
-	}
-	return fmt.Sprintf("%s: %s", base, diagnostic)
+	return "worktree creation failed: " + strings.TrimSpace(e.Diagnostic)
 }
 
-func (e *SetupRetainedError) Unwrap() error {
+func (e *CreateError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
 	return e.cause
 }
 
-func (e *SetupRetainedError) Is(target error) bool {
-	return target == ErrWorktreeSetupRetained
-}
-
-func (e *SetupRetainedError) Validate() error {
+func (e *CreateError) Validate() error {
 	if e == nil {
-		return errors.New("worktree setup retained error is required")
+		return errors.New("worktree create error is required")
 	}
-	if e.Worktree.Variant != TopologyVariantRegistered {
-		return errors.New("retained setup error requires a registered worktree")
-	}
-	if err := e.Worktree.Validate(); err != nil {
-		return err
-	}
-	if strings.TrimSpace(e.ScriptPath) == "" {
-		return errors.New("retained setup error script_path is required")
+	switch e.Owner {
+	case CreateErrorOwnerBaseRef, CreateErrorOwnerForm:
+	default:
+		return errors.New("worktree create error owner is invalid")
 	}
 	if strings.TrimSpace(e.Diagnostic) == "" {
-		return errors.New("retained setup error diagnostic is required")
+		return errors.New("worktree create error diagnostic is required")
 	}
-	return validateRetainedPreviousWorktree(e.RetainedPreviousWorktree)
+	return nil
 }
 
-type DeletePreconditionError struct {
-	DirtyState DirtyState
+type CreateContractError struct {
+	Operation  string
+	Owner      *CreateErrorOwner
+	Diagnostic string
+	Cause      error
 }
 
-func (e *DeletePreconditionError) Error() string {
-	base := ErrWorktreeDeletePrecondition.Error()
+func CreateErrorOwnerPointer(owner CreateErrorOwner) *CreateErrorOwner {
+	return &owner
+}
+
+func NewCreateContractError(operation string, owner *CreateErrorOwner, diagnostic string, cause error) *CreateContractError {
+	return &CreateContractError{
+		Operation:  strings.TrimSpace(operation),
+		Owner:      owner,
+		Diagnostic: diagnostic,
+		Cause:      cause,
+	}
+}
+
+func (e *CreateContractError) Error() string {
 	if e == nil {
-		return base
+		return ErrWorktreeCreateContract.Error()
 	}
-	switch e.DirtyState.Kind {
-	case DirtyStateDirty:
-		if e.DirtyState.DirtyFileCount != nil && *e.DirtyState.DirtyFileCount > 0 {
-			return fmt.Sprintf(
-				"%s: %d modified or untracked file(s); force folder removal to continue",
-				base,
-				*e.DirtyState.DirtyFileCount,
-			)
-		}
-	case DirtyStateUnknown:
-		if e.DirtyState.UnknownCause != nil {
-			cause := strings.TrimSpace(*e.DirtyState.UnknownCause)
-			if cause != "" {
-				return fmt.Sprintf(
-					"%s: worktree cleanliness could not be determined: %s; force folder removal to continue",
-					base,
-					cause,
-				)
-			}
-		}
+	details := fmt.Sprintf("%s: operation=%q", ErrWorktreeCreateContract.Error(), e.Operation)
+	if e.Owner != nil {
+		details += fmt.Sprintf(" owner=%q", *e.Owner)
 	}
-	return base
+	if e.Cause == nil {
+		return details
+	}
+	return fmt.Sprintf("%s: %v", details, e.Cause)
 }
 
-func (e *DeletePreconditionError) Is(target error) bool {
-	return target == ErrWorktreeDeletePrecondition
-}
-
-func (e *DeletePreconditionError) Validate() error {
+func (e *CreateContractError) Unwrap() error {
 	if e == nil {
-		return errors.New("worktree delete precondition error is required")
+		return nil
 	}
-	return ValidateDeletePrecondition(
-		e.DirtyState.Kind,
-		e.DirtyState.DirtyFileCount,
-		e.DirtyState.UnknownCause,
-	)
+	return e.Cause
+}
+
+func (e *CreateContractError) Is(target error) bool {
+	return target == ErrWorktreeCreateContract
+}
+
+func ValidateCreateError(err error, operation string) error {
+	var typed *CreateError
+	if !errors.As(err, &typed) {
+		return nil
+	}
+	if validationErr := typed.Validate(); validationErr != nil {
+		var owner *CreateErrorOwner
+		diagnostic := validationErr.Error()
+		if typed != nil {
+			owner = CreateErrorOwnerPointer(typed.Owner)
+			diagnostic = typed.Diagnostic
+		}
+		return NewCreateContractError(operation, owner, diagnostic, validationErr)
+	}
+	return nil
 }

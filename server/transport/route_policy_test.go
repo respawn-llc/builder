@@ -22,7 +22,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-	"core/shared/worktreecontract"
 )
 
 func TestRoutePolicyAuthPolicyHandlesBlankAndUnknownMethods(t *testing.T) {
@@ -97,23 +96,6 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, activeRoute, serverapi.SessionMainViewRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign session unexpectedly allowed")
-	}
-	deletePreviewRoute := routeForTest(t, protocol.MethodWorktreeDeletePreview)
-	if err := executor.authorizeScope(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		deletePreviewRoute,
-		worktreecontract.DeletePreviewRequest{SessionID: fixture.ownSessionID, Selector: "feature"},
-	); err != nil {
-		t.Fatalf("active project own delete preview: %v", err)
-	}
-	if err := executor.authorizeScope(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		deletePreviewRoute,
-		worktreecontract.DeletePreviewRequest{SessionID: fixture.foreignSessionID, Selector: "feature"},
-	); err == nil {
-		t.Fatal("active project foreign delete preview unexpectedly allowed")
 	}
 	transcriptPageRoute := routeForTest(t, protocol.MethodSessionGetTranscriptPage)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, transcriptPageRoute, serverapi.SessionTranscriptPageRequest{SessionID: fixture.ownSessionID}); err != nil {
@@ -401,28 +383,6 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 		routeScopeParams{},
 	); err != nil {
 		t.Fatalf("workspace Chat materialization with attached project: %v", err)
-	}
-	workspaceListRoute := routeForTest(t, protocol.MethodWorktreeWorkspaceList)
-	if err := executor.authorizeScope(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
-		workspaceListRoute,
-		worktreecontract.WorkspaceListRequest{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingA.WorkspaceID},
-	); err != nil {
-		t.Fatalf("workspace list with matching project/workspace: %v", err)
-	}
-	for _, request := range []worktreecontract.WorkspaceListRequest{
-		{ProjectID: fixture.bindingB.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
-		{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
-	} {
-		if err := executor.authorizeScope(
-			ctx,
-			&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
-			workspaceListRoute,
-			request,
-		); err == nil {
-			t.Fatalf("foreign workspace list unexpectedly allowed: %+v", request)
-		}
 	}
 	unboundCore, unboundServer := newUnboundGatewayTestServer(t)
 	unboundServer.Close()

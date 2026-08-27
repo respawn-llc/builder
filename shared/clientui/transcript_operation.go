@@ -1,8 +1,6 @@
 package clientui
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -11,77 +9,11 @@ import (
 )
 
 type TranscriptWorktreeTransitionOutcome struct {
-	OperationID        worktreecontract.OperationID
+	OperationID        WorktreeTransitionID
 	Transition         WorktreeTransitionKind
 	State              WorktreeTransitionState
 	Failure            *TranscriptDiagnostic
-	DeletePrecondition *worktreecontract.DirtyState
-}
-
-type transcriptWorktreeTransitionOutcomeJSON struct {
-	OperationID        string
-	Transition         WorktreeTransitionKind
-	State              WorktreeTransitionState
-	Failure            *TranscriptDiagnostic
-	DeletePrecondition *transcriptWorktreeDirtyStateJSON
-}
-
-type transcriptWorktreeDirtyStateJSON struct {
-	Kind           worktreecontract.DirtyStateKind `json:"kind"`
-	DirtyFileCount *int                            `json:"dirty_file_count,omitempty"`
-	UnknownCause   *string                         `json:"unknown_cause,omitempty"`
-}
-
-func (o TranscriptWorktreeTransitionOutcome) MarshalJSON() ([]byte, error) {
-	if err := o.OperationID.Validate(); err != nil {
-		return nil, err
-	}
-	var precondition *transcriptWorktreeDirtyStateJSON
-	if o.DeletePrecondition != nil {
-		precondition = &transcriptWorktreeDirtyStateJSON{
-			Kind:           o.DeletePrecondition.Kind,
-			DirtyFileCount: o.DeletePrecondition.DirtyFileCount,
-			UnknownCause:   o.DeletePrecondition.UnknownCause,
-		}
-	}
-	return json.Marshal(transcriptWorktreeTransitionOutcomeJSON{
-		OperationID:        o.OperationID.String(),
-		Transition:         o.Transition,
-		State:              o.State,
-		Failure:            o.Failure,
-		DeletePrecondition: precondition,
-	})
-}
-
-func (o *TranscriptWorktreeTransitionOutcome) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		*o = TranscriptWorktreeTransitionOutcome{}
-		return nil
-	}
-	var wire transcriptWorktreeTransitionOutcomeJSON
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-	operationID, err := worktreecontract.ParseOperationID(wire.OperationID)
-	if err != nil {
-		return err
-	}
-	var precondition *worktreecontract.DirtyState
-	if wire.DeletePrecondition != nil {
-		precondition = &worktreecontract.DirtyState{
-			Kind:           wire.DeletePrecondition.Kind,
-			DirtyFileCount: wire.DeletePrecondition.DirtyFileCount,
-			UnknownCause:   wire.DeletePrecondition.UnknownCause,
-		}
-	}
-	*o = TranscriptWorktreeTransitionOutcome{
-		OperationID:        operationID,
-		Transition:         wire.Transition,
-		State:              wire.State,
-		Failure:            wire.Failure,
-		DeletePrecondition: precondition,
-	}
-	return nil
+	DeletePrecondition *WorktreeDirtyState
 }
 
 type OperationalDiagnosticCode string

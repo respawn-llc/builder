@@ -151,6 +151,9 @@ func (e routePolicyExecutor) authenticationStage(method string) (sharedpb.Authen
 		if _, migrated := registration.BinarySubscriptionBinding(trimmed); migrated {
 			return operation.Options.AuthenticationStage, true
 		}
+		if notification, migrated := registration.BinarySubscriptionNotification(trimmed); migrated {
+			return notification.Options.AuthenticationStage, true
+		}
 	}
 	operation, _, ok := registration.LegacyOperation(trimmed)
 	if !ok {

@@ -9,9 +9,7 @@ import (
 
 	"core/shared/protocol"
 	"core/shared/runtimeids"
-	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
-
 	"github.com/google/uuid"
 )
 
@@ -149,100 +147,13 @@ func DecodeCurrentNodeInterruptionDetail(raw string) (CurrentNodeInterruptionDet
 }
 
 func (d *CurrentNodeInterruptionDetail) UnmarshalJSON(data []byte) error {
-	var decoded currentNodeInterruptionDetailJSON
+	type wire CurrentNodeInterruptionDetail
+	var decoded wire
 	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
 		return err
 	}
-	*d = decoded.domain()
+	*d = CurrentNodeInterruptionDetail(decoded)
 	return d.Validate()
-}
-
-func (d CurrentNodeInterruptionDetail) MarshalJSON() ([]byte, error) {
-	if err := d.Validate(); err != nil {
-		return nil, err
-	}
-	return json.Marshal(currentNodeInterruptionDetailToJSON(d))
-}
-
-type currentNodeInterruptionDetailJSON struct {
-	Code                                 string
-	Fields                               map[string]string
-	ConfiguredExecutionTargetUnavailable *ConfiguredExecutionTargetUnavailable `json:"configured_execution_target_unavailable,omitempty"`
-	SetupRecovery                        *currentNodeSetupRecoveryDetailJSON   `json:"setup_recovery,omitempty"`
-}
-
-type currentNodeSetupRecoveryDetailJSON struct {
-	SetupOperationID         uuid.UUID                                 `json:"setup_operation_id"`
-	Cause                    worktreecontract.SetupFailureKind         `json:"cause"`
-	Diagnostic               string                                    `json:"diagnostic"`
-	ScriptPath               *string                                   `json:"script_path"`
-	SetupRequirement         worktreecontract.SetupRequirement         `json:"setup_requirement"`
-	ExecutionTarget          workflowcontract.ExecutionTargetSelection `json:"execution_target"`
-	RetainedWorktree         *currentNodeRetainedWorktreeJSON          `json:"retained_worktree"`
-	RetainedPreviousWorktree *currentNodeRetainedWorktreeJSON          `json:"retained_previous_worktree"`
-}
-
-type currentNodeRetainedWorktreeJSON struct {
-	WorktreeID string `json:"worktree_id"`
-	Root       string `json:"root"`
-}
-
-func currentNodeInterruptionDetailToJSON(detail CurrentNodeInterruptionDetail) currentNodeInterruptionDetailJSON {
-	result := currentNodeInterruptionDetailJSON{
-		Code:                                 detail.Code,
-		Fields:                               detail.Fields,
-		ConfiguredExecutionTargetUnavailable: detail.ConfiguredExecutionTargetUnavailable,
-	}
-	if detail.SetupRecovery != nil {
-		recovery := detail.SetupRecovery
-		result.SetupRecovery = &currentNodeSetupRecoveryDetailJSON{
-			SetupOperationID:         uuid.UUID(recovery.SetupOperationID),
-			Cause:                    recovery.Cause,
-			Diagnostic:               recovery.Diagnostic,
-			ScriptPath:               recovery.ScriptPath,
-			SetupRequirement:         recovery.SetupRequirement,
-			ExecutionTarget:          recovery.ExecutionTarget,
-			RetainedWorktree:         currentNodeRetainedWorktreeToJSON(recovery.RetainedWorktree),
-			RetainedPreviousWorktree: currentNodeRetainedWorktreeToJSON(recovery.RetainedPreviousWorktree),
-		}
-	}
-	return result
-}
-
-func currentNodeRetainedWorktreeToJSON(retained *worktreecontract.RetainedWorktree) *currentNodeRetainedWorktreeJSON {
-	if retained == nil {
-		return nil
-	}
-	return &currentNodeRetainedWorktreeJSON{WorktreeID: retained.WorktreeID, Root: retained.Root}
-}
-
-func (detail currentNodeInterruptionDetailJSON) domain() CurrentNodeInterruptionDetail {
-	result := CurrentNodeInterruptionDetail{
-		Code:                                 detail.Code,
-		Fields:                               detail.Fields,
-		ConfiguredExecutionTargetUnavailable: detail.ConfiguredExecutionTargetUnavailable,
-	}
-	if detail.SetupRecovery != nil {
-		recovery := detail.SetupRecovery
-		result.SetupRecovery = &worktreecontract.SetupRecoveryDetail{
-			SetupOperationID:         worktreecontract.SetupOperationID(recovery.SetupOperationID),
-			Cause:                    recovery.Cause,
-			Diagnostic:               recovery.Diagnostic,
-			ScriptPath:               recovery.ScriptPath,
-			SetupRequirement:         recovery.SetupRequirement,
-			ExecutionTarget:          recovery.ExecutionTarget,
-			RetainedWorktree:         recovery.RetainedWorktree.domain(),
-			RetainedPreviousWorktree: recovery.RetainedPreviousWorktree.domain(),
-		}
-	}
-	return result
-}
-
-func (retained *currentNodeRetainedWorktreeJSON) domain() *worktreecontract.RetainedWorktree {
-	if retained == nil {
-		return nil
-	}
-	return &worktreecontract.RetainedWorktree{WorktreeID: retained.WorktreeID, Root: retained.Root}
 }
 
 func (d CurrentNodeInterruptionDetail) Validate() error {
@@ -273,11 +184,10 @@ func (d CurrentNodeInterruptionDetail) SetupOperationID() (*uuid.UUID, error) {
 		return nil, err
 	}
 	value := d.SetupRecovery.SetupOperationID
-	uuidValue := uuid.UUID(value)
-	return &uuidValue, nil
+	return &value, nil
 }
 
-type CurrentNodeSetupRecoveryDetail = worktreecontract.SetupRecoveryDetail
+type CurrentNodeSetupRecoveryDetail = worktreecontract.SetupRecoveryDetail[uuid.UUID, ExecutionTargetSelection]
 
 type CurrentNodeSetupRecoveryCause = worktreecontract.SetupFailureKind
 

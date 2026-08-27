@@ -14,7 +14,6 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
-	"core/shared/worktreecontract"
 )
 
 type remoteSubscription[Wire any, Event any] struct {
@@ -187,48 +186,6 @@ func workflowProjectEventFromProtocol(event protocol.WorkflowProjectEvent) (serv
 		return serverapi.WorkflowProjectEvent{}, err
 	}
 	return decoded, nil
-}
-
-func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req worktreecontract.SetupSubscribeRequest) (worktreecontract.SetupSubscription, error) {
-	conn, route, err := c.subscribeRPC(ctx, protocol.MethodWorktreeSetupSubscribe, "subscribe-worktree-setup", req, "", false)
-	if err != nil {
-		return nil, err
-	}
-	return newRemoteSubscriptionWithError(conn, route, func(params protocol.WorktreeSetupEventParams) (worktreecontract.SetupEvent, error) {
-		id, err := worktreecontract.ParseSetupOperationID(params.Event.SetupOperationID)
-		if err != nil {
-			return worktreecontract.SetupEvent{}, err
-		}
-		decoded := worktreecontract.SetupEvent{
-			SetupOperationID: id,
-			Phase:            worktreecontract.SetupPhase(params.Event.Phase),
-		}
-		decodePayload := func(raw json.RawMessage, target any) error {
-			if len(raw) == 0 {
-				return nil
-			}
-			if err := protocol.DecodeStrictJSON([]byte(raw), target); err != nil {
-				return err
-			}
-			return nil
-		}
-		if err := decodePayload(params.Event.Started, &decoded.Started); err != nil {
-			return worktreecontract.SetupEvent{}, err
-		}
-		if err := decodePayload(params.Event.Completed, &decoded.Completed); err != nil {
-			return worktreecontract.SetupEvent{}, err
-		}
-		if err := decodePayload(params.Event.NotRequired, &decoded.NotRequired); err != nil {
-			return worktreecontract.SetupEvent{}, err
-		}
-		if err := decodePayload(params.Event.Failed, &decoded.Failed); err != nil {
-			return worktreecontract.SetupEvent{}, err
-		}
-		if err := decoded.Validate(); err != nil {
-			return worktreecontract.SetupEvent{}, err
-		}
-		return decoded, nil
-	}), nil
 }
 
 func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID string, req any, sessionID string, attachSession bool) (rpcwire.Conn, rpccontract.Route, error) {

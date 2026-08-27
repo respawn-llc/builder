@@ -16,7 +16,6 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
-	"core/shared/workflowcontract"
 )
 
 var testGraphEntityIDs sync.Map
@@ -574,7 +573,7 @@ SET source_workspace_id = ?,
 WHERE id = ?`,
 		workspaceID,
 		worktreeID,
-		string(workflowcontract.ExecutionTargetModeHead),
+		string(workflow.ExecutionTargetModeHead),
 		"HEAD",
 		"fixture-commit",
 		string(ExecutionTargetProvenanceResolved),

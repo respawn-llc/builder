@@ -6,7 +6,6 @@ import (
 
 	"core/shared/protocol"
 	"core/shared/serverapi"
-	"core/shared/worktreecontract"
 )
 
 type Kind string
@@ -215,17 +214,6 @@ var routeContracts = []Route{
 	unary[serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](protocol.MethodSessionResolveTransition, AuthServer, ScopeSessionActiveProjectIfSet, ConnectionControl),
 	unary[serverapi.SessionRuntimeActivateRequest, serverapi.SessionRuntimeActivateResponse](protocol.MethodSessionRuntimeActivate, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.SessionRuntimeReleaseRequest, serverapi.SessionRuntimeReleaseResponse](protocol.MethodSessionRuntimeRelease, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[worktreecontract.StatusRequest, worktreecontract.StatusResponse](protocol.MethodWorktreeStatus, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[worktreecontract.ListRequest, worktreecontract.ListResponse](protocol.MethodWorktreeList, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[worktreecontract.WorkspaceListRequest, worktreecontract.WorkspaceListResponse](protocol.MethodWorktreeWorkspaceList, AuthServer, ScopeProjectWorkspaceBinding, ConnectionControl),
-	unary[worktreecontract.SelectorResolveRequest, worktreecontract.SelectorResolveResponse](protocol.MethodWorktreeSelectorResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[worktreecontract.DeletePreviewRequest, worktreecontract.DeletePreviewResponse](protocol.MethodWorktreeDeletePreview, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[worktreecontract.CreateTargetResolveRequest, worktreecontract.CreateTargetResolveResponse](protocol.MethodWorktreeCreateTargetResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[worktreecontract.CreateRequest, worktreecontract.CreateResponse](protocol.MethodWorktreeCreate, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[worktreecontract.EnterRequest, worktreecontract.ScheduledAcknowledgement](protocol.MethodWorktreeEnter, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[worktreecontract.LeaveRequest, worktreecontract.ScheduledAcknowledgement](protocol.MethodWorktreeLeave, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[worktreecontract.DeleteRequest, worktreecontract.DeleteResult](protocol.MethodWorktreeDelete, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	subscription[worktreecontract.SetupSubscribeRequest, protocol.WorktreeSetupEventParams](protocol.MethodWorktreeSetupSubscribe, AuthServer, ScopeNone, protocol.MethodWorktreeSetupEvent, protocol.MethodWorktreeSetupComplete),
 	unary[serverapi.RuntimeSetSessionNameRequest, struct{}](protocol.MethodRuntimeSetSessionName, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.RuntimeSetThinkingLevelRequest, struct{}](protocol.MethodRuntimeSetThinkingLevel, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.RuntimeSetFastModeEnabledRequest, serverapi.RuntimeSetFastModeEnabledResponse](protocol.MethodRuntimeSetFastModeEnabled, AuthServer, ScopeSessionActiveProject, ConnectionControl),
@@ -281,8 +269,6 @@ var routeContracts = []Route{
 	notification[protocol.StreamCompleteParams](protocol.MethodWorkflowComplete),
 	notification[protocol.WorkflowProjectEventParams](protocol.MethodWorkflowProjectEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodWorkflowProjectComplete),
-	notification[protocol.WorktreeSetupEventParams](protocol.MethodWorktreeSetupEvent),
-	notification[protocol.StreamCompleteParams](protocol.MethodWorktreeSetupComplete),
 }
 
 func Routes() []Route {

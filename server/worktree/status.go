@@ -14,9 +14,6 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req worktreecontract.St
 	if s == nil || s.metadata == nil || s.git == nil {
 		return worktreecontract.StatusResponse{}, errors.New("worktree service dependencies are required")
 	}
-	if err := req.Validate(); err != nil {
-		return worktreecontract.StatusResponse{}, err
-	}
 	target, err := s.metadata.ResolveSessionExecutionTarget(ctx, req.SessionID)
 	if err != nil {
 		return worktreecontract.StatusResponse{}, fmt.Errorf(

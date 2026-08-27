@@ -85,11 +85,11 @@ func (s *validationState) validateShape() {
 
 func (s *validationState) validateExecutionTargetPolicy() {
 	policy := s.def.ExecutionTargetPolicy.Canonical()
-	if !workflowcontract.IsExecutionTargetPolicyMode(policy.Mode) {
+	if !validExecutionTargetPolicyMode(policy.Mode) {
 		s.addHard(CodeInvalidExecutionTargetPolicy, "execution target policy mode is invalid", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 		return
 	}
-	if policy.Mode != workflowcontract.ExecutionTargetModeCustomRef {
+	if policy.Mode != ExecutionTargetModeCustomRef {
 		if policy.CustomRef != nil {
 			s.addHard(CodeInvalidExecutionTargetPolicy, "execution target custom ref is only valid for custom_ref policy", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 		}

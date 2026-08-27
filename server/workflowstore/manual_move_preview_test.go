@@ -10,7 +10,6 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
 	"core/shared/runtimeids"
-	"core/shared/workflowcontract"
 )
 
 func replaceSerialCurrentNodeBindingFixture(
@@ -439,7 +438,7 @@ func TestManualMovePreviewHidesAuthorizedSoleRoleSelection(t *testing.T) {
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{
@@ -504,7 +503,7 @@ func TestManualMoveAppliesAutomaticSoleRoleSelection(t *testing.T) {
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{
@@ -582,7 +581,7 @@ func TestManualMoveValidatesAndAppliesManyRoleSelection(t *testing.T) {
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{
@@ -714,7 +713,7 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 		t.Fatalf("PrepareManualMove backward: %v", err)
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
-		Snapshot: ExecutionTargetSnapshot{Mode: workflowcontract.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
 		Root:     ExecutionRoot{SourceWorkspaceID: binding.WorkspaceID, SourceWorkspaceRoot: binding.CanonicalRoot},
 	})
 	if err != nil {
@@ -1455,7 +1454,7 @@ func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{

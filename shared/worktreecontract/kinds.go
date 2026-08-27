@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/shared/workflowcontract"
-
 	"github.com/google/uuid"
 )
 
@@ -42,13 +40,13 @@ func IsValidSetupRequirement(requirement SetupRequirement) bool {
 	return requirement == SetupRequirementRequired || requirement == SetupRequirementAlreadyCompleted
 }
 
-type SetupRecoveryDetail struct {
-	SetupOperationID         SetupOperationID
+type SetupRecoveryDetail[OperationID ~[16]byte, ExecutionTarget interface{ Validate() error }] struct {
+	SetupOperationID         OperationID
 	Cause                    SetupFailureKind
 	Diagnostic               string
 	ScriptPath               *string
 	SetupRequirement         SetupRequirement
-	ExecutionTarget          workflowcontract.ExecutionTargetSelection
+	ExecutionTarget          ExecutionTarget
 	RetainedWorktree         *RetainedWorktree
 	RetainedPreviousWorktree *RetainedWorktree
 }
@@ -58,7 +56,7 @@ type RetainedWorktree struct {
 	Root       string
 }
 
-func (d SetupRecoveryDetail) Validate() error {
+func (d SetupRecoveryDetail[OperationID, ExecutionTarget]) Validate() error {
 	setupOperationID := uuid.UUID(d.SetupOperationID)
 	switch {
 	case setupOperationID == uuid.Nil || setupOperationID.Version() != 4 || setupOperationID.Variant() != uuid.RFC4122:

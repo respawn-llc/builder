@@ -504,8 +504,6 @@ export function subscriptionCompleteMethod(subscriptionMethod: string): string |
       return "workflow.project.complete";
     case "attention.notification.subscribe":
       return "attention.notification.complete";
-    case "worktree.setup.subscribe":
-      return "worktree.setup.complete";
     default:
       return null;
   }

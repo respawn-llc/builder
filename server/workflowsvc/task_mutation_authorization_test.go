@@ -15,7 +15,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-	"core/shared/workflowcontract"
 )
 
 func TestWorkflowSessionCannotStartItsOwnTask(t *testing.T) {
@@ -167,8 +166,8 @@ func TestWorkflowSessionCanStartAnotherTask(t *testing.T) {
 		TaskID:            targetTask.Task.ID,
 		InvokingSessionID: &sessionID,
 		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
-			Mode: workflowcontract.ExecutionTargetModeNone,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
 	})
 	if err != nil {
@@ -204,8 +203,8 @@ func TestWorkflowSessionCanMoveAnotherTask(t *testing.T) {
 		TaskID:            targetTask.Task.ID,
 		InvokingSessionID: &sessionID,
 		TargetNodeID:      targetNodeID,
-		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
-			Mode: workflowcontract.ExecutionTargetModeNone,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
 	})
 	if err != nil {
@@ -282,7 +281,7 @@ func TestWorkflowSessionCanInterruptAndResumeAnotherTask(t *testing.T) {
 		TaskID:            targetTask.Task.ID,
 		InvokingSessionID: &sessionID,
 		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget:   &workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeNone},
+		ExecutionTarget:   &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
 	}); err != nil {
 		t.Fatalf("ResumeWorkflowTask: %v", err)
 	}
@@ -335,8 +334,8 @@ func TestWorkflowTaskMutationRejectsUnknownInvokingSession(t *testing.T) {
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
-			Mode: workflowcontract.ExecutionTargetModeNone,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
 	})
 	if err != nil || response.Applied == nil {
@@ -364,7 +363,7 @@ func TestUnboundSessionCanMutateAnyTask(t *testing.T) {
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &sessionID,
 		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget:   &workflowcontract.ExecutionTargetSelection{Mode: workflowcontract.ExecutionTargetModeNone},
+		ExecutionTarget:   &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
 	}); err != nil {
 		t.Fatalf("ResumeWorkflowTask with unbound Session: %v", err)
 	}
@@ -379,8 +378,8 @@ func TestUnboundSessionCanMutateAnyTask(t *testing.T) {
 		TaskID:            moveTask.Task.ID,
 		InvokingSessionID: &sessionID,
 		TargetNodeID:      moveTargetNodeID,
-		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
-			Mode: workflowcontract.ExecutionTargetModeNone,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
 	})
 	if err != nil || moveResponse.Applied == nil {
@@ -413,8 +412,8 @@ func TestUnboundSessionCanMutateAnyTask(t *testing.T) {
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &sessionID,
 		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &workflowcontract.ExecutionTargetSelection{
-			Mode: workflowcontract.ExecutionTargetModeNone,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
 	})
 	if err != nil || response.Applied == nil {

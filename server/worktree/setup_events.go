@@ -30,9 +30,6 @@ func (b *setupEventBroker) Subscribe(req worktreecontract.SetupSubscribeRequest)
 	if b == nil {
 		return nil, errors.New("worktree setup broker is required")
 	}
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
 	id := req.SetupOperationID
 	sub := &setupSubscription{broker: b, id: id, events: make(chan worktreecontract.SetupEvent, 16)}
 	b.mu.Lock()

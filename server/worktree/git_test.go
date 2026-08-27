@@ -246,23 +246,6 @@ func TestGitInspectorAdd(t *testing.T) {
 	}
 }
 
-func TestGitInspectorAddRejectsCreateBranchWithoutBaseRef(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	worktreeRoot := filepath.Join(t.TempDir(), "linked")
-	runner := &stubGitCommandRunner{}
-	inspector := NewGitInspector(runner)
-
-	_, err := inspector.Add(context.Background(), workspaceRoot, worktreeRoot, CreateSpec{CreateBranch: true, BranchName: "feature/new"})
-
-	var validationErr *worktreecontract.CreateValidationError
-	if !errors.As(err, &validationErr) || validationErr.Kind != worktreecontract.CreateValidationBaseRefRequired {
-		t.Fatalf("error = %T %v, want neutral base ref validation", err, err)
-	}
-	if runner.args != nil {
-		t.Fatalf("expected no git command, got %v", runner.args)
-	}
-}
-
 func TestGitInspectorProbeDirtyStateCountsMixedStatusWithoutDuplicateRenameOrCopyEntries(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "linked")
 	runner := &stubGitCommandRunner{output: []byte(" M changed.go\x00?? new.go\x00R  renamed.go\x00old.go\x00C  copied.go\x00source.go\x00")}

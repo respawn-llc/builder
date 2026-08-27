@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"core/shared/serverapi"
-	"core/shared/workflowcontract"
 )
 
 func addInitialBranchExecutionFlags(fs *flag.FlagSet) (*string, *string) {
@@ -21,7 +20,7 @@ func parseInitialBranchExecutionOptions(
 	executionTargetRaw string,
 	branchNameRaw string,
 	stderr io.Writer,
-) (*workflowcontract.ExecutionTargetSelection, *string, bool) {
+) (*serverapi.WorkflowExecutionTargetSelection, *string, bool) {
 	executionTarget, err := parseOptionalTaskExecutionTarget(executionTargetRaw, flagExplicit(fs, "execution-target"))
 	if err != nil {
 		fmt.Fprintln(stderr, err)

@@ -24,12 +24,15 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/invariant"
+	"core/shared/protoapi"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
 
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
 )
 
 const setupDiagnosticLimitBytes = 16 * 1024
@@ -1108,10 +1111,15 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 }
 
 func (s *Service) createAndBindManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp boundManagedTaskWorktree, err error) {
-	createSpec, err := normalizeCreateSpec(req.CreateSpec)
-	if err != nil {
+	generatedSpec := &worktreepb.CreateSpec{
+		BaseRef:      proto.String(req.CreateSpec.BaseRef),
+		CreateBranch: req.CreateSpec.CreateBranch,
+		BranchName:   proto.String(req.CreateSpec.BranchName),
+	}
+	if err := protoapi.Validate(generatedSpec); err != nil {
 		return boundManagedTaskWorktree{}, err
 	}
+	createSpec := normalizeCreateSpec(req.CreateSpec)
 	var worktreeRoot string
 	rootKind := managedRootKindExplicit
 	if req.RequestedRoot == nil {
@@ -1670,9 +1678,6 @@ func (s *Service) taskSourceWorkspace(ctx context.Context, projectID string, sou
 }
 
 func (s *Service) ListWorktrees(ctx context.Context, req worktreecontract.ListRequest) (worktreecontract.ListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return worktreecontract.ListResponse{}, err
-	}
 	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
 	if err != nil {
 		return worktreecontract.ListResponse{}, err
@@ -1689,9 +1694,6 @@ func (s *Service) ListWorktrees(ctx context.Context, req worktreecontract.ListRe
 }
 
 func (s *Service) ListWorkspaceWorktrees(ctx context.Context, req worktreecontract.WorkspaceListRequest) (worktreecontract.WorkspaceListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return worktreecontract.WorkspaceListResponse{}, err
-	}
 	if s == nil || s.metadata == nil {
 		return worktreecontract.WorkspaceListResponse{}, errors.New("worktree service metadata store is required")
 	}
@@ -1717,9 +1719,6 @@ func (s *Service) ListWorkspaceWorktrees(ctx context.Context, req worktreecontra
 }
 
 func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req worktreecontract.CreateTargetResolveRequest) (worktreecontract.CreateTargetResolveResponse, error) {
-	if err := req.Validate(); err != nil {
-		return worktreecontract.CreateTargetResolveResponse{}, err
-	}
 	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
 	if err != nil {
 		return worktreecontract.CreateTargetResolveResponse{}, err
@@ -1757,13 +1756,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req worktreecontract.Creat
 		}
 		err = worktreecontract.NewCreateError(worktreecontract.CreateErrorOwnerForm, err.Error(), err)
 	}()
-	if err := req.Validate(); err != nil {
-		return worktreecontract.CreateResponse{}, err
-	}
-	createSpec, err := normalizeCreateSpec(CreateSpec{BaseRef: req.BaseRef, CreateBranch: req.CreateBranch, BranchName: req.BranchName})
-	if err != nil {
-		return worktreecontract.CreateResponse{}, err
-	}
+	createSpec := normalizeCreateSpec(CreateSpec{BaseRef: req.BaseRef, CreateBranch: req.CreateBranch, BranchName: req.BranchName})
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
 	if err != nil {
 		return worktreecontract.CreateResponse{}, err

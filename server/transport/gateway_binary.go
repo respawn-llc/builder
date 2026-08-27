@@ -21,12 +21,13 @@ import (
 )
 
 type gatewayBinaryBinding struct {
-	operation protoapi.Operation
-	policy    gatewayBinaryExecutionPolicy
-	request   func() proto.Message
-	scope     func(proto.Message) (routeScopeParams, error)
-	invoke    func(*Gateway, context.Context, *connectionState, proto.Message) (proto.Message, error)
-	failure   func(*Gateway, *connectionState, proto.Message, error) proto.Message
+	operation         protoapi.Operation
+	policy            gatewayBinaryExecutionPolicy
+	request           func() proto.Message
+	scope             func(proto.Message) (routeScopeParams, error)
+	invoke            func(*Gateway, context.Context, *connectionState, proto.Message) (proto.Message, error)
+	failure           func(*Gateway, *connectionState, proto.Message, error) proto.Message
+	validationFailure func(proto.Message, error) proto.Message
 }
 
 type gatewayBinaryExecutionPolicy uint8
@@ -103,6 +104,9 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 	if err := registerSessionLaunchGatewayBinaryBindings(bindings); err != nil {
 		return nil, err
 	}
+	if err := registerWorktreeGatewayBinaryBindings(bindings); err != nil {
+		return nil, err
+	}
 	return bindings, nil
 }
 
@@ -118,6 +122,7 @@ func registerGatewayBinaryUnary[
 	scope func(Request) (routeScopeParams, error),
 	invoke func(*Gateway, context.Context, *connectionState, Request) (Success, error),
 	failureDetail func(*Gateway, *connectionState, Request, error) proto.Message,
+	validationFailure ...func(Request, error) proto.Message,
 ) error {
 	if service == nil {
 		return fmt.Errorf("generated service descriptor is required")
@@ -133,7 +138,7 @@ func registerGatewayBinaryUnary[
 	if err != nil {
 		return err
 	}
-	bindings[operation.Name] = gatewayBinaryBinding{
+	binding := gatewayBinaryBinding{
 		operation: operation,
 		policy:    policy,
 		request: func() proto.Message {
@@ -173,8 +178,24 @@ func registerGatewayBinaryUnary[
 			return gatewayBinaryFailureResult(method, failureDetail(g, state, request, err))
 		},
 	}
+	if len(validationFailure) > 1 {
+		return fmt.Errorf("generated %s.%s unary binding has multiple validation failure classifiers", service.Name(), methodName)
+	}
+	if len(validationFailure) == 1 {
+		if validationFailure[0] == nil {
+			return fmt.Errorf("generated %s.%s unary binding validation failure classifier is nil", service.Name(), methodName)
+		}
+		binding.validationFailure = func(message proto.Message, err error) proto.Message {
+			request, ok := message.(Request)
+			if !ok {
+				return nil
+			}
+			return validationFailure[0](request, err)
+		}
+	}
+	bindings[operation.Name] = binding
 	if scope != nil {
-		binding := bindings[operation.Name]
+		binding = bindings[operation.Name]
 		binding.scope = func(message proto.Message) (routeScopeParams, error) {
 			request, ok := message.(Request)
 			if !ok {
@@ -568,10 +589,18 @@ func (g *Gateway) dispatchBinary(
 		return nil, invalidPayloadFailure(request.call.Correlation)
 	}
 	message := binding.request()
-	if err := protoapi.Decode(request.call.Payload, message); err != nil {
+	if err := protoapi.Unmarshal(request.call.Payload, message); err != nil {
 		return nil, invalidPayloadFailure(request.call.Correlation)
 	}
 	decoded = message
+	if err := protoapi.Validate(message); err != nil {
+		if binding.validationFailure != nil {
+			if result := binding.validationFailure(message, err); result != nil {
+				return result, nil
+			}
+		}
+		return nil, invalidPayloadFailure(request.call.Correlation)
+	}
 	var scopeFacts routeScopeParams
 	if binding.scope != nil {
 		facts, err := binding.scope(message)

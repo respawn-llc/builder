@@ -29,9 +29,6 @@ type transitionTargetSync func(context.Context, clientui.SessionExecutionTarget,
 type transitionAuthority func(func() error) error
 
 func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
-	}
 	request := worktreeTransitionRequest{
 		operationID: req.OperationID,
 		sessionID:   strings.TrimSpace(req.SessionID),
@@ -48,9 +45,6 @@ func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnter
 }
 
 func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
-	}
 	request := worktreeTransitionRequest{
 		operationID: req.OperationID,
 		sessionID:   strings.TrimSpace(req.SessionID),

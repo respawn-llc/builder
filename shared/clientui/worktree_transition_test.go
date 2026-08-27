@@ -1,19 +1,15 @@
 package clientui
 
-import (
-	"testing"
-
-	"core/shared/worktreecontract"
-)
+import "testing"
 
 func TestWorktreeTransitionOutcomeIsProcessLocalTerminalState(t *testing.T) {
-	operationID := worktreecontract.NewOperationID()
+	operationID := NewWorktreeTransitionID()
 	if err := operationID.Validate(); err != nil {
 		t.Fatalf("generated transition id rejected: %v", err)
 	}
 	for _, raw := range []string{"", "not-a-uuid", "00000000-0000-0000-0000-000000000000", "11111111-1111-1111-1111-111111111111"} {
-		if _, err := worktreecontract.ParseOperationID(raw); err == nil {
-			t.Fatalf("ParseOperationID(%q) succeeded", raw)
+		if _, err := ParseWorktreeTransitionID(raw); err == nil {
+			t.Fatalf("ParseWorktreeTransitionID(%q) succeeded", raw)
 		}
 	}
 
@@ -57,8 +53,8 @@ func TestWorktreeTransitionOutcomeIsProcessLocalTerminalState(t *testing.T) {
 		State:       WorktreeTransitionFailed,
 		Failure: &WorktreeTransitionFailure{
 			Diagnostic: "delete precondition",
-			DeletePrecondition: &worktreecontract.DirtyState{
-				Kind:           worktreecontract.DirtyStateDirty,
+			DeletePrecondition: &WorktreeDirtyState{
+				Kind:           WorktreeDirtyStateDirty,
 				DirtyFileCount: &dirtyCount,
 			},
 		},
@@ -74,7 +70,7 @@ func TestWorktreeTransitionOutcomeIsProcessLocalTerminalState(t *testing.T) {
 	invalidClean := failedDelete
 	invalidClean.Failure = &WorktreeTransitionFailure{
 		Diagnostic:         failedDelete.Failure.Diagnostic,
-		DeletePrecondition: &worktreecontract.DirtyState{Kind: worktreecontract.DirtyStateClean},
+		DeletePrecondition: &WorktreeDirtyState{Kind: WorktreeDirtyStateClean},
 	}
 	if err := invalidClean.Validate(); err == nil {
 		t.Fatal("clean delete precondition validated")

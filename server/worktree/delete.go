@@ -18,9 +18,6 @@ import (
 )
 
 func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeDeleteResult{}, err
-	}
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err

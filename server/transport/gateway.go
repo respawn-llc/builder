@@ -26,7 +26,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/serverjsoncontract"
-	"core/shared/worktreecontract"
 
 	"github.com/google/uuid"
 )
@@ -189,7 +188,6 @@ var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodPromptFollowUpWatch:                   (*Gateway).servePromptFollowUpSubscription,
 	protocol.MethodWorkflowSubscribe:                     (*Gateway).serveWorkflowSubscription,
 	protocol.MethodWorkflowSubscribeProject:              (*Gateway).serveWorkflowProjectSubscription,
-	protocol.MethodWorktreeSetupSubscribe:                (*Gateway).serveWorktreeSetupSubscription,
 }
 
 var gatewaySubscriptionHandlers = routeHandlersForKind(apicontract.KindSubscription, gatewaySubscriptionHandlerEntries)
@@ -680,9 +678,6 @@ func protocolError(err error) (int, string) {
 	}
 	if errors.Is(err, serverapi.ErrRuntimeNoFinalAnswer) {
 		return protocol.ErrCodeRuntimeNoFinalAnswer, message
-	}
-	if errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
-		return protocol.ErrCodeWorktreeBlocked, message
 	}
 	if errors.Is(err, serverapi.ErrStreamUnavailable) {
 		return protocol.ErrCodeStreamUnavailable, message

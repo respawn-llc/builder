@@ -104,9 +104,6 @@ func topologyIsCurrent(entry worktreecontract.TopologyEntry, target clientui.Ses
 }
 
 func (s *Service) ResolveWorktreeSelector(ctx context.Context, req worktreecontract.SelectorResolveRequest) (worktreecontract.SelectorResolveResponse, error) {
-	if err := req.Validate(); err != nil {
-		return worktreecontract.SelectorResolveResponse{}, err
-	}
 	resolution, err := s.resolveWorktreeSelector(ctx, req.SessionID, req.Selector)
 	if err != nil {
 		return worktreecontract.SelectorResolveResponse{}, err
@@ -141,9 +138,6 @@ func (s *Service) resolveWorktreeSelector(ctx context.Context, sessionID string,
 }
 
 func (s *Service) PreviewWorktreeDelete(ctx context.Context, req worktreecontract.DeletePreviewRequest) (worktreecontract.DeletePreviewResponse, error) {
-	if err := req.Validate(); err != nil {
-		return worktreecontract.DeletePreviewResponse{}, err
-	}
 	resolution, err := s.resolveWorktreeSelector(ctx, req.SessionID, req.Selector)
 	if err != nil {
 		return worktreecontract.DeletePreviewResponse{}, err

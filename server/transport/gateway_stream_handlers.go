@@ -12,7 +12,6 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
-	"core/shared/worktreecontract"
 )
 
 type gatewaySubscription[Event any] interface {
@@ -210,10 +209,6 @@ func (g *Gateway) serveWorkflowSubscription(conn rpcwire.Conn, ctx context.Conte
 	serveGatewaySubscription(conn, ctx, route, req, g.deps.WorkflowClient().SubscribeWorkflow, workflowProjectEventParams)
 }
 
-func (g *Gateway) serveWorktreeSetupSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.WorktreeClient().SubscribeWorktreeSetup, worktreeSetupEventParams)
-}
-
 func workflowProjectEventParams(evt serverapi.WorkflowProjectEvent) protocol.WorkflowProjectEventParams {
 	return protocol.WorkflowProjectEventParams{Event: protocol.WorkflowProjectEvent{
 		ProjectID:        evt.ProjectID,
@@ -223,42 +218,5 @@ func workflowProjectEventParams(evt serverapi.WorkflowProjectEvent) protocol.Wor
 		PrimaryEntityID:  evt.PrimaryEntityID,
 		RelatedIDs:       append([]string(nil), evt.RelatedIDs...),
 		OccurredAtUnixMs: evt.OccurredAtUnixMs,
-	}}
-}
-
-func worktreeSetupEventParams(evt worktreecontract.SetupEvent) protocol.WorktreeSetupEventParams {
-	if err := evt.Validate(); err != nil {
-		panic(fmt.Sprintf("serialize invalid worktree setup event: %v; event=%+v", err, evt))
-	}
-	payload := func(value any) json.RawMessage {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			panic(fmt.Sprintf("marshal validated worktree setup event payload: %v", err))
-		}
-		return encoded
-	}
-	var started json.RawMessage
-	if evt.Started != nil {
-		started = payload(evt.Started)
-	}
-	var completed json.RawMessage
-	if evt.Completed != nil {
-		completed = payload(evt.Completed)
-	}
-	var notRequired json.RawMessage
-	if evt.NotRequired != nil {
-		notRequired = payload(evt.NotRequired)
-	}
-	var failed json.RawMessage
-	if evt.Failed != nil {
-		failed = payload(evt.Failed)
-	}
-	return protocol.WorktreeSetupEventParams{Event: protocol.WorktreeSetupEvent{
-		SetupOperationID: evt.SetupOperationID.String(),
-		Phase:            string(evt.Phase),
-		Started:          started,
-		Completed:        completed,
-		NotRequired:      notRequired,
-		Failed:           failed,
 	}}
 }

@@ -986,23 +986,19 @@ func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRo
 	if err != nil {
 		return false, err
 	}
-	normalized, err := normalizeCreateSpec(spec)
-	if err != nil {
-		return false, err
-	}
 	args := []string{"worktree", "add"}
-	if normalized.CreateBranch {
-		args = append(args, "-b", normalized.BranchName, canonicalWorktreeRoot)
-		if normalized.BaseRef != "" {
-			args = append(args, normalized.BaseRef)
+	if spec.CreateBranch {
+		args = append(args, "-b", spec.BranchName, canonicalWorktreeRoot)
+		if spec.BaseRef != "" {
+			args = append(args, spec.BaseRef)
 		}
 	} else {
-		args = append(args, canonicalWorktreeRoot, normalized.BaseRef)
+		args = append(args, canonicalWorktreeRoot, spec.BaseRef)
 	}
 	if _, err := i.runner.Output(ctx, canonicalWorkspaceRoot, args...); err != nil {
 		return false, err
 	}
-	return normalized.CreateBranch, nil
+	return spec.CreateBranch, nil
 }
 
 func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (worktreecontract.DirtyState, error) {
@@ -1187,13 +1183,12 @@ func (i *GitInspector) deleteBranch(ctx context.Context, workspaceRoot string, b
 	return err
 }
 
-func normalizeCreateSpec(spec CreateSpec) (CreateSpec, error) {
-	baseRef := strings.TrimSpace(spec.BaseRef)
-	branchName := strings.TrimSpace(spec.BranchName)
-	if err := worktreecontract.ValidateCreateSpec(baseRef, spec.CreateBranch, branchName); err != nil {
-		return CreateSpec{}, err
+func normalizeCreateSpec(spec CreateSpec) CreateSpec {
+	return CreateSpec{
+		BaseRef:      strings.TrimSpace(spec.BaseRef),
+		CreateBranch: spec.CreateBranch,
+		BranchName:   strings.TrimSpace(spec.BranchName),
 	}
-	return CreateSpec{BaseRef: baseRef, CreateBranch: spec.CreateBranch, BranchName: branchName}, nil
 }
 
 type execGitCommandRunner struct{}

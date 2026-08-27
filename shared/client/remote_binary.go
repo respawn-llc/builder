@@ -53,9 +53,10 @@ func callGeneratedBinary[
 	request Request,
 	result Result,
 	decodeFailure func(Failure) error,
+	classifyValidation ...func(error) error,
 ) (Success, error) {
 	var zeroSuccess Success
-	if err := c.callBinary(ctx, method, request, result); err != nil {
+	if err := c.callBinary(ctx, method, request, result, classifyValidation...); err != nil {
 		return zeroSuccess, err
 	}
 	classified, err := protoapi.ClassifyResult(result)
@@ -86,12 +87,13 @@ func (c *Remote) callBinaryControl(
 	method protoreflect.MethodDescriptor,
 	request proto.Message,
 	result proto.Message,
+	classifyValidation ...func(error) error,
 ) error {
 	control, err := c.ensureControl(ctx)
 	if err != nil {
 		return err
 	}
-	return control.callBinary(ctx, method, request, result)
+	return control.callBinary(ctx, method, request, result, classifyValidation...)
 }
 
 func (c *Remote) callBinary(
@@ -99,6 +101,7 @@ func (c *Remote) callBinary(
 	method protoreflect.MethodDescriptor,
 	request proto.Message,
 	result proto.Message,
+	classifyValidation ...func(error) error,
 ) error {
 	operation, err := protoapi.OperationFromDescriptor(method)
 	if err != nil {
@@ -106,9 +109,9 @@ func (c *Remote) callBinary(
 	}
 	switch operation.Options.UnaryConnection {
 	case sharedpb.UnaryConnection_UNARY_CONNECTION_MULTIPLEXED:
-		return c.callBinaryControl(ctx, method, request, result)
+		return c.callBinaryControl(ctx, method, request, result, classifyValidation...)
 	case sharedpb.UnaryConnection_UNARY_CONNECTION_DEDICATED:
-		return c.callBinaryDedicated(ctx, operation.Name, method, request, result)
+		return c.callBinaryDedicated(ctx, operation.Name, method, request, result, classifyValidation...)
 	default:
 		return fmt.Errorf("operation %s has no unary connection policy", operation.Name)
 	}
@@ -120,13 +123,14 @@ func (c *Remote) callBinaryDedicated(
 	method protoreflect.MethodDescriptor,
 	request proto.Message,
 	result proto.Message,
+	classifyValidation ...func(error) error,
 ) error {
 	conn, cleanup, err := c.openRPCConn(ctx)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	return callBinaryRPC(ctx, conn, requestID, method, request, result)
+	return callBinaryRPC(ctx, conn, requestID, method, request, result, classifyValidation...)
 }
 
 func (c *remoteControlConn) callBinary(
@@ -134,6 +138,7 @@ func (c *remoteControlConn) callBinary(
 	method protoreflect.MethodDescriptor,
 	request proto.Message,
 	result proto.Message,
+	classifyValidation ...func(error) error,
 ) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -142,7 +147,7 @@ func (c *remoteControlConn) callBinary(
 		return err
 	}
 	id := fmt.Sprintf("rpc-%d", c.requestID.Add(1))
-	frame, operation, err := binaryCallFrame(id, method, request, result)
+	frame, operation, err := binaryCallFrame(id, method, request, result, classifyValidation...)
 	if err != nil {
 		return err
 	}
@@ -182,8 +187,9 @@ func callBinaryRPC(
 	method protoreflect.MethodDescriptor,
 	request proto.Message,
 	result proto.Message,
+	classifyValidation ...func(error) error,
 ) error {
-	frame, operation, err := binaryCallFrame(requestID, method, request, result)
+	frame, operation, err := binaryCallFrame(requestID, method, request, result, classifyValidation...)
 	if err != nil {
 		return err
 	}
@@ -220,6 +226,7 @@ func binaryCallFrame(
 	method protoreflect.MethodDescriptor,
 	request proto.Message,
 	result proto.Message,
+	classifyValidation ...func(error) error,
 ) (rpcwire.Frame, protoapi.Operation, error) {
 	operation, err := protoapi.OperationFromDescriptor(method)
 	if err != nil {
@@ -237,7 +244,19 @@ func binaryCallFrame(
 	if err := requireBinaryMessageType(operation.Name, "result", result, method.Output()); err != nil {
 		return rpcwire.Frame{}, protoapi.Operation{}, err
 	}
-	payload, err := protoapi.Encode(request)
+	if len(classifyValidation) > 1 {
+		return rpcwire.Frame{}, protoapi.Operation{}, fmt.Errorf("operation %s has multiple request validation classifiers", operation.Name)
+	}
+	if err := protoapi.Validate(request); err != nil {
+		if len(classifyValidation) == 1 {
+			if classifyValidation[0] == nil {
+				return rpcwire.Frame{}, protoapi.Operation{}, fmt.Errorf("operation %s request validation classifier is nil", operation.Name)
+			}
+			return rpcwire.Frame{}, protoapi.Operation{}, classifyValidation[0](err)
+		}
+		return rpcwire.Frame{}, protoapi.Operation{}, fmt.Errorf("encode %s request: %w", operation.Name, err)
+	}
+	payload, err := protoapi.Marshal(request)
 	if err != nil {
 		return rpcwire.Frame{}, protoapi.Operation{}, fmt.Errorf("encode %s request: %w", operation.Name, err)
 	}

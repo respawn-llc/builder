@@ -13,7 +13,6 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
-	"core/shared/workflowcontract"
 )
 
 type graphSaveWorkflowFactory func(*testing.T, context.Context, *Store) runtimeids.WorkflowID
@@ -1208,7 +1207,7 @@ func TestWorkflowGraphSaveSupportsMetadataAndNoopRevisions(t *testing.T) {
 
 func TestWorkflowGraphSaveRoundTripsExecutionTargetPolicy(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
-	if f.record.ExecutionTargetPolicy.Mode != workflowcontract.ExecutionTargetModeAskOnFirstExecution || f.def.ExecutionTargetPolicy.Mode != workflowcontract.ExecutionTargetModeAskOnFirstExecution {
+	if f.record.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution || f.def.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution {
 		t.Fatalf("created workflow policy = record=%+v definition=%+v, want ask_on_first_execution", f.record.ExecutionTargetPolicy, f.def.ExecutionTargetPolicy)
 	}
 
@@ -1217,7 +1216,7 @@ func TestWorkflowGraphSaveRoundTripsExecutionTargetPolicy(t *testing.T) {
 	custom.Metadata = &WorkflowGraphSaveMetadata{
 		Name:                  f.record.Name,
 		Description:           f.record.Description,
-		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflowcontract.ExecutionTargetModeCustomRef, CustomRef: &customRef},
+		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeCustomRef, CustomRef: &customRef},
 	}
 	customPreview := f.preview(t, custom)
 	if !customPreview.CanSave || customPreview.Version != f.record.Version {
@@ -1228,7 +1227,7 @@ func TestWorkflowGraphSaveRoundTripsExecutionTargetPolicy(t *testing.T) {
 		t.Fatalf("custom policy save = %+v, want one metadata revision", customSaved)
 	}
 	updated, updatedRecord := f.current(t)
-	if updated.ExecutionTargetPolicy.Mode != workflowcontract.ExecutionTargetModeCustomRef || updated.ExecutionTargetPolicy.CustomRef == nil || *updated.ExecutionTargetPolicy.CustomRef != customRef ||
+	if updated.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeCustomRef || updated.ExecutionTargetPolicy.CustomRef == nil || *updated.ExecutionTargetPolicy.CustomRef != customRef ||
 		updatedRecord.ExecutionTargetPolicy != updated.ExecutionTargetPolicy {
 		t.Fatalf("custom policy did not round-trip: definition=%+v record=%+v", updated.ExecutionTargetPolicy, updatedRecord.ExecutionTargetPolicy)
 	}
@@ -1238,14 +1237,14 @@ func TestWorkflowGraphSaveRoundTripsExecutionTargetPolicy(t *testing.T) {
 	combined.Metadata = &WorkflowGraphSaveMetadata{
 		Name:                  updatedRecord.Name,
 		Description:           updatedRecord.Description,
-		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflowcontract.ExecutionTargetModeHead},
+		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeHead},
 	}
 	combinedSaved := f.save(t, combined)
 	if !combinedSaved.Saved || combinedSaved.Version != updatedRecord.Version+1 {
 		t.Fatalf("combined policy/graph save = %+v, want exactly one version increment", combinedSaved)
 	}
 	afterCombined, afterCombinedRecord := f.current(t)
-	if afterCombined.ExecutionTargetPolicy.Mode != workflowcontract.ExecutionTargetModeHead || afterCombined.ExecutionTargetPolicy.CustomRef != nil ||
+	if afterCombined.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeHead || afterCombined.ExecutionTargetPolicy.CustomRef != nil ||
 		afterCombinedRecord.ExecutionTargetPolicy != afterCombined.ExecutionTargetPolicy {
 		t.Fatalf("non-custom policy should clear custom ref: definition=%+v record=%+v", afterCombined.ExecutionTargetPolicy, afterCombinedRecord.ExecutionTargetPolicy)
 	}
@@ -1265,7 +1264,7 @@ func TestWorkflowGraphSaveRoundTripsExecutionTargetPolicy(t *testing.T) {
 	incomplete.Metadata = &WorkflowGraphSaveMetadata{
 		Name:                  afterCombinedRecord.Name,
 		Description:           afterCombinedRecord.Description,
-		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflowcontract.ExecutionTargetModeCustomRef},
+		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeCustomRef},
 	}
 	incompletePreview := f.preview(t, incomplete)
 	if !incompletePreview.CanSave || !hasWorkflowValidationCode(incompletePreview.ValidationErrors, workflow.CodeExecutionTargetCustomRefRequired) {

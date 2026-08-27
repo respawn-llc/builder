@@ -12,7 +12,6 @@ import (
 	"core/server/workflow"
 	"core/shared/config"
 	"core/shared/runtimeids"
-	"core/shared/workflowcontract"
 )
 
 func TestPrepareManualMoveRejectsOversizedCommentary(t *testing.T) {
@@ -426,7 +425,7 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{
@@ -464,7 +463,7 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
-	if targetContext.Task.ExecutionTarget == nil || targetContext.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone {
+	if targetContext.Task.ExecutionTarget == nil || targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 		t.Fatalf("execution target after manual move = %+v, want locked none target", targetContext.Task.ExecutionTarget)
 	}
 }
@@ -672,7 +671,7 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{
@@ -715,7 +714,7 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
-	if targetContext.Task.ExecutionTarget == nil || targetContext.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone {
+	if targetContext.Task.ExecutionTarget == nil || targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 		t.Fatalf("execution target after manual move = %+v, want locked none target", targetContext.Task.ExecutionTarget)
 	}
 
@@ -897,7 +896,7 @@ func TestManualMoveFanoutTransitionReplacesTaskWithEveryBranch(t *testing.T) {
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{
@@ -973,7 +972,7 @@ func TestManualMoveFromPartiallyArrivedFanoutReplacesTheWholeTaskGroup(t *testin
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{
@@ -1025,7 +1024,7 @@ func TestManualMoveFinalRevalidationReturnsNoOpWithoutExecutionTargetMutation(t 
 	}
 	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{

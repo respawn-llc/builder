@@ -19,6 +19,8 @@ import {
   type RpcSubscription,
 } from "@/api/composition";
 
+export { worktreeQueryAuthorityRoutes } from "./worktree";
+
 type FakeJsonRoute = Readonly<{
   method: string;
   result?: unknown;
@@ -30,6 +32,7 @@ type FakeDescriptorRoute = Readonly<{
   descriptor: DescMethod;
   result?: Message;
   error?: Error;
+  resultFactory?: (request: Message, callIndex: number) => Message;
 }>;
 
 type FakeDescriptorSubscriptionRoute = Readonly<{
@@ -110,10 +113,13 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     if (route.error !== undefined) {
       throw route.error;
     }
-    if (route.result === undefined) {
+    const callIndex = this.#callCounts.get(operation) ?? 0;
+    this.#callCounts.set(operation, callIndex + 1);
+    const result = route.resultFactory?.(request, callIndex) ?? route.result;
+    if (result === undefined) {
       throw new Error(`Missing fake descriptor result: ${operation}`);
     }
-    const payload = encode(route.descriptor.output, route.result);
+    const payload = encode(route.descriptor.output, result);
     return decode<Method["output"]>(descriptor.output, payload);
   }
 

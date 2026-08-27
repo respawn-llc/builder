@@ -52,6 +52,9 @@ func productionGatewayRegistration() (gatewayRegistration, error) {
 	if err != nil {
 		return gatewayRegistration{}, err
 	}
+	if err := registerWorktreeSetupGatewayBinaryBinding(registration.subscriptions); err != nil {
+		return gatewayRegistration{}, err
+	}
 	return registration, nil
 }
 

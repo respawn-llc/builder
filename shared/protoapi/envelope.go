@@ -19,7 +19,7 @@ func DecodeEnvelope(encoded []byte) (*sharedpb.Envelope, error) {
 // so callers can isolate an invalid frame without accepting the envelope.
 func DecodeEnvelopeCorrelation(encoded []byte) string {
 	envelope := &sharedpb.Envelope{}
-	if err := unmarshalGenerated(encoded, envelope); err != nil {
+	if err := Unmarshal(encoded, envelope); err != nil {
 		return ""
 	}
 	var correlation *string

@@ -14,7 +14,7 @@ import * as taskDependencies from "./clientTaskDependencies";
 import * as taskDetail from "./clientTaskDetail";
 import * as promptAnswers from "./clientPromptAnswers";
 import * as taskSearch from "./clientTaskSearch";
-import * as worktree from "./clientWorktree";
+import * as worktree from "./clientWorktreeBinary";
 import * as project from "./clientProject";
 import {
   workflowGraphDraftPayload,
@@ -47,7 +47,8 @@ import { workflowPageSize } from "./clientInputs";
 import { compactJsonObject, emptyJsonObject } from "./json";
 import type { SetupOperationID } from "./setupOperationID";
 import type * as worktreeModels from "./schemas/worktree";
-import { subscribeWorktreeSetup, type WorktreeSetupEventHandler } from "./worktreeSetup";
+import type { WorktreeSetupEventHandler } from "./worktreeSetup";
+import { subscribeBinaryWorktreeSetup } from "./worktreeSetupBinary";
 import type {
   ActivityPage,
   AttentionPage,
@@ -580,25 +581,26 @@ export class ApiClient implements ApiService {
     );
   }
 
-  getWorktreeStatus = async (sessionID: string) => worktree.getWorktreeStatus(this.#transport, sessionID);
-  listWorktrees = async (sessionID: string) => worktree.listWorktrees(this.#transport, sessionID);
+  getWorktreeStatus = async (sessionID: string) =>
+    worktree.getBinaryWorktreeStatus(this.#transport, sessionID);
+  listWorktrees = async (sessionID: string) => worktree.listBinaryWorktrees(this.#transport, sessionID);
   resolveWorktreeSelector = async (sessionID: string, selector: string) =>
-    worktree.resolveWorktreeSelector(this.#transport, sessionID, selector);
+    worktree.resolveBinaryWorktreeSelector(this.#transport, sessionID, selector);
   resolveWorktreeCreateTarget = async (sessionID: string, target: string) =>
-    worktree.resolveWorktreeCreateTarget(this.#transport, sessionID, target);
+    worktree.resolveBinaryWorktreeCreateTarget(this.#transport, sessionID, target);
   previewWorktreeDelete = async (sessionID: string, selector: string) =>
-    worktree.previewWorktreeDelete(this.#transport, sessionID, selector);
+    worktree.previewBinaryWorktreeDelete(this.#transport, sessionID, selector);
   createWorktree = async (input: worktreeModels.WorktreeCreateInput) =>
-    worktree.createWorktree(this.#transport, input);
+    worktree.createBinaryWorktree(this.#transport, input);
   switchWorktree = async (sessionID: string, operation: worktreeModels.WorktreeSwitch) =>
-    worktree.switchWorktree(this.#transport, sessionID, operation);
+    worktree.switchBinaryWorktree(this.#transport, sessionID, operation);
   deleteWorktree = async (
     sessionID: string,
     preview: worktreeModels.WorktreeDeletePreview,
     confirmation: worktreeModels.WorktreeDeleteConfirmationChoice,
-  ) => worktree.deleteWorktree(this.#transport, sessionID, preview, confirmation);
+  ) => worktree.deleteBinaryWorktree(this.#transport, sessionID, preview, confirmation);
   subscribeWorktreeSetup = (setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler) =>
-    subscribeWorktreeSetup(this.#transport, setupOperationID, handler);
+    subscribeBinaryWorktreeSetup(this.#transport, setupOperationID, handler);
 }
 
 function projectReadiness(readiness: Readiness): ServerReadiness {

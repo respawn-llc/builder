@@ -13,7 +13,6 @@ import (
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/config"
-	"core/shared/workflowcontract"
 )
 
 func TestManualMoveToNonExecutableWaitsForConcurrentWriterBeforeRevalidation(t *testing.T) {
@@ -111,7 +110,7 @@ func TestManualMoveToExecutableWaitsForConcurrentWriterBeforeRevalidationAndLock
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
-		targetContext.Task.ExecutionTarget.Mode != workflowcontract.ExecutionTargetModeNone {
+		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 		t.Fatalf("execution target after manual move = %+v, want locked none target", targetContext.Task.ExecutionTarget)
 	}
 }
@@ -292,7 +291,7 @@ type manualMoveApplyResult struct {
 func noneManualMoveExecutionTargetCandidate(binding metadata.Binding) *ExecutionTargetCandidate {
 	return &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
-			Mode:       workflowcontract.ExecutionTargetModeNone,
+			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
 		},
 		Root: ExecutionRoot{

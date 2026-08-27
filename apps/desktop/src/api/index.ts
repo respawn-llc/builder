@@ -73,22 +73,16 @@ export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./
 export { parseWorktreeOperationID, type WorktreeOperationID } from "./worktreeOperationID";
 export type * from "./schemas/worktree";
 export { rpcErrorCodes } from "./rpcErrorCodes";
-export { decodeWorktreeError } from "./clientWorktree";
-export {
-  decodeWorktreeSetupRetainedError,
-  WorktreeError,
-  WorktreeSetupRetainedError,
-} from "./worktreeFailure";
+export { WorktreeError, WorktreeSetupRetainedError } from "./worktreeFailure";
 export type { WorktreeErrorDetail } from "./worktreeFailure";
 export { workflowIDSchema } from "./schemas/workflowID";
 export { nonBlankString } from "./schemas/common";
 export {
-  parseTaskSetupRecoveryDetail,
-  type TaskSetupRecovery,
   type WorktreeSetupEvent,
   type WorktreeSetupEventHandler,
   type WorktreeSetupPhase,
 } from "./worktreeSetup";
+export { parseTaskSetupRecoveryDetail, type TaskSetupRecovery } from "./schemas/workflowWorktree";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
 export { workflowLabelMaxIDs } from "./workflowLabelContract";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";

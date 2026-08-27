@@ -15,14 +15,13 @@ import (
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
-	"core/shared/workflowcontract"
 )
 
 func TestServiceTaskStartMaterializesLatestTaskScopedPendingBranch(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: workflowcontract.ExecutionTargetModeHead,
+		Mode: serverapi.WorkflowExecutionTargetModeHead,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -38,7 +37,7 @@ func TestServiceTaskStartMaterializesLatestTaskScopedPendingBranch(t *testing.T)
 	worktreeID := "worktree-" + task.Task.ID
 	targets := &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
-			Mode: workflowcontract.ExecutionTargetModeHead, RequestedRef: &requestedRef,
+			Mode: workflow.ExecutionTargetModeHead, RequestedRef: &requestedRef,
 			CommitOID: &commitOID, Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 		},
 	}
@@ -102,7 +101,7 @@ func TestServiceTaskStartRestoresAlreadyLockedExecutionTarget(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
-		Mode: workflowcontract.ExecutionTargetModeDefaultBranch,
+		Mode: serverapi.WorkflowExecutionTargetModeDefaultBranch,
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -134,7 +133,7 @@ func TestServiceTaskStartRestoresAlreadyLockedExecutionTarget(t *testing.T) {
 	commitOID := strings.Repeat("d", 40)
 	if err := service.store.LockTaskExecutionTarget(ctx, taskID, &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode: workflowcontract.ExecutionTargetModeDefaultBranch, RequestedRef: &requestedRef,
+			Mode: workflow.ExecutionTargetModeDefaultBranch, RequestedRef: &requestedRef,
 			CommitOID: &commitOID, Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 		},
 		Root: workflowstore.ExecutionRoot{
@@ -172,7 +171,7 @@ func TestServiceTaskStartRestoresAlreadyLockedExecutionTarget(t *testing.T) {
 	if targets.restoreTaskID != taskID {
 		t.Fatalf("restored Task = %q, want %q", targets.restoreTaskID, taskID)
 	}
-	if targets.materializeTaskID != "" || targets.resolveSelection != (workflowcontract.ExecutionTargetSelection{}) {
+	if targets.materializeTaskID != "" || targets.resolveSelection != (workflow.ExecutionTargetSelection{}) {
 		t.Fatalf("locked target was resolved or materialized again: %+v", targets)
 	}
 }

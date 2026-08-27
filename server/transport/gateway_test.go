@@ -40,7 +40,6 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
-	"core/shared/worktreecontract"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -131,20 +130,6 @@ func TestProtocolErrorMapsStreamFailureAsStreamFailure(t *testing.T) {
 	}
 	if message != source.Error() {
 		t.Fatalf("protocol error message = %q, want %q", message, source.Error())
-	}
-}
-
-func TestResponseForErrorMapsJoinedWorktreeBlocked(t *testing.T) {
-	source := errors.Join(
-		fmt.Errorf("delete target: %w", worktreecontract.ErrWorktreeBlocked),
-		errors.New("target has a live run"),
-	)
-	response := responseForError("worktree-blocked", source)
-	if response.Error == nil ||
-		response.Error.Code != protocol.ErrCodeWorktreeBlocked ||
-		response.Error.Message != source.Error() ||
-		len(response.Error.Data) != 0 {
-		t.Fatalf("worktree-blocked response = %+v, want code/message without data", response.Error)
 	}
 }
 

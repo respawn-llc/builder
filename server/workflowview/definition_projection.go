@@ -10,7 +10,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
-	"core/shared/workflowcontract"
 )
 
 type DefinitionProjection struct {
@@ -186,7 +185,7 @@ func projectExecutionTargetPolicy(policy workflow.ExecutionTargetPolicy) servera
 		customRef = &value
 	}
 	return serverapi.WorkflowExecutionTargetConfiguration{
-		Mode:      workflowcontract.ExecutionTargetMode(canonical.Mode),
+		Mode:      serverapi.WorkflowExecutionTargetMode(canonical.Mode),
 		CustomRef: customRef,
 	}
 }

@@ -36,7 +36,6 @@ import (
 	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/workflowcontract"
 )
 
 const currentNodeRunnerWait = 60 * time.Second
@@ -410,7 +409,7 @@ func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.Ta
 			Commit: func(ctx context.Context) error {
 				return f.store.LockTaskExecutionTarget(ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
 					Snapshot: workflowstore.ExecutionTargetSnapshot{
-						Mode:       workflowcontract.ExecutionTargetModeNone,
+						Mode:       workflow.ExecutionTargetModeNone,
 						Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 					},
 					Root: workflowstore.ExecutionRoot{
@@ -2226,7 +2225,7 @@ func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *test
 			Commit: func(ctx context.Context) error {
 				return f.store.LockTaskExecutionTarget(ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
 					Snapshot: workflowstore.ExecutionTargetSnapshot{
-						Mode:       workflowcontract.ExecutionTargetModeNone,
+						Mode:       workflow.ExecutionTargetModeNone,
 						Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 					},
 					Root: workflowstore.ExecutionRoot{

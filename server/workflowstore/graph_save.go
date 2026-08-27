@@ -189,7 +189,7 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		return plan, nil
 	}
 	currentPolicy := workflow.ExecutionTargetPolicy{
-		Mode:      workflowcontract.ExecutionTargetMode(current.ExecutionTargetPolicy),
+		Mode:      workflow.ExecutionTargetMode(current.ExecutionTargetPolicy),
 		CustomRef: workflowCustomRefFromRow(current.ExecutionTargetCustomRef),
 	}.Canonical()
 	metadata, metadataChanged, err := prepareWorkflowGraphSaveMetadata(current.Name, current.Description, currentPolicy, req.Metadata)
@@ -443,17 +443,17 @@ func prepareWorkflowGraphSaveMetadata(currentName string, currentDescription str
 	if prepared.Name == "" {
 		return nil, false, ErrWorkflowNameRequired
 	}
-	if policy.Mode != workflowcontract.ExecutionTargetModeCustomRef && policy.CustomRef != nil {
+	if policy.Mode != workflow.ExecutionTargetModeCustomRef && policy.CustomRef != nil {
 		return nil, false, errors.New("execution target custom ref is only valid for custom_ref policy")
 	}
-	if policy.Mode == workflowcontract.ExecutionTargetModeCustomRef && policy.CustomRef != nil && strings.TrimSpace(*policy.CustomRef) == "" {
+	if policy.Mode == workflow.ExecutionTargetModeCustomRef && policy.CustomRef != nil && strings.TrimSpace(*policy.CustomRef) == "" {
 		return nil, false, errors.New("execution target custom ref must be non-blank when present")
 	}
-	if policy.Mode != workflowcontract.ExecutionTargetModeNone &&
-		policy.Mode != workflowcontract.ExecutionTargetModeHead &&
-		policy.Mode != workflowcontract.ExecutionTargetModeDefaultBranch &&
-		policy.Mode != workflowcontract.ExecutionTargetModeCustomRef &&
-		policy.Mode != workflowcontract.ExecutionTargetModeAskOnFirstExecution {
+	if policy.Mode != workflow.ExecutionTargetModeNone &&
+		policy.Mode != workflow.ExecutionTargetModeHead &&
+		policy.Mode != workflow.ExecutionTargetModeDefaultBranch &&
+		policy.Mode != workflow.ExecutionTargetModeCustomRef &&
+		policy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution {
 		return nil, false, errors.New("execution target policy mode is invalid")
 	}
 	changed := prepared.Name != currentName || prepared.Description != currentDescription || !workflowExecutionTargetPoliciesEqual(*prepared.ExecutionTargetPolicy, currentPolicy)
