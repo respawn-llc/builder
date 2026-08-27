@@ -205,7 +205,7 @@ func TestTriggerHandoffWithProviderCompactionCarriesPreservedUserMessageInOrder(
 		Model:          "gpt-5",
 		CompactionMode: "native",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(
+	if err := steerTestActiveStep(eng, "handoff-input", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventDefault,
 		true,

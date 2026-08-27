@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
@@ -18,56 +18,19 @@ import (
 	"core/shared/toolspec"
 )
 
-type compactionSlogCaptureHandler struct {
-	mu      sync.Mutex
-	records []capturedCompactionSlogRecord
-}
-
-type capturedCompactionSlogRecord struct {
-	level slog.Level
-	attrs map[string]slog.Value
-}
-
-func (h *compactionSlogCaptureHandler) Enabled(context.Context, slog.Level) bool {
-	return true
-}
-
-func (h *compactionSlogCaptureHandler) Handle(_ context.Context, record slog.Record) error {
-	attrs := make(map[string]slog.Value)
-	record.Attrs(func(attr slog.Attr) bool {
-		attrs[attr.Key] = attr.Value
-		return true
-	})
-	if _, ok := attrs["checkpoint_reason"]; !ok {
-		return nil
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.records = append(h.records, capturedCompactionSlogRecord{level: record.Level, attrs: attrs})
-	return nil
-}
-
-func (h *compactionSlogCaptureHandler) checkpointRecords() []capturedCompactionSlogRecord {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return append([]capturedCompactionSlogRecord(nil), h.records...)
-}
-
-func (h *compactionSlogCaptureHandler) WithAttrs([]slog.Attr) slog.Handler {
-	return h
-}
-
-func (h *compactionSlogCaptureHandler) WithGroup(string) slog.Handler {
-	return h
-}
-
-func captureCompactionLogs(t *testing.T) *compactionSlogCaptureHandler {
+func captureCompactionLogs(t *testing.T) *testsetup.SlogRecords {
 	t.Helper()
-	capture := &compactionSlogCaptureHandler{}
-	previous := slog.Default()
-	slog.SetDefault(slog.New(capture))
-	t.Cleanup(func() { slog.SetDefault(previous) })
-	return capture
+	return testsetup.CaptureSlogRecords(t)
+}
+
+func checkpointRecords(logs *testsetup.SlogRecords) []testsetup.CapturedSlogRecord {
+	var checkpointRecords []testsetup.CapturedSlogRecord
+	for _, record := range logs.Records() {
+		if _, ok := record.Fields["checkpoint_reason"]; ok {
+			checkpointRecords = append(checkpointRecords, record)
+		}
+	}
+	return checkpointRecords
 }
 
 func malformedCompactionCheckpointError() *llm.CompactionCheckpointContractError {
@@ -177,7 +140,7 @@ func TestMalformedRemoteCompactionFallbackUsesOverflowRepairedInput(t *testing.T
 		CompactionMode:      "native",
 		ContextWindowTokens: 2_500,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+	if err := steerTestActiveStep(engine, "overflow-input", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -185,7 +148,7 @@ func TestMalformedRemoteCompactionFallbackUsesOverflowRepairedInput(t *testing.T
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	if err := engine.steer("tool", steerMessagesWithPersistenceIntent(
+	if err := steerTestActiveStep(engine, "overflow-tool-call", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -197,7 +160,7 @@ func TestMalformedRemoteCompactionFallbackUsesOverflowRepairedInput(t *testing.T
 	)); err != nil {
 		t.Fatalf("persist tool call: %v", err)
 	}
-	if err := engine.steer("tool", steerMessagesWithPersistenceIntent(
+	if err := steerTestActiveStep(engine, "overflow-tool-output", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -268,7 +231,7 @@ func TestMalformedRemoteCompactionCombinesRemoteAndLocalOverflowRepairFacts(t *t
 			Name:  string(toolspec.ToolExecCommand),
 			Input: json.RawMessage(`{"command":"pwd"}`),
 		})
-		if err := engine.steer("tool", steerMessagesWithPersistenceIntent(
+		if err := steerTestActiveStep(engine, "combined-overflow-tool-output", steerMessagesWithPersistenceIntent(
 			steeringPriorityNormal,
 			steeringMessageEventNone,
 			true,
@@ -319,7 +282,7 @@ func TestRemoteCompactionInheritsEffectiveFastMode(t *testing.T) {
 		CompactionMode:  "native",
 		FastModeEnabled: true,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+	if err := steerTestActiveStep(engine, "fast-mode-input", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -331,6 +294,7 @@ func TestRemoteCompactionInheritsEffectiveFastMode(t *testing.T) {
 	if err := engine.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
+	waitEngineLifecycleTasks(t, engine)
 	if len(client.compactionCalls) != 1 {
 		t.Fatalf("compaction calls = %d, want one", len(client.compactionCalls))
 	}
@@ -353,7 +317,7 @@ func TestRemoteCompactionTransientRetryReusesUnchangedDispatchState(t *testing.T
 		Model:          "gpt-5",
 		CompactionMode: "native",
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+	if err := steerTestActiveStep(engine, "transient-retry-input", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -365,6 +329,7 @@ func TestRemoteCompactionTransientRetryReusesUnchangedDispatchState(t *testing.T
 	if err := engine.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
+	waitEngineLifecycleTasks(t, engine)
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("compaction calls = %d, want transient retry", len(client.compactionCalls))
 	}
@@ -496,7 +461,11 @@ func TestRemoteCompactionOrdinaryProviderFailuresDoNotFallbackToLocal(t *testing
 			_, client, engine := newRemoteCompactionFixture(t, test.err)
 			client.compactionErrors = nil
 			client.compactionErr = test.err
-			err := engine.CompactContext(test.ctx(), "")
+			stepID := runtimeTestStepID("ordinary-provider-failure-" + test.name)
+			err := runTestActiveStep(engine, stepID, func() error {
+				_, _, compactErr := engine.compactNow(test.ctx(), stepID, compactionModeManual, compactionInstructionsInput{}, true)
+				return compactErr
+			})
 			if err == nil {
 				t.Fatal("compaction succeeded after ordinary provider failure")
 			}
@@ -534,7 +503,11 @@ func TestMalformedRemoteCompactionPanicsInDebugBeforeLocalFallback(t *testing.T)
 		}
 	}()
 
-	_ = engine.CompactContext(context.Background(), "")
+	stepID := runtimeTestStepID("debug-malformed-checkpoint")
+	_ = runTestActiveStep(engine, stepID, func() error {
+		_, _, compactErr := engine.compactNow(context.Background(), stepID, compactionModeManual, compactionInstructionsInput{}, true)
+		return compactErr
+	})
 }
 
 func TestMalformedRemoteCompactionLogsSafeDiagnosticAndFallsBackOnce(t *testing.T) {
@@ -554,47 +527,47 @@ func TestMalformedRemoteCompactionLogsSafeDiagnosticAndFallsBackOnce(t *testing.
 	if _, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(4); err != nil {
 		t.Fatalf("read committed compaction records: %v", err)
 	}
-	records := logs.checkpointRecords()
+	records := checkpointRecords(logs)
 	if len(records) != 1 {
 		t.Fatalf("structured diagnostics = %d, want one", len(records))
 	}
 	record := records[0]
-	if record.level != slog.LevelError {
-		t.Fatalf("diagnostic level = %s, want error", record.level)
+	if record.Level != slog.LevelError {
+		t.Fatalf("diagnostic level = %s, want error", record.Level)
 	}
 	wantKeys := map[string]bool{
 		"provider_id": true, "status_code": true, "request_id": true,
 		"checkpoint_reason": true, "compaction_count": true, "output_count": true,
 		"output_type_counts": true,
 	}
-	if len(record.attrs) != len(wantKeys) {
-		t.Fatalf("diagnostic keys = %v, want %v", record.attrs, wantKeys)
+	if len(record.Fields) != len(wantKeys) {
+		t.Fatalf("diagnostic keys = %v, want %v", record.Fields, wantKeys)
 	}
 	for key := range wantKeys {
-		if _, ok := record.attrs[key]; !ok {
+		if _, ok := record.Fields[key]; !ok {
 			t.Fatalf("diagnostic omitted approved key %q", key)
 		}
 	}
-	if got := record.attrs["provider_id"].String(); got != "openai" {
+	if got, ok := record.Fields["provider_id"].(string); !ok || got != "openai" {
 		t.Fatalf("provider_id = %q, want openai", got)
 	}
-	if got := record.attrs["status_code"].Int64(); got != 502 {
+	if got, ok := record.Fields["status_code"].(int64); !ok || got != 502 {
 		t.Fatalf("status_code = %d, want 502", got)
 	}
-	if got := record.attrs["request_id"].String(); got != "provider-request" {
+	if got, ok := record.Fields["request_id"].(string); !ok || got != "provider-request" {
 		t.Fatalf("request_id = %q, want provider-request", got)
 	}
-	if got := record.attrs["checkpoint_reason"].String(); got != string(llm.CompactionCheckpointReasonMultiple) {
+	if got, ok := record.Fields["checkpoint_reason"].(string); !ok || got != string(llm.CompactionCheckpointReasonMultiple) {
 		t.Fatalf("checkpoint_reason = %q, want %q", got, llm.CompactionCheckpointReasonMultiple)
 	}
-	if got := record.attrs["compaction_count"].Int64(); got != 2 {
+	if got, ok := record.Fields["compaction_count"].(int64); !ok || got != 2 {
 		t.Fatalf("compaction_count = %d, want 2", got)
 	}
-	if got := record.attrs["output_count"].Int64(); got != 3 {
+	if got, ok := record.Fields["output_count"].(int64); !ok || got != 3 {
 		t.Fatalf("output_count = %d, want 3", got)
 	}
-	if got, ok := record.attrs["output_type_counts"].Any().(map[llm.ResponseItemType]int); !ok || !reflect.DeepEqual(got, map[llm.ResponseItemType]int{llm.ResponseItemTypeCompaction: 2, llm.ResponseItemTypeMessage: 1}) {
-		t.Fatalf("output_type_counts = %#v, want typed counts", record.attrs["output_type_counts"].Any())
+	if got, ok := record.Fields["output_type_counts"].(map[llm.ResponseItemType]int); !ok || !reflect.DeepEqual(got, map[llm.ResponseItemType]int{llm.ResponseItemTypeCompaction: 2, llm.ResponseItemTypeMessage: 1}) {
+		t.Fatalf("output_type_counts = %#v, want typed counts", record.Fields["output_type_counts"])
 	}
 }
 
@@ -615,7 +588,7 @@ func TestMalformedRemoteCompactionJoinsLocalFailureAndKeepsOneDiagnostic(t *test
 	if len(client.compactionCalls) != 1 || len(client.calls) == 0 {
 		t.Fatalf("remote/local compaction calls = %d/%d, want one/at least one", len(client.compactionCalls), len(client.calls))
 	}
-	if records := logs.checkpointRecords(); len(records) != 1 {
+	if records := checkpointRecords(logs); len(records) != 1 {
 		t.Fatalf("structured diagnostics = %d, want one", len(records))
 	}
 }
@@ -640,7 +613,7 @@ func TestMalformedRemoteCompactionJoinsLocalDispatchFailure(t *testing.T) {
 	if len(base.compactionCalls) != 1 || len(base.calls) != 0 {
 		t.Fatalf("remote/local compaction calls = %d/%d, want one/zero", len(base.compactionCalls), len(base.calls))
 	}
-	if records := logs.checkpointRecords(); len(records) != 1 {
+	if records := checkpointRecords(logs); len(records) != 1 {
 		t.Fatalf("structured diagnostics = %d, want one", len(records))
 	}
 }

@@ -95,7 +95,7 @@ func TestPreSubmitCompactionLocalCarriesPreservedUserMessageInOrder(t *testing.T
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})
-	if err := engine.steer("user", steerMessagesWithPersistenceIntent(
+	if err := steerTestActiveStep(engine, "user", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,

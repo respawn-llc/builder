@@ -97,7 +97,7 @@ func TestAutoCompactionLocalCarriesPreservedUserMessageInOrder(t *testing.T) {
 		ContextWindowTokens:   200_000,
 		AutoCompactTokenLimit: 190_000,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
