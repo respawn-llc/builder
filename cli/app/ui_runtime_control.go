@@ -151,12 +151,16 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	response := msg.response
 	settings := response.Settings
 	m.thinkingLevel = settings.SelectedAgent.Thinking
+	m.fastModeAvailable = settings.Fast != nil
 	m.reviewerMode = string(settings.Supervisor.Value)
 	m.reviewerEnabled = m.reviewerMode != string(serverapi.ChatSettingsSupervisorOff)
 	m.fastModeEnabled = settings.Fast != nil && settings.Fast.Value
 	m.questionsEnabled = settings.Questions.Enabled
 	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
-	m.setRuntimeContextUsage(m.currentRuntimeSessionID(), runtimeContextUsageFromChatContext(response.Context))
+	m.setRuntimeContextUsage(
+		m.currentRuntimeSessionID(),
+		runtimeContextUsageFromChatContext(response.Context, m.cachedRuntimeStatus().ContextUsage),
+	)
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
 		reason := "Chat settings mutation rejected"
 		if response.Result.Rejected != nil {

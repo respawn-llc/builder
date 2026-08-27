@@ -60,6 +60,9 @@ func (c Collector) CollectBase(req Request) Snapshot {
 		contextInfo.UsedTokens = usage.UsedTokens
 		contextInfo.WindowTokens = usage.WindowTokens
 		contextInfo.AvailableTokens = usage.WindowTokens - usage.UsedTokens
+		if usage.HasAutomaticThreshold {
+			contextInfo.ThresholdTokens = usage.AutomaticThresholdTokens
+		}
 		if contextInfo.AvailableTokens < 0 {
 			contextInfo.AvailableTokens = 0
 		}

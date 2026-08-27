@@ -20,10 +20,12 @@ func (f ConversationFreshness) IsFresh() bool {
 }
 
 type RuntimeContextUsage struct {
-	UsedTokens            int
-	WindowTokens          int
-	CacheHitPercent       int
-	HasCacheHitPercentage bool
+	UsedTokens               int
+	WindowTokens             int
+	AutomaticThresholdTokens int
+	HasAutomaticThreshold    bool
+	CacheHitPercent          int
+	HasCacheHitPercentage    bool
 }
 
 type RuntimeGoal struct {

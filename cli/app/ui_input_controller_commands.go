@@ -243,9 +243,12 @@ func (m *uiModel) sendThinkingLevelQueryStatus(level string) tea.Cmd {
 func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, tea.Cmd) {
 	m := c.model
 	requested = strings.ToLower(strings.TrimSpace(requested))
-	_, currentEnabled := m.fastModeState()
+	available, currentEnabled := m.fastModeState()
 	switch requested {
 	case "status":
+		if !available {
+			return m, c.model.sendTransientStatusWithNoticeID("Fast mode is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		}
 		status := "off"
 		if currentEnabled {
 			status = "on"
@@ -256,6 +259,9 @@ func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, t
 	default:
 		errText := "Usage: /fast [on|off|status]"
 		return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	}
+	if !available && requested != "off" {
+		return m, m.sendTransientStatusWithNoticeID("Fast mode is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	if m.hasRuntimeClient() {
 		return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationFast, requested)
