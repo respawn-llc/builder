@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/cli/app/internal/projectbinding"
 	serverstartup "core/server/startup"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -38,8 +39,8 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 		runProjectBindingPickerFlow = originalPicker
 		runProjectNamePromptFlow = originalPrompt
 	})
-	runProjectBindingPickerFlow = func(projects []clientui.ProjectSummary, theme string) (projectBindingPickerResult, error) {
-		return projectBindingPickerResult{CreateNew: true}, nil
+	runProjectBindingPickerFlow = func(context.Context, []clientui.ProjectSummary, string, projectbinding.ProjectPickerSnapshot) (projectBindingPickerResult, error) {
+		return projectbinding.ProjectPickerCreateNew{}, nil
 	}
 	runProjectNamePromptFlow = func(defaultName string, theme string) (string, error) {
 		return "Remote No Auth Project", nil
