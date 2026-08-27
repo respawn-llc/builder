@@ -261,6 +261,31 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 	}
 }
 
+func TestInvalidWriteStdinCompletionProvenanceFailsWithoutPersistence(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{ToolName: string(toolspec.ToolWriteStdin)})
+
+	receipt, _, err := engine.persistToolCompletionRaw("step", tools.Result{
+		CallID:                       "write-stdin-call",
+		Name:                         toolspec.ToolWriteStdin,
+		Output:                       json.RawMessage(`{"error":"invalid completion"}`),
+		IsError:                      true,
+		Presentation:                 &presentation,
+		CompletedBackgroundSessionID: textutil.Value(0),
+	})
+	if receipt.Committed {
+		t.Fatal("invalid completion provenance was persisted")
+	}
+	var provenanceErr invalidBackgroundCompletionProvenanceError
+	if !errors.As(err, &provenanceErr) {
+		t.Fatalf("persist invalid completion error = %v, want typed provenance error", err)
+	}
+	if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("write-stdin-call"); found {
+		t.Fatal("invalid completion provenance was applied to runtime state")
+	}
+}
+
 func TestBackgroundNoticeSchedulerRestoresUncommittedSteerFailure(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})

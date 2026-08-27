@@ -59,28 +59,19 @@ func effectiveCompactionMode(
 	configured config.CompactionMode,
 	capabilities *llm.ProviderCapabilities,
 ) serverapi.ChatContextCompactionMode {
-	if capabilities == nil {
-		switch configured {
-		case config.CompactionModeNone:
-			return serverapi.ChatContextCompactionModeDisabled
-		case config.CompactionModeNative:
-			return serverapi.ChatContextCompactionModeProviderNative
-		default:
-			return serverapi.ChatContextCompactionModeLocal
-		}
-	}
+	supportsProviderNative := capabilities != nil && capabilities.SupportsResponsesCompact
 	switch configured {
 	case config.CompactionModeNone:
 		return serverapi.ChatContextCompactionModeDisabled
 	case config.CompactionModeLocal:
 		return serverapi.ChatContextCompactionModeLocal
 	case config.CompactionModeNative:
-		if capabilities.SupportsResponsesCompact {
+		if capabilities == nil || supportsProviderNative {
 			return serverapi.ChatContextCompactionModeProviderNative
 		}
 		return serverapi.ChatContextCompactionModeLocal
 	default:
-		if capabilities.SupportsResponsesCompact {
+		if supportsProviderNative {
 			return serverapi.ChatContextCompactionModeProviderNative
 		}
 		return serverapi.ChatContextCompactionModeLocal

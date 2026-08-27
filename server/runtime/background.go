@@ -248,17 +248,27 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 	}
 }
 
-func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
+type invalidBackgroundCompletionProvenanceError struct {
+	SessionID int
+}
+
+func (e invalidBackgroundCompletionProvenanceError) Error() string {
+	return fmt.Sprintf(
+		"write_stdin completion provenance has invalid session ID %d",
+		e.SessionID,
+	)
+}
+
+func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool, error) {
 	if res.Name != toolspec.ToolWriteStdin || res.CompletedBackgroundSessionID == nil {
-		return "", false
+		return "", false, nil
 	}
 	if *res.CompletedBackgroundSessionID <= 0 {
-		panic(fmt.Sprintf(
-			"write_stdin completion provenance has invalid session ID %d",
-			*res.CompletedBackgroundSessionID,
-		))
+		return "", false, invalidBackgroundCompletionProvenanceError{
+			SessionID: *res.CompletedBackgroundSessionID,
+		}
 	}
-	return strconv.Itoa(*res.CompletedBackgroundSessionID), true
+	return strconv.Itoa(*res.CompletedBackgroundSessionID), true, nil
 }
 
 func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) *resultGroupFatal {
