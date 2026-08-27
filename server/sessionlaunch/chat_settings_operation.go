@@ -9,40 +9,8 @@ import (
 	"core/server/launch"
 	"core/server/session"
 	"core/shared/config"
+	"core/shared/serverapi"
 )
-
-type ChatSettingsOperationKind string
-
-const (
-	ChatSettingsOperationAgent          ChatSettingsOperationKind = "agent"
-	ChatSettingsOperationSupervisor     ChatSettingsOperationKind = "supervisor"
-	ChatSettingsOperationThinking       ChatSettingsOperationKind = "thinking"
-	ChatSettingsOperationFast           ChatSettingsOperationKind = "fast"
-	ChatSettingsOperationQuestions      ChatSettingsOperationKind = "questions"
-	ChatSettingsOperationAutoCompaction ChatSettingsOperationKind = "auto_compaction"
-)
-
-// ChatSettingsOperation is one semantic settings action. Its kind determines
-// which value is present; false remains a valid value for boolean operations.
-type ChatSettingsOperation struct {
-	Kind    ChatSettingsOperationKind
-	Value   string
-	Enabled bool
-}
-
-type ChatSettingsRejectionReason string
-
-const (
-	ChatSettingsAgentLocked              ChatSettingsRejectionReason = "agent_locked"
-	ChatSettingsAgentUnavailable         ChatSettingsRejectionReason = "agent_unavailable"
-	ChatSettingsThinkingUnavailable      ChatSettingsRejectionReason = "thinking_unavailable"
-	ChatSettingsFastUnavailable          ChatSettingsRejectionReason = "fast_unavailable"
-	ChatSettingsAutoCompactionPolicyLock ChatSettingsRejectionReason = "auto_compaction_policy_locked"
-)
-
-type ChatSettingsOperationRejection struct {
-	Reason ChatSettingsRejectionReason
-}
 
 type PreparedChatSettingsOperationInput struct {
 	Raw                session.ChatSettingsState
@@ -51,7 +19,6 @@ type PreparedChatSettingsOperationInput struct {
 	PersistedThinking  string
 	Catalog            launch.PreparedChatAgentCatalog
 	Locked             *session.LockedContract
-	AgentLocked        bool
 	WorkflowLocked     bool
 	CompactionMode     config.CompactionMode
 }
@@ -60,12 +27,12 @@ type PreparedChatSettingsOperationResult struct {
 	State     session.ChatSettingsState
 	Effective session.ChatSettings
 	Changed   bool
-	Rejection *ChatSettingsOperationRejection
+	Rejection *serverapi.ChatSettingsMutationRejectedResult
 }
 
 func ProjectPreparedChatSettingsOperation(
 	input PreparedChatSettingsOperationInput,
-	operation ChatSettingsOperation,
+	operation serverapi.ChatSettingsMutationOperation,
 ) (PreparedChatSettingsOperationResult, error) {
 	operation, err := normalizeChatSettingsOperation(operation)
 	if err != nil {
@@ -99,7 +66,7 @@ func ProjectPreparedChatSettingsOperation(
 
 	baseAgent := rawAgent
 	baseSettings := input.Effective
-	if !selectedAvailable && !input.AgentLocked {
+	if !selectedAvailable && input.Locked == nil {
 		baseAgent = config.DefaultSubagentRole
 		baseSettings = defaultEntry.Settings.Baseline
 		baseSettings.Questions = input.PersistedQuestions
@@ -119,40 +86,40 @@ func ProjectPreparedChatSettingsOperation(
 	target := base
 	effectiveEntry := selectedEntry
 	switch operation.Kind {
-	case ChatSettingsOperationAgent:
-		entry, available := input.Catalog.Lookup(operation.Value)
+	case serverapi.ChatSettingsMutationAgent:
+		entry, available := input.Catalog.Lookup(*operation.Role)
 		if !available {
-			return rejectedChatSettingsOperation(input, ChatSettingsAgentUnavailable), nil
+			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationAgentUnavailable), nil
 		}
-		if (input.AgentLocked || input.WorkflowLocked) && operation.Value != rawAgent {
-			return rejectedChatSettingsOperation(input, ChatSettingsAgentLocked), nil
+		if (input.Locked != nil || input.WorkflowLocked) && *operation.Role != rawAgent {
+			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationAgentLocked), nil
 		}
-		if operation.Value != rawAgent || !selectedAvailable {
+		if *operation.Role != rawAgent || !selectedAvailable {
 			target = session.ChatSettingsState{
 				Agent:    entry.Choice.Role,
 				Settings: completeChatSettingsOverrides(entry.Settings.Baseline),
 			}
 		}
 		effectiveEntry = entry
-	case ChatSettingsOperationSupervisor:
-		target.Settings.Supervisor = &operation.Value
-	case ChatSettingsOperationThinking:
-		if !slices.Contains(selectedEntry.Settings.SupportedThinkingValues, operation.Value) {
-			return rejectedChatSettingsOperation(input, ChatSettingsThinkingUnavailable), nil
+	case serverapi.ChatSettingsMutationSupervisor:
+		target.Settings.Supervisor = operation.Value
+	case serverapi.ChatSettingsMutationThinking:
+		if !slices.Contains(selectedEntry.Settings.SupportedThinkingValues, *operation.Value) {
+			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationThinkingUnavailable), nil
 		}
-		target.Settings.Thinking = &operation.Value
-	case ChatSettingsOperationFast:
+		target.Settings.Thinking = operation.Value
+	case serverapi.ChatSettingsMutationFast:
 		if !selectedEntry.Settings.FastAvailable {
-			return rejectedChatSettingsOperation(input, ChatSettingsFastUnavailable), nil
+			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationFastUnavailable), nil
 		}
-		target.Settings.Fast = &operation.Enabled
-	case ChatSettingsOperationQuestions:
-		target.Settings.Questions = &operation.Enabled
-	case ChatSettingsOperationAutoCompaction:
+		target.Settings.Fast = operation.Enabled
+	case serverapi.ChatSettingsMutationQuestions:
+		target.Settings.Questions = operation.Enabled
+	case serverapi.ChatSettingsMutationAutoCompaction:
 		if input.WorkflowLocked || input.CompactionMode == config.CompactionModeNone {
-			return rejectedChatSettingsOperation(input, ChatSettingsAutoCompactionPolicyLock), nil
+			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationAutoCompactionPolicyLock), nil
 		}
-		target.Settings.AutoCompaction = &operation.Enabled
+		target.Settings.AutoCompaction = operation.Enabled
 	default:
 		return PreparedChatSettingsOperationResult{}, fmt.Errorf("Chat settings operation kind %q is invalid", operation.Kind)
 	}
@@ -175,42 +142,46 @@ func ProjectPreparedChatSettingsOperation(
 	}, nil
 }
 
-func normalizeChatSettingsOperation(operation ChatSettingsOperation) (ChatSettingsOperation, error) {
+func normalizeChatSettingsOperation(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationOperation, error) {
+	if err := operation.Validate(); err != nil {
+		return serverapi.ChatSettingsMutationOperation{}, err
+	}
 	switch operation.Kind {
-	case ChatSettingsOperationAgent:
-		agent, ok := session.NormalizeChatAgent(operation.Value)
+	case serverapi.ChatSettingsMutationAgent:
+		agent, ok := session.NormalizeChatAgent(*operation.Role)
 		if !ok {
-			return ChatSettingsOperation{}, fmt.Errorf("Chat Agent %q is invalid", operation.Value)
+			return serverapi.ChatSettingsMutationOperation{}, fmt.Errorf("Chat Agent %q is invalid", *operation.Role)
 		}
-		operation.Value = agent
-	case ChatSettingsOperationSupervisor:
+		operation.Role = &agent
+	case serverapi.ChatSettingsMutationSupervisor:
 		normalized, err := session.NormalizeChatSettingsOverrides(&session.ChatSettingsOverrides{
-			Supervisor: &operation.Value,
+			Supervisor: operation.Value,
 		})
 		if err != nil {
-			return ChatSettingsOperation{}, err
+			return serverapi.ChatSettingsMutationOperation{}, err
 		}
-		operation.Value = *normalized.Supervisor
-	case ChatSettingsOperationThinking:
-		operation.Value = strings.TrimSpace(operation.Value)
-		if operation.Value == "" {
-			return ChatSettingsOperation{}, errors.New("Chat settings Thinking is required")
+		operation.Value = normalized.Supervisor
+	case serverapi.ChatSettingsMutationThinking:
+		value := strings.TrimSpace(*operation.Value)
+		if value == "" {
+			return serverapi.ChatSettingsMutationOperation{}, errors.New("Chat settings Thinking is required")
 		}
-	case ChatSettingsOperationFast, ChatSettingsOperationQuestions, ChatSettingsOperationAutoCompaction:
+		operation.Value = &value
+	case serverapi.ChatSettingsMutationFast, serverapi.ChatSettingsMutationQuestions, serverapi.ChatSettingsMutationAutoCompaction:
 	default:
-		return ChatSettingsOperation{}, fmt.Errorf("Chat settings operation kind %q is invalid", operation.Kind)
+		return serverapi.ChatSettingsMutationOperation{}, fmt.Errorf("Chat settings operation kind %q is invalid", operation.Kind)
 	}
 	return operation, nil
 }
 
 func rejectedChatSettingsOperation(
 	input PreparedChatSettingsOperationInput,
-	reason ChatSettingsRejectionReason,
+	reason serverapi.ChatSettingsMutationRejectionReason,
 ) PreparedChatSettingsOperationResult {
 	return PreparedChatSettingsOperationResult{
 		State:     input.Raw,
 		Effective: input.Effective,
-		Rejection: &ChatSettingsOperationRejection{Reason: reason},
+		Rejection: &serverapi.ChatSettingsMutationRejectedResult{Reason: reason},
 	}
 }
 

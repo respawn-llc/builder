@@ -98,7 +98,6 @@ type runtimeControlDoneMsg struct {
 type chatSettingsDoneMsg struct {
 	operation serverapi.ChatSettingsMutationOperationKind
 	response  serverapi.ChatSettingsMutationResponse
-	view      clientui.RuntimeMainView
 	err       error
 }
 

@@ -35,7 +35,6 @@ type sessionRuntimeClient struct {
 	mainView         clientui.RuntimeMainView
 	hasMainView      bool
 	metadataRevision uint64
-	agentIdentity    runtimeAgentIdentity
 }
 
 func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService, chatSettings apicontract.ChatSettingsService) clientui.RuntimeClient {

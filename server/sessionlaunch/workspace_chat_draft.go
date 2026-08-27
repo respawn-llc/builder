@@ -13,6 +13,7 @@ import (
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 type WorkspaceChatDraft = metadata.WorkspaceChatDraftDocument
@@ -180,7 +181,7 @@ func (o *WorkspaceChatDraftOwner) MutateWorkspaceChatSettings(
 	ctx context.Context,
 	id string,
 	resolve WorkspaceChatDraftInputResolver,
-	operation ChatSettingsOperation,
+	operation serverapi.ChatSettingsMutationOperation,
 ) (WorkspaceChatSettingsMutationResult, error) {
 	var err error
 	if id, err = o.workspaceID(id); err != nil {

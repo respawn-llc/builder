@@ -265,7 +265,7 @@ func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (Works
 
 func (s *Service) MutateWorkspaceChatSettingsAggregate(
 	ctx context.Context,
-	operation ChatSettingsOperation,
+	operation serverapi.ChatSettingsMutationOperation,
 ) (WorkspaceChatSettingsMutationResult, error) {
 	owner, workspaceID, err := s.workspaceChatDraftOwner()
 	if err != nil {
@@ -360,7 +360,6 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 		PersistedThinking:  persistedThinking,
 		Catalog:            catalog,
 		Locked:             store.Meta().Locked,
-		AgentLocked:        store.Meta().Locked != nil,
 		WorkflowLocked:     taskID != nil,
 		CompactionMode:     planner.Config.Settings.CompactionMode,
 	}, nil

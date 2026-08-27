@@ -37,9 +37,6 @@ func (c *sessionRuntimeClient) mergeMainViewCandidate(
 	if metadataBaselineRevision == nil || c.metadataRevision == *metadataBaselineRevision {
 		c.mainView.Status = view.Status
 		c.mainView.Session = view.Session
-		if view.Version.Validate() == nil {
-			c.agentIdentity = runtimeAgentIdentityFromSession(view.Session)
-		}
 		c.advanceMetadataRevision()
 	}
 	if decision == runtimeTupleApply {
@@ -63,10 +60,6 @@ func (c *sessionRuntimeClient) advanceMetadataRevision() {
 }
 
 func (c *sessionRuntimeClient) patchMainView(apply func(view *clientui.RuntimeMainView)) {
-	_ = c.patchMainViewWithResult(apply)
-}
-
-func (c *sessionRuntimeClient) patchMainViewWithResult(apply func(view *clientui.RuntimeMainView)) clientui.RuntimeMainView {
 	c.mu.Lock()
 	apply(&c.mainView)
 	if c.mainView.Session.SessionID == "" {
@@ -74,7 +67,5 @@ func (c *sessionRuntimeClient) patchMainViewWithResult(apply func(view *clientui
 	}
 	c.hasMainView = true
 	c.advanceMetadataRevision()
-	view := c.mainView
 	c.mu.Unlock()
-	return view
 }

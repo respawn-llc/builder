@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -51,10 +50,6 @@ func (s chatSettingsService) MutateChatSettings(
 	if err := req.Validate(); err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	operation, err := chatSettingsOperation(req.Operation)
-	if err != nil {
-		return serverapi.ChatSettingsMutationResponse{}, err
-	}
 	result := serverapi.NewChatSettingsMutationApplied(false)
 	switch req.Target.TargetKind {
 	case serverapi.ChatSettingsReadTargetLazy:
@@ -63,13 +58,13 @@ func (s chatSettingsService) MutateChatSettings(
 			return serverapi.ChatSettingsMutationResponse{}, err
 		}
 		service := s.core.sessionLaunchServiceForProjectContext(projectCtx)
-		projected, err := service.MutateWorkspaceChatSettingsAggregate(ctx, operation)
+		projected, err := service.MutateWorkspaceChatSettingsAggregate(ctx, req.Operation)
 		if err != nil {
 			return serverapi.ChatSettingsMutationResponse{}, err
 		}
 		if projected.Rejection != nil {
 			result = serverapi.NewChatSettingsMutationRejected(
-				serverapi.ChatSettingsMutationRejectionReason(projected.Rejection.Reason),
+				projected.Rejection.Reason,
 			)
 		}
 		if result.Applied != nil {
@@ -81,28 +76,9 @@ func (s chatSettingsService) MutateChatSettings(
 		}
 		return serverapi.ChatSettingsMutationResponse{Result: result, Settings: settings, Context: contextFacts}, nil
 	case serverapi.ChatSettingsReadTargetSession:
-		return s.mutateMaterializedChatSettings(ctx, *req.Target.Session, operation, result)
+		return s.mutateMaterializedChatSettings(ctx, *req.Target.Session, req.Operation, result)
 	default:
 		return serverapi.ChatSettingsMutationResponse{}, errors.New("Chat settings target kind is invalid")
-	}
-}
-
-func chatSettingsOperation(operation serverapi.ChatSettingsMutationOperation) (sessionlaunch.ChatSettingsOperation, error) {
-	switch operation.Kind {
-	case serverapi.ChatSettingsMutationAgent:
-		return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationAgent, Value: *operation.Role}, nil
-	case serverapi.ChatSettingsMutationSupervisor:
-		return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationSupervisor, Value: *operation.Value}, nil
-	case serverapi.ChatSettingsMutationThinking:
-		return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationThinking, Value: *operation.Value}, nil
-	case serverapi.ChatSettingsMutationFast:
-		return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationFast, Enabled: *operation.Enabled}, nil
-	case serverapi.ChatSettingsMutationQuestions:
-		return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationQuestions, Enabled: *operation.Enabled}, nil
-	case serverapi.ChatSettingsMutationAutoCompaction:
-		return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationAutoCompaction, Enabled: *operation.Enabled}, nil
-	default:
-		return sessionlaunch.ChatSettingsOperation{}, fmt.Errorf("Chat settings operation kind %q is invalid", operation.Kind)
 	}
 }
 
@@ -124,14 +100,10 @@ func (s chatSettingsService) readLazySettingsAndContext(
 func (s chatSettingsService) mutateMaterializedChatSettings(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
-	operation sessionlaunch.ChatSettingsOperation,
+	operation serverapi.ChatSettingsMutationOperation,
 	result serverapi.ChatSettingsMutationResult,
 ) (serverapi.ChatSettingsMutationResponse, error) {
-	store := s.core.safeBundles().Persistence.metadataStore
 	authority := s.core.safeBundles().Runtime.runtimeAuthority
-	if store == nil || authority == nil {
-		return serverapi.ChatSettingsMutationResponse{}, errors.New("Chat settings runtime authority is required")
-	}
 	var changed bool
 	err := authority.WithSessionChatSettings(ctx, sessionID.String(), func(
 		runCtx context.Context,
@@ -152,7 +124,7 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 		}
 		if projected.Rejection != nil {
 			result = serverapi.NewChatSettingsMutationRejected(
-				serverapi.ChatSettingsMutationRejectionReason(projected.Rejection.Reason),
+				projected.Rejection.Reason,
 			)
 			return false, nil
 		}
