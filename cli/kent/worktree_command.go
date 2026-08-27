@@ -11,12 +11,14 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/config"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 	"core/shared/worktreecontract"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 const worktreeCommandTimeout = 5 * time.Second
@@ -73,12 +75,7 @@ func worktreeStatusSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		if *jsonOut {
-			output, err := worktreeStatusJSON(status)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			return writeCommandJSON(stdout, stderr, output)
+			return writeWorktreeProtoJSON(stdout, stderr, status)
 		}
 		fmt.Fprintln(stdout, status.GetWorktree().GetRecordedRoot())
 		for _, problem := range status.Problems {
@@ -114,12 +111,7 @@ func worktreeListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 				return 1
 			}
 			if *jsonOut {
-				output, err := worktreeListJSON(response)
-				if err != nil {
-					fmt.Fprintln(stderr, err)
-					return 1
-				}
-				return writeCommandJSON(stdout, stderr, output)
+				return writeWorktreeProtoJSON(stdout, stderr, response)
 			}
 			writeWorktreeList(stdout, response.Worktrees, true)
 			return 0
@@ -142,12 +134,7 @@ func worktreeListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		return 1
 	}
 	if *jsonOut {
-		output, err := worktreeWorkspaceListJSON(response)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return writeCommandJSON(stdout, stderr, output)
+		return writeWorktreeProtoJSON(stdout, stderr, response)
 	}
 	writeWorktreeList(stdout, response.Worktrees, false)
 	return 0
@@ -237,12 +224,7 @@ func worktreeCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		if *jsonOut {
-			output, err := worktreeCreateJSON(response)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			return writeCommandJSON(stdout, stderr, output)
+			return writeWorktreeProtoJSON(stdout, stderr, response)
 		}
 		registered := response.GetWorktree().GetTopology().GetRegistered()
 		if registered == nil {
@@ -345,12 +327,7 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		if *jsonOut {
-			output, err := worktreeDeleteJSON(result)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			return writeCommandJSON(stdout, stderr, output)
+			return writeWorktreeProtoJSON(stdout, stderr, result)
 		}
 		fmt.Fprintln(stdout, "Deleted worktree")
 		if result.GetCleanup().GetKind() == worktreepb.BranchCleanupOutcomeKind_WORKTREE_BRANCH_CLEANUP_OUTCOME_RETAINED {
@@ -400,317 +377,23 @@ func runScheduledWorktreeCommand(
 			return 1
 		}
 		if jsonOut {
-			return writeCommandJSON(stdout, stderr, worktreeScheduledAcknowledgementJSON{
-				OperationID: ack.OperationId,
-			})
+			return writeWorktreeProtoJSON(stdout, stderr, ack)
 		}
 		fmt.Fprintf(stdout, "Worktree %s scheduled for the agent's next step. This usually takes a few seconds.\n", action)
 		return 0
 	})
 }
 
-type worktreeScheduledAcknowledgementJSON struct {
-	OperationID string `json:"operation_id"`
-}
-
-type worktreeStatusJSONOutput struct {
-	Target   clientui.SessionExecutionTarget `json:"target"`
-	Worktree worktreeStatusTargetJSON        `json:"worktree"`
-	Problems []worktreeStatusProblemJSON     `json:"problems"`
-}
-
-type worktreeStatusTargetJSON struct {
-	RecordedRoot      string  `json:"recorded_root"`
-	ObservedRoot      *string `json:"observed_root,omitempty"`
-	DisplayName       *string `json:"display_name,omitempty"`
-	RecordedBranchRef *string `json:"recorded_branch_ref,omitempty"`
-	ObservedBranchRef *string `json:"observed_branch_ref,omitempty"`
-}
-
-type worktreeStatusProblemJSON struct {
-	Kind string  `json:"kind"`
-	Root *string `json:"root,omitempty"`
-	Ref  *string `json:"ref,omitempty"`
-}
-
-type worktreeListJSONOutput struct {
-	Target    clientui.SessionExecutionTarget `json:"target"`
-	Worktrees []worktreeListEntryJSON         `json:"worktrees"`
-}
-
-type worktreeWorkspaceListJSONOutput struct {
-	WorkspaceID string                  `json:"workspace_id"`
-	Worktrees   []worktreeListEntryJSON `json:"worktrees"`
-}
-
-type worktreeCreateJSONOutput struct {
-	Target   clientui.SessionExecutionTarget `json:"target"`
-	Worktree worktreeListEntryJSON           `json:"worktree"`
-}
-
-type worktreeListEntryJSON struct {
-	Topology   worktreeTopologyJSON   `json:"topology"`
-	Projection worktreeProjectionJSON `json:"projection"`
-}
-
-type worktreeTopologyJSON struct {
-	Variant    string                       `json:"variant"`
-	Registered *worktreeRegisteredFactsJSON `json:"registered,omitempty"`
-	External   *worktreeExternalFactsJSON   `json:"external,omitempty"`
-	Missing    *worktreeMissingFactsJSON    `json:"missing,omitempty"`
-}
-
-type worktreeRegisteredFactsJSON struct {
-	Git  worktreeGitFactsJSON  `json:"git"`
-	Kent worktreeKentFactsJSON `json:"kent"`
-}
-
-type worktreeExternalFactsJSON struct {
-	Git worktreeGitFactsJSON `json:"git"`
-}
-
-type worktreeMissingFactsJSON struct {
-	Kent worktreeKentFactsJSON `json:"kent"`
-}
-
-type worktreeGitFactsJSON struct {
-	CanonicalRoot  string  `json:"canonical_root"`
-	HeadObject     string  `json:"head_object"`
-	BranchRef      *string `json:"branch_ref"`
-	BranchName     *string `json:"branch_name"`
-	Detached       bool    `json:"detached"`
-	Bare           bool    `json:"bare"`
-	LockedReason   *string `json:"locked_reason"`
-	PrunableReason *string `json:"prunable_reason"`
-	IsMain         bool    `json:"is_main"`
-	PathAvailable  bool    `json:"path_available"`
-}
-
-type worktreeKentFactsJSON struct {
-	WorktreeID      string  `json:"worktree_id"`
-	CanonicalRoot   string  `json:"canonical_root"`
-	DisplayName     string  `json:"display_name"`
-	Managed         bool    `json:"managed"`
-	CreatedBranch   bool    `json:"created_branch"`
-	OriginSessionID *string `json:"origin_session_id"`
-}
-
-type worktreeProjectionJSON struct {
-	Selector         string                              `json:"selector"`
-	IsCurrent        bool                                `json:"is_current"`
-	Switch           *worktreeSwitchOperationJSON        `json:"switch,omitempty"`
-	DeletePreview    *worktreeDeletePreviewOperationJSON `json:"delete_preview,omitempty"`
-	FallbackIdentity *string                             `json:"fallback_identity,omitempty"`
-}
-
-type worktreeSwitchOperationJSON struct {
-	Kind     string  `json:"kind"`
-	Selector *string `json:"selector,omitempty"`
-}
-
-type worktreeDeletePreviewOperationJSON struct {
-	Selector string `json:"selector"`
-}
-
-type worktreeDeleteJSONOutput struct {
-	Cleanup      worktreeBranchCleanupJSON `json:"cleanup"`
-	LeftoverRoot *string                   `json:"leftover_root,omitempty"`
-}
-
-type worktreeBranchCleanupJSON struct {
-	Kind       string  `json:"kind"`
-	BranchName *string `json:"branch_name,omitempty"`
-	Diagnostic *string `json:"diagnostic,omitempty"`
-}
-
-func worktreeStatusJSON(success *worktreepb.StatusSuccess) (worktreeStatusJSONOutput, error) {
-	target, err := worktreeExecutionTargetJSON(success.GetTarget())
+func writeWorktreeProtoJSON(stdout io.Writer, stderr io.Writer, message proto.Message) int {
+	data, err := protojson.Marshal(message)
+	if err == nil {
+		_, err = fmt.Fprintln(stdout, string(data))
+	}
 	if err != nil {
-		return worktreeStatusJSONOutput{}, err
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
-	problems := make([]worktreeStatusProblemJSON, len(success.GetProblems()))
-	for index, problem := range success.GetProblems() {
-		kind, err := worktreeStatusProblemKindJSON(problem.GetKind())
-		if err != nil {
-			return worktreeStatusJSONOutput{}, err
-		}
-		problems[index] = worktreeStatusProblemJSON{Kind: kind, Root: problem.Root, Ref: problem.Ref}
-	}
-	worktree := success.GetWorktree()
-	return worktreeStatusJSONOutput{
-		Target: target,
-		Worktree: worktreeStatusTargetJSON{
-			RecordedRoot:      worktree.GetRecordedRoot(),
-			ObservedRoot:      worktree.ObservedRoot,
-			DisplayName:       worktree.DisplayName,
-			RecordedBranchRef: worktree.RecordedBranchRef,
-			ObservedBranchRef: worktree.ObservedBranchRef,
-		},
-		Problems: problems,
-	}, nil
-}
-
-func worktreeListJSON(success *worktreepb.ListSuccess) (worktreeListJSONOutput, error) {
-	target, err := worktreeExecutionTargetJSON(success.GetTarget())
-	if err != nil {
-		return worktreeListJSONOutput{}, err
-	}
-	worktrees, err := worktreeListEntriesJSON(success.GetWorktrees())
-	if err != nil {
-		return worktreeListJSONOutput{}, err
-	}
-	return worktreeListJSONOutput{Target: target, Worktrees: worktrees}, nil
-}
-
-func worktreeWorkspaceListJSON(success *worktreepb.WorkspaceListSuccess) (worktreeWorkspaceListJSONOutput, error) {
-	worktrees, err := worktreeListEntriesJSON(success.GetWorktrees())
-	if err != nil {
-		return worktreeWorkspaceListJSONOutput{}, err
-	}
-	return worktreeWorkspaceListJSONOutput{WorkspaceID: success.GetWorkspaceId(), Worktrees: worktrees}, nil
-}
-
-func worktreeCreateJSON(success *worktreepb.CreateSuccess) (worktreeCreateJSONOutput, error) {
-	target, err := worktreeExecutionTargetJSON(success.GetTarget())
-	if err != nil {
-		return worktreeCreateJSONOutput{}, err
-	}
-	worktree, err := worktreeListEntryJSONFromProto(success.GetWorktree())
-	if err != nil {
-		return worktreeCreateJSONOutput{}, err
-	}
-	return worktreeCreateJSONOutput{Target: target, Worktree: worktree}, nil
-}
-
-func worktreeDeleteJSON(success *worktreepb.DeleteSuccess) (worktreeDeleteJSONOutput, error) {
-	kind, err := worktreeBranchCleanupKindJSON(success.GetCleanup().GetKind())
-	if err != nil {
-		return worktreeDeleteJSONOutput{}, err
-	}
-	return worktreeDeleteJSONOutput{
-		Cleanup: worktreeBranchCleanupJSON{
-			Kind:       kind,
-			BranchName: success.GetCleanup().BranchName,
-			Diagnostic: success.GetCleanup().Diagnostic,
-		},
-		LeftoverRoot: success.LeftoverRoot,
-	}, nil
-}
-
-func worktreeExecutionTargetJSON(target *worktreepb.SessionExecutionTarget) (clientui.SessionExecutionTarget, error) {
-	workspaceAvailability, err := client.ProjectAvailabilityFromProto(target.GetWorkspaceAvailability())
-	if err != nil {
-		return clientui.SessionExecutionTarget{}, err
-	}
-	var worktree *clientui.SessionExecutionWorktreeTarget
-	if value := target.GetWorktree(); value != nil {
-		availability, err := client.ProjectAvailabilityFromProto(value.GetAvailability())
-		if err != nil {
-			return clientui.SessionExecutionTarget{}, err
-		}
-		worktree = &clientui.SessionExecutionWorktreeTarget{
-			ID:           value.GetId(),
-			Name:         value.GetName(),
-			Root:         value.GetRoot(),
-			Availability: string(availability),
-		}
-	}
-	return clientui.SessionExecutionTarget{
-		WorkspaceID:           target.GetWorkspaceId(),
-		WorkspaceName:         target.GetWorkspaceName(),
-		WorkspaceRoot:         target.GetWorkspaceRoot(),
-		WorkspaceAvailability: workspaceAvailability,
-		Worktree:              worktree,
-		CwdRelpath:            target.GetCwdRelpath(),
-		EffectiveWorkdir:      target.GetEffectiveWorkdir(),
-	}, nil
-}
-
-func worktreeListEntriesJSON(entries []*worktreepb.ListEntry) ([]worktreeListEntryJSON, error) {
-	result := make([]worktreeListEntryJSON, len(entries))
-	for index, entry := range entries {
-		projected, err := worktreeListEntryJSONFromProto(entry)
-		if err != nil {
-			return nil, err
-		}
-		result[index] = projected
-	}
-	return result, nil
-}
-
-func worktreeListEntryJSONFromProto(entry *worktreepb.ListEntry) (worktreeListEntryJSON, error) {
-	topology, err := worktreeTopologyJSONFromProto(entry.GetTopology())
-	if err != nil {
-		return worktreeListEntryJSON{}, err
-	}
-	projection := entry.GetProjection()
-	result := worktreeListEntryJSON{
-		Topology: topology,
-		Projection: worktreeProjectionJSON{
-			Selector:         projection.GetSelector(),
-			IsCurrent:        projection.GetIsCurrent(),
-			FallbackIdentity: projection.FallbackIdentity,
-		},
-	}
-	if value := projection.GetSwitch(); value != nil {
-		kind, err := worktreeSwitchKindJSON(value.GetKind())
-		if err != nil {
-			return worktreeListEntryJSON{}, err
-		}
-		result.Projection.Switch = &worktreeSwitchOperationJSON{Kind: kind, Selector: value.Selector}
-	}
-	if value := projection.GetDeletePreview(); value != nil {
-		result.Projection.DeletePreview = &worktreeDeletePreviewOperationJSON{Selector: value.GetSelector()}
-	}
-	return result, nil
-}
-
-func worktreeTopologyJSONFromProto(topology *worktreepb.TopologyEntry) (worktreeTopologyJSON, error) {
-	variant, err := worktreeTopologyVariantJSON(topology)
-	if err != nil {
-		return worktreeTopologyJSON{}, err
-	}
-	result := worktreeTopologyJSON{Variant: variant}
-	switch value := topology.GetTopology().(type) {
-	case *worktreepb.TopologyEntry_Registered:
-		result.Registered = &worktreeRegisteredFactsJSON{
-			Git:  worktreeGitFactsJSONFromProto(value.Registered.GetGit()),
-			Kent: worktreeKentFactsJSONFromProto(value.Registered.GetKent()),
-		}
-	case *worktreepb.TopologyEntry_External:
-		result.External = &worktreeExternalFactsJSON{Git: worktreeGitFactsJSONFromProto(value.External.GetGit())}
-	case *worktreepb.TopologyEntry_Missing:
-		result.Missing = &worktreeMissingFactsJSON{Kent: worktreeKentFactsJSONFromProto(value.Missing.GetKent())}
-	default:
-		return worktreeTopologyJSON{}, errors.New("worktree topology is missing")
-	}
-	return result, nil
-}
-
-func worktreeGitFactsJSONFromProto(facts *worktreepb.GitFacts) worktreeGitFactsJSON {
-	return worktreeGitFactsJSON{
-		CanonicalRoot:  facts.GetCanonicalRoot(),
-		HeadObject:     facts.GetHeadObject(),
-		BranchRef:      facts.BranchRef,
-		BranchName:     facts.BranchName,
-		Detached:       facts.GetDetached(),
-		Bare:           facts.GetBare(),
-		LockedReason:   facts.LockedReason,
-		PrunableReason: facts.PrunableReason,
-		IsMain:         facts.GetIsMain(),
-		PathAvailable:  facts.GetPathAvailable(),
-	}
-}
-
-func worktreeKentFactsJSONFromProto(facts *worktreepb.KentFacts) worktreeKentFactsJSON {
-	return worktreeKentFactsJSON{
-		WorktreeID:      facts.GetWorktreeId(),
-		CanonicalRoot:   facts.GetCanonicalRoot(),
-		DisplayName:     facts.GetDisplayName(),
-		Managed:         facts.GetManaged(),
-		CreatedBranch:   facts.GetCreatedBranch(),
-		OriginSessionID: facts.OriginSessionId,
-	}
+	return 0
 }
 
 func worktreeTopologyVariantJSON(topology *worktreepb.TopologyEntry) (string, error) {
@@ -723,17 +406,6 @@ func worktreeTopologyVariantJSON(topology *worktreepb.TopologyEntry) (string, er
 		return "missing", nil
 	default:
 		return "", errors.New("worktree topology is missing")
-	}
-}
-
-func worktreeSwitchKindJSON(kind worktreepb.SwitchOperationKind) (string, error) {
-	switch kind {
-	case worktreepb.SwitchOperationKind_WORKTREE_SWITCH_OPERATION_ENTER:
-		return "enter", nil
-	case worktreepb.SwitchOperationKind_WORKTREE_SWITCH_OPERATION_LEAVE_MAIN:
-		return "leave", nil
-	default:
-		return "", fmt.Errorf("unsupported worktree switch operation %s", kind)
 	}
 }
 
@@ -751,21 +423,6 @@ func worktreeStatusProblemKindJSON(kind worktreepb.StatusProblemKind) (string, e
 		return "recorded_ref_missing", nil
 	default:
 		return "", fmt.Errorf("unsupported worktree status problem %s", kind)
-	}
-}
-
-func worktreeBranchCleanupKindJSON(kind worktreepb.BranchCleanupOutcomeKind) (string, error) {
-	switch kind {
-	case worktreepb.BranchCleanupOutcomeKind_WORKTREE_BRANCH_CLEANUP_OUTCOME_NOT_REQUESTED:
-		return "not_requested", nil
-	case worktreepb.BranchCleanupOutcomeKind_WORKTREE_BRANCH_CLEANUP_OUTCOME_NOT_APPLICABLE:
-		return "not_applicable", nil
-	case worktreepb.BranchCleanupOutcomeKind_WORKTREE_BRANCH_CLEANUP_OUTCOME_DELETED:
-		return "deleted", nil
-	case worktreepb.BranchCleanupOutcomeKind_WORKTREE_BRANCH_CLEANUP_OUTCOME_RETAINED:
-		return "retained", nil
-	default:
-		return "", fmt.Errorf("unsupported worktree branch cleanup outcome %s", kind)
 	}
 }
 
