@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"core/server/metadata"
-	"core/shared/clientui"
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/worktreecontract"
 )
 
 func TestDeleteWorktreeRequiresExplicitForceForDirtyTarget(t *testing.T) {
@@ -19,7 +19,7 @@ func TestDeleteWorktreeRequiresExplicitForceForDirtyTarget(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, created.WorktreeID))
-	var precondition *serverapi.WorktreeDeletePreconditionError
+	var precondition *worktreecontract.DeletePreconditionError
 	if !errors.As(err, &precondition) {
 		t.Fatalf("delete error = %v, want dirty precondition", err)
 	}
@@ -28,14 +28,14 @@ func TestDeleteWorktreeRequiresExplicitForceForDirtyTarget(t *testing.T) {
 func TestDeleteWorktreeRechecksDirtyStateAfterCleanPreview(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-preview-race-dirty")
-	preview, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
-		SessionID: env.session.Meta().SessionID,
+	preview, err := env.service.PreviewWorktreeDelete(env.ctx, &worktreepb.DeletePreviewRequest{
+		SessionId: env.session.Meta().SessionID,
 		Selector:  created.WorktreeID,
 	})
 	if err != nil {
 		t.Fatalf("PreviewWorktreeDelete: %v", err)
 	}
-	if preview.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+	if preview.Cleanliness.Kind != worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN {
 		t.Fatalf("preview cleanliness = %+v, want clean", preview.Cleanliness)
 	}
 	if err := os.WriteFile(filepath.Join(created.CanonicalRoot, "dirty-after-preview.txt"), []byte("dirty"), 0o644); err != nil {
@@ -43,11 +43,11 @@ func TestDeleteWorktreeRechecksDirtyStateAfterCleanPreview(t *testing.T) {
 	}
 
 	_, err = env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, preview.DeletionSelector))
-	var precondition *serverapi.WorktreeDeletePreconditionError
+	var precondition *worktreecontract.DeletePreconditionError
 	if !errors.As(err, &precondition) ||
-		precondition.DirtyState.Kind != clientui.WorktreeDirtyStateDirty ||
-		precondition.DirtyState.DirtyFileCount == nil ||
-		*precondition.DirtyState.DirtyFileCount != 1 {
+		precondition.Details.DirtyState.Kind != worktreepb.DirtyStateKind_DIRTY_STATE_DIRTY ||
+		precondition.Details.DirtyState.DirtyFileCount == nil ||
+		*precondition.Details.DirtyState.DirtyFileCount != 1 {
 		t.Fatalf("delete error = %v, want typed dirty precondition", err)
 	}
 }
@@ -55,8 +55,8 @@ func TestDeleteWorktreeRechecksDirtyStateAfterCleanPreview(t *testing.T) {
 func TestDeleteWorktreeRechecksUnknownStateAfterCleanPreview(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-preview-race-unknown")
-	preview, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
-		SessionID: env.session.Meta().SessionID,
+	preview, err := env.service.PreviewWorktreeDelete(env.ctx, &worktreepb.DeletePreviewRequest{
+		SessionId: env.session.Meta().SessionID,
 		Selector:  created.WorktreeID,
 	})
 	if err != nil {
@@ -69,10 +69,10 @@ func TestDeleteWorktreeRechecksUnknownStateAfterCleanPreview(t *testing.T) {
 	})
 
 	_, err = env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, preview.DeletionSelector))
-	var precondition *serverapi.WorktreeDeletePreconditionError
+	var precondition *worktreecontract.DeletePreconditionError
 	if !errors.As(err, &precondition) ||
-		precondition.DirtyState.Kind != clientui.WorktreeDirtyStateUnknown ||
-		precondition.DirtyState.UnknownCause == nil {
+		precondition.Details.DirtyState.Kind != worktreepb.DirtyStateKind_DIRTY_STATE_UNKNOWN ||
+		precondition.Details.DirtyState.UnknownCause == nil {
 		t.Fatalf("delete error = %v, want typed unknown precondition", err)
 	}
 }
@@ -103,12 +103,12 @@ func TestDeleteWorktreeForceDeletesUnmergedBranch(t *testing.T) {
 	runGit(t, created.CanonicalRoot, "commit", "-m", "unmerged branch change")
 
 	request := worktreeDeleteRequest(env, created.WorktreeID)
-	request.BranchCleanupPolicy = serverapi.WorktreeBranchCleanupModeDeleteForce
+	request.BranchCleanupPolicy = worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_FORCE
 	result, err := env.service.DeleteWorktree(env.ctx, request)
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if result.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
+	if result.Cleanup.Kind != worktreepb.BranchCleanupOutcomeKind_WORKTREE_BRANCH_CLEANUP_OUTCOME_DELETED {
 		t.Fatalf("DeleteWorktree result = %+v, want deleted branch", result)
 	}
 	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, created.BranchName); err != nil || exists {
@@ -152,23 +152,23 @@ func TestMissingWorktreeDeletePreviewIsCleanAndPreservesLeftoverRoot(t *testing.
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
 
-	preview, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
-		SessionID: env.session.Meta().SessionID,
+	preview, err := env.service.PreviewWorktreeDelete(env.ctx, &worktreepb.DeletePreviewRequest{
+		SessionId: env.session.Meta().SessionID,
 		Selector:  record.ID,
 	})
 	if err != nil {
 		t.Fatalf("PreviewWorktreeDelete: %v", err)
 	}
-	if preview.Worktree.Variant != serverapi.WorktreeTopologyVariantMissing ||
+	if preview.Worktree.GetMissing() == nil ||
 		preview.DeletionSelector != record.ID ||
-		preview.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+		preview.Cleanliness.Kind != worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN {
 		t.Fatalf("missing preview = %+v, want clean ID-bound preview", preview)
 	}
 
-	result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		SessionID:           env.session.Meta().SessionID,
+	result, err := env.service.DeleteWorktree(env.ctx, &worktreepb.DeleteRequest{
+		SessionId:           env.session.Meta().SessionID,
 		Selector:            preview.DeletionSelector,
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+		BranchCleanupPolicy: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_RETAIN,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)

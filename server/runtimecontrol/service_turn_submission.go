@@ -212,9 +212,6 @@ func (s *Service) submitUserTurn(
 			}
 		}
 	}
-	if errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
-		err = errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
-	}
 	if attempt.Accepted() {
 		s.recordAcceptedUserTurnHistory(request, projection)
 	}

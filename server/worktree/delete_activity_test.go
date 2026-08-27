@@ -20,9 +20,11 @@ import (
 	"core/server/sessionruntime"
 	"core/server/tools"
 	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 type deleteInFlightStartLifecycle struct {
@@ -140,7 +142,7 @@ type deleteTargetState struct {
 }
 
 type deleteActivityResult struct {
-	result serverapi.WorktreeDeleteResult
+	result *worktreepb.DeleteSuccess
 	err    error
 }
 
@@ -286,7 +288,7 @@ func TestDeleteWorktreeRejectsInFlightStartAndCompletesUnrelatedWorktree(t *test
 	busyDeleted := deleteServiceTestWorktree(env, busy.WorktreeID)
 	select {
 	case result := <-busyDeleted:
-		if !errors.Is(result.err, serverapi.ErrWorktreeBlocked) {
+		if !errors.Is(result.err, worktreecontract.ErrWorktreeBlocked) {
 			t.Fatalf("DeleteWorktree busy target = %+v, %v; want ErrWorktreeBlocked", result.result, result.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -362,7 +364,7 @@ func TestDeleteWorktreeRejectsLiveRunAndCompletesUnrelatedWorktree(t *testing.T)
 	busyDeleted := deleteServiceTestWorktree(env, busy.WorktreeID)
 	select {
 	case result := <-busyDeleted:
-		if !errors.Is(result.err, serverapi.ErrWorktreeBlocked) {
+		if !errors.Is(result.err, worktreecontract.ErrWorktreeBlocked) {
 			t.Fatalf("DeleteWorktree busy target = %+v, %v; want ErrWorktreeBlocked", result.result, result.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -465,7 +467,7 @@ func TestDeleteWorktreeRejectsRunningReviewer(t *testing.T) {
 	busyDeleted := deleteServiceTestWorktree(env, busy.WorktreeID)
 	select {
 	case result := <-busyDeleted:
-		if !errors.Is(result.err, serverapi.ErrWorktreeBlocked) {
+		if !errors.Is(result.err, worktreecontract.ErrWorktreeBlocked) {
 			t.Fatalf("DeleteWorktree busy target = %+v, %v; want ErrWorktreeBlocked", result.result, result.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -501,7 +503,7 @@ func TestDeleteWorktreeRetiresIdleRuntimeAndRetargetsSessionBeforePhysicalRemova
 		delegate: env.service.git.runner,
 		barrier:  barrier,
 	})
-	deleted := testsetup.Start(func() (serverapi.WorktreeDeleteResult, error) {
+	deleted := testsetup.Start(func() (*worktreepb.DeleteSuccess, error) {
 		return env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, target.WorktreeID))
 	})
 	select {
@@ -581,7 +583,7 @@ func TestDeleteTaskWorktreeRejectsInFlightStartUnchanged(t *testing.T) {
 	}()
 	select {
 	case err := <-deleted:
-		if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+		if !errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
 			t.Fatalf("DeleteTaskWorktree error = %v, want ErrWorktreeBlocked", err)
 		}
 	case <-time.After(3 * time.Second):
@@ -640,7 +642,7 @@ func TestDeleteWorktreeCurrentTargetForceDeletesBranch(t *testing.T) {
 	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
 
 	request := worktreeDeleteRequest(env, target.WorktreeID)
-	request.BranchCleanupPolicy = serverapi.WorktreeBranchCleanupModeDeleteForce
+	request.BranchCleanupPolicy = worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_FORCE
 	_, err := env.service.DeleteWorktree(env.ctx, request)
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
@@ -658,11 +660,11 @@ func TestDeleteWorktreeRechecksDirtyStateBeforeRemoval(t *testing.T) {
 	tests := []struct {
 		name              string
 		secondStatusError error
-		wantKind          clientui.WorktreeDirtyStateKind
+		wantKind          worktreepb.DirtyStateKind
 		wantCount         int
 	}{
-		{name: "dirty", wantKind: clientui.WorktreeDirtyStateDirty, wantCount: 1},
-		{name: "unknown", secondStatusError: errors.New("status inspection failed"), wantKind: clientui.WorktreeDirtyStateUnknown},
+		{name: "dirty", wantKind: worktreepb.DirtyStateKind_DIRTY_STATE_DIRTY, wantCount: 1},
+		{name: "unknown", secondStatusError: errors.New("status inspection failed"), wantKind: worktreepb.DirtyStateKind_DIRTY_STATE_UNKNOWN},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -670,15 +672,15 @@ func TestDeleteWorktreeRechecksDirtyStateBeforeRemoval(t *testing.T) {
 			target := mustCreateWorktree(t, env, "feature/delete-scheduled-race-"+test.name)
 			updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
 			state := captureDeleteTargetState(t, env, env.session.Meta().SessionID, target)
-			preview, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
-				SessionID: env.session.Meta().SessionID,
+			preview, err := env.service.PreviewWorktreeDelete(env.ctx, &worktreepb.DeletePreviewRequest{
+				SessionId: env.session.Meta().SessionID,
 				Selector:  target.WorktreeID,
 			})
 			if err != nil {
 				t.Fatalf("PreviewWorktreeDelete: %v", err)
 			}
-			if preview.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
-				t.Fatalf("preview cleanliness = %+v, want clean", preview.Cleanliness)
+			if preview.GetCleanliness().GetKind() != worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN {
+				t.Fatalf("preview cleanliness = %+v, want clean", preview.GetCleanliness())
 			}
 
 			runner := newBlockingDeleteStatusRunner(test.secondStatusError)
@@ -706,15 +708,15 @@ func TestDeleteWorktreeRechecksDirtyStateBeforeRemoval(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("DeleteWorktree did not return after cleanliness check")
 			}
-			var precondition *serverapi.WorktreeDeletePreconditionError
+			var precondition *worktreecontract.DeletePreconditionError
 			if !errors.As(result.err, &precondition) ||
-				precondition.DirtyState.Kind != test.wantKind {
+				precondition.Details.GetDirtyState().GetKind() != test.wantKind {
 				t.Fatalf("DeleteWorktree = %+v, %v; want typed %s precondition", result.result, result.err, test.wantKind)
 			}
 			if test.wantCount != 0 {
-				if precondition.DirtyState.DirtyFileCount == nil ||
-					*precondition.DirtyState.DirtyFileCount != test.wantCount {
-					t.Fatalf("dirty precondition = %+v, want count %d", precondition.DirtyState, test.wantCount)
+				if precondition.Details.GetDirtyState().DirtyFileCount == nil ||
+					precondition.Details.GetDirtyState().GetDirtyFileCount() != int32(test.wantCount) {
+					t.Fatalf("dirty precondition = %+v, want count %d", precondition.Details.GetDirtyState(), test.wantCount)
 				}
 			}
 			state.assertUnchanged(t, env, env.session.Meta().SessionID, target.WorktreeID)

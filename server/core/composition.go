@@ -38,11 +38,10 @@ import (
 	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-	"core/shared/workflowcontract"
-	"core/shared/worktreecontract"
 )
 
 func New(cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport) (*Core, error) {
@@ -442,15 +441,15 @@ func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Co
 	var revision worktree.GitRevision
 	var err error
 	switch req.Selection.Mode {
-	case workflowcontract.ExecutionTargetModeHead:
+	case workflow.ExecutionTargetModeHead:
 		revision, err = i.git.ResolveHEAD(ctx, req.SourceWorkspaceRoot)
-	case workflowcontract.ExecutionTargetModeDefaultBranch:
+	case workflow.ExecutionTargetModeDefaultBranch:
 		var defaultBranch worktree.GitDefaultBranch
 		defaultBranch, err = i.git.ResolveDefaultBranch(ctx, req.SourceWorkspaceRoot)
 		if err == nil {
 			revision, err = i.git.ResolveRevision(ctx, req.SourceWorkspaceRoot, defaultBranch.Ref)
 		}
-	case workflowcontract.ExecutionTargetModeCustomRef:
+	case workflow.ExecutionTargetModeCustomRef:
 		if req.Selection.CustomRef == nil {
 			return workflowstore.ExecutionTargetSnapshot{}, errors.New("custom execution target ref is required")
 		}
@@ -479,7 +478,7 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 	if err := req.Snapshot.Validate(); err != nil {
 		return workflowsvc.ExecutionTargetMaterialization{}, err
 	}
-	if req.Snapshot.Mode == workflowcontract.ExecutionTargetModeNone {
+	if req.Snapshot.Mode == workflow.ExecutionTargetModeNone {
 		prepared, err := i.service.PrepareTaskExecutionRoot(ctx, worktree.TaskExecutionRootPreparationRequest{
 			TaskID: req.TaskID, SetupOperationID: req.SetupOperationID, SetupRequirement: req.SetupRequirement,
 		})
@@ -505,9 +504,9 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 		}
 		return workflowsvc.ExecutionTargetMaterialization{RetainedPreviousWorktree: prepared.RetainedPreviousWorktree}, err
 	}
-	var retainedWorktree *worktreecontract.TopologyEntry
+	var retainedWorktree *worktreepb.RegisteredFacts
 	if prepared.Materialization != nil {
-		retainedWorktree = &prepared.Materialization.Worktree
+		retainedWorktree = prepared.Materialization.Worktree.GetRegistered()
 	}
 	return workflowsvc.ExecutionTargetMaterialization{
 		RetainedRoot:             prepared.Root.Managed,

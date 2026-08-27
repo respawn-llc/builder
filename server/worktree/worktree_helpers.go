@@ -11,7 +11,8 @@ import (
 	"core/server/metadata"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/worktreecontract"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTarget) error {
@@ -24,24 +25,50 @@ func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTa
 	return nil
 }
 
-func contractSessionExecutionTarget(target clientui.SessionExecutionTarget) worktreecontract.SessionExecutionTarget {
-	var worktree *worktreecontract.SessionExecutionWorktreeTarget
+func contractSessionExecutionTarget(target clientui.SessionExecutionTarget) (*worktreepb.SessionExecutionTarget, error) {
+	workspaceAvailability, err := projectAvailability(target.WorkspaceAvailability)
+	if err != nil {
+		return nil, err
+	}
+	var worktree *worktreepb.SessionExecutionWorktreeTarget
 	if target.Worktree != nil {
-		worktree = &worktreecontract.SessionExecutionWorktreeTarget{
-			ID:           target.Worktree.ID,
+		availability, err := projectAvailability(clientui.ProjectAvailability(target.Worktree.Availability))
+		if err != nil {
+			return nil, err
+		}
+		worktree = &worktreepb.SessionExecutionWorktreeTarget{
+			Id:           target.Worktree.ID,
 			Name:         target.Worktree.Name,
 			Root:         target.Worktree.Root,
-			Availability: target.Worktree.Availability,
+			Availability: availability,
 		}
 	}
-	return worktreecontract.SessionExecutionTarget{
-		WorkspaceID:           target.WorkspaceID,
+	return &worktreepb.SessionExecutionTarget{
+		WorkspaceId:           target.WorkspaceID,
 		WorkspaceName:         target.WorkspaceName,
 		WorkspaceRoot:         target.WorkspaceRoot,
-		WorkspaceAvailability: worktreecontract.ProjectAvailability(target.WorkspaceAvailability),
+		WorkspaceAvailability: workspaceAvailability,
 		Worktree:              worktree,
 		CwdRelpath:            target.CwdRelpath,
 		EffectiveWorkdir:      target.EffectiveWorkdir,
+	}, nil
+}
+
+func projectAvailability(value clientui.ProjectAvailability) (projectpb.ProjectAvailability, error) {
+	switch value {
+	case clientui.ProjectAvailabilityAvailable:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE, nil
+	case clientui.ProjectAvailabilityMissing:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_MISSING, nil
+	case clientui.ProjectAvailabilityInaccessible:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_INACCESSIBLE, nil
+	case clientui.ProjectAvailabilityUnlinked:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_UNLINKED, nil
+	default:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_UNSPECIFIED, fmt.Errorf(
+			"project availability %q is unsupported",
+			value,
+		)
 	}
 }
 
@@ -70,11 +97,19 @@ func worktreeNamedBranch(worktree GitWorktree) (string, bool) {
 }
 
 type PathInspection struct {
-	Availability worktreecontract.PathAvailability
+	Availability pathAvailability
 	Directory    bool
 }
 
-func PathAvailability(path string) worktreecontract.PathAvailability {
+type pathAvailability string
+
+const (
+	pathAvailabilityAvailable    pathAvailability = "available"
+	pathAvailabilityMissing      pathAvailability = "missing"
+	pathAvailabilityInaccessible pathAvailability = "inaccessible"
+)
+
+func PathAvailability(path string) pathAvailability {
 	return InspectPath(path).Availability
 }
 
@@ -82,15 +117,15 @@ func InspectPath(path string) PathInspection {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return PathInspection{Availability: worktreecontract.PathAvailabilityMissing}
+			return PathInspection{Availability: pathAvailabilityMissing}
 		}
-		return PathInspection{Availability: worktreecontract.PathAvailabilityInaccessible}
+		return PathInspection{Availability: pathAvailabilityInaccessible}
 	}
 	if !info.IsDir() {
-		return PathInspection{Availability: worktreecontract.PathAvailabilityInaccessible}
+		return PathInspection{Availability: pathAvailabilityInaccessible}
 	}
 	return PathInspection{
-		Availability: worktreecontract.PathAvailabilityAvailable,
+		Availability: pathAvailabilityAvailable,
 		Directory:    true,
 	}
 }

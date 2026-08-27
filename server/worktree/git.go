@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"core/shared/config"
-	"core/shared/worktreecontract"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 var errGitTargetNotFound = errors.New("git target not found")
@@ -1001,34 +1001,35 @@ func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRo
 	return spec.CreateBranch, nil
 }
 
-func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (worktreecontract.DirtyState, error) {
+func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (*worktreepb.DirtyState, error) {
 	if i == nil {
-		return worktreecontract.DirtyState{}, fmt.Errorf("git inspector is required")
+		return nil, fmt.Errorf("git inspector is required")
 	}
 	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
 	if err != nil {
-		return worktreecontract.DirtyState{}, err
+		return nil, err
 	}
 	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, "status", "--porcelain=v1", "-z")
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return worktreecontract.DirtyState{}, ctxErr
+			return nil, ctxErr
 		}
 		cause := err.Error()
-		return worktreecontract.DirtyState{
-			Kind:         worktreecontract.DirtyStateUnknown,
+		return &worktreepb.DirtyState{
+			Kind:         worktreepb.DirtyStateKind_DIRTY_STATE_UNKNOWN,
 			UnknownCause: &cause,
 		}, nil
 	}
 	count := countPorcelainStatusEntries(output)
 	if count == 0 {
-		return worktreecontract.DirtyState{
-			Kind: worktreecontract.DirtyStateClean,
+		return &worktreepb.DirtyState{
+			Kind: worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN,
 		}, nil
 	}
-	return worktreecontract.DirtyState{
-		Kind:           worktreecontract.DirtyStateDirty,
-		DirtyFileCount: &count,
+	dirtyFileCount := int32(count)
+	return &worktreepb.DirtyState{
+		Kind:           worktreepb.DirtyStateKind_DIRTY_STATE_DIRTY,
+		DirtyFileCount: &dirtyFileCount,
 	}, nil
 }
 

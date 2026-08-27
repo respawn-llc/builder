@@ -181,11 +181,6 @@ func (r gatewayRegistration) BinarySubscriptionBinding(operation string) (gatewa
 	return binding, exists
 }
 
-type gatewayBinarySubscriptionAssociations struct {
-	event      protoapi.Operation
-	completion protoapi.Operation
-}
-
 func (r gatewayRegistration) validateBinarySubscriptionBinding(
 	operation protoapi.Operation,
 	binding gatewayBinarySubscriptionBinding,
@@ -206,7 +201,7 @@ func (r gatewayRegistration) validateBinarySubscriptionBinding(
 	if binding.failure == nil {
 		return fmt.Errorf("binary subscription binding %q has no failure mapper", operation.Name)
 	}
-	if binding.event == nil || binding.next == nil {
+	if binding.event == nil {
 		return fmt.Errorf("binary subscription binding %q has no event encoder", operation.Name)
 	}
 	if binding.completion == nil || binding.complete == nil {
@@ -241,69 +236,22 @@ func (r gatewayRegistration) validateBinarySubscriptionBinding(
 	if start == nil || start.ProtoReflect().Descriptor().FullName() != operation.Descriptor.Output().FullName() {
 		return fmt.Errorf("binary subscription binding %q has a mismatched start-result type", operation.Name)
 	}
-	associations, err := r.binarySubscriptionAssociations(binding)
+	associations, err := protoapi.ResolveSubscriptionOperations(operation.Descriptor)
 	if err != nil {
 		return err
 	}
-	if err := validateBinaryNotificationAssociation(operation.Name, "event", associations.event, binding.event()); err != nil {
+	if err := validateBinaryNotificationAssociation(operation.Name, "event", associations.Event, binding.event()); err != nil {
 		return err
 	}
 	if err := validateBinaryNotificationAssociation(
 		operation.Name,
 		"completion",
-		associations.completion,
+		associations.Completion,
 		binding.completion(),
 	); err != nil {
 		return err
 	}
 	return nil
-}
-
-func (r gatewayRegistration) binarySubscriptionAssociations(
-	binding gatewayBinarySubscriptionBinding,
-) (gatewayBinarySubscriptionAssociations, error) {
-	event, err := r.operationForAssociation(binding.operation.Name, "event", binding.operation.Options.Event)
-	if err != nil {
-		return gatewayBinarySubscriptionAssociations{}, err
-	}
-	completion, err := r.operationForAssociation(
-		binding.operation.Name,
-		"completion",
-		binding.operation.Options.Completion,
-	)
-	if err != nil {
-		return gatewayBinarySubscriptionAssociations{}, err
-	}
-	return gatewayBinarySubscriptionAssociations{event: event, completion: completion}, nil
-}
-
-func (r gatewayRegistration) operationForAssociation(
-	owner string,
-	role string,
-	association *sharedpb.OperationAssociation,
-) (protoapi.Operation, error) {
-	if association == nil {
-		return protoapi.Operation{}, fmt.Errorf("binary subscription binding %q has no %s association", owner, role)
-	}
-	name, err := protoapi.ActiveOperationName(association.Package, association.Service, association.Method)
-	if err != nil {
-		return protoapi.Operation{}, fmt.Errorf(
-			"binary subscription binding %q %s association: %w",
-			owner,
-			role,
-			err,
-		)
-	}
-	operation, exists := r.operations[name]
-	if !exists {
-		return protoapi.Operation{}, fmt.Errorf(
-			"binary subscription binding %q %s association %q has no descriptor operation",
-			owner,
-			role,
-			name,
-		)
-	}
-	return operation, nil
 }
 
 func validateBinaryNotificationAssociation(
@@ -343,14 +291,14 @@ func validateBinaryNotificationAssociation(
 func (r gatewayRegistration) binarySubscriptionNotificationOwners(operation string) (int, error) {
 	owners := 0
 	for _, binding := range r.subscriptions {
-		associations, err := r.binarySubscriptionAssociations(binding)
+		associations, err := protoapi.ResolveSubscriptionOperations(binding.operation.Descriptor)
 		if err != nil {
 			return 0, err
 		}
-		if associations.event.Name == operation {
+		if associations.Event.Name == operation {
 			owners++
 		}
-		if associations.completion.Name == operation {
+		if associations.Completion.Name == operation {
 			owners++
 		}
 	}
@@ -361,15 +309,15 @@ func (r gatewayRegistration) BinarySubscriptionNotification(
 	operation string,
 ) (protoapi.Operation, bool) {
 	for _, binding := range r.subscriptions {
-		associations, err := r.binarySubscriptionAssociations(binding)
+		associations, err := protoapi.ResolveSubscriptionOperations(binding.operation.Descriptor)
 		if err != nil {
 			continue
 		}
 		switch operation {
-		case associations.event.Name:
-			return associations.event, true
-		case associations.completion.Name:
-			return associations.completion, true
+		case associations.Event.Name:
+			return associations.Event, true
+		case associations.Completion.Name:
+			return associations.Completion, true
 		}
 	}
 	return protoapi.Operation{}, false

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/shared/worktreecontract"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 type canceledGitCommandRunner struct{}
@@ -255,7 +255,7 @@ func TestGitInspectorProbeDirtyStateCountsMixedStatusWithoutDuplicateRenameOrCop
 	if err != nil {
 		t.Fatalf("ProbeDirtyState: %v", err)
 	}
-	if state.Kind != worktreecontract.DirtyStateDirty || state.DirtyFileCount == nil || *state.DirtyFileCount != 4 {
+	if state.Kind != worktreepb.DirtyStateKind_DIRTY_STATE_DIRTY || state.DirtyFileCount == nil || *state.DirtyFileCount != 4 {
 		t.Fatalf("dirty state = %+v, want dirty count 4", state)
 	}
 	if got, want := runner.args, []string{"status", "--porcelain=v1", "-z"}; !slices.Equal(got, want) {
@@ -270,19 +270,19 @@ func TestGitInspectorProbeDirtyStateUsesTypedCleanDirtyAndUnknownResults(t *test
 	root := t.TempDir()
 	clean := NewGitInspector(&stubGitCommandRunner{})
 	state, err := clean.ProbeDirtyState(context.Background(), root)
-	if err != nil || state.Kind != worktreecontract.DirtyStateClean || state.DirtyFileCount != nil {
+	if err != nil || state.Kind != worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN || state.DirtyFileCount != nil {
 		t.Fatalf("clean state = %+v err=%v", state, err)
 	}
 
 	dirty := NewGitInspector(&stubGitCommandRunner{output: []byte(" M changed.go\x00")})
 	state, err = dirty.ProbeDirtyState(context.Background(), root)
-	if err != nil || state.Kind != worktreecontract.DirtyStateDirty || state.DirtyFileCount == nil || *state.DirtyFileCount != 1 {
+	if err != nil || state.Kind != worktreepb.DirtyStateKind_DIRTY_STATE_DIRTY || state.DirtyFileCount == nil || *state.DirtyFileCount != 1 {
 		t.Fatalf("dirty state = %+v err=%v", state, err)
 	}
 
 	unknown := NewGitInspector(&stubGitCommandRunner{err: errors.New("status unavailable"), exitCode: 1})
 	state, err = unknown.ProbeDirtyState(context.Background(), root)
-	if err != nil || state.Kind != worktreecontract.DirtyStateUnknown || state.DirtyFileCount != nil || state.UnknownCause == nil {
+	if err != nil || state.Kind != worktreepb.DirtyStateKind_DIRTY_STATE_UNKNOWN || state.DirtyFileCount != nil || state.UnknownCause == nil {
 		t.Fatalf("unknown state = %+v err=%v", state, err)
 	}
 }

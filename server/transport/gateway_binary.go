@@ -190,7 +190,11 @@ func registerGatewayBinaryUnary[
 			if !ok {
 				return nil
 			}
-			return validationFailure[0](request, err)
+			detail := validationFailure[0](request, err)
+			if detail == nil {
+				return nil
+			}
+			return gatewayBinaryFailureResult(method, detail)
 		}
 	}
 	bindings[operation.Name] = binding

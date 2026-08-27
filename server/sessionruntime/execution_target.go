@@ -14,6 +14,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 type ActiveRuntimeMaintenance struct {
@@ -129,7 +130,7 @@ func (a *Authority) RunWorktreeTransition(
 		})
 		if errors.Is(err, runtime.ErrReviewerRunning) ||
 			errors.Is(err, runtime.ErrWorktreeDeleteBlockedByQueuedWork) {
-			err = errors.Join(serverapi.ErrWorktreeBlocked, err)
+			err = errors.Join(worktreecontract.ErrWorktreeBlocked, err)
 		}
 		return retire, err
 	})

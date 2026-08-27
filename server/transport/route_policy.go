@@ -16,7 +16,6 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/serverapi"
-	"core/shared/worktreecontract"
 )
 
 type routePolicyExecutor struct {
@@ -336,12 +335,7 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 }
 
 func routeProjectWorkspaceBinding(params any) (string, string, bool) {
-	switch request := params.(type) {
-	case worktreecontract.WorkspaceListRequest:
-		return request.ProjectID, request.WorkspaceID, true
-	default:
-		return "", "", false
-	}
+	return "", "", false
 }
 
 func routeSessionID(params any) (string, bool) {
@@ -372,24 +366,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.SessionRuntimeReleaseRequest:
 		return p.Attachment.SessionID, true
-	case worktreecontract.ListRequest:
-		return p.SessionID, true
-	case worktreecontract.StatusRequest:
-		return p.SessionID, true
-	case worktreecontract.SelectorResolveRequest:
-		return p.SessionID, true
-	case worktreecontract.DeletePreviewRequest:
-		return p.SessionID, true
-	case worktreecontract.CreateTargetResolveRequest:
-		return p.SessionID, true
-	case worktreecontract.CreateRequest:
-		return p.SessionID, true
-	case worktreecontract.EnterRequest:
-		return p.SessionID, true
-	case worktreecontract.LeaveRequest:
-		return p.SessionID, true
-	case worktreecontract.DeleteRequest:
-		return p.SessionID, true
 	case serverapi.RuntimeSetSessionNameRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeSetThinkingLevelRequest:

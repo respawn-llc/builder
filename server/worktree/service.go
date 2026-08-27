@@ -27,12 +27,12 @@ import (
 	"core/shared/protoapi"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
 
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const setupDiagnosticLimitBytes = 16 * 1024
@@ -81,30 +81,27 @@ type syncedWorktree struct {
 	git    GitWorktree
 }
 
-func (s *Service) evaluateDeleteCleanliness(ctx context.Context, entry worktreecontract.TopologyEntry) (worktreecontract.DirtyState, error) {
+func (s *Service) evaluateDeleteCleanliness(ctx context.Context, entry *worktreepb.TopologyEntry) (*worktreepb.DirtyState, error) {
 	if s == nil || s.git == nil {
-		return worktreecontract.DirtyState{}, errors.New("worktree service dependencies are required")
+		return nil, errors.New("worktree service dependencies are required")
 	}
-	if err := entry.Validate(); err != nil {
-		return worktreecontract.DirtyState{}, err
-	}
-	if entry.Variant == worktreecontract.TopologyVariantMissing {
-		return worktreecontract.DirtyState{Kind: worktreecontract.DirtyStateClean}, nil
+	if entry.GetMissing() != nil {
+		return &worktreepb.DirtyState{Kind: worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN}, nil
 	}
 	root := topologyRoot(entry)
 	if strings.TrimSpace(root) == "" {
-		return worktreecontract.DirtyState{}, errors.New("worktree topology root is required")
+		return nil, errors.New("worktree topology root is required")
 	}
 	dirtyState, err := s.git.ProbeDirtyState(ctx, root)
 	if err == nil {
 		return dirtyState, nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return worktreecontract.DirtyState{}, err
+		return nil, err
 	}
 	cause := err.Error()
-	return worktreecontract.DirtyState{
-		Kind:         worktreecontract.DirtyStateUnknown,
+	return &worktreepb.DirtyState{
+		Kind:         worktreepb.DirtyStateKind_DIRTY_STATE_UNKNOWN,
 		UnknownCause: &cause,
 	}, nil
 }
@@ -182,7 +179,7 @@ type TaskExecutionRootPreparationRequest struct {
 type TaskExecutionRootPreparation struct {
 	Root                     workflowstore.ExecutionRoot
 	SetupResult              *WorktreeSetupResult
-	RetainedPreviousWorktree *worktreecontract.RetainedPreviousWorktree
+	RetainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
 	Materialization          *TaskWorktreeMaterialization
 }
 
@@ -230,35 +227,35 @@ func (e *LockedTaskWorktreeError) Unwrap() error {
 }
 
 type TaskWorktreeMaterialization struct {
-	Worktree      worktreecontract.TopologyEntry
+	Worktree      *worktreepb.TopologyEntry
 	Created       bool
 	CreatedBranch bool
 	SetupResult   *WorktreeSetupResult
 }
 
 type WorktreeSetupResult struct {
-	Completed   *worktreecontract.SetupCompleted
-	NotRequired *worktreecontract.SetupNotRequired
-	Failed      *worktreecontract.SetupFailed
+	Completed   *worktreepb.SetupCompleted
+	NotRequired *worktreepb.SetupNotRequired
+	Failed      *worktreepb.SetupFailed
 }
 
 func (r WorktreeSetupResult) Validate() error {
 	payloadCount := 0
 	if r.Completed != nil {
 		payloadCount++
-		if err := r.Completed.Validate(); err != nil {
+		if err := protoapi.Validate(r.Completed); err != nil {
 			return err
 		}
 	}
 	if r.NotRequired != nil {
 		payloadCount++
-		if err := r.NotRequired.Validate(); err != nil {
+		if err := protoapi.Validate(r.NotRequired); err != nil {
 			return err
 		}
 	}
 	if r.Failed != nil {
 		payloadCount++
-		if err := r.Failed.Validate(); err != nil {
+		if err := protoapi.Validate(r.Failed); err != nil {
 			return err
 		}
 	}
@@ -289,7 +286,7 @@ func (b boundManagedTaskWorktree) setupExecution(settings *config.WorktreeSettin
 		WorktreeRoot:        b.record.CanonicalRoot,
 		ScriptPayload:       b.setupPayload,
 		CreatedBranch:       b.materialization.CreatedBranch,
-		RetainedWorktree:    &b.materialization.Worktree,
+		RetainedWorktree:    b.materialization.Worktree,
 		Recreation: &setupRecreationFacts{
 			RecordedCheckout:      recordedCheckout,
 			CreationBaseCommitOID: b.record.CreationBaseCommitOID,
@@ -543,7 +540,7 @@ func (s *Service) PrepareTaskExecutionRoot(ctx context.Context, req TaskExecutio
 		SourceWorkspaceID:   workspace.WorkspaceID,
 		SourceWorkspaceRoot: workspace.RootPath,
 	}
-	var previous *worktreecontract.RetainedPreviousWorktree
+	var previous *worktreepb.RetainedPreviousWorktree
 	var existingRecord *metadata.WorktreeRecord
 	if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
 		record, err := s.metadata.GetWorktreeRecordByID(ctx, strings.TrimSpace(task.ManagedWorktreeID.String))
@@ -583,7 +580,7 @@ func (s *Service) PrepareTaskExecutionRoot(ctx context.Context, req TaskExecutio
 	if err != nil {
 		var retained *worktreecontract.SetupRetainedError
 		if errors.As(err, &retained) && previous != nil {
-			retained.RetainedPreviousWorktree = previous
+			retained.Details.RetainedPreviousWorktree = previous
 		}
 		return prepared, err
 	}
@@ -620,7 +617,7 @@ func (s *Service) prepareManagedTaskWorktree(
 			}
 			if setupRequirement == worktreecontract.SetupRequirementAlreadyCompleted {
 				bound.materialization.SetupResult = &WorktreeSetupResult{
-					Completed: &worktreecontract.SetupCompleted{},
+					Completed: &worktreepb.SetupCompleted{},
 				}
 				return bound.materialization, nil
 			}
@@ -663,7 +660,7 @@ func (s *Service) prepareManagedTaskWorktree(
 func taskExecutionRootPreparation(
 	root workflowstore.ExecutionRoot,
 	materialized TaskWorktreeMaterialization,
-	previous *worktreecontract.RetainedPreviousWorktree,
+	previous *worktreepb.RetainedPreviousWorktree,
 ) TaskExecutionRootPreparation {
 	if previous != nil && materialized.SetupResult != nil {
 		switch {
@@ -680,11 +677,11 @@ func taskExecutionRootPreparation(
 		SetupResult:              materialized.SetupResult,
 		RetainedPreviousWorktree: previous,
 	}
-	if materialized.Worktree.Registered != nil {
+	if materialized.Worktree.GetRegistered() != nil {
 		prepared.Materialization = &materialized
 		prepared.Root.Managed = &workflowstore.ManagedExecutionRoot{
-			WorktreeID: materialized.Worktree.Registered.Kent.WorktreeID,
-			Root:       materialized.Worktree.Registered.Git.CanonicalRoot,
+			WorktreeID: materialized.Worktree.GetRegistered().GetKent().GetWorktreeId(),
+			Root:       materialized.Worktree.GetRegistered().GetGit().GetCanonicalRoot(),
 		}
 	}
 	return prepared
@@ -695,7 +692,7 @@ func (s *Service) releaseProvisionalTaskWorktree(
 	task sqlitegen.TaskRecord,
 	workspace taskSourceWorkspace,
 	record metadata.WorktreeRecord,
-) (*worktreecontract.RetainedPreviousWorktree, error) {
+) (*worktreepb.RetainedPreviousWorktree, error) {
 	recorded, err := worktreeGitMetadataFromRecord(record)
 	if err != nil {
 		return nil, err
@@ -715,7 +712,7 @@ func (s *Service) releaseProvisionalTaskWorktree(
 		if err := s.unbindTaskManagedWorktree(ctx, task); err != nil {
 			return nil, err
 		}
-		return &worktreecontract.RetainedPreviousWorktree{Worktree: topology}, nil
+		return &worktreepb.RetainedPreviousWorktree{Worktree: topology.GetRegistered()}, nil
 	}
 	branchName, named := worktreeNamedBranch(live)
 	if record.CreatedBranch && !named {
@@ -825,8 +822,8 @@ func isManagedExecutionTargetMode(mode sql.NullString) bool {
 	if !mode.Valid {
 		return false
 	}
-	switch workflowcontract.ExecutionTargetMode(mode.String) {
-	case workflowcontract.ExecutionTargetModeHead, workflowcontract.ExecutionTargetModeDefaultBranch, workflowcontract.ExecutionTargetModeCustomRef:
+	switch workflow.ExecutionTargetMode(mode.String) {
+	case workflow.ExecutionTargetModeHead, workflow.ExecutionTargetModeDefaultBranch, workflow.ExecutionTargetModeCustomRef:
 		return true
 	default:
 		return false
@@ -1335,9 +1332,10 @@ func (s *Service) runManagedTaskWorktreeSetupRecoveryWithSettings(
 			)
 		}
 		retainedErr, validationErr := worktreecontract.NewSetupRetainedError(
-			bound.materialization.Worktree,
+			bound.materialization.Worktree.GetRegistered(),
 			scriptPath,
 			result.Result.Failed.Diagnostic,
+			result.Result.Failed.RetainedPreviousWorktree,
 			result.Err,
 		)
 		if validationErr != nil {
@@ -1533,9 +1531,9 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("managed worktree %q is absent from projected topology: %w", worktreeID, worktreecontract.ErrWorktreeNotFound)
 	}
 	var target syncedWorktree
-	targetFound := entry.Variant == worktreecontract.TopologyVariantRegistered
+	targetFound := entry.GetRegistered() != nil
 	if targetFound {
-		gitEntry, err := gitWorktreeFromFacts(entry.Registered.Git)
+		gitEntry, err := gitWorktreeFromFacts(entry.GetRegistered().GetGit())
 		if err != nil {
 			return DeleteTaskWorktreeResponse{}, err
 		}
@@ -1547,7 +1545,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		if err != nil {
 			return DeleteTaskWorktreeResponse{}, err
 		}
-		forceRemoval = dirtyState.Kind != worktreecontract.DirtyStateClean
+		forceRemoval = dirtyState.Kind != worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN
 	}
 	retargetCompensation, err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
 		workspaceID:   record.WorkspaceID,
@@ -1677,64 +1675,113 @@ func (s *Service) taskSourceWorkspace(ctx context.Context, projectID string, sou
 	return taskSourceWorkspace{WorkspaceID: workspace.ID, RootPath: workspace.CanonicalRootPath}, nil
 }
 
-func (s *Service) ListWorktrees(ctx context.Context, req worktreecontract.ListRequest) (worktreecontract.ListResponse, error) {
-	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
+func (s *Service) ListWorktrees(ctx context.Context, req *worktreepb.ListRequest) (*worktreepb.ListSuccess, error) {
+	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionId)
 	if err != nil {
-		return worktreecontract.ListResponse{}, err
+		return nil, err
 	}
 	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
-		return worktreecontract.ListResponse{}, err
+		return nil, err
 	}
 	worktrees, err := projectWorktreeList(topology, &workspaceCtx.target)
 	if err != nil {
-		return worktreecontract.ListResponse{}, err
+		return nil, err
 	}
-	return worktreecontract.ListResponse{Target: contractSessionExecutionTarget(workspaceCtx.target), Worktrees: worktrees}, nil
+	target, err := contractSessionExecutionTarget(workspaceCtx.target)
+	if err != nil {
+		return nil, err
+	}
+	return &worktreepb.ListSuccess{Target: target, Worktrees: worktrees}, nil
 }
 
-func (s *Service) ListWorkspaceWorktrees(ctx context.Context, req worktreecontract.WorkspaceListRequest) (worktreecontract.WorkspaceListResponse, error) {
+func (s *Service) ListWorkspaceWorktrees(ctx context.Context, req *worktreepb.WorkspaceListRequest) (*worktreepb.WorkspaceListSuccess, error) {
 	if s == nil || s.metadata == nil {
-		return worktreecontract.WorkspaceListResponse{}, errors.New("worktree service metadata store is required")
+		return nil, errors.New("worktree service metadata store is required")
 	}
-	binding, err := s.metadata.LookupWorkspaceBindingByID(ctx, strings.TrimSpace(req.WorkspaceID))
+	binding, err := s.metadata.LookupWorkspaceBindingByID(ctx, strings.TrimSpace(req.WorkspaceId))
 	if err != nil {
-		return worktreecontract.WorkspaceListResponse{}, err
+		return nil, err
 	}
-	if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(req.ProjectID) {
-		return worktreecontract.WorkspaceListResponse{}, serverapi.ErrWorkspaceNotRegistered
+	if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(req.ProjectId) {
+		return nil, serverapi.ErrWorkspaceNotRegistered
 	}
 	topology, err := s.projectTopology(ctx, binding.WorkspaceID, binding.CanonicalRoot)
 	if err != nil {
-		return worktreecontract.WorkspaceListResponse{}, err
+		return nil, err
 	}
 	worktrees, err := projectWorktreeList(topology, nil)
 	if err != nil {
-		return worktreecontract.WorkspaceListResponse{}, err
+		return nil, err
 	}
-	return worktreecontract.WorkspaceListResponse{
-		WorkspaceID: binding.WorkspaceID,
+	return &worktreepb.WorkspaceListSuccess{
+		WorkspaceId: binding.WorkspaceID,
 		Worktrees:   worktrees,
 	}, nil
 }
 
-func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req worktreecontract.CreateTargetResolveRequest) (worktreecontract.CreateTargetResolveResponse, error) {
-	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
+func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req *worktreepb.CreateTargetResolveRequest) (*worktreepb.CreateTargetResolveSuccess, error) {
+	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionId)
 	if err != nil {
-		return worktreecontract.CreateTargetResolveResponse{}, err
+		return nil, err
 	}
 	resolution, err := s.git.ResolveCreateTarget(ctx, workspaceCtx.workspaceRoot, req.Target)
 	if err != nil {
-		return worktreecontract.CreateTargetResolveResponse{}, err
+		return nil, err
 	}
-	return worktreecontract.CreateTargetResolveResponse{Resolution: worktreecontract.CreateTargetResolution{
+	kind, err := createTargetResolutionKind(resolution.Kind)
+	if err != nil {
+		return nil, err
+	}
+	return &worktreepb.CreateTargetResolveSuccess{Resolution: &worktreepb.CreateTargetResolution{
 		Input:       resolution.Input,
-		Kind:        worktreecontract.CreateTargetResolutionKind(resolution.Kind),
-		ResolvedRef: resolution.ResolvedRef,
+		Kind:        kind,
+		ResolvedRef: nonblankPointer(resolution.ResolvedRef),
 	}}, nil
 }
 
-func (s *Service) CreateWorktree(ctx context.Context, req worktreecontract.CreateRequest) (resp worktreecontract.CreateResponse, err error) {
+func createTargetResolutionKind(kind CreateTargetResolutionKind) (worktreepb.CreateTargetResolutionKind, error) {
+	switch kind {
+	case CreateTargetResolutionKindNewBranch:
+		return worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH, nil
+	case CreateTargetResolutionKindExistingBranch:
+		return worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH, nil
+	case CreateTargetResolutionKindDetachedRef:
+		return worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_DETACHED_REF, nil
+	default:
+		return worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_UNSPECIFIED,
+			fmt.Errorf("worktree create target resolution kind %q is unsupported", kind)
+	}
+}
+
+func nonblankPointer(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
+func validateCreateErrorBoundary(err error, operation string, policy invariant.Policy) error {
+	contractErr := worktreecontract.ValidateCreateError(err, operation)
+	if contractErr == nil {
+		return nil
+	}
+	diagnostic := invariant.Diagnostic{
+		Scope: invariant.ScopeWorktreeContract,
+		Fields: map[invariant.Field]string{
+			invariant.FieldOperation:       strings.TrimSpace(operation),
+			invariant.FieldValidationCause: contractErr.Error(),
+		},
+	}
+	var typedContract *worktreecontract.CreateContractError
+	if errors.As(contractErr, &typedContract) && typedContract.Owner != nil {
+		diagnostic.Fields[invariant.FieldRawOwner] = string(*typedContract.Owner)
+	}
+	policy.Check(false, diagnostic)
+	return contractErr
+}
+
+func (s *Service) CreateWorktree(ctx context.Context, req *worktreepb.CreateRequest) (resp *worktreepb.CreateSuccess, err error) {
 	defer func() {
 		if err == nil {
 			return
@@ -1756,10 +1803,18 @@ func (s *Service) CreateWorktree(ctx context.Context, req worktreecontract.Creat
 		}
 		err = worktreecontract.NewCreateError(worktreecontract.CreateErrorOwnerForm, err.Error(), err)
 	}()
-	createSpec := normalizeCreateSpec(CreateSpec{BaseRef: req.BaseRef, CreateBranch: req.CreateBranch, BranchName: req.BranchName})
-	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
+	createSpec := normalizeCreateSpec(CreateSpec{
+		BaseRef:      req.GetSpec().GetBaseRef(),
+		CreateBranch: req.GetSpec().GetCreateBranch(),
+		BranchName:   req.GetSpec().GetBranchName(),
+	})
+	setupOperationID, err := worktreecontract.ParseSetupOperationID(req.SetupOperationId)
 	if err != nil {
-		return worktreecontract.CreateResponse{}, err
+		return nil, err
+	}
+	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionId)
+	if err != nil {
+		return nil, err
 	}
 	defer release()
 	cleanup := failedCreateCleanup{
@@ -1779,7 +1834,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req worktreecontract.Creat
 		resolved, resolveErr := s.git.ResolveRevisionCommit(ctx, workspaceCtx.workspaceRoot, createSpec.BaseRef)
 		if resolveErr != nil {
 			if errors.Is(resolveErr, context.Canceled) || errors.Is(resolveErr, context.DeadlineExceeded) {
-				return worktreecontract.CreateResponse{}, resolveErr
+				return nil, resolveErr
 			}
 			owner := worktreecontract.CreateErrorOwnerForm
 			var revisionErr *GitRevisionResolutionError
@@ -1789,7 +1844,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req worktreecontract.Creat
 					owner = worktreecontract.CreateErrorOwnerBaseRef
 				}
 			}
-			return worktreecontract.CreateResponse{}, worktreecontract.NewCreateError(
+			return nil, worktreecontract.NewCreateError(
 				owner,
 				resolveErr.Error(),
 				resolveErr,
@@ -1799,24 +1854,24 @@ func (s *Service) CreateWorktree(ctx context.Context, req worktreecontract.Creat
 	}
 	var worktreeRoot string
 	rootKind := managedRootKindExplicit
-	if strings.TrimSpace(req.RootPath) == "" {
+	if strings.TrimSpace(req.GetRootPath()) == "" {
 		worktreeRoot, err = s.managedRoots.reserveRegularRoot(workspaceCtx.workspaceRoot)
 		if err != nil {
-			return worktreecontract.CreateResponse{}, err
+			return nil, err
 		}
 		rootKind = managedRootKindAutomatic
 	} else {
-		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(req.RootPath, workspaceCtx.workspaceRoot)
+		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(req.GetRootPath(), workspaceCtx.workspaceRoot)
 		if err != nil {
-			return worktreecontract.CreateResponse{}, err
+			return nil, err
 		}
 	}
 	if err := s.validateManagedRootForCreation(ctx, worktreeRoot, rootKind, nil); err != nil {
-		return worktreecontract.CreateResponse{}, err
+		return nil, err
 	}
 	createdBranch, err := s.addManagedWorktree(ctx, workspaceCtx.workspaceRoot, worktreeRoot, createSpec, rootKind)
 	if err != nil {
-		return worktreecontract.CreateResponse{}, err
+		return nil, err
 	}
 	cleanup.active = true
 	cleanup.worktreeRoot = strings.TrimSpace(worktreeRoot)
@@ -1825,7 +1880,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req worktreecontract.Creat
 	// parent segments differently than the pre-create non-existent target path.
 	worktreeRoot, err = config.CanonicalWorkspaceRoot(worktreeRoot)
 	if err != nil {
-		return worktreecontract.CreateResponse{}, err
+		return nil, err
 	}
 	cleanup.worktreeRoot = strings.TrimSpace(worktreeRoot)
 	created, err := s.registerCreatedWorktree(ctx, createdWorktreeRegistration{
@@ -1837,19 +1892,20 @@ func (s *Service) CreateWorktree(ctx context.Context, req worktreecontract.Creat
 		OriginSessionID: workspaceCtx.sessionID,
 	})
 	if err != nil {
-		return worktreecontract.CreateResponse{}, err
+		return nil, err
 	}
 	cleanup.worktreeID = strings.TrimSpace(created.record.ID)
 	setupSessionID, err := normalizeSetupSessionID(&workspaceCtx.sessionID)
 	if err != nil {
-		return worktreecontract.CreateResponse{}, err
+		return nil, err
 	}
 	branchName, named := worktreeNamedBranch(created.git)
 	if !named {
-		return worktreecontract.CreateResponse{}, errors.New("created managed worktree does not have a named branch")
+		return nil, errors.New("created managed worktree does not have a named branch")
 	}
 	cleanup.active = false
-	if err := s.runSetupForWorktree(ctx, req.SetupOperationID, setupExecutionRequest{
+	retainedWorktree := registeredTopologyEntry(created)
+	if err := s.runSetupForWorktree(ctx, setupOperationID, setupExecutionRequest{
 		SourceWorkspaceRoot: workspaceCtx.workspaceRoot,
 		BranchName:          branchName,
 		WorktreeRoot:        created.record.CanonicalRoot,
@@ -1859,41 +1915,34 @@ func (s *Service) CreateWorktree(ctx context.Context, req worktreecontract.Creat
 			WorkspaceID: workspaceCtx.workspaceID,
 			WorktreeID:  created.record.ID,
 		},
-		CreatedBranch: createdBranch,
-		RetainedWorktree: &worktreecontract.TopologyEntry{
-			Variant: worktreecontract.TopologyVariantRegistered,
-			Registered: &worktreecontract.RegisteredFacts{
-				Git:  gitFactsFromEntry(created.git),
-				Kent: kentFactsFromRecord(created.record),
-			},
-		},
+		CreatedBranch:    createdBranch,
+		RetainedWorktree: retainedWorktree,
 	}); err != nil {
 		scriptPath, ok := setupScriptPathFromError(err)
 		if !ok {
-			return worktreecontract.CreateResponse{}, err
+			return nil, err
 		}
 		retainedErr, validationErr := worktreecontract.NewSetupRetainedError(
-			worktreecontract.TopologyEntry{
-				Variant: worktreecontract.TopologyVariantRegistered,
-				Registered: &worktreecontract.RegisteredFacts{
-					Git:  gitFactsFromEntry(created.git),
-					Kent: kentFactsFromRecord(created.record),
-				},
-			},
+			retainedWorktree.GetRegistered(),
 			scriptPath,
 			err.Error(),
+			nil,
 			err,
 		)
 		if validationErr != nil {
-			return worktreecontract.CreateResponse{}, errors.Join(err, validationErr)
+			return nil, errors.Join(err, validationErr)
 		}
-		return worktreecontract.CreateResponse{}, retainedErr
+		return nil, retainedErr
 	}
 	createdEntry, err := s.createdWorktreeListEntry(ctx, workspaceCtx, created.record.ID)
 	if err != nil {
-		return worktreecontract.CreateResponse{}, err
+		return nil, err
 	}
-	return worktreecontract.CreateResponse{Target: contractSessionExecutionTarget(workspaceCtx.target), Worktree: createdEntry}, nil
+	target, err := contractSessionExecutionTarget(workspaceCtx.target)
+	if err != nil {
+		return nil, err
+	}
+	return &worktreepb.CreateSuccess{Target: target, Worktree: createdEntry}, nil
 }
 
 func (s *Service) addManagedWorktree(
@@ -1917,14 +1966,14 @@ func cleanupAutomaticManagedRootAfterAddFailure(rootKind managedRootKind, worktr
 	return addErr
 }
 
-func (s *Service) createdWorktreeListEntry(ctx context.Context, workspaceCtx sessionWorkspaceContext, worktreeID string) (worktreecontract.ListEntry, error) {
+func (s *Service) createdWorktreeListEntry(ctx context.Context, workspaceCtx sessionWorkspaceContext, worktreeID string) (*worktreepb.ListEntry, error) {
 	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
-		return worktreecontract.ListEntry{}, err
+		return nil, err
 	}
 	entries, err := projectWorktreeList(topology, &workspaceCtx.target)
 	if err != nil {
-		return worktreecontract.ListEntry{}, err
+		return nil, err
 	}
 	for _, entry := range entries {
 		id := topologyWorktreeID(entry.Topology)
@@ -1932,7 +1981,7 @@ func (s *Service) createdWorktreeListEntry(ctx context.Context, workspaceCtx ses
 			return entry, nil
 		}
 	}
-	return worktreecontract.ListEntry{}, fmt.Errorf("created worktree %q is absent from projected topology: %w", strings.TrimSpace(worktreeID), worktreecontract.ErrWorktreeNotFound)
+	return nil, fmt.Errorf("created worktree %q is absent from projected topology: %w", strings.TrimSpace(worktreeID), worktreecontract.ErrWorktreeNotFound)
 }
 
 type createdWorktreeRegistration struct {
@@ -2170,7 +2219,7 @@ type setupExecutionRequest struct {
 	WorktreeRoot        string
 	ScriptPayload       setupScriptPayload
 	CreatedBranch       bool
-	RetainedWorktree    *worktreecontract.TopologyEntry
+	RetainedWorktree    *worktreepb.TopologyEntry
 	Recreation          *setupRecreationFacts
 }
 
@@ -2180,12 +2229,12 @@ type setupRecreationFacts struct {
 }
 
 type setupAttemptObserver interface {
-	ObserveSetupAttempt(worktreecontract.SetupStarted)
+	ObserveSetupAttempt(*worktreepb.SetupStarted)
 }
 
-type setupAttemptObserverFunc func(worktreecontract.SetupStarted)
+type setupAttemptObserverFunc func(*worktreepb.SetupStarted)
 
-func (f setupAttemptObserverFunc) ObserveSetupAttempt(attempt worktreecontract.SetupStarted) {
+func (f setupAttemptObserverFunc) ObserveSetupAttempt(attempt *worktreepb.SetupStarted) {
 	f(attempt)
 }
 
@@ -2202,28 +2251,27 @@ type setupRecoveryResult struct {
 }
 
 type preparedSetupAttempt struct {
-	started        worktreecontract.SetupStarted
+	started        *worktreepb.SetupStarted
 	scriptPath     string
 	payload        setupScriptPayload
 	timeoutSeconds int
 	settings       config.WorktreeSettings
-	retained       *worktreecontract.TopologyEntry
+	retained       *worktreepb.TopologyEntry
 	recreation     *setupRecreationFacts
 }
 
 func (s *Service) taskSetupAttemptObserver(setupOperationID *worktreecontract.SetupOperationID) (setupAttemptObserver, error) {
 	if setupOperationID == nil {
-		return setupAttemptObserverFunc(func(worktreecontract.SetupStarted) {}), nil
+		return setupAttemptObserverFunc(func(*worktreepb.SetupStarted) {}), nil
 	}
 	operationID := *setupOperationID
 	if err := operationID.Validate(); err != nil {
 		return nil, err
 	}
-	return setupAttemptObserverFunc(func(started worktreecontract.SetupStarted) {
-		s.publishSetupEvent(worktreecontract.SetupEvent{
-			SetupOperationID: operationID,
-			Phase:            worktreecontract.SetupPhaseStarted,
-			Started:          &started,
+	return setupAttemptObserverFunc(func(started *worktreepb.SetupStarted) {
+		s.publishSetupEvent(&worktreepb.SetupEvent{
+			SetupOperationId: operationID.String(),
+			Phase:            &worktreepb.SetupEvent_Started{Started: started},
 		})
 	}), nil
 }
@@ -2242,8 +2290,8 @@ func (s *Service) runSetupRecovery(ctx context.Context, req setupRecoveryRequest
 	if attempt == nil {
 		return setupRecoveryResult{
 			Result: WorktreeSetupResult{
-				NotRequired: &worktreecontract.SetupNotRequired{
-					Reason: worktreecontract.SetupNotRequiredNoConfiguredScript,
+				NotRequired: &worktreepb.SetupNotRequired{
+					Reason: worktreepb.SetupNotRequiredReason_WORKTREE_SETUP_NOT_REQUIRED_REASON_NO_CONFIGURED_SCRIPT,
 				},
 			},
 		}, nil
@@ -2267,7 +2315,7 @@ func (s *Service) runSetupRecovery(ctx context.Context, req setupRecoveryRequest
 	firstErr := s.executeSetupAttempt(ctx, *attempt, req.Observer)
 	if firstErr == nil {
 		return setupRecoveryResult{
-			Result: WorktreeSetupResult{Completed: &worktreecontract.SetupCompleted{}},
+			Result: WorktreeSetupResult{Completed: &worktreepb.SetupCompleted{}},
 		}, nil
 	}
 	if errors.Is(firstErr, context.Canceled) || errors.Is(firstErr, context.DeadlineExceeded) || ctx.Err() != nil {
@@ -2293,7 +2341,7 @@ func (s *Service) runSetupRecovery(ctx context.Context, req setupRecoveryRequest
 	finalErr := s.executeSetupAttempt(ctx, *attempt, req.Observer)
 	if finalErr == nil {
 		return setupRecoveryResult{
-			Result: WorktreeSetupResult{Completed: &worktreecontract.SetupCompleted{}},
+			Result: WorktreeSetupResult{Completed: &worktreepb.SetupCompleted{}},
 		}, nil
 	}
 	return setupRecoveryResult{
@@ -2319,7 +2367,7 @@ func (s *Service) prepareSetupAttemptForRecovery(
 
 func setupPreparationFailureResult(
 	err error,
-	retained *worktreecontract.TopologyEntry,
+	retained *worktreepb.TopologyEntry,
 ) (setupRecoveryResult, bool) {
 	if _, identified := setupScriptPathFromError(err); !identified {
 		return setupRecoveryResult{}, false
@@ -2402,7 +2450,7 @@ func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetup
 		CreatedBranch:       req.CreatedBranch,
 	}
 	return &preparedSetupAttempt{
-		started: worktreecontract.SetupStarted{
+		started: &worktreepb.SetupStarted{
 			SourceWorkspaceRoot: payload.SourceWorkspaceRoot,
 			WorktreeRoot:        payload.WorktreeRoot,
 			ScriptPath:          scriptPath,
@@ -2477,15 +2525,14 @@ func (s *Service) executeSetupAttempt(ctx context.Context, attempt preparedSetup
 	return s.runSetupScript(ctx, attempt.scriptPath, attempt.payload, attempt.timeoutSeconds)
 }
 
-func setupFailureFromError(err error, retained *worktreecontract.TopologyEntry) *worktreecontract.SetupFailed {
-	failed := &worktreecontract.SetupFailed{
-		RetryReadiness: worktreecontract.SetupRetryReady,
-		Cause: worktreecontract.SetupFailureCause{
-			Kind:        worktreecontract.SetupFailureOperational,
-			Operational: &worktreecontract.SetupOperationalFailure{},
+func setupFailureFromError(err error, retained *worktreepb.TopologyEntry) *worktreepb.SetupFailed {
+	failed := &worktreepb.SetupFailed{
+		RetryReadiness: worktreepb.SetupRetryReadiness_WORKTREE_SETUP_RETRY_READY,
+		Cause: &worktreepb.SetupFailureCause{
+			Cause: &worktreepb.SetupFailureCause_Operational{Operational: &emptypb.Empty{}},
 		},
 		Diagnostic:       err.Error(),
-		RetainedWorktree: retained,
+		RetainedWorktree: retained.GetRegistered(),
 	}
 	if scriptPath, identified := setupScriptPathFromError(err); identified {
 		failed.ScriptPath = &scriptPath
@@ -2498,27 +2545,24 @@ func setupFailureFromError(err error, retained *worktreecontract.TopologyEntry) 
 	stderr := setupErr.Stderr
 	switch {
 	case setupErr.Timeout:
-		failed.Cause = worktreecontract.SetupFailureCause{
-			Kind: worktreecontract.SetupFailureTimeout,
-			Timeout: &worktreecontract.SetupTimeout{
+		failed.Cause = &worktreepb.SetupFailureCause{
+			Cause: &worktreepb.SetupFailureCause_Timeout{Timeout: &worktreepb.SetupTimeout{
 				Stdout: &stdout,
 				Stderr: &stderr,
-			},
+			}},
 		}
 	case setupErr.Canceled:
-		failed.RetryReadiness = worktreecontract.SetupNonRetryable
-		failed.Cause = worktreecontract.SetupFailureCause{
-			Kind:     worktreecontract.SetupFailureCanceled,
-			Canceled: &worktreecontract.SetupCanceled{},
+		failed.RetryReadiness = worktreepb.SetupRetryReadiness_WORKTREE_SETUP_NON_RETRYABLE
+		failed.Cause = &worktreepb.SetupFailureCause{
+			Cause: &worktreepb.SetupFailureCause_Canceled{Canceled: &emptypb.Empty{}},
 		}
 	case setupErr.ExitCode != nil:
-		failed.Cause = worktreecontract.SetupFailureCause{
-			Kind: worktreecontract.SetupFailureProcessExit,
-			ProcessExit: &worktreecontract.SetupProcessExit{
-				ExitCode: *setupErr.ExitCode,
+		failed.Cause = &worktreepb.SetupFailureCause{
+			Cause: &worktreepb.SetupFailureCause_ProcessExit{ProcessExit: &worktreepb.SetupProcessExit{
+				ExitCode: int32(*setupErr.ExitCode),
 				Stdout:   &stdout,
 				Stderr:   &stderr,
-			},
+			}},
 		}
 	}
 	return failed
@@ -2530,43 +2574,42 @@ func (s *Service) runSetupForWorktree(ctx context.Context, operationID worktreec
 	}
 	attempt, err := s.prepareSetupAttempt(req)
 	if err != nil {
-		s.publishSetupEvent(worktreecontract.SetupEvent{
-			SetupOperationID: operationID,
-			Phase:            worktreecontract.SetupPhaseFailed,
-			Failed: &worktreecontract.SetupFailed{
-				RetryReadiness: worktreecontract.SetupNonRetryable,
-				Cause: worktreecontract.SetupFailureCause{
-					Kind:        worktreecontract.SetupFailureOperational,
-					Operational: &worktreecontract.SetupOperationalFailure{},
+		s.publishSetupEvent(&worktreepb.SetupEvent{
+			SetupOperationId: operationID.String(),
+			Phase: &worktreepb.SetupEvent_Failed{Failed: &worktreepb.SetupFailed{
+				RetryReadiness: worktreepb.SetupRetryReadiness_WORKTREE_SETUP_NON_RETRYABLE,
+				Cause: &worktreepb.SetupFailureCause{
+					Cause: &worktreepb.SetupFailureCause_Operational{Operational: &emptypb.Empty{}},
 				},
 				Diagnostic:       err.Error(),
-				RetainedWorktree: req.RetainedWorktree,
-			},
+				RetainedWorktree: req.RetainedWorktree.GetRegistered(),
+			}},
 		})
 		return err
 	}
 	if attempt == nil {
 		return nil
 	}
-	observer := setupAttemptObserverFunc(func(started worktreecontract.SetupStarted) {
-		s.publishSetupEvent(worktreecontract.SetupEvent{
-			SetupOperationID: operationID,
-			Phase:            worktreecontract.SetupPhaseStarted,
-			Started:          &started,
+	observer := setupAttemptObserverFunc(func(started *worktreepb.SetupStarted) {
+		s.publishSetupEvent(&worktreepb.SetupEvent{
+			SetupOperationId: operationID.String(),
+			Phase:            &worktreepb.SetupEvent_Started{Started: started},
 		})
 	})
 	if err := s.executeSetupAttempt(ctx, *attempt, observer); err != nil {
-		s.publishSetupEvent(worktreecontract.SetupEvent{
-			SetupOperationID: operationID,
-			Phase:            worktreecontract.SetupPhaseFailed,
-			Failed:           setupFailureFromError(err, attempt.retained),
+		s.publishSetupEvent(&worktreepb.SetupEvent{
+			SetupOperationId: operationID.String(),
+			Phase: &worktreepb.SetupEvent_Failed{
+				Failed: setupFailureFromError(err, attempt.retained),
+			},
 		})
 		return err
 	}
-	s.publishSetupEvent(worktreecontract.SetupEvent{
-		SetupOperationID: operationID,
-		Phase:            worktreecontract.SetupPhaseCompleted,
-		Completed:        &worktreecontract.SetupCompleted{},
+	s.publishSetupEvent(&worktreepb.SetupEvent{
+		SetupOperationId: operationID.String(),
+		Phase: &worktreepb.SetupEvent_Completed{
+			Completed: &worktreepb.SetupCompleted{},
+		},
 	})
 	return nil
 }
@@ -2649,14 +2692,14 @@ func (s *Service) runSetupScript(ctx context.Context, scriptPath string, payload
 	return setupErr
 }
 
-func (s *Service) publishSetupEvent(evt worktreecontract.SetupEvent) {
+func (s *Service) publishSetupEvent(evt *worktreepb.SetupEvent) {
 	if s == nil || s.setupBroker == nil {
 		return
 	}
 	s.setupBroker.Publish(evt)
 }
 
-func (s *Service) PublishWorkflowTaskSetupEvent(evt worktreecontract.SetupEvent) {
+func (s *Service) PublishWorkflowTaskSetupEvent(evt *worktreepb.SetupEvent) {
 	s.publishSetupEvent(evt)
 }
 

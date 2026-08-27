@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"core/shared/serverapi"
+	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/worktreecontract"
 )
 
 func TestEnterWorktreeRejectsInvalidSelectorsBeforeScheduling(t *testing.T) {
@@ -18,20 +20,18 @@ func TestEnterWorktreeRejectsInvalidSelectorsBeforeScheduling(t *testing.T) {
 
 	for _, testCase := range []struct {
 		selector string
-		kind     serverapi.WorktreeSelectorErrorKind
+		kind     worktreepb.SelectorErrorKind
 	}{
-		{selector: "missing-worktree", kind: serverapi.WorktreeSelectorErrorKindNotFound},
-		{selector: filepath.Base(validRoot), kind: serverapi.WorktreeSelectorErrorKindAmbiguous},
+		{selector: "missing-worktree", kind: worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_NOT_FOUND},
+		{selector: filepath.Base(validRoot), kind: worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_AMBIGUOUS},
 	} {
-		_, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
-			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-				OperationID: serverapi.NewWorktreeOperationID(),
-				SessionID:   env.session.Meta().SessionID,
-			},
-			Selector: testCase.selector,
+		_, err := env.service.EnterWorktree(env.ctx, &worktreepb.EnterRequest{
+			OperationId: clientui.NewWorktreeTransitionID().String(),
+			SessionId:   env.session.Meta().SessionID,
+			Selector:    testCase.selector,
 		})
-		var selectorErr *serverapi.WorktreeSelectorError
-		if !errors.As(err, &selectorErr) || selectorErr.Kind != testCase.kind {
+		var selectorErr *worktreecontract.SelectorError
+		if !errors.As(err, &selectorErr) || selectorErr.Details.Kind != testCase.kind {
 			t.Fatalf("selector %q error = %v, want %s", testCase.selector, err, testCase.kind)
 		}
 	}

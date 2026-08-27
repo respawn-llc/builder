@@ -125,9 +125,6 @@ func (s *Service) runAgentExecution(
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
-		return errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
-	}
 	if errors.Is(err, sessionruntime.ErrSessionRunActive) ||
 		errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
 		return errors.Join(serverapi.ErrSessionRunStarting, err)
