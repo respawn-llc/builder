@@ -160,6 +160,16 @@ func TestRegistryPrepareInputUsesRegisteredPreparedContract(t *testing.T) {
 	}
 }
 
+func TestRegistryPanicsWhenPatchAndEditAreRegisteredTogether(t *testing.T) {
+	assertToolsPanic(t, func() {
+		_, _ = NewStaticToolRegistry(
+			staticContractTestOwner(t),
+			handlerRegistration(toolspec.ToolPatch),
+			handlerRegistration(toolspec.ToolEdit),
+		)
+	})
+}
+
 func TestCompleteNodeDefinitionIsSchemaFreeMetadata(t *testing.T) {
 	definition, ok := DefinitionFor(toolspec.ToolCompleteNode)
 	if !ok {
@@ -228,6 +238,16 @@ func TestDefaultEnabledToolIDsIncludesStableTools(t *testing.T) {
 	if !enabled[toolspec.ToolTriggerHandoff] {
 		t.Fatalf("expected %s to be default-enabled", toolspec.ToolTriggerHandoff)
 	}
+}
+
+func assertToolsPanic(t *testing.T, fn func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("function did not panic")
+		}
+	}()
+	fn()
 }
 
 func TestDefinitionContractsDriveRuntimeAndRequestExposure(t *testing.T) {

@@ -41,37 +41,8 @@ var defaultEnabledIDs = []ID{
 	ToolWriteStdin,
 }
 
-var parseAliases = map[string]ID{
-	"ask_question":    ToolAskQuestion,
-	"bash":            ToolExecCommand,
-	"bash_command":    ToolExecCommand,
-	"exec_command":    ToolExecCommand,
-	"edit":            ToolEdit,
-	"complete_node":   ToolCompleteNode,
-	"patch":           ToolPatch,
-	"read_image":      ToolViewImage,
-	"shell":           ToolExecCommand,
-	"shell_command":   ToolExecCommand,
-	"trigger_handoff": ToolTriggerHandoff,
-	"view_image":      ToolViewImage,
-	"web_search":      ToolWebSearch,
-	"replace":         ToolEdit,
-	"write":           ToolEdit,
-	"write_stdin":     ToolWriteStdin,
-}
-
-var configAliases = map[string]ID{
-	"ask_question":    ToolAskQuestion,
-	"edit":            ToolEdit,
-	"exec_command":    ToolExecCommand,
-	"patch":           ToolPatch,
-	"read_image":      ToolViewImage,
-	"shell":           ToolExecCommand,
-	"trigger_handoff": ToolTriggerHandoff,
-	"view_image":      ToolViewImage,
-	"web_search":      ToolWebSearch,
-	"write_stdin":     ToolWriteStdin,
-}
+var parseAliases = buildLegacyParseAliases()
+var configAliases = buildConfigAliases()
 
 func init() {
 	sort.Slice(catalogIDs, func(i, j int) bool { return catalogIDs[i] < catalogIDs[j] })

@@ -70,6 +70,23 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 	if messageContent(msg) != "final" {
 		t.Fatalf("assistant content = %q, want final", messageContent(msg))
 	}
+	if len(mainClient.calls) < 2 {
+		t.Fatalf("provider calls = %d, want continuation request", len(mainClient.calls))
+	}
+	var continuedCall *llm.ToolCall
+	for _, message := range requestMessages(mainClient.calls[1]) {
+		for index := range message.ToolCalls {
+			if message.ToolCalls[index].ID == "call-edit-1" {
+				call := message.ToolCalls[index]
+				continuedCall = &call
+			}
+		}
+	}
+	if continuedCall == nil ||
+		continuedCall.Name != string(toolspec.ToolEdit) ||
+		string(continuedCall.Input) != `{"new_string":"new","old_string":"old","path":"a.txt"}` {
+		t.Fatalf("continuation tool call = %+v, want canonical call", continuedCall)
+	}
 	data, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("read edited file: %v", err)
@@ -105,8 +122,8 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 	if persistedCall == nil {
 		t.Fatal("persisted assistant history omitted alias-only Edit call")
 	}
-	if string(persistedCall.Input) != string(editInput) {
-		t.Fatalf("persisted Edit input = %s, want raw provider input %s", persistedCall.Input, editInput)
+	if string(persistedCall.Input) != `{"new_string":"new","old_string":"old","path":"a.txt"}` {
+		t.Fatalf("persisted Edit input = %s, want canonical provider input", persistedCall.Input)
 	}
 	persistedMeta := transcriptToolCallMeta(*persistedCall, workspace)
 	if persistedMeta.PatchRender == nil || len(persistedMeta.PatchRender.Files) != 1 ||

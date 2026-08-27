@@ -15,7 +15,7 @@ func TestExecuteToolCallsCanonicalizesEditAliases(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolEdit, Handler: capturingTool{name: toolspec.ToolEdit}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolEdit, Handler: &capturingTool{name: toolspec.ToolEdit}}), Config{
 		Model:        "claude",
 		EnabledTools: []toolspec.ID{toolspec.ToolEdit},
 		OnEvent: func(evt Event) {
@@ -69,10 +69,140 @@ func TestExecuteToolCallsCanonicalizesEditAliases(t *testing.T) {
 	}
 }
 
+func TestExecuteToolCallsCanonicalizesHiddenToolAndParameterAliases(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	var events []Event
+	handler := &capturingTool{name: toolspec.ToolExecCommand}
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: handler,
+	}), Config{
+		Model:        "claude",
+		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+		OnEvent: func(evt Event) {
+			events = append(events, evt)
+		},
+	})
+	stepID := runtimeTestStepID("step-hidden-exec-alias")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
+
+	results, err := eng.executeToolCalls(context.Background(), stepID, []llm.ToolCall{{
+		ID:    "call-run-command",
+		Name:  "run-command",
+		Input: json.RawMessage(`{"script":"echo hi","working-directory":"."}`),
+	}})
+	if err != nil {
+		t.Fatalf("execute tool calls: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != toolspec.ToolExecCommand || results[0].IsError {
+		t.Fatalf("results = %+v, want canonical successful exec_command", results)
+	}
+	if got := string(handler.input); got != `{"cmd":"echo hi","workdir":"."}` {
+		t.Fatalf("handler input = %s, want canonical input", got)
+	}
+	var started *llm.ToolCall
+	for _, evt := range events {
+		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil && evt.ToolCall.ID == "call-run-command" {
+			started = evt.ToolCall
+		}
+	}
+	if started == nil {
+		t.Fatalf("events = %+v, want started event", events)
+	}
+	if started.Name != string(toolspec.ToolExecCommand) || string(started.Input) != `{"cmd":"echo hi","workdir":"."}` {
+		t.Fatalf("started call = %+v, want canonical name and input", *started)
+	}
+	snapshot := mustTranscriptHydrationSnapshot(t, eng)
+	found := false
+	for _, row := range snapshot.CommittedRows {
+		if row.Tool != nil && row.Tool.ToolCallID == "call-run-command" {
+			found = true
+			if row.Tool.ToolName != string(toolspec.ToolExecCommand) {
+				t.Fatalf("persisted tool name = %q, want exec_command", row.Tool.ToolName)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("snapshot = %+v, want persisted tool call", snapshot.CommittedRows)
+	}
+}
+
+func TestExecuteToolCallsRetainsCanonicalInvalidInputAndSkipsHandler(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	handler := &capturingTool{name: toolspec.ToolAskQuestion}
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
+		ID:      toolspec.ToolAskQuestion,
+		Handler: handler,
+	}), Config{
+		Model:        "claude",
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	stepID := runtimeTestStepID("step-invalid-ask-alias")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
+
+	results, err := eng.executeToolCalls(context.Background(), stepID, []llm.ToolCall{{
+		ID:    "call-ask-invalid",
+		Name:  "ask",
+		Input: json.RawMessage(`{"text":"Continue?","choices":"not-an-array"}`),
+	}})
+	if err != nil {
+		t.Fatalf("execute tool calls: %v", err)
+	}
+	if len(results) != 1 || !results[0].IsError {
+		t.Fatalf("results = %+v, want validation error", results)
+	}
+	if handler.input != nil {
+		t.Fatalf("handler input = %s, want handler not invoked", handler.input)
+	}
+	snapshot := mustTranscriptHydrationSnapshot(t, eng)
+	for _, row := range snapshot.CommittedRows {
+		if row.Tool != nil && row.Tool.ToolCallID == "call-ask-invalid" {
+			if row.Tool.ToolName != string(toolspec.ToolAskQuestion) {
+				t.Fatalf("persisted tool name = %q, want ask_question", row.Tool.ToolName)
+			}
+		}
+	}
+}
+
+func TestExecuteToolCallsRetainsCanonicalInvalidExecInputAndSkipsHandler(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	handler := &capturingTool{name: toolspec.ToolExecCommand}
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: handler,
+	}), Config{
+		Model:        "claude",
+		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+	})
+	stepID := runtimeTestStepID("step-invalid-exec-alias")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
+
+	results, err := eng.executeToolCalls(context.Background(), stepID, []llm.ToolCall{{
+		ID:    "call-exec-invalid",
+		Name:  "run-command",
+		Input: json.RawMessage(`{"script":"echo hi","pty":"not-a-bool"}`),
+	}})
+	if err != nil {
+		t.Fatalf("execute tool calls: %v", err)
+	}
+	if len(results) != 1 || !results[0].IsError {
+		t.Fatalf("results = %+v, want validation error", results)
+	}
+	if handler.input != nil {
+		t.Fatalf("handler input = %s, want handler not invoked", handler.input)
+	}
+}
+
 func TestExecuteToolCallsAcceptsCustomEditJSONAndRejectsPlainText(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolEdit, Handler: capturingTool{name: toolspec.ToolEdit}}), Config{Model: "claude", EnabledTools: []toolspec.ID{toolspec.ToolEdit}})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolEdit, Handler: &capturingTool{name: toolspec.ToolEdit}}), Config{Model: "claude", EnabledTools: []toolspec.ID{toolspec.ToolEdit}})
 
 	jsonStepID := runtimeTestStepID("step-json")
 	restoreStep := setTestActiveStep(eng, jsonStepID)
@@ -108,10 +238,12 @@ func TestExecuteToolCallsAcceptsCustomEditJSONAndRejectsPlainText(t *testing.T) 
 }
 
 type capturingTool struct {
-	name toolspec.ID
+	name  toolspec.ID
+	input json.RawMessage
 }
 
-func (t capturingTool) Call(_ context.Context, c tools.Call) (tools.Result, error) {
+func (t *capturingTool) Call(_ context.Context, c tools.Call) (tools.Result, error) {
+	t.input = append(t.input[:0], c.Input...)
 	var payload map[string]any
 	validJSON := json.Unmarshal(c.Input, &payload) == nil && payload != nil
 	if !validJSON {

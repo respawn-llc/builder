@@ -52,7 +52,246 @@ func TestParseConfigIDAndConfigName(t *testing.T) {
 			t.Fatalf("ParseConfigID(%s) unexpectedly resolved to %q", alias, got)
 		}
 	}
+	for _, alias := range []string{"run_command", "exec", "open_image", "ask", "edit_file", "handoff"} {
+		if got, ok := ParseID(alias); ok {
+			t.Fatalf("ParseID(%s) unexpectedly resolved to %q", alias, got)
+		}
+		if got, ok := ParseConfigID(alias); ok {
+			t.Fatalf("ParseConfigID(%s) unexpectedly resolved to %q", alias, got)
+		}
+	}
 	if got := ConfigName(ToolExecCommand); got != "shell" {
 		t.Fatalf("ConfigName(exec_command) = %q, want shell", got)
 	}
+}
+
+func TestResolveModelToolNameAcceptsApprovedAliasesAndGeneratedForms(t *testing.T) {
+	tests := []struct {
+		name string
+		id   ID
+	}{
+		{"exec_command", ToolExecCommand},
+		{"shell", ToolExecCommand},
+		{"bash", ToolExecCommand},
+		{"exec", ToolExecCommand},
+		{"run_command", ToolExecCommand},
+		{"run-command", ToolExecCommand},
+		{"shell_command", ToolExecCommand},
+		{"shell-command", ToolExecCommand},
+		{"run_shell", ToolExecCommand},
+		{"runShell", ToolExecCommand},
+		{"bash_command", ToolExecCommand},
+		{"bash-command", ToolExecCommand},
+		{"execCommand", ToolExecCommand},
+		{"EXEC-COMMAND", ToolExecCommand},
+		{"write_stdin", ToolWriteStdin},
+		{"writeStdin", ToolWriteStdin},
+		{"WRITE-STDIN", ToolWriteStdin},
+		{"view_image", ToolViewImage},
+		{"read_image", ToolViewImage},
+		{"read-image", ToolViewImage},
+		{"openImage", ToolViewImage},
+		{"inspect_image", ToolViewImage},
+		{"vision", ToolViewImage},
+		{"read_pdf", ToolViewImage},
+		{"open-pdf", ToolViewImage},
+		{"inspectPdf", ToolViewImage},
+		{"patch", ToolPatch},
+		{"apply_patch", ToolPatch},
+		{"apply-patch", ToolPatch},
+		{"edit", ToolEdit},
+		{"ask_question", ToolAskQuestion},
+		{"question", ToolAskQuestion},
+		{"ask-user-question", ToolAskQuestion},
+		{"requestUserInput", ToolAskQuestion},
+		{"ask", ToolAskQuestion},
+		{"ask_user", ToolAskQuestion},
+		{"ask-human", ToolAskQuestion},
+		{"help", ToolAskQuestion},
+		{"say", ToolAskQuestion},
+		{"trigger_handoff", ToolTriggerHandoff},
+		{"handoff", ToolTriggerHandoff},
+		{"trigger-handoff", ToolTriggerHandoff},
+		{"compact", ToolTriggerHandoff},
+		{"requestHandoff", ToolTriggerHandoff},
+		{"edit_file", ToolEdit},
+		{"edit-file", ToolEdit},
+		{"strReplaceEditor", ToolEdit},
+		{"replace", ToolEdit},
+		{"string-replace", ToolEdit},
+		{"replaceText", ToolEdit},
+		{"write", ToolEdit},
+		{"complete_node", ToolCompleteNode},
+		{"web_search", ToolWebSearch},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := ResolveModelToolName(test.name, nil)
+			if !ok || got != test.id {
+				t.Fatalf("ResolveModelToolName(%q) = %q, %t; want %q, true", test.name, got, ok, test.id)
+			}
+		})
+	}
+}
+
+func TestResolveModelToolNameUsesMatchingStageOrder(t *testing.T) {
+	tests := []struct {
+		name  string
+		stage modelToolNameMatchStage
+	}{
+		{"exec_command", modelToolNameMatchCanonical},
+		{"run_command", modelToolNameMatchSemanticAlias},
+		{"execCommand", modelToolNameMatchCanonicalCamelCase},
+		{"runCommand", modelToolNameMatchSemanticAliasCamelCase},
+		{"EXEC-COMMAND", modelToolNameMatchCaseInsensitive},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, stage, ok := resolveModelToolName(test.name, nil)
+			if !ok || stage != test.stage {
+				t.Fatalf("resolveModelToolName(%q) = stage %d, %t; want stage %d, true", test.name, stage, ok, test.stage)
+			}
+		})
+	}
+}
+
+func TestResolveModelToolNameUsesPublishedToolWhenAliasCollides(t *testing.T) {
+	if got, ok := ResolveModelToolName("edit", []ID{ToolPatch}); !ok || got != ToolPatch {
+		t.Fatalf("patch-only edit resolution = %q, %t; want patch, true", got, ok)
+	}
+	if got, ok := ResolveModelToolName("edit", []ID{ToolEdit}); !ok || got != ToolEdit {
+		t.Fatalf("edit-only edit resolution = %q, %t; want edit, true", got, ok)
+	}
+}
+
+func TestResolveModelToolNameDoesNotExpandRetainedHostedOrWorkflowNames(t *testing.T) {
+	for _, name := range []string{"completeNode", "complete-node", "WEB-SEARCH", "webSearch"} {
+		if got, ok := ResolveModelToolName(name, nil); ok {
+			t.Fatalf("ResolveModelToolName(%q) = %q, true; retained names must remain exact", name, got)
+		}
+	}
+}
+
+func TestResolveModelParameterNameAcceptsApprovedAliasesAndGeneratedForms(t *testing.T) {
+	tests := []struct {
+		tool      ID
+		name      string
+		canonical string
+	}{
+		{ToolExecCommand, "command", "cmd"},
+		{ToolExecCommand, "script", "cmd"},
+		{ToolExecCommand, "cwd", "workdir"},
+		{ToolExecCommand, "working_directory", "workdir"},
+		{ToolExecCommand, "working_dir", "workdir"},
+		{ToolExecCommand, "working-directory", "workdir"},
+		{ToolExecCommand, "shellPath", "shell"},
+		{ToolExecCommand, "interpreter", "shell"},
+		{ToolExecCommand, "login_shell", "login"},
+		{ToolExecCommand, "pty", "tty"},
+		{ToolExecCommand, "use-tty", "tty"},
+		{ToolExecCommand, "rawOutput", "raw"},
+		{ToolExecCommand, "yield_ms", "yield_time_ms"},
+		{ToolExecCommand, "wait_ms", "yield_time_ms"},
+		{ToolExecCommand, "yield-time_ms", "yield_time_ms"},
+		{ToolExecCommand, "yield-time-ms", "yield_time_ms"},
+		{ToolExecCommand, "yieldTimeMs", "yield_time_ms"},
+		{ToolExecCommand, "max-tokens", "max_output_tokens"},
+		{ToolExecCommand, "output_token_limit", "max_output_tokens"},
+		{ToolWriteStdin, "process_id", "session_id"},
+		{ToolWriteStdin, "shellId", "session_id"},
+		{ToolWriteStdin, "stdin", "chars"},
+		{ToolWriteStdin, "text", "chars"},
+		{ToolWriteStdin, "yield-time_ms", "yield_time_ms"},
+		{ToolWriteStdin, "wait_ms", "yield_time_ms"},
+		{ToolWriteStdin, "max_tokens", "max_output_tokens"},
+		{ToolWriteStdin, "output_token_limit", "max_output_tokens"},
+		{ToolViewImage, "file_path", "path"},
+		{ToolViewImage, "image_path", "path"},
+		{ToolViewImage, "file", "path"},
+		{ToolViewImage, "pdf-path", "path"},
+		{ToolViewImage, "filename", "path"},
+		{ToolViewImage, "raw_output", "raw"},
+		{ToolViewImage, "unoptimized", "raw"},
+		{ToolViewImage, "disableOptimization", "raw"},
+		{ToolViewImage, "original_quality", "raw"},
+		{ToolPatch, "diff", "patch"},
+		{ToolPatch, "patch_text", "patch"},
+		{ToolPatch, "patch-content", "patch"},
+		{ToolPatch, "content", "patch"},
+		{ToolPatch, "patch_content", "patch"},
+		{ToolPatch, "input", "patch"},
+		{ToolEdit, "filePath", "path"},
+		{ToolEdit, "file", "path"},
+		{ToolEdit, "oldText", "old_string"},
+		{ToolEdit, "old_text", "old_string"},
+		{ToolEdit, "search", "old_string"},
+		{ToolEdit, "new-text", "new_string"},
+		{ToolEdit, "new_text", "new_string"},
+		{ToolEdit, "replace", "new_string"},
+		{ToolEdit, "replaceAll", "replace_all"},
+		{ToolEdit, "all", "replace_all"},
+		{ToolEdit, "global", "replace_all"},
+		{ToolAskQuestion, "prompt", "question"},
+		{ToolAskQuestion, "message", "question"},
+		{ToolAskQuestion, "choices", "suggestions"},
+		{ToolAskQuestion, "options", "suggestions"},
+		{ToolAskQuestion, "answers", "suggestions"},
+		{ToolAskQuestion, "suggested-option-index", "recommended_option_index"},
+		{ToolAskQuestion, "recommended_index", "recommended_option_index"},
+		{ToolAskQuestion, "default_index", "recommended_option_index"},
+		{ToolTriggerHandoff, "summaryPrompt", "summarizer_prompt"},
+		{ToolTriggerHandoff, "handoff_prompt", "summarizer_prompt"},
+		{ToolTriggerHandoff, "compaction_prompt", "summarizer_prompt"},
+		{ToolTriggerHandoff, "handoff-message", "future_agent_message"},
+		{ToolTriggerHandoff, "next_agent_message", "future_agent_message"},
+		{ToolTriggerHandoff, "continuation_message", "future_agent_message"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.tool)+"/"+test.name, func(t *testing.T) {
+			got, ok := ResolveModelParameterName(test.tool, test.name)
+			if !ok || got != test.canonical {
+				t.Fatalf("ResolveModelParameterName(%q, %q) = %q, %t; want %q, true", test.tool, test.name, got, ok, test.canonical)
+			}
+		})
+	}
+}
+
+func TestResolveModelParameterNameCanonicalDerivedFormsTakePrecedence(t *testing.T) {
+	tests := []struct {
+		tool      ID
+		name      string
+		canonical string
+	}{
+		{ToolExecCommand, "CMD", "cmd"},
+		{ToolExecCommand, "yield-time_ms", "yield_time_ms"},
+		{ToolEdit, "NEW-STRING", "new_string"},
+		{ToolAskQuestion, "recommendedOptionIndex", "recommended_option_index"},
+	}
+	for _, test := range tests {
+		got, ok := ResolveModelParameterName(test.tool, test.name)
+		if !ok || got != test.canonical {
+			t.Fatalf("ResolveModelParameterName(%q, %q) = %q, %t; want %q, true", test.tool, test.name, got, ok, test.canonical)
+		}
+	}
+}
+
+func TestAliasCatalogRejectsConflictingToolAndParameterAliases(t *testing.T) {
+	t.Run("parameters", func(t *testing.T) {
+		assertPanics(t, func() {
+			newParameterAliasCatalog(ToolPatch, []parameterAliasSpec{
+				{canonical: "patch", aliases: []string{"same"}},
+				{canonical: "other", aliases: []string{"same"}},
+			})
+		})
+	})
+}
+
+func assertPanics(t *testing.T, fn func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("function did not panic")
+		}
+	}()
+	fn()
 }
