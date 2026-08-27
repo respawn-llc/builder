@@ -44,12 +44,12 @@ func ProjectRowText(displayName string, projectID string, rootPath string, times
 	return RowText{Title: title, Preview: PreviewPath(rootPath, homeDir), Timestamp: strings.TrimSpace(timestamp)}
 }
 
-func WorkspaceRowText(displayName string, rootPath string, timestamp string, homeDir string) RowText {
+func WorkspaceRowText(displayName string, rootPath string, homeDir string) RowText {
 	title := strings.TrimSpace(displayName)
 	if title == "" {
 		title = strings.TrimSpace(filepath.Base(rootPath))
 	}
-	return RowText{Title: title, Preview: PreviewPath(rootPath, homeDir), Timestamp: strings.TrimSpace(timestamp)}
+	return RowText{Title: title, Preview: PreviewPath(rootPath, homeDir)}
 }
 
 func PreviewPath(rootPath string, homeDir string) string {

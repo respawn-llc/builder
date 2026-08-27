@@ -11,18 +11,42 @@ import (
 )
 
 type startupPickerStatusFailure struct {
-	Tab        sessioncontract.SessionCategory
-	Operation  sessionPickerOperationKind
+	Operation  startupPickerStatusOperation
 	Generation uint64
 	Kind       sessionPickerFailureKind
 	Diagnostic error
 }
 
-type sessionPickerOperationKind string
+type startupPickerStatusOperation interface {
+	isStartupPickerStatusOperation()
+}
+
+type startupPickerSessionOperation struct {
+	tab  sessioncontract.SessionCategory
+	kind sessionPickerOperationKind
+}
+
+func (startupPickerSessionOperation) isStartupPickerStatusOperation() {}
+
+type startupPickerWorkspaceOperationKind uint8
 
 const (
-	sessionPickerOperationBodyPage        sessionPickerOperationKind = "body_page"
-	sessionPickerOperationDirectionalPage sessionPickerOperationKind = "directional_page"
+	startupPickerWorkspaceOperationFirstPage startupPickerWorkspaceOperationKind = iota + 1
+	startupPickerWorkspaceOperationPreviousEdge
+	startupPickerWorkspaceOperationNextEdge
+)
+
+type startupPickerWorkspaceOperation struct {
+	kind startupPickerWorkspaceOperationKind
+}
+
+func (startupPickerWorkspaceOperation) isStartupPickerStatusOperation() {}
+
+type sessionPickerOperationKind uint8
+
+const (
+	sessionPickerOperationBodyPage sessionPickerOperationKind = iota + 1
+	sessionPickerOperationDirectionalPage
 )
 
 type sessionPickerFailureKind string
@@ -33,8 +57,7 @@ const (
 )
 
 type startupPickerStatusKey struct {
-	tab       sessioncontract.SessionCategory
-	operation sessionPickerOperationKind
+	operation startupPickerStatusOperation
 }
 
 type startupPickerStatusRecord struct {
@@ -62,6 +85,30 @@ func (m *startupPickerStatusModel) Record(failure startupPickerStatusFailure) {
 	if failure.Diagnostic == nil {
 		panic("startup picker failure requires a diagnostic")
 	}
+	if failure.Operation == nil {
+		panic("startup picker failure requires an operation")
+	}
+	switch operation := failure.Operation.(type) {
+	case startupPickerSessionOperation:
+		if _, err := sessioncontract.ParseSessionCategory(string(operation.tab)); err != nil {
+			panic(fmt.Sprintf("invalid session picker operation tab %q", operation.tab))
+		}
+		switch operation.kind {
+		case sessionPickerOperationBodyPage, sessionPickerOperationDirectionalPage:
+		default:
+			panic(fmt.Sprintf("unknown session picker operation kind %d", operation.kind))
+		}
+	case startupPickerWorkspaceOperation:
+		switch operation.kind {
+		case startupPickerWorkspaceOperationFirstPage,
+			startupPickerWorkspaceOperationPreviousEdge,
+			startupPickerWorkspaceOperationNextEdge:
+		default:
+			panic(fmt.Sprintf("unknown Workspace picker operation kind %d", operation.kind))
+		}
+	default:
+		panic(fmt.Sprintf("unknown startup picker operation type %T", failure.Operation))
+	}
 	switch failure.Kind {
 	case sessionPickerFailurePageRequest,
 		sessionPickerFailurePageContract:
@@ -72,7 +119,7 @@ func (m *startupPickerStatusModel) Record(failure startupPickerStatusFailure) {
 		m.failures = make(map[startupPickerStatusKey]startupPickerStatusRecord)
 	}
 	m.sequence++
-	m.failures[startupPickerStatusKey{tab: failure.Tab, operation: failure.Operation}] = startupPickerStatusRecord{
+	m.failures[startupPickerStatusKey{operation: failure.Operation}] = startupPickerStatusRecord{
 		failure:  failure,
 		sequence: m.sequence,
 	}
@@ -82,7 +129,18 @@ func (m *startupPickerStatusModel) Clear(tab sessioncontract.SessionCategory, op
 	if m == nil {
 		return
 	}
-	key := startupPickerStatusKey{tab: tab, operation: operation}
+	key := startupPickerStatusKey{operation: startupPickerSessionOperation{tab: tab, kind: operation}}
+	record, ok := m.failures[key]
+	if ok && record.failure.Generation <= generation {
+		delete(m.failures, key)
+	}
+}
+
+func (m *startupPickerStatusModel) ClearWorkspace(operation startupPickerWorkspaceOperationKind, generation uint64) {
+	if m == nil {
+		return
+	}
+	key := startupPickerStatusKey{operation: startupPickerWorkspaceOperation{kind: operation}}
 	record, ok := m.failures[key]
 	if ok && record.failure.Generation <= generation {
 		delete(m.failures, key)
@@ -93,7 +151,7 @@ func (m *startupPickerStatusModel) failure(tab sessioncontract.SessionCategory, 
 	if m == nil {
 		return startupPickerStatusFailure{}, false
 	}
-	record, ok := m.failures[startupPickerStatusKey{tab: tab, operation: operation}]
+	record, ok := m.failures[startupPickerStatusKey{operation: startupPickerSessionOperation{tab: tab, kind: operation}}]
 	if !ok {
 		return startupPickerStatusFailure{}, false
 	}
@@ -126,8 +184,11 @@ func projectStartupPickerStatus(model *startupPickerStatusModel) startupPickerSt
 	var newest startupPickerStatusRecord
 	found := false
 	for key, record := range model.failures {
-		if model.activeTab != nil && key.tab != *model.activeTab {
-			continue
+		if model.activeTab != nil {
+			operation, ok := key.operation.(startupPickerSessionOperation)
+			if ok && operation.tab != *model.activeTab {
+				continue
+			}
 		}
 		if !found || record.sequence > newest.sequence {
 			newest, found = record, true
@@ -182,9 +243,14 @@ func renderStartupPickerStatus(projection startupPickerStatusProjection, width i
 
 func projectStartupPickerStatusRender(projection startupPickerStatusProjection) *startupPickerStatusRenderProjection {
 	if projection.Failure != nil {
+		text := sessionPickerFailureOperatorText(projection.Failure.Kind)
+		if _, ok := projection.Failure.Operation.(startupPickerWorkspaceOperation); ok &&
+			projection.Failure.Diagnostic != nil {
+			text = projection.Failure.Diagnostic.Error()
+		}
 		return &startupPickerStatusRenderProjection{
 			Kind:    startupPickerStatusRenderFailure,
-			Text:    sessionPickerFailureOperatorText(projection.Failure.Kind),
+			Text:    text,
 			IsError: true,
 		}
 	}
@@ -222,7 +288,8 @@ func (m *sessionPickerModel) recordPickerFailureForTab(
 		m.startupStatus = newStartupPickerStatusModel()
 	}
 	m.startupStatus.Record(startupPickerStatusFailure{
-		Tab: tab.category, Operation: operation, Generation: generation, Kind: kind, Diagnostic: diagnostic,
+		Operation:  startupPickerSessionOperation{tab: tab.category, kind: operation},
+		Generation: generation, Kind: kind, Diagnostic: diagnostic,
 	})
 }
 

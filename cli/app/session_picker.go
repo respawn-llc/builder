@@ -119,6 +119,7 @@ type sessionPickerPageLoadedMsg struct {
 	category        sessioncontract.SessionCategory
 	generation      uint64
 	requestedOffset int
+	pageRequest     *startupPickerPageRequest
 	response        sessionPageResponse
 	err             error
 }
@@ -308,7 +309,8 @@ func (m *sessionPickerModel) moveSelection(delta int) tea.Cmd {
 	if next >= 0 && next < tab.itemCount() {
 		return m.selectTabIndex(tab, next)
 	}
-	if tab.directional != nil {
+	if (delta > 0 && tab.nextEdge.request != nil) ||
+		(delta < 0 && tab.previousEdge.request != nil) {
 		return nil
 	}
 	if delta > 0 {
@@ -357,7 +359,8 @@ func (m *sessionPickerModel) moveSelectionPage(direction int) tea.Cmd {
 	if next >= 0 && next < tab.itemCount() {
 		return m.selectTabIndex(tab, next)
 	}
-	if tab.directional != nil {
+	if (direction > 0 && tab.nextEdge.request != nil) ||
+		(direction < 0 && tab.previousEdge.request != nil) {
 		return nil
 	}
 	if direction > 0 {
@@ -393,7 +396,7 @@ func (m *sessionPickerModel) selectTabIndex(tab *sessionPickerTab, index int) te
 
 func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCategory, kind sessionPickerBodyRequestKind) tea.Cmd {
 	tab := m.tab(category)
-	if tab.bodyRequest != nil || tab.directional != nil {
+	if tab.bodyRequest != nil || tab.hasPendingRequest() {
 		return nil
 	}
 	if kind == sessionPickerBodyRequestRetry {
@@ -408,7 +411,7 @@ func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCa
 	}
 	tab.bodyRequest = request
 	tab.bodyPhase = sessionPickerBodyInitialLoading
-	load := m.loadPageCmd(category, request.generation, request.requestedOffset)
+	load := m.loadPageCmd(category, request.generation, request.requestedOffset, nil)
 	if kind == sessionPickerBodyRequestRetry {
 		return tea.Batch(load, m.reconcileSpinnerTick())
 	}
@@ -416,22 +419,24 @@ func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCa
 }
 
 func (m *sessionPickerModel) startDirectionalRequest(tab *sessionPickerTab, requestedOffset int, move int) tea.Cmd {
-	if tab.bodyRequest != nil || tab.directional != nil {
+	if tab.bodyRequest != nil || tab.hasPendingRequest() {
 		return nil
 	}
-	tab.generation++
-	tab.directional = &sessionPickerDirectionalRequest{
-		generation:      tab.generation,
-		requestedOffset: requestedOffset,
-		move:            move,
+	direction := startupPickerPageNext
+	if move < 0 {
+		direction = startupPickerPagePrevious
+	}
+	request, ok := tab.begin(direction, requestedOffset, nil, false, false, 0, 0, move)
+	if !ok {
+		return nil
 	}
 	return tea.Batch(
-		m.loadPageCmd(tab.category, tab.generation, requestedOffset),
+		m.loadPageCmd(tab.category, request.generation, requestedOffset, &request),
 		m.reconcileSpinnerTick(),
 	)
 }
 
-func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategory, generation uint64, requestedOffset int) tea.Cmd {
+func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategory, generation uint64, requestedOffset int, pageRequest *startupPickerPageRequest) tea.Cmd {
 	offset := requestedOffset
 	limit := sessionPickerPageSize
 	request := sessionPageRequest{
@@ -446,6 +451,7 @@ func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategor
 			category:        category,
 			generation:      generation,
 			requestedOffset: requestedOffset,
+			pageRequest:     pageRequest,
 			response:        response,
 			err:             err,
 		}
@@ -507,13 +513,14 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 		m.ensureSelectedVisible(tab)
 		return m.maybeCompleteAllEmpty()
 	}
-	if tab.directional == nil ||
-		tab.directional.generation != message.generation ||
-		tab.directional.requestedOffset != message.requestedOffset {
+	if message.pageRequest == nil {
 		return nil
 	}
-	directional := *tab.directional
-	tab.directional = nil
+	active := tab.requestFor(message.pageRequest.direction)
+	if active == nil || *active != *message.pageRequest {
+		return nil
+	}
+	directional := *active
 	if message.err != nil {
 		tab.resetForFreshLoad()
 		tab.bodyPhase = sessionPickerBodyFailed
@@ -526,22 +533,17 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 		m.recordPickerFailureForTab(tab, sessionPickerOperationDirectionalPage, message.generation, sessionPickerFailurePageContract, err)
 		return nil
 	}
+	tab.complete(directional)
 	segment := newSessionPickerPageSegment(message.requestedOffset, message.response)
 	switch {
 	case directional.move > 0:
-		tab.segments = append(tab.segments, segment)
-		if len(tab.segments) > 2 {
-			tab.segments = tab.segments[len(tab.segments)-2:]
-		}
+		tab.segments = appendBoundedPickerPage(tab.segments, segment)
 		appended := tab.segments[len(tab.segments)-1]
 		if directional.move > 0 && len(appended.sessions) > 0 {
 			tab.selected = newSessionPickerSessionSelection(appended.sessions[0].SessionID)
 		}
 	case directional.move < 0:
-		tab.segments = append([]sessionPickerPageSegment{segment}, tab.segments...)
-		if len(tab.segments) > 2 {
-			tab.segments = tab.segments[:2]
-		}
+		tab.segments = prependBoundedPickerPage(tab.segments, segment)
 		prepended := tab.segments[0]
 		if directional.move < 0 && len(prepended.sessions) > 0 {
 			tab.selected = newSessionPickerSessionSelection(prepended.sessions[len(prepended.sessions)-1].SessionID)
@@ -551,7 +553,7 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 			"session picker directional request requires movement: category=%q generation=%d requested_offset=%d",
 			tab.category,
 			directional.generation,
-			directional.requestedOffset,
+			directional.offset,
 		)
 		if m.header.StatusRequest.Settings.Debug {
 			panic(err)
@@ -582,8 +584,8 @@ func (m *sessionPickerModel) maybeCompleteAllEmpty() tea.Cmd {
 }
 
 func (m *sessionPickerModel) hasPendingPageRequest() bool {
-	return m.main.bodyRequest != nil || m.main.directional != nil ||
-		m.subagents.bodyRequest != nil || m.subagents.directional != nil
+	return m.main.bodyRequest != nil || m.main.hasPendingRequest() ||
+		m.subagents.bodyRequest != nil || m.subagents.hasPendingRequest()
 }
 
 func (m *sessionPickerModel) reconcileSpinnerTick() tea.Cmd {
@@ -605,20 +607,9 @@ func runSessionPicker(ctx context.Context, loader sessionPageLoader, theme strin
 		Header: header,
 	})
 	defer lifecycle.Close()
-	terminal := sessionPickerTerminal{state: sessionPickerTerminalInactive}
-	if err := terminal.Enter(); err != nil {
+	finalModel, err := runContextualStartupPicker(ctx, lifecycle)
+	if err != nil {
 		return nil, err
-	}
-	finalModel, runErr := tea.NewProgram(lifecycle, tea.WithContext(ctx)).Run()
-	closeErr := terminal.Close()
-	if runErr != nil && closeErr != nil {
-		return nil, errors.Join(runErr, closeErr)
-	}
-	if runErr != nil {
-		return nil, runErr
-	}
-	if closeErr != nil {
-		return nil, closeErr
 	}
 	if finalModel != lifecycle {
 		return nil, fmt.Errorf("unexpected picker lifecycle model type %T", finalModel)
@@ -628,77 +619,4 @@ func runSessionPicker(ctx context.Context, loader sessionPageLoader, theme strin
 		return nil, err
 	}
 	return result, nil
-}
-
-type sessionPickerTerminalState uint8
-
-const (
-	sessionPickerTerminalInactive sessionPickerTerminalState = iota + 1
-	sessionPickerTerminalAltScreen
-	sessionPickerTerminalAlternateScroll
-	sessionPickerTerminalCleaned
-)
-
-type sessionPickerTerminalError struct {
-	Operation string
-	Err       error
-}
-
-func (e sessionPickerTerminalError) Error() string {
-	return fmt.Sprintf("session picker terminal %s failed: %v", e.Operation, e.Err)
-}
-
-func (e sessionPickerTerminalError) Unwrap() error {
-	return e.Err
-}
-
-type sessionPickerTerminal struct {
-	state sessionPickerTerminalState
-}
-
-func (t *sessionPickerTerminal) Enter() error {
-	if t == nil || t.state != sessionPickerTerminalInactive {
-		return errors.New("session picker terminal must be inactive before entry")
-	}
-	if err := writeTerminalSequence("\x1b[?1049h"); err != nil {
-		return sessionPickerTerminalError{Operation: "enter alt-screen", Err: err}
-	}
-	t.state = sessionPickerTerminalAltScreen
-	if err := writeTerminalSequence("\x1b[?1007h"); err != nil {
-		cleanupErr := t.Close()
-		if cleanupErr != nil {
-			return errors.Join(sessionPickerTerminalError{Operation: "enable alternate scroll", Err: err}, cleanupErr)
-		}
-		return sessionPickerTerminalError{Operation: "enable alternate scroll", Err: err}
-	}
-	t.state = sessionPickerTerminalAlternateScroll
-	return nil
-}
-
-func (t *sessionPickerTerminal) Close() error {
-	if t == nil || t.state == sessionPickerTerminalCleaned {
-		return nil
-	}
-	var cleanupErr error
-	switch t.state {
-	case sessionPickerTerminalAlternateScroll:
-		if err := writeTerminalSequence("\x1b[?1007l"); err != nil {
-			cleanupErr = sessionPickerTerminalError{Operation: "disable alternate scroll", Err: err}
-		}
-		fallthrough
-	case sessionPickerTerminalAltScreen:
-		if err := writeTerminalSequence("\x1b[?1049l"); err != nil {
-			exitErr := sessionPickerTerminalError{Operation: "exit alt-screen", Err: err}
-			if cleanupErr != nil {
-				cleanupErr = errors.Join(cleanupErr, exitErr)
-			} else {
-				cleanupErr = exitErr
-			}
-		}
-	case sessionPickerTerminalInactive:
-	default:
-		panic(fmt.Sprintf("unknown session picker terminal state %d", t.state))
-	}
-	t.state = sessionPickerTerminalCleaned
-	return cleanupErr
 }

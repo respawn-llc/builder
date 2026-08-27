@@ -6,7 +6,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"core/cli/app/internal/projectbinding"
 	"core/cli/tui"
@@ -34,8 +33,8 @@ const (
 	projectNamePromptHeaderFallback      = "Name New Project"
 )
 
-var runProjectBindingPickerFlow func([]clientui.ProjectSummary, string) (projectBindingPickerResult, error)
-var runServerProjectPickerFlow func([]clientui.ProjectSummary, string) (projectBindingPickerResult, error)
+var runProjectBindingPickerFlow func(context.Context, []clientui.ProjectSummary, string, projectbinding.ProjectPickerSnapshot) (projectBindingPickerResult, error)
+var runServerProjectPickerFlow func(context.Context, []clientui.ProjectSummary, string, projectbinding.ProjectPickerSnapshot) (projectBindingPickerResult, error)
 var runProjectWorkspacePickerFlow = runProjectWorkspacePicker
 var runProjectNamePromptFlow = runProjectNamePrompt
 
@@ -64,7 +63,7 @@ type projectBindingPickerModel struct {
 	result   projectBindingPickerResult
 }
 
-func newProjectBindingPickerModel(projects []clientui.ProjectSummary, theme string, options projectPickerOptions) *projectBindingPickerModel {
+func newProjectBindingPickerModel(projects []clientui.ProjectSummary, theme string, options projectPickerOptions, snapshot projectbinding.ProjectPickerSnapshot) *projectBindingPickerModel {
 	items := append([]clientui.ProjectSummary(nil), projects...)
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
@@ -77,6 +76,8 @@ func newProjectBindingPickerModel(projects []clientui.ProjectSummary, theme stri
 		theme:    theme,
 		styles:   newSessionPickerStyles(theme),
 		headerMD: newStartupMarkdownRendererWithWordWrap(theme),
+		cursor:   snapshot.Cursor,
+		offset:   snapshot.Offset,
 	}
 }
 
@@ -102,14 +103,6 @@ func (m *projectBindingPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ShowGroup:  m.shouldShowGroupHeader,
 		})
 		return m, nil
-	case tea.MouseMsg:
-		switch key.Button {
-		case tea.MouseButtonWheelUp:
-			m.moveCursor(-1)
-		case tea.MouseButtonWheelDown:
-			m.moveCursor(1)
-		}
-		return m, nil
 	case tea.KeyMsg:
 		switch key.Type {
 		case tea.KeyUp:
@@ -125,23 +118,26 @@ func (m *projectBindingPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 'j':
 					m.moveCursor(1)
 				case 'q':
-					m.result = projectBindingPickerResult{Canceled: true}
+					m.result = projectbinding.ProjectPickerExit{}
 					return m, tea.Quit
 				}
 			}
 		case tea.KeyEnter:
 			if m.isCreateRow(m.cursor) {
-				m.result = projectBindingPickerResult{CreateNew: true}
+				m.result = projectbinding.ProjectPickerCreateNew{}
 				return m, tea.Quit
 			}
 			picked, ok := m.projectForRow(m.cursor)
 			if !ok {
 				return m, nil
 			}
-			m.result = projectBindingPickerResult{Project: &picked}
+			m.result = projectbinding.ProjectPickerSelected{
+				Project:  picked,
+				Snapshot: projectbinding.ProjectPickerSnapshot{Cursor: m.cursor, Offset: m.offset},
+			}
 			return m, tea.Quit
 		case tea.KeyEsc, tea.KeyCtrlC:
-			m.result = projectBindingPickerResult{Canceled: true}
+			m.result = projectbinding.ProjectPickerExit{}
 			return m, tea.Quit
 		}
 	}
@@ -291,218 +287,15 @@ func projectBindingHomeDir() string {
 	return home
 }
 
-func runConfiguredProjectPicker(projects []clientui.ProjectSummary, theme string, options projectPickerOptions) (projectBindingPickerResult, error) {
-	model := newProjectBindingPickerModel(projects, theme, options)
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	finalModel, err := program.Run()
+func runConfiguredProjectPicker(ctx context.Context, projects []clientui.ProjectSummary, theme string, options projectPickerOptions, snapshot projectbinding.ProjectPickerSnapshot) (projectBindingPickerResult, error) {
+	model := newProjectBindingPickerModel(projects, theme, options, snapshot)
+	finalModel, err := runContextualStartupPicker(ctx, model)
 	if err != nil {
-		return projectBindingPickerResult{}, err
+		return nil, err
 	}
 	picked, ok := finalModel.(*projectBindingPickerModel)
 	if !ok {
-		return projectBindingPickerResult{}, fmt.Errorf("unexpected binding picker model type %T", finalModel)
-	}
-	return picked.result, nil
-}
-
-type projectWorkspacePickerModel struct {
-	workspaces []clientui.ProjectWorkspaceSummary
-	cursor     int
-	offset     int
-	width      int
-	height     int
-	theme      string
-	styles     sessionPickerStyles
-	headerMD   *startupMarkdownRenderer
-	result     projectWorkspacePickerResult
-}
-
-func newProjectWorkspacePickerModel(workspaces []clientui.ProjectWorkspaceSummary, theme string) *projectWorkspacePickerModel {
-	items := append([]clientui.ProjectWorkspaceSummary(nil), workspaces...)
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].IsPrimary != items[j].IsPrimary {
-			return items[i].IsPrimary
-		}
-		return items[i].UpdatedAt.After(items[j].UpdatedAt)
-	})
-	return &projectWorkspacePickerModel{
-		workspaces: items,
-		width:      defaultPickerWidth,
-		height:     defaultPickerHeight,
-		theme:      theme,
-		styles:     newSessionPickerStyles(theme),
-		headerMD:   newStartupMarkdownRendererWithWordWrap(theme),
-	}
-}
-
-func (m *projectWorkspacePickerModel) Init() tea.Cmd { return nil }
-
-func (m *projectWorkspacePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch key := msg.(type) {
-	case tea.WindowSizeMsg:
-		if key.Width > 0 {
-			m.width = key.Width
-		}
-		if key.Height > 0 {
-			m.height = key.Height
-		}
-		m.offset = projectbinding.EnsureCursorVisible(m.cursor, m.offset, projectbinding.VisibleRowsRequest{
-			ItemCount:  len(m.workspaces),
-			LineBudget: m.visibleLineBudget(),
-			HasPreview: m.hasPreview,
-		})
-		return m, nil
-	case tea.MouseMsg:
-		switch key.Button {
-		case tea.MouseButtonWheelUp:
-			m.moveCursor(-1)
-		case tea.MouseButtonWheelDown:
-			m.moveCursor(1)
-		}
-		return m, nil
-	case tea.KeyMsg:
-		switch key.Type {
-		case tea.KeyUp:
-			m.moveCursor(-1)
-		case tea.KeyDown:
-			m.moveCursor(1)
-		case tea.KeyRunes:
-			filtered, _ := stripMouseSGRRunes(key.Runes)
-			if len(filtered) == 1 {
-				switch filtered[0] {
-				case 'k':
-					m.moveCursor(-1)
-				case 'j':
-					m.moveCursor(1)
-				case 'q':
-					m.result = projectWorkspacePickerResult{Canceled: true}
-					return m, tea.Quit
-				}
-			}
-		case tea.KeyEnter:
-			if len(m.workspaces) == 0 {
-				return m, nil
-			}
-			picked := m.workspaces[m.cursor]
-			m.result = projectWorkspacePickerResult{Workspace: &picked}
-			return m, tea.Quit
-		case tea.KeyEsc, tea.KeyCtrlC:
-			m.result = projectWorkspacePickerResult{Canceled: true}
-			return m, tea.Quit
-		}
-	}
-	return m, nil
-}
-
-func (m *projectWorkspacePickerModel) View() string {
-	var out strings.Builder
-	out.WriteString(m.renderHeader())
-	out.WriteString("\n\n")
-	out.WriteString(tui.ApplyThemeStyleIntents(truncateQueuedMessageLine(projectWorkspacePickerNoticeText, m.width), m.theme, tui.ThemeForeground))
-	out.WriteString("\n\n")
-	for idx, row := range projectbinding.VisibleRows(projectbinding.VisibleRowsRequest{
-		Offset:     m.offset,
-		ItemCount:  len(m.workspaces),
-		LineBudget: m.visibleLineBudget(),
-		HasPreview: m.hasPreview,
-	}) {
-		if idx > 0 {
-			out.WriteByte('\n')
-		}
-		out.WriteString(m.renderRow(row.Index, row.ShowPreview))
-	}
-	return out.String()
-}
-
-func (m *projectWorkspacePickerModel) visibleLineBudget() int {
-	rows := m.height - 4
-	if rows < 1 {
-		return 1
-	}
-	return rows
-}
-
-func (m *projectWorkspacePickerModel) moveCursor(delta int) {
-	m.cursor = projectbinding.MoveCursor(m.cursor, delta, len(m.workspaces))
-	m.offset = projectbinding.EnsureCursorVisible(m.cursor, m.offset, projectbinding.VisibleRowsRequest{
-		ItemCount:  len(m.workspaces),
-		LineBudget: m.visibleLineBudget(),
-		HasPreview: m.hasPreview,
-	})
-}
-
-func (m *projectWorkspacePickerModel) renderHeader() string {
-	if m.headerMD != nil {
-		rendered := m.headerMD.Render(projectWorkspacePickerHeaderMarkdown, m.width)
-		return tui.ApplyThemeStyleIntents(trimRenderedHeaderInset(rendered), m.theme, tui.ThemeForeground)
-	}
-	return m.styles.headerFallback.Render(projectWorkspacePickerHeaderFallback)
-}
-
-func (m *projectWorkspacePickerModel) renderRow(index int, showPreview bool) string {
-	selected := index == m.cursor
-	workspace := m.workspaces[index]
-	row := projectbinding.WorkspaceRowText(workspace.DisplayName, workspace.RootPath, projectBindingTimestamp(workspace.UpdatedAt), projectBindingHomeDir())
-	markerStyle := m.styles.marker
-	rowStyle := m.styles.row
-	marker := "◈"
-	if selected {
-		markerStyle = m.styles.markerSelected
-		rowStyle = m.styles.rowSelected
-	}
-	left := markerStyle.Render(marker) + " " + rowStyle.Render(row.Title)
-	if row.Timestamp == "" {
-		if row.Preview == "" || !showPreview {
-			return left
-		}
-		previewWidth := m.width - 2
-		if previewWidth < 1 {
-			previewWidth = 1
-		}
-		previewLine := "  " + m.styles.preview.Render(truncateQueuedMessageLine(row.Preview, previewWidth))
-		return left + "\n" + previewLine
-	}
-	right := m.styles.timestamp.Render(row.Timestamp)
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-	titleLine := left + strings.Repeat(" ", gap) + right
-	if row.Preview == "" || !showPreview {
-		return titleLine
-	}
-	previewWidth := m.width - 2
-	if previewWidth < 1 {
-		previewWidth = 1
-	}
-	previewLine := "  " + m.styles.preview.Render(truncateQueuedMessageLine(row.Preview, previewWidth))
-	return titleLine + "\n" + previewLine
-}
-
-func projectBindingTimestamp(ts time.Time) string {
-	if ts.IsZero() {
-		return "unknown"
-	}
-	return ts.Local().Format("2006-01-02 15:04")
-}
-
-func (m *projectWorkspacePickerModel) hasPreview(index int) bool {
-	if index < 0 || index >= len(m.workspaces) {
-		return false
-	}
-	return strings.TrimSpace(m.workspaces[index].RootPath) != ""
-}
-
-func runProjectWorkspacePicker(workspaces []clientui.ProjectWorkspaceSummary, theme string) (projectWorkspacePickerResult, error) {
-	model := newProjectWorkspacePickerModel(workspaces, theme)
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	finalModel, err := program.Run()
-	if err != nil {
-		return projectWorkspacePickerResult{}, err
-	}
-	picked, ok := finalModel.(*projectWorkspacePickerModel)
-	if !ok {
-		return projectWorkspacePickerResult{}, fmt.Errorf("unexpected workspace picker model type %T", finalModel)
+		return nil, fmt.Errorf("unexpected binding picker model type %T", finalModel)
 	}
 	return picked.result, nil
 }
@@ -510,26 +303,26 @@ func runProjectWorkspacePicker(workspaces []clientui.ProjectWorkspaceSummary, th
 func ensureInteractiveProjectBinding(ctx context.Context, server projectbinding.Server[interactiveSessionServer]) (interactiveSessionServer, error) {
 	pickLocalProject := runProjectBindingPickerFlow
 	if pickLocalProject == nil {
-		pickLocalProject = func(projects []clientui.ProjectSummary, theme string) (projectBindingPickerResult, error) {
-			return runConfiguredProjectPicker(projects, theme, projectPickerOptions{
+		pickLocalProject = func(ctx context.Context, projects []clientui.ProjectSummary, theme string, snapshot projectbinding.ProjectPickerSnapshot) (projectBindingPickerResult, error) {
+			return runConfiguredProjectPicker(ctx, projects, theme, projectPickerOptions{
 				AllowCreate:    true,
 				HeaderMarkdown: projectBindingPickerHeaderMarkdown,
 				HeaderFallback: projectBindingPickerHeaderFallback,
 				NoticeText:     projectBindingPickerNoticeText,
 				GroupLabel:     projectBindingExistingLabel,
-			})
+			}, snapshot)
 		}
 	}
 	pickServerProject := runServerProjectPickerFlow
 	if pickServerProject == nil {
-		pickServerProject = func(projects []clientui.ProjectSummary, theme string) (projectBindingPickerResult, error) {
-			return runConfiguredProjectPicker(projects, theme, projectPickerOptions{
+		pickServerProject = func(ctx context.Context, projects []clientui.ProjectSummary, theme string, snapshot projectbinding.ProjectPickerSnapshot) (projectBindingPickerResult, error) {
+			return runConfiguredProjectPicker(ctx, projects, theme, projectPickerOptions{
 				AllowCreate:    false,
 				HeaderMarkdown: serverProjectPickerHeaderMarkdown,
 				HeaderFallback: serverProjectPickerHeaderFallback,
 				NoticeText:     serverProjectPickerNoticeText,
 				GroupLabel:     serverProjectExistingLabel,
-			})
+			}, snapshot)
 		}
 	}
 	return projectbinding.EnsureInteractive[interactiveSessionServer](ctx, projectbinding.Request[interactiveSessionServer]{
