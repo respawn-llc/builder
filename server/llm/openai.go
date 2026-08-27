@@ -117,7 +117,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, request Request, callbacks 
 
 	providerResp, err := c.transport.Generate(ctx, providerReq, callbacks)
 	if err != nil {
-		return Response{}, fmt.Errorf("openai generate stream: %w", err)
+		return Response{}, fmt.Errorf("openai generate: %w", err)
 	}
 
 	return responseFromOpenAI(providerResp)
