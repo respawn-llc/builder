@@ -87,7 +87,7 @@ func (m *uiModel) nativeProgressEligible() bool {
 	}
 	return m.isCompacting() ||
 		m.runtimeActivityProjection.Reviewer == clientui.ReviewerActivityInvoking ||
-		m.pendingDetailTranscript != nil ||
+		(m.pendingDetailTranscript != nil && m.pendingDetailTranscript.detailMode) ||
 		m.worktrees.create.submitting ||
 		m.worktrees.deleteConfirm.submitting
 }

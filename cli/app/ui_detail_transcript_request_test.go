@@ -409,6 +409,9 @@ func TestDetailTranscriptVisibleSessionReplacementCancelsOldRequestAndHydratesNe
 	if newCmd == nil {
 		t.Fatal("visible session replacement did not hydrate the new target")
 	}
+	if model.pendingDetailTranscript == nil || !model.pendingDetailTranscript.detailMode {
+		t.Fatalf("visible session replacement request = %#v, want Detail Mode provenance", model.pendingDetailTranscript)
+	}
 
 	newDone := runDetailTranscriptCommand(newCmd)
 	newRequest := waitForDetailTranscriptRequest(t, sessionViews)
@@ -456,6 +459,9 @@ func TestDetailTranscriptHiddenSessionReplacementResetsAndHydratesNewTarget(t *t
 	}
 	if cmd == nil {
 		t.Fatal("hidden session replacement did not hydrate the new target")
+	}
+	if model.pendingDetailTranscript == nil || model.pendingDetailTranscript.detailMode {
+		t.Fatalf("hidden session replacement request = %#v, want non-Detail Mode provenance", model.pendingDetailTranscript)
 	}
 
 	done := runDetailTranscriptCommand(cmd)

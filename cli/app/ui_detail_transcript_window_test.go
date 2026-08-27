@@ -26,9 +26,13 @@ func TestDetailModeTransitionLoadsServerBackedTranscriptPage(t *testing.T) {
 		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
 	)
 	model.view = tui.NewModel()
+	model.view = mustUpdateTUIModel(t, model.view, tui.SetModeMsg{Mode: tui.ModeDetail})
 	cmd := model.detailLoadCmdForModeTransition(tui.ModeOngoing, tui.ModeDetail)
 	if cmd == nil {
 		t.Fatal("detail transition did not create a transcript page load command")
+	}
+	if model.pendingDetailTranscript == nil || !model.pendingDetailTranscript.detailMode {
+		t.Fatalf("detail transition request = %#v, want Detail Mode provenance", model.pendingDetailTranscript)
 	}
 
 	for _, msg := range collectCmdMessages(t, cmd) {

@@ -40,9 +40,15 @@ func TestNativeProgressEligibilityUsesOnlyApprovedSources(t *testing.T) {
 		{
 			name: "detail transcript page",
 			setup: func(m *uiModel) {
-				m.pendingDetailTranscript = &uiPendingDetailTranscriptRequest{}
+				m.pendingDetailTranscript = &uiPendingDetailTranscriptRequest{detailMode: true}
 			},
 			want: true,
+		},
+		{
+			name: "session opening transcript hydration",
+			setup: func(m *uiModel) {
+				m.pendingDetailTranscript = &uiPendingDetailTranscriptRequest{}
+			},
 		},
 		{
 			name: "worktree create",
