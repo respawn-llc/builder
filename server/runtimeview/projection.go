@@ -149,6 +149,7 @@ func SessionViewFromRuntime(engine *runtime.Engine) (clientui.RuntimeSessionView
 		SessionID:             engine.SessionID(),
 		SessionName:           engine.SessionName(),
 		AgentRole:             engine.ContinuationAgentRole(),
+		AgentRoleKnown:        true,
 		ConversationFreshness: ConversationFreshnessFromSession(freshness),
 	}, nil
 }

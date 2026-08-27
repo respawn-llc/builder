@@ -42,8 +42,6 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	cachedView, _ := c.CachedMainView()
-	previousAgentRole := cachedView.Session.AgentRole
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
 	response, err := c.chatSettings.MutateChatSettings(ctx, serverapi.ChatSettingsMutationRequest{
@@ -58,10 +56,12 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 		usage := runtimeContextUsageFromChatContext(
 			response.Context,
 			view.Status.ContextUsage,
-			chatSettingsAgentRolesEqual(previousAgentRole, agentRole),
+			chatSettingsAgentRoleKnown(view.Session) &&
+				chatSettingsAgentRolesEqual(view.Session.AgentRole, agentRole),
 		)
 		view.Status.ThinkingLevel = response.Settings.SelectedAgent.Thinking
 		view.Session.AgentRole = agentRole
+		view.Session.AgentRoleKnown = true
 		view.Status.ReviewerFrequency = string(response.Settings.Supervisor.Value)
 		view.Status.ReviewerEnabled = response.Settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
 		view.Status.FastModeAvailable = response.Settings.Fast != nil
@@ -81,6 +81,10 @@ func chatSettingsAgentRole(role string) *string {
 		return nil
 	}
 	return &role
+}
+
+func chatSettingsAgentRoleKnown(session clientui.RuntimeSessionView) bool {
+	return session.AgentRoleKnown || session.AgentRole != nil
 }
 
 func chatSettingsAgentRolesEqual(current, next *string) bool {
