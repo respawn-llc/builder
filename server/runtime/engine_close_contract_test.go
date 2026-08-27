@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/tools"
 	"core/shared/textutil"
 )
 
@@ -13,7 +14,7 @@ func TestCloseRejectsUserTurnsAndSteeringWithoutNewWork(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 
 	if err := engine.Close(); err != nil {
 		t.Fatalf("close engine: %v", err)
@@ -21,12 +22,7 @@ func TestCloseRejectsUserTurnsAndSteeringWithoutNewWork(t *testing.T) {
 	if _, err := engine.SubmitUserMessage(context.Background(), "after-close"); !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("submit after close error = %v, want ErrEngineClosed", err)
 	}
-	if err := engine.steer("", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventDefault,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after-close")}},
-	)); !errors.Is(err, ErrEngineClosed) {
+	if err := engine.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after-close")}})); !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("steer after close error = %v, want ErrEngineClosed", err)
 	}
 	if calls := len(client.calls); calls != 0 {

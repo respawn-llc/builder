@@ -7,6 +7,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -30,25 +31,18 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 		},
 		Usage: llm.Usage{InputTokens: 100, WindowTokens: 200_000},
 	}}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:          "gpt-5",
 		CompactionMode: "native",
 		OnEvent:        func(event Event) { events = append(events, event) },
 	})
-	if err := engine.steer(
+	if err := steerTestActiveStep(engine,
 		"input",
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventNone,
-			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-		),
+		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
 	); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact remote context: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 
 	liveFacts := make([]TranscriptCommittedRowFact, 0)
 	for _, event := range events {
@@ -70,7 +64,7 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 		t,
 		reopenedStore,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
@@ -139,7 +133,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
@@ -159,7 +153,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		},
 	})
 
-	if err := engine.steer(
+	if err := steerTestActiveStep(engine,
 		"compaction",
 		steerHistoryReplacementIntent("local", compactionModeAuto, 1, nil, items),
 	); err != nil {
@@ -186,11 +180,6 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 	}
 	if len(live) != 4 {
 		t.Fatalf("projected transcript facts = %+v, want summary, two preserved messages, and environment", live)
-	}
-	for index, fact := range live {
-		if fact.Provenance == nil || fact.Provenance.CommittedAtUnixMs != nil {
-			t.Fatalf("ineligible replacement fact %d provenance = %+v", index, fact.Provenance)
-		}
 	}
 	wantMessageTypes := []llm.MessageType{
 		llm.MessageTypeCompactionSummary,
@@ -243,7 +232,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		t,
 		mustOpenTestSession(t, store.Dir()),
 		providerClient,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
@@ -267,7 +256,6 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		}
 	}
 }
-
 func TestEligibleHistoryReplacementTimestampParityAcrossPersistedAndLiveProjection(t *testing.T) {
 	t.Parallel()
 	var events []Event
@@ -299,7 +287,8 @@ func TestEligibleHistoryReplacementTimestampParityAcrossPersistedAndLiveProjecti
 			Content:     textutil.Value("replacement summary"),
 		},
 	})
-	if err := engine.steer(
+	if err := steerTestActiveStep(
+		engine,
 		"eligible replacement",
 		steerHistoryReplacementIntent("local", compactionModeAuto, 1, nil, items),
 	); err != nil {

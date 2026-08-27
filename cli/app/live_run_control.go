@@ -14,9 +14,8 @@ import (
 )
 
 type RunLiveSteerResult struct {
-	QueueItemID     string
-	Text            string
-	ClientRequestID string
+	QueueItemID string
+	Text        string
 }
 
 type RunLiveStopResult struct {
@@ -27,14 +26,6 @@ type RunLiveWatchResult struct {
 	Response serverapi.RuntimeLiveWatchResponse
 	Error    error
 	Close    func() error
-}
-
-func RunLiveWatch(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
-	result := RunLiveWatchWithCleanup(ctx, opts, targetSessionID)
-	if result.Close != nil {
-		_ = result.Close()
-	}
-	return result.Response, result.Error
 }
 
 func RunLiveWatchWithCleanup(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) RunLiveWatchResult {
@@ -64,7 +55,6 @@ func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.
 	}
 	defer func() { _ = closeFn() }()
 	resp, err := liveClient.LiveSteer(ctx, serverapi.RuntimeLiveSteerRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 		SessionID:       targetSessionID.String(),
 		CallerSessionID: callerSessionID,
 		Text:            trimmedText,
@@ -72,7 +62,7 @@ func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.
 	if err != nil {
 		return RunLiveSteerResult{}, err
 	}
-	return RunLiveSteerResult{QueueItemID: resp.QueueItemID, Text: resp.Text, ClientRequestID: resp.ClientRequestID}, nil
+	return RunLiveSteerResult{QueueItemID: resp.QueueItemID, Text: resp.Text}, nil
 }
 
 func LiveSteerCallerSessionID() (*string, error) {
@@ -101,8 +91,7 @@ func RunLiveStop(ctx context.Context, opts Options, targetSessionID runtimeids.S
 	}
 	defer func() { _ = closeFn() }()
 	resp, err := liveClient.LiveStop(ctx, serverapi.RuntimeLiveStopRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       targetSessionID.String(),
+		SessionID: targetSessionID.String(),
 	})
 	if err != nil {
 		return RunLiveStopResult{}, err

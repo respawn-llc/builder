@@ -5,7 +5,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 )
 
 type exclusiveStepOptions struct {
@@ -38,6 +38,8 @@ type exclusiveStepLifecycle interface {
 	Snapshot() *RunSnapshot
 	WithActiveStep(fn func(stepID string) error) (bool, error)
 	ApplyForActiveStep(stepID string, apply func() error) error
+	BeginAgentStepBoundary(ctx context.Context) error
+	CompleteAgentStepBoundary(ctx context.Context) error
 	DrainAgentStepBoundary(ctx context.Context) error
 	EndAgentStepBoundary()
 }
@@ -55,9 +57,9 @@ type backgroundNoticeScheduler interface {
 }
 
 type contextCompactor interface {
-	CompactContextWithAcceptance(ctx context.Context, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
+	CompactContextWithAcceptance(ctx context.Context, requestID runtimeids.CompactionRequestID, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
 	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
-	CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult
+	CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error)
 	CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
@@ -145,26 +147,33 @@ type messageLifecycle interface {
 	FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
 	DrainPendingUserInjections() []QueuedUserMessage
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
+	DrainPendingUserInjectionsByScope(scopeID runtimeids.ExecutionScopeID) []interruptedHumanSteering
+	DrainInterruptedUserInjections() []interruptedHumanSteering
 	PendingUserMessages() []QueuedUserMessage
 	RestorePendingUserInjections(items []queuedUserMessage)
-	QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error)
-	QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error)
+	QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
+	QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
 	HasPendingUserInjections() bool
 }
 
 type reviewerPipeline interface {
 	ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool
-	RunFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error)
-	RunSuggestions(ctx context.Context, stepID string, reviewerClient llm.Client) (reviewerSuggestionsResult, error)
+	Prepare(ctx context.Context, stepID string, reviewerClient llm.Client) (preparedReviewerRequest, error)
+	Run(ctx context.Context, prepared preparedReviewerRequest) reviewerProviderResult
 }
 
-type reviewerFollowUpResult struct {
-	Message                    llm.Message
-	Completion                 *ReviewerStatus
-	AssistantCommittedStart    int
-	AssistantCommittedStartSet bool
-	AssistantEventEmitted      bool
+type preparedReviewerRequest struct {
+	originStepID     runtimeids.StepID
+	client           llm.Client
+	request          llm.Request
+	cacheObservation preparedCacheRequestObservation
+}
+
+type reviewerProviderResult struct {
+	suggestions reviewerSuggestionsResult
+	usage       llm.Usage
+	err         error
 }
 
 type phaseProtocolTurn struct {
@@ -219,9 +228,6 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 				reviewer: e.reviewerFlow,
 				messages: e.messageFlow,
 			}
-		}
-		if reviewer, ok := e.reviewerFlow.(*defaultReviewerPipeline); ok && reviewer.stepRunner == nil {
-			reviewer.stepRunner = e.stepFlow
 		}
 	})
 }

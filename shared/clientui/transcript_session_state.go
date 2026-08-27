@@ -2,7 +2,6 @@ package clientui
 
 import (
 	"fmt"
-	"strings"
 
 	"core/shared/runtimeids"
 )
@@ -31,10 +30,20 @@ const (
 	CompactionFailed    CompactionState = "failed"
 )
 
+type CompactionMode string
+
+const (
+	CompactionModeAuto                   CompactionMode = "auto"
+	CompactionModeHandoff                CompactionMode = "handoff"
+	CompactionModeManual                 CompactionMode = "manual"
+	CompactionModeWorkflowPostCompletion CompactionMode = "workflow_post_completion"
+)
+
 type TranscriptCompactionStatus struct {
 	StepID     runtimeids.StepID
+	RequestID  *runtimeids.CompactionRequestID
 	State      CompactionState
-	Mode       string
+	Mode       CompactionMode
 	Count      int
 	Diagnostic *TranscriptDiagnostic
 }
@@ -81,8 +90,18 @@ func (s TranscriptCompactionStatus) Validate() error {
 	if s.StepID.IsZero() {
 		return fmt.Errorf("compaction status step id is required")
 	}
-	if strings.TrimSpace(s.Mode) == "" {
-		return fmt.Errorf("compaction mode is required")
+	switch s.Mode {
+	case CompactionModeAuto, CompactionModeHandoff, CompactionModeManual, CompactionModeWorkflowPostCompletion:
+	default:
+		return fmt.Errorf("unknown compaction mode %q", s.Mode)
+	}
+	if s.RequestID != nil {
+		if s.RequestID.IsZero() {
+			return fmt.Errorf("compaction request id cannot be zero")
+		}
+		if s.Mode != CompactionModeManual {
+			return fmt.Errorf("%s compaction cannot carry a client request id", s.Mode)
+		}
 	}
 	if s.Count < 0 {
 		return fmt.Errorf("compaction count cannot be negative")

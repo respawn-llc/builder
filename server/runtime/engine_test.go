@@ -70,14 +70,15 @@ func (f *fakeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabili
 		return f.caps, nil
 	}
 	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsPromptCacheKey:        true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsNativeWebSearch:        true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
+		IsOpenAIFirstParty:             true,
 	}, nil
 }
 
@@ -110,14 +111,15 @@ func (c *hookClient) ProviderCapabilities(context.Context) (llm.ProviderCapabili
 		return c.caps, nil
 	}
 	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsPromptCacheKey:        true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsNativeWebSearch:        true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
+		IsOpenAIFirstParty:             true,
 	}, nil
 }
 
@@ -127,6 +129,10 @@ type fakeCompactionClient struct {
 	responses []llm.Response
 	errors    []error
 	calls     []llm.Request
+
+	inputTokenCount      int
+	inputTokenCountFn    func(req llm.Request) int
+	countInputTokenCalls int
 
 	compactionResponses []llm.CompactionResponse
 	compactionErr       error
@@ -167,6 +173,68 @@ func (c *contextWindowClient) ProviderCapabilities(context.Context) (llm.Provide
 	}, nil
 }
 
+type preciseCompactionClient struct {
+	inputTokenCount int
+	contextWindow   int
+	countErr        error
+	countSupported  *bool
+	supportErr      error
+
+	countCalls   int
+	resolveCalls int
+}
+
+func (c *preciseCompactionClient) Generate(_ context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
+	return llm.Response{}, nil
+}
+
+func (c *preciseCompactionClient) CountRequestInputTokens(_ context.Context, _ llm.Request) (int, error) {
+	c.countCalls++
+	if c.countErr != nil {
+		return 0, c.countErr
+	}
+	if c.inputTokenCount < 0 {
+		return 0, nil
+	}
+	return c.inputTokenCount, nil
+}
+
+func (c *preciseCompactionClient) SupportsRequestInputTokenCount(_ context.Context) (bool, error) {
+	if c.supportErr != nil {
+		return false, c.supportErr
+	}
+	if c.countSupported != nil {
+		return *c.countSupported, nil
+	}
+	return true, nil
+}
+
+func (c *preciseCompactionClient) ResolveModelContextWindow(_ context.Context, _ string) (int, error) {
+	c.resolveCalls++
+	if c.contextWindow <= 0 {
+		return 0, nil
+	}
+	return c.contextWindow, nil
+}
+
+func (c *preciseCompactionClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	supportsExactCount := true
+	if c.countSupported != nil {
+		supportsExactCount = *c.countSupported
+	}
+	return llm.ProviderCapabilities{
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: supportsExactCount,
+		SupportsPromptCacheKey:         true,
+		SupportsNativeWebSearch:        true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
+		IsOpenAIFirstParty:             true,
+	}, nil
+}
+
 func (f *fakeCompactionClient) Generate(_ context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -184,6 +252,23 @@ func (f *fakeCompactionClient) Generate(_ context.Context, req llm.Request, _ ll
 	resp := f.responses[0]
 	f.responses = f.responses[1:]
 	return resp, nil
+}
+
+func (f *fakeCompactionClient) CountRequestInputTokens(_ context.Context, req llm.Request) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.countInputTokenCalls++
+	if f.inputTokenCountFn != nil {
+		count := f.inputTokenCountFn(req)
+		if count < 0 {
+			return 0, nil
+		}
+		return count, nil
+	}
+	if f.inputTokenCount < 0 {
+		return 0, nil
+	}
+	return f.inputTokenCount, nil
 }
 
 func (f *fakeCompactionClient) Compact(_ context.Context, req llm.CompactionRequest) (llm.CompactionResponse, error) {
@@ -211,14 +296,15 @@ func (f *fakeCompactionClient) Compact(_ context.Context, req llm.CompactionRequ
 func (f *fakeCompactionClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	if strings.TrimSpace(f.caps.ProviderID) == "" {
 		return llm.ProviderCapabilities{
-			ProviderID:                    "openai",
-			SupportsResponsesAPI:          true,
-			SupportsResponsesCompact:      true,
-			SupportsPromptCacheKey:        true,
-			SupportsNativeWebSearch:       true,
-			SupportsReasoningEncrypted:    true,
-			SupportsServerSideContextEdit: true,
-			IsOpenAIFirstParty:            true,
+			ProviderID:                     "openai",
+			SupportsResponsesAPI:           true,
+			SupportsResponsesCompact:       true,
+			SupportsRequestInputTokenCount: true,
+			SupportsPromptCacheKey:         true,
+			SupportsNativeWebSearch:        true,
+			SupportsReasoningEncrypted:     true,
+			SupportsServerSideContextEdit:  true,
+			IsOpenAIFirstParty:             true,
 		}, nil
 	}
 	return f.caps, nil
@@ -299,14 +385,15 @@ type fakeReasoningStreamClient struct{}
 
 func defaultTestProviderCapabilities() llm.ProviderCapabilities {
 	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsPromptCacheKey:        true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsNativeWebSearch:        true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
+		IsOpenAIFirstParty:             true,
 	}
 }
 
@@ -359,10 +446,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReminderEntries(t *testin
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value("heads up")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value("heads up")}})); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 
@@ -375,12 +462,12 @@ func TestLastCommittedAssistantFinalAnswerClearsAtBlankFinal(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, message := range []llm.Message{
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")},
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("")},
 	} {
-		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 			t.Fatalf("append assistant final: %v", err)
 		}
 	}
@@ -395,10 +482,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingErrorFeedback(t *testing.
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value("phase mismatch")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value("phase mismatch")}})); err != nil {
 		t.Fatalf("append warning: %v", err)
 	}
 
@@ -412,10 +499,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingHandoffFutureMessage(t *t
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHandoffFutureMessage), Content: textutil.Value("resume with tests")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHandoffFutureMessage), Content: textutil.Value("resume with tests")}})); err != nil {
 		t.Fatalf("append handoff future message: %v", err)
 	}
 
@@ -429,10 +516,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReviewerFeedback(t *testi
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value("reviewer suggestions")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value("reviewer suggestions")}})); err != nil {
 		t.Fatalf("append reviewer feedback: %v", err)
 	}
 
@@ -446,10 +533,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingGoalFeedback(t *testing.T
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeGoal), Content: textutil.Value(prompts.RenderGoalSetPrompt("ship goal mode")), CompactContent: textutil.Value("Goal set: \"ship goal mode\"")}, eng.transcriptWorkingDir())})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeGoal), Content: textutil.Value(prompts.RenderGoalSetPrompt("ship goal mode")), CompactContent: textutil.Value("Goal set: \"ship goal mode\"")}, eng.transcriptWorkingDir())})); err != nil {
 		t.Fatalf("append goal feedback: %v", err)
 	}
 
@@ -463,10 +550,10 @@ func TestLastCommittedAssistantFinalAnswerDoesNotSkipTrailingUntypedDeveloperMes
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("User ran shell command directly:\npwd")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("User ran shell command directly:\npwd")}})); err != nil {
 		t.Fatalf("append developer message: %v", err)
 	}
 
@@ -900,9 +987,7 @@ func TestSystemPromptSnapshotRefreshesAfterCompaction(t *testing.T) {
 	if got := client.calls[1].SystemPrompt; got != "prompt A" {
 		t.Fatalf("pre-compaction system prompt = %q, want prompt A", got)
 	}
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if got := client.calls[2].SystemPrompt; got != "prompt A" {
 		t.Fatalf("compaction system prompt = %q, want prompt A", got)
 	}
@@ -944,9 +1029,7 @@ func TestSystemPromptRefreshFailureKeepsStaleLockAndRetries(t *testing.T) {
 		t.Fatalf("submit first: %v", err)
 	}
 	writeTestFile(t, systemPath, "prompt B {{")
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if _, err := eng.SubmitUserMessage(context.Background(), "fails"); err == nil {
 		t.Fatal("expected invalid prompt refresh to fail")
 	}
@@ -988,9 +1071,7 @@ func TestPendingSystemPromptRefreshRunsAfterReopen(t *testing.T) {
 		t.Fatalf("submit first: %v", err)
 	}
 	writeTestFile(t, systemPath, "prompt B")
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if locked := store.Meta().Locked; locked == nil || locked.HasSystemPrompt || locked.SystemPrompt != "" {
 		t.Fatalf("locked prompt after compaction = %+v, want stale", locked)
 	}

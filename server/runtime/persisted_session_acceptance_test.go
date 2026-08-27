@@ -50,12 +50,13 @@ func (*persistedBoundaryClient) ProviderCapabilities(
 	context.Context,
 ) (llm.ProviderCapabilities, error) {
 	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsPromptCacheKey:        true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
 	}, nil
 }
 
@@ -175,7 +176,7 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	customInput := "later custom input"
@@ -201,6 +202,8 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		},
 	}
 	const stepID = "crash-unclosed-step"
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	persistAcceptedToolCallIntents(t, engine, stepID, accepted)
 	collector, err := newResultGroupCollector([]resultGroupCallIdentity{
 		resultGroupIdentityFromToolCall(calls[0]),
@@ -215,14 +218,12 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		Output: json.RawMessage(`{"ok":"completed only in memory"}`),
 	}
 	var outcome *resultGroupReportOutcome
-	if err := engine.steer(
-		stepID,
-		steerResultGroupReportIntent(
-			collector,
-			calls[1].ID,
-			resultGroupUnit{result: laterResult},
-			&outcome,
-		),
+	if err := engine.steer(runtimeTestStepID(stepID), steerResultGroupReportIntent(
+		collector,
+		calls[1].ID,
+		resultGroupUnit{result: laterResult},
+		&outcome,
+	),
 	); err != nil || outcome == nil || *outcome != resultGroupReportAccepted {
 		t.Fatalf("report later crash result = outcome:%v error:%v", outcome, err)
 	}
@@ -245,7 +246,7 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		t,
 		firstStore,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	assertFreshResourceRepairOnEngine(t, first, firstStore, calls[0].ID)
@@ -288,7 +289,7 @@ func TestPersistedSessionCrashWithBlockedPrefixRepairsWholeUncommittedGroup(t *t
 		t,
 		secondStore,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	for _, call := range calls {
@@ -446,9 +447,12 @@ func runPersistedEffectRecoveryCase(
 		}),
 		Config{Model: "gpt-5"},
 	)
+	stepID := runtimeTestStepID("effect-step")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	calls := questionBarrierAcceptedCalls()
 	calls.local[0] = fixture.call
-	persistAcceptedToolCallIntents(t, engine, "effect-step", calls)
+	persistAcceptedToolCallIntents(t, engine, stepID, calls)
 	cause := errors.New("persisted effect barrier failure")
 	switch failure {
 	case persistedEffectObserverFailure:
@@ -461,7 +465,7 @@ func runPersistedEffectRecoveryCase(
 
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),
-		"effect-step",
+		stepID,
 		calls,
 	)
 	var fatal *resultGroupFatal

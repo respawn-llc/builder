@@ -103,16 +103,14 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 
 func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queuedID string, origin activeSubmitOrigin, submissionOrder *inputSubmissionOrder) tea.Cmd {
 	m := c.model
-	clientRequestID := runtimeids.NewRuntimeClientRequestID()
-	token := m.beginSubmitAttempt(text, queuedID, origin, clientRequestID, submissionOrder)
+	token := m.beginSubmitAttempt(text, queuedID, origin, submissionOrder)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
 			return newSubmitDoneMsg(token, "", text, errors.New("runtime engine is not configured"))
 		}
 		submission, err := m.submitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-			ClientRequestID: clientRequestID,
-			Input:           input,
+			Input: input,
 		})
 		if err != nil {
 			if !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) && errors.Is(err, context.Canceled) {
@@ -134,7 +132,7 @@ func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queu
 
 func (c uiInputController) submitUserShellCmd(originalText, command string, origin activeSubmitOrigin, submissionOrder *inputSubmissionOrder) tea.Cmd {
 	m := c.model
-	token := m.beginSubmitAttempt(originalText, "", origin, runtimeids.RuntimeClientRequestID{}, submissionOrder)
+	token := m.beginSubmitAttempt(originalText, "", origin, submissionOrder)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
@@ -155,7 +153,6 @@ func (m *uiModel) beginSubmitAttempt(
 	text string,
 	queuedID string,
 	origin activeSubmitOrigin,
-	clientRequestID runtimeids.RuntimeClientRequestID,
 	submissionOrder *inputSubmissionOrder,
 ) uint64 {
 	if m == nil {
@@ -176,65 +173,48 @@ func (m *uiModel) beginSubmitAttempt(
 		text:            text,
 		queuedID:        queuedID,
 		origin:          origin,
-		clientRequestID: clientRequestID,
 		submissionOrder: order,
 	}
 	return m.submitToken
 }
 
-type uiCompactionOrigin uint8
-
-const (
-	uiCompactionOriginManual uiCompactionOrigin = iota
-	uiCompactionOriginQueued
-)
-
-func (c uiInputController) startCompactionWithOrigin(submittedText, args string, origin uiCompactionOrigin) tea.Cmd {
+func (c uiInputController) startCompaction(args string) tea.Cmd {
 	m := c.model
-	switch origin {
-	case uiCompactionOriginManual:
-	case uiCompactionOriginQueued:
-		m.postTurnCompactionsInFlight++
-	default:
-		panic("compact request has invalid dispatch origin")
+	if m.isCompacting() {
+		return nil
 	}
+	requestID := runtimeids.NewCompactionRequestID()
+	m.registerPendingCompactionRequest(requestID)
+	c.startRuntimeOperationAffordance()
 	m.logf("compaction.start args_chars=%d", len(strings.TrimSpace(args)))
 	m.layout().syncViewport()
-	return c.compactCmd(submittedText, args, origin)
+	return tea.Batch(c.compactCmd(requestID, args), m.reconcileSpinnerTicking(false))
 }
 
-func (c uiInputController) compactCmd(submittedText, args string, origin uiCompactionOrigin) tea.Cmd {
+func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, args string) tea.Cmd {
 	m := c.model
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
-			return compactDoneMsg{
-				submittedText: submittedText,
-				origin:        origin,
-				err: serverapi.NewRuntimeCommandNotAcceptedError(
-					errors.New("runtime engine is not configured"),
-				),
-			}
+			return compactDoneMsg{requestID: requestID, err: errors.New("runtime engine is not configured")}
 		}
-		err := client.CompactRuntime(context.Background(), clientui.RuntimeCompactRequest{Args: args})
 		return compactDoneMsg{
-			submittedText: submittedText,
-			origin:        origin,
-			invoked:       true,
-			err:           err,
+			requestID: requestID,
+			err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{
+				RequestID: requestID,
+				Args:      args,
+			}),
 		}
 	}
 }
 
 func (c uiInputController) startRuntimeOperationAffordance() {
 	m := c.model
-	m.clearReviewerState()
 	m.clearActiveAssistantStreamSource()
 }
 
 func (c uiInputController) finishRuntimeOperationAffordance() {
 	m := c.model
-	m.clearReviewerState()
 	m.spinnerFrame = 0
 	if !m.shouldAnimateSpinner() {
 		m.stopSpinnerTicking()
@@ -243,16 +223,20 @@ func (c uiInputController) finishRuntimeOperationAffordance() {
 
 func (c uiInputController) notifyTurnQueueDrainedIfIdle() {
 	m := c.model
-	if m.turnQueueHook == nil ||
-		m.blocksRuntimeInput() ||
-		len(m.queued) > 0 ||
-		m.postTurnCompactionsInFlight > 0 ||
-		m.injectedQueueBlocksDrain() ||
-		m.hasEnqueuedInjectedRuntimeWork() ||
-		m.ask.hasCurrent() {
+	if m.turnQueueHook == nil || !c.turnQueueDrained() {
 		return
 	}
 	m.turnQueueHook.OnTurnQueueDrained()
+}
+
+func (c uiInputController) turnQueueDrained() bool {
+	m := c.model
+	return m != nil &&
+		!m.blocksRuntimeInput() &&
+		len(m.queued) == 0 &&
+		!m.injectedQueueBlocksDrain() &&
+		!m.hasEnqueuedInjectedRuntimeWork() &&
+		!m.ask.hasCurrent()
 }
 
 func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.Cmd) {
@@ -267,13 +251,18 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	m.observeRuntimeRequestResult(msg.err)
 	restoreSubmittedText := msg.err != nil && (msg.token == 0 || m.shouldRestoreSubmittedTextOnSubmitError(msg.err))
 	activeQueuedID := m.activeSubmit.queuedID
+	var queuedStateCmd tea.Cmd
 	if msg.err == nil && msg.queued.ID != "" {
-		m.registerSteeredQueuedUserMessage(msg.queued)
+		queuedStateCmd = m.registerSubmittedQueuedUserMessage(msg.queued)
 	}
 	m.activeSubmit = activeSubmitState{}
+	m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
 	c.finishRuntimeOperationAffordance()
 	if msg.token == 0 || !m.hasRuntimeClient() {
-		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle})
+		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{
+			State:    clientui.RuntimeActivityRegisteredIdle,
+			Reviewer: clientui.ReviewerActivityInactive,
+		})
 	}
 	m.discardQueuedInput(activeQueuedID)
 	if msg.err != nil {
@@ -333,11 +322,11 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if len(m.queued) > 0 {
 		next, drainCmd := c.flushQueuedInputs(queueDrainAuto)
 		c.notifyTurnQueueDrainedIfIdle()
-		return next, drainCmd
+		return next, tea.Batch(queuedStateCmd, drainCmd)
 	}
 	c.notifyTurnQueueDrainedIfIdle()
 	m.layout().syncViewport()
-	return m, nil
+	return m, queuedStateCmd
 }
 
 func (c uiInputController) handleSpinnerTick(msg spinnerTickMsg) (tea.Model, tea.Cmd) {
@@ -368,93 +357,63 @@ func (c uiInputController) handleSpinnerTick(msg spinnerTickMsg) (tea.Model, tea
 
 func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea.Cmd) {
 	m := c.model
-	compactionOrigin := msg.origin
-	notAccepted := errors.Is(msg.err, serverapi.ErrRuntimeCommandNotAccepted)
-	if !msg.invoked && !notAccepted {
-		msg.err = serverapi.NewRuntimeCommandNotAcceptedError(
-			errors.New("compact request completed without dispatch"),
-		)
-		notAccepted = true
-	}
-	if compactionOrigin == uiCompactionOriginQueued {
-		if m.postTurnCompactionsInFlight == 0 {
-			if m.debugMode {
-				panic("compact completion has no matching post-turn request")
-			}
-			msg.err = serverapi.NewRuntimeCommandNotAcceptedError(
-				errors.New("compact completion has no matching post-turn request"),
-			)
-			notAccepted = true
-		} else {
-			m.postTurnCompactionsInFlight--
-		}
-	}
-	if msg.invoked {
-		m.observeRuntimeRequestResult(msg.err)
-	}
+	serverActiveBeforeCompletion := m.runtimeActivityBusy()
+	m.observeRuntimeRequestResult(msg.err)
+	c.finishRuntimeOperationAffordance()
 	if msg.err != nil {
-		if notAccepted {
-			c.restoreSubmittedTextIntoInput(msg.submittedText)
-			if compactionOrigin == uiCompactionOriginQueued {
-				if m.turnQueueHook != nil {
-					m.turnQueueHook.OnTurnQueueAborted()
-				}
-				c.restoreQueuedMessagesIntoInput()
-			}
-			detailErr := runtimeattach.FormatSubmissionError(msg.err)
-			m.logf("compaction.error err=%q", detailErr)
+		m.clearPendingCompactionRequest(msg.requestID)
+		restoreInjectedCmd := c.restoreInjectedInputsIntoComposer()
+		c.restoreQueuedMessagesIntoInput()
+		if isRuntimeOperationInterrupted(msg.err) {
+			m.activity = uiActivityInterrupted
+			m.logf("step.interrupted")
 			m.layout().syncViewport()
-			return m, m.sendTransientStatusWithNoticeID(
-				detailErr,
-				uiStatusNoticeError,
-				transientStatusDuration,
-				uiStatusNoticeReplace,
-				"",
-			)
+			return m, tea.Batch(restoreInjectedCmd, m.interruptedStatusNoticeCmd())
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
 		m.activity = uiActivityError
 		appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
 		m.logf("compaction.error err=%q", detailErr)
-		next, advanceCmd := c.advanceAfterAcceptedCompaction(compactionOrigin)
-		return next, tea.Batch(appendCmd, advanceCmd)
+		m.layout().syncViewport()
+		return m, tea.Batch(restoreInjectedCmd, appendCmd)
 	}
 
-	m.logf("compaction.done")
-	return c.advanceAfterAcceptedCompaction(compactionOrigin)
-}
-
-func (c uiInputController) advanceAfterAcceptedCompaction(origin uiCompactionOrigin) (tea.Model, tea.Cmd) {
-	m := c.model
+	if !serverActiveBeforeCompletion {
+		m.activity = uiActivityIdle
+	}
+	m.logf("compaction.scheduled")
 	if len(m.queued) > 0 {
-		c.notifyUserCompactionCompleted(origin, false)
-		if origin != uiCompactionOriginQueued {
-			m.layout().syncViewport()
-			return m, nil
-		}
 		next, cmd := c.flushQueuedInputs(queueDrainAuto)
 		c.notifyTurnQueueDrainedIfIdle()
 		return next, cmd
 	}
 	if m.injectedQueueBlocksDrain() || m.hasEnqueuedInjectedRuntimeWork() {
-		c.notifyUserCompactionCompleted(origin, false)
 		m.layout().syncViewport()
 		return m, nil
 	}
-	c.notifyUserCompactionCompleted(origin, true)
 	m.layout().syncViewport()
 	return m, nil
 }
 
-func (c uiInputController) notifyUserCompactionCompleted(origin uiCompactionOrigin, queueDrained bool) {
-	m := c.model
-	if m == nil || m.turnQueueHook == nil {
-		return
+func (m *uiModel) clearPendingCompactionRequest(requestID runtimeids.CompactionRequestID) bool {
+	if m == nil {
+		return false
 	}
-	switch origin {
-	case uiCompactionOriginManual, uiCompactionOriginQueued:
-		m.turnQueueHook.OnUserCompactionCompleted(queueDrained)
+	if _, exists := m.pendingCompactionRequestIDs[requestID]; !exists {
+		return false
 	}
+	delete(m.pendingCompactionRequestIDs, requestID)
+	if len(m.pendingCompactionRequestIDs) == 0 {
+		m.pendingCompactionRequestIDs = nil
+	}
+	return true
+}
+
+func (m *uiModel) registerPendingCompactionRequest(requestID runtimeids.CompactionRequestID) {
+	if m.pendingCompactionRequestIDs == nil {
+		m.pendingCompactionRequestIDs = make(map[runtimeids.CompactionRequestID]struct{})
+	}
+	m.pendingCompactionRequestIDs[requestID] = struct{}{}
 }
 
 func (m *uiModel) shouldRestoreSubmittedTextOnSubmitError(err error) bool {

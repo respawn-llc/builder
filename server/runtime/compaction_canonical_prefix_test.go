@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,22 +58,20 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	if err := store.SetHeadlessActive(true); err != nil {
 		t.Fatalf("enable headless context: %v", err)
 	}
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
-	_, receipt, err := compactNowInActiveTestRun(
-		t,
-		engine,
+	stepID := runtimeTestStepID("compact")
+	restoreStep := setTestActiveStep(engine, stepID)
+	_, receipt, err := engine.compactNow(
+		context.Background(),
+		stepID,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,
 	)
+	restoreStep()
 	if err != nil || !receipt.Committed {
 		t.Fatalf("compact remote context: receipt=%+v error=%v", receipt, err)
 	}

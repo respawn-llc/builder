@@ -92,11 +92,6 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 			return nil
 		}
 		entries = []ChatEntry{toolResultChatEntry(*evt.ToolResult)}
-	case EventReviewerCompleted:
-		// Reviewer completion remains a runtime-status event only.
-		// Persisted reviewer terminal rows must arrive through local_entry_added
-		// so the client has exactly one committed transcript source.
-		return nil
 	case EventCompactionCompleted:
 		return nil
 	case EventCompactionFailed:
@@ -136,20 +131,20 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 	default:
 		return nil
 	}
-	stepID := strings.TrimSpace(evt.StepID)
+	stepID := cloneOptionalStepID(evt.StepID)
 	for index := range entries {
-		existing := strings.TrimSpace(entries[index].StepID)
-		if existing != "" && stepID != "" && existing != stepID {
+		existing := cloneOptionalStepID(entries[index].StepID)
+		if existing != nil && stepID != nil && *existing != *stepID {
 			panic(fmt.Sprintf(
 				"transcript entry step identity conflicts with runtime event: entry_index=%d entry_step_id=%q event_step_id=%q event_kind=%q",
 				index,
-				existing,
-				stepID,
+				*existing,
+				*stepID,
 				evt.Kind,
 			))
 		}
-		if stepID != "" {
-			entries[index].StepID = stepID
+		if stepID != nil {
+			entries[index].StepID = cloneOptionalStepID(stepID)
 		}
 	}
 	return entries

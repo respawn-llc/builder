@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +27,8 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 func newTestToolRegistry(t testing.TB, registrations ...tools.HandlerRegistration) *tools.Registry {
@@ -57,6 +60,19 @@ type testPersistedEvent struct {
 }
 
 const runtimeTestSynchronizationTimeout = 30 * time.Second
+
+var runtimeTestStepIDs sync.Map
+
+func runtimeTestStepID(seed string) string {
+	if parsed, err := runtimeids.ParseStepID(seed); err == nil {
+		return parsed.String()
+	}
+	if seed == "" {
+		panic("runtime test Step identity seed is required")
+	}
+	stepID, _ := runtimeTestStepIDs.LoadOrStore(seed, uuid.NewString())
+	return stepID.(string)
+}
 
 func withGenerateRetryDelays(t *testing.T, delays []time.Duration) {
 	t.Helper()
@@ -91,36 +107,6 @@ func withActiveTestRunContext(
 		exclusiveStepOptions{ActiveKind: activeKind},
 		fn,
 	)
-}
-
-func runReviewerSuggestionsInActiveTestRun(
-	t *testing.T,
-	engine *Engine,
-	reviewerClient llm.Client,
-) (reviewerSuggestionsResult, error) {
-	t.Helper()
-	var result reviewerSuggestionsResult
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var runErr error
-		result, runErr = engine.runReviewerSuggestions(ctx, stepID, reviewerClient)
-		return runErr
-	})
-	return result, err
-}
-
-func runStepLoopInActiveTestRun(
-	t *testing.T,
-	ctx context.Context,
-	engine *Engine,
-) (llm.Message, error) {
-	t.Helper()
-	var message llm.Message
-	err := withActiveTestRunContext(t, ctx, engine, ActiveKindUserTurn, func(runCtx context.Context, stepID string) error {
-		var runErr error
-		message, runErr = engine.runStepLoop(runCtx, stepID)
-		return runErr
-	})
-	return message, err
 }
 
 func buildActiveTurnRequestForTest(
@@ -226,6 +212,14 @@ func waitEngineLifecycleTasks(t *testing.T, eng *Engine) {
 	}
 }
 
+func scheduleManualCompactionAndWait(t *testing.T, eng *Engine) {
+	t.Helper()
+	if err := eng.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("schedule manual compaction: %v", err)
+	}
+	waitEngineLifecycleTasks(t, eng)
+}
+
 func backgroundShellEventTypeForTest(eventType shelltool.EventType) BackgroundShellEventType {
 	switch eventType {
 	case shelltool.EventBackgrounded:
@@ -320,6 +314,13 @@ func mustBlockTestEventLogAppends(t *testing.T, store *session.Store) *testEvent
 	return filemode.MustBlockEventLogAppends(t, filepath.Join(store.Dir(), "events.jsonl"))
 }
 
+func blockTestSessionMetadataMutations(t *testing.T, store *session.Store) {
+	t.Helper()
+	if err := os.Mkdir(filepath.Join(store.Dir(), "append-recovery.json"), 0o755); err != nil {
+		t.Fatalf("block Session metadata mutations: %v", err)
+	}
+}
+
 func appendRawCurrentEventLine(t *testing.T, store *session.Store, line []byte) {
 	t.Helper()
 	path := filepath.Join(store.Dir(), "events.jsonl")
@@ -391,21 +392,6 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	if cfg.EffectiveContextWindowPercent <= 0 || cfg.EffectiveContextWindowPercent > 100 {
 		cfg.EffectiveContextWindowPercent = 95
 	}
-	if cfg.CurrentNodeExecution != nil {
-		if cfg.CurrentNodeExecution.ScopeID.IsZero() {
-			cfg.CurrentNodeExecution.ScopeID = runtimeids.NewExecutionScopeID()
-		}
-		instructions := &cfg.CurrentNodeExecution.Instructions
-		if instructions.CurrentNode.TaskID == "" && instructions.CurrentNode.NodeID == "" {
-			reference, err := workflow.NewCurrentNodeReference("test-task", "test-current-node", nil)
-			if err != nil {
-				t.Fatalf("create test current node reference: %v", err)
-			}
-			instructions.CurrentNode = reference
-		} else if err := instructions.CurrentNode.Validate(); err != nil {
-			t.Fatalf("invalid test current node reference: %v", err)
-		}
-	}
 	eventLog := mustMaterializeTestEventLog(t, store)
 	engine, err := New(store, eventLog, client, registry, cfg)
 	if err != nil {
@@ -418,6 +404,75 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 		}
 	})
 	return engine
+}
+
+func setTestActiveStep(engine *Engine, stepID string) func() {
+	stepID = runtimeTestStepID(stepID)
+	previous := engine.stepLifecycle
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{
+		activeStepID: stepID,
+		snapshot: &RunSnapshot{
+			RunID:      "11111111-1111-4111-8111-111111111111",
+			StepID:     stepID,
+			ActiveKind: ActiveKindUserTurn,
+		},
+	}
+	return func() {
+		engine.stepLifecycle = previous
+	}
+}
+
+func steerTestActiveStep(engine *Engine, stepID string, intents ...steeringIntent) error {
+	stepID = runtimeTestStepID(stepID)
+	restore := setTestActiveStep(engine, stepID)
+	defer restore()
+	return engine.steer(stepID, intents...)
+}
+
+func runTestActiveStep(engine *Engine, stepID string, operation func() error) error {
+	restore := setTestActiveStep(engine, stepID)
+	defer restore()
+	return operation()
+}
+
+func generateTestActiveStep(
+	ctx context.Context,
+	engine *Engine,
+	stepID string,
+	client llm.Client,
+	request llm.Request,
+) (llm.Response, error) {
+	stepID = runtimeTestStepID(stepID)
+	restore := setTestActiveStep(engine, stepID)
+	defer restore()
+	return engine.generateWithRetryClient(ctx, stepID, client, request, nil, nil, nil)
+}
+
+func runReviewerSuggestionsTestActiveStep(
+	ctx context.Context,
+	engine *Engine,
+	stepID string,
+	client llm.Client,
+) (reviewerSuggestionsResult, error) {
+	stepID = runtimeTestStepID(stepID)
+	restore := setTestActiveStep(engine, stepID)
+	defer restore()
+	return engine.runReviewerSuggestions(ctx, stepID, client)
+}
+
+func runStepLoopInActiveTestRun(
+	t *testing.T,
+	ctx context.Context,
+	engine *Engine,
+) (llm.Message, error) {
+	t.Helper()
+	var message llm.Message
+	err := withActiveTestRunContext(t, ctx, engine, ActiveKindUserTurn, func(runCtx context.Context, stepID string) error {
+		var runErr error
+		message, runErr = engine.runStepLoop(runCtx, stepID)
+		return runErr
+	})
+	return message, err
 }
 
 func mustMaterializeTestEventLog(
@@ -649,7 +704,6 @@ func mustNewHandoffTestEngine(t *testing.T, store *session.Store, client llm.Cli
 
 func mustNewWorkflowTestEngine(t *testing.T, store *session.Store, client llm.Client, workflowCfg *workflowruntime.CurrentNodeExecutionConfig, cfg Config) *Engine {
 	t.Helper()
-	cfg.CurrentNodeExecution = workflowCfg
 	toolIDs := []toolspec.ID{toolspec.ToolExecCommand}
 	seen := map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
 	for _, id := range cfg.EnabledTools {
@@ -659,7 +713,48 @@ func mustNewWorkflowTestEngine(t *testing.T, store *session.Store, client llm.Cl
 		seen[id] = true
 		toolIDs = append(toolIDs, id)
 	}
-	return mustNewFakeToolEngine(t, store, client, cfg, toolIDs...)
+	engine := mustNewFakeToolEngine(t, store, client, cfg, toolIDs...)
+	publishTestWorkflowExecution(t, engine, workflowCfg)
+	return engine
+}
+
+func publishTestWorkflowExecution(t *testing.T, engine *Engine, workflowCfg *workflowruntime.CurrentNodeExecutionConfig) {
+	t.Helper()
+	if workflowCfg == nil {
+		t.Fatal("workflow execution config is required")
+	}
+	if binder, ok := workflowCfg.Controller.(interface {
+		bindWorkflowCompletionEngine(*Engine)
+	}); ok {
+		binder.bindWorkflowCompletionEngine(engine)
+	}
+	if workflowCfg.ScopeID.IsZero() {
+		workflowCfg.ScopeID = runtimeids.NewExecutionScopeID()
+	}
+	instructions := &workflowCfg.Instructions
+	if instructions.CurrentNode.TaskID == "" && instructions.CurrentNode.NodeID == "" {
+		reference, err := workflow.NewCurrentNodeReference("test-task", "test-current-node", nil)
+		if err != nil {
+			t.Fatalf("create test current node reference: %v", err)
+		}
+		instructions.CurrentNode = reference
+	} else if err := instructions.CurrentNode.Validate(); err != nil {
+		t.Fatalf("invalid test current node reference: %v", err)
+	}
+	binding, err := engine.BindCurrentNodeExecution(workflowCfg)
+	if err != nil {
+		t.Fatalf("bind workflow execution: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := binding.Close(); err != nil && !errors.Is(err, ErrEngineClosed) {
+			t.Errorf("close workflow execution binding: %v", err)
+		}
+	})
+}
+
+func publishTestWorkflowAgentAssociation(t *testing.T, engine *Engine, workflowCfg *workflowruntime.CurrentNodeExecutionConfig) {
+	t.Helper()
+	publishTestWorkflowExecution(t, engine, workflowCfg)
 }
 
 func mustTestCurrentNodeReference(t *testing.T, taskID string, nodeID string, branchKey *workflow.TransitionBranchKey) workflow.CurrentNodeReference {

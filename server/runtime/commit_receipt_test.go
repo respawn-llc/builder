@@ -1,325 +1,31 @@
 package runtime
 
 import (
+	"context"
 	"errors"
-	"reflect"
-	"slices"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
-	"core/server/workflow"
-	"core/server/workflowruntime"
-	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
-
-func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
-	t.Run("preparation failure is returned directly", func(t *testing.T) {
-		store := mustCreateTestSession(t)
-		mustBlockTestEventLogAppends(t, store)
-
-		_, err := SteerPersistedWorkflowAssignment(
-			store,
-			workflowAssignmentForCommitReceiptTest(),
-			persistedWorkflowAssignmentContextForTest(t),
-		)
-		if err == nil {
-			t.Fatal("SteerPersistedWorkflowAssignment did not return preparation failure")
-		}
-	})
-
-	t.Run("uncommitted assignment append failure", func(t *testing.T) {
-		store := mustCreateTestSession(t)
-		seedPersistedWorkflowBaseContextForCommitReceiptTest(t, store)
-		engine, err := newPersistedSteeringEngine(store)
-		if err != nil {
-			t.Fatalf("prepare persisted steering engine: %v", err)
-		}
-		message, err := buildWorkflowAssignmentMessage(workflowAssignmentForCommitReceiptTest())
-		if err != nil {
-			t.Fatalf("build workflow assignment: %v", err)
-		}
-		mustBlockTestEventLogAppends(t, store)
-
-		steer := completePersistedWorkflowAssignment(engine, message)
-		receipt, waitErr := steer.Wait(t.Context())
-		if waitErr == nil {
-			t.Fatal("workflow assignment completion did not surface append failure")
-		}
-		if receipt.Committed {
-			t.Fatalf("workflow assignment receipt = %+v, want uncommitted", receipt)
-		}
-	})
-
-	t.Run("committed observer failure", func(t *testing.T) {
-		observerErr := errors.New("workflow assignment observer failed")
-		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-		seedPersistedWorkflowBaseContextForCommitReceiptTest(t, store)
-		gate.FailNext(observerErr)
-
-		steer, err := SteerPersistedWorkflowAssignment(
-			store,
-			workflowAssignmentForCommitReceiptTest(),
-			persistedWorkflowAssignmentContextForTest(t),
-		)
-		if err != nil {
-			t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
-		}
-		receipt, waitErr := steer.Wait(t.Context())
-		if !errors.Is(waitErr, observerErr) {
-			t.Fatalf("workflow assignment completion error = %v, want %v", waitErr, observerErr)
-		}
-		if !receipt.Committed {
-			t.Fatalf("workflow assignment receipt = %+v, want committed", receipt)
-		}
-	})
-}
-
-func TestPersistedWorkflowAssignmentDoesNotRepairExistingSession(t *testing.T) {
-	store := mustCreateTestSession(t)
-	assignment := workflowAssignmentForCommitReceiptTest()
-	message, err := buildWorkflowAssignmentMessage(assignment)
-	if err != nil {
-		t.Fatalf("build workflow assignment: %v", err)
-	}
-	receipt, err := SteerPersistedMessage(store, "", message)
-	if err != nil || !receipt.Committed {
-		t.Fatalf("seed existing workflow assignment = %+v, %v; want committed", receipt, err)
-	}
-
-	steer, err := SteerPersistedWorkflowAssignment(
-		store,
-		assignment,
-		persistedWorkflowAssignmentContextForTest(t),
-	)
-	if err != nil {
-		t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
-	}
-	if receipt, err := steer.Wait(t.Context()); err != nil || !receipt.Committed {
-		t.Fatalf("wait for workflow assignment = %+v, %v; want committed", receipt, err)
-	}
-
-	eventLog, err := store.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize event log: %v", err)
-	}
-	recent, err := eventLog.ReadRecentRecords(10)
-	if err != nil {
-		t.Fatalf("read recent records: %v", err)
-	}
-	messageTypes := make([]session.MessageType, 0, len(recent.Records))
-	for _, record := range recent.Records {
-		payload, err := record.Payload()
-		if err != nil {
-			t.Fatalf("read event payload: %v", err)
-		}
-		message, ok := payload.(session.MessageRecord)
-		if ok && message.MessageType != nil {
-			messageTypes = append(messageTypes, *message.MessageType)
-		}
-	}
-	want := []session.MessageType{
-		session.MessageTypeWorkflowMode,
-		session.MessageTypeWorkflowMode,
-	}
-	if !slices.Equal(messageTypes, want) {
-		t.Fatalf("existing Session message types = %v, want assignments only %v", messageTypes, want)
-	}
-}
-
-func TestPersistedWorkflowAssignmentSnapshotRestoresExactPriorAssignment(t *testing.T) {
-	store := mustCreateTestSession(t)
-	initial := workflowAssignmentForCommitReceiptTest()
-	initialSteer, err := SteerPersistedWorkflowAssignment(
-		store,
-		initial,
-		persistedWorkflowAssignmentContextForTest(t),
-	)
-	if err != nil {
-		t.Fatalf("persist initial workflow assignment: %v", err)
-	}
-	if receipt, waitErr := initialSteer.Wait(t.Context()); waitErr != nil || !receipt.Committed {
-		t.Fatalf("initial workflow assignment receipt = %+v, %v", receipt, waitErr)
-	}
-	legacySnapshot := store.PromptFacingMetadataSnapshot()
-	legacySnapshot.ActiveWorkflowAssignment = nil
-	legacySnapshot.ActiveWorkflowAssignmentState = nil
-	if err := store.RestorePromptFacingMetadata(legacySnapshot); err != nil {
-		t.Fatalf("simulate Session created before assignment projection: %v", err)
-	}
-	snapshot, found, err := CapturePersistedWorkflowAssignment(store)
-	if err != nil || !found {
-		t.Fatalf("capture initial workflow assignment = found %v, %v", found, err)
-	}
-
-	replacement := initial
-	replacement.ContextMode = workflow.ContextModeContinueSession
-	replacement.Prompt.Identity = workflowruntime.CurrentNodePromptIdentity(workflow.CurrentNodeReference{
-		TaskID: initial.Prompt.Instructions.CurrentNode.TaskID,
-		NodeID: "node-replacement-assignment",
-	})
-	replacement.Prompt.Instructions.CurrentNode.NodeID = "node-replacement-assignment"
-	replacementSteer, err := SteerPersistedWorkflowAssignment(
-		store,
-		replacement,
-		persistedWorkflowAssignmentContextForTest(t),
-	)
-	if err != nil {
-		t.Fatalf("persist replacement workflow assignment: %v", err)
-	}
-	if receipt, waitErr := replacementSteer.Wait(t.Context()); waitErr != nil || !receipt.Committed {
-		t.Fatalf("replacement workflow assignment receipt = %+v, %v", receipt, waitErr)
-	}
-	restoration, err := SteerPersistedWorkflowAssignmentSnapshot(store, snapshot)
-	if err != nil {
-		t.Fatalf("restore workflow assignment snapshot: %v", err)
-	}
-	if receipt, waitErr := restoration.Wait(t.Context()); waitErr != nil || !receipt.Committed {
-		t.Fatalf("restored workflow assignment receipt = %+v, %v", receipt, waitErr)
-	}
-
-	eventLog, err := store.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize restored event log: %v", err)
-	}
-	recent, err := eventLog.ReadRecentRecords(8)
-	if err != nil {
-		t.Fatalf("read restored workflow assignments: %v", err)
-	}
-	assignments := make([]session.MessageRecord, 0, 3)
-	for _, record := range recent.Records {
-		payload, payloadErr := record.Payload()
-		if payloadErr != nil {
-			t.Fatalf("read restored workflow assignment: %v", payloadErr)
-		}
-		message, ok := payload.(session.MessageRecord)
-		if ok && message.MessageType != nil && *message.MessageType == session.MessageTypeWorkflowMode {
-			assignments = append(assignments, message)
-		}
-	}
-	if len(assignments) != 3 {
-		t.Fatalf("workflow assignment count = %d, want initial, replacement, and restoration", len(assignments))
-	}
-	if reflect.DeepEqual(assignments[0], assignments[1]) {
-		t.Fatal("replacement workflow assignment did not differ from the initial assignment")
-	}
-	if !reflect.DeepEqual(assignments[0], assignments[2]) {
-		t.Fatalf("restored workflow assignment = %+v, want exact prior assignment %+v", assignments[2], assignments[0])
-	}
-}
-
-func TestPersistedWorkflowAssignmentSnapshotRestoresAbsentAssignment(t *testing.T) {
-	store := mustCreateTestSession(t)
-	snapshot, found, err := CapturePersistedWorkflowAssignment(store)
-	if err != nil || !found {
-		t.Fatalf("capture absent workflow assignment = found %v, %v", found, err)
-	}
-	assignment := workflowAssignmentForCommitReceiptTest()
-	steer, err := SteerPersistedWorkflowAssignment(
-		store,
-		assignment,
-		persistedWorkflowAssignmentContextForTest(t),
-	)
-	if err != nil {
-		t.Fatalf("persist workflow assignment: %v", err)
-	}
-	if receipt, waitErr := steer.Wait(t.Context()); waitErr != nil || !receipt.Committed {
-		t.Fatalf("workflow assignment receipt = %+v, %v", receipt, waitErr)
-	}
-	restoration, err := SteerPersistedWorkflowAssignmentSnapshot(store, snapshot)
-	if err != nil {
-		t.Fatalf("restore absent workflow assignment: %v", err)
-	}
-	if receipt, waitErr := restoration.Wait(t.Context()); waitErr != nil || !receipt.Committed {
-		t.Fatalf("absent workflow assignment restoration receipt = %+v, %v", receipt, waitErr)
-	}
-	if active := store.Meta().ActiveWorkflowAssignment; active != nil {
-		t.Fatalf("active workflow assignment after absent restoration = %+v, want absent", active)
-	}
-}
-
-func TestWorkflowAssignmentSnapshotRestoresLiveThinkingLevel(t *testing.T) {
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
-		Model:         "gpt-5",
-		ThinkingLevel: "high",
-	})
-	snapshot := WorkflowAssignmentSnapshot{}.WithThinkingLevel("low")
-	steer, err := engine.SteerWorkflowAssignmentSnapshot(snapshot)
-	if err != nil {
-		t.Fatalf("restore live workflow assignment snapshot: %v", err)
-	}
-	if receipt, waitErr := steer.Wait(t.Context()); waitErr != nil || !receipt.Committed {
-		t.Fatalf("live workflow assignment restoration receipt = %+v, %v", receipt, waitErr)
-	}
-	if got := engine.ThinkingLevel(); got != "low" {
-		t.Fatalf("live thinking level = %q, want restored value", got)
-	}
-}
-
-func workflowAssignmentForCommitReceiptTest() WorkflowAssignment {
-	reference := workflow.CurrentNodeReference{
-		TaskID: "task-assignment-receipt",
-		NodeID: "node-assignment-receipt",
-	}
-	return WorkflowAssignment{
-		ContextMode:    workflow.ContextModeNewSession,
-		CompletionMode: workflowruntime.CompletionModeTool,
-		Prompt: workflowruntime.PromptContract{
-			Identity:       workflowruntime.CurrentNodePromptIdentity(reference),
-			CompletionMode: workflowruntime.CompletionModeTool,
-			Instructions: workflowruntime.TaskInstructions{
-				CurrentNode:      reference,
-				WorkflowID:       runtimeids.NewWorkflowID(),
-				TransitionPrompt: "Perform the assigned workflow step.",
-			},
-		},
-	}
-}
-
-func persistedWorkflowAssignmentContextForTest(t *testing.T) PersistedWorkflowAssignmentContext {
-	t.Helper()
-	return PersistedWorkflowAssignmentContext{
-		Workdir:         t.TempDir(),
-		GlobalConfigDir: t.TempDir(),
-		Model:           "gpt-5",
-	}
-}
-
-func seedPersistedWorkflowBaseContextForCommitReceiptTest(t *testing.T, store *session.Store) {
-	t.Helper()
-	receipt, err := SteerPersistedMessage(store, "", llm.Message{
-		Role:        llm.RoleDeveloper,
-		MessageType: textutil.Value(llm.MessageTypeEnvironment),
-		Content:     textutil.Value("test environment context"),
-	})
-	if err != nil || !receipt.Committed {
-		t.Fatalf("seed persisted workflow base context = %+v, %v; want committed", receipt, err)
-	}
-}
 
 func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 	t.Parallel()
 	t.Run("uncommitted error", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		var events []Event
-		eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		})
 		mustBlockTestEventLogAppends(t, store)
 
-		err := eng.steer("step-1", steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventDefault,
-			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("uncommitted")}},
-		))
+		err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("uncommitted")}}))
 		if err == nil {
 			t.Fatal("persisted message did not surface the event-log append failure")
 		}
@@ -336,18 +42,13 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 		var events []Event
-		eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		})
 		gate.FailNext(observerErr)
 
-		err := eng.steer("step-1", steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventDefault,
-			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("committed")}},
-		))
+		err := eng.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("committed")}}))
 		if !errors.Is(err, observerErr) {
 			t.Fatalf("persisted message error = %v, want observer error", err)
 		}
@@ -379,7 +80,7 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 				}}, Config{Model: "gpt-5.3-codex"})
 			},
 			apply: func(engine *Engine) (bool, session.CommitReceipt, error) {
-				return engine.SetFastModeEnabledWithCommittedFeedback(true, func(bool) string {
+				return engine.SetFastModeEnabledWithCommittedFeedback(context.Background(), true, func(bool) string {
 					return "feedback"
 				})
 			},
@@ -391,7 +92,7 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 				return mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
 			},
 			apply: func(engine *Engine) (bool, session.CommitReceipt, error) {
-				changed, _, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(false, func(bool, bool) string {
+				changed, _, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(context.Background(), false, func(bool, bool) string {
 					return "feedback"
 				})
 				return changed, receipt, err
@@ -415,7 +116,7 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 				})
 			},
 			apply: func(engine *Engine) (bool, session.CommitReceipt, error) {
-				changed, _, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(true, func(bool, string, bool) string {
+				changed, _, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(context.Background(), true, func(bool, string, bool) string {
 					return "feedback"
 				})
 				return changed, receipt, err
@@ -443,6 +144,440 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 				t.Fatalf("committed control feedback projected rows: %+v", rows)
 			}
 		})
+	}
+}
+
+func TestFastModePersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	engine := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{
+		ProviderID:           "openai",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   true,
+	}}, Config{Model: "gpt-5.3-codex"})
+	entered, release := gate.BlockNext()
+	defer release()
+
+	result := make(chan struct {
+		changed bool
+		receipt session.CommitReceipt
+		err     error
+	}, 1)
+	go func() {
+		changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(t.Context(), true, func(bool) string {
+			return "feedback"
+		})
+		result <- struct {
+			changed bool
+			receipt session.CommitReceipt
+			err     error
+		}{changed: changed, receipt: receipt, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Fast Mode metadata persistence")
+	}
+	requireSessionFastModeOverride(t, store, true)
+	if engine.FastModeEnabled() {
+		t.Fatal("Fast Mode applied to live Runtime before Session metadata persistence completed")
+	}
+	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
+		t.Fatalf("Fast Mode feedback committed before Session metadata persistence: %+v", rows)
+	}
+
+	release()
+	select {
+	case got := <-result:
+		if got.err != nil || !got.changed || !got.receipt.Committed {
+			t.Fatalf("SetFastModeEnabledWithCommittedFeedback = %+v", got)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Fast Mode completion")
+	}
+	if !engine.FastModeEnabled() {
+		t.Fatal("Fast Mode was not applied after Session metadata persistence")
+	}
+}
+
+func TestQuestionsPersistBeforeFeedbackAndLiveProjection(t *testing.T) {
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	entered, release := gate.BlockNext()
+	defer release()
+
+	result := make(chan struct {
+		changed bool
+		enabled bool
+		receipt session.CommitReceipt
+		err     error
+	}, 1)
+	go func() {
+		changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(t.Context(), false, func(bool, bool) string {
+			return "feedback"
+		})
+		result <- struct {
+			changed bool
+			enabled bool
+			receipt session.CommitReceipt
+			err     error
+		}{changed: changed, enabled: enabled, receipt: receipt, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Questions metadata persistence")
+	}
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.Questions == nil || *meta.ChatSettings.Questions {
+		t.Fatalf("Session Questions override = %+v, want false", meta.ChatSettings)
+	}
+	if !engine.QuestionsEnabled() {
+		t.Fatal("Questions applied to live Runtime before Session metadata persistence completed")
+	}
+	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
+		t.Fatalf("Questions feedback committed before Session metadata persistence: %+v", rows)
+	}
+
+	release()
+	select {
+	case got := <-result:
+		if got.err != nil || !got.changed || got.enabled || !got.receipt.Committed {
+			t.Fatalf("SetQuestionsEnabledWithCommittedFeedback = %+v", got)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Questions completion")
+	}
+	if engine.QuestionsEnabled() {
+		t.Fatal("Questions was not applied after Session metadata persistence")
+	}
+}
+
+func TestReviewerPersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeTool{name: toolspec.ToolExecCommand},
+	}), Config{
+		Model: "gpt-5",
+		Reviewer: ReviewerConfig{
+			Frequency:     "off",
+			Model:         "gpt-5",
+			ThinkingLevel: "low",
+			Client:        &fakeClient{},
+		},
+	})
+	entered, release := gate.BlockNext()
+	defer release()
+
+	result := make(chan struct {
+		changed bool
+		mode    string
+		receipt session.CommitReceipt
+		err     error
+	}, 1)
+	go func() {
+		changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(t.Context(), true, func(bool, string, bool) string {
+			return "feedback"
+		})
+		result <- struct {
+			changed bool
+			mode    string
+			receipt session.CommitReceipt
+			err     error
+		}{changed: changed, mode: mode, receipt: receipt, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Reviewer metadata persistence")
+	}
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.Supervisor == nil || *meta.ChatSettings.Supervisor != "edits" {
+		t.Fatalf("Session Supervisor override = %+v, want edits", meta.ChatSettings)
+	}
+	if engine.ReviewerFrequency() != "off" {
+		t.Fatal("Reviewer applied to live Runtime before Session metadata persistence completed")
+	}
+	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
+		t.Fatalf("Reviewer feedback committed before Session metadata persistence: %+v", rows)
+	}
+
+	release()
+	select {
+	case got := <-result:
+		if got.err != nil || !got.changed || got.mode != "edits" || !got.receipt.Committed {
+			t.Fatalf("SetReviewerEnabledWithCommittedFeedback = %+v", got)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for Reviewer completion")
+	}
+	if engine.ReviewerFrequency() != "edits" {
+		t.Fatal("Reviewer was not applied after Session metadata persistence")
+	}
+}
+
+func TestStateOnlyChatSettingsPersistBeforeLiveProjection(t *testing.T) {
+	t.Run("Thinking", func(t *testing.T) {
+		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+		engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+			Model:                   "gpt-5",
+			ThinkingLevel:           "medium",
+			SupportedThinkingValues: []string{"low", "medium", "high"},
+		})
+		entered, release := gate.BlockNext()
+		defer release()
+
+		result := make(chan error, 1)
+		go func() {
+			result <- engine.SetThinkingLevel(t.Context(), "high")
+		}()
+		select {
+		case <-entered:
+		case <-time.After(runtimeTestSynchronizationTimeout):
+			t.Fatal("timed out waiting for Thinking metadata persistence")
+		}
+		meta := store.Meta()
+		if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "high" {
+			t.Fatalf("Session Thinking override = %+v, want high", meta.ChatSettings)
+		}
+		if got := engine.ThinkingLevel(); got != "medium" {
+			t.Fatalf("live Thinking = %q before metadata persistence completed, want medium", got)
+		}
+
+		release()
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("SetThinkingLevel: %v", err)
+			}
+		case <-time.After(runtimeTestSynchronizationTimeout):
+			t.Fatal("timed out waiting for Thinking completion")
+		}
+		if got := engine.ThinkingLevel(); got != "high" {
+			t.Fatalf("live Thinking = %q after metadata persistence, want high", got)
+		}
+	})
+
+	t.Run("Auto-compaction", func(t *testing.T) {
+		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+		engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+		entered, release := gate.BlockNext()
+		defer release()
+
+		result := make(chan struct {
+			changed bool
+			enabled bool
+			err     error
+		}, 1)
+		go func() {
+			changed, enabled, err := engine.SetAutoCompactionEnabled(t.Context(), false)
+			result <- struct {
+				changed bool
+				enabled bool
+				err     error
+			}{changed: changed, enabled: enabled, err: err}
+		}()
+		select {
+		case <-entered:
+		case <-time.After(runtimeTestSynchronizationTimeout):
+			t.Fatal("timed out waiting for Auto-compaction metadata persistence")
+		}
+		meta := store.Meta()
+		if meta.ChatSettings == nil || meta.ChatSettings.AutoCompaction == nil || *meta.ChatSettings.AutoCompaction {
+			t.Fatalf("Session Auto-compaction override = %+v, want false", meta.ChatSettings)
+		}
+		if !engine.AutoCompactionEnabled() {
+			t.Fatal("Auto-compaction applied to live Runtime before Session metadata persistence completed")
+		}
+
+		release()
+		select {
+		case got := <-result:
+			if got.err != nil || !got.changed || got.enabled {
+				t.Fatalf("SetAutoCompactionEnabled = %+v", got)
+			}
+		case <-time.After(runtimeTestSynchronizationTimeout):
+			t.Fatal("timed out waiting for Auto-compaction completion")
+		}
+		if engine.AutoCompactionEnabled() {
+			t.Fatal("Auto-compaction was not applied after Session metadata persistence")
+		}
+	})
+}
+
+func TestDefinitelyUncommittedStateOnlyChatSettingsStopBeforeLiveProjection(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(*testing.T, *Engine) error
+		state func(*Engine) bool
+	}{
+		{
+			name: "Thinking",
+			apply: func(t *testing.T, engine *Engine) error {
+				return engine.SetThinkingLevel(t.Context(), "low")
+			},
+			state: func(engine *Engine) bool { return engine.ThinkingLevel() == "high" },
+		},
+		{
+			name: "Auto-compaction",
+			apply: func(t *testing.T, engine *Engine) error {
+				_, _, err := engine.SetAutoCompactionEnabled(t.Context(), false)
+				return err
+			},
+			state: func(engine *Engine) bool { return engine.AutoCompactionEnabled() },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+				Model:                   "gpt-5",
+				ThinkingLevel:           "high",
+				SupportedThinkingValues: []string{"low", "high"},
+			})
+			blockTestSessionMetadataMutations(t, store)
+
+			if err := test.apply(t, engine); err == nil {
+				t.Fatal("definitely uncommitted setting mutation succeeded")
+			}
+			if !test.state(engine) {
+				t.Fatal("definitely uncommitted setting changed live Runtime state")
+			}
+			if err := engine.SetSessionName(t.Context(), "closed"); !errors.Is(err, ErrEngineClosed) {
+				t.Fatalf("mutation after uncommitted settings failure = %v, want Engine closed", err)
+			}
+		})
+	}
+}
+
+func TestCommittedControlFeedbackCallerCancellationStopsOnlyWait(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+		t.Fatalf("pause Runtime FIFO: %v", err)
+	}
+
+	caller, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() {
+		_, _, _, err := engine.SetQuestionsEnabledWithCommittedFeedback(caller, false, func(bool, bool) string {
+			return "feedback"
+		})
+		result <- err
+	}()
+	waitForPendingRuntimeOperation(t, engine)
+
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled control wait error = %v, want canceled", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("canceled control caller remained blocked")
+	}
+	if !engine.QuestionsEnabled() {
+		t.Fatal("control mutation applied before the paused Runtime FIFO drained")
+	}
+
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatalf("drain accepted control mutation: %v", err)
+	}
+	if engine.QuestionsEnabled() {
+		t.Fatal("accepted control mutation did not continue after caller cancellation")
+	}
+	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 1 {
+		t.Fatalf("accepted control feedback projected rows: %+v", rows)
+	}
+}
+
+func TestRuntimeSetterCallerCancellationStopsOnlyWait(t *testing.T) {
+	tests := []struct {
+		name    string
+		apply   func(context.Context, *Engine) error
+		applied func(*Engine) bool
+	}{
+		{
+			name: "Session name",
+			apply: func(ctx context.Context, engine *Engine) error {
+				return engine.SetSessionName(ctx, "renamed")
+			},
+			applied: func(engine *Engine) bool { return engine.SessionName() == "renamed" },
+		},
+		{
+			name: "Thinking",
+			apply: func(ctx context.Context, engine *Engine) error {
+				return engine.SetThinkingLevel(ctx, "low")
+			},
+			applied: func(engine *Engine) bool { return engine.ThinkingLevel() == "low" },
+		},
+		{
+			name: "Auto-compaction",
+			apply: func(ctx context.Context, engine *Engine) error {
+				_, _, err := engine.SetAutoCompactionEnabled(ctx, false)
+				return err
+			},
+			applied: func(engine *Engine) bool { return !engine.AutoCompactionEnabled() },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+				Model:                   "gpt-5",
+				ThinkingLevel:           "high",
+				SupportedThinkingValues: []string{"low", "high"},
+			})
+			if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+				t.Fatalf("pause Runtime FIFO: %v", err)
+			}
+
+			caller, cancel := context.WithCancel(t.Context())
+			result := make(chan error, 1)
+			go func() {
+				result <- test.apply(caller, engine)
+			}()
+			waitForPendingRuntimeOperation(t, engine)
+			cancel()
+			select {
+			case err := <-result:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("canceled setter wait error = %v, want canceled", err)
+				}
+			case <-time.After(runtimeTestSynchronizationTimeout):
+				t.Fatal("canceled setter caller remained blocked")
+			}
+			if test.applied(engine) {
+				t.Fatal("setter applied before the paused Runtime FIFO drained")
+			}
+
+			if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+				t.Fatalf("drain accepted setter: %v", err)
+			}
+			if !test.applied(engine) {
+				t.Fatal("accepted setter did not continue after caller cancellation")
+			}
+		})
+	}
+}
+
+func waitForPendingRuntimeOperation(t *testing.T, engine *Engine) {
+	t.Helper()
+	deadline := time.After(runtimeTestSynchronizationTimeout)
+	for !engine.HasPendingRuntimeOperations() {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for accepted Runtime operation")
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 

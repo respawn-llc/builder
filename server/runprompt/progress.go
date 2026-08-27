@@ -59,7 +59,7 @@ func RunPromptProgressFromRuntimeEvent(evt runtime.Event) (serverapi.RunPromptPr
 		if status == nil || status.Status != runtime.QueuedUserMessageAccepted {
 			return serverapi.RunPromptProgress{}, false
 		}
-		content := status.RestoreText
+		content := status.Text
 		if strings.TrimSpace(content) == "" {
 			return serverapi.RunPromptProgress{}, false
 		}

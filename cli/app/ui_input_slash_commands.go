@@ -65,11 +65,10 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 			recordCmd = m.recordPromptHistory(commandText)
 		}
 		m.clearCommandInput(command, draft)
-		next, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(
+		next, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndOrigin(
 			commandResult,
 			preSubmitQueueBack,
 			activeSubmitOriginDirect,
-			text,
 		)
 		return true, next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 	}

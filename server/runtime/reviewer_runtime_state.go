@@ -7,54 +7,114 @@ import (
 	"sync"
 
 	"core/server/llm"
+	"core/shared/runtimeids"
 )
 
 type reviewerRuntimeState struct {
 	mu     sync.Mutex
 	client llm.Client
-	active *TranscriptReviewerState
+	active *runtimeids.StepID
 }
 
 func newReviewerRuntimeState(client llm.Client) *reviewerRuntimeState {
 	return &reviewerRuntimeState{client: client}
 }
 
-func (s *reviewerRuntimeState) SetActiveStep(stepID string) {
+func (s *reviewerRuntimeState) TryStart(stepID string) bool {
 	if s == nil {
-		return
+		return false
 	}
-	s.mu.Lock()
 	normalized := strings.TrimSpace(stepID)
 	if normalized == "" {
-		s.mu.Unlock()
 		panic("reviewer active step id is required")
 	}
-	s.active = &TranscriptReviewerState{StepID: normalized}
-	s.mu.Unlock()
-}
-
-func (s *reviewerRuntimeState) ClearActiveStep(stepID string) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	if s.active != nil && s.active.StepID == strings.TrimSpace(stepID) {
-		s.active = nil
-	}
-	s.mu.Unlock()
-}
-
-func (s *reviewerRuntimeState) ActiveStepSnapshot() *TranscriptReviewerState {
-	if s == nil {
-		return nil
+	active, err := runtimeids.ParseStepID(normalized)
+	if err != nil {
+		panic(err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active == nil {
+	if s.active != nil {
+		return false
+	}
+	s.active = &active
+	return true
+}
+
+func (s *reviewerRuntimeState) Complete(stepID string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active != nil && s.active.String() == strings.TrimSpace(stepID) {
+		s.active = nil
+		return true
+	}
+	return false
+}
+
+func (s *reviewerRuntimeState) Running() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active != nil
+}
+
+func (e *Engine) ReviewerRunning() bool {
+	return e != nil && e.reviewerRuntimeState().Running()
+}
+
+func (e *Engine) startReviewerActivity(stepID string) (bool, error) {
+	if e == nil || e.closed.Load() {
+		return false, ErrEngineClosed
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	return e.startReviewerActivityRaw(stepID)
+}
+
+func (e *Engine) startReviewerActivityRaw(stepID string) (bool, error) {
+	if !e.reviewerRuntimeState().TryStart(stepID) {
+		return false, nil
+	}
+	revision, err := e.TranscriptRevision()
+	if err != nil {
+		e.reviewerRuntimeState().Complete(stepID)
+		return false, err
+	}
+	err = e.emitRawAtRevision(Event{
+		Kind: EventRuntimeActivityChanged,
+	}, revision)
+	if err != nil {
+		e.reviewerRuntimeState().Complete(stepID)
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *Engine) completeReviewerActivity(stepID string) error {
+	if e == nil {
 		return nil
 	}
-	state := *s.active
-	return &state
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	return e.completeReviewerActivityRaw(stepID)
+}
+
+func (e *Engine) completeReviewerActivityRaw(stepID string) error {
+	if !e.reviewerRuntimeState().Complete(stepID) {
+		return nil
+	}
+	revision, err := e.TranscriptRevision()
+	if err != nil {
+		return err
+	}
+	return e.emitRawAtRevision(Event{
+		Kind: EventRuntimeActivityChanged,
+	}, revision)
 }
 
 func (s *reviewerRuntimeState) Client() llm.Client {

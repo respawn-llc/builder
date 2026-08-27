@@ -35,9 +35,12 @@ func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	done := make(chan error, 1)
 	go func() {
-		_, err := engine.executeToolCalls(ctx, "step", []llm.ToolCall{{
+		_, err := engine.executeToolCalls(ctx, stepID, []llm.ToolCall{{
 			ID:    "canceled-call",
 			Name:  string(toolspec.ToolExecCommand),
 			Input: json.RawMessage(`{"cmd":"true"}`),
@@ -74,19 +77,22 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 		}),
 		Config{
 			Model: "gpt-5",
-			CurrentNodeExecution: testWorkflowConfig(
-				&fakeWorkflowController{},
-				config.WorkflowCompletionModeTool,
-			),
 		},
 	)
+	publishTestWorkflowExecution(t, engine, testWorkflowConfig(
+		&fakeWorkflowController{},
+		config.WorkflowCompletionModeTool,
+	))
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct {
 		results []tools.Result
 		err     error
 	}, 1)
 	go func() {
-		results, err := engine.executeToolCalls(ctx, "step", []llm.ToolCall{
+		results, err := engine.executeToolCalls(ctx, stepID, []llm.ToolCall{
 			{
 				ID:          "completed",
 				Name:        string(toolspec.ToolPatch),

@@ -339,13 +339,13 @@ func pendingApprovalsByTask(
 	ctx context.Context,
 	queries *sqlitegen.Queries,
 	encodedTaskIDs taskIDsEncoding,
-) (map[workflow.TaskID][]sqlitegen.ListTaskPendingApprovalsByTasksRow, error) {
+) (map[workflow.TaskID][]sqlitegen.TaskPendingApproval, error) {
 	rows, err := queries.ListTaskPendingApprovalsByTasks(ctx, encodedTaskIDs.json)
 	if err != nil {
 		return nil, err
 	}
 	requested := taskIDSet(encodedTaskIDs.values)
-	approvals := make(map[workflow.TaskID][]sqlitegen.ListTaskPendingApprovalsByTasksRow, len(encodedTaskIDs.values))
+	approvals := make(map[workflow.TaskID][]sqlitegen.TaskPendingApproval, len(encodedTaskIDs.values))
 	for _, taskID := range encodedTaskIDs.values {
 		approvals[taskID] = nil
 	}

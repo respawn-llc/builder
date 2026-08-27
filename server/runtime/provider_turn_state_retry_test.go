@@ -56,7 +56,7 @@ func TestGenerateWithRetryReplaysExactProviderTurnState(t *testing.T) {
 	transport := newProviderTurnStateTransport(t, server)
 	client := llm.NewOpenAIClient(transport)
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	_, err = engine.generateWithRetryClient(context.Background(), "", client, llm.Request{
+	_, err = engine.generateWithRetryClient(context.Background(), runtimeTestStepID("provider-turn-state"), client, llm.Request{
 		Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 	}, nil, nil, nil)
@@ -89,7 +89,7 @@ func TestGenerationMissingOutputRebuildDoesNotReplayProviderTurnState(t *testing
 	client := llm.NewOpenAIClient(transport)
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	steerDanglingToolCall(t, engine, "seed", llm.ToolCall{ID: "missing", Name: "exec_command", Input: []byte(`{}`)})
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+	err := engine.stepLifecycle.Run(t.Context(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(ctx context.Context, stepID string) error {
 		_, err := engine.generateWithMissingToolOutputRepair(ctx, stepID, func() (llm.Request, error) {
 			return engine.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
 		}, nil, nil, nil)

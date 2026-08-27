@@ -20,8 +20,6 @@ var ErrEngineClosed = errors.New("runtime engine is closed")
 
 var ErrExclusiveStepReservationPending = errors.New("manual compaction is already pending")
 
-var errPendingModelRecoveryClear = errors.New("clear pending model recovery")
-
 type defaultExclusiveStepLifecycle struct {
 	engine     *Engine
 	background backgroundNoticeScheduler
@@ -151,6 +149,11 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 	if err != nil {
 		return err
 	}
+	if isAgentStepKind(options.ActiveKind) {
+		if pauseErr := s.engine.pauseRuntimeOperations(ctx); pauseErr != nil {
+			return s.finishStep(stepID, options, pauseErr)
+		}
+	}
 	if options.EmitRunState {
 		if snapshot := s.Snapshot(); snapshot != nil {
 			s.engine.beginLiveRunStep(snapshot)
@@ -159,7 +162,7 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 	if options.EmitRunState {
 		if snapshot := s.Snapshot(); snapshot != nil {
 			mode := runModeFromActiveKind(snapshot.ActiveKind)
-			_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: &RunState{
+			_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: exactStepIDPointer(stepID), RunState: &RunState{
 				Lifecycle:  RunningRunLifecycle(mode),
 				RunID:      snapshot.RunID,
 				ActiveKind: snapshot.ActiveKind,
@@ -174,15 +177,18 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 }
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
+	if isAgentStepKind(options.ActiveKind) {
+		if drainErr := s.engine.drainRuntimeOperations(context.Background()); drainErr != nil &&
+			!errors.Is(drainErr, ErrEngineClosed) {
+			err = errors.Join(err, fmt.Errorf("drain Runtime operations at agent Step Boundary: %w", drainErr))
+		}
+	}
 	s.closeActiveStepQueue(stepID)
 	if fatal, ok := resultGroupFatalFromError(err); ok {
 		return s.finishRuntimeAbort(stepID, options, fatal)
 	}
 	if clearReasoningErr := s.engine.steer(stepID, steerClearReasoningStateIntent()); clearReasoningErr != nil {
 		err = errors.Join(err, fmt.Errorf("clear reasoning state at agent step termination: %w", clearReasoningErr))
-	}
-	if assignmentErr := s.engine.flushPendingWorkflowAssignments(stepID); assignmentErr != nil {
-		err = errors.Join(err, fmt.Errorf("flush workflow assignments: %w", assignmentErr))
 	}
 	if drainErr := s.engine.drainActiveStepGoalMutations(stepID); drainErr != nil {
 		err = errors.Join(err, fmt.Errorf("drain active-step goal mutations: %w", drainErr))
@@ -201,27 +207,13 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		snapshot,
 		status,
 		err,
-		func() error {
-			clearErr := s.engine.store.ClearPendingModelRecoveryForStep(stepID)
-			if clearErr == nil {
-				return nil
-			}
-			wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
-			_ = s.engine.steer(stepID, steerEventIntent(Event{
-				Kind:   EventInFlightClearFailed,
-				StepID: stepID,
-				Error:  wrapped.Error(),
-			}))
-			return wrapped
-		},
+		nil,
 	)
-	if !errors.Is(err, errPendingModelRecoveryClear) {
-		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
-			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
-		}
-		if startErr := s.scheduleIdleWork(status != RunStatusFailed); startErr != nil {
-			err = errors.Join(err, startErr)
-		}
+	if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
+		s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
+	}
+	if startErr := s.scheduleIdleWork(status != RunStatusFailed); startErr != nil {
+		err = errors.Join(err, startErr)
 	}
 	if publishLiveRunFinished != nil {
 		publishLiveRunFinished()
@@ -271,6 +263,7 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 	err error,
 	beforeLiveRun func() error,
 ) (error, error, func()) {
+	publishExternalLifecycle := s.activeOwnsExternalLifecycle()
 	s.beginTerminalPublication()
 	if options.EmitRunState {
 		state := &RunState{Lifecycle: IdleRunLifecycle()}
@@ -285,12 +278,12 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 		}
 		_ = s.engine.steer(stepID, steerEventIntent(Event{
 			Kind:     EventRunStateChanged,
-			StepID:   stepID,
+			StepID:   exactStepIDPointer(stepID),
 			RunState: state,
 		}))
 	}
 	var publicationErr error
-	if snapshot != nil && s.engine.cfg.StepLifecycle != nil {
+	if publishExternalLifecycle && snapshot != nil && s.engine.cfg.StepLifecycle != nil {
 		if publishErr := s.engine.cfg.StepLifecycle.StepEnded(
 			context.Background(),
 			stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *snapshot),
@@ -375,7 +368,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(afterPersist func(*RunSnapshot)) (*RunSnapshot, error) {
 	s.mu.Lock()
 	active := s.active
-	if active == nil || !isAgentStepCapable(active.activeKind) || active.closing || active.interrupted {
+	if active == nil || !isInterruptibleAgentTurn(active.activeKind) || active.closing || active.interrupted {
 		s.mu.Unlock()
 		return nil, nil
 	}
@@ -410,7 +403,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(afterPersist f
 }
 
 func (s *defaultExclusiveStepLifecycle) persistInterruption() error {
-	return s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}}))
+	return s.engine.steerInterruption(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}}))
 }
 
 func (s *defaultExclusiveStepLifecycle) runCurrentLocked(run *exclusiveRunState) bool {
@@ -552,7 +545,7 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 			s.mu.Unlock()
 			return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
 		}
-		if (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 {
+		if s.suspended != nil || (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 {
 			waiter.ready = make(chan struct{})
 			s.mu.Unlock()
 			continue
@@ -617,7 +610,7 @@ func (s *defaultExclusiveStepLifecycle) activateLocked(ctx context.Context, opti
 }
 
 func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOptions, stepCtx context.Context, stepID string) (context.Context, string, error) {
-	if snapshot := s.Snapshot(); snapshot != nil && s.engine.cfg.StepLifecycle != nil {
+	if snapshot := s.Snapshot(); s.activeOwnsExternalLifecycle() && snapshot != nil && s.engine.cfg.StepLifecycle != nil {
 		if err := s.engine.cfg.StepLifecycle.StepBegan(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionBegan, *snapshot)); err != nil {
 			finished := s.snapshotWithFinishedAt(time.Now().UTC(), RunStatusFailed)
 			s.beginTerminalPublication()
@@ -632,21 +625,25 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 					state.StartedAt = finished.StartedAt
 					state.FinishedAt = finished.FinishedAt
 				}
-				_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: state}))
+				_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: exactStepIDPointer(stepID), RunState: state}))
 			}
 			if finished != nil {
 				if endErr := s.engine.cfg.StepLifecycle.StepEnded(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *finished)); endErr != nil {
 					err = errors.Join(err, fmt.Errorf("publish start-failed step ended: %w", endErr))
 				}
 			}
-			if clearErr := s.engine.store.ClearPendingModelRecoveryForStep(stepID); clearErr != nil {
-				err = errors.Join(err, fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr))
-			}
 			s.finishTerminalPublication()
 			return nil, "", err
 		}
 	}
 	return stepCtx, stepID, nil
+}
+
+func (s *defaultExclusiveStepLifecycle) activeOwnsExternalLifecycle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Boundary reservations run inside the suspended Agent Step's resource lifecycle.
+	return s.active != nil && s.suspended == nil
 }
 
 func (s *defaultExclusiveStepLifecycle) reservationPendingLocked(reservation *exclusiveStepReservation) bool {
@@ -672,7 +669,7 @@ func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWa
 }
 
 func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
-	if (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 || len(s.nextWaiters) == 0 {
+	if s.suspended != nil || (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 || len(s.nextWaiters) == 0 {
 		return
 	}
 	if s.heldReservation != nil && s.heldWaiter == nil {
@@ -763,9 +760,43 @@ func (s *defaultExclusiveStepLifecycle) waitForPublicationLocked() {
 }
 
 func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Context) error {
+	if s.activeAgentStepID() == nil {
+		return nil
+	}
+	return s.drainAgentStepBoundary(ctx)
+}
+
+func (s *defaultExclusiveStepLifecycle) CompleteAgentStepBoundary(ctx context.Context) error {
+	stepID := s.activeAgentStepID()
+	if stepID == nil {
+		return nil
+	}
+	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
+	s.engine.persistManualCompactEligibilityBestEffort(*stepID, true)
+	return s.drainAgentStepBoundary(ctx)
+}
+
+func (s *defaultExclusiveStepLifecycle) activeAgentStepID() *string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil || !isAgentStepKind(s.active.activeKind) {
+		return nil
+	}
+	stepID := s.active.stepID
+	return &stepID
+}
+
+func (s *defaultExclusiveStepLifecycle) drainAgentStepBoundary(ctx context.Context) error {
+	if err := s.engine.drainRuntimeOperations(ctx); err != nil {
+		return err
+	}
+	return s.drainBoundaryReservations(ctx)
+}
+
+func (s *defaultExclusiveStepLifecycle) drainBoundaryReservations(ctx context.Context) error {
 	for {
 		s.mu.Lock()
-		if s.active == nil || !isAgentStepCapable(s.active.activeKind) ||
+		if s.active == nil || s.suspended != nil || !isAgentStepKind(s.active.activeKind) ||
 			len(s.nextWaiters) == 0 || s.nextWaiters[0].reservation == nil {
 			s.mu.Unlock()
 			return nil
@@ -792,6 +823,30 @@ func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Conte
 		case <-done:
 		}
 	}
+}
+
+func (s *defaultExclusiveStepLifecycle) BeginAgentStepBoundary(ctx context.Context) error {
+	if s.activeAgentStepID() == nil {
+		return nil
+	}
+	for {
+		drainedThrough, err := s.engine.drainRuntimeOperationsThrough(ctx)
+		if err != nil {
+			return err
+		}
+		if err := s.drainBoundaryReservations(ctx); err != nil {
+			return err
+		}
+		pausedThrough, err := s.engine.pauseRuntimeOperationsThrough(ctx)
+		if err != nil {
+			return err
+		}
+		if pausedThrough == drainedThrough {
+			break
+		}
+	}
+	s.EndAgentStepBoundary()
+	return nil
 }
 
 func (s *defaultExclusiveStepLifecycle) EndAgentStepBoundary() {

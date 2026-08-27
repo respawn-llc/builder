@@ -127,7 +127,7 @@ func (m *uiModel) statusLineSpinning() bool {
 		return false
 	}
 	return (m.runtimeActivityBusy() && m.activity != uiActivityQuestion) ||
-		m.runtimeLifecycle.Reviewer.IsRunning()
+		m.isReviewerRunning()
 }
 
 func (m *uiModel) setRuntimeContextUsage(sessionID string, usage clientui.RuntimeContextUsage) {

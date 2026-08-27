@@ -26,13 +26,8 @@ func TestAuthorityManualMoveSelectionCancelsPendingQuestionsAndClosesPromptAdmis
 		WorkflowID:  testsetup.WorkflowID(t, "workflow-manual-move"),
 		CurrentNode: mustWorkflowCurrentNodeReference(t, taskID, "node-running"),
 	}
-	lease, err := authority.NewWorkflowExecutionLease(ref)
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &lease,
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: ref,
 		Command: ScriptCommand{
 			Path: shellPath,
 			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
@@ -127,13 +122,8 @@ func TestAuthorityManualMoveSelectionClassifiesPendingApproval(t *testing.T) {
 		WorkflowID:  testsetup.WorkflowID(t, "workflow-manual-move-approval"),
 		CurrentNode: mustWorkflowCurrentNodeReference(t, taskID, "node-running"),
 	}
-	lease, err := authority.NewWorkflowExecutionLease(ref)
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &lease,
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: ref,
 		Command: ScriptCommand{
 			Path: shellPath,
 			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
@@ -169,14 +159,16 @@ func TestAuthorityManualMoveSelectionClassifiesPendingApproval(t *testing.T) {
 	err = authority.WithWorkflowManualMoveSelection(taskID, func(WorkflowInterruptSelection) error {
 		return nil
 	})
-	if !errors.Is(err, ErrWorkflowApprovalPending) {
-		t.Fatalf("WithWorkflowManualMoveSelection error = %v, want ErrWorkflowApprovalPending", err)
+	if err != nil {
+		t.Fatalf("WithWorkflowManualMoveSelection: %v", err)
 	}
-	exact.execution.cancel()
 	select {
-	case <-awaitErr:
+	case promptErr := <-awaitErr:
+		if !errors.Is(promptErr, context.Canceled) {
+			t.Fatalf("pending approval resolution error = %v, want context canceled", promptErr)
+		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("pending approval did not resolve after cancellation")
+		t.Fatal("pending approval did not resolve during Manual Move")
 	}
 }
 

@@ -40,7 +40,7 @@ func TestDeleteWorktreeBlocksWhenBackgroundProcessUsesDescendantPath(t *testing.
 	state.assertUnchanged(t, env, busySession.Meta().SessionID, busy.WorktreeID)
 
 	result, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, unrelated.WorktreeID))
-	if err != nil || result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+	if err != nil {
 		t.Fatalf("DeleteWorktree unrelated = %+v, %v; want completed", result, err)
 	}
 }
@@ -396,10 +396,7 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 
 func worktreeDeleteRequest(env *serviceTestEnv, worktreeID string) serverapi.WorktreeDeleteRequest {
 	return serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            worktreeID,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	}

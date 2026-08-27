@@ -152,7 +152,6 @@ type bellHooks struct {
 	observedTurn          *observedNotificationTurn
 	pendingTurnCompletion *queuedTurnCompletion
 	pendingCompaction     bool
-	reviewerStep          *runtimeids.StepID
 }
 
 func newBellHooks(notifier terminalNotifier, title func() string, focused ...func() bool) *bellHooks {
@@ -272,9 +271,6 @@ func (h *bellHooks) recordTurnCompletion(stepID runtimeids.StepID, assistantCont
 	message := turnCompletionNotificationMessage(assistantContent)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.reviewerStep != nil && *h.reviewerStep == stepID {
-		return
-	}
 	if h.observedTurn == nil {
 		h.observedTurn = &observedNotificationTurn{stepID: stepID}
 	}
@@ -300,29 +296,11 @@ func (h *bellHooks) recordStepFinished(stepID runtimeids.StepID) {
 		}
 		h.observedTurn = nil
 	}
-	if h.reviewerStep != nil && *h.reviewerStep == stepID {
-		h.reviewerStep = nil
-	}
-}
-
-func (h *bellHooks) recordReviewerState(state clientui.TranscriptReviewerState) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	switch state.State {
-	case clientui.ReviewerStateRunning:
-		stepID := state.StepID
-		h.reviewerStep = &stepID
-	case clientui.ReviewerStateCompleted:
-		return
-	}
 }
 
 func (h *bellHooks) clearPendingTurnCompletionForNoFinal() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.reviewerStep != nil {
-		return
-	}
 	h.pendingTurnCompletion = nil
 	h.observedTurn = nil
 }
@@ -357,7 +335,6 @@ func (h *bellHooks) OnTurnQueueAborted() {
 	h.observedTurn = nil
 	h.pendingTurnCompletion = nil
 	h.pendingCompaction = false
-	h.reviewerStep = nil
 	h.mu.Unlock()
 }
 

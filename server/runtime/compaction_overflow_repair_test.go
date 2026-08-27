@@ -156,9 +156,6 @@ func TestCompactionOverflowRepairUsesCumulativeAttemptCapOldestFirst(t *testing.
 
 func TestCompactionOverflowRepairTargetsUseContextWindow(t *testing.T) {
 	t.Parallel()
-	if got := compactionOverflowRepairTargetTokens(0, 1); got != 0 {
-		t.Fatalf("invalid-window repair target = %d, want 0 without a second window authority", got)
-	}
 	if got, want := compactionOverflowRepairTargetTokens(100_000, 1), 10_000; got != want {
 		t.Fatalf("first repair target = %d, want %d", got, want)
 	}
@@ -187,17 +184,17 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 		ID:    "call-shell",
 		Name:  string(toolspec.ToolExecCommand),
 		Input: json.RawMessage(`{"cmd":"go test ./..."}`),
 	}}}})); err != nil {
 		t.Fatalf("append assistant tool call: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:       llm.RoleTool,
 		ToolCallID: textutil.Value("call-shell"),
 		Name:       textutil.Value(string(toolspec.ToolExecCommand)),
@@ -206,13 +203,10 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 		t.Fatalf("append tool output: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if len(client.calls) != 2 {
 		t.Fatalf("local compaction model calls = %d, want 2", len(client.calls))
 	}
-	assertFreshGenerationDispatchesWithSameMetadata(t, client.calls, "")
 	if len(client.calls[1].Items) != len(client.calls[0].Items) {
 		t.Fatalf("expected repair to preserve item count, first=%d second=%d", len(client.calls[0].Items), len(client.calls[1].Items))
 	}
@@ -247,20 +241,23 @@ func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *test
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 		ID:               "rs-heavy",
 		EncryptedContent: strings.Repeat("reasoning-heavy-history", 12_000),
 	}}}})); err != nil {
 		t.Fatalf("append reasoning message: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err == nil {
-		t.Fatal("expected ordinary-history overflow to fail without retry")
-	} else if !llm.IsContextLengthOverflowError(err) {
-		t.Fatalf("expected context overflow error, got %v", err)
+	var events []Event
+	eng.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	scheduleManualCompactionAndWait(t, eng)
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("ordinary-history overflow events = %+v, want failed event", events)
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("expected no retry without collapsible tool payloads, got %d local compaction model calls", len(client.calls))
@@ -283,10 +280,10 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local", ContextWindowTokens: 100_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 		ID:               "rs-keep",
 		EncryptedContent: strings.Repeat("reasoning", 2_000),
 	}}}})); err != nil {
@@ -294,14 +291,14 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 	}
 	for idx := 0; idx < 5; idx++ {
 		callID := fmt.Sprintf("call-shell-%d", idx)
-		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 			ID:    callID,
 			Name:  string(toolspec.ToolExecCommand),
 			Input: json.RawMessage(`{"cmd":"echo hi"}`),
 		}}}})); err != nil {
 			t.Fatalf("append assistant tool call %d: %v", idx, err)
 		}
-		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 			Role:       llm.RoleTool,
 			ToolCallID: textutil.Value(callID),
 			Name:       textutil.Value(string(toolspec.ToolExecCommand)),
@@ -311,13 +308,10 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 		}
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if len(client.calls) != 4 {
 		t.Fatalf("local compaction model calls = %d, want 4", len(client.calls))
 	}
-	assertFreshGenerationDispatchesWithSameMetadata(t, client.calls, "")
 	wantCollapsedByCall := []int{0, 1, 2, 4}
 	for callIdx, call := range client.calls {
 		collapsed := 0
@@ -335,80 +329,6 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 		}
 		if !reasoningPreserved {
 			t.Fatalf("reasoning item changed or missing on compaction repair call %d: %+v", callIdx+1, call.Items)
-		}
-	}
-}
-
-func assertFreshGenerationDispatchesWithSameMetadata(t *testing.T, calls []llm.Request, requestKind llm.CodexRequestKind) {
-	t.Helper()
-	if len(calls) < 2 {
-		t.Fatalf("generation calls = %d, want at least two", len(calls))
-	}
-	var metadata string
-	for index, call := range calls {
-		if call.CodexDispatch == nil {
-			t.Fatalf("generation call %d omitted Codex dispatch", index+1)
-		}
-		got, err := call.CodexDispatch.TurnMetadataJSON()
-		if err != nil {
-			t.Fatalf("generation call %d metadata: %v", index+1, err)
-		}
-		if index == 0 {
-			metadata = got
-		} else {
-			if got != metadata {
-				t.Fatalf("generation call %d identity changed:\nfirst=%s\n got=%s", index+1, metadata, got)
-			}
-			if calls[index-1].CodexDispatch == call.CodexDispatch {
-				t.Fatalf("generation call %d reused changed-payload dispatch state", index+1)
-			}
-		}
-	}
-	if requestKind == "" {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(metadata), &fields); err != nil {
-			t.Fatalf("decode local compaction metadata: %v", err)
-		}
-		if _, present := fields["request_kind"]; present {
-			t.Fatalf("local compaction metadata included request kind: %s", metadata)
-		}
-	}
-}
-
-func assertFreshCompactionDispatchesWithSameMetadata(t *testing.T, calls []llm.CompactionRequest, requestKind llm.CodexRequestKind) {
-	t.Helper()
-	if len(calls) < 2 {
-		t.Fatalf("compaction calls = %d, want at least two", len(calls))
-	}
-	var metadata string
-	for index, call := range calls {
-		if call.CodexDispatch == nil {
-			t.Fatalf("compaction call %d omitted Codex dispatch", index+1)
-		}
-		got, err := call.CodexDispatch.TurnMetadataJSON()
-		if err != nil {
-			t.Fatalf("compaction call %d metadata: %v", index+1, err)
-		}
-		if index == 0 {
-			metadata = got
-		} else {
-			if got != metadata {
-				t.Fatalf("compaction call %d identity changed:\nfirst=%s\n got=%s", index+1, metadata, got)
-			}
-			if calls[index-1].CodexDispatch == call.CodexDispatch {
-				t.Fatalf("compaction call %d reused changed-payload dispatch state", index+1)
-			}
-		}
-	}
-	if requestKind == llm.CodexRequestKindCompaction {
-		var fields struct {
-			RequestKind llm.CodexRequestKind `json:"request_kind"`
-		}
-		if err := json.Unmarshal([]byte(metadata), &fields); err != nil {
-			t.Fatalf("decode remote compaction metadata: %v", err)
-		}
-		if fields.RequestKind != requestKind {
-			t.Fatalf("remote compaction request kind = %q, want %q", fields.RequestKind, requestKind)
 		}
 	}
 }

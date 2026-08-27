@@ -17,10 +17,10 @@ import (
 var _ servicecontract.RuntimeLiveControlService = (*Service)(nil)
 
 func (s *Service) withLiveExecutionRuntime(ctx context.Context, id runtimeids.SessionID, fn func(context.Context, *runtime.Engine) error) error {
-	if s == nil || s.execution == nil {
+	if s == nil || s.authority == nil {
 		return errors.New("session runtime authority is required")
 	}
-	return s.execution.WithLiveExecutionRuntime(ctx, id, fn)
+	return s.authority.WithLiveExecutionRuntime(ctx, id, fn)
 }
 
 func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {
@@ -31,66 +31,52 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 	if err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
 	}
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(req.ClientRequestID)
-	if err != nil {
-		return serverapi.RuntimeLiveSteerResponse{}, err
-	}
-	memoReq := liveSteerMemoRequest{
-		SessionID:       sessionID,
-		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
-		Text:            strings.TrimSpace(req.Text),
-	}
-	return s.liveSteers.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveSteerMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveSteerResponse, error) {
-		var resp serverapi.RuntimeLiveSteerResponse
-		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-			queueText := memoReq.Text
-			var agentSteer runtime.AgentSteer
-			if memoReq.CallerSessionID.Present {
-				callerID, parseErr := runtimeids.ParseSessionID(memoReq.CallerSessionID.Value)
-				if parseErr != nil {
-					return parseErr
-				}
-				agentSteer, err = runtime.NewAgentSteer(callerID, memoReq.Text)
-				if err != nil {
-					return err
-				}
-				queueText = *agentSteer.Message().Content
+	callerSessionID := serverapi.CanonicalOptionalString(req.CallerSessionID)
+	text := strings.TrimSpace(req.Text)
+	var resp serverapi.RuntimeLiveSteerResponse
+	err = s.withLiveExecutionRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		queueText := text
+		var agentSteer runtime.AgentSteer
+		if callerSessionID.Present {
+			callerID, parseErr := runtimeids.ParseSessionID(callerSessionID.Value)
+			if parseErr != nil {
+				return parseErr
 			}
-			queueBefore := func() error {
-				if s == nil || s.promptStore == nil {
-					return nil
-				}
-				_, _, err := s.recordPromptHistory(callbackCtx, memoReq.SessionID.String(), clientRequestID.String(), queueText)
-				if err != nil {
-					return err
-				}
-				return nil
-			}
-			var item runtime.QueuedUserMessage
-			var accepted bool
-			if memoReq.CallerSessionID.Present {
-				item, accepted, err = engine.QueueAgentSteerForActiveRun(callbackCtx, agentSteer, clientRequestID, queueBefore)
-			} else {
-				item, accepted, err = engine.QueueUserMessageForActiveRun(callbackCtx, queueText, clientRequestID, queueBefore)
-			}
-			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
-				return serverapi.ErrRuntimeNoActiveRun
-			}
+			agentSteer, err = runtime.NewAgentSteer(callerID, text)
 			if err != nil {
 				return err
 			}
-			if !accepted {
-				return serverapi.ErrRuntimeNoActiveRun
+			queueText = *agentSteer.Message().Content
+		}
+		var item runtime.QueuedUserMessage
+		var accepted bool
+		if callerSessionID.Present {
+			item, accepted, err = engine.QueueAgentSteerForActiveRun(callbackCtx, agentSteer, nil)
+		} else {
+			item, accepted, err = engine.QueueUserMessageForActiveRun(callbackCtx, queueText, nil)
+		}
+		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
+			return serverapi.ErrRuntimeNoActiveRun
+		}
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return serverapi.ErrRuntimeNoActiveRun
+		}
+		displayText, displayErr := item.DisplayText()
+		if displayErr != nil {
+			return displayErr
+		}
+		resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: displayText}
+		if s != nil && s.promptStore != nil {
+			if _, err := s.recordPromptHistory(callbackCtx, sessionID.String(), queueText); err != nil {
+				engine.ReportPromptHistoryPersistError(err.Error())
 			}
-			displayText, displayErr := item.DisplayText()
-			if displayErr != nil {
-				return displayErr
-			}
-			resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: displayText, ClientRequestID: item.ClientRequestID}
-			return nil
-		})
-		return resp, err
+		}
+		return nil
 	})
+	return resp, err
 }
 
 func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error) {
@@ -101,24 +87,18 @@ func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopReq
 	if err != nil {
 		return serverapi.RuntimeLiveStopResponse{}, err
 	}
-	memoReq := liveStopMemoRequest{SessionID: sessionID}
-	return s.liveStops.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveStopMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveStopResponse, error) {
-		resp := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
-		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			stopped, err := engine.TryInterruptActiveRun()
-			if err != nil {
-				return err
-			}
-			if stopped {
-				resp.Status = serverapi.RuntimeLiveStopStatusStopped
-			}
-			return nil
-		})
-		if errors.Is(err, serverapi.ErrRuntimeUnavailable) || errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
-			return resp, nil
-		}
-		return resp, err
-	})
+	if s == nil || s.authority == nil {
+		return serverapi.RuntimeLiveStopResponse{}, errors.New("session runtime authority is required")
+	}
+	resp := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
+	stopped, err := s.authority.InterruptCurrentLiveRun(ctx, sessionID)
+	if err != nil {
+		return serverapi.RuntimeLiveStopResponse{}, err
+	}
+	if stopped {
+		resp.Status = serverapi.RuntimeLiveStopStatusStopped
+	}
+	return resp, nil
 }
 
 func (s *Service) captureLiveRun(ctx context.Context, id runtimeids.SessionID) (*runtime.LiveRunWaitHandle, string, error) {

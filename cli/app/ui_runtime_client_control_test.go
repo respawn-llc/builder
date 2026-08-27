@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 )
@@ -72,18 +71,16 @@ func TestRuntimeClientControlMutationsPatchCachedSessionStatus(t *testing.T) {
 	}
 }
 
-func TestRuntimeClientInputRequestUsesCallerRequestIdentity(t *testing.T) {
+func TestRuntimeClientInputMakesOneExplicitCall(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{}
 	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls).(*sessionRuntimeClient)
-	requestID := runtimeids.NewRuntimeClientRequestID()
 
 	if _, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		ClientRequestID: requestID,
-		Input:           runtimeinput.Text("hello"),
+		Input: runtimeinput.Text("hello"),
 	}); err != nil {
 		t.Fatalf("SubmitRuntimeInput: %v", err)
 	}
-	if got := controls.submitRequestIDs(); len(got) != 1 || got[0] != requestID.String() {
-		t.Fatalf("request ids = %+v, want %q", got, requestID.String())
+	if controls.submitCalls != 1 {
+		t.Fatalf("submit calls = %d, want 1", controls.submitCalls)
 	}
 }

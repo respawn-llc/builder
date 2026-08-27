@@ -32,6 +32,11 @@ func TestCommittedRowLocatorRequiresPositiveComparableComponents(t *testing.T) {
 	}
 }
 
+func testGoalAvailability() *GoalAvailability {
+	value := GoalAvailabilityAvailable
+	return &value
+}
+
 func TestCommittedRowRequiresLocatorAndPreservesItThroughJSON(t *testing.T) {
 	row := transcriptLocatorTestAssistantRow(t)
 	if err := row.Validate(); err != nil {

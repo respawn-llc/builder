@@ -1,17 +1,13 @@
 package workflowstore
 
 import (
-	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 
-	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/invariant"
 )
 
-const retainedTargetInvariantOperation = "workflow.retained_target.resolve"
 const legacyContinuationSourceOperation = "workflow.legacy_continuation_source.resolve"
 
 type workflowInvariantSlogSink struct{}
@@ -24,92 +20,6 @@ func (workflowInvariantSlogSink) RecordInvariantDiagnostic(diagnostic invariant.
 	}
 	attributes = append(attributes, "stack", diagnostic.Stack)
 	slog.Error("workflow invariant violation", attributes...)
-}
-func checkRetainedTargetInvariantBeforeMutation(
-	policy invariant.Policy,
-	detail workflow.RetainedTargetInvariantDetail,
-) {
-	if policy.Mode() == invariant.ModePanic {
-		policy.Check(false, retainedTargetInvariantDiagnostic(detail))
-	}
-}
-func reportRetainedTargetInvariantAfterCommit(
-	policy invariant.Policy,
-	detail workflow.RetainedTargetInvariantDetail,
-) {
-	if policy.Mode() == invariant.ModeDiagnostic {
-		policy.Check(false, retainedTargetInvariantDiagnostic(detail))
-	}
-}
-func retainedTargetInvariantDiagnostic(detail workflow.RetainedTargetInvariantDetail) invariant.Diagnostic {
-	fields := map[invariant.Field]string{
-		invariant.FieldOperation:    retainedTargetInvariantOperation,
-		invariant.FieldTaskID:       string(detail.TaskID),
-		invariant.FieldSourceNodeID: string(detail.SourceNodeID),
-		invariant.FieldTargetNodeID: string(detail.TargetNodeID),
-		invariant.FieldReason:       string(detail.Reason),
-	}
-	if detail.ActiveSourceSessionID != nil {
-		fields[invariant.FieldActiveSourceSessionID] = detail.ActiveSourceSessionID.String()
-	}
-	if detail.RejectedRetainedSessionID != nil {
-		fields[invariant.FieldRejectedRetainedSessionID] = detail.RejectedRetainedSessionID.String()
-	}
-	return invariant.Diagnostic{
-		Scope:  invariant.ScopeWorkflowExecution,
-		Fields: fields,
-	}
-}
-
-func (s *Store) validateRetainedTargetSessionCreationAuthorization(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	enteringEdge workflow.Edge,
-	sourceNodeID workflow.NodeID,
-	currentNode workflow.CurrentNode,
-) error {
-	contextSource := workflow.CanonicalContextSource(enteringEdge.ContextSource).Kind
-	if currentNode.SessionID != nil ||
-		enteringEdge.ContextMode == workflow.ContextModeNewSession ||
-		(contextSource != workflow.ContextSourcePreviousTarget &&
-			contextSource != workflow.ContextSourcePreviousTargetOrNew) {
-		return nil
-	}
-	activeSourceSessionID, exact := currentNode.ContinuationSource.ExactSessionID()
-	if !exact {
-		return nil
-	}
-	association, err := currentTaskSessionForNode(
-		sqlitegen.WithExpectedNoRows(ctx),
-		q,
-		currentNode.Reference,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if association.SourceSessionID != activeSourceSessionID {
-		return nil
-	}
-	detail := workflow.RetainedTargetInvariantDetail{
-		TaskID:                    currentNode.Reference.TaskID,
-		SourceNodeID:              sourceNodeID,
-		TargetNodeID:              currentNode.Reference.NodeID,
-		ActiveSourceSessionID:     &activeSourceSessionID,
-		RejectedRetainedSessionID: &association.SessionID,
-		Reason:                    workflow.RetainedTargetInvariantUnauthorizedSessionCreation,
-	}
-	checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, detail)
-	return workflow.RetainedTargetInvariantError{Detail: detail}
-}
-
-func reportRetainedTargetInvariantError(policy invariant.Policy, err error) {
-	var invariantErr workflow.RetainedTargetInvariantError
-	if errors.As(err, &invariantErr) {
-		policy.Check(false, retainedTargetInvariantDiagnostic(invariantErr.Detail))
-	}
 }
 
 type legacyContinuationSourceFallbackDetail struct {
@@ -205,6 +115,5 @@ func reportLegacyContinuationSourceError(policy invariant.Policy, err error) {
 }
 
 func reportWorkflowInvariantError(policy invariant.Policy, err error) {
-	reportRetainedTargetInvariantError(policy, err)
 	reportLegacyContinuationSourceError(policy, err)
 }

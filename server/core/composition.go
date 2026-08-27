@@ -107,6 +107,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
 	var workflowController *workflowexecution.CurrentNodeController
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		Debug:           cfg.Settings.Debug,
 		PersistenceRoot: cfg.PersistenceRoot,
 		AuthManager:     authSupport.AuthManager,
 		Background:      runtimeSupport.Background,
@@ -122,11 +123,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		},
 		ResourceLifecycle: runtimeRegistry,
 		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			if workflowController != nil {
-				workflowController.ExecutionFinalized(scope)
-			}
-		}),
 	})
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
 		if publishErr := runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
@@ -184,11 +180,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore).
-		WithChatSettingsPreparationResolver(sessionChatSettingsPreparationResolver{
-			metadataStore:   metadataStore,
-			authManager:     authSupport.AuthManager,
-			persistenceRoot: cfg.PersistenceRoot,
-		}).
 		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
 	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
 		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{
@@ -238,11 +229,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		}
 	}
 	workflowRoleResolver := configRoleResolver{settings: cfg.Settings}
-	workflowStore, err := workflowstore.New(
-		metadataStore,
-		workflowstore.WithRoleResolver(workflowRoleResolver),
-		workflowstore.WithDebug(cfg.Settings.Debug),
-	)
+	workflowStore, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflowRoleResolver))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: store: %w", err)
@@ -304,6 +291,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node controller: %w", err)
 	}
+	runtimeControlService.WithWorkflowSessionReactivator(workflowController)
+	runtimeControlService.WithWorkflowSessionPreparationReader(workflowController)
 	if _, err := workflowController.Recover(context.Background()); err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)

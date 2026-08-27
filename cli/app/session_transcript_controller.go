@@ -267,7 +267,6 @@ func (c *ongoingTranscriptController) applyState(message clientui.TranscriptMess
 func (c *ongoingTranscriptController) applyAppOwnedMessage(message clientui.TranscriptMessage) bool {
 	switch message.Kind() {
 	case clientui.TranscriptMessageStepState,
-		clientui.TranscriptMessageReviewerState,
 		clientui.TranscriptMessageRuntimeReadModelUpdate:
 		// Canonical runtime state is represented by the app status line.
 	case clientui.TranscriptMessageUserMessageFlushed:
@@ -450,7 +449,6 @@ func humanizeTranscriptFact(value string) string {
 func isAppOwnedOngoingMessage(kind clientui.TranscriptMessageKind) bool {
 	switch kind {
 	case clientui.TranscriptMessageStepState,
-		clientui.TranscriptMessageReviewerState,
 		clientui.TranscriptMessageRuntimeReadModelUpdate,
 		clientui.TranscriptMessageQueuedMessageState,
 		clientui.TranscriptMessageUserMessageFlushed,

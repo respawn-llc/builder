@@ -22,8 +22,11 @@ func TestExecuteToolCallsCanonicalizesEditAliases(t *testing.T) {
 			events = append(events, evt)
 		},
 	})
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
 
-	results, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+	results, err := eng.executeToolCalls(context.Background(), stepID, []llm.ToolCall{{
 		ID:    "call-replace",
 		Name:  "replace",
 		Input: json.RawMessage(`{"path":"a.go","old_string":"old","new_string":"new"}`),
@@ -71,7 +74,9 @@ func TestExecuteToolCallsAcceptsCustomEditJSONAndRejectsPlainText(t *testing.T) 
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolEdit, Handler: capturingTool{name: toolspec.ToolEdit}}), Config{Model: "claude", EnabledTools: []toolspec.ID{toolspec.ToolEdit}})
 
-	okResults, err := eng.executeToolCalls(context.Background(), "step-json", []llm.ToolCall{{
+	jsonStepID := runtimeTestStepID("step-json")
+	restoreStep := setTestActiveStep(eng, jsonStepID)
+	okResults, err := eng.executeToolCalls(context.Background(), jsonStepID, []llm.ToolCall{{
 		ID:          "call-json",
 		Name:        "edit",
 		Custom:      true,
@@ -83,8 +88,12 @@ func TestExecuteToolCallsAcceptsCustomEditJSONAndRejectsPlainText(t *testing.T) 
 	if len(okResults) != 1 || okResults[0].IsError {
 		t.Fatalf("json custom results = %+v, want success", okResults)
 	}
+	restoreStep()
 
-	badResults, err := eng.executeToolCalls(context.Background(), "step-text", []llm.ToolCall{{
+	textStepID := runtimeTestStepID("step-text")
+	restoreStep = setTestActiveStep(eng, textStepID)
+	defer restoreStep()
+	badResults, err := eng.executeToolCalls(context.Background(), textStepID, []llm.ToolCall{{
 		ID:          "call-text",
 		Name:        "edit",
 		Custom:      true,

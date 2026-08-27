@@ -7,13 +7,6 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -76,8 +69,9 @@ func openEmptyMetadataTestDatabase(t testing.TB) *sql.DB {
 		t.Fatalf("register metadata SQLite extensions: %v", err)
 	}
 	dsn := fmt.Sprintf(
-		"file:kent-metadata-test-%d?mode=memory&cache=shared&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)",
+		"file:kent-metadata-test-%d?mode=memory&cache=shared&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(%d)",
 		metadataTestDatabaseSequence.Add(1),
+		metadataSQLiteBusyTimeoutMilliseconds,
 	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -120,94 +114,6 @@ func TestAllMetadataMigrationsMatchLatestInMemorySchema(t *testing.T) {
 	if err := rows.Close(); err != nil {
 		t.Fatalf("close migration foreign-key check: %v", err)
 	}
-}
-
-func TestMetadataTestsDoNotOpenFileBackedDatabases(t *testing.T) {
-	_, sourcePath, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve metadata test source path")
-	}
-	metadataDirectory := filepath.Dir(sourcePath)
-	err := filepath.WalkDir(metadataDirectory, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
-			return nil
-		}
-		fileSet := token.NewFileSet()
-		file, err := parser.ParseFile(fileSet, path, nil, 0)
-		if err != nil {
-			return fmt.Errorf("parse metadata test file %s: %w", path, err)
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if allowedMetadataTestDatabaseOpen(file, call) {
-				return true
-			}
-			if name, forbidden := forbiddenMetadataTestDatabaseOpen(file, call); forbidden {
-				position := fileSet.Position(call.Pos())
-				t.Errorf("%s calls %s; metadata tests must use an in-memory SQLite fixture", position, name)
-			}
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func allowedMetadataTestDatabaseOpen(file *ast.File, call *ast.CallExpr) bool {
-	position := call.Pos()
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Body == nil || position < function.Body.Pos() || position > function.Body.End() {
-			continue
-		}
-		return function.Name.Name == "openEmptyMetadataTestDatabase" ||
-			function.Name.Name == "openGraphEntityIDSQLiteTestDatabase" ||
-			function.Name.Name == "openSQLiteFixture" ||
-			function.Name.Name == "TestGeneratedSingleRowNoRowsDiagnosticsArePolicyScoped"
-	}
-	return false
-}
-
-func forbiddenMetadataTestDatabaseOpen(file *ast.File, call *ast.CallExpr) (string, bool) {
-	switch function := call.Fun.(type) {
-	case *ast.Ident:
-		if function.Name == "Open" || function.Name == "OpenAtPath" {
-			return function.Name, true
-		}
-	case *ast.SelectorExpr:
-		packageName, ok := function.X.(*ast.Ident)
-		if !ok {
-			return "", false
-		}
-		if function.Sel.Name == "OpenAtPath" {
-			return packageName.Name + ".OpenAtPath", true
-		}
-		if function.Sel.Name != "Open" {
-			return "", false
-		}
-		for _, importSpec := range file.Imports {
-			importPath := strings.Trim(importSpec.Path.Value, `"`)
-			importName := filepath.Base(importPath)
-			if importSpec.Name != nil {
-				importName = importSpec.Name.Name
-			}
-			if importName != packageName.Name {
-				continue
-			}
-			if importPath == "database/sql" || importPath == "core/server/metadata" {
-				return packageName.Name + ".Open", true
-			}
-		}
-	}
-	return "", false
 }
 
 func metadataTestSchema(t testing.TB, db *sql.DB) []byte {

@@ -797,7 +797,7 @@ func TestTaskLabelAssignmentSupportsEveryTaskLifecycleState(t *testing.T) {
 
 	admitted := createDefaultTask(t, ctx, store, binding.ProjectID)
 	admittedStart := startTask(t, ctx, store, admitted.ID)
-	if err := store.AdmitCurrentNode(ctx, admittedStart.Mutation.Created[0].Reference); err != nil {
+	if _, err := store.AdmitCurrentNode(ctx, admittedStart.Mutation.Created[0].Reference); err != nil {
 		t.Fatalf("AdmitCurrentNode: %v", err)
 	}
 
