@@ -146,7 +146,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	}
 }
 
-func TestWriteStdinCompletionDuringGuardedPollDoesNotQueueDuplicateBackgroundNotice(t *testing.T) {
+func TestRunningExecGuardDoesNotQueueBackgroundNoticeWithoutFollowUpPoll(t *testing.T) {
 	store := mustCreateTestSession(t)
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
 	if err != nil {
@@ -162,25 +162,12 @@ func TestWriteStdinCompletionDuringGuardedPollDoesNotQueueDuplicateBackgroundNot
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_exec_1",
 				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"cmd":"read line; printf '12345678901234567890123456789012345678901234567890123456789012345678901234567890'","shell":"/bin/sh","login":false,"tty":true,"yield_time_ms":1}`),
-			}},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("wait for it"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
-			ToolCalls: []llm.ToolCall{{
-				ID:    "call_poll_1",
-				Name:  string(toolspec.ToolWriteStdin),
-				Input: json.RawMessage(`{"session_id":1000,"chars":"\n","yield_time_ms":15000,"max_output_tokens":21}`),
+				Input: json.RawMessage(`{"cmd":"printf '12345678901234567890123456789012345678901234567890123456789012345678901234567890'; sleep 0.2","shell":"/bin/sh","login":false,"yield_time_ms":1,"max_output_tokens":21}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("unexpected extra turn"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -227,8 +214,8 @@ func TestWriteStdinCompletionDuringGuardedPollDoesNotQueueDuplicateBackgroundNot
 	client.mu.Lock()
 	callCount := len(client.calls)
 	client.mu.Unlock()
-	if callCount != 3 {
-		t.Fatalf("model call count = %d, want 3", callCount)
+	if callCount != 2 {
+		t.Fatalf("model call count = %d, want 2", callCount)
 	}
 	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
 		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice {

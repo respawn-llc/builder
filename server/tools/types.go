@@ -52,6 +52,7 @@ type Result struct {
 	PresentationDelta *transcript.ToolResultPresentationDelta `json:"-"`
 
 	BackgroundSessionID *string `json:"-"`
+	OutputPath          *string `json:"-"`
 }
 
 type Definition struct {

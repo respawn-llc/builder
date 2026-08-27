@@ -203,13 +203,13 @@ func TestModelVisibleFallbackPreviewsLimitCommandOutputLines(t *testing.T) {
 	path := writeBackgroundNoticeLog(t, []byte(long))
 	exitCode := 0
 	snapshot := completedBackgroundSnapshot(path, &exitCode)
-	event, err := (&Manager{}).fallbackBackgroundEvent(EventCompleted, snapshot, nil)
+	event, err := (&Manager{}).fallbackBackgroundEvent(EventCompleted, snapshot, nil, false)
 	if err != nil || fallbackPreview(t, event) != want {
 		t.Fatalf("fallback event = %v", err)
 	}
 	rawSnapshot := snapshot
 	rawSnapshot.RawOutput = true
-	rawEvent, _ := (&Manager{}).fallbackBackgroundEvent(EventCompleted, rawSnapshot, nil)
+	rawEvent, _ := (&Manager{}).fallbackBackgroundEvent(EventCompleted, rawSnapshot, nil, false)
 	if got := fallbackPreview(t, rawEvent); got != long {
 		t.Fatalf("raw fallback preview = %q", got)
 	}

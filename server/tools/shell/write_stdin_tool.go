@@ -87,6 +87,16 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 		Input:          in.Chars,
 		YieldTime:      yieldTime,
 		MaxOutputChars: maxChars,
+		SuppressBackgroundNotice: func(candidate ExecResult) bool {
+			body, _ := marshalNoHTMLEscape(writeStdinOutput{
+				Output:              formatExecResponse(candidate),
+				BackgroundSessionID: in.SessionID,
+				BackgroundRunning:   candidate.Running,
+				Backgrounded:        candidate.Backgrounded,
+				BackgroundExitCode:  textutil.Pointer(candidate.ExitCode),
+			})
+			return candidate.Backgrounded && t.oversizedOutputGuard.shouldGuard(in.MaxOutputTokens, string(body))
+		},
 	})
 	if err != nil {
 		return tools.ErrorResultWith(c, formatToolCallError("write_stdin", err), marshalNoHTMLEscape), nil

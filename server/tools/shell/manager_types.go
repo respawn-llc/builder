@@ -149,18 +149,19 @@ type Snapshot struct {
 }
 
 type ExecRequest struct {
-	Command              []string
-	DisplayCommand       string
-	OwnerSessionID       string
-	OwnerRunID           string
-	OwnerStepID          string
-	ExecutionCorrelation *runtimeids.ExecutionCorrelation
-	Workdir              string
-	YieldTime            time.Duration
-	MaxOutputChars       int
-	KeepStdinOpen        bool
-	Raw                  bool
-	Postprocessor        *postprocess.Runner
+	Command                  []string
+	DisplayCommand           string
+	OwnerSessionID           string
+	OwnerRunID               string
+	OwnerStepID              string
+	ExecutionCorrelation     *runtimeids.ExecutionCorrelation
+	Workdir                  string
+	YieldTime                time.Duration
+	MaxOutputChars           int
+	KeepStdinOpen            bool
+	Raw                      bool
+	Postprocessor            *postprocess.Runner
+	SuppressBackgroundNotice func(ExecResult) bool
 }
 
 type ExecResult struct {
@@ -213,10 +214,11 @@ type BackgroundNoticeOptions struct {
 }
 
 type WriteRequest struct {
-	SessionID      string
-	Input          string
-	YieldTime      time.Duration
-	MaxOutputChars int
+	SessionID                string
+	Input                    string
+	YieldTime                time.Duration
+	MaxOutputChars           int
+	SuppressBackgroundNotice func(ExecResult) bool
 }
 
 type PollingCanceledError struct {
@@ -273,6 +275,7 @@ type processEntry struct {
 	killRequested        bool
 	terminalEvent        *terminalEventCache
 	terminalDelivered    bool
+	noticeSuppressed     bool
 	mu                   sync.Mutex
 	interactMu           sync.Mutex
 	publishedSnapshot    atomic.Pointer[Snapshot]

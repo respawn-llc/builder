@@ -227,23 +227,19 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
 	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{RuntimeClientFactory: factory})
-
+	settings := config.DefaultOnboardingSettings()
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 40
+	settings.Reviewer.Frequency = "off"
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID:       "activate-factory",
 		SessionID:             fixture.store.Meta().SessionID,
 		OwnerID:               "owner",
 		QuestionsEnabled:      textutil.Value(true),
 		AutoCompactionEnabled: textutil.Value(true),
-		ActiveSettings: config.Settings{
-			Model:              "gpt-5",
-			ThinkingLevel:      "medium",
-			ModelContextWindow: 40,
-			Reviewer:           config.ReviewerSettings{Frequency: "off"},
-			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
-			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
-		},
-		EnabledToolIDs: []string{string(toolspec.ToolExecCommand)},
-		Source:         config.SourceReport{Sources: map[string]string{}},
+		ActiveSettings:        settings,
+		EnabledToolIDs:        []string{string(toolspec.ToolExecCommand)},
+		Source:                config.SourceReport{Sources: map[string]string{}},
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)

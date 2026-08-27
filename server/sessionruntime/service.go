@@ -80,13 +80,13 @@ func applyAgentSelection(store *session.Store, selection *session.ChatAgentSelec
 	return result.Changed, err
 }
 
-func applyActivationContextPolicy(ctx context.Context, store *session.Store, settings config.Settings) (config.Settings, error) {
-	meta := store.Meta()
-	provider, err := llm.ResolveEffectiveProviderCapabilities(ctx, meta.Locked, settings, nil)
-	if err != nil {
-		return config.Settings{}, err
+func applyActivationContextPolicy(store *session.Store, settings config.Settings) config.Settings {
+	locked := store.Meta().Locked
+	if locked == nil {
+		return settings
 	}
-	return chatcontext.ApplyPolicy(settings, chatcontext.ResolvePolicy(settings, provider.Capabilities, meta.Locked)), nil
+	capabilities, _ := llm.ProviderCapabilitiesFromLocked(locked)
+	return chatcontext.ApplyPolicy(settings, chatcontext.ResolvePolicy(settings, capabilities, locked))
 }
 
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
@@ -163,10 +163,7 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		autoCompaction := effective.AutoCompaction
 		req.QuestionsEnabled = &questions
 		req.AutoCompactionEnabled = &autoCompaction
-		req.ActiveSettings, resolveErr = applyActivationContextPolicy(activationCtx, store, req.ActiveSettings)
-		if resolveErr != nil {
-			return nil, nil, resolveErr
-		}
+		req.ActiveSettings = applyActivationContextPolicy(store, req.ActiveSettings)
 		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())
 		if planErr != nil {
 			return nil, nil, planErr

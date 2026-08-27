@@ -14,6 +14,12 @@ type oversizedOutputGuard struct {
 	contextWindowTokens int
 }
 
+func (g oversizedOutputGuard) shouldGuard(requestedOutputTokens *int, modelVisibleOutput string) bool {
+	return requestedOutputTokens != nil &&
+		*requestedOutputTokens > g.contextWindowTokens/2 &&
+		textutil.ApproxTextTokenCount(modelVisibleOutput) > g.contextWindowTokens/2
+}
+
 func newOversizedOutputGuard(contextWindowTokens int) oversizedOutputGuard {
 	return oversizedOutputGuard{contextWindowTokens: contextWindowTokens}
 }
@@ -25,9 +31,7 @@ func (g oversizedOutputGuard) FailedResult(
 	outputPath string,
 	presentation *transcript.ToolResultPresentationDelta,
 ) (tools.Result, bool) {
-	if requestedOutputTokens == nil ||
-		*requestedOutputTokens <= g.contextWindowTokens/2 ||
-		textutil.ApproxTextTokenCount(modelVisibleOutput) <= g.contextWindowTokens/2 {
+	if !g.shouldGuard(requestedOutputTokens, modelVisibleOutput) {
 		return tools.Result{}, false
 	}
 	result := tools.ErrorResultWith(
@@ -36,5 +40,6 @@ func (g oversizedOutputGuard) FailedResult(
 		marshalNoHTMLEscape,
 	)
 	result.PresentationDelta = presentation
+	result.OutputPath = textutil.OptionalTrimmedString(outputPath)
 	return result, true
 }
