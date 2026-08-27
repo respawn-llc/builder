@@ -678,11 +678,11 @@ func classifyEventLogSource(
 			return classification, nil
 		case eventLogSourceCurrent:
 			return &eventLogSourceClassificationResult{
-					source:       eventLogSourceMalformed,
-					foundVersion: cloneEventLogSourceVersion(classification.foundVersion),
-				}, MalformedEventLogHeaderError{
-					Reason: malformedEventLogHeaderUnterminated,
-				}
+				source:       eventLogSourceMalformed,
+				foundVersion: cloneEventLogSourceVersion(classification.foundVersion),
+			}, MalformedEventLogHeaderError{
+				Reason: malformedEventLogHeaderUnterminated,
+			}
 		default:
 			return classification, err
 		}
@@ -724,36 +724,36 @@ func classifyEventLogHeader(
 	}
 	if contract != EventLogContract {
 		return &eventLogSourceClassificationResult{
-				source:       eventLogSourceMalformed,
-				foundVersion: &version,
-			}, MalformedEventLogHeaderError{
-				Reason: malformedEventLogHeaderUnexpectedContract,
-			}
+			source:       eventLogSourceMalformed,
+			foundVersion: &version,
+		}, MalformedEventLogHeaderError{
+			Reason: malformedEventLogHeaderUnexpectedContract,
+		}
 	}
 	if version > EventLogVersionV2 {
 		return &eventLogSourceClassificationResult{
-				source:       eventLogSourceNewer,
-				foundVersion: &version,
-			}, UnsupportedEventLogVersionError{
-				FoundVersion:     version,
-				SupportedVersion: EventLogVersionV2,
-			}
+			source:       eventLogSourceNewer,
+			foundVersion: &version,
+		}, UnsupportedEventLogVersionError{
+			FoundVersion:     version,
+			SupportedVersion: EventLogVersionV2,
+		}
 	}
 	if version != EventLogVersionV1 && version != EventLogVersionV2 {
 		return &eventLogSourceClassificationResult{
-				source:       eventLogSourceMalformed,
-				foundVersion: &version,
-			}, MalformedEventLogHeaderError{
-				Reason: malformedEventLogHeaderUnsupportedVersion,
-			}
+			source:       eventLogSourceMalformed,
+			foundVersion: &version,
+		}, MalformedEventLogHeaderError{
+			Reason: malformedEventLogHeaderUnsupportedVersion,
+		}
 	}
 	if _, err := decodeEventLogHeader(line); err != nil {
 		return &eventLogSourceClassificationResult{
-				source:       eventLogSourceMalformed,
-				foundVersion: &version,
-			}, MalformedEventLogHeaderError{
-				Reason: malformedEventLogHeaderInvalidField,
-			}
+			source:       eventLogSourceMalformed,
+			foundVersion: &version,
+		}, MalformedEventLogHeaderError{
+			Reason: malformedEventLogHeaderInvalidField,
+		}
 	}
 	return &eventLogSourceClassificationResult{
 		source:       eventLogSourceCurrent,
