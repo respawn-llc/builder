@@ -240,13 +240,13 @@ func reopenRetargetedSession(
 	if runtimePlan.stopEventStreams != nil {
 		runtimePlan.stopEventStreams()
 	}
-	if err := persistSessionDraftToServer(ctx, server, rawSessionID, finalModel); err != nil {
-		return serverapi.SessionDirective{}, releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
-	}
 	if err := runtimePlan.Close(); err != nil {
 		return serverapi.SessionDirective{}, err
 	}
 	if err := server.ReattachSession(ctx, rawSessionID); err != nil {
+		return serverapi.SessionDirective{}, err
+	}
+	if err := persistSessionDraftToServer(ctx, server, rawSessionID, finalModel); err != nil {
 		return serverapi.SessionDirective{}, err
 	}
 	return serverapi.LaunchSessionDirective(

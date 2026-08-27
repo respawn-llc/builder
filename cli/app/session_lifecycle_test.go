@@ -232,18 +232,25 @@ func TestRuntimeReleaseUsesFinalModelPolicyAndPreservesErrors(t *testing.T) {
 	})
 }
 
-func TestReopenRetargetedSessionReleasesSourceRuntimeBeforeReplacingRemote(t *testing.T) {
+func TestReopenRetargetedSessionReleasesSourceRuntimeAndPersistsDraftAfterDestinationAttachment(t *testing.T) {
 	sourceRemoteOpen := true
 	released := false
-	server := reattachSessionLifecycleServer{
-		lifecycle: &recordingSessionLifecycleClient{
-			persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-				if !sourceRemoteOpen {
-					return serverapi.SessionPersistInputDraftResponse{}, errors.New("source remote is closed")
-				}
-				return serverapi.SessionPersistInputDraftResponse{}, nil
-			},
+	var persistedDraft string
+	sourceLifecycle := &recordingSessionLifecycleClient{
+		persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+			return serverapi.SessionPersistInputDraftResponse{}, errors.New("Session is outside the source Project")
 		},
+	}
+	destinationLifecycle := &recordingSessionLifecycleClient{
+		persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+			persistedDraft = req.Input
+			return serverapi.SessionPersistInputDraftResponse{}, nil
+		},
+	}
+	var server *reattachSessionLifecycleServer
+	server = &reattachSessionLifecycleServer{
+		lifecycle:           sourceLifecycle,
+		reattachedLifecycle: destinationLifecycle,
 		reattach: func(context.Context, string) error {
 			if !released {
 				return errors.New("source runtime owner is still attached")
@@ -260,19 +267,24 @@ func TestReopenRetargetedSessionReleasesSourceRuntimeBeforeReplacingRemote(t *te
 		return nil
 	}}
 	sessionID := "11111111-1111-4111-8111-111111111111"
+	model := newUIModelDefaults(nil)
+	testSetMainInput(model, "draft after rebind")
 
 	next, err := reopenRetargetedSession(
 		context.Background(),
 		server,
 		runtimePlan,
 		sessionID,
-		newUIModelDefaults(nil),
+		model,
 	)
 	if err != nil {
 		t.Fatalf("reopen retargeted Session: %v", err)
 	}
 	if !released || sourceRemoteOpen {
 		t.Fatalf("handoff state released=%t source_remote_open=%t", released, sourceRemoteOpen)
+	}
+	if persistedDraft != "draft after rebind" {
+		t.Fatalf("persisted draft = %q, want destination draft", persistedDraft)
 	}
 	if target := requireSessionOpenDestination(t, next); target != sessionID {
 		t.Fatalf("reopen destination = %q, want %q", target, sessionID)
@@ -299,16 +311,23 @@ func (s narrowSessionLifecycleServer) Reauthenticate(ctx context.Context, intera
 }
 
 type reattachSessionLifecycleServer struct {
-	lifecycle apicontract.SessionLifecycleService
-	reattach  func(context.Context, string) error
+	lifecycle           apicontract.SessionLifecycleService
+	reattachedLifecycle apicontract.SessionLifecycleService
+	reattach            func(context.Context, string) error
 }
 
-func (s reattachSessionLifecycleServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
+func (s *reattachSessionLifecycleServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	return s.lifecycle
 }
 
-func (s reattachSessionLifecycleServer) ReattachSession(ctx context.Context, sessionID string) error {
-	return s.reattach(ctx, sessionID)
+func (s *reattachSessionLifecycleServer) ReattachSession(ctx context.Context, sessionID string) error {
+	if err := s.reattach(ctx, sessionID); err != nil {
+		return err
+	}
+	if s.reattachedLifecycle != nil {
+		s.lifecycle = s.reattachedLifecycle
+	}
+	return nil
 }
 
 type recordingSessionLifecycleClient struct {
