@@ -94,15 +94,10 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 	if err != nil {
 		return metadata.SessionWorkspaceRetargetResult{}, err
 	}
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(plan.SessionID))
+	releaseStarts, maintenanceCtx, err := s.blockSessionStarts(ctx, plan.SessionID)
 	if err != nil {
 		return metadata.SessionWorkspaceRetargetResult{}, err
 	}
-	releaseStarts, err := s.authority.BlockSessionStarts(ctx, []runtimeids.SessionID{sessionID}, sessionruntime.SessionStartBlockMaintenance)
-	if err != nil {
-		return metadata.SessionWorkspaceRetargetResult{}, err
-	}
-	maintenanceCtx := releaseStarts.AuthorizeMaintenance(ctx)
 	plan, err = s.metadata.PlanSessionWorkspaceRetarget(maintenanceCtx, req)
 	if err != nil {
 		return metadata.SessionWorkspaceRetargetResult{}, errors.Join(err, releaseStarts.Close(context.Background()))
@@ -178,33 +173,44 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 		retirementScheduled := false
 		var publicationErr error
 		var failureCause error
-		runErr := s.authority.RunSessionMaintenanceAtStepBoundary(
-			runCtx,
-			plan.SessionID,
-			origin,
-			func() {
-				if admission.accept() {
-					result <- nil
-				}
-			},
-			func(boundaryCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
-				_, applyErr := s.applyWorkspaceRetarget(boundaryCtx, req, store, activeRuntime, true)
-				if applyErr != nil {
-					failureCause = applyErr
-					reminder := rebindFailureReminder(plan, sourceTarget.EffectiveWorkdir, applyErr)
-					receipt, steerErr := activeRuntime.SteerSessionRebindFailure(reminder)
-					failurePersisted = receipt.Committed
-					if failurePersisted {
-						return errors.Join(applyErr, steerErr)
+		maintenanceCtx := runCtx
+		var releaseStarts sessionruntime.SessionStartBlockRelease
+		var runErr error
+		if plan.CrossProject() {
+			releaseStarts, maintenanceCtx, runErr = s.blockSessionStarts(runCtx, plan.SessionID)
+		}
+		if runErr == nil {
+			runErr = s.authority.RunSessionMaintenanceAtStepBoundary(
+				maintenanceCtx,
+				plan.SessionID,
+				origin,
+				func() {
+					if admission.accept() {
+						result <- nil
 					}
-					persistErr := store.SetSessionRebindReminder(&reminder)
-					failurePersisted = persistErr == nil
-					return errors.Join(applyErr, steerErr, persistErr)
-				}
-				retirementScheduled, publicationErr = s.publishCommittedWorkspaceRetarget(plan.SessionID, activeRuntime)
-				return nil
-			},
-		)
+				},
+				func(boundaryCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
+					_, applyErr := s.applyWorkspaceRetarget(boundaryCtx, req, store, activeRuntime, true)
+					if applyErr != nil {
+						failureCause = applyErr
+						reminder := rebindFailureReminder(plan, sourceTarget.EffectiveWorkdir, applyErr)
+						receipt, steerErr := activeRuntime.SteerSessionRebindFailure(reminder)
+						failurePersisted = receipt.Committed
+						if failurePersisted {
+							return errors.Join(applyErr, steerErr)
+						}
+						persistErr := store.SetSessionRebindReminder(&reminder)
+						failurePersisted = persistErr == nil
+						return errors.Join(applyErr, steerErr, persistErr)
+					}
+					retirementScheduled, publicationErr = s.publishCommittedWorkspaceRetarget(plan.SessionID, activeRuntime)
+					return nil
+				},
+			)
+		}
+		if releaseStarts != nil {
+			runErr = errors.Join(runErr, releaseStarts.Close(context.Background()))
+		}
 		if admission.canceled() {
 			return
 		}
@@ -263,6 +269,25 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 		}
 		return serverapi.WorktreeScheduledAcknowledgement{}, context.Cause(ctx)
 	}
+}
+
+func (s *SessionWorkspaceRetargeter) blockSessionStarts(
+	ctx context.Context,
+	sessionID string,
+) (sessionruntime.SessionStartBlockRelease, context.Context, error) {
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return nil, nil, err
+	}
+	release, err := s.authority.BlockSessionStarts(
+		ctx,
+		[]runtimeids.SessionID{id},
+		sessionruntime.SessionStartBlockMaintenance,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return release, release.AuthorizeMaintenance(ctx), nil
 }
 
 func (s *SessionWorkspaceRetargeter) publishCommittedWorkspaceRetarget(

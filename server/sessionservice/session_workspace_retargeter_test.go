@@ -291,7 +291,7 @@ func (f realSessionRetargetFixture) openRuntime(t *testing.T) {
 	f.openRuntimeWithClient(t, retargetRuntimeClient{})
 }
 
-func (f realSessionRetargetFixture) openRuntimeWithClient(t *testing.T, client llm.Client) *runtime.Engine {
+func (f realSessionRetargetFixture) runtimePlan(t *testing.T, client llm.Client) sessionruntime.AgentRuntimePlan {
 	t.Helper()
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: config.Settings{
@@ -317,7 +317,13 @@ func (f realSessionRetargetFixture) openRuntimeWithClient(t *testing.T, client l
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)
 	}
-	_, err = f.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+	return plan
+}
+
+func (f realSessionRetargetFixture) openRuntimeWithClient(t *testing.T, client llm.Client) *runtime.Engine {
+	t.Helper()
+	plan := f.runtimePlan(t, client)
+	_, err := f.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
 		SessionID: f.childID,
 		OwnerID:   "retarget-test",
 		Runtime:   &plan,
@@ -463,15 +469,18 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 		OwnerSessionID: request.SessionID,
 		Running:        true,
 	}}
+	reopenPlan := fixture.runtimePlan(t, retargetRuntimeClient{})
 	published := make(chan error, 1)
 	retargeter := NewSessionWorkspaceRetargeter(
 		fixture.metadata,
 		fixture.authority,
 		retargetIdentityPublisherFunc(func(string) error {
-			returnErr := fixture.authority.WithCurrentRuntime(context.Background(), fixture.childID, func(context.Context, *runtime.Engine) error {
-				return nil
+			_, openErr := fixture.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+				SessionID: fixture.childID,
+				OwnerID:   "destination-reopen",
+				Runtime:   &reopenPlan,
 			})
-			published <- returnErr
+			published <- openErr
 			return nil
 		}),
 		processes,
@@ -510,8 +519,8 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 	}
 	select {
 	case err := <-published:
-		if err != nil {
-			t.Fatalf("identity published after Runtime retirement: %v", err)
+		if !errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
+			t.Fatalf("destination reopen during handoff error = %v, want Session start block", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("moved Session identity was not published")
