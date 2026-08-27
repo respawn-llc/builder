@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestExtractUITransitionIncludesInitialPrompt(t *testing.T) {
@@ -74,4 +76,106 @@ func TestRunUIProgramSurfacesForcedExitStatusAfterLoopRestoration(t *testing.T) 
 	if got := strings.TrimSpace(output.String()); got != final.transientStatus {
 		t.Fatalf("post-loop fatal status length = %d, want %d", len(got), len(final.transientStatus))
 	}
+}
+
+func TestNativeProgressRequiresTerminalOutput(t *testing.T) {
+	var output bytes.Buffer
+	if terminalSupportsNativeProgress(&output) {
+		t.Fatal("redirected output was treated as a terminal")
+	}
+}
+
+func TestRunUIProgramAttemptsBestEffortNativeProgressResetWhenEnabled(t *testing.T) {
+	var progress bytes.Buffer
+	composition := &uiProgramComposition{
+		options: []tea.ProgramOption{
+			tea.WithInput(nil),
+			tea.WithOutput(io.Discard),
+			tea.WithoutRenderer(),
+		},
+		terminalOutput:        newUITerminalOutput(&progress),
+		nativeProgressEnabled: true,
+		close:                 func() {},
+	}
+	if _, err := runUIProgram(composition, uiProgramFinalModelHarness{final: newProjectedStaticUIModel()}); err != nil {
+		t.Fatalf("runUIProgram: %v", err)
+	}
+	if got, want := progress.String(), xansi.ResetProgressBar; got != want {
+		t.Fatalf("post-run native progress output = %q, want %q", got, want)
+	}
+}
+
+func TestRunUIProgramCancelsPendingNativeProgressBeforeFinalReset(t *testing.T) {
+	model, progress := nativeProgressTestModel(t, true)
+	model.worktrees.create.submitting = true
+	_ = model.reconcileNativeProgress()
+	generation := model.nativeProgress.generation
+	_, showCmd := model.Update(nativeProgressDelayMsg{generation: generation})
+	if showCmd == nil {
+		t.Fatal("eligible operation did not schedule native progress")
+	}
+
+	composition := &uiProgramComposition{
+		model:                 model,
+		options:               []tea.ProgramOption{tea.WithInput(nil), tea.WithOutput(io.Discard), tea.WithoutRenderer()},
+		terminalOutput:        model.terminalOutput,
+		nativeProgressEnabled: true,
+		close:                 func() {},
+	}
+	if _, err := runUIProgram(composition, uiProgramFinalModelHarness{final: newProjectedStaticUIModel()}); err != nil {
+		t.Fatalf("runUIProgram: %v", err)
+	}
+	done, ok := showCmd().(nativeProgressWriteDoneMsg)
+	if !ok || !done.canceled {
+		t.Fatalf("post-exit show command result = %#v, want canceled completion", showCmd())
+	}
+	if got, want := progress.String(), xansi.ResetProgressBar; got != want {
+		t.Fatalf("post-exit native progress output = %q, want %q", got, want)
+	}
+}
+
+func TestRunUIProgramSkipsNativeProgressResetWhenDisabled(t *testing.T) {
+	var progress bytes.Buffer
+	composition := &uiProgramComposition{
+		options: []tea.ProgramOption{
+			tea.WithInput(nil),
+			tea.WithOutput(io.Discard),
+			tea.WithoutRenderer(),
+		},
+		terminalOutput: newUITerminalOutput(&progress),
+		close:          func() {},
+	}
+	if _, err := runUIProgram(composition, uiProgramFinalModelHarness{final: newProjectedStaticUIModel()}); err != nil {
+		t.Fatalf("runUIProgram: %v", err)
+	}
+	if progress.Len() != 0 {
+		t.Fatalf("disabled post-run native progress output = %q, want empty", progress.String())
+	}
+}
+
+func TestRunUIProgramLogsBestEffortNativeProgressResetFailure(t *testing.T) {
+	logger := &testUILogger{}
+	composition := &uiProgramComposition{
+		options: []tea.ProgramOption{
+			tea.WithInput(nil),
+			tea.WithOutput(io.Discard),
+			tea.WithoutRenderer(),
+		},
+		logger:                logger,
+		terminalOutput:        newUITerminalOutput(nativeProgressFailingWriter{}),
+		nativeProgressEnabled: true,
+		close:                 func() {},
+	}
+	if _, err := runUIProgram(composition, uiProgramFinalModelHarness{final: newProjectedStaticUIModel()}); err != nil {
+		t.Fatalf("runUIProgram: %v", err)
+	}
+	if len(logger.lines) == 0 {
+		t.Fatal("native progress reset failure was not logged")
+	}
+}
+
+type nativeProgressFailingWriter struct{}
+
+func (nativeProgressFailingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("native progress output failed")
 }

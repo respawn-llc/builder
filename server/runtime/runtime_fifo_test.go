@@ -12,6 +12,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/clientui"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -488,8 +489,8 @@ func TestWorktreeTransitionUsesReviewerFollowUpStepAtToolBoundary(t *testing.T) 
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for Reviewer follow-up tool")
 	}
-	if !engine.ReviewerRunning() {
-		t.Fatal("Reviewer activity completed before its follow-up tool boundary")
+	if got := engine.ReviewerActivity(); got != clientui.ReviewerActivityAddressingFeedback {
+		t.Fatalf("Reviewer activity completed before its follow-up tool boundary: %q", got)
 	}
 
 	transitionRan := false
@@ -520,7 +521,7 @@ func TestWorktreeTransitionUsesReviewerFollowUpStepAtToolBoundary(t *testing.T) 
 		t.Fatal("Worktree transition callback did not run")
 	}
 	waitEngineLifecycleTasks(t, engine)
-	if engine.ReviewerRunning() {
+	if got := engine.ReviewerActivity(); got != clientui.ReviewerActivityInactive {
 		t.Fatal("Reviewer activity remained active after its follow-up completed")
 	}
 }

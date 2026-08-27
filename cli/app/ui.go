@@ -137,27 +137,41 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer m.enterUIMainThread("Update")()
 	if probe, ok := msg.(uiModelProbeMessage); ok {
 		probe.probeUIModel(m)
-		return m, nil
+		return m, m.reconcileNativeProgress()
 	}
 	switch msg.(type) {
 	case tea.FocusMsg:
 		m.terminalFocus.MarkFocused()
-		return m, nil
+		return m, m.reconcileNativeProgress()
 	case tea.BlurMsg:
 		m.terminalFocus.MarkBlurred()
-		return m, nil
+		return m, m.reconcileNativeProgress()
 	}
 	if result := m.reduceFeatureMessage(msg); result.handled {
-		return result.model, result.cmd
+		return finalizeUIUpdate(result.model, result.cmd)
 	}
 
 	if _, ok := msg.(tea.MouseMsg); ok && m.rollback.isActive() {
 		m.layout().syncViewport()
-		return m, nil
+		return m, m.reconcileNativeProgress()
 	}
 	cmd := m.forwardToView(msg)
 	m.layout().syncViewport()
-	return m, cmd
+	return finalizeUIUpdate(m, cmd)
+}
+
+func finalizeUIUpdate(model *uiModel, cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if model == nil {
+		return model, cmd
+	}
+	progressCmd := model.reconcileNativeProgress()
+	if cmd == nil {
+		return model, progressCmd
+	}
+	if progressCmd == nil {
+		return model, cmd
+	}
+	return model, tea.Batch(cmd, progressCmd)
 }
 
 func (m *uiModel) setDebugKeyTransientStatus(raw tea.Msg, normalized tea.KeyMsg, source string) {

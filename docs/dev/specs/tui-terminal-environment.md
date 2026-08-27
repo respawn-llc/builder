@@ -25,6 +25,25 @@
 - Alternate Screen surfaces enable Alternate Scroll while active and disable it on exit. The rollback picker is the exception.
 - No surface enables Mouse Capture.
 
+## Native Progress
+
+- The interactive TUI emits OSC 9;4 as a best-effort terminal-native progress signal when `tui_native_progress_bar` is enabled.
+- `tui_native_progress_bar` is a global or workspace config-file boolean, defaults to `true`, and has no environment override or command-line flag.
+- Kent does not identify terminal brands or probe for OSC 9;4 support. An unsupported terminal may ignore the signal.
+- Disabling native progress suppresses only OSC 9;4 output. It does not change in-TUI spinners, loading text, status labels, or the context meter.
+- Compaction, Reviewer activity while `invoking`, Detail Mode transcript page loading, Worktree creation including its setup script, and Worktree deletion activate native progress.
+- The main Agent Turn, Reviewer activity while `addressing_feedback`, Worktree list refresh, Worktree target lookup, Worktree switch scheduling, Session listing, Project loading, Session opening, workspace retargeting, startup surfaces, and onboarding do not activate native progress.
+- The eligible operations listed above use indeterminate native progress because they expose no trustworthy completion fraction.
+- Kent may emit numeric native progress only when the operation supplies an authoritative percentage. Kent must not derive a percentage from elapsed time or arbitrary phase weights.
+- Kent waits 500 milliseconds after aggregate eligible activity begins before it emits native progress.
+- If all eligible activity ends during the delay, Kent emits no native progress signal.
+- Once visible, native progress remains continuously active while at least one eligible operation remains.
+- Starting or ending an overlapping eligible operation does not restart the delay, flash, or clear native progress while another eligible operation remains.
+- Success, failure, interruption, cancellation, Session transition, and TUI exit clear native progress immediately unless another eligible operation remains active.
+- This feature does not emit the OSC 9;4 error state.
+- Headless commands, Workflow commands, JSON output, redirected output, Desktop, and the server do not emit native progress.
+- The interactive TUI clears native progress best-effort whenever it exits.
+
 ## Markdown Hyperlinks
 
 - Kent emits OSC 8 for valid Markdown link destinations on every terminal.

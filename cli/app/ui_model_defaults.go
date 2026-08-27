@@ -48,9 +48,10 @@ func newUIInputFeatureState() uiInputFeatureState {
 
 func newUIPresentationFeatureState() uiPresentationFeatureState {
 	return uiPresentationFeatureState{
-		theme:         theme.Auto,
-		markdownLinks: transcriptrender.MarkdownLinkLabelOnly,
-		terminalFocus: newTerminalFocusState(),
+		theme:                theme.Auto,
+		tuiNativeProgressBar: true,
+		markdownLinks:        transcriptrender.MarkdownLinkLabelOnly,
+		terminalFocus:        newTerminalFocusState(),
 	}
 }
 

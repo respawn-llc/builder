@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"core/server/llm"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 )
 
@@ -14,13 +15,14 @@ type reviewerRuntimeState struct {
 	mu     sync.Mutex
 	client llm.Client
 	active *runtimeids.StepID
+	phase  clientui.ReviewerActivity
 }
 
 func newReviewerRuntimeState(client llm.Client) *reviewerRuntimeState {
-	return &reviewerRuntimeState{client: client}
+	return &reviewerRuntimeState{client: client, phase: clientui.ReviewerActivityInactive}
 }
 
-func (s *reviewerRuntimeState) TryStart(stepID string) bool {
+func (s *reviewerRuntimeState) Reserve(stepID string) bool {
 	if s == nil {
 		return false
 	}
@@ -38,10 +40,41 @@ func (s *reviewerRuntimeState) TryStart(stepID string) bool {
 		return false
 	}
 	s.active = &active
+	s.phase = clientui.ReviewerActivityInactive
 	return true
 }
 
-func (s *reviewerRuntimeState) Complete(stepID string) bool {
+func (s *reviewerRuntimeState) Start(stepID string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil ||
+		s.active.String() != strings.TrimSpace(stepID) ||
+		s.phase != clientui.ReviewerActivityInactive {
+		return false
+	}
+	s.phase = clientui.ReviewerActivityInvoking
+	return true
+}
+
+func (s *reviewerRuntimeState) SetAddressingFeedback(stepID string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil ||
+		s.active.String() != strings.TrimSpace(stepID) ||
+		s.phase != clientui.ReviewerActivityInvoking {
+		return false
+	}
+	s.phase = clientui.ReviewerActivityAddressingFeedback
+	return true
+}
+
+func (s *reviewerRuntimeState) Clear(stepID string) bool {
 	if s == nil {
 		return false
 	}
@@ -49,12 +82,13 @@ func (s *reviewerRuntimeState) Complete(stepID string) bool {
 	defer s.mu.Unlock()
 	if s.active != nil && s.active.String() == strings.TrimSpace(stepID) {
 		s.active = nil
+		s.phase = clientui.ReviewerActivityInactive
 		return true
 	}
 	return false
 }
 
-func (s *reviewerRuntimeState) Running() bool {
+func (s *reviewerRuntimeState) Active() bool {
 	if s == nil {
 		return false
 	}
@@ -63,8 +97,24 @@ func (s *reviewerRuntimeState) Running() bool {
 	return s.active != nil
 }
 
-func (e *Engine) ReviewerRunning() bool {
-	return e != nil && e.reviewerRuntimeState().Running()
+func (s *reviewerRuntimeState) Activity() clientui.ReviewerActivity {
+	if s == nil {
+		return clientui.ReviewerActivityInactive
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.phase
+}
+
+func (e *Engine) ReviewerActive() bool {
+	return e != nil && e.reviewerRuntimeState().Active()
+}
+
+func (e *Engine) ReviewerActivity() clientui.ReviewerActivity {
+	if e == nil {
+		return clientui.ReviewerActivityInactive
+	}
+	return e.reviewerRuntimeState().Activity()
 }
 
 func (e *Engine) startReviewerActivity(stepID string) (bool, error) {
@@ -77,22 +127,40 @@ func (e *Engine) startReviewerActivity(stepID string) (bool, error) {
 }
 
 func (e *Engine) startReviewerActivityRaw(stepID string) (bool, error) {
-	if !e.reviewerRuntimeState().TryStart(stepID) {
+	if !e.reviewerRuntimeState().Start(stepID) {
 		return false, nil
 	}
 	revision, err := e.TranscriptRevision()
 	if err != nil {
-		e.reviewerRuntimeState().Complete(stepID)
+		e.reviewerRuntimeState().Clear(stepID)
 		return false, err
 	}
 	err = e.emitRawAtRevision(Event{
 		Kind: EventRuntimeActivityChanged,
 	}, revision)
 	if err != nil {
-		e.reviewerRuntimeState().Complete(stepID)
+		e.reviewerRuntimeState().Clear(stepID)
 		return false, err
 	}
 	return true, nil
+}
+
+func (e *Engine) reserveReviewerActivity(stepID string) bool {
+	if e == nil || e.closed.Load() {
+		return false
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	return e.reviewerRuntimeState().Reserve(stepID)
+}
+
+func (e *Engine) releaseReviewerActivity(stepID string) {
+	if e == nil {
+		return
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	e.reviewerRuntimeState().Clear(stepID)
 }
 
 func (e *Engine) completeReviewerActivity(stepID string) error {
@@ -105,7 +173,25 @@ func (e *Engine) completeReviewerActivity(stepID string) error {
 }
 
 func (e *Engine) completeReviewerActivityRaw(stepID string) error {
-	if !e.reviewerRuntimeState().Complete(stepID) {
+	if !e.reviewerRuntimeState().Clear(stepID) {
+		return nil
+	}
+	revision, err := e.TranscriptRevision()
+	if err != nil {
+		return err
+	}
+	return e.emitRawAtRevision(Event{
+		Kind: EventRuntimeActivityChanged,
+	}, revision)
+}
+
+func (e *Engine) setReviewerAddressingFeedback(stepID string) error {
+	if e == nil {
+		return nil
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	if !e.reviewerRuntimeState().SetAddressingFeedback(stepID) {
 		return nil
 	}
 	revision, err := e.TranscriptRevision()

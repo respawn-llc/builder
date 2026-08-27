@@ -410,7 +410,7 @@ func (e *Engine) BeginRetirement() bool {
 		e.HasQueuedUserWork() ||
 		e.HasScheduledQueuedUserWork() ||
 		e.CurrentNodeExecutionConfigured() ||
-		e.ReviewerRunning() ||
+		e.ReviewerActive() ||
 		!e.runtimeFIFO.beginCloseIfIdle() {
 		return false
 	}

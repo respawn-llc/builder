@@ -192,6 +192,7 @@ type Settings struct {
 	ModelCapabilities                ModelCapabilitiesOverride
 	Theme                            string
 	NotificationMethod               string
+	TUINativeProgressBar             bool
 	ToolPreambles                    bool
 	PriorityRequestMode              bool
 	Debug                            bool

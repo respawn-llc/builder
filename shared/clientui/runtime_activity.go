@@ -57,13 +57,14 @@ const (
 type ReviewerActivity string
 
 const (
-	ReviewerActivityInactive ReviewerActivity = "inactive"
-	ReviewerActivityRunning  ReviewerActivity = "running"
+	ReviewerActivityInactive           ReviewerActivity = "inactive"
+	ReviewerActivityInvoking           ReviewerActivity = "invoking"
+	ReviewerActivityAddressingFeedback ReviewerActivity = "addressing_feedback"
 )
 
 func (a ReviewerActivity) Validate() error {
 	switch a {
-	case ReviewerActivityInactive, ReviewerActivityRunning:
+	case ReviewerActivityInactive, ReviewerActivityInvoking, ReviewerActivityAddressingFeedback:
 		return nil
 	default:
 		return fmt.Errorf("unknown reviewer activity %q", a)

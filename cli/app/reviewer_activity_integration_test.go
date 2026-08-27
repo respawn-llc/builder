@@ -20,7 +20,7 @@ import (
 	"core/shared/textutil"
 )
 
-func TestReviewerActivityPublishesRunningAndTerminalStateToTUI(t *testing.T) {
+func TestReviewerActivityPublishesInvocationAndTerminalStateToTUI(t *testing.T) {
 	tests := []struct {
 		name     string
 		terminal string
@@ -125,10 +125,10 @@ func TestReviewerActivityPublishesRunningAndTerminalStateToTUI(t *testing.T) {
 			applyReviewerActivityMessage(
 				t,
 				controller,
-				nextReviewerActivityMessage(t, subscription, clientui.ReviewerActivityRunning),
+				nextReviewerActivityMessage(t, subscription, clientui.ReviewerActivityInvoking),
 			)
-			if !model.isReviewerRunning() {
-				t.Fatalf("TUI Reviewer projection = %+v, want running", model.runtimeActivityProjection)
+			if !model.isReviewerActive() {
+				t.Fatalf("TUI Reviewer projection = %+v, want active", model.runtimeActivityProjection)
 			}
 			select {
 			case submitErr := <-submitDone:
@@ -157,7 +157,7 @@ func TestReviewerActivityPublishesRunningAndTerminalStateToTUI(t *testing.T) {
 				controller,
 				nextReviewerActivityMessage(t, subscription, clientui.ReviewerActivityInactive),
 			)
-			if model.isReviewerRunning() {
+			if model.isReviewerActive() {
 				t.Fatalf("TUI Reviewer projection = %+v, want inactive", model.runtimeActivityProjection)
 			}
 			if testCase.terminal == "failure" {

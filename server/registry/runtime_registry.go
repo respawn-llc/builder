@@ -361,9 +361,7 @@ func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(sessionID string) runt
 	snapshot.Active = runtimeactivity.ActiveStepFromProvider(engine)
 	if engine != nil {
 		snapshot.LiveRunActive = engine.HasActiveLiveRunGroup()
-		if engine.ReviewerRunning() {
-			snapshot.Reviewer = clientui.ReviewerActivityRunning
-		}
+		snapshot.Reviewer = engine.ReviewerActivity()
 	}
 	if len(r.pendingPrompts.List(id)) > 0 {
 		snapshot.PromptWait = true

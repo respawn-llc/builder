@@ -47,10 +47,18 @@ func TestDelayedTranscriptRuntimeTupleCannotRollBackNewerUnaryState(t *testing.T
 func TestRuntimeTupleEqualityIncludesReviewerActivity(t *testing.T) {
 	inactive := runtimeTupleTestIdleActivity()
 	running := inactive
-	running.Reviewer = clientui.ReviewerActivityRunning
+	running.Reviewer = clientui.ReviewerActivityInvoking
 
 	if runtimeActivitiesEqual(inactive, running) {
 		t.Fatal("runtime activities with different Reviewer state compared equal")
+	}
+	addressing := inactive
+	addressing.Reviewer = clientui.ReviewerActivityAddressingFeedback
+	if err := addressing.Reviewer.Validate(); err != nil {
+		t.Fatalf("addressing-feedback Reviewer activity failed validation: %v", err)
+	}
+	if runtimeActivitiesEqual(running, addressing) {
+		t.Fatal("runtime activities with different Reviewer phases compared equal")
 	}
 }
 
