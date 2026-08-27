@@ -54,6 +54,10 @@ The target-selection provenance locked to a task when its first executable actio
 
 The directory Kent uses as the working directory and relative-path base for a Task's executable Nodes. It is the Task's source workspace when the Task uses no managed worktree and the managed worktree root otherwise.
 
+### Worktree Base Dir
+
+The server-configured canonical directory within which every Kent-managed Worktree root must resolve. The `worktrees.base_dir` setting configures it.
+
 ### Working Directory
 
 The directory Kent uses as the shell working directory and relative-path base for a Session's tools. It may be the Session's Execution Target Root or one of its descendant directories.

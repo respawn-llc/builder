@@ -399,7 +399,7 @@
 - Every Base-ref validation or operational error appears beneath the `Base ref` field in error-colored plain text.
 - Desktop uses typed error ownership to distinguish a Base-ref error from another creation failure. It never parses diagnostic text to choose error placement.
 - An empty Base ref sends no creation request and shows `Base ref is required`.
-- The creation state has no custom filesystem-path field. Kent uses the configured worktree base directory.
+- The creation state has no custom filesystem-path field. Kent uses the Worktree Base Dir.
 - The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
 - While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
 - Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.
