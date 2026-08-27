@@ -564,7 +564,7 @@ describe("ProjectTasksSurface", () => {
     );
     expect(fixture.open).toHaveBeenCalledWith({
       kind: "taskDetail",
-      mode: "shift",
+      mode: "overlay",
       taskID: "active-1",
     });
 

@@ -162,15 +162,31 @@ export function createSidebarStack(
     if (!capability.active) {
       return "stale";
     }
+    const currentDestination = current()?.destination;
+    if (currentDestination === undefined) {
+      throw new Error("Sidebar Replace requires a current page.");
+    }
     capability.active = false;
-    emit([...view.entries.slice(0, -1), createEntry(destination)], "open", "replace");
+    emit(
+      [
+        ...view.entries.slice(0, -1),
+        createEntry(destinationInOpenSidebarMode(destination, currentDestination)),
+      ],
+      "open",
+      "replace",
+    );
     return "accepted";
   };
   const push = (capability: Capability, destination: SidebarDestination): SidebarNavigationOutcome => {
     if (!capability.active) {
       return "stale";
     }
-    const retained = findRetainedEntry(view.entries, destination, policy);
+    const currentEntry = current();
+    if (currentEntry === undefined) {
+      throw new Error("Sidebar Push requires a current page.");
+    }
+    const resolvedDestination = destinationInOpenSidebarMode(destination, currentEntry.destination);
+    const retained = findRetainedEntry(view.entries, resolvedDestination, policy);
     if (retained !== undefined) {
       capability.active = false;
       emit(
@@ -188,14 +204,10 @@ export function createSidebarStack(
     }
     const retainedState = capability.capture.read();
     capability.active = false;
-    const currentEntry = current();
-    if (currentEntry === undefined) {
-      throw new Error("Sidebar Push requires a current page.");
-    }
     const appended = [
       ...view.entries.slice(0, -1),
       { ...currentEntry, retainedState },
-      createEntry(destination),
+      createEntry(resolvedDestination),
     ];
     const rootEntry = appended[0];
     if (rootEntry === undefined) {
@@ -210,6 +222,7 @@ export function createSidebarStack(
   };
   const open = (destination: SidebarDestination): SidebarRootHandle => {
     clearCloseTimeout();
+    const resolvedDestination = destinationInOpenSidebarMode(destination, current()?.destination);
     revokeCurrent();
     if (root !== undefined) {
       settle(root, "replaced");
@@ -223,7 +236,7 @@ export function createSidebarStack(
     }
     const ownedRoot: PendingRoot = { resolve: resolveLifecycle, settled: false };
     root = ownedRoot;
-    emit([createEntry(destination)], "open", "replace");
+    emit([createEntry(resolvedDestination)], "open", "replace");
     return {
       lifecycle,
       release: () => {
@@ -247,6 +260,20 @@ export function createSidebarStack(
     },
     open,
   };
+}
+
+function destinationInOpenSidebarMode(
+  destination: SidebarDestination,
+  openDestination: SidebarDestination | undefined,
+): SidebarDestination {
+  if (openDestination === undefined) {
+    return destination;
+  }
+  const openMode = openDestination.mode ?? "shift";
+  if ((destination.mode ?? "shift") === openMode) {
+    return destination;
+  }
+  return { ...destination, mode: openMode };
 }
 
 function findRetainedEntry(
