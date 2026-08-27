@@ -248,8 +248,7 @@ describe("ProjectTasksSurface", () => {
     const user = userEvent.setup();
     renderSurface();
 
-    const trigger = screen.getByRole("button", { name: appI18n.t("board.sort.chip") });
-    expect(trigger).toHaveAccessibleName(appI18n.t("board.sort.chip"));
+    const trigger = getSortTrigger();
     await user.click(trigger);
 
     const dialog = screen.getByRole("dialog");
@@ -260,23 +259,12 @@ describe("ProjectTasksSurface", () => {
     ).toEqual(["updated", "created", "status", "title", "labels", "short_id", "asc", "desc"]);
     expect(within(dialog).queryAllByRole("button")).toHaveLength(0);
 
-    await user.click(within(dialog).getByRole("radio", { name: appI18n.t("board.sort.fields.created") }));
+    await user.click(getSortRadio(dialog, "created"));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(
-      within(screen.getByRole("dialog")).getByRole("radio", {
-        name: appI18n.t("board.sort.directions.desc"),
-      }),
-    ).toBeChecked();
+    expect(getSortRadio(dialog, "desc")).toBeChecked();
 
-    await user.click(
-      within(screen.getByRole("dialog")).getByRole("radio", { name: appI18n.t("board.sort.directions.asc") }),
-    );
-    expect(trigger).toHaveAccessibleName(
-      appI18n.t("board.sort.summary", {
-        direction: appI18n.t("board.sort.directions.asc"),
-        field: appI18n.t("board.sort.fields.created"),
-      }),
-    );
+    await user.click(getSortRadio(dialog, "asc"));
+    expect(getSortTrigger()).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
@@ -284,27 +272,17 @@ describe("ProjectTasksSurface", () => {
     const user = userEvent.setup();
     const memory = createProjectTasksViewMemory();
     const view = renderSurface(memory);
-    await user.click(screen.getByRole("button", { name: appI18n.t("board.sort.chip") }));
-    await user.click(
-      within(screen.getByRole("dialog")).getByRole("radio", { name: appI18n.t("board.sort.fields.created") }),
-    );
+    await user.click(getSortTrigger());
+    await user.click(getSortRadio(screen.getByRole("dialog"), "created"));
     view.unmount();
 
     renderSurface(memory);
 
-    expect(
-      screen.getByRole("button", {
-        name: appI18n.t("board.sort.summary", {
-          direction: appI18n.t("board.sort.directions.desc"),
-          field: appI18n.t("board.sort.fields.created"),
-        }),
-      }),
-    ).toHaveAccessibleName(
-      appI18n.t("board.sort.summary", {
-        direction: appI18n.t("board.sort.directions.desc"),
-        field: appI18n.t("board.sort.fields.created"),
-      }),
-    );
+    const retainedTrigger = getSortTrigger();
+    expect(retainedTrigger).toHaveAttribute("aria-pressed", "true");
+    await user.click(retainedTrigger);
+    expect(getSortRadio(screen.getByRole("dialog"), "created")).toBeChecked();
+    expect(getSortRadio(screen.getByRole("dialog"), "desc")).toBeChecked();
   });
 
   it("opens the server-defined Status legend from keyboard focus", async () => {
@@ -377,7 +355,9 @@ describe("ProjectTasksSurface", () => {
     expect(screen.getAllByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") })).toHaveLength(
       1,
     );
-    expect(screen.queryByRole("button", { name: appI18n.t("board.sort.chip") })).not.toBeInTheDocument();
+    expect(
+      screen.queryAllByRole("button").filter((button) => button.getAttribute("aria-haspopup") === "dialog"),
+    ).toHaveLength(0);
   });
 
   it("offers Project-scoped New Task for a sole linked Workflow without making Desktop select it", () => {
@@ -747,6 +727,26 @@ function renderSurface(
     mockedActiveTasks = activeTasks;
   }
   return render(withQueryClient(surface(memory, sidebarMode)));
+}
+
+function getSortTrigger(): HTMLElement {
+  const trigger = screen
+    .getAllByRole("button")
+    .find((button) => button.getAttribute("aria-haspopup") === "dialog");
+  if (trigger === undefined) {
+    throw new Error("Expected the Project Task sort trigger.");
+  }
+  return trigger;
+}
+
+function getSortRadio(dialog: HTMLElement, value: string): HTMLElement {
+  const radio = within(dialog)
+    .getAllByRole("radio")
+    .find((candidate) => candidate.getAttribute("value") === value);
+  if (radio === undefined) {
+    throw new Error(`Expected the Project Task sort option "${value}".`);
+  }
+  return radio;
 }
 
 function surface(memory = createProjectTasksViewMemory(), sidebarMode: "overlay" | "shift" = "shift") {
