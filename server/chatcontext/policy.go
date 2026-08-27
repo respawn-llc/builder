@@ -1,8 +1,6 @@
 package chatcontext
 
 import (
-	"strings"
-
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
@@ -11,11 +9,12 @@ import (
 
 // ResolvePolicy is the sole authority for the effective Context window,
 // automatic threshold, and Compaction Mode after Agent-role settings and
-// provider capabilities have been resolved. An absent provider contract leaves
-// the configured compaction mode unchanged until capability resolution occurs.
+// provider capabilities have been resolved.
+// A nil effectiveCapabilities means that no provider contract is available,
+// so the configured Compaction Mode remains authoritative.
 func ResolvePolicy(
 	settings config.Settings,
-	effectiveCapabilities llm.ProviderCapabilities,
+	effectiveCapabilities *llm.ProviderCapabilities,
 	locked *session.LockedContract,
 ) Policy {
 	configuredWindow := settings.ModelContextWindow
@@ -29,7 +28,7 @@ func ResolvePolicy(
 			window = locked.ContextWindow
 		}
 		if lockedCapabilities, present := llm.ProviderCapabilitiesFromLocked(locked); present {
-			capabilities = lockedCapabilities
+			capabilities = &lockedCapabilities
 		}
 	}
 	threshold := min(max(settings.ContextCompactionThresholdTokens, 0), window)
@@ -58,25 +57,29 @@ func ApplyPolicy(settings config.Settings, policy Policy) config.Settings {
 
 func effectiveCompactionMode(
 	configured config.CompactionMode,
-	capabilities llm.ProviderCapabilities,
+	capabilities *llm.ProviderCapabilities,
 ) serverapi.ChatContextCompactionMode {
+	if capabilities == nil {
+		switch configured {
+		case config.CompactionModeNone:
+			return serverapi.ChatContextCompactionModeDisabled
+		case config.CompactionModeNative:
+			return serverapi.ChatContextCompactionModeProviderNative
+		default:
+			return serverapi.ChatContextCompactionModeLocal
+		}
+	}
 	switch configured {
 	case config.CompactionModeNone:
 		return serverapi.ChatContextCompactionModeDisabled
 	case config.CompactionModeLocal:
 		return serverapi.ChatContextCompactionModeLocal
 	case config.CompactionModeNative:
-		if strings.TrimSpace(capabilities.ProviderID) == "" {
-			return serverapi.ChatContextCompactionModeProviderNative
-		}
 		if capabilities.SupportsResponsesCompact {
 			return serverapi.ChatContextCompactionModeProviderNative
 		}
 		return serverapi.ChatContextCompactionModeLocal
 	default:
-		if strings.TrimSpace(capabilities.ProviderID) == "" {
-			return serverapi.ChatContextCompactionModeLocal
-		}
 		if capabilities.SupportsResponsesCompact {
 			return serverapi.ChatContextCompactionModeProviderNative
 		}

@@ -89,7 +89,8 @@ func (s *Service) ReadWorkspaceChatContext(ctx context.Context) (serverapi.ChatC
 	if err != nil {
 		return serverapi.ChatContext{}, err
 	}
-	policy := chatcontext.ResolvePolicy(selected.settings, provider.Capabilities, nil)
+	capabilities := provider.Capabilities
+	policy := chatcontext.ResolvePolicy(selected.settings, &capabilities, nil)
 	return chatcontext.Project(chatcontext.ProjectionInput{
 		Policy:                policy,
 		AutoCompactionEnabled: resolution.Draft.AutoCompaction,

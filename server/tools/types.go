@@ -51,9 +51,9 @@ type Result struct {
 	// persistence and materializes Presentation from authoritative call input.
 	PresentationDelta *transcript.ToolResultPresentationDelta `json:"-"`
 
-	// BackgroundSessionID is transient completion provenance consumed by runtime
-	// orchestration before the result is persisted.
-	BackgroundSessionID *string `json:"-"`
+	// CompletedBackgroundSessionID is transient completion provenance consumed
+	// by runtime orchestration before the result is persisted.
+	CompletedBackgroundSessionID *int `json:"-"`
 }
 
 type Definition struct {

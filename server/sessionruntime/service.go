@@ -153,7 +153,10 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		autoCompaction := effective.AutoCompaction
 		req.QuestionsEnabled = &questions
 		req.AutoCompactionEnabled = &autoCompaction
-		capabilities, _ := llm.ProviderCapabilitiesFromOverride(req.ActiveSettings.ProviderCapabilities)
+		var capabilities *llm.ProviderCapabilities
+		if resolved, present := llm.ProviderCapabilitiesFromOverride(req.ActiveSettings.ProviderCapabilities); present {
+			capabilities = &resolved
+		}
 		req.ActiveSettings = chatcontext.ApplyPolicy(
 			req.ActiveSettings,
 			chatcontext.ResolvePolicy(req.ActiveSettings, capabilities, store.Meta().Locked),

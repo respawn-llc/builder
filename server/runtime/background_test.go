@@ -239,10 +239,11 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 
 			presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{ToolName: string(toolspec.ToolWriteStdin)})
 			receipt, _, err := engine.persistToolCompletionRaw("step", tools.Result{
-				CallID:       "write-stdin-call",
-				Name:         toolspec.ToolWriteStdin,
-				Output:       json.RawMessage(`{"background_session_id":42,"background_running":false,"backgrounded":true}`),
-				Presentation: &presentation,
+				CallID:                       "write-stdin-call",
+				Name:                         toolspec.ToolWriteStdin,
+				Output:                       json.RawMessage(`{"background_session_id":42,"background_running":false,"backgrounded":true}`),
+				Presentation:                 &presentation,
+				CompletedBackgroundSessionID: textutil.Value(42),
 			})
 			if receipt.Committed == tt.wantPending {
 				t.Fatalf("completion receipt = %+v, want committed=%t", receipt, !tt.wantPending)

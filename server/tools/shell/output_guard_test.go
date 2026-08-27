@@ -159,7 +159,7 @@ func TestWriteStdinGuardPreservesRunningCompletedEscapedAndIndependentPolls(t *t
 			}
 			result := callWriteStdin(t, NewWriteStdinTool(16_000, 40, manager), "poll", input)
 			assertOversizedOutputFailure(t, result, snapshot.LogPath)
-			if !test.running && result.BackgroundSessionID == nil {
+			if !test.running && result.CompletedBackgroundSessionID == nil {
 				t.Fatal("completed guarded poll lost its background completion identity")
 			}
 			if test.running {

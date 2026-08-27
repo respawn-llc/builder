@@ -603,6 +603,9 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 			if poll.IsError {
 				t.Fatalf("unexpected write_stdin error: %s", string(poll.Output))
 			}
+			if poll.CompletedBackgroundSessionID == nil || *poll.CompletedBackgroundSessionID != sessionID {
+				t.Fatalf("completion provenance = %v, want session %d", poll.CompletedBackgroundSessionID, sessionID)
+			}
 			output := decodeWriteStdinToolOutput(t, poll)
 			if output.BackgroundSessionID != sessionID {
 				t.Fatalf("background session ID = %d, want %d", output.BackgroundSessionID, sessionID)

@@ -110,17 +110,20 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 	if marshalErr != nil {
 		return tools.Result{}, marshalErr
 	}
+	var completedBackgroundSessionID *int
+	if result.Backgrounded && !result.Running && result.ExitCode != nil {
+		completedBackgroundSessionID = textutil.Value(in.SessionID)
+	}
 	if guarded, ok := t.oversizedOutputGuard.FailedResult(c, in.MaxOutputTokens, string(body), result.OutputPath, presentation); ok {
-		if result.Backgrounded && !result.Running && result.ExitCode != nil {
-			guarded.BackgroundSessionID = textutil.OptionalExactString(strconv.Itoa(in.SessionID))
-		}
+		guarded.CompletedBackgroundSessionID = completedBackgroundSessionID
 		return guarded, nil
 	}
 	toolResult := tools.Result{
-		CallID:            c.ID,
-		Name:              c.Name,
-		Output:            body,
-		PresentationDelta: presentation,
+		CallID:                       c.ID,
+		Name:                         c.Name,
+		Output:                       body,
+		PresentationDelta:            presentation,
+		CompletedBackgroundSessionID: completedBackgroundSessionID,
 	}
 	return toolResult, nil
 }

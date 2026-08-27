@@ -2,9 +2,9 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -248,32 +248,17 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 	}
 }
 
-type harvestedBackgroundCompletion struct {
-	SessionID  int  `json:"background_session_id"`
-	Running    bool `json:"background_running"`
-	Background bool `json:"backgrounded"`
-}
-
 func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
-	if res.Name != toolspec.ToolWriteStdin {
+	if res.Name != toolspec.ToolWriteStdin || res.CompletedBackgroundSessionID == nil {
 		return "", false
 	}
-	if res.BackgroundSessionID != nil {
-		if sessionID := strings.TrimSpace(*res.BackgroundSessionID); sessionID != "" {
-			return sessionID, true
-		}
+	if *res.CompletedBackgroundSessionID <= 0 {
+		panic(fmt.Sprintf(
+			"write_stdin completion provenance has invalid session ID %d",
+			*res.CompletedBackgroundSessionID,
+		))
 	}
-	if res.IsError {
-		return "", false
-	}
-	var out harvestedBackgroundCompletion
-	if err := json.Unmarshal(res.Output, &out); err != nil {
-		return "", false
-	}
-	if out.SessionID <= 0 || out.Running || !out.Background {
-		return "", false
-	}
-	return fmt.Sprintf("%d", out.SessionID), true
+	return strconv.Itoa(*res.CompletedBackgroundSessionID), true
 }
 
 func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) *resultGroupFatal {

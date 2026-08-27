@@ -239,18 +239,37 @@ func TestCompletedWriteStdinGuardConsumesPendingBackgroundNotice(t *testing.T) {
 	if callCount != 3 {
 		t.Fatalf("model call count = %d, want 3 without an extra background continuation", callCount)
 	}
-	var pollOutput string
+	var backgroundNoticeCount int
 	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if msg.Role == llm.RoleTool && msg.ToolCallID != nil && *msg.ToolCallID == "call_stdin_1" {
-			pollOutput = messageContent(msg)
-		}
 		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice {
-			t.Fatalf("did not expect consumed background notice in transcript: %+v", msg)
+			backgroundNoticeCount++
 		}
 	}
-	if !strings.Contains(pollOutput, "output you requested exceeded") ||
-		strings.Contains(pollOutput, "1234567890") {
-		t.Fatalf("guarded poll output = %q, want only oversized-output failure", pollOutput)
+	if backgroundNoticeCount != 0 {
+		t.Fatalf("background notice count = %d, want 0", backgroundNoticeCount)
+	}
+	completion, ok := eng.transcriptRuntimeState().ToolCompletionSnapshot("call_stdin_1")
+	if !ok {
+		t.Fatal("expected persisted guarded poll completion")
+	}
+	if !completion.IsError {
+		t.Fatalf("guarded poll completion = %+v, want error result", completion)
+	}
+	var payload struct {
+		Error  *string `json:"error"`
+		Output *string `json:"output"`
+	}
+	if err := json.Unmarshal(completion.Output, &payload); err != nil {
+		t.Fatalf("decode guarded poll result: %v", err)
+	}
+	if payload.Error == nil || payload.Output != nil {
+		t.Fatalf("guarded poll payload = %+v, want typed error without command output", payload)
+	}
+	if completion.Presentation == nil ||
+		completion.Presentation.MovedToBackground ||
+		completion.Presentation.ShellExitCode == nil ||
+		*completion.Presentation.ShellExitCode != 0 {
+		t.Fatalf("guarded poll presentation = %+v, want terminal shell facts", completion.Presentation)
 	}
 }
 
