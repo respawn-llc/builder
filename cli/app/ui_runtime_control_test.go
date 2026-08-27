@@ -129,7 +129,7 @@ func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSe
 	case serverapi.ChatSettingsMutationAutoCompaction:
 		settings.AutoCompaction.Stored = *operation.Enabled
 	}
-	return serverapi.ChatSettingsMutationResponse{
+	response := serverapi.ChatSettingsMutationResponse{
 		Result:   serverapi.NewChatSettingsMutationApplied(true),
 		Settings: settings,
 		Context: serverapi.ChatContext{
@@ -140,7 +140,23 @@ func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSe
 			AutoCompactionEnabled:    settings.AutoCompaction.Stored,
 			CompactionMode:           serverapi.ChatContextCompactionModeLocal,
 		},
-	}, f.err
+	}
+	f.status.ThinkingLevel = response.Settings.SelectedAgent.Thinking
+	f.status.ReviewerFrequency = string(response.Settings.Supervisor.Value)
+	f.status.ReviewerEnabled = response.Settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
+	f.status.FastModeAvailable = response.Settings.Fast != nil
+	f.status.FastModeEnabled = response.Settings.Fast != nil && response.Settings.Fast.Value
+	f.status.QuestionsEnabled = response.Settings.Questions.Enabled
+	f.status.AutoCompactionEnabled = response.Context.AutoCompactionEnabled
+	f.status.CompactionMode = string(response.Context.CompactionMode)
+	f.status.CompactionCount = int(response.Context.CompletedCompactionCount)
+	f.status.ContextUsage = clientui.RuntimeContextUsage{
+		UsedTokens:               int(response.Context.UsedTokens),
+		WindowTokens:             int(response.Context.ContextWindowTokens),
+		AutomaticThresholdTokens: int(response.Context.AutomaticThresholdTokens),
+		HasAutomaticThreshold:    true,
+	}
+	return response, f.err
 }
 func (f *runtimeControlFakeClient) chatSettings() serverapi.ChatSettings {
 	return serverapi.ChatSettings{

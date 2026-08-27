@@ -22,6 +22,7 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 		return nil
 	}
 	status := view.Status
+	m.thinkingLevel = status.ThinkingLevel
 	m.reviewerMode = status.ReviewerFrequency
 	m.reviewerEnabled = status.ReviewerEnabled
 	m.autoCompactionEnabled = status.AutoCompactionEnabled

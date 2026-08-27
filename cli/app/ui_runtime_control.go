@@ -43,13 +43,11 @@ func (m *uiModel) chatSettingsMutationCommand(operation serverapi.ChatSettingsMu
 		return nil
 	}
 	return func() tea.Msg {
-		previousAgentRole := m.cachedRuntimeMainView().Session.AgentRole
 		response, err := client.MutateChatSettings(operation)
 		return chatSettingsDoneMsg{
-			operation:         operation.Kind,
-			response:          response,
-			previousAgentRole: previousAgentRole,
-			err:               err,
+			operation: operation.Kind,
+			response:  response,
+			err:       err,
 		}
 	}
 }
@@ -74,13 +72,11 @@ func (m *uiModel) chatSettingsToggleCommand(
 		if err != nil {
 			return chatSettingsDoneMsg{operation: kind, err: err}
 		}
-		previousAgentRole := m.cachedRuntimeMainView().Session.AgentRole
 		response, err := client.MutateChatSettings(operation)
 		return chatSettingsDoneMsg{
-			operation:         kind,
-			response:          response,
-			previousAgentRole: previousAgentRole,
-			err:               err,
+			operation: kind,
+			response:  response,
+			err:       err,
 		}
 	}
 }
@@ -161,25 +157,7 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 		return m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	response := msg.response
-	settings := response.Settings
-	m.thinkingLevel = settings.SelectedAgent.Thinking
-	m.fastModeAvailable = settings.Fast != nil
-	m.reviewerMode = string(settings.Supervisor.Value)
-	m.reviewerEnabled = m.reviewerMode != string(serverapi.ChatSettingsSupervisorOff)
-	m.fastModeEnabled = settings.Fast != nil && settings.Fast.Value
-	m.questionsEnabled = settings.Questions.Enabled
-	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
-	m.setRuntimeContextUsage(
-		m.currentRuntimeSessionID(),
-		runtimeContextUsageFromChatContext(
-			response.Context,
-			m.cachedRuntimeStatus().ContextUsage,
-			chatSettingsAgentRolesEqual(
-				msg.previousAgentRole,
-				chatSettingsAgentRole(settings.SelectedAgent.Role),
-			),
-		),
-	)
+	m.applyRuntimeMainViewState(m.cachedRuntimeMainView())
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
 		reason := "Chat settings mutation rejected"
 		if response.Result.Rejected != nil {
@@ -190,7 +168,7 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	if response.Result.Applied == nil || !response.Result.Applied.Changed {
 		return nil
 	}
-	name, value := chatSettingsResultValue(msg.operation, settings)
+	name, value := chatSettingsResultValue(msg.operation, response.Settings)
 	return m.sendTransientStatusWithNoticeID(
 		name+": "+value,
 		uiStatusNoticeSuccess,
