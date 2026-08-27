@@ -37,6 +37,8 @@ import {
 } from "@/ui";
 import {
   projectTaskGroups,
+  projectTaskGroupPageSize,
+  projectTaskGroupPrefetchPages,
   projectTaskListWorkflowCardinality,
   useProjectTaskListData,
   useProjectTaskListEvents,
@@ -82,7 +84,6 @@ export function ProjectTasksSurface({
   const { activeDestination } = useSidebarShell();
   const [disclosure, setDisclosure] = useState(viewMemory.read().disclosure);
   const [labelEditorTaskID, setLabelEditorTaskID] = useState<string | null>(null);
-  const [paginationEnabled, setPaginationEnabled] = useState(false);
   const workflowsQuery = useProjectTaskWorkflowPages(projectID);
   const data = useProjectTaskListData({
     expanded: disclosure,
@@ -233,7 +234,6 @@ export function ProjectTasksSurface({
       if (element === null) return;
       element.scrollLeft = 0;
       element.onscroll = () => {
-        setPaginationEnabled(true);
         const current = viewMemory.read();
         viewMemory.setScrollOffsets(scrollRestorationReady ? element.scrollTop : current.verticalOffsetPx, 0);
       };
@@ -295,7 +295,6 @@ export function ProjectTasksSurface({
             workflows={workflows}
           />,
         )}
-        paginationEnabled={paginationEnabled}
       />
       <TaskInitiatingActionDialogs
         continuation={initiatingAction}
@@ -353,7 +352,6 @@ function ProjectTasksContent({
   workflowsBoundary,
   workflowStrip,
   newTaskAvailable,
-  paginationEnabled,
 }: Readonly<{
   columnLayout: ProjectTaskColumnLayout;
   countsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
@@ -370,7 +368,6 @@ function ProjectTasksContent({
   workflowsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   workflowStrip: ReactNode;
   newTaskAvailable: boolean;
-  paginationEnabled: boolean;
 }>) {
   const { t } = useTranslation();
   const listEntries = entries;
@@ -431,7 +428,7 @@ function ProjectTasksContent({
             role="grid"
             rowSpacing="tight"
             testId="project-task-list-grid"
-            visibilityTriggers={projectTaskVisibilityTriggers(listEntries, paginationEnabled)}
+            visibilityTriggers={projectTaskVisibilityTriggers(listEntries)}
           />
         </div>
       )}
@@ -553,24 +550,32 @@ function ProjectTaskGroupIcon({ group }: Readonly<{ group: ProjectTaskGroup }>) 
 
 function projectTaskVisibilityTriggers(
   entries: readonly ProjectTaskListEntry[],
-  enabled: boolean,
 ): readonly VirtualizedItemVisibilityTrigger[] {
-  if (!enabled) {
-    return [];
-  }
   return entries.flatMap((entry) =>
     entry.kind === "boundary" && entry.direction !== "initial"
       ? [
           {
             enabled: entry.hasMore ?? false,
             fetching: entry.isFetching ?? false,
-            itemKey: entry.key,
+            itemKey: entry.direction === "next" ? projectTaskNextPageTriggerKey(entries, entry) : entry.key,
             onVisible: entry.onLoadMore ?? (() => undefined),
             requestGeneration: `${entry.groupKey}:${entry.direction}:${entry.requestGeneration}`,
           },
         ]
       : [],
   );
+}
+
+function projectTaskNextPageTriggerKey(
+  entries: readonly ProjectTaskListEntry[],
+  boundary: Extract<ProjectTaskListEntry, { kind: "boundary" }>,
+): string {
+  const groupTasks = entries.filter(
+    (entry): entry is Extract<ProjectTaskListEntry, { kind: "task" }> =>
+      entry.kind === "task" && entry.groupKey === boundary.groupKey,
+  );
+  const prefetchDistance = projectTaskGroupPageSize * projectTaskGroupPrefetchPages;
+  return groupTasks[Math.max(0, groupTasks.length - prefetchDistance)]?.key ?? boundary.key;
 }
 
 function TasksShell({

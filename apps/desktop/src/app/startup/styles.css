@@ -646,6 +646,7 @@
 
 .project-task-list-scroll {
   overscroll-behavior: contain;
+  scroll-behavior: auto;
   -webkit-mask-image: linear-gradient(
     to bottom,
     black 0,
@@ -675,10 +676,6 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .project-task-list-scroll {
-    scroll-behavior: smooth;
-  }
-
   .app-sidebar-page[data-direction="push"] {
     animation: sidebar-page-push var(--motion-fast) both;
   }

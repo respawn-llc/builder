@@ -21,8 +21,9 @@ import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
 export const projectTaskGroups = ["active", "backlog", "done"] as const satisfies readonly ProjectTaskGroup[];
 export type { ProjectTaskGroup } from "@/api";
 
-export const projectTaskGroupPageSize = 25;
-export const projectTaskGroupRetainedPages = 3;
+export const projectTaskGroupPageSize = 50;
+export const projectTaskGroupRetainedPages = 10;
+export const projectTaskGroupPrefetchPages = 1;
 
 export type ProjectTaskGroupDisclosure = Readonly<Record<ProjectTaskGroup, boolean>>;
 export type ProjectTaskGroupData = Readonly<{
