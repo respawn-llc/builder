@@ -323,9 +323,9 @@
 - After reconnection, Desktop reissues the current-target and open Worktree-list reads.
 - Desktop does not reconstruct, retain, or retry a pending Worktree target change that the server lost during shutdown or restart.
 - Reconnection shows no speculative warning for an absent pending Worktree operation. Mutation admission remains authoritative if the operator acts on a stale Worktree projection.
-- If connection loss interrupts creation or setup, Desktop does not retry the Create request or keep waiting for its old result.
-- After reconnection, an open Worktree surface returns to its list and performs another server-owned read. A worktree retained by the interrupted operation appears when a read or update observes it.
-- Desktop performs the automatic Switch only after it receives a successful Create result. An interrupted Create request does not infer success from list topology.
+- If connection loss ends Desktop's observation of creation or setup, the server operation continues independently. Desktop does not retry the Create request or keep waiting for its old result.
+- After reconnection, an open Worktree surface returns to its list and performs another server-owned read. The completed or still-running server operation is reflected only through server-owned reads and updates.
+- Desktop performs the automatic Switch only after it receives a successful Create result. A Create whose result was not observed does not infer success from list topology.
 - The list contains the server's complete worktree topology in authoritative order without pagination.
 - The current target row uses the shared UI kit's established selected-list-row treatment. Desktop adds no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.

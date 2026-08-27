@@ -4,7 +4,7 @@
 
 - Kent does not virtualize or sandbox command execution. Isolation requires running Kent on a remote machine or in Docker.
 - The server is the single authority for tool calls, session and other durable data, agent execution, and provider communication. CLI and GUI clients control and observe that authority; they do not own parallel local state or execution.
-- Client connection changes are transport-only. They never change server work, and server event publication never depends on subscriber count.
+- Client presence and connection lifecycle are transport-only and are never server-work authority. Connecting, disconnecting, canceling or closing a client request, reconnecting, changing subscriber count, navigating away, or closing a UI may stop that client's observation or delivery only; it never starts, stops, pauses, cancels, retries, replays, duplicates, authorizes, or otherwise changes server-owned work. Server event publication never depends on subscriber count.
 - A completed live execution has one server-authoritative terminal result: status, result kind, reason that no final answer exists, final assistant message, runtime error, timestamps, and whether work was performed. Work was performed when a completed step observed at least two tool-start events, including events emitted during recovery.
 - Terminal-result delivery is best-effort and never delays execution completion, waiting callers, queued work, interruption, or successor scheduling.
 - Each controlling TUI may run its configured read-only lifecycle command after it accepts a lifecycle event. Desktop, headless, subagent, and server-only use never run it. The server neither supplies nor overrides the command.
@@ -16,7 +16,7 @@
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
 - A failure to clear PendingModelRecovery remains live operational feedback. TUI and Desktop surface it through their typed operational-diagnostic or status-notice owner; it is neither persisted nor projected as committed transcript history.
 - The server owns exact Session-resource admission, Runtime Command ordering, dormant Goal commands, domain-operation ordering, idempotency, server work queues, execution lifecycle, reconciliation, and persistence disposition.
-- Transport preserves request identity for request/response correlation. Transport may sequence connection setup, bound concurrent handling of requests on one client connection, apply socket backpressure, correlate and write responses, and cancel and drain connection-bound request handling when that connection closes. These connection mechanics never order domain operations, retain server work after request handling, or decide idempotency, execution, reconciliation, or persistence outcomes.
+- Transport preserves request identity for request/response correlation. Transport may sequence connection setup, bound concurrent handling of requests on one client connection, apply socket backpressure, correlate and write responses, and stop connection-bound waiting and delivery when that connection closes. Transport teardown never cancels or drains the underlying server operation. Connection mechanics never order domain operations or decide their lifetime, idempotency, execution, reconciliation, or persistence outcomes.
 
 ## Skills And Generated Assets
 
