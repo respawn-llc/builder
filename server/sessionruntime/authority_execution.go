@@ -225,9 +225,6 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	if e.onRetire != nil {
 		e.onRetire()
 	}
-	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
-		authority.executionFinalized.ExecutionFinalized(e.scope)
-	}
 	close(e.done)
 }
 

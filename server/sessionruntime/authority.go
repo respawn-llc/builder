@@ -22,29 +22,16 @@ import (
 var ErrAuthorityClosed = errors.New("session runtime authority is closed")
 var ErrExecutionNoLongerLive = errors.New("exact execution scope is no longer live")
 
-type ExecutionFinalized interface {
-	ExecutionFinalized(ExecutionScope)
-}
-
-type ExecutionFinalizedFunc func(ExecutionScope)
-
-func (f ExecutionFinalizedFunc) ExecutionFinalized(scope ExecutionScope) {
-	if f != nil {
-		f(scope)
-	}
-}
-
 type AuthorityOptions struct {
-	Debug              bool
-	ExecutionFinalized ExecutionFinalized
-	PersistenceRoot    string
-	AuthManager        *auth.Manager
-	Background         *shelltool.Manager
-	StoreOptions       []session.StoreOption
-	EventFeed          AgentResourceEventFeed
-	ResourceLifecycle  AgentResourceLifecycle
-	StepLifecycle      AgentResourceStepLifecycle
-	PromptFeed         ExecutionPromptFeed
+	Debug             bool
+	PersistenceRoot   string
+	AuthManager       *auth.Manager
+	Background        *shelltool.Manager
+	StoreOptions      []session.StoreOption
+	EventFeed         AgentResourceEventFeed
+	ResourceLifecycle AgentResourceLifecycle
+	StepLifecycle     AgentResourceStepLifecycle
+	PromptFeed        ExecutionPromptFeed
 }
 
 type Authority struct {
@@ -59,7 +46,6 @@ type Authority struct {
 	workflowExecutions map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
 	resources          map[runtimeids.SessionID]*agentResource
 	gates              map[runtimeids.SessionID]*sessionAdmissionGate
-	executionFinalized ExecutionFinalized
 	promptFeed         ExecutionPromptFeed
 	options            authorityRuntimeOptions
 	invariantPolicy    invariant.Policy
@@ -75,7 +61,6 @@ func NewAuthority(options AuthorityOptions) *Authority {
 		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
 		lifecycleCtx:       lifecycleCtx,
 		lifecycleCancel:    lifecycleCancel,
-		executionFinalized: options.ExecutionFinalized,
 		promptFeed:         options.PromptFeed,
 		options:            newAuthorityRuntimeOptions(options),
 		invariantPolicy:    invariant.OperationalPolicy(options.Debug),

@@ -3,8 +3,6 @@ package clientui
 import (
 	"testing"
 	"time"
-
-	"core/shared/runtimeids"
 )
 
 func TestTranscriptContextGoalAndCompactionFactsValidateTypedState(t *testing.T) {
@@ -30,10 +28,6 @@ func TestTranscriptContextGoalAndCompactionFactsValidateTypedState(t *testing.T)
 		State:  CompactionStarted,
 		Mode:   "manual",
 		Count:  1,
-		RequestID: func() *runtimeids.CompactionRequestID {
-			id := runtimeids.NewCompactionRequestID()
-			return &id
-		}(),
 	}
 	if err := compaction.Validate(); err != nil {
 		t.Fatalf("validate compaction status: %v", err)
@@ -63,14 +57,5 @@ func TestTranscriptContextGoalAndCompactionFactsRejectInvalidState(t *testing.T)
 		Mode:   "auto",
 	}).Validate(); err == nil {
 		t.Fatal("accepted failed compaction without diagnostic")
-	}
-	requestID := runtimeids.NewCompactionRequestID()
-	if err := (TranscriptCompactionStatus{
-		StepID:    transcriptTestStepID(t),
-		State:     CompactionStarted,
-		Mode:      CompactionModeAuto,
-		RequestID: &requestID,
-	}).Validate(); err == nil {
-		t.Fatal("accepted automatic compaction with a client request id")
 	}
 }

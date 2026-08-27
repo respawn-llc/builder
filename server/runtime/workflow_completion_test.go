@@ -1086,7 +1086,12 @@ func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
 		structuredFinalResponse("unexpected"),
 	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput), Config{})
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	if _, err := eng.SetGoal(t.Context(), "complete structured workflow", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -1098,6 +1103,9 @@ func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceStructuredOutput {
 		t.Fatalf("terminal state = %+v, want structured completion", terminal)
 	}
+	if goal := eng.Goal(); goal == nil || goal.Status != session.GoalStatusComplete {
+		t.Fatalf("goal after structured workflow completion = %+v, want complete", goal)
+	}
 }
 
 func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
@@ -1108,7 +1116,12 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
 		structuredFinalResponse("unexpected"),
 	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{})
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	if _, err := eng.SetGoal(t.Context(), "complete unstructured workflow", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -1129,6 +1142,9 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 	terminal := eng.WorkflowTerminalState()
 	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceUnstructured {
 		t.Fatalf("terminal state = %+v, want unstructured completion", terminal)
+	}
+	if goal := eng.Goal(); goal == nil || goal.Status != session.GoalStatusComplete {
+		t.Fatalf("goal after unstructured workflow completion = %+v, want complete", goal)
 	}
 }
 

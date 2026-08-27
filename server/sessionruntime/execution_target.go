@@ -69,7 +69,7 @@ func (a *Authority) RunWorktreeTransition(
 		return nil
 	}
 	switch transition {
-	case clientui.WorktreeTransitionEnter, clientui.WorktreeTransitionLeave, clientui.WorktreeTransitionDelete:
+	case clientui.WorktreeTransitionEnter, clientui.WorktreeTransitionLeave:
 	default:
 		return errors.New("worktree transition kind is invalid")
 	}
@@ -96,11 +96,7 @@ func (a *Authority) RunWorktreeTransition(
 			)
 		}
 		retire := false
-		runTransition := engine.RunWorktreeTransition
-		if transition == clientui.WorktreeTransitionDelete {
-			runTransition = engine.RunWorktreeDeleteTransition
-		}
-		err := runTransition(runCtx, func() error {
+		err := engine.RunWorktreeTransition(runCtx, func() error {
 			active := true
 			defer func() { active = false }()
 			return fn(

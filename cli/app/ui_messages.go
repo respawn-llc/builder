@@ -7,7 +7,6 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -119,8 +118,7 @@ type injectedQueueDiscardDoneMsg struct {
 }
 
 type compactDoneMsg struct {
-	requestID runtimeids.CompactionRequestID
-	err       error
+	err error
 }
 
 type activeSubmitOrigin uint8

@@ -839,15 +839,12 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	content = strings.TrimSpace(content)
 	var (
 		parsed workflowruntime.ParsedCompletion
-		source WorkflowCompletionSource
 	)
 	switch mode {
 	case workflowruntime.CompletionModeStructuredOutput:
 		parsed, err = workflowruntime.DecodeCompletion([]byte(content), execution.Contract)
-		source = WorkflowCompletionSourceStructuredOutput
 	case workflowruntime.CompletionModeUnstructuredOutput:
 		parsed, err = workflowruntime.DecodeUnstructuredCompletion(content, execution.Contract)
-		source = WorkflowCompletionSourceUnstructured
 	case workflowruntime.CompletionModeShellCommand:
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, errors.New("normal final answers do not complete shell-command workflow nodes"))
 		return true, terminal, nudgeErr
@@ -878,7 +875,6 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
 		return true, terminal, nudgeErr
 	}
-	e.setWorkflowTerminalState(stepID, source, completed)
 	if completeErr != nil {
 		if err := e.steer(
 			stepID,
@@ -887,6 +883,7 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 			return true, true, err
 		}
 	}
+	e.cascadeCompleteActiveGoalOnWorkflowCompletion(stepID)
 	return true, true, nil
 }
 

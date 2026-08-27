@@ -139,33 +139,52 @@ func (r currentNodeTestPublicationRunner) PrepareScriptPublication(
 	return nil, nil
 }
 
-func (r currentNodeTestPublicationRunner) PrepareAgentPublication(
+func (r currentNodeTestPublicationRunner) StartAgentCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	delivery workflowruntime.TaskPromptDelivery,
 	assignment CurrentNodeAssignmentSteer,
 	onRetire func(),
 	controller workflowruntime.Controller,
-) (CurrentNodeAgentPublication, error) {
+) (sessionruntime.ExecutionHandle, error) {
 	if preparation, ok := r.runner.(currentNodeTestPreparation); ok {
 		if err := preparation.PrepareCurrentNode(ctx, reference, delivery); err != nil {
 			return nil, err
 		}
 	}
-	return &currentNodeTestPublication{
-		runner: r.runner, authority: r.authority, reference: reference,
-		delivery: delivery, assignment: assignment, onRetire: onRetire, controller: controller,
-	}, nil
-}
-
-type currentNodeTestPublication struct {
-	runner     currentNodeTestRunner
-	authority  *sessionruntime.Authority
-	reference  workflow.CurrentNodeReference
-	delivery   workflowruntime.TaskPromptDelivery
-	assignment CurrentNodeAssignmentSteer
-	onRetire   func()
-	controller workflowruntime.Controller
+	state := &workflowExecutionStartState{
+		reference: reference,
+		admit:     func() error { return nil },
+		onRetire:  onRetire,
+	}
+	if err := r.runner.PublishCurrentNode(
+		ctx,
+		reference,
+		delivery,
+		assignment,
+		workflowExecutionStart{state: state},
+		controller,
+	); err != nil {
+		return nil, err
+	}
+	if state.handle == nil {
+		shellPath, err := exec.LookPath("sh")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := startTestWorkflowScript(r.authority, workflowExecutionStart{state: state}, sessionruntime.ScriptExecutionRequest{
+			Command: sessionruntime.ScriptCommand{Path: shellPath, Args: []string{"-c", "exit 0"}},
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if state.onRetire != nil {
+		go func() {
+			_, _ = state.handle.Wait(context.Background())
+			state.onRetire()
+		}()
+	}
+	return state.handle, nil
 }
 
 type currentNodeTestScriptPublication struct {
@@ -200,46 +219,6 @@ func (p *currentNodeTestScriptPublication) Publish(
 }
 
 func (p *currentNodeTestScriptPublication) Cancel() {}
-
-func (p *currentNodeTestPublication) Publish(
-	_ context.Context,
-	admit func() error,
-	published func(sessionruntime.ExecutionHandle),
-) (sessionruntime.ExecutionHandle, func(), error) {
-	if err := admit(); err != nil {
-		return nil, nil, err
-	}
-	state := &workflowExecutionStartState{
-		reference: p.reference,
-		admit:     func() error { return nil }, published: published, onRetire: p.onRetire,
-	}
-	if err := p.runner.PublishCurrentNode(
-		context.Background(), p.reference, p.delivery, p.assignment,
-		workflowExecutionStart{state: state}, p.controller,
-	); err != nil {
-		return nil, nil, err
-	}
-	if state.handle == nil {
-		shellPath, err := exec.LookPath("sh")
-		if err != nil {
-			return nil, nil, err
-		}
-		if _, err := startTestWorkflowScript(p.authority, workflowExecutionStart{state: state}, sessionruntime.ScriptExecutionRequest{
-			Command: sessionruntime.ScriptCommand{Path: shellPath, Args: []string{"-c", "exit 0"}},
-		}); err != nil {
-			return nil, nil, err
-		}
-	}
-	if state.onRetire != nil {
-		go func() {
-			_, _ = state.handle.Wait(context.Background())
-			state.onRetire()
-		}()
-	}
-	return state.handle, func() {}, nil
-}
-
-func (p *currentNodeTestPublication) Cancel() error { return nil }
 
 func startTestWorkflowScript(
 	authority *sessionruntime.Authority,
@@ -995,11 +974,6 @@ func newCurrentNodeQuestionFixtureWithPromptFeed(
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			if controller != nil {
-				controller.ExecutionFinalized(scope)
-			}
-		}),
 		PersistenceRoot: appCfg.PersistenceRoot,
 		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
 		PromptFeed:      promptFeed,
@@ -1096,40 +1070,34 @@ func (f currentNodeQuestionFixture) startAgentExecutionWithClient(
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)
 	}
-	detached, err := f.authority.PrepareDetachedAgentExecution(context.Background(), sessionruntime.DetachedAgentExecutionRequest{
+	handle, err := f.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
 		Descriptor: descriptor,
 		Runtime:    &plan,
-		Workflow: sessionruntime.WorkflowExecutionRef{
-			ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID,
-			CurrentNode: reference,
+		Workflow: &sessionruntime.WorkflowAgentExecution{
+			Reference: sessionruntime.WorkflowExecutionRef{
+				ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID,
+				CurrentNode: reference,
+			},
+			Config: &workflowruntime.CurrentNodeExecutionConfig{
+				Contract: workflowruntime.CompletionContract{
+					Transitions: []workflowruntime.CompletionTransition{{ID: "next"}},
+				},
+				CompletionMode: workflowruntime.CompletionModeTool,
+				Controller:     f.controller,
+				Instructions:   workflowruntime.TaskInstructions{CurrentNode: reference},
+			},
 		},
 		Resource: sessionruntime.OpenAgentResource{},
-		Config: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{
-				Transitions: []workflowruntime.CompletionTransition{{ID: "next"}},
-			},
-			CompletionMode: workflowruntime.CompletionModeTool,
-			Controller:     f.controller,
-			Instructions:   workflowruntime.TaskInstructions{CurrentNode: reference},
-		},
-		Runner: runner,
+		Runner:   runner,
 	})
 	if err != nil {
-		t.Fatalf("PrepareDetachedAgentExecution: %v", err)
+		t.Fatalf("StartAgentExecution: %v", err)
 	}
-	scope, err := detached.Scope()
-	if err != nil {
-		t.Fatalf("detached Agent Scope: %v", err)
-	}
+	scope := handle.Scope()
 	resource, ok := scope.Resource()
 	if !ok {
 		t.Fatal("detached Agent execution has no Session Resource")
 	}
-	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
-	if err != nil {
-		t.Fatalf("publish detached Agent execution: %v", err)
-	}
-	launch()
 	return handle, sessionID, resource
 }
 

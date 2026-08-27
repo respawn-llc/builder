@@ -501,9 +501,8 @@ func TestRemotePersistInputDraftSendsComposerInput(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "draft-1",
-		SessionID:       "session-1",
-		Input:           "visible draft",
+		SessionID: "session-1",
+		Input:     "visible draft",
 	})
 	if err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
@@ -1278,9 +1277,8 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "request-1",
-		SessionID:       source.SessionID,
-		WorkspaceRoot:   source.TargetRoot,
+		SessionID:     source.SessionID,
+		WorkspaceRoot: source.TargetRoot,
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }

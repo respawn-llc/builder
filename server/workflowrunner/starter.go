@@ -166,51 +166,6 @@ type currentNodeAgentAssignmentSteer struct {
 	err        error
 }
 
-type currentNodeAgentPublication struct {
-	starter            *Starter
-	input              workflowstore.CurrentNodeStartContext
-	prepared           preparedCurrentNodeAgentSession
-	onRetire           func()
-	taskPromptDelivery workflowruntime.TaskPromptDelivery
-	controller         workflowruntime.Controller
-	mu                 sync.Mutex
-	settled            bool
-}
-
-func (p *currentNodeAgentPublication) Publish(
-	ctx context.Context,
-	admit func() error,
-	published func(sessionruntime.ExecutionHandle),
-) (sessionruntime.ExecutionHandle, func(), error) {
-	p.mu.Lock()
-	if p.settled {
-		p.mu.Unlock()
-		return nil, nil, sessionruntime.ErrExecutionNoLongerLive
-	}
-	p.settled = true
-	p.mu.Unlock()
-	return p.starter.publishCurrentNodeAgent(
-		ctx,
-		p.input,
-		p.prepared,
-		p.taskPromptDelivery,
-		p.onRetire,
-		p.controller,
-		admit,
-		published,
-	)
-}
-
-func (p *currentNodeAgentPublication) Cancel() error {
-	if p == nil {
-		return nil
-	}
-	p.mu.Lock()
-	p.settled = true
-	p.mu.Unlock()
-	return nil
-}
-
 func (s *currentNodeAgentAssignmentSteer) Prepare(ctx context.Context) error {
 	if s == nil {
 		return errors.New("current node agent assignment steer is required")
@@ -552,14 +507,14 @@ func (s *Starter) restoreManualMoveAssignmentSnapshot(
 	return waitErr
 }
 
-func (s *Starter) PrepareAgentPublication(
+func (s *Starter) StartAgentCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
 	onRetire func(),
 	controller workflowruntime.Controller,
-) (workflowexecution.CurrentNodeAgentPublication, error) {
+) (sessionruntime.ExecutionHandle, error) {
 	if s == nil || s.closed.Load() {
 		return nil, errors.New("workflow runtime starter closed")
 	}
@@ -572,49 +527,54 @@ func (s *Starter) PrepareAgentPublication(
 		if err != nil {
 			return nil, err
 		}
-		return &currentNodeAgentPublication{
-			starter: s, input: input, prepared: prepared, onRetire: onRetire,
-			taskPromptDelivery: taskPromptDelivery, controller: controller,
-		}, nil
+		return s.startCurrentNodeAgent(
+			ctx,
+			input,
+			prepared,
+			taskPromptDelivery,
+			onRetire,
+			controller,
+		)
 	}
 	assignment, ok := assignmentSteer.(*currentNodeAgentAssignmentSteer)
 	if !ok || assignment == nil || assignment.starter != s || !assignment.reference.Equal(reference) {
 		return nil, fmt.Errorf("current node %v received incompatible assignment %T", reference, assignmentSteer)
 	}
-	return &currentNodeAgentPublication{
-		starter: s, input: assignment.input,
-		prepared: assignment.prepared, onRetire: onRetire,
-		taskPromptDelivery: taskPromptDelivery, controller: controller,
-	}, nil
+	return s.startCurrentNodeAgent(
+		ctx,
+		assignment.input,
+		assignment.prepared,
+		taskPromptDelivery,
+		onRetire,
+		controller,
+	)
 }
 
-func (s *Starter) publishCurrentNodeAgent(
+func (s *Starter) startCurrentNodeAgent(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
 	prepared preparedCurrentNodeAgentSession,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	onRetire func(),
 	controller workflowruntime.Controller,
-	admit func() error,
-	published func(sessionruntime.ExecutionHandle),
-) (sessionruntime.ExecutionHandle, func(), error) {
+) (sessionruntime.ExecutionHandle, error) {
 	reference := input.CurrentNode.Reference
 	var err error
 	if prepared.client == nil {
 		prepared.client, err = s.newWorkflowProviderClient(ctx, prepared.plan)
 		if err != nil {
-			return nil, nil, prepared.cleanup(err)
+			return nil, prepared.cleanup(err)
 		}
 	}
 	if err := s.applyCurrentNodeSessionExecutionTarget(ctx, input, prepared.plan.Descriptor); err != nil {
-		return nil, nil, prepared.cleanup(err)
+		return nil, prepared.cleanup(err)
 	}
 	resource := sessionruntime.AgentResourceSelection(sessionruntime.CurrentAgentResource{})
 	var replacementPlan *sessionruntime.AgentRuntimePlan
 	if prepared.replaceResource {
 		runtimePlan, planErr := s.buildCurrentNodeAgentRuntimePlan(input, prepared)
 		if planErr != nil {
-			return nil, nil, prepared.cleanup(planErr)
+			return nil, prepared.cleanup(planErr)
 		}
 		resource = sessionruntime.ReplaceAgentResource{}
 		replacementPlan = &runtimePlan
@@ -623,12 +583,12 @@ func (s *Starter) publishCurrentNodeAgent(
 		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 			runtimePlan, planErr := s.buildCurrentNodeAgentRuntimePlan(input, prepared)
 			if planErr != nil {
-				return nil, nil, prepared.cleanup(planErr)
+				return nil, prepared.cleanup(planErr)
 			}
 			resource = sessionruntime.OpenAgentResource{}
 			replacementPlan = &runtimePlan
 		} else if err != nil {
-			return nil, nil, prepared.cleanup(err)
+			return nil, prepared.cleanup(err)
 		}
 	}
 	runtimeConfig, err := BuildCurrentNodeRuntimeConfig(
@@ -642,21 +602,23 @@ func (s *Starter) publishCurrentNodeAgent(
 		s.taskAwarenessSource,
 	)
 	if err != nil {
-		return nil, nil, prepared.cleanup(err)
+		return nil, prepared.cleanup(err)
 	}
-	detached, err := s.runtimeAuthority.PrepareDetachedAgentExecution(
+	handle, err := s.runtimeAuthority.StartAgentExecution(
 		ctx,
-		sessionruntime.DetachedAgentExecutionRequest{
+		sessionruntime.AgentExecutionRequest{
 			Descriptor: prepared.plan.Descriptor,
 			Runtime:    replacementPlan,
-			Workflow: sessionruntime.WorkflowExecutionRef{
-				ProjectID:   input.Task.ProjectID,
-				WorkflowID:  input.Workflow.ID,
-				CurrentNode: reference,
+			Workflow: &sessionruntime.WorkflowAgentExecution{
+				Reference: sessionruntime.WorkflowExecutionRef{
+					ProjectID:   input.Task.ProjectID,
+					WorkflowID:  input.Workflow.ID,
+					CurrentNode: reference,
+				},
+				Config:   runtimeConfig,
+				OnRetire: onRetire,
 			},
 			Resource: resource,
-			Config:   runtimeConfig,
-			OnRetire: onRetire,
 			Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 				return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 			},
@@ -664,14 +626,10 @@ func (s *Starter) publishCurrentNodeAgent(
 		},
 	)
 	if err != nil {
-		return nil, nil, prepared.cleanup(err)
-	}
-	handle, launch, err := detached.Publish(ctx, admit, published)
-	if err != nil {
-		return nil, nil, prepared.cleanup(err)
+		return nil, prepared.cleanup(err)
 	}
 	prepared.cleanup = func(err error) error { return err }
-	return handle, launch, nil
+	return handle, nil
 }
 
 func (s *Starter) currentNodeAgentAssignment(
@@ -946,7 +904,17 @@ func (s *Starter) currentNodeAgentRunner(
 			return nil
 		}
 		if turnErr == nil {
-			return nil
+			turnErr = errors.New("workflow Agent execution ended without a completion outcome")
+			return errors.Join(
+				turnErr,
+				s.failCurrentNodeScope(
+					context.WithoutCancel(runCtx),
+					controller,
+					scope,
+					"workflow_runtime_finalized_without_outcome",
+					turnErr,
+				),
+			)
 		}
 		reason := ReasonRuntimeFailed
 		if errors.Is(turnErr, context.Canceled) || context.Cause(runCtx) != nil {

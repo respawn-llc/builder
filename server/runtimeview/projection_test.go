@@ -295,7 +295,7 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{
 		Model: "gpt-5",
 	})
-	publication, err := eng.PrepareCurrentNodeExecutionPublication(
+	binding, err := eng.BindCurrentNodeExecution(
 		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: runtimeids.NewExecutionScopeID(),
 			Instructions: workflowruntime.TaskInstructions{
@@ -308,12 +308,8 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 		},
 	)
 	if err != nil {
-		t.Fatalf("PrepareCurrentNodeExecutionPublication: %v", err)
+		t.Fatalf("BindCurrentNodeExecution: %v", err)
 	}
-	if err := publication.Begin(); err != nil {
-		t.Fatalf("Begin: %v", err)
-	}
-	binding := publication.Commit()
 	t.Cleanup(func() { _ = binding.Close() })
 	view := mainViewFromRuntimeForTest(t, eng)
 	if view.Status.WorkflowSession == nil {

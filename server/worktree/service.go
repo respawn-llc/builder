@@ -1508,7 +1508,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if err := s.ensureNoOtherNonTerminalTasksManageWorktree(ctx, taskID, record); err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
-	activityLease, err := s.acquireDeleteTargetActivity(ctx, nil, &record, &record.CanonicalRoot)
+	activityLease, err := s.acquireDeleteTargetActivity(ctx, &record, &record.CanonicalRoot)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
@@ -1542,7 +1542,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	retargetCompensation, err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
 		workspaceID:   record.WorkspaceID,
 		workspaceRoot: workspaceRoot,
-	}, record, nil)
+	}, record)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}

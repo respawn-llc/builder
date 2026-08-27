@@ -450,7 +450,6 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 		result.Terminal = true
 		return result, err
 	}
-	e.setWorkflowTerminalState(stepID, WorkflowCompletionSourceTool, outcome)
 	result.Output = workflowruntime.ToolSuccessPayload(outcome)
 	result.Summary = textutil.Value("workflow node completed")
 	result.Terminal = true

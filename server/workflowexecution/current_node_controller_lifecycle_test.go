@@ -366,44 +366,46 @@ func (retainedSessionReactivationPublicationRunner) PrepareScriptPublication(
 	return nil, nil
 }
 
-func (r retainedSessionReactivationPublicationRunner) PrepareAgentPublication(
+func (r retainedSessionReactivationPublicationRunner) StartAgentCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentSteer,
 	onRetire func(),
 	controller workflowruntime.Controller,
-) (CurrentNodeAgentPublication, error) {
+) (sessionruntime.ExecutionHandle, error) {
 	descriptor, err := session.NewOpenSessionDescriptor(r.sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return r.authority.PrepareDetachedAgentExecution(ctx, sessionruntime.DetachedAgentExecutionRequest{
+	return r.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: descriptor,
-		Workflow: sessionruntime.WorkflowExecutionRef{
-			ProjectID:   "project-test",
-			WorkflowID:  currentNodeControllerTestWorkflowID,
-			CurrentNode: reference,
-		},
-		Resource: sessionruntime.CurrentAgentResource{},
-		Config: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract:       workflowruntime.CompletionContract{Transitions: []workflowruntime.CompletionTransition{{ID: "next"}}},
-			CompletionMode: workflowruntime.CompletionModeTool,
-			Controller:     controller,
-			Instructions: workflowruntime.TaskInstructions{
+		Workflow: &sessionruntime.WorkflowAgentExecution{
+			Reference: sessionruntime.WorkflowExecutionRef{
+				ProjectID:   "project-test",
 				WorkflowID:  currentNodeControllerTestWorkflowID,
 				CurrentNode: reference,
 			},
+			Config: &workflowruntime.CurrentNodeExecutionConfig{
+				Contract:       workflowruntime.CompletionContract{Transitions: []workflowruntime.CompletionTransition{{ID: "next"}}},
+				CompletionMode: workflowruntime.CompletionModeTool,
+				Controller:     controller,
+				Instructions: workflowruntime.TaskInstructions{
+					WorkflowID:  currentNodeControllerTestWorkflowID,
+					CurrentNode: reference,
+				},
+			},
+			OnRetire: onRetire,
 		},
+		Resource: sessionruntime.CurrentAgentResource{},
 		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
 			<-ctx.Done()
 			return context.Cause(ctx)
 		},
-		OnRetire: onRetire,
 	})
 }
 
-func TestReactivateWorkflowSessionJoinsConcurrentExplicitResumeAdmission(t *testing.T) {
+func TestReactivateWorkflowSessionRejectsConcurrentExplicitResumeAdmission(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(
 		t,
 		"task-reactivate-concurrent-resume",
@@ -458,21 +460,12 @@ func TestReactivateWorkflowSessionJoinsConcurrentExplicitResumeAdmission(t *test
 	}}
 	store.mu.Unlock()
 
-	reactivated := make(chan error, 1)
-	go func() {
-		_, err := controller.ReactivateWorkflowSession(context.Background(), sessionID)
-		reactivated <- err
-	}()
-	select {
-	case err := <-reactivated:
-		t.Fatalf("reactivation returned before concurrent Resume admission completed: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	_, err := controller.ReactivateWorkflowSession(context.Background(), sessionID)
+	var conflict *TaskResumeConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("ReactivateWorkflowSession error = %v, want Task Resume conflict", err)
 	}
 	close(runner.release)
-	err := <-reactivated
-	if !errors.Is(err, admissionFailure) {
-		t.Fatalf("ReactivateWorkflowSession error = %v, want joined admission failure", err)
-	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if len(store.resumed) != 1 {

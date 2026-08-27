@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
-	"core/server/workflowstore"
 )
 
 func TestCurrentNodeControllerFailedScriptDoesNotReleaseAgentCapacity(t *testing.T) {
@@ -25,11 +23,7 @@ func TestCurrentNodeControllerFailedScriptDoesNotReleaseAgentCapacity(t *testing
 	queuedAgent := currentNodeReferenceForControllerTest(t, "task-failed-script-queued-agent", "node-queued-agent")
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &selectiveScriptFailureRunner{
 		authority: authority,
 		failed:    failedScript,
@@ -96,11 +90,7 @@ func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.
 	next := currentNodeReferenceForControllerTest(t, "task-next-after-failed-reservation", "node-next")
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{
@@ -216,153 +206,4 @@ func (r *finalizingBeforeLiveRunner) PublishCurrentNode(
 		r.started <- reference
 	}
 	return err
-}
-
-func TestCurrentNodeControllerFinalizedGateReleasesAgentCapacity(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	fast := currentNodeReferenceForControllerTest(t, "task-finalized-gate", "node-fast")
-	next := currentNodeReferenceForControllerTest(t, "task-after-finalized-gate", "node-next")
-	store := &currentNodeControllerStore{}
-	var controller *CurrentNodeController
-	finalized := make(chan struct{})
-	var finalizedOnce sync.Once
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-			finalizedOnce.Do(func() { close(finalized) })
-		}),
-	})
-	runner := &finalizingBeforeLiveRunner{
-		authority: authority,
-		fast:      fast,
-		shellPath: shellPath,
-		started:   make(chan workflow.CurrentNodeReference, 1),
-	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	t.Cleanup(func() {
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	controller.enqueueStarts(automaticQueuedStarts([]CurrentNodeAutomaticIntent{{
-		CurrentNode: fast,
-		NodeKind:    workflow.NodeKindAgent,
-	}}))
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		_, interrupted := store.interruption(fast)
-		return interrupted
-	}, "fast-finalized gated Agent was not cleaned up")
-
-	controller.enqueueStarts(automaticQueuedStarts([]CurrentNodeAutomaticIntent{{
-		CurrentNode: next,
-		NodeKind:    workflow.NodeKindAgent,
-	}}))
-	select {
-	case started := <-runner.started:
-		if !started.Equal(next) {
-			t.Fatalf("queued Agent start = %v, want %v", started, next)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("queued Agent did not start after gated finalization released capacity")
-	}
-}
-
-func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	source := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-source")
-	successor := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-successor")
-	queuedAgent := currentNodeReferenceForControllerTest(t, "task-unrelated-agent", "node-agent")
-	queuedScript := currentNodeReferenceForControllerTest(t, "task-unrelated-script", "node-script")
-	store := &currentNodeControllerStore{
-		completion: workflowstore.CurrentNodeCompletionResult{
-			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
-		},
-	}
-	steerer := &recordingCurrentNodeAssignmentSteerer{}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 4),
-	}
-	controller = newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		AssignmentSteerer: steerer,
-	})
-	t.Cleanup(func() {
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	controller.enqueueStarts(automaticQueuedStarts([]CurrentNodeAutomaticIntent{{CurrentNode: source, NodeKind: workflow.NodeKindAgent}}))
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, source)
-	controller.enqueueStarts(automaticQueuedStarts([]CurrentNodeAutomaticIntent{
-		{CurrentNode: queuedAgent, NodeKind: workflow.NodeKindAgent},
-		{CurrentNode: queuedScript, NodeKind: workflow.NodeKindScript},
-	}))
-	sourceScope := singleLiveScope(t, authority, source)
-	cause := errors.New("assignment persistence failed")
-	steerer.setWaitError(cause)
-	if _, err := completeCurrentNodeLifecycleForTest(
-		context.Background(), controller, sourceScope, "next",
-	); err != nil {
-		t.Fatalf("complete source: %v", err)
-	}
-	sourceHandle, live := authority.ExecutionByScope(sourceScope)
-	if !live {
-		t.Fatal("completed source scope retired before stop")
-	}
-	if err := sourceHandle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop source: %v", err)
-	}
-
-	if interruption, interrupted := store.interruption(successor); interrupted {
-		t.Fatalf("unassigned held successor was made resumable: %+v", interruption)
-	}
-	if err := controller.EnsureTaskQuiescent(source.TaskID); err != nil {
-		t.Fatalf("uncommitted assignment failure latched controller failure: %v", err)
-	}
-	started := make(map[workflow.CurrentNodeReferenceKey]struct{}, 2)
-	deadline := time.After(3 * time.Second)
-	for len(started) < 2 {
-		select {
-		case currentNode := <-runner.started:
-			if currentNode.Equal(successor) {
-				t.Fatalf("unassigned held successor started after assignment failure")
-			}
-			if !currentNode.Equal(queuedAgent) && !currentNode.Equal(queuedScript) {
-				t.Fatalf("unexpected start after assignment failure: %v", currentNode)
-			}
-			currentNodeKey, err := currentNode.Key()
-			if err != nil {
-				t.Fatalf("started current node key: %v", err)
-			}
-			started[currentNodeKey] = struct{}{}
-		case <-deadline:
-			t.Fatalf("queued work did not start after source capacity was released: %+v", started)
-		}
-	}
 }

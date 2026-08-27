@@ -57,47 +57,6 @@ type LocalToolRegistryBinding struct {
 	mu       sync.Mutex
 }
 
-type ExecutionCorrelationPublication struct {
-	binding  *LocalToolRegistryBinding
-	value    *runtimeids.ExecutionCorrelation
-	handlers []tools.HandlerRegistration
-}
-
-func (b *LocalToolRegistryBinding) PrepareExecutionCorrelation(
-	correlation *runtimeids.ExecutionCorrelation,
-) (*ExecutionCorrelationPublication, error) {
-	if b == nil {
-		return nil, fmt.Errorf("local tool registry binding is required")
-	}
-	if correlation != nil {
-		if err := correlation.Validate(); err != nil {
-			return nil, fmt.Errorf("validate execution correlation: %w", err)
-		}
-	}
-	b.mu.Lock()
-	next := b.ctx
-	enabled := append([]toolspec.ID(nil), b.enabled...)
-	next.ExecutionCorrelation = correlation
-	b.mu.Unlock()
-	handlers, err := localRuntimeHandlers(enabled, next)
-	if err != nil {
-		return nil, err
-	}
-	return &ExecutionCorrelationPublication{
-		binding: b, value: correlation, handlers: handlers,
-	}, nil
-}
-
-func (p *ExecutionCorrelationPublication) Commit() {
-	if p == nil || p.binding == nil {
-		panic("execution correlation publication is invalid")
-	}
-	p.binding.mu.Lock()
-	defer p.binding.mu.Unlock()
-	p.binding.ctx.ExecutionCorrelation = p.value
-	p.binding.registry.ReplaceHandlers(p.handlers...)
-}
-
 func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext) (tools.Handler, error) {
 	switch def.LocalRuntimeBuilder() {
 	case tools.LocalRuntimeBuilderExecCommand:

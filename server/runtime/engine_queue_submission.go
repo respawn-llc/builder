@@ -70,18 +70,6 @@ func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) err
 	return e.runWorktreeTransition(ctx, nil, fn)
 }
 
-func (e *Engine) RunWorktreeDeleteTransition(ctx context.Context, fn func() error) error {
-	return e.runWorktreeTransition(ctx, func() error {
-		if e.ReviewerRunning() {
-			return ErrReviewerRunning
-		}
-		if e.HasQueuedUserWork() || e.HasScheduledQueuedUserWork() {
-			return ErrWorktreeDeleteBlockedByQueuedWork
-		}
-		return nil
-	}, fn)
-}
-
 func (e *Engine) runWorktreeTransition(ctx context.Context, admit func() error, fn func() error) error {
 	if fn == nil {
 		return nil

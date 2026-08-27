@@ -159,14 +159,16 @@ func TestAuthorityManualMoveSelectionClassifiesPendingApproval(t *testing.T) {
 	err = authority.WithWorkflowManualMoveSelection(taskID, func(WorkflowInterruptSelection) error {
 		return nil
 	})
-	if !errors.Is(err, ErrWorkflowApprovalPending) {
-		t.Fatalf("WithWorkflowManualMoveSelection error = %v, want ErrWorkflowApprovalPending", err)
+	if err != nil {
+		t.Fatalf("WithWorkflowManualMoveSelection: %v", err)
 	}
-	exact.execution.cancel()
 	select {
-	case <-awaitErr:
+	case promptErr := <-awaitErr:
+		if !errors.Is(promptErr, context.Canceled) {
+			t.Fatalf("pending approval resolution error = %v, want context canceled", promptErr)
+		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("pending approval did not resolve after cancellation")
+		t.Fatal("pending approval did not resolve during Manual Move")
 	}
 }
 

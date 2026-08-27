@@ -413,30 +413,27 @@ func (f currentNodeViewFixture) startCurrentNodePrompt(
 		WorkflowID:  f.workflowID,
 		CurrentNode: started.currentNode,
 	}
-	detached, err := authority.PrepareDetachedAgentExecution(f.ctx, sessionruntime.DetachedAgentExecutionRequest{
+	handle, err := authority.StartAgentExecution(f.ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: mustOpenCurrentNodeViewSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   workflowRef,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Config: &workflowruntime.CurrentNodeExecutionConfig{
-			Instructions: workflowruntime.TaskInstructions{
-				CurrentNode: workflowRef.CurrentNode,
-				WorkflowID:  workflowRef.WorkflowID,
+		Workflow: &sessionruntime.WorkflowAgentExecution{
+			Reference: workflowRef,
+			Config: &workflowruntime.CurrentNodeExecutionConfig{
+				Instructions: workflowruntime.TaskInstructions{
+					CurrentNode: workflowRef.CurrentNode,
+					WorkflowID:  workflowRef.WorkflowID,
+				},
 			},
 		},
+		Resource: sessionruntime.OpenAgentResource{},
 		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
 			_, awaitErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
 			return awaitErr
 		},
 	})
 	if err != nil {
-		t.Fatalf("PrepareDetachedAgentExecution: %v", err)
+		t.Fatalf("StartAgentExecution: %v", err)
 	}
-	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
-	if err != nil {
-		t.Fatalf("Publish detached Agent execution: %v", err)
-	}
-	launch()
 	t.Cleanup(func() {
 		if err := handle.Stop(context.Background()); err != nil {
 			t.Errorf("stop live workflow prompt execution: %v", err)

@@ -27,11 +27,7 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 		interruptRelease: make(chan struct{}),
 	}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{
@@ -79,87 +75,6 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRetirement(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	source := currentNodeReferenceForControllerTest(t, "task-interrupt-fence", "node-source")
-	other := currentNodeReferenceForControllerTest(t, "task-interrupt-fence", "node-other")
-	approval := workflow.PendingApproval{ID: workflow.NewApprovalID(), Source: source}
-	store := &currentNodeControllerStore{pendingApproval: approval}
-	finalized := make(chan struct{})
-	releaseFinalization := make(chan struct{})
-	var finalizedOnce sync.Once
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			finalizedOnce.Do(func() {
-				close(finalized)
-			})
-			<-releaseFinalization
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 1),
-	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	t.Cleanup(func() {
-		select {
-		case <-releaseFinalization:
-		default:
-			close(releaseFinalization)
-		}
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
-		t.Fatalf("start source: %v", err)
-	}
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, source)
-	interruptDone := make(chan error, 1)
-	go func() {
-		interruptDone <- controller.Interrupt(context.Background(), InterruptSelector{TaskID: source.TaskID})
-	}()
-	select {
-	case <-finalized:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Task Interrupt did not reach exact-scope retirement")
-	}
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, other); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("start during Task Interrupt = %v, want %v", err, ErrTaskExecutionNotQuiescent)
-	}
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("approval during Task Interrupt = %v, want %v", err, ErrTaskExecutionNotQuiescent)
-	}
-	if err := controller.EnsureTaskQuiescent(source.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("quiescence during Task Interrupt = %v, want %v", err, ErrTaskExecutionNotQuiescent)
-	}
-
-	close(releaseFinalization)
-	select {
-	case err := <-interruptDone:
-		if err != nil {
-			t.Fatalf("Task Interrupt after finalization: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Task Interrupt fence did not clear after retirement")
-	}
-}
-
 func TestCurrentNodeControllerTaskInterruptPreservesSiblingPreparation(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -169,11 +84,7 @@ func TestCurrentNodeControllerTaskInterruptPreservesSiblingPreparation(t *testin
 	preparing := currentNodeReferenceForControllerTest(t, "task-preparing-sibling", "node-preparing")
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{
@@ -290,11 +201,7 @@ func TestCurrentNodeControllerTaskInterruptDoesNotCoordinateFinalizingSibling(t 
 		interruptRelease: make(chan struct{}),
 	}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &runningAndFinalizingScriptRunner{
 		authority:           authority,
 		shellPath:           shellPath,
@@ -391,11 +298,7 @@ func TestCurrentNodeControllerTaskInterruptDoesNotOverrideFinalizingScopeFailure
 		interruptRelease: make(chan struct{}),
 	}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &runningAndFinalizingScriptRunner{
 		authority:           authority,
 		shellPath:           shellPath,
@@ -560,11 +463,7 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 	reserved := currentNodeReferenceForControllerTest(t, "task-reservation-interrupt", "node-successor")
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{
@@ -631,11 +530,7 @@ func TestCurrentNodeControllerInterruptingScriptDoesNotReleaseAgentCapacity(t *t
 	queuedAgent := currentNodeReferenceForControllerTest(t, "task-interrupted-script-queued-agent", "node-queued-agent")
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{
@@ -722,11 +617,7 @@ func TestCurrentNodeControllerTaskInterruptDrainsConcurrencyQueuedWorkAlongsideR
 		interruptRelease: make(chan struct{}),
 	}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &runningAndQueuedGateRunner{
 		authority:      authority,
 		shellPath:      shellPath,
@@ -924,11 +815,7 @@ func TestCurrentNodeControllerProtocolViolationCapStopsAndInterruptsLiveScope(t 
 	reference := currentNodeReferenceForControllerTest(t, "task-protocol", "node-agent")
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{

@@ -46,11 +46,17 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 	})
 	var waitErrs []error
 	for _, handle := range state.waitHandles {
-		if _, err := handle.Wait(cleanupCtx); err != nil &&
-			!errors.Is(err, context.Canceled) &&
-			!errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) &&
-			!errors.Is(err, ErrTaskExecutionNotQuiescent) {
-			waitErrs = append(waitErrs, err)
+		_, waitErr := handle.Wait(cleanupCtx)
+		if _, live := c.authority.ExecutionByScope(handle.Scope().ID()); !live {
+			c.mu.Lock()
+			c.interrupts.finishScope(handle.Scope().ID())
+			c.mu.Unlock()
+		}
+		if waitErr != nil &&
+			!errors.Is(waitErr, context.Canceled) &&
+			!errors.Is(waitErr, sessionruntime.ErrExecutionNoLongerLive) &&
+			!errors.Is(waitErr, ErrTaskExecutionNotQuiescent) {
+			waitErrs = append(waitErrs, waitErr)
 		}
 	}
 	for _, wait := range state.admissionWaits {
@@ -191,8 +197,8 @@ func interruptSelectorAlreadyInterrupted(
 
 // InterruptForManualMove atomically revalidates the mutation, then fences all
 // currently running workflow scopes for a Task before closing their canonical
-// prompt stores. Pending Questions are canceled with their scopes; queued,
-// and pending-Approval work remains conflicting.
+// prompt stores. Pending Questions and Approvals are canceled with their exact
+// scopes; queued work remains conflicting.
 func (c *CurrentNodeController) InterruptForManualMove(
 	ctx context.Context,
 	taskID workflow.TaskID,
@@ -296,11 +302,6 @@ func (c *CurrentNodeController) InterruptForManualMove(
 			return nil
 		})
 	})
-	if selectionErr != nil {
-		if errors.Is(selectionErr, sessionruntime.ErrWorkflowApprovalPending) {
-			return ErrManualMoveLifecycleConflict
-		}
-	}
 	cleanupState := currentNodeInterruptCleanupState{
 		taskID:         taskID,
 		stopHandles:    stopHandles,

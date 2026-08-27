@@ -741,14 +741,10 @@ func newRuntimeControlWorkflowTestService(
 ) (*session.Store, *runtime.Engine, *Service) {
 	t.Helper()
 	store, engine, service := newRuntimeControlTestService(t, client, registry, cfg)
-	publication, err := engine.PrepareCurrentNodeExecutionPublication(execution)
+	binding, err := engine.BindCurrentNodeExecution(execution)
 	if err != nil {
-		t.Fatalf("prepare Current Node execution publication: %v", err)
+		t.Fatalf("bind Current Node execution: %v", err)
 	}
-	if err := publication.Begin(); err != nil {
-		t.Fatalf("begin Current Node execution publication: %v", err)
-	}
-	binding := publication.Commit()
 	t.Cleanup(func() {
 		if err := binding.Close(); err != nil && !errors.Is(err, runtime.ErrEngineClosed) {
 			t.Errorf("close Current Node execution binding: %v", err)
@@ -778,14 +774,10 @@ func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting
 		CurrentNode: config.Instructions.CurrentNode,
 	}
 	config.Instructions.WorkflowID = workflowRef.WorkflowID
-	publication, err := engine.PrepareCurrentNodeExecutionPublication(config)
+	binding, err := engine.BindCurrentNodeExecution(config)
 	if err != nil {
-		t.Fatalf("prepare retained Workflow activation: %v", err)
+		t.Fatalf("bind retained Workflow activation: %v", err)
 	}
-	if err := publication.Begin(); err != nil {
-		t.Fatalf("begin retained Workflow activation: %v", err)
-	}
-	binding := publication.Commit()
 	bindingClosed := false
 	var execution sessionruntime.ExecutionHandle
 	t.Cleanup(func() {
@@ -816,13 +808,15 @@ func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting
 			if err != nil {
 				return nil, err
 			}
-			detached, err := service.authority.PrepareDetachedAgentExecution(
+			handle, err := service.authority.StartAgentExecution(
 				context.Background(),
-				sessionruntime.DetachedAgentExecutionRequest{
+				sessionruntime.AgentExecutionRequest{
 					Descriptor: descriptor,
-					Workflow:   workflowRef,
-					Resource:   sessionruntime.CurrentAgentResource{},
-					Config:     config,
+					Workflow: &sessionruntime.WorkflowAgentExecution{
+						Reference: workflowRef,
+						Config:    config,
+					},
+					Resource: sessionruntime.CurrentAgentResource{},
 					Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
 						<-ctx.Done()
 						return context.Cause(ctx)
@@ -832,12 +826,7 @@ func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting
 			if err != nil {
 				return nil, err
 			}
-			handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
-			if err != nil {
-				return nil, err
-			}
 			execution = handle
-			launch()
 			return handle, nil
 		},
 	))
@@ -2613,7 +2602,6 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 
 	if err := service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
 		SessionID: store.Meta().SessionID,
-		RequestID: runtimeids.NewCompactionRequestID(),
 		Args:      "compact",
 	}); err != nil {
 		t.Fatalf("CompactContext scheduling: %v", err)

@@ -741,14 +741,10 @@ func publishTestWorkflowExecution(t *testing.T, engine *Engine, workflowCfg *wor
 	} else if err := instructions.CurrentNode.Validate(); err != nil {
 		t.Fatalf("invalid test current node reference: %v", err)
 	}
-	publication, err := engine.PrepareCurrentNodeExecutionPublication(workflowCfg)
+	binding, err := engine.BindCurrentNodeExecution(workflowCfg)
 	if err != nil {
-		t.Fatalf("prepare workflow execution publication: %v", err)
+		t.Fatalf("bind workflow execution: %v", err)
 	}
-	if err := publication.Begin(); err != nil {
-		t.Fatalf("begin workflow execution publication: %v", err)
-	}
-	binding := publication.Commit()
 	t.Cleanup(func() {
 		if err := binding.Close(); err != nil && !errors.Is(err, ErrEngineClosed) {
 			t.Errorf("close workflow execution binding: %v", err)

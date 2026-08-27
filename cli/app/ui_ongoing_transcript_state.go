@@ -50,14 +50,15 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		// RuntimeActivity is the authoritative compaction lifecycle. This event
 		// carries lifecycle notification facts, not live-session state.
 		status := message.Payload().(clientui.TranscriptCompactionStatus)
-		if status.Mode == clientui.CompactionModeManual && status.RequestID != nil {
+		if status.Mode == clientui.CompactionModeManual && m.pendingManualCompaction {
 			switch status.State {
 			case clientui.CompactionCompleted:
-				if m.clearPendingCompactionRequest(*status.RequestID) && m.turnQueueHook != nil {
+				m.pendingManualCompaction = false
+				if m.turnQueueHook != nil {
 					m.turnQueueHook.OnUserCompactionCompleted(m.inputController().turnQueueDrained())
 				}
 			case clientui.CompactionFailed:
-				m.clearPendingCompactionRequest(*status.RequestID)
+				m.pendingManualCompaction = false
 			}
 		}
 	case clientui.TranscriptMessageContextUsage:
@@ -191,7 +192,7 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	if previousSessionID == "" || previousSessionID == nextSessionID {
 		return titleCmd
 	}
-	m.pendingCompactionRequestIDs = nil
+	m.pendingManualCompaction = false
 	m.askController().cancelActiveDelivery()
 	m.ask.pendingCtrlCContinuation = nil
 	promptCmd := m.reconcileTranscriptPrompts(nil)

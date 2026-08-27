@@ -95,16 +95,6 @@ func (e *Engine) failQueuedUserWorkIfTerminal() bool {
 	return true
 }
 
-func (e *Engine) setWorkflowTerminalState(stepID string, source WorkflowCompletionSource, completion workflowruntime.CompletionResult) {
-	if e == nil || !e.currentNodeExecutionActive() {
-		return
-	}
-	transitioned := e.recordWorkflowTerminalState(source, completion)
-	if transitioned {
-		e.cascadeCompleteActiveGoalOnWorkflowCompletion(stepID)
-	}
-}
-
 func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource, completion workflowruntime.CompletionResult) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()

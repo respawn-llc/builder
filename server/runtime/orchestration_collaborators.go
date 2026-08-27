@@ -57,7 +57,7 @@ type backgroundNoticeScheduler interface {
 }
 
 type contextCompactor interface {
-	CompactContextWithAcceptance(ctx context.Context, requestID runtimeids.CompactionRequestID, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
+	CompactContextWithAcceptance(ctx context.Context, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
 	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
 	CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error)
 	CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)

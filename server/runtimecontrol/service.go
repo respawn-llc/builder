@@ -51,6 +51,10 @@ type WorkflowSessionReactivator interface {
 	) (sessionruntime.ExecutionHandle, error)
 }
 
+type WorkflowSessionPreparationReader interface {
+	WorkflowSessionPreparing(context.Context, runtimeids.SessionID) (bool, error)
+}
+
 var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction cannot be disabled for workflow task sessions")
 
 type Service struct {
@@ -60,6 +64,7 @@ type Service struct {
 	promptCommands PromptCommandResolver
 	workflowTasks  WorkflowTaskSessionResolver
 	reactivator    WorkflowSessionReactivator
+	preparations   WorkflowSessionPreparationReader
 	persisted      session.PersistedSessionResolver
 	askViews       servicecontract.AskViewService
 	approvalViews  servicecontract.ApprovalViewService
@@ -166,6 +171,14 @@ func (s *Service) WithWorkflowSessionReactivator(reactivator WorkflowSessionReac
 		return nil
 	}
 	s.reactivator = reactivator
+	return s
+}
+
+func (s *Service) WithWorkflowSessionPreparationReader(reader WorkflowSessionPreparationReader) *Service {
+	if s == nil {
+		return nil
+	}
+	s.preparations = reader
 	return s
 }
 
@@ -495,7 +508,7 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
 		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			_, compactErr := engine.CompactContextForRequestWithAcceptance(runCtx, req.RequestID, req.Args, attempt.Accept)
+			_, compactErr := engine.CompactContextWithAcceptance(runCtx, req.Args, attempt.Accept)
 			return compactErr
 		})
 		return struct{}{}, attempt.Accepted(), commandErr

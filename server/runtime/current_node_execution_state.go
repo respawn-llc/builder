@@ -17,17 +17,9 @@ type CurrentNodeExecutionBinding struct {
 	err     error
 }
 
-type CurrentNodeExecutionPublication struct {
-	engine *Engine
-	state  *currentNodeExecutionState
-	config *workflowruntime.CurrentNodeExecutionConfig
-	locked bool
-	done   bool
-}
-
-func (e *Engine) PrepareCurrentNodeExecutionPublication(
+func (e *Engine) BindCurrentNodeExecution(
 	config *workflowruntime.CurrentNodeExecutionConfig,
-) (*CurrentNodeExecutionPublication, error) {
+) (*CurrentNodeExecutionBinding, error) {
 	if e == nil {
 		return nil, errors.New("runtime engine is required")
 	}
@@ -39,48 +31,24 @@ func (e *Engine) PrepareCurrentNodeExecutionPublication(
 		return nil, errors.New("current node execution state is unavailable")
 	}
 	cloned := cloneCurrentNodeExecutionConfig(config)
-	return &CurrentNodeExecutionPublication{engine: e, state: state, config: cloned}, nil
-}
-
-func (p *CurrentNodeExecutionPublication) Begin() error {
-	if p == nil || p.state == nil || p.done || p.locked {
-		return errors.New("current node execution publication is invalid")
+	state.mu.Lock()
+	if state.owner != nil {
+		state.mu.Unlock()
+		return nil, fmt.Errorf("current node execution scope %s cannot publish while scope %s owns the state", cloned.ScopeID, state.owner.scopeID)
 	}
-	p.state.mu.Lock()
-	if p.state.owner != nil {
-		p.state.mu.Unlock()
-		return fmt.Errorf("current node execution scope %s cannot publish while scope %s owns the state", p.config.ScopeID, p.state.owner.scopeID)
+	if state.config != nil && state.config.ScopeID == cloned.ScopeID &&
+		!state.config.Instructions.CurrentNode.Equal(cloned.Instructions.CurrentNode) {
+		state.mu.Unlock()
+		return nil, fmt.Errorf("current node execution scope %s cannot change Current Node", cloned.ScopeID)
 	}
-	if p.state.config != nil && p.state.config.ScopeID == p.config.ScopeID &&
-		!p.state.config.Instructions.CurrentNode.Equal(p.config.Instructions.CurrentNode) {
-		p.state.mu.Unlock()
-		return fmt.Errorf("current node execution scope %s cannot change Current Node", p.config.ScopeID)
-	}
-	p.locked = true
-	return nil
-}
-
-func (p *CurrentNodeExecutionPublication) Commit() *CurrentNodeExecutionBinding {
-	if p == nil || p.state == nil || p.done || !p.locked {
-		panic("Current Node execution publication must be validated and locked before commit")
-	}
-	p.done = true
-	p.state.config = p.config
-	p.state.delivery = newWorkflowPromptDeliveryState(p.config)
-	p.state.owner = &currentNodeExecutionOwner{scopeID: p.config.ScopeID}
-	p.state.mu.Unlock()
-	p.engine.mu.Lock()
-	p.engine.workflowTerminal = WorkflowTerminalState{}
-	p.engine.mu.Unlock()
-	return &CurrentNodeExecutionBinding{engine: p.engine, scopeID: p.config.ScopeID}
-}
-
-func (p *CurrentNodeExecutionPublication) Cancel() {
-	if p == nil || p.state == nil || p.done || !p.locked {
-		return
-	}
-	p.done = true
-	p.state.mu.Unlock()
+	state.config = cloned
+	state.delivery = newWorkflowPromptDeliveryState(cloned)
+	state.owner = &currentNodeExecutionOwner{scopeID: cloned.ScopeID}
+	state.mu.Unlock()
+	e.mu.Lock()
+	e.workflowTerminal = WorkflowTerminalState{}
+	e.mu.Unlock()
+	return &CurrentNodeExecutionBinding{engine: e, scopeID: cloned.ScopeID}, nil
 }
 
 type currentNodeExecutionSnapshot struct {

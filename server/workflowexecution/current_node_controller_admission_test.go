@@ -30,11 +30,7 @@ func TestCurrentNodeControllerAdmitsScriptBeforeDetachedPublication(t *testing.T
 	outputPath := t.TempDir() + "/started"
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &controlledScriptRunner{
 		authority:   authority,
 		command:     sessionruntime.ScriptCommand{Path: shellPath, Args: []string{"-c", `printf started > "$1"; trap 'exit 0' TERM; while :; do sleep 1; done`, "sh", outputPath}},
@@ -105,11 +101,7 @@ func TestCurrentNodeControllerCloseDoesNotCancelStartedDurableAdmission(t *testi
 		admitRelease: make(chan struct{}),
 	}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
 		command:   sessionruntime.ScriptCommand{Path: shellPath, Args: []string{"-c", "exit 0"}},
@@ -281,86 +273,6 @@ func TestCurrentNodeControllerExecutionLossBeforeAdmissionInterruptsReadyCurrent
 	}, "pre-admission execution loss did not publish interrupted Current Node attention")
 }
 
-func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNode(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	reference := currentNodeReferenceForControllerTest(t, "task-finalization-failure", "node-script")
-	store := &currentNodeControllerStore{}
-	attention := &currentNodeAttentionRecorder{}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &finalizerFailureScriptRunner{
-		authority:        authority,
-		shellPath:        shellPath,
-		finalizerEntered: make(chan struct{}),
-		releaseFinalizer: make(chan struct{}),
-		handle:           make(chan sessionruntime.ExecutionHandle, 1),
-	}
-	controller = newCurrentNodeControllerWithAttentionForTest(t, store, runner, authority, 1, attention)
-	var releaseOnce sync.Once
-	releaseFinalizer := func() {
-		releaseOnce.Do(func() {
-			close(runner.releaseFinalizer)
-		})
-	}
-	t.Cleanup(func() {
-		releaseFinalizer()
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
-		t.Fatalf("queue current node start: %v", err)
-	}
-	select {
-	case <-runner.finalizerEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Script did not reach completion finalization")
-	}
-	releaseFinalizer()
-	handle := <-runner.handle
-	if _, err := handle.Wait(context.Background()); err == nil {
-		t.Fatal("Script finalization unexpectedly succeeded")
-	}
-
-	var interruption currentNodeInterruptionRecord
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		var interrupted bool
-		interruption, interrupted = store.interruption(reference)
-		return interrupted
-	}, "outcome-less finalization did not interrupt the admitted current node")
-	if interruption.reason != reasonCurrentNodeRuntimeFinalizedWithoutOutcome {
-		t.Fatalf(
-			"interruption reason = %q, want %q",
-			interruption.reason,
-			reasonCurrentNodeRuntimeFinalizedWithoutOutcome,
-		)
-	}
-	if !workflow.IsActionableCurrentNodeInterruptionReason(interruption.reason) {
-		t.Fatalf("interruption reason = %q, want actionable runtime finalization failure", interruption.reason)
-	}
-	if interruption.detail.Code != string(reasonCurrentNodeRuntimeFinalizedWithoutOutcome) ||
-		interruption.detail.Diagnostic() == nil {
-		t.Fatalf("interruption detail = %+v, want typed runtime finalization diagnostic", interruption.detail)
-	}
-	if calls := store.interruptionCount(reference); calls != 1 {
-		t.Fatalf("outcome-less finalization interruption writes = %d, want 1", calls)
-	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return attention.pendingCount() == 1
-	}, "outcome-less finalization did not publish interrupted Current Node attention")
-}
-
 func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesIndependently(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -373,11 +285,7 @@ func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesI
 		{Reference: second, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
 	}}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &parallelExplicitRunner{
 		authority:      authority,
 		shellPath:      shellPath,
@@ -640,11 +548,7 @@ func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(
 	second := currentNodeReferenceForControllerTest(t, "task-automatic-b", "node-b")
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &firstAdmissionBlockingScriptRunner{
 		authority: authority,
 		shellPath: shellPath,
@@ -788,11 +692,7 @@ func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *test
 	secondScript := currentNodeReferenceForControllerTest(t, "task-script-second", "node-script-second")
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{
@@ -881,11 +781,7 @@ func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing
 	script := `trap '' TERM; while :; do sleep 1; done`
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{

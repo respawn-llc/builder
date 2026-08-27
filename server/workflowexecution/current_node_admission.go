@@ -314,21 +314,7 @@ func (c *CurrentNodeController) admit(
 	if err != nil {
 		return nil, err
 	}
-	publication, err := c.runner.PrepareAgentPublication(
-		ctx,
-		reference,
-		start.taskPromptDelivery,
-		assignmentSteer,
-		func() { c.releaseAgentCapacity(start.agentCapacityLease) },
-		c,
-	)
-	if err != nil {
-		return nil, err
-	}
-	if publication == nil {
-		return nil, errors.New("Agent publication preparation returned no publication")
-	}
-	return c.admitPreparedAgent(ctx, start, key, publication)
+	return c.admitAgent(ctx, start, key, assignmentSteer)
 }
 
 func (c *CurrentNodeController) admitPreparedScript(
@@ -390,21 +376,13 @@ func (c *CurrentNodeController) admitPreparedScript(
 	return handle, nil
 }
 
-func (c *CurrentNodeController) admitPreparedAgent(
+func (c *CurrentNodeController) admitAgent(
 	ctx context.Context,
 	start currentNodeQueuedStart,
 	key workflow.CurrentNodeReferenceKey,
-	publication CurrentNodeAgentPublication,
+	assignmentSteer CurrentNodeAssignmentSteer,
 ) (sessionruntime.ExecutionHandle, error) {
-	defer func() {
-		if err := publication.Cancel(); err != nil {
-			c.mu.Lock()
-			c.workerErr = errors.Join(c.workerErr, err)
-			c.mu.Unlock()
-		}
-	}()
-	var handle sessionruntime.ExecutionHandle
-	var launch func()
+	admitted := false
 	err := c.runTaskMutation(ctx, start.reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(start.reference.TaskID); err != nil {
@@ -423,37 +401,44 @@ func (c *CurrentNodeController) admitPreparedAgent(
 			currentNodeAgentCapacityLive,
 		)
 		c.mu.Unlock()
-		var publishErr error
-		admitted := false
-		handle, launch, publishErr = publication.Publish(ctx, func() error {
-			receipt, err := c.store.AdmitCurrentNode(context.WithoutCancel(ctx), start.reference)
-			admitted = receipt.Committed
-			if admissionErr := classifyCurrentNodeAdmission(receipt, err); admissionErr != nil {
-				return admissionErr
-			}
-			return nil
-		}, nil)
-		if publishErr != nil {
-			return currentNodeAdmissionError{cause: publishErr, admitted: admitted}
-		}
-		return nil
+		receipt, err := c.store.AdmitCurrentNode(context.WithoutCancel(ctx), start.reference)
+		admitted = receipt.Committed
+		return classifyCurrentNodeAdmission(receipt, err)
 	})
 	if err != nil {
 		c.mu.Lock()
 		c.releaseAgentCapacityLocked(start.agentCapacityLease)
 		c.mu.Unlock()
-		var admissionErr currentNodeAdmissionError
-		if errors.As(err, &admissionErr) {
-			return nil, admissionErr
-		}
-		return nil, currentNodeAdmissionError{cause: err}
+		return nil, currentNodeAdmissionError{cause: err, admitted: admitted}
 	}
-	launch()
+	handle, err := c.runner.StartAgentCurrentNode(
+		ctx,
+		start.reference,
+		start.taskPromptDelivery,
+		assignmentSteer,
+		func() { c.releaseAgentCapacity(start.agentCapacityLease) },
+		c,
+	)
+	if err != nil {
+		c.mu.Lock()
+		c.releaseAgentCapacityLocked(start.agentCapacityLease)
+		c.mu.Unlock()
+		return nil, currentNodeAdmissionError{cause: err, admitted: true}
+	}
+	if handle == nil {
+		c.mu.Lock()
+		c.releaseAgentCapacityLocked(start.agentCapacityLease)
+		c.mu.Unlock()
+		return nil, currentNodeAdmissionError{
+			cause:    errors.New("Agent start returned no execution"),
+			admitted: true,
+		}
+	}
 	scope := handle.Scope()
 	scopeRef, ok := scope.Workflow()
 	if !ok || !scopeRef.CurrentNode.Equal(start.reference) {
 		return nil, currentNodeAdmissionError{
-			cause:    errors.New("detached Agent publication started a mismatched Workflow scope"),
+			cause:    errors.New("Agent start returned a mismatched Workflow scope"),
 			admitted: true,
 		}
 	}
@@ -987,7 +972,7 @@ func (c *CurrentNodeController) handleCurrentNodeStartFailures(
 	cause error,
 ) {
 	c.mu.Lock()
-	closed := c.closed
+	closed := c.closed || c.closing
 	c.mu.Unlock()
 	if closed {
 		return
@@ -999,6 +984,10 @@ func (c *CurrentNodeController) handleCurrentNodeStartFailures(
 		return
 	}
 	c.mu.Lock()
+	if c.closed || c.closing {
+		c.mu.Unlock()
+		return
+	}
 	c.workerErr = errors.Join(c.workerErr, cause, err)
 	c.mu.Unlock()
 }

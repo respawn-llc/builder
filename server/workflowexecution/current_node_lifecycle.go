@@ -165,11 +165,7 @@ func (c *CurrentNodeController) ReactivateWorkflowSession(
 	}
 	handle, live := c.authority.SessionExecution(sessionID)
 	if !live {
-		return nil, fmt.Errorf(
-			"reactivate workflow Session %s: Current Node %v has no admission owner or live execution",
-			sessionID,
-			input.CurrentNode.Reference,
-		)
+		return nil, &TaskResumeConflictError{TaskID: input.Task.ID}
 	}
 	return c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
 }
@@ -225,9 +221,9 @@ func (c *CurrentNodeController) validateReactivatedWorkflowExecution(
 	return live, nil
 }
 
-func (c *CurrentNodeController) currentNodeAdmissionCompletionLocked(
+func (c *CurrentNodeController) currentNodePreparingLocked(
 	key workflow.CurrentNodeReferenceKey,
-) *currentNodeAdmissionCompletion {
+) bool {
 	for _, batch := range c.preparationQueue {
 		for _, start := range batch.starts {
 			startKey, err := start.reference.Key()
@@ -235,7 +231,7 @@ func (c *CurrentNodeController) currentNodeAdmissionCompletionLocked(
 				panic(fmt.Sprintf("inspect queued Task preparation admission: %v", err))
 			}
 			if startKey == key {
-				return start.completion
+				return true
 			}
 		}
 	}
@@ -246,7 +242,7 @@ func (c *CurrentNodeController) currentNodeAdmissionCompletionLocked(
 				panic(fmt.Sprintf("inspect running Task preparation admission: %v", err))
 			}
 			if startKey == key {
-				return start.completion
+				return true
 			}
 		}
 	}
@@ -256,7 +252,7 @@ func (c *CurrentNodeController) currentNodeAdmissionCompletionLocked(
 			panic(fmt.Sprintf("inspect explicit admission queue: %v", err))
 		}
 		if startKey == key {
-			return start.completion
+			return true
 		}
 	}
 	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
@@ -265,19 +261,48 @@ func (c *CurrentNodeController) currentNodeAdmissionCompletionLocked(
 			panic(fmt.Sprintf("inspect automatic admission queue: %v", err))
 		}
 		if startKey == key {
-			return entry.start.completion
+			return true
 		}
 	}
-	if start, exists := c.explicitReservations[key]; exists {
-		return start.completion
+	if _, exists := c.explicitReservations[key]; exists {
+		return true
 	}
-	if start, exists := c.automaticReservations[key]; exists {
-		return start.completion
+	if _, exists := c.automaticReservations[key]; exists {
+		return true
 	}
-	if start, exists := c.admissionWorkers[key]; exists {
-		return start.completion
+	if _, exists := c.admissionWorkers[key]; exists {
+		return true
 	}
-	return nil
+	return false
+}
+
+func (c *CurrentNodeController) WorkflowSessionPreparing(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) (bool, error) {
+	if c == nil {
+		return false, errors.New("current node workflow controller is required")
+	}
+	if sessionID.IsZero() {
+		return false, errors.New("session id is required")
+	}
+	input, err := c.store.ResolveCurrentSessionStartContext(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if handle, live := c.authority.SessionExecution(sessionID); live {
+		if _, err := c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	key, err := input.CurrentNode.Reference.Key()
+	if err != nil {
+		return false, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.currentNodePreparingLocked(key), nil
 }
 
 // PromoteConcurrencyQueuedTask moves automatic Current Nodes waiting for agent
@@ -462,15 +487,6 @@ func (c *CurrentNodeController) resumeTask(
 			return TaskResumeResult{}, err
 		}
 		if len(classification.alreadyResumed) != 0 {
-			if watch != nil {
-				key, keyErr := watch.Key()
-				if keyErr != nil {
-					return TaskResumeResult{}, keyErr
-				}
-				c.mu.Lock()
-				watchedCompletion = c.currentNodeAdmissionCompletionLocked(key)
-				c.mu.Unlock()
-			}
 			return TaskResumeResult{
 				Outcome:      TaskResumeNoOp,
 				CurrentNodes: classification.alreadyResumed,

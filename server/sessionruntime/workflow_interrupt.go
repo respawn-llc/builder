@@ -23,11 +23,6 @@ type WorkflowExecutionSelection struct {
 	CurrentNode workflow.CurrentNodeReference
 }
 
-var (
-	ErrWorkflowQuestionPending = errors.New("workflow task has a pending question")
-	ErrWorkflowApprovalPending = errors.New("workflow task has a pending session approval")
-)
-
 // WithWorkflowManualMoveSelection selects one Task's exact workflow executions
 // and closes Question admission without retaining Authority-wide ownership
 // while the controller establishes its interruption fence.
@@ -79,23 +74,6 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		locked = append(locked, execution)
 	}
 	a.mu.Unlock()
-	hasApproval := false
-	for _, execution := range locked {
-		for _, entry := range execution.prompts.pending {
-			if entry == nil {
-				panic(fmt.Sprintf("workflow execution scope %s has a nil pending prompt", execution.scope.ID()))
-			}
-			if entry.snapshot.Request.Approval {
-				hasApproval = true
-			}
-		}
-	}
-	if hasApproval {
-		for _, execution := range locked {
-			execution.prompts.mu.Unlock()
-		}
-		return ErrWorkflowApprovalPending
-	}
 	err := operation(selection)
 	if err != nil {
 		for _, execution := range locked {
@@ -128,7 +106,8 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 
 // WithWorkflowInterruptSelection linearizes Task Interrupt selection against
 // phase changes and retirement only for the selected Task's exact executions.
-// A queued scope or a scope waiting for a Question never authorizes Interrupt.
+// A queued scope never authorizes Interrupt. Pending prompts remain part of
+// their running exact execution and are closed by ordinary interruption.
 func (a *Authority) WithWorkflowInterruptSelection(
 	taskID workflow.TaskID,
 	sessionID *runtimeids.SessionID,
@@ -169,19 +148,12 @@ func (a *Authority) WithWorkflowInterruptSelection(
 
 	promptLocked := make([]*execution, 0, len(executions))
 	selection := WorkflowInterruptSelection{}
-	hasQuestion := false
-	hasApproval := false
 	for _, execution := range executions {
-		execution.prompts.mu.RLock()
+		execution.prompts.mu.Lock()
 		promptLocked = append(promptLocked, execution)
 		for _, entry := range execution.prompts.pending {
 			if entry == nil {
 				panic(fmt.Sprintf("workflow execution scope %s has a nil pending prompt", execution.scope.ID()))
-			}
-			if !entry.snapshot.Request.Approval {
-				hasQuestion = true
-			} else {
-				hasApproval = true
 			}
 		}
 		ref, _ := execution.scope.Workflow()
@@ -200,26 +172,42 @@ func (a *Authority) WithWorkflowInterruptSelection(
 				selection.Queued = append(selection.Queued, selected)
 			}
 		case workflowExecutionRunning:
-			if len(execution.prompts.pending) == 0 {
-				selection.Interruptible = append(selection.Interruptible, selected)
-			}
+			selection.Interruptible = append(selection.Interruptible, selected)
 		case workflowExecutionNotRunning:
 		}
 	}
 	a.mu.Unlock()
-	defer func() {
-		for index := len(promptLocked) - 1; index >= 0; index-- {
-			promptLocked[index].prompts.mu.RUnlock()
-		}
-	}()
 	if len(selection.Interruptible) == 0 {
-		if hasQuestion {
-			return ErrWorkflowQuestionPending
-		}
-		if hasApproval {
-			return ErrWorkflowApprovalPending
+		for index := len(promptLocked) - 1; index >= 0; index-- {
+			promptLocked[index].prompts.mu.Unlock()
 		}
 		return ErrExecutionNoLongerLive
 	}
-	return operation(selection)
+	if err := operation(selection); err != nil {
+		for index := len(promptLocked) - 1; index >= 0; index-- {
+			promptLocked[index].prompts.mu.Unlock()
+		}
+		return err
+	}
+	closures := make([]struct {
+		store   *executionPromptStore
+		closure executionPromptClosure
+	}, 0, len(promptLocked))
+	for _, execution := range promptLocked {
+		closures = append(closures, struct {
+			store   *executionPromptStore
+			closure executionPromptClosure
+		}{store: &execution.prompts, closure: execution.prompts.closeLocked(context.Canceled)})
+	}
+	for index := len(promptLocked) - 1; index >= 0; index-- {
+		promptLocked[index].prompts.mu.Unlock()
+	}
+	var publicationErr error
+	for _, item := range closures {
+		publicationErr = errors.Join(publicationErr, item.store.publishClosure(item.closure))
+	}
+	for _, item := range closures {
+		item.store.releaseClosure(item.closure)
+	}
+	return publicationErr
 }

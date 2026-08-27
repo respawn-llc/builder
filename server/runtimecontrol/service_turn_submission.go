@@ -167,12 +167,28 @@ func (s *Service) submitUserTurn(
 		)
 	}
 	err = executeTurn()
-	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) && s.reactivator != nil {
-		_, reactivateErr := s.reactivator.ReactivateWorkflowSession(attempt.Context(), sessionID)
-		if reactivateErr != nil {
-			err = reactivateErr
-		} else {
-			err = executeTurn()
+	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
+		preparing := false
+		var preparingErr error
+		if s.preparations != nil {
+			preparing, preparingErr = s.preparations.WorkflowSessionPreparing(attempt.Context(), sessionID)
+		}
+		switch {
+		case preparingErr != nil:
+			err = preparingErr
+		case preparing:
+			err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+				return runTurn(runCtx, engine, attempt.Accept)
+			})
+		case s.reactivator != nil:
+			_, reactivateErr := s.reactivator.ReactivateWorkflowSession(attempt.Context(), sessionID)
+			if reactivateErr != nil {
+				err = reactivateErr
+			} else {
+				err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+					return runTurn(runCtx, engine, attempt.Accept)
+				})
+			}
 		}
 	}
 	if errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {

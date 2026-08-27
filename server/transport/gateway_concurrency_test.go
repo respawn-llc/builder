@@ -104,15 +104,15 @@ type gatewayFailingRunner struct {
 	cause error
 }
 
-func (r gatewayFailingRunner) PrepareAgentPublication(
+func (r gatewayFailingRunner) StartAgentCurrentNode(
 	context.Context,
 	workflow.CurrentNodeReference,
 	workflowruntime.TaskPromptDelivery,
 	workflowexecution.CurrentNodeAssignmentSteer,
 	func(),
 	workflowruntime.Controller,
-) (workflowexecution.CurrentNodeAgentPublication, error) {
-	return gatewayFailingAgentPublication{cause: r.cause}, nil
+) (sessionruntime.ExecutionHandle, error) {
+	return nil, r.cause
 }
 
 func (gatewayFailingRunner) PrepareScriptPublication(

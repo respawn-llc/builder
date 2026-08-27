@@ -158,324 +158,16 @@ type ExecutionAskHandler func(context.Context, ExecutionScope, tools.AskQuestion
 type AgentExecutionRequest struct {
 	Descriptor session.SessionDescriptor
 	Runtime    *AgentRuntimePlan
+	Workflow   *WorkflowAgentExecution
 	Resource   AgentResourceSelection
 	Ask        ExecutionAskHandler
 	Runner     AgentRunner
 }
 
-type DetachedAgentExecutionRequest struct {
-	Descriptor session.SessionDescriptor
-	Runtime    *AgentRuntimePlan
-	Workflow   WorkflowExecutionRef
-	Resource   AgentResourceSelection
-	Ask        ExecutionAskHandler
-	Runner     AgentRunner
-	Config     *workflowruntime.CurrentNodeExecutionConfig
-	OnRetire   func()
-}
-
-type DetachedAgentExecution struct {
-	authority     *Authority
-	admissionGate *sessionAdmissionGate
-	resource      *agentResource
-	execution     *execution
-	workflowKey   workflow.CurrentNodeReferenceKey
-	config        *workflowruntime.CurrentNodeExecutionConfig
-	correlation   *runtimeids.ExecutionCorrelation
-	closeResource bool
-	runner        AgentRunner
-	ask           ExecutionAskHandler
-	mu            sync.Mutex
-	settled       bool
-}
-
-func (a *Authority) PrepareDetachedAgentExecution(
-	ctx context.Context,
-	request DetachedAgentExecutionRequest,
-) (*DetachedAgentExecution, error) {
-	if a == nil {
-		return nil, errors.New("session runtime authority is required")
-	}
-	if err := request.Descriptor.Validate(); err != nil {
-		return nil, err
-	}
-	if err := request.Workflow.Validate(); err != nil {
-		return nil, err
-	}
-	if request.Resource == nil || request.Runner == nil || request.Config == nil {
-		return nil, errors.New("detached Agent execution request is incomplete")
-	}
-	gate := a.gateFor(request.Descriptor.SessionID())
-	if err := gate.lock.LockContext(ctx); err != nil {
-		return nil, err
-	}
-	releaseGate := true
-	defer func() {
-		if releaseGate {
-			gate.lock.Unlock()
-		}
-	}()
-	if len(gate.blocks) != 0 {
-		return nil, sessionStartsBlockedError(request.Descriptor.SessionID())
-	}
-	resource, closeResource, err := a.selectDetachedResource(ctx, request.Descriptor, request.Runtime, request.Resource)
-	if err != nil {
-		return nil, err
-	}
-	a.mu.Lock()
-	if a.closed {
-		a.mu.Unlock()
-		return nil, ErrAuthorityClosed
-	}
-	workflowKey, err := workflowExecutionKeyFor(request.Workflow)
-	if err != nil {
-		a.mu.Unlock()
-		return nil, err
-	}
-	if a.workflowExecutionByCurrentNodeLocked(request.Workflow, workflowKey) != nil {
-		a.mu.Unlock()
-		return nil, fmt.Errorf("workflow current node %v is already live", request.Workflow.CurrentNode)
-	}
-	executionGeneration := a.nextExecutionGenerationLocked()
-	a.mu.Unlock()
-	resource.mu.Lock()
-	if resource.current != nil {
-		resource.mu.Unlock()
-		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", request.Descriptor.SessionID()))
-	}
-	if err := resource.pinLocked(); err != nil {
-		resource.mu.Unlock()
-		return nil, err
-	}
-	resource.mu.Unlock()
-	scopeID := runtimeids.NewExecutionScopeID()
-	config := *request.Config
-	config.ScopeID = scopeID
-	scope := newAgentExecutionScope(scopeID, executionGeneration, resource.ref, &request.Workflow)
-	correlation, err := runtimeids.NewExecutionCorrelation(scope.ID(), resource.ref.Generation())
-	if err != nil {
-		_ = resource.releasePin()
-		return nil, err
-	}
-	runCtx, cancel := context.WithCancel(resource.ctx)
-	execution := &execution{
-		authority: a, resource: resource, scope: scope, ctx: runCtx, cancel: cancel,
-		done: make(chan struct{}), prompts: newExecutionPromptStore(a, scope, a.promptFeed),
-		closeResource: closeResource, phase: executionPhaseQueued, onRetire: request.OnRetire,
-	}
-	detached := &DetachedAgentExecution{
-		authority: a, admissionGate: gate, resource: resource, execution: execution, workflowKey: workflowKey,
-		config: &config, correlation: &correlation, closeResource: closeResource,
-		runner: request.Runner, ask: request.Ask,
-	}
-	releaseGate = false
-	return detached, nil
-}
-
-func (a *Authority) selectDetachedResource(
-	ctx context.Context,
-	descriptor session.SessionDescriptor,
-	plan *AgentRuntimePlan,
-	selection AgentResourceSelection,
-) (*agentResource, bool, error) {
-	if _, replacing := selection.(ReplaceAgentResource); !replacing {
-		return a.selectResource(ctx, descriptor, plan, selection)
-	}
-	sessionID := descriptor.SessionID()
-	a.mu.Lock()
-	existing := a.resources[sessionID]
-	a.mu.Unlock()
-	if existing != nil {
-		existing.mu.Lock()
-		busy := existing.state == AgentResourceDraining ||
-			existing.current != nil ||
-			existing.callbacks != 0 ||
-			existing.steps != 0
-		existing.mu.Unlock()
-		if busy {
-			return nil, false, errors.Join(
-				serverapi.ErrRuntimeUnavailable,
-				fmt.Errorf("session %s runtime is draining or active", sessionID),
-			)
-		}
-	}
-	return a.selectResource(ctx, descriptor, plan, selection)
-}
-
-func (d *DetachedAgentExecution) Scope() (ExecutionScope, error) {
-	if d == nil || d.execution == nil {
-		return ExecutionScope{}, sessionRuntimeInvariant(
-			d != nil && d.authority != nil && d.authority.options.debug,
-			"read detached Agent execution Scope",
-			errors.New("detached Agent execution is uninitialized"),
-		)
-	}
-	return d.execution.scope, nil
-}
-
-func (d *DetachedAgentExecution) Publish(
-	ctx context.Context,
-	admit func() error,
-	published func(ExecutionHandle),
-) (ExecutionHandle, func(), error) {
-	if d == nil || d.authority == nil || d.execution == nil || d.resource == nil {
-		return nil, nil, errors.New("detached Agent execution is required")
-	}
-	if admit == nil {
-		return nil, nil, errors.New("detached Agent admission is required")
-	}
-	d.mu.Lock()
-	if d.settled {
-		d.mu.Unlock()
-		return nil, nil, ErrExecutionNoLongerLive
-	}
-	if d.admissionGate == nil {
-		d.mu.Unlock()
-		return nil, nil, errors.New("detached Agent execution has no Session admission")
-	}
-	admissionGate := d.admissionGate
-	d.admissionGate = nil
-	d.settled = true
-	d.mu.Unlock()
-	defer admissionGate.lock.Unlock()
-	if err := context.Cause(ctx); err != nil {
-		d.discard()
-		return nil, nil, err
-	}
-	d.authority.mu.Lock()
-	d.resource.mu.Lock()
-	d.execution.exactMu.Lock()
-	workflowRef, workflowErr := workflowRefForDetachedAgent(d.execution.scope)
-	if workflowErr != nil {
-		d.execution.exactMu.Unlock()
-		d.resource.mu.Unlock()
-		d.authority.mu.Unlock()
-		invariantErr := d.authority.invariant("publish detached Agent execution", workflowErr)
-		d.discard()
-		return nil, nil, invariantErr
-	}
-	if d.authority.closed || d.resource.current != nil ||
-		d.authority.workflowExecutionByCurrentNodeLocked(workflowRef, d.workflowKey) != nil {
-		d.execution.exactMu.Unlock()
-		d.resource.mu.Unlock()
-		d.authority.mu.Unlock()
-		d.discard()
-		return nil, nil, ErrExecutionNoLongerLive
-	}
-	runtimePublication, err := d.resource.engine.PrepareCurrentNodeExecutionPublication(d.config)
-	if err != nil {
-		d.execution.exactMu.Unlock()
-		d.resource.mu.Unlock()
-		d.authority.mu.Unlock()
-		d.discard()
-		return nil, nil, err
-	}
-	if err := runtimePublication.Begin(); err != nil {
-		d.execution.exactMu.Unlock()
-		d.resource.mu.Unlock()
-		d.authority.mu.Unlock()
-		d.discard()
-		return nil, nil, err
-	}
-	var correlationPublication *runtimewire.ExecutionCorrelationPublication
-	if d.resource.localTools != nil {
-		correlationPublication, err = d.resource.localTools.PrepareExecutionCorrelation(d.correlation)
-		if err != nil {
-			runtimePublication.Cancel()
-			d.execution.exactMu.Unlock()
-			d.resource.mu.Unlock()
-			d.authority.mu.Unlock()
-			d.discard()
-			return nil, nil, err
-		}
-	}
-	if err := admit(); err != nil {
-		runtimePublication.Cancel()
-		d.execution.exactMu.Unlock()
-		d.resource.mu.Unlock()
-		d.authority.mu.Unlock()
-		d.discard()
-		return nil, nil, err
-	}
-	binding := runtimePublication.Commit()
-	d.execution.workflow = binding
-	if correlationPublication != nil {
-		correlationPublication.Commit()
-	}
-	if d.resource.askBroker != nil {
-		scopeID := d.execution.scope.ID()
-		askHandler := d.ask
-		if askHandler == nil {
-			askHandler = func(ctx context.Context, scope ExecutionScope, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
-				return d.authority.AwaitPromptResolution(ctx, scope.ID(), req)
-			}
-		}
-		d.resource.askBroker.SetAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
-			return askHandler(ctx, d.execution.scope, req)
-		})
-		d.resource.askScope = &scopeID
-	}
-	d.resource.current = d.execution
-	d.resource.signalLocked()
-	d.authority.byScope[d.execution.scope.ID()] = d.execution
-	d.authority.addWorkflowExecutionLocked(workflowRef, d.workflowKey, d.execution)
-	d.execution.phase = executionPhaseRunning
-	d.execution.exactMu.Unlock()
-	d.resource.mu.Unlock()
-	d.authority.mu.Unlock()
-	handle := executionHandle{execution: d.execution}
-	if published != nil {
-		published(handle)
-	}
-	return handle, func() {
-		go func() {
-			if err := context.Cause(d.execution.ctx); err != nil {
-				d.execution.finish(ExecutionResult{}, err, nil)
-				return
-			}
-			runErr := d.runner(d.execution.ctx, d.execution.scope, AgentRuntimeBridge{
-				authority: d.authority,
-				resource:  d.resource.ref,
-			})
-			d.execution.finish(ExecutionResult{}, runErr, nil)
-		}()
-	}, nil
-}
-
-func (d *DetachedAgentExecution) discard() {
-	if d == nil || d.execution == nil || d.resource == nil {
-		return
-	}
-	d.execution.cancel()
-	_ = d.resource.releasePin()
-}
-
-func (d *DetachedAgentExecution) Cancel() error {
-	if d == nil || d.execution == nil || d.resource == nil {
-		return nil
-	}
-	d.mu.Lock()
-	if d.settled {
-		d.mu.Unlock()
-		return nil
-	}
-	admissionGate := d.admissionGate
-	d.admissionGate = nil
-	d.settled = true
-	d.mu.Unlock()
-	if admissionGate != nil {
-		admissionGate.lock.Unlock()
-	}
-	d.execution.cancel()
-	return d.resource.releasePin()
-}
-
-func workflowRefForDetachedAgent(scope ExecutionScope) (WorkflowExecutionRef, error) {
-	ref, ok := scope.Workflow()
-	if !ok {
-		return WorkflowExecutionRef{}, errors.New("detached Agent execution has no Workflow reference")
-	}
-	return ref, nil
+type WorkflowAgentExecution struct {
+	Reference WorkflowExecutionRef
+	Config    *workflowruntime.CurrentNodeExecutionConfig
+	OnRetire  func()
 }
 
 type agentResource struct {
@@ -1065,13 +757,36 @@ func (a *Authority) startAgentExecutionUnderAdmission(
 		a.mu.Unlock()
 		return nil, ErrAuthorityClosed
 	}
+	var workflowRef *WorkflowExecutionRef
+	var workflowKey workflow.CurrentNodeReferenceKey
+	if request.Workflow != nil {
+		if err := request.Workflow.Reference.Validate(); err != nil {
+			a.mu.Unlock()
+			return nil, err
+		}
+		if err := validateWorkflowAgentExecution(request.Workflow); err != nil {
+			a.mu.Unlock()
+			return nil, err
+		}
+		ref := request.Workflow.Reference
+		workflowRef = &ref
+		workflowKey, err = workflowExecutionKeyFor(ref)
+		if err != nil {
+			a.mu.Unlock()
+			return nil, err
+		}
+		if a.workflowExecutionByCurrentNodeLocked(ref, workflowKey) != nil {
+			a.mu.Unlock()
+			return nil, fmt.Errorf("workflow current node %v is already live", ref.CurrentNode)
+		}
+	}
 	resource.mu.Lock()
 	if resource.current != nil {
 		resource.mu.Unlock()
 		a.mu.Unlock()
 		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", sessionID))
 	}
-	if resource.engine.CurrentNodeExecutionConfigured() {
+	if workflowRef == nil && resource.engine.CurrentNodeExecutionConfigured() {
 		resource.mu.Unlock()
 		a.mu.Unlock()
 		return nil, errors.Join(
@@ -1086,25 +801,40 @@ func (a *Authority) startAgentExecutionUnderAdmission(
 	}
 	scopeID := runtimeids.NewExecutionScopeID()
 	executionGeneration := a.nextExecutionGenerationLocked()
-	scope := newAgentExecutionScope(scopeID, executionGeneration, resource.ref, nil)
-	correlation, err := runtimeids.NewExecutionCorrelation(scope.ID(), resource.ref.Generation())
-	if err != nil {
-		resource.pins--
-		resource.signalLocked()
-		resource.mu.Unlock()
-		a.mu.Unlock()
-		return nil, a.invariant(
-			"create Agent execution correlation",
-			fmt.Errorf("scope=%s resource=%v: %w", scope.ID(), resource.ref, err),
-		)
-	}
-	if resource.localTools != nil {
-		if err := resource.localTools.BindExecutionCorrelation(&correlation); err != nil {
+	scope := newAgentExecutionScope(scopeID, executionGeneration, resource.ref, workflowRef)
+	var workflowBinding *runtime.CurrentNodeExecutionBinding
+	if request.Workflow != nil {
+		config := *request.Workflow.Config
+		config.ScopeID = scopeID
+		workflowBinding, err = resource.engine.BindCurrentNodeExecution(&config)
+		if err != nil {
 			resource.pins--
 			resource.signalLocked()
 			resource.mu.Unlock()
 			a.mu.Unlock()
-			return nil, fmt.Errorf("bind agent execution correlation: %w", err)
+			return nil, fmt.Errorf("bind workflow current node execution: %w", err)
+		}
+	}
+	correlation, err := runtimeids.NewExecutionCorrelation(scope.ID(), resource.ref.Generation())
+	if err != nil {
+		bindingErr := workflowBinding.Close()
+		resource.pins--
+		resource.signalLocked()
+		resource.mu.Unlock()
+		a.mu.Unlock()
+		return nil, errors.Join(a.invariant(
+			"create Agent execution correlation",
+			fmt.Errorf("scope=%s resource=%v: %w", scope.ID(), resource.ref, err),
+		), bindingErr)
+	}
+	if resource.localTools != nil {
+		if err := resource.localTools.BindExecutionCorrelation(&correlation); err != nil {
+			bindingErr := workflowBinding.Close()
+			resource.pins--
+			resource.signalLocked()
+			resource.mu.Unlock()
+			a.mu.Unlock()
+			return nil, errors.Join(fmt.Errorf("bind agent execution correlation: %w", err), bindingErr)
 		}
 	}
 	runCtx, cancel := context.WithCancel(resource.ctx)
@@ -1116,8 +846,12 @@ func (a *Authority) startAgentExecutionUnderAdmission(
 		cancel:        cancel,
 		done:          make(chan struct{}),
 		prompts:       newExecutionPromptStore(a, scope, a.promptFeed),
+		workflow:      workflowBinding,
 		closeResource: closeResource,
 		phase:         executionPhaseRunning,
+	}
+	if request.Workflow != nil {
+		execution.onRetire = request.Workflow.OnRetire
 	}
 	if resource.askBroker != nil {
 		scopeID := scope.ID()
@@ -1136,6 +870,9 @@ func (a *Authority) startAgentExecutionUnderAdmission(
 	resource.signalLocked()
 	resource.mu.Unlock()
 	a.byScope[scope.ID()] = execution
+	if workflowRef != nil {
+		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
+	}
 	a.mu.Unlock()
 	go func() {
 		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
@@ -1145,6 +882,19 @@ func (a *Authority) startAgentExecutionUnderAdmission(
 		execution.finish(ExecutionResult{}, runErr, nil)
 	}()
 	return executionHandle{execution: execution}, nil
+}
+
+func validateWorkflowAgentExecution(request *WorkflowAgentExecution) error {
+	if request == nil {
+		return nil
+	}
+	if request.Config == nil {
+		return errors.New("workflow Agent execution config is required")
+	}
+	if !request.Config.Instructions.CurrentNode.Equal(request.Reference.CurrentNode) {
+		return errors.New("workflow runtime config does not match execution current node")
+	}
+	return nil
 }
 
 func (a *Authority) RunCurrentHumanTurn(

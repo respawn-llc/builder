@@ -145,17 +145,19 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 		SessionID:  sessionID.String(),
 	}
 	workflowPromptDone := make(chan error, 1)
-	detached, err := authority.PrepareDetachedAgentExecution(context.Background(), sessionruntime.DetachedAgentExecutionRequest{
+	workflowHandle, err := authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
 		Descriptor: descriptor,
 		Runtime:    &plan,
-		Workflow:   workflowRef,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Config: &workflowruntime.CurrentNodeExecutionConfig{
-			Instructions: workflowruntime.TaskInstructions{
-				CurrentNode: workflowRef.CurrentNode,
-				WorkflowID:  workflowRef.WorkflowID,
+		Workflow: &sessionruntime.WorkflowAgentExecution{
+			Reference: workflowRef,
+			Config: &workflowruntime.CurrentNodeExecutionConfig{
+				Instructions: workflowruntime.TaskInstructions{
+					CurrentNode: workflowRef.CurrentNode,
+					WorkflowID:  workflowRef.WorkflowID,
+				},
 			},
 		},
+		Resource: sessionruntime.OpenAgentResource{},
 		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
 			err := registry.PromptPendingScope(scope, request, time.Now().UTC())
 			workflowPromptDone <- err
@@ -164,13 +166,8 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 		},
 	})
 	if err != nil {
-		t.Fatalf("prepare workflow execution: %v", err)
+		t.Fatalf("start workflow execution: %v", err)
 	}
-	workflowHandle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
-	if err != nil {
-		t.Fatalf("publish workflow execution: %v", err)
-	}
-	launch()
 	if err := <-workflowPromptDone; err != nil {
 		t.Fatalf("workflow prompt projection: %v", err)
 	}

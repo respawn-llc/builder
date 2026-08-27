@@ -2,9 +2,7 @@ package workflowexecution
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -17,8 +15,7 @@ import (
 )
 
 const (
-	reasonProtocolViolationCap                      workflow.CurrentNodeInterruptionReason = "workflow_protocol_violation_cap"
-	reasonCurrentNodeRuntimeFinalizedWithoutOutcome workflow.CurrentNodeInterruptionReason = "workflow_runtime_finalized_without_outcome"
+	reasonProtocolViolationCap workflow.CurrentNodeInterruptionReason = "workflow_protocol_violation_cap"
 )
 
 type CurrentNodeAssignmentSteerer interface {
@@ -44,20 +41,15 @@ type CurrentNodeAssignmentPreparation interface {
 	Prepare(context.Context) error
 }
 
-type CurrentNodeAgentPublicationRunner interface {
-	PrepareAgentPublication(
+type CurrentNodeAgentRunner interface {
+	StartAgentCurrentNode(
 		context.Context,
 		workflow.CurrentNodeReference,
 		workflowruntime.TaskPromptDelivery,
 		CurrentNodeAssignmentSteer,
 		func(),
 		workflowruntime.Controller,
-	) (CurrentNodeAgentPublication, error)
-}
-
-type CurrentNodeAgentPublication interface {
-	Publish(context.Context, func() error, func(sessionruntime.ExecutionHandle)) (sessionruntime.ExecutionHandle, func(), error)
-	Cancel() error
+	) (sessionruntime.ExecutionHandle, error)
 }
 
 type CurrentNodeScriptPublicationPreparation interface {
@@ -69,7 +61,7 @@ type CurrentNodeScriptPublicationPreparation interface {
 }
 
 type CurrentNodePublicationRunner interface {
-	CurrentNodeAgentPublicationRunner
+	CurrentNodeAgentRunner
 	CurrentNodeScriptPublicationPreparation
 }
 
@@ -409,31 +401,6 @@ func (c *CurrentNodeController) releaseAgentCapacity(lease *currentNodeAgentCapa
 	}
 }
 
-func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.ExecutionScope) {
-	ref, ok := scope.Workflow()
-	if !ok || c == nil {
-		return
-	}
-	c.mu.Lock()
-	interrupted := c.interrupts.scopeFenced(scope.ID())
-	c.interrupts.finishScope(scope.ID())
-	closed := c.closed || c.closing
-	c.mu.Unlock()
-	if !closed {
-		c.wakeAdmissionWorker()
-	}
-	if interrupted || closed {
-		return
-	}
-	if err := c.interruptOutcomeLessFinalization(ref.CurrentNode); err != nil {
-		c.mu.Lock()
-		c.workerErr = errors.Join(c.workerErr, err)
-		c.mu.Unlock()
-	}
-}
-
-var _ sessionruntime.ExecutionFinalized = (*CurrentNodeController)(nil)
-
 func (c *CurrentNodeController) RecordProtocolViolation(ctx context.Context, req workflowruntime.ViolationRequest) (workflowruntime.ViolationResult, error) {
 	count, interrupted, err := c.authority.RecordWorkflowProtocolViolation(req.ScopeID, req.MaxCount)
 	if err != nil {
@@ -508,43 +475,6 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 	}
 	c.publishPendingInterruptedCurrentNode(ctx, reference, reason)
 	handle.RequestStop()
-	return nil
-}
-
-func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workflow.CurrentNodeReference) error {
-	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
-	defer cancel()
-	interrupted, err := runCurrentNodeTaskMutation(ctx, c, reference.TaskID, func(ctx context.Context) (bool, error) {
-		c.mu.Lock()
-		closed := c.closed || c.closing
-		c.mu.Unlock()
-		if closed {
-			return false, nil
-		}
-		diagnostic := errors.New("exact workflow execution finalized without a durable completion or interruption outcome")
-		err := c.store.InterruptAdmittedCurrentNode(
-			ctx,
-			reference,
-			reasonCurrentNodeRuntimeFinalizedWithoutOutcome,
-			workflow.NewCurrentNodeInterruptionDetail(
-				string(reasonCurrentNodeRuntimeFinalizedWithoutOutcome),
-				diagnostic,
-			),
-		)
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
-			return false, fmt.Errorf("interrupt outcome-less finalized Current Node %v: %w", reference, err)
-		}
-		return true, nil
-	})
-	if err != nil {
-		return err
-	}
-	if interrupted {
-		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeFinalizedWithoutOutcome)
-	}
 	return nil
 }
 

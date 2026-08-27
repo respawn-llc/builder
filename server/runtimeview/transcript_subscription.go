@@ -98,11 +98,10 @@ func transcriptCompactionStateFromRuntime(state *runtime.TranscriptCompactionSta
 		return nil
 	}
 	return &clientui.TranscriptCompactionStatus{
-		StepID:    mustTranscriptStepID(state.StepID, "hydrated compaction"),
-		RequestID: state.RequestID,
-		State:     clientui.CompactionStarted,
-		Mode:      clientui.CompactionMode(strings.TrimSpace(state.Mode)),
-		Count:     state.Count,
+		StepID: mustTranscriptStepID(state.StepID, "hydrated compaction"),
+		State:  clientui.CompactionStarted,
+		Mode:   clientui.CompactionMode(strings.TrimSpace(state.Mode)),
+		Count:  state.Count,
 	}
 }
 
@@ -306,10 +305,9 @@ func transcriptFeedStateMessages(evt runtime.Event) []clientui.TranscriptEvent {
 
 func transcriptCompactionStatus(evt runtime.Event) clientui.TranscriptCompactionStatus {
 	status := clientui.TranscriptCompactionStatus{
-		StepID:    mustRuntimeTranscriptStepID(evt.StepID, "compaction status"),
-		RequestID: evt.Compaction.RequestID,
-		Mode:      clientui.CompactionMode(strings.TrimSpace(evt.Compaction.Mode)),
-		Count:     evt.Compaction.Count,
+		StepID: mustRuntimeTranscriptStepID(evt.StepID, "compaction status"),
+		Mode:   clientui.CompactionMode(strings.TrimSpace(evt.Compaction.Mode)),
+		Count:  evt.Compaction.Count,
 	}
 	switch evt.Kind {
 	case runtime.EventCompactionStarted:

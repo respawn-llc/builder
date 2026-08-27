@@ -206,10 +206,9 @@ type steeringQueuedUserMessageRestore struct {
 }
 
 type steeringCompactionActivity struct {
-	active    bool
-	requestID *runtimeids.CompactionRequestID
-	mode      string
-	count     int
+	active bool
+	mode   string
+	count  int
 }
 
 type steeringMessageEventPolicy uint8
@@ -397,17 +396,15 @@ func steerEventIntent(evt Event) steeringIntent {
 
 func steerCompactionActivityIntent(
 	active bool,
-	requestID *runtimeids.CompactionRequestID,
 	mode string,
 	count int,
 ) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{compactionActivity: &steeringCompactionActivity{
-			active:    active,
-			requestID: requestID,
-			mode:      strings.TrimSpace(mode),
-			count:     count,
+			active: active,
+			mode:   strings.TrimSpace(mode),
+			count:  count,
 		}}},
 	}
 }
@@ -765,7 +762,7 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 		}
 		activity := item.compactionActivity
 		if activity.active {
-			e.compactionRuntimeState().SetActive(stepID, activity.requestID, activity.mode, activity.count)
+			e.compactionRuntimeState().SetActive(stepID, activity.mode, activity.count)
 		} else {
 			e.compactionRuntimeState().ClearActive(stepID)
 		}

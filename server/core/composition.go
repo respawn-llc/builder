@@ -123,11 +123,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		},
 		ResourceLifecycle: runtimeRegistry,
 		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			if workflowController != nil {
-				workflowController.ExecutionFinalized(scope)
-			}
-		}),
 	})
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
 		if publishErr := runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
@@ -297,6 +292,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: current node controller: %w", err)
 	}
 	runtimeControlService.WithWorkflowSessionReactivator(workflowController)
+	runtimeControlService.WithWorkflowSessionPreparationReader(workflowController)
 	if _, err := workflowController.Recover(context.Background()); err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
