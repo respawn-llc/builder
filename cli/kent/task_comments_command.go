@@ -80,14 +80,14 @@ type taskCommentAuthor struct {
 }
 
 func taskCommentAuthorForAdd(ctx context.Context, remote apicontract.WorkflowService, taskID string, explicitAuthor string, explicit bool) taskCommentAuthor {
-	sessionID, ok := sessionenv.LookupSessionID(os.LookupEnv)
-	if ok {
-		return taskCommentAuthor{Kind: "agent", ID: sessionAgentAuthorID(ctx, remote, sessionID)}
-	}
 	if explicit {
 		return taskCommentAuthor{Kind: strings.TrimSpace(explicitAuthor)}
 	}
-	return taskCommentAuthor{Kind: "user"}
+	sessionID, ok := sessionenv.LookupSessionID(os.LookupEnv)
+	if !ok {
+		return taskCommentAuthor{Kind: "user"}
+	}
+	return taskCommentAuthor{Kind: "agent", ID: sessionAgentAuthorID(ctx, remote, sessionID)}
 }
 
 func sessionAgentAuthorID(ctx context.Context, remote apicontract.WorkflowService, sessionID string) string {

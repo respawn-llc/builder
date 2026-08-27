@@ -682,7 +682,6 @@
 
 - Agents can add, replace, and delete Task Comments through Task-management commands and APIs.
 - There are no model-callable comment tools.
-- When `KENT_SESSION_ID` identifies an agent invocation, Task Comment creation must record the agent author kind even if the command requests a user author kind.
 - Comments record the author or source agent when available.
 - Comments belong to the Task and are not files in its worktree.
 - Comment lists order by creation time descending, then Comment ID descending.
