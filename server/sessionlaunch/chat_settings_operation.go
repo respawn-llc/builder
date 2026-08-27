@@ -50,6 +50,7 @@ type PreparedChatSettingsOperationInput struct {
 	PersistedQuestions bool
 	PersistedThinking  string
 	Catalog            launch.PreparedChatAgentCatalog
+	Locked             *session.LockedContract
 	AgentLocked        bool
 	WorkflowLocked     bool
 	CompactionMode     config.CompactionMode
@@ -84,6 +85,17 @@ func ProjectPreparedChatSettingsOperation(
 	if !selectedAvailable {
 		selectedEntry = defaultEntry
 	}
+	if input.Locked != nil {
+		selectedSettings, err := lockedPreparedChatSettings(
+			*input.Locked,
+			selectedEntry.Settings,
+			input.Effective,
+		)
+		if err != nil {
+			return PreparedChatSettingsOperationResult{}, err
+		}
+		selectedEntry.Settings = selectedSettings
+	}
 
 	baseAgent := rawAgent
 	baseSettings := input.Effective
@@ -112,7 +124,7 @@ func ProjectPreparedChatSettingsOperation(
 		if !available {
 			return rejectedChatSettingsOperation(input, ChatSettingsAgentUnavailable), nil
 		}
-		if input.AgentLocked && operation.Value != rawAgent {
+		if (input.AgentLocked || input.WorkflowLocked) && operation.Value != rawAgent {
 			return rejectedChatSettingsOperation(input, ChatSettingsAgentLocked), nil
 		}
 		if operation.Value != rawAgent || !selectedAvailable {

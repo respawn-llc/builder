@@ -55,7 +55,7 @@ func (s chatSettingsService) MutateChatSettings(
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	result := serverapi.ChatSettingsMutationResult{Kind: serverapi.ChatSettingsMutationApplied}
+	result := serverapi.NewChatSettingsMutationApplied(false)
 	switch req.Target.TargetKind {
 	case serverapi.ChatSettingsReadTargetLazy:
 		projectCtx, err := s.core.resolveProjectContext(ctx, *req.Target.ProjectID, *req.Target.WorkspaceID, "")
@@ -68,10 +68,13 @@ func (s chatSettingsService) MutateChatSettings(
 			return serverapi.ChatSettingsMutationResponse{}, err
 		}
 		if projected.Rejection != nil {
-			result.Kind = serverapi.ChatSettingsMutationRejected
-			result.Rejection = &serverapi.ChatSettingsMutationRejection{Reason: string(projected.Rejection.Reason)}
+			result = serverapi.NewChatSettingsMutationRejected(
+				serverapi.ChatSettingsMutationRejectionReason(projected.Rejection.Reason),
+			)
 		}
-		result.Changed = projected.Changed
+		if result.Applied != nil {
+			result.Applied.Changed = projected.Changed
+		}
 		settings, contextFacts, err := s.readLazySettingsAndContext(ctx, service)
 		if err != nil {
 			return serverapi.ChatSettingsMutationResponse{}, err
@@ -148,11 +151,12 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 			return false, err
 		}
 		if projected.Rejection != nil {
-			result.Kind = serverapi.ChatSettingsMutationRejected
-			result.Rejection = &serverapi.ChatSettingsMutationRejection{Reason: string(projected.Rejection.Reason)}
+			result = serverapi.NewChatSettingsMutationRejected(
+				serverapi.ChatSettingsMutationRejectionReason(projected.Rejection.Reason),
+			)
 			return false, nil
 		}
-		if engine != nil {
+		if engine != nil && projected.State.Agent == input.Raw.Agent {
 			if _, err := engine.PrepareReviewerFrequency(projected.Effective.Supervisor); err != nil {
 				return false, err
 			}
@@ -181,7 +185,9 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	result.Changed = changed
+	if result.Applied != nil {
+		result.Applied.Changed = changed
+	}
 	service, err := s.materializedService(ctx, sessionID.String())
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err

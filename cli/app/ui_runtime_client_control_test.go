@@ -22,8 +22,16 @@ func (c *runtimeControlStatusPatchClient) ReadChatSettings(context.Context, serv
 
 func (c *runtimeControlStatusPatchClient) MutateChatSettings(context.Context, serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
 	return serverapi.ChatSettingsMutationResponse{
-		Result:   serverapi.ChatSettingsMutationResult{Kind: serverapi.ChatSettingsMutationApplied, Changed: true},
+		Result:   serverapi.NewChatSettingsMutationApplied(true),
 		Settings: c.settings,
+		Context: serverapi.ChatContext{
+			ContextWindowTokens:      100,
+			UsedTokens:               10,
+			RemainingTokens:          90,
+			AutomaticThresholdTokens: 80,
+			AutoCompactionEnabled:    true,
+			CompactionMode:           serverapi.ChatContextCompactionModeLocal,
+		},
 	}, nil
 }
 

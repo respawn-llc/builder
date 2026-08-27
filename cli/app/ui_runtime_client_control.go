@@ -22,7 +22,9 @@ func (c *sessionRuntimeClient) ReadChatSettings() (serverapi.ChatSettings, error
 	if err != nil {
 		return serverapi.ChatSettings{}, err
 	}
-	response, err := c.chatSettings.ReadChatSettings(context.Background(), serverapi.ChatSettingsReadRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
+	defer cancel()
+	response, err := c.chatSettings.ReadChatSettings(ctx, serverapi.ChatSettingsReadRequest{
 		Target: serverapi.SessionChatSettingsTarget(sessionID),
 	})
 	if err != nil {
@@ -39,7 +41,9 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	response, err := c.chatSettings.MutateChatSettings(context.Background(), serverapi.ChatSettingsMutationRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
+	defer cancel()
+	response, err := c.chatSettings.MutateChatSettings(ctx, serverapi.ChatSettingsMutationRequest{
 		Target:    serverapi.SessionChatSettingsTarget(sessionID),
 		Operation: operation,
 	})
@@ -52,10 +56,18 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 		view.Status.ReviewerEnabled = response.Settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
 		view.Status.FastModeEnabled = response.Settings.Fast != nil && response.Settings.Fast.Value
 		view.Status.QuestionsEnabled = response.Settings.Questions.Enabled
-		view.Status.AutoCompactionEnabled = response.Settings.AutoCompaction.Stored
-		view.Status.CompactionMode = string(response.Settings.AutoCompaction.Policy)
+		view.Status.AutoCompactionEnabled = response.Context.AutoCompactionEnabled
+		view.Status.CompactionMode = string(response.Context.CompactionMode)
+		view.Status.ContextUsage = runtimeContextUsageFromChatContext(response.Context)
 	})
 	return response, nil
+}
+
+func runtimeContextUsageFromChatContext(contextFacts serverapi.ChatContext) clientui.RuntimeContextUsage {
+	return clientui.RuntimeContextUsage{
+		UsedTokens:   int(contextFacts.UsedTokens),
+		WindowTokens: int(contextFacts.ContextWindowTokens),
+	}
 }
 
 func runtimeRequestCallWithID[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, requestID string, call func(ctx context.Context, requestID string) (T, error)) (T, error) {

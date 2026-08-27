@@ -130,8 +130,16 @@ func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSe
 		settings.AutoCompaction.Stored = *operation.Enabled
 	}
 	return serverapi.ChatSettingsMutationResponse{
-		Result:   serverapi.ChatSettingsMutationResult{Kind: serverapi.ChatSettingsMutationApplied, Changed: true},
+		Result:   serverapi.NewChatSettingsMutationApplied(true),
 		Settings: settings,
+		Context: serverapi.ChatContext{
+			ContextWindowTokens:      100,
+			UsedTokens:               10,
+			RemainingTokens:          90,
+			AutomaticThresholdTokens: 80,
+			AutoCompactionEnabled:    settings.AutoCompaction.Stored,
+			CompactionMode:           serverapi.ChatContextCompactionModeLocal,
+		},
 	}, f.err
 }
 func (f *runtimeControlFakeClient) chatSettings() serverapi.ChatSettings {
@@ -141,8 +149,8 @@ func (f *runtimeControlFakeClient) chatSettings() serverapi.ChatSettings {
 			Value:    serverapi.ChatSettingsSupervisorValue(f.status.ReviewerFrequency),
 			Baseline: serverapi.ChatSettingsSupervisorAfterEdits,
 		},
-		Fast: &serverapi.ChatSettingsFast{Value: f.status.FastModeEnabled},
-		Questions: serverapi.ChatSettingsQuestions{Enabled: f.status.QuestionsEnabled},
+		Fast:           &serverapi.ChatSettingsFast{Value: f.status.FastModeEnabled},
+		Questions:      serverapi.ChatSettingsQuestions{Enabled: f.status.QuestionsEnabled},
 		AutoCompaction: serverapi.ChatSettingsAutoCompaction{Stored: f.status.AutoCompactionEnabled},
 	}
 }

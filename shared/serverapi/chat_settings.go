@@ -283,25 +283,69 @@ const (
 	ChatSettingsMutationRejected ChatSettingsMutationResultKind = "rejected"
 )
 
-type ChatSettingsMutationRejection struct {
-	Reason string `json:"reason"`
+type ChatSettingsMutationRejectionReason string
+
+const (
+	ChatSettingsMutationAgentLocked              ChatSettingsMutationRejectionReason = "agent_locked"
+	ChatSettingsMutationAgentUnavailable         ChatSettingsMutationRejectionReason = "agent_unavailable"
+	ChatSettingsMutationThinkingUnavailable      ChatSettingsMutationRejectionReason = "thinking_unavailable"
+	ChatSettingsMutationFastUnavailable          ChatSettingsMutationRejectionReason = "fast_unavailable"
+	ChatSettingsMutationAutoCompactionPolicyLock ChatSettingsMutationRejectionReason = "auto_compaction_policy_locked"
+)
+
+func (r ChatSettingsMutationRejectionReason) Validate() error {
+	switch r {
+	case ChatSettingsMutationAgentLocked,
+		ChatSettingsMutationAgentUnavailable,
+		ChatSettingsMutationThinkingUnavailable,
+		ChatSettingsMutationFastUnavailable,
+		ChatSettingsMutationAutoCompactionPolicyLock:
+		return nil
+	default:
+		return fmt.Errorf("Chat settings mutation rejection reason %q is invalid", r)
+	}
+}
+
+type ChatSettingsMutationAppliedResult struct {
+	Changed bool `json:"changed"`
+}
+
+type ChatSettingsMutationRejectedResult struct {
+	Reason ChatSettingsMutationRejectionReason `json:"reason"`
 }
 
 type ChatSettingsMutationResult struct {
-	Kind      ChatSettingsMutationResultKind `json:"kind"`
-	Changed   bool                           `json:"changed"`
-	Rejection *ChatSettingsMutationRejection `json:"rejection,omitempty"`
+	Kind     ChatSettingsMutationResultKind      `json:"kind"`
+	Applied  *ChatSettingsMutationAppliedResult  `json:"applied,omitempty"`
+	Rejected *ChatSettingsMutationRejectedResult `json:"rejected,omitempty"`
+}
+
+func NewChatSettingsMutationApplied(changed bool) ChatSettingsMutationResult {
+	return ChatSettingsMutationResult{
+		Kind:    ChatSettingsMutationApplied,
+		Applied: &ChatSettingsMutationAppliedResult{Changed: changed},
+	}
+}
+
+func NewChatSettingsMutationRejected(reason ChatSettingsMutationRejectionReason) ChatSettingsMutationResult {
+	return ChatSettingsMutationResult{
+		Kind:     ChatSettingsMutationRejected,
+		Rejected: &ChatSettingsMutationRejectedResult{Reason: reason},
+	}
 }
 
 func (r ChatSettingsMutationResult) Validate() error {
 	switch r.Kind {
 	case ChatSettingsMutationApplied:
-		if r.Rejection != nil {
-			return errors.New("applied Chat settings result cannot contain rejection")
+		if r.Applied == nil || r.Rejected != nil {
+			return errors.New("applied Chat settings result requires only applied data")
 		}
 	case ChatSettingsMutationRejected:
-		if r.Rejection == nil || strings.TrimSpace(r.Rejection.Reason) == "" {
-			return errors.New("rejected Chat settings result requires rejection")
+		if r.Rejected == nil || r.Applied != nil {
+			return errors.New("rejected Chat settings result requires only rejected data")
+		}
+		if err := r.Rejected.Reason.Validate(); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("Chat settings mutation result kind %q is invalid", r.Kind)

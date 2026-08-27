@@ -325,6 +325,16 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 	if err != nil {
 		return PreparedChatSettingsOperationInput{}, err
 	}
+	if store.Meta().Locked != nil {
+		entry.Settings, err = lockedPreparedChatSettings(
+			*store.Meta().Locked,
+			entry.Settings,
+			effective,
+		)
+		if err != nil {
+			return PreparedChatSettingsOperationInput{}, err
+		}
+	}
 	effective = normalizeProjectedChatSettings(effective, entry.Settings)
 	persistedQuestions := effective.Questions
 	persistedThinking := effective.Thinking
@@ -349,6 +359,7 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 		PersistedQuestions: persistedQuestions,
 		PersistedThinking:  persistedThinking,
 		Catalog:            catalog,
+		Locked:             store.Meta().Locked,
 		AgentLocked:        store.Meta().Locked != nil,
 		WorkflowLocked:     taskID != nil,
 		CompactionMode:     planner.Config.Settings.CompactionMode,
@@ -424,6 +435,17 @@ func (s *Service) MaterializedChatSettings(
 	)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	if record.Meta.Locked != nil {
+		baselineEntry.Settings, err = lockedPreparedChatSettings(
+			*record.Meta.Locked,
+			baselineEntry.Settings,
+			effective,
+		)
+		if err != nil {
+			return serverapi.ChatSettingsReadResponse{}, err
+		}
+		effective = normalizeProjectedChatSettings(effective, baselineEntry.Settings)
 	}
 	taskID, err := s.workflowTaskID(ctx, sessionID.String())
 	if err != nil {

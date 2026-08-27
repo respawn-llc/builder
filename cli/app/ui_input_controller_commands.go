@@ -271,14 +271,7 @@ func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, t
 	}
 
 	changed := currentEnabled != targetEnabled
-	if m.hasRuntimeClient() {
-		return m, m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
-			Kind:    serverapi.ChatSettingsMutationFast,
-			Enabled: &targetEnabled,
-		})
-	} else {
-		m.fastModeEnabled = targetEnabled
-	}
+	m.fastModeEnabled = targetEnabled
 
 	if !changed {
 		return m, nil
@@ -318,22 +311,11 @@ func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Mo
 	}
 	changed := false
 	nextMode := currentMode
-	if m.hasRuntimeClient() {
-		value := string(serverapi.ChatSettingsSupervisorAfterEdits)
-		if !targetEnabled {
-			value = string(serverapi.ChatSettingsSupervisorOff)
-		}
-		return m, m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
-			Kind:  serverapi.ChatSettingsMutationSupervisor,
-			Value: &value,
-		})
-	} else {
-		nextMode = "off"
-		if targetEnabled {
-			nextMode = "edits"
-		}
-		changed = currentEnabled != targetEnabled
+	nextMode = "off"
+	if targetEnabled {
+		nextMode = "edits"
 	}
+	changed = currentEnabled != targetEnabled
 	m.reviewerMode = nextMode
 	m.reviewerEnabled = nextMode != "off"
 	if !changed {
@@ -363,15 +345,8 @@ func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, 
 	}
 	changed := false
 	nextEnabled := currentEnabled
-	if m.hasRuntimeClient() {
-		return m, m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
-			Kind:    serverapi.ChatSettingsMutationQuestions,
-			Enabled: &targetEnabled,
-		})
-	} else {
-		nextEnabled = targetEnabled
-		changed = currentEnabled != targetEnabled
-	}
+	nextEnabled = targetEnabled
+	changed = currentEnabled != targetEnabled
 	m.questionsEnabled = nextEnabled
 	if !changed {
 		return m, nil
@@ -404,15 +379,8 @@ func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Mo
 	}
 	changed := false
 	nextEnabled := currentEnabled
-	if m.hasRuntimeClient() {
-		return m, m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
-			Kind:    serverapi.ChatSettingsMutationAutoCompaction,
-			Enabled: &targetEnabled,
-		})
-	} else {
-		nextEnabled = targetEnabled
-		changed = currentEnabled != targetEnabled
-	}
+	nextEnabled = targetEnabled
+	changed = currentEnabled != targetEnabled
 	m.autoCompactionEnabled = nextEnabled
 	if !changed {
 		return m, nil

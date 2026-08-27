@@ -155,15 +155,16 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	m.reviewerEnabled = m.reviewerMode != string(serverapi.ChatSettingsSupervisorOff)
 	m.fastModeEnabled = settings.Fast != nil && settings.Fast.Value
 	m.questionsEnabled = settings.Questions.Enabled
-	m.autoCompactionEnabled = settings.AutoCompaction.Stored
+	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
+	m.setRuntimeContextUsage(m.currentRuntimeSessionID(), runtimeContextUsageFromChatContext(response.Context))
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
 		reason := "Chat settings mutation rejected"
-		if response.Result.Rejection != nil {
-			reason = response.Result.Rejection.Reason
+		if response.Result.Rejected != nil {
+			reason = chatSettingsRejectionNotice(response.Result.Rejected.Reason)
 		}
 		return m.sendTransientStatusWithNoticeID(reason, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
-	if !response.Result.Changed {
+	if response.Result.Applied == nil || !response.Result.Applied.Changed {
 		return nil
 	}
 	name, value := chatSettingsResultValue(msg.operation, settings)
@@ -184,7 +185,7 @@ func chatSettingsResultValue(
 	case serverapi.ChatSettingsMutationAgent:
 		return "Agent", settings.SelectedAgent.Role
 	case serverapi.ChatSettingsMutationSupervisor:
-		return "Supervisor", string(settings.Supervisor.Value)
+		return "Supervisor", chatSettingsSupervisorNotice(settings.Supervisor.Value)
 	case serverapi.ChatSettingsMutationThinking:
 		return "Thinking", settings.SelectedAgent.Thinking
 	case serverapi.ChatSettingsMutationFast:
@@ -204,6 +205,36 @@ func chatSettingsResultValue(
 		return "Auto-compaction", "off"
 	default:
 		return "Chat settings", "updated"
+	}
+}
+
+func chatSettingsRejectionNotice(reason serverapi.ChatSettingsMutationRejectionReason) string {
+	switch reason {
+	case serverapi.ChatSettingsMutationAgentLocked:
+		return "Agent is locked"
+	case serverapi.ChatSettingsMutationAgentUnavailable:
+		return "Agent is unavailable"
+	case serverapi.ChatSettingsMutationThinkingUnavailable:
+		return "Thinking is unavailable"
+	case serverapi.ChatSettingsMutationFastUnavailable:
+		return "Fast mode is unavailable"
+	case serverapi.ChatSettingsMutationAutoCompactionPolicyLock:
+		return "Auto-compaction is unavailable"
+	default:
+		return "Chat settings mutation rejected"
+	}
+}
+
+func chatSettingsSupervisorNotice(value serverapi.ChatSettingsSupervisorValue) string {
+	switch value {
+	case serverapi.ChatSettingsSupervisorOff:
+		return "Off"
+	case serverapi.ChatSettingsSupervisorAfterEdits:
+		return "After edits"
+	case serverapi.ChatSettingsSupervisorAlways:
+		return "Always"
+	default:
+		return "Unknown"
 	}
 }
 
