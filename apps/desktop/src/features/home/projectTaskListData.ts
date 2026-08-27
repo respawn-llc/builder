@@ -127,14 +127,13 @@ function useProjectTaskGroupData(
       firstPageParam === 0 ? undefined : Math.max(0, firstPageParam - projectTaskGroupPageSize),
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     maxPages: projectTaskGroupRetainedPages,
-    placeholderData: (previous) => previous,
   });
   const [generation, dispatchGeneration] = useReducer(projectTaskGenerationReducer, emptyGenerationState);
   const sortChanged = generation.currentSort !== null && !projectTaskSortsEqual(generation.currentSort, sort);
-  const queryEstablished = !query.isPlaceholderData && !query.isError && query.data !== undefined;
+  const queryEstablished = !query.isError && query.data !== undefined;
   const targetEstablished = queryEstablished && query.data.pageParams[0] === 0;
   const isSortReplacement = projectTaskSortReplacement({
-    hasSource: query.isPlaceholderData || generation.establishedData !== null,
+    hasSource: generation.establishedData !== null,
     replacementSort: generation.replacementSort,
     sort,
     sortChanged,

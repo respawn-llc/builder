@@ -402,10 +402,11 @@ describe("Project Task-list data ownership", () => {
 
   it("clears every selected sort generation when collapsing and reopening a group", async () => {
     const pendingReplacement = deferred<TaskListPage>();
-    let mode: "initial" | "replacement" | "reopen-error" = "initial";
+    const pendingReopen = deferred<TaskListPage>();
+    let mode: "initial" | "replacement" | "reopen-pending" = "initial";
     state.listPage = async (input) => {
-      if (mode === "reopen-error") {
-        throw new Error("reopen failed");
+      if (mode === "reopen-pending") {
+        return pendingReopen.promise;
       }
       if (mode === "replacement" && input.sort?.[0]?.field === "created") {
         return pendingReplacement.promise;
@@ -452,12 +453,25 @@ describe("Project Task-list data ownership", () => {
     });
     expect(result.current.active.tasks).toEqual([]);
 
-    mode = "reopen-error";
+    mode = "reopen-pending";
     rerender({ expanded: true, sort: { field: "created", direction: "desc" } });
     await waitFor(() => {
-      expect(result.current.active.isError).toBe(true);
+      expect(result.current.active.isFetching).toBe(true);
     });
     expect(result.current.active.tasks).toEqual([]);
+
+    const reopenedPage = pageResponse("active", 0);
+    const reopenedTask = reopenedPage.tasks[0];
+    if (reopenedTask === undefined) {
+      throw new Error("Expected a reopened task fixture.");
+    }
+    pendingReopen.resolve({
+      ...reopenedPage,
+      tasks: [{ ...reopenedTask, id: "active-reopened", shortID: "KNT-2", title: "Reopened task" }],
+    });
+    await waitFor(() => {
+      expect(result.current.active.tasks.map((task) => task.id)).toEqual(["active-reopened"]);
+    });
   });
 
   it("distinguishes a first-page failure from a retained next-edge failure", async () => {
