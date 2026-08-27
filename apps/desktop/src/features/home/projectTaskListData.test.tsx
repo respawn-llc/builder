@@ -19,6 +19,7 @@ import {
   useProjectTaskListData,
   useProjectTaskListEvents,
 } from "./projectTaskListData";
+import { defaultProjectTaskSort, type ProjectTaskSort } from "./projectTaskSorting";
 
 const projectTaskGroupDefinitions: readonly ProjectTaskGroupDefinition[] = [
   {
@@ -128,7 +129,9 @@ describe("Project Task-list data ownership", () => {
     rerender({ active: false, backlog: true, done: false });
     await waitFor(() => {
       expect(
-        harness.queryClient.getQueryData(queryKeys.projectTaskGroup("project-1", "active")),
+        harness.queryClient.getQueryData(
+          queryKeys.projectTaskGroup("project-1", "active", defaultProjectTaskSort),
+        ),
       ).toBeUndefined();
     });
     expect(result.current.active.tasks).toEqual([]);
@@ -195,7 +198,93 @@ describe("Project Task-list data ownership", () => {
     expect(result.current.active.tasks.at(0)?.id).toBe("active-0");
     expect(result.current.active.nextRequestGeneration).toBe("project-1:500");
     unmount();
-    expect(harness.queryClient.getQueryData(queryKeys.projectTaskGroup("project-1", "active"))).toBeDefined();
+    expect(
+      harness.queryClient.getQueryData(
+        queryKeys.projectTaskGroup("project-1", "active", defaultProjectTaskSort),
+      ),
+    ).toBeDefined();
+  });
+
+  it("sends the selected sort to every expanded group and preserves server row order", async () => {
+    const selectedSort = { field: "title", direction: "asc" } as const;
+    state.listPage = async (input) => {
+      const response = pageResponse(taskGroupForInput(input), input.offset ?? 0);
+      const firstTask = response.tasks[0];
+      if (firstTask === undefined) throw new Error("Expected a task fixture.");
+      return {
+        ...response,
+        tasks: [
+          { ...firstTask, id: `${firstTask.id}-last`, title: "Zeta" },
+          { ...firstTask, id: `${firstTask.id}-first`, title: "Alpha" },
+        ],
+      };
+    };
+    const harness = createHarness();
+    const { result } = renderHook(
+      () =>
+        useProjectTaskListData({
+          expanded: { active: true, backlog: true, done: false },
+          projectID: "project-1",
+          sort: selectedSort,
+        }),
+      { wrapper: ({ children }) => harness.render(children) },
+    );
+
+    await waitFor(() => {
+      expect(state.listRequests).toHaveLength(2);
+      expect(result.current.active.tasks).toHaveLength(2);
+    });
+    expect(state.listRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ group: "active", offset: 0, sort: [selectedSort] }),
+        expect.objectContaining({ group: "backlog", offset: 0, sort: [selectedSort] }),
+      ]),
+    );
+    expect(result.current.active.tasks.map((task) => task.id)).toEqual(["active-0-last", "active-0-first"]);
+    expect(result.current.done.tasks).toEqual([]);
+  });
+
+  it("keeps source rows while the selected sort replacement is pending or failed", async () => {
+    const pendingReplacement = deferred<TaskListPage>();
+    let requestCount = 0;
+    state.listPage = async (input) => {
+      requestCount += 1;
+      if (input.sort?.[0]?.field === "created") {
+        return pendingReplacement.promise;
+      }
+      return pageResponse(taskGroupForInput(input), input.offset ?? 0);
+    };
+    const harness = createHarness();
+    const initialSort: ProjectTaskSort = defaultProjectTaskSort;
+    const { result, rerender } = renderHook(
+      ({ sort }) =>
+        useProjectTaskListData({
+          expanded: { active: true, backlog: false, done: false },
+          projectID: "project-1",
+          sort,
+        }),
+      {
+        initialProps: { sort: initialSort },
+        wrapper: ({ children }) => harness.render(children),
+      },
+    );
+    await waitFor(() => {
+      expect(result.current.active.tasks).toHaveLength(1);
+    });
+
+    rerender({ sort: { field: "created", direction: "desc" } satisfies ProjectTaskSort });
+    await waitFor(() => {
+      expect(result.current.active.isSortReplacement).toBe(true);
+    });
+    expect(result.current.active.tasks[0]?.id).toBe("active-0");
+
+    pendingReplacement.reject(new Error("replacement failed"));
+    await waitFor(() => {
+      expect(result.current.active.isError).toBe(true);
+    });
+    expect(result.current.active.isSortReplacement).toBe(true);
+    expect(result.current.active.tasks[0]?.id).toBe("active-0");
+    expect(requestCount).toBe(2);
   });
 
   it("evicts a collapsed group and restarts its bounded query at zero", async () => {
@@ -297,7 +386,9 @@ describe("Project Task-list data ownership", () => {
     expect(result.current.active.tasks).toEqual([]);
     await waitFor(() => {
       expect(
-        harness.queryClient.getQueryData(queryKeys.projectTaskGroup("project-1", "active")),
+        harness.queryClient.getQueryData(
+          queryKeys.projectTaskGroup("project-1", "active", defaultProjectTaskSort),
+        ),
       ).toBeUndefined();
     });
     fail = true;
@@ -517,8 +608,10 @@ function workflowEvent(
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }

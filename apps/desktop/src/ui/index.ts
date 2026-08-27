@@ -11,6 +11,7 @@ export type {
   InteractiveChipSize,
   InteractiveChipTone,
 } from "./InteractiveChip";
+export { AnimatedChipSummary } from "./AnimatedChipSummary";
 export { ProgressChip, ProgressInteractiveChip } from "./ProgressChip";
 export type { ProgressChipProps, ProgressInteractiveChipProps } from "./ProgressChip";
 export { ActionableListRow } from "./ActionableListRow";
@@ -21,6 +22,7 @@ export { OneLineOverflowRow } from "./OneLineOverflowRow";
 export type { OneLineOverflowItem, OneLineOverflowRowProps } from "./OneLineOverflowRow";
 export { SegmentedControl } from "./SegmentedControl";
 export type { SegmentedControlOption, SegmentedControlProps } from "./SegmentedControl";
+export { SortChrome } from "./SortChrome";
 export { CopyableValueButton } from "./CopyableValueButton";
 export { IconTooltipButton } from "./IconTooltipButton";
 export { HelpHint } from "./HelpHint";
