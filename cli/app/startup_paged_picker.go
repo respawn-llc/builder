@@ -34,6 +34,7 @@ type startupPickerPageEdge struct {
 	requestedOffset int
 	generation      uint64
 	diagnostic      error
+	request         *startupPickerPageRequest
 	failedRequest   *startupPickerPageRequest
 }
 
@@ -88,7 +89,7 @@ func (w *startupPickerPageWindow[P]) begin(
 	visibleDistance int,
 	move int,
 ) (startupPickerPageRequest, bool) {
-	if w.request != nil {
+	if w.requestFor(direction) != nil {
 		return startupPickerPageRequest{}, false
 	}
 	w.generation++
@@ -101,9 +102,11 @@ func (w *startupPickerPageWindow[P]) begin(
 		visibleDistance: visibleDistance,
 		move:            move,
 	}
-	w.request = &request
-	if direction == startupPickerPageNext || direction == startupPickerPagePrevious {
+	if direction == startupPickerPageInitial {
+		w.request = &request
+	} else {
 		edge := w.edge(direction)
+		edge.request = &request
 		edge.state = startupPickerEdgeLoading
 		edge.requestedOffset = offset
 		edge.generation = request.generation
@@ -121,16 +124,35 @@ func (w *startupPickerPageWindow[P]) retry(
 	if edge.failedRequest == nil {
 		return startupPickerPageRequest{}, false
 	}
+	if visibleDistance < 1 {
+		visibleDistance = edge.failedRequest.visibleDistance
+	}
 	return w.begin(direction, edge.failedRequest.offset, crossing, pageMove, visibleDistance, edge.failedRequest.move)
 }
 
+func (w *startupPickerPageWindow[P]) requestFor(direction startupPickerPageDirection) *startupPickerPageRequest {
+	if direction == startupPickerPageInitial {
+		return w.request
+	}
+	return w.edge(direction).request
+}
+
+func (w *startupPickerPageWindow[P]) hasPendingRequest() bool {
+	return w.request != nil ||
+		w.previousEdge.request != nil ||
+		w.nextEdge.request != nil
+}
+
 func (w *startupPickerPageWindow[P]) complete(request startupPickerPageRequest) bool {
-	if w.request == nil || *w.request != request {
+	active := w.requestFor(request.direction)
+	if active == nil || *active != request {
 		return false
 	}
-	w.request = nil
-	if request.direction == startupPickerPageNext || request.direction == startupPickerPagePrevious {
+	if request.direction == startupPickerPageInitial {
+		w.request = nil
+	} else {
 		edge := w.edge(request.direction)
+		edge.request = nil
 		edge.failedRequest = nil
 		edge.diagnostic = nil
 	}
@@ -138,12 +160,15 @@ func (w *startupPickerPageWindow[P]) complete(request startupPickerPageRequest) 
 }
 
 func (w *startupPickerPageWindow[P]) fail(request startupPickerPageRequest, diagnostic error) bool {
-	if w.request == nil || *w.request != request {
+	active := w.requestFor(request.direction)
+	if active == nil || *active != request {
 		return false
 	}
-	w.request = nil
-	if request.direction == startupPickerPageNext || request.direction == startupPickerPagePrevious {
+	if request.direction == startupPickerPageInitial {
+		w.request = nil
+	} else {
 		edge := w.edge(request.direction)
+		edge.request = nil
 		edge.state = startupPickerEdgeFailed
 		edge.requestedOffset = request.offset
 		edge.generation = request.generation

@@ -274,15 +274,17 @@ func TestSessionPickerZeroMovementDirectionalResultUsesDebugPolicy(t *testing.T)
 			model.main.bodyRequest = nil
 			model.main.bodyPhase = sessionPickerBodyReady
 			model.main.generation = 1
-			model.main.request = &startupPickerPageRequest{
+			pageRequest := &startupPickerPageRequest{
 				generation: 1,
 				offset:     sessionPickerPageSize,
 				direction:  startupPickerPageNext,
 			}
+			model.main.nextEdge.request = pageRequest
 			message := sessionPickerPageLoadedMsg{
 				category:        sessioncontract.SessionCategoryMain,
 				generation:      1,
 				requestedOffset: sessionPickerPageSize,
+				pageRequest:     pageRequest,
 				response: sessionPageResponse{
 					ProjectID: model.loader.ProjectID(),
 					Category:  sessioncontract.SessionCategoryMain,

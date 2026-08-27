@@ -11,6 +11,7 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 
 	tea "github.com/charmbracelet/bubbletea"
+	ansi "github.com/charmbracelet/x/ansi"
 )
 
 type workspacePickerLoader struct {
@@ -156,8 +157,12 @@ func TestProjectWorkspacePickerShowsOperationDiagnosticAtEdge(t *testing.T) {
 	if model.phase != projectWorkspacePickerReadyWithEdgeFailure {
 		t.Fatalf("phase after edge failure = %d", model.phase)
 	}
-	if !strings.Contains(model.View(), diagnostic.Error()) {
-		t.Fatalf("view omitted operation diagnostic %q", diagnostic)
+	view := model.View()
+	if !strings.Contains(view, diagnostic.Error()) {
+		t.Fatalf("shared status omitted operation diagnostic %q", diagnostic)
+	}
+	if strings.Contains(ansi.Strip(model.renderEdgeStatus(&model.nextEdge)), diagnostic.Error()) {
+		t.Fatal("edge feedback duplicated the operation diagnostic")
 	}
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if _, ok := model.result.(projectbinding.WorkspacePickerSelected); !ok {
@@ -466,6 +471,49 @@ func TestProjectWorkspacePickerKeepsDirectionalFailuresIndependent(t *testing.T)
 	}
 	if previousRetries != 3 || nextRetries != 1 {
 		t.Fatalf("directional retry calls = previous:%d next:%d, want previous:3 next:1", previousRetries, nextRetries)
+	}
+}
+
+func TestProjectWorkspacePickerAllowsOppositeEdgeWhileOneEdgeLoads(t *testing.T) {
+	base := &workspacePickerLoader{
+		responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
+			0:   workspacePickerResponse("project-1", 0, projectWorkspacePickerPageSize, true),
+			50:  workspacePickerResponse("project-1", 50, projectWorkspacePickerPageSize, true),
+			100: workspacePickerResponse("project-1", 100, projectWorkspacePickerPageSize, true),
+			150: workspacePickerResponse("project-1", 150, 1, false),
+		},
+		errors: map[int32]error{},
+	}
+	loader := &delayedWorkspacePickerLoader{
+		base: base, blockOffset: 150, started: make(chan struct{}), release: make(chan struct{}),
+	}
+	model := newProjectWorkspacePickerModel(context.Background(), loader, "project-1", "dark")
+	applyWorkspacePickerCommand(model, model.Init())
+	applyWorkspacePickerCommand(model, model.startPageRequest(50, projectWorkspacePickerPageNext))
+	model.selectIndex(len(model.workspaces()) - 1)
+	applyWorkspacePickerCommand(model, model.startPageRequest(100, projectWorkspacePickerPageNext))
+	model.selectIndex(0)
+
+	nextCommand := model.requestEdge(projectWorkspacePickerPageNext, true, false, 0)
+	nextMessage := make(chan tea.Msg, 1)
+	go func() { nextMessage <- nextCommand() }()
+	<-loader.started
+
+	previousCommand := model.requestEdge(projectWorkspacePickerPagePrevious, true, false, 0)
+	if previousCommand == nil {
+		t.Fatal("previous edge was blocked by unrelated next-edge request")
+	}
+	previousMessage := previousCommand()
+	model.Update(previousMessage)
+	if model.previousEdge.state == projectWorkspacePickerEdgeLoading ||
+		model.previousEdge.state == projectWorkspacePickerEdgeFailed {
+		t.Fatalf("previous edge did not complete while next edge loaded: %+v", model.previousEdge)
+	}
+
+	close(loader.release)
+	updated, _ := model.Update(<-nextMessage)
+	if updated != model || model.nextEdge.state == projectWorkspacePickerEdgeLoading {
+		t.Fatalf("next edge remained active after completion: %+v", model.nextEdge)
 	}
 }
 

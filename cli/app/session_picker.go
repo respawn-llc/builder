@@ -119,6 +119,7 @@ type sessionPickerPageLoadedMsg struct {
 	category        sessioncontract.SessionCategory
 	generation      uint64
 	requestedOffset int
+	pageRequest     *startupPickerPageRequest
 	response        sessionPageResponse
 	err             error
 }
@@ -308,7 +309,8 @@ func (m *sessionPickerModel) moveSelection(delta int) tea.Cmd {
 	if next >= 0 && next < tab.itemCount() {
 		return m.selectTabIndex(tab, next)
 	}
-	if tab.request != nil {
+	if (delta > 0 && tab.nextEdge.request != nil) ||
+		(delta < 0 && tab.previousEdge.request != nil) {
 		return nil
 	}
 	if delta > 0 {
@@ -357,7 +359,8 @@ func (m *sessionPickerModel) moveSelectionPage(direction int) tea.Cmd {
 	if next >= 0 && next < tab.itemCount() {
 		return m.selectTabIndex(tab, next)
 	}
-	if tab.request != nil {
+	if (direction > 0 && tab.nextEdge.request != nil) ||
+		(direction < 0 && tab.previousEdge.request != nil) {
 		return nil
 	}
 	if direction > 0 {
@@ -393,7 +396,7 @@ func (m *sessionPickerModel) selectTabIndex(tab *sessionPickerTab, index int) te
 
 func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCategory, kind sessionPickerBodyRequestKind) tea.Cmd {
 	tab := m.tab(category)
-	if tab.bodyRequest != nil || tab.request != nil {
+	if tab.bodyRequest != nil || tab.hasPendingRequest() {
 		return nil
 	}
 	if kind == sessionPickerBodyRequestRetry {
@@ -408,7 +411,7 @@ func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCa
 	}
 	tab.bodyRequest = request
 	tab.bodyPhase = sessionPickerBodyInitialLoading
-	load := m.loadPageCmd(category, request.generation, request.requestedOffset)
+	load := m.loadPageCmd(category, request.generation, request.requestedOffset, nil)
 	if kind == sessionPickerBodyRequestRetry {
 		return tea.Batch(load, m.reconcileSpinnerTick())
 	}
@@ -416,7 +419,7 @@ func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCa
 }
 
 func (m *sessionPickerModel) startDirectionalRequest(tab *sessionPickerTab, requestedOffset int, move int) tea.Cmd {
-	if tab.bodyRequest != nil || tab.request != nil {
+	if tab.bodyRequest != nil || tab.hasPendingRequest() {
 		return nil
 	}
 	direction := startupPickerPageNext
@@ -428,12 +431,12 @@ func (m *sessionPickerModel) startDirectionalRequest(tab *sessionPickerTab, requ
 		return nil
 	}
 	return tea.Batch(
-		m.loadPageCmd(tab.category, request.generation, requestedOffset),
+		m.loadPageCmd(tab.category, request.generation, requestedOffset, &request),
 		m.reconcileSpinnerTick(),
 	)
 }
 
-func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategory, generation uint64, requestedOffset int) tea.Cmd {
+func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategory, generation uint64, requestedOffset int, pageRequest *startupPickerPageRequest) tea.Cmd {
 	offset := requestedOffset
 	limit := sessionPickerPageSize
 	request := sessionPageRequest{
@@ -448,6 +451,7 @@ func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategor
 			category:        category,
 			generation:      generation,
 			requestedOffset: requestedOffset,
+			pageRequest:     pageRequest,
 			response:        response,
 			err:             err,
 		}
@@ -509,12 +513,14 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 		m.ensureSelectedVisible(tab)
 		return m.maybeCompleteAllEmpty()
 	}
-	if tab.request == nil ||
-		tab.request.generation != message.generation ||
-		tab.request.offset != message.requestedOffset {
+	if message.pageRequest == nil {
 		return nil
 	}
-	directional := *tab.request
+	active := tab.requestFor(message.pageRequest.direction)
+	if active == nil || *active != *message.pageRequest {
+		return nil
+	}
+	directional := *active
 	if message.err != nil {
 		tab.resetForFreshLoad()
 		tab.bodyPhase = sessionPickerBodyFailed
@@ -578,8 +584,8 @@ func (m *sessionPickerModel) maybeCompleteAllEmpty() tea.Cmd {
 }
 
 func (m *sessionPickerModel) hasPendingPageRequest() bool {
-	return m.main.bodyRequest != nil || m.main.request != nil ||
-		m.subagents.bodyRequest != nil || m.subagents.request != nil
+	return m.main.bodyRequest != nil || m.main.hasPendingRequest() ||
+		m.subagents.bodyRequest != nil || m.subagents.hasPendingRequest()
 }
 
 func (m *sessionPickerModel) reconcileSpinnerTick() tea.Cmd {

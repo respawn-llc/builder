@@ -72,7 +72,7 @@ func (m *sessionPickerModel) View() string {
 		out.WriteString(m.renderRow(tab, 0, false))
 	case sessionPickerBodyReady:
 		visible := m.visibleRowsFromOffset(tab, tab.offset)
-		if tab.request != nil && tab.request.move < 0 {
+		if tab.previousEdge.request != nil {
 			out.WriteString(m.styles.row.Render(pendingToolSpinnerFrame(m.spinnerFrame) + " Loading newer sessions"))
 			if len(visible) > 0 {
 				out.WriteByte('\n')
@@ -84,7 +84,7 @@ func (m *sessionPickerModel) View() string {
 			}
 			out.WriteString(m.renderRow(tab, row.index, row.showPreview))
 		}
-		if tab.request != nil && tab.request.move > 0 {
+		if tab.nextEdge.request != nil {
 			if len(visible) > 0 {
 				out.WriteByte('\n')
 			}
