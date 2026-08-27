@@ -1060,6 +1060,54 @@ type WorkflowWorktreeKentFacts struct {
 	OriginSessionID *string `json:"origin_session_id"`
 }
 
+func (f WorkflowWorktreeGitFacts) Validate() error {
+	if strings.TrimSpace(f.CanonicalRoot) == "" || strings.TrimSpace(f.HeadObject) == "" {
+		return errors.New("workflow worktree Git canonical_root and head_object are required")
+	}
+	for _, fact := range []*string{f.BranchRef, f.BranchName, f.LockedReason, f.PrunableReason} {
+		if fact != nil && strings.TrimSpace(*fact) == "" {
+			return errors.New("optional workflow worktree Git facts must be non-blank")
+		}
+	}
+	return nil
+}
+
+func (f WorkflowWorktreeKentFacts) Validate() error {
+	if strings.TrimSpace(f.WorktreeID) == "" ||
+		strings.TrimSpace(f.CanonicalRoot) == "" ||
+		strings.TrimSpace(f.DisplayName) == "" {
+		return errors.New("workflow worktree Kent worktree_id, canonical_root, and display_name are required")
+	}
+	if f.OriginSessionID != nil && strings.TrimSpace(*f.OriginSessionID) == "" {
+		return errors.New("workflow worktree origin_session_id must be non-blank")
+	}
+	return nil
+}
+
+func (f WorkflowRegisteredWorktreeFacts) Validate() error {
+	if err := f.Git.Validate(); err != nil {
+		return err
+	}
+	if err := f.Kent.Validate(); err != nil {
+		return err
+	}
+	if f.Git.CanonicalRoot != f.Kent.CanonicalRoot {
+		return errors.New("workflow registered worktree Git and Kent canonical roots must match")
+	}
+	return nil
+}
+
+func (t WorkflowRegisteredWorktreeTopology) Validate() error {
+	if t.Variant != "registered" || t.Registered == nil {
+		return errors.New("workflow retained worktree must be registered")
+	}
+	return t.Registered.Validate()
+}
+
+func (r WorkflowRetainedPreviousWorktree) Validate() error {
+	return r.Worktree.Validate()
+}
+
 type WorkflowSetupRetainedError struct {
 	Worktree                 WorkflowRegisteredWorktreeTopology `json:"worktree"`
 	ScriptPath               string                             `json:"script_path"`
@@ -1093,17 +1141,16 @@ func (e *WorkflowSetupRetainedError) RPCErrorData() json.RawMessage {
 }
 
 func (e *WorkflowSetupRetainedError) Validate() error {
-	if e == nil || e.Worktree.Variant != "registered" || e.Worktree.Registered == nil {
-		return errors.New("retained setup error requires a registered worktree")
+	if e == nil {
+		return errors.New("retained setup error is required")
 	}
-	registered := e.Worktree.Registered
-	if strings.TrimSpace(registered.Git.CanonicalRoot) == "" ||
-		strings.TrimSpace(registered.Git.HeadObject) == "" ||
-		strings.TrimSpace(registered.Kent.WorktreeID) == "" ||
-		strings.TrimSpace(registered.Kent.CanonicalRoot) == "" ||
-		strings.TrimSpace(registered.Kent.DisplayName) == "" ||
-		registered.Git.CanonicalRoot != registered.Kent.CanonicalRoot {
-		return errors.New("retained setup error worktree facts are invalid")
+	if err := e.Worktree.Validate(); err != nil {
+		return err
+	}
+	if e.RetainedPreviousWorktree != nil {
+		if err := e.RetainedPreviousWorktree.Validate(); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(e.ScriptPath) == "" || strings.TrimSpace(e.Diagnostic) == "" {
 		return errors.New("retained setup error script_path and diagnostic are required")

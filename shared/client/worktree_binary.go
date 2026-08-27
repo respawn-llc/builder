@@ -9,7 +9,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/protoapi"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
-	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/worktreecontract"
 
@@ -169,7 +168,7 @@ func worktreeError[Failure worktreeFailure](failure Failure) error {
 		if typed, ok := any(failure).(interface {
 			GetWorktreeBlocked() *worktreepb.BlockedDetails
 		}); ok && typed.GetWorktreeBlocked() != nil {
-			return newWorktreeBlockedError(typed.GetWorktreeBlocked())
+			return worktreecontract.ErrWorktreeBlocked
 		}
 	case "delete_precondition":
 		if typed, ok := any(failure).(interface {
@@ -201,13 +200,6 @@ func worktreeError[Failure worktreeFailure](failure Failure) error {
 		}
 	}
 	return generatedOperationFailure(failure.GetCode())
-}
-
-func newWorktreeBlockedError(details *worktreepb.BlockedDetails) error {
-	if details == nil {
-		return worktreecontract.ErrWorktreeBlocked
-	}
-	return protocol.NewSentinelError(worktreecontract.ErrWorktreeBlocked, details.Diagnostic)
 }
 
 func validateWorktreeListFallbacks(entries []*worktreepb.ListEntry) error {

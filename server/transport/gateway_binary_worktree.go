@@ -190,7 +190,7 @@ func worktreeSelectorFailure[Request proto.Message](request Request, err error) 
 
 func worktreeDeletePreviewFailure(request *worktreepb.DeletePreviewRequest, err error) proto.Message {
 	if errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
-		return &worktreepb.BlockedDetails{Diagnostic: err.Error()}
+		return &worktreepb.BlockedDetails{}
 	}
 	return worktreeSelectorFailure(request, err)
 }
@@ -217,7 +217,7 @@ func worktreeDeleteFailure(request *worktreepb.DeleteRequest, err error) proto.M
 		return precondition.Details
 	}
 	if errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
-		return &worktreepb.BlockedDetails{Diagnostic: err.Error()}
+		return &worktreepb.BlockedDetails{}
 	}
 	return worktreeSelectorFailure(request, err)
 }

@@ -388,16 +388,7 @@ message CreateFailureDetails {
   string diagnostic = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
-message BlockedDetails {
-  string diagnostic = 1 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.blocked_diagnostic_nonblank"
-      message: "diagnostic must be non-blank"
-      expression: "this.trim() != ''"
-    }
-  ];
-}
+message BlockedDetails {}
 
 message StatusRequest {
   string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];

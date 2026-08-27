@@ -57,7 +57,7 @@ func TestProtocolErrorDecodesWorktreeBlocked(t *testing.T) {
 			Outcome: &worktreepb.DeleteResult_Error{Error: &worktreepb.DeleteError{
 				Code: "worktree_blocked",
 				Detail: &worktreepb.DeleteError_WorktreeBlocked{
-					WorktreeBlocked: &worktreepb.BlockedDetails{Diagnostic: "blocked"},
+					WorktreeBlocked: &worktreepb.BlockedDetails{},
 				},
 			}},
 		},
