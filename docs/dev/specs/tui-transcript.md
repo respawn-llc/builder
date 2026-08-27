@@ -244,7 +244,7 @@
 - A Kent background shell process in the worktree blocks deletion immediately. Kent does not wait or retry automatically.
 - A busy deletion reports `worktree blocked`. It is not a successful deletion and includes no blocker-detail payload.
 - Branch cleanup is conservative/best-effort. Normal TUI deletion only auto-attempts branch deletion when provenance proves Kent created the branch. Explicit TUI Delete + Branch is available for every branch-backed worktree and uses safe branch deletion.
-- New worktrees default under `worktrees.base_dir`, rooted under Kent persistence state by default.
+- New worktrees default under the Worktree Base Dir, which is rooted under Kent persistence state by default.
 - After a target change, shell execution and relative file paths use the new Working Directory.
 - Containment checks for `edit`, `patch`, and `view_image` use the new Execution Target Root.
 - Tools without filesystem-path behavior use neither path authority.

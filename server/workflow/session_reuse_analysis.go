@@ -952,6 +952,13 @@ func validateStaticContinuationSources(def Definition, start NodeID) []EdgeID {
 	return result
 }
 
+// RequiresExactActiveContinuationSource reports whether execution beginning at
+// start can reach a transition that needs the incoming active Session before
+// another Agent establishes or selects one.
+func RequiresExactActiveContinuationSource(def Definition, start NodeID) bool {
+	return len(validateStaticContinuationSources(def, start)) > 0
+}
+
 func newStaticSessionReuseAnalyzer(def Definition) sessionReuseAnalyzer {
 	analyzer := sessionReuseAnalyzer{
 		input:              SessionReuseAnalysisInput{Workflow: def},

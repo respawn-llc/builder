@@ -54,6 +54,10 @@ The target-selection provenance locked to a task when its first executable actio
 
 The directory Kent uses as the working directory and relative-path base for a Task's executable Nodes. It is the Task's source workspace when the Task uses no managed worktree and the managed worktree root otherwise.
 
+### Worktree Base Dir
+
+The server-configured canonical directory within which every Kent-managed Worktree root must resolve. The `worktrees.base_dir` setting configures it.
+
 ### Working Directory
 
 The directory Kent uses as the shell working directory and relative-path base for a Session's tools. It may be the Session's Execution Target Root or one of its descendant directories.
@@ -100,7 +104,7 @@ The node where new tasks enter a workflow. A start node is non-executable and ha
 
 ### Task Start
 
-An explicit operation that moves a newly created Task from start/backlog into its first executable current Node by applying the Start Node's outgoing Transition.
+An explicit server-owned operation that prepares a newly created Task's first execution while the Task remains at start/backlog, then atomically applies the Start Node's outgoing Transition once preparation succeeds.
 
 ### Terminal Node
 
@@ -412,7 +416,7 @@ The user-facing TUI action that injects a message to take effect after the curre
 
 Every client attached to a Session has the same control capabilities over the shared Active Session Runtime. Kent has no controller client, limited-control client, read-only attachment, or client lease.
 
-Client connection state is not Session state. A client connection or disconnection for any reason never starts, stops, pauses, cancels, closes, replays, restores, or otherwise changes a Session, Agent Turn, Goal, Queue, Steer, Worktree operation, or accepted Session mutation. Only an accepted product operation changes server state. The server publishes every event without using subscriber count as a condition: zero connected clients do not suppress publication, and every connected client receives each applicable broadcast.
+Client connection state is not server-work state. A client connection, disconnection, request cancellation, request closure, navigation, or UI closure never starts, stops, pauses, cancels, closes, retries, replays, restores, duplicates, authorizes, or otherwise changes a Session, Agent Turn, Goal, Queue, Steer, Worktree operation, Workflow operation, or other accepted server command. Only the server-owned operation lifecycle changes server work. The server publishes every event without using subscriber count as a condition: zero connected clients do not suppress publication, and every connected client receives each applicable broadcast.
 
 ### Goal
 
