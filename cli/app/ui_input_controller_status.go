@@ -16,7 +16,7 @@ func (m *uiModel) reviewerInvocationState() (bool, string) {
 }
 
 func (m *uiModel) fastModeState() (bool, bool) {
-	if m.settingsInitialized {
+	if m.source != uiChatSettingsStateSourceInitial {
 		return m.fastModeAvailable, m.fastModeEnabled
 	}
 	status := m.cachedRuntimeStatus()

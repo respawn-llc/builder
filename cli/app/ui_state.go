@@ -48,6 +48,7 @@ type uiRuntimeFeatureState struct {
 }
 
 type uiInputFeatureState struct {
+	uiChatSettingsState
 	mainEditor             tuiinput.Editor
 	mainInputDraftToken    uint64
 	promptHistory          []string
@@ -84,16 +85,7 @@ type uiInputFeatureState struct {
 	completedRunID              string
 	completedStepID             string
 
-	modelName                 string
-	agentRole                 *string
 	configuredModelName       *string
-	thinkingLevel             string
-	fastModeAvailable         bool
-	fastModeEnabled           bool
-	settingsInitialized       bool
-	compactionMode            string
-	compactionCount           int
-	modelContractLocked       bool
 	spinnerFrame              int
 	spinnerClock              frameAnimationClock
 	spinnerTickDue            time.Time
@@ -117,6 +109,30 @@ type uiInputFeatureState struct {
 	slashCommandSelection     int
 	pathReferenceSearch       uiPathReferenceSearch
 	pathReference             uiPathReferenceState
+}
+
+type uiChatSettingsStateSource uint8
+
+const (
+	uiChatSettingsStateSourceInitial uiChatSettingsStateSource = iota
+	uiChatSettingsStateSourceRuntime
+	uiChatSettingsStateSourceMutation
+)
+
+type uiChatSettingsState struct {
+	modelName             string
+	agentRole             *string
+	thinkingLevel         string
+	fastModeAvailable     bool
+	fastModeEnabled       bool
+	reviewerEnabled       bool
+	reviewerMode          string
+	autoCompactionEnabled bool
+	questionsEnabled      bool
+	compactionMode        string
+	compactionCount       int
+	modelContractLocked   bool
+	source                uiChatSettingsStateSource
 }
 
 type uiPresentationFeatureState struct {

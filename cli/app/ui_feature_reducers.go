@@ -58,7 +58,6 @@ func (m *uiModel) reduceStatusMessage(msg tea.Msg) uiFeatureUpdateResult {
 			return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID(msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 		}
 		m.status.error = ""
-		m.applyDirectRuntimeStatus(&msg.snapshot)
 		m.status.snapshot = msg.snapshot
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, nil)
@@ -89,7 +88,6 @@ func (m *uiModel) reduceStatusMessage(msg tea.Msg) uiFeatureUpdateResult {
 		if m.status.snapshot.AgentTokenCounts != nil {
 			snapshot.AgentTokenCounts = m.status.snapshot.AgentTokenCounts
 		}
-		m.applyDirectRuntimeStatus(&snapshot)
 		m.status.snapshot = snapshot
 		m.finishStatusSectionRefresh(uiStatusSectionBase, msg.snapshot.CollectorWarning)
 		m.layout().syncViewport()

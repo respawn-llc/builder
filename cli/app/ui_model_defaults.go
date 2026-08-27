@@ -35,6 +35,9 @@ func newUIRuntimeFeatureState(runtimeClient clientui.RuntimeClient) uiRuntimeFea
 
 func newUIInputFeatureState() uiInputFeatureState {
 	return uiInputFeatureState{
+		uiChatSettingsState: uiChatSettingsState{
+			source: uiChatSettingsStateSourceInitial,
+		},
 		mainEditor:            tuiinput.NewEditor(),
 		activity:              uiActivityIdle,
 		mainInputDraftToken:   1,

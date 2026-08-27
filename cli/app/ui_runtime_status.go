@@ -33,9 +33,9 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 	m.questionsEnabled = status.QuestionsEnabled
 	m.fastModeAvailable = status.FastModeAvailable
 	m.fastModeEnabled = status.FastModeEnabled
-	m.settingsInitialized = true
 	m.compactionMode = status.CompactionMode
 	m.compactionCount = status.CompactionCount
+	m.source = uiChatSettingsStateSourceRuntime
 	m.conversationFreshness = status.ConversationFreshness
 	m.setRuntimeContextUsage(view.Session.SessionID, status.ContextUsage)
 	if view.Activity.State != "" {
@@ -60,6 +60,22 @@ func (m *uiModel) runtimeMainView() clientui.RuntimeMainView {
 		Status:  m.localRuntimeStatus(),
 		Session: m.localRuntimeSessionView(),
 	}
+}
+
+func (m *uiModel) startupRuntimeMainView() (clientui.RuntimeMainView, bool) {
+	if m == nil {
+		return clientui.RuntimeMainView{}, false
+	}
+	client := m.runtimeClient()
+	if client == nil {
+		return m.runtimeMainView(), true
+	}
+	if cached, ok := client.(interface {
+		CachedMainView() (clientui.RuntimeMainView, bool)
+	}); ok {
+		return cached.CachedMainView()
+	}
+	return client.MainView(), true
 }
 
 func (m *uiModel) cachedRuntimeMainView() clientui.RuntimeMainView {
