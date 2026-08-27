@@ -164,7 +164,7 @@ func TestSelectWorkspaceForStartupUsesCatalogLoader(t *testing.T) {
 		ProjectID: "project-1",
 		PickWorkspace: func(ctx context.Context, loader WorkspacePageLoader, projectID string, theme string) (WorkspacePickerResult, error) {
 			seen = ctx != nil && loader != nil && projectID == "project-1" && theme == "dark"
-			return WorkspacePickerSelected{Workspace: projectpb.ProjectWorkspaceCatalogSummary{
+			return WorkspacePickerSelected{Workspace: &projectpb.ProjectWorkspaceCatalogSummary{
 				WorkspaceId: "workspace-1", RootPath: "/workspace-1",
 			}}, nil
 		},
@@ -207,7 +207,7 @@ func TestEnsureServerBrowsingBindingRestoresProjectPickerSnapshotAfterWorkspaceB
 			if workspaceCalls == 1 {
 				return WorkspacePickerBack{}, nil
 			}
-			return WorkspacePickerSelected{Workspace: projectpb.ProjectWorkspaceCatalogSummary{
+			return WorkspacePickerSelected{Workspace: &projectpb.ProjectWorkspaceCatalogSummary{
 				WorkspaceId: "workspace-1", RootPath: "/workspace-1",
 			}}, nil
 		},

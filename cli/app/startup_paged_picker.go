@@ -11,14 +11,15 @@ const (
 )
 
 type startupPickerPageRequest struct {
-	generation      uint64
-	offset          int
-	direction       startupPickerPageDirection
-	boundary        *startupPickerPageBoundary
-	crossing        bool
-	pageMove        bool
-	visibleDistance int
-	move            int
+	generation       uint64
+	offset           int
+	direction        startupPickerPageDirection
+	boundary         *startupPickerPageBoundary
+	crossing         bool
+	pageMove         bool
+	visibleDistance  int
+	pageMoveOverflow int
+	move             int
 }
 
 type startupPickerPageBoundary struct {
@@ -95,6 +96,7 @@ func (w *startupPickerPageWindow[P]) begin(
 	crossing bool,
 	pageMove bool,
 	visibleDistance int,
+	pageMoveOverflow int,
 	move int,
 ) (startupPickerPageRequest, bool) {
 	if w.requestFor(direction) != nil {
@@ -102,14 +104,15 @@ func (w *startupPickerPageWindow[P]) begin(
 	}
 	w.generation++
 	request := startupPickerPageRequest{
-		generation:      w.generation,
-		offset:          offset,
-		direction:       direction,
-		boundary:        boundary,
-		crossing:        crossing,
-		pageMove:        pageMove,
-		visibleDistance: visibleDistance,
-		move:            move,
+		generation:       w.generation,
+		offset:           offset,
+		direction:        direction,
+		boundary:         boundary,
+		crossing:         crossing,
+		pageMove:         pageMove,
+		visibleDistance:  visibleDistance,
+		pageMoveOverflow: pageMoveOverflow,
+		move:             move,
 	}
 	if direction == startupPickerPageInitial {
 		w.request = &request

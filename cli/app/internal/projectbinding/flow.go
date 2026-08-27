@@ -53,7 +53,7 @@ type WorkspacePickerResult interface {
 }
 
 type WorkspacePickerSelected struct {
-	Workspace projectpb.ProjectWorkspaceCatalogSummary
+	Workspace *projectpb.ProjectWorkspaceCatalogSummary
 }
 
 type WorkspacePickerBack struct{}

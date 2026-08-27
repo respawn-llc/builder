@@ -12,6 +12,7 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"google.golang.org/protobuf/proto"
 )
 
 type projectWorkspacePickerModel struct {
@@ -73,7 +74,7 @@ type projectWorkspacePickerPageRequest = startupPickerPageRequest
 type projectWorkspacePickerPageSegment struct {
 	generation uint64
 	offset     int
-	workspaces []projectpb.ProjectWorkspaceCatalogSummary
+	workspaces []*projectpb.ProjectWorkspaceCatalogSummary
 	nextOffset *int32
 }
 
@@ -317,8 +318,8 @@ func (m *projectWorkspacePickerModel) moveCursorPage(direction int) tea.Cmd {
 	return m.requestEdge(projectWorkspacePickerPagePrevious, true, true, visible)
 }
 
-func (m *projectWorkspacePickerModel) workspaces() []projectpb.ProjectWorkspaceCatalogSummary {
-	return flattenBoundedPickerPages(m.segments, func(segment projectWorkspacePickerPageSegment) []projectpb.ProjectWorkspaceCatalogSummary {
+func (m *projectWorkspacePickerModel) workspaces() []*projectpb.ProjectWorkspaceCatalogSummary {
+	return flattenBoundedPickerPages(m.segments, func(segment projectWorkspacePickerPageSegment) []*projectpb.ProjectWorkspaceCatalogSummary {
 		return segment.workspaces
 	})
 }
@@ -430,8 +431,9 @@ func (m *projectWorkspacePickerModel) requestEdge(direction projectWorkspacePick
 	if edge.state == projectWorkspacePickerEdgeExhausted {
 		return nil
 	}
+	pageMoveOverflow := m.pageMoveOverflow(direction, pageMove, visibleDistance)
 	if edge.state == projectWorkspacePickerEdgeFailed {
-		request, ok := m.retryEdge(direction, crossing, pageMove, visibleDistance)
+		request, ok := m.retryEdge(direction, crossing, pageMove, visibleDistance, pageMoveOverflow)
 		if !ok {
 			return nil
 		}
@@ -442,7 +444,7 @@ func (m *projectWorkspacePickerModel) requestEdge(direction projectWorkspacePick
 		edge.state = projectWorkspacePickerEdgeExhausted
 		return nil
 	}
-	return m.startPageRequestWithIntent(offset, direction, crossing, pageMove, visibleDistance)
+	return m.startPageRequestWithIntent(offset, direction, crossing, pageMove, visibleDistance, pageMoveOverflow)
 }
 
 func (m *projectWorkspacePickerModel) retryEdge(
@@ -450,6 +452,7 @@ func (m *projectWorkspacePickerModel) retryEdge(
 	crossing bool,
 	pageMove bool,
 	visibleDistance int,
+	pageMoveOverflow int,
 ) (projectWorkspacePickerPageRequest, bool) {
 	edge := m.edge(direction)
 	if edge.failedRequest == nil {
@@ -469,8 +472,26 @@ func (m *projectWorkspacePickerModel) retryEdge(
 		crossing,
 		pageMove,
 		visibleDistance,
+		pageMoveOverflow,
 		edge.failedRequest.move,
 	)
+}
+
+func (m *projectWorkspacePickerModel) pageMoveOverflow(
+	direction projectWorkspacePickerPageDirection,
+	pageMove bool,
+	visibleDistance int,
+) int {
+	if !pageMove {
+		return 0
+	}
+	if visibleDistance < 1 {
+		visibleDistance = 1
+	}
+	if direction == projectWorkspacePickerPagePrevious {
+		return m.cursor - visibleDistance
+	}
+	return m.cursor + visibleDistance - len(m.workspaces())
 }
 
 func (m *projectWorkspacePickerModel) edgeOffset(direction projectWorkspacePickerPageDirection) (int, bool) {
@@ -497,10 +518,17 @@ func (m *projectWorkspacePickerModel) edgeOffset(direction projectWorkspacePicke
 }
 
 func (m *projectWorkspacePickerModel) startPageRequest(offset int, direction projectWorkspacePickerPageDirection) tea.Cmd {
-	return m.startPageRequestWithIntent(offset, direction, false, false, 0)
+	return m.startPageRequestWithIntent(offset, direction, false, false, 0, 0)
 }
 
-func (m *projectWorkspacePickerModel) startPageRequestWithIntent(offset int, direction projectWorkspacePickerPageDirection, crossing bool, pageMove bool, visibleDistance int) tea.Cmd {
+func (m *projectWorkspacePickerModel) startPageRequestWithIntent(
+	offset int,
+	direction projectWorkspacePickerPageDirection,
+	crossing bool,
+	pageMove bool,
+	visibleDistance int,
+	pageMoveOverflow int,
+) tea.Cmd {
 	request, ok := m.begin(
 		direction,
 		offset,
@@ -508,6 +536,7 @@ func (m *projectWorkspacePickerModel) startPageRequestWithIntent(offset int, dir
 		crossing,
 		pageMove,
 		visibleDistance,
+		pageMoveOverflow,
 		0,
 	)
 	if !ok {
@@ -625,20 +654,16 @@ func (m *projectWorkspacePickerModel) applyPageLoaded(message projectWorkspacePi
 		if request.direction == projectWorkspacePickerPageNext {
 			local = 0
 			if request.pageMove {
-				local = request.visibleDistance
-				if local < 1 {
-					local = 1
+				local = request.pageMoveOverflow
+				if local < 0 {
+					local = 0
 				}
 				if local >= len(segment.workspaces) {
 					local = len(segment.workspaces) - 1
 				}
 			}
 		} else if request.pageMove {
-			distance := request.visibleDistance
-			if distance < 1 {
-				distance = 1
-			}
-			local -= distance
+			local = len(segment.workspaces) + request.pageMoveOverflow
 			if local < 0 {
 				local = 0
 			}
@@ -855,13 +880,13 @@ func cloneInt32(value *int32) *int32 {
 	return &cloned
 }
 
-func cloneProjectWorkspaceCatalogRows(rows []*projectpb.ProjectWorkspaceCatalogSummary) []projectpb.ProjectWorkspaceCatalogSummary {
-	cloned := make([]projectpb.ProjectWorkspaceCatalogSummary, 0, len(rows))
+func cloneProjectWorkspaceCatalogRows(rows []*projectpb.ProjectWorkspaceCatalogSummary) []*projectpb.ProjectWorkspaceCatalogSummary {
+	cloned := make([]*projectpb.ProjectWorkspaceCatalogSummary, 0, len(rows))
 	for _, row := range rows {
 		if row == nil {
 			continue
 		}
-		cloned = append(cloned, *row)
+		cloned = append(cloned, proto.Clone(row).(*projectpb.ProjectWorkspaceCatalogSummary))
 	}
 	return cloned
 }

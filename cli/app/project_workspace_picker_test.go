@@ -773,7 +773,81 @@ func TestProjectWorkspacePickerPageDownKeepsPreTransitionVisibleDistance(t *test
 	visible := model.visiblePageDistance()
 	_, command := model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
 	applyWorkspacePickerCommand(model, command)
-	if model.selected == nil || model.selected.offset != 50 || model.selected.index != 2 {
-		t.Fatalf("PageDown selected occurrence = %+v, want final row with pre-distance %d", model.selected, visible)
+	if model.selected == nil || model.selected.offset != 50 || model.selected.index != visible-1 {
+		t.Fatalf("PageDown selected occurrence = %+v, want next-page index %d", model.selected, visible-1)
+	}
+}
+
+func TestProjectWorkspacePickerPageDownCrossingPreservesVisibleDistance(t *testing.T) {
+	loader := &workspacePickerLoader{
+		responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
+			0:  workspacePickerResponse("project-1", 0, projectWorkspacePickerPageSize, true),
+			50: workspacePickerResponse("project-1", 50, projectWorkspacePickerPageSize, true),
+		},
+		errors: map[int32]error{},
+	}
+	model := newProjectWorkspacePickerModel(context.Background(), loader, "project-1", "dark")
+	model.height = 9
+	applyWorkspacePickerCommand(model, model.Init())
+	model.cursor = projectWorkspacePickerPageSize - 1
+	model.offset = projectWorkspacePickerPageSize - 5
+	model.selectIndex(model.cursor)
+	visible := model.visiblePageDistance()
+	_, command := model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	applyWorkspacePickerCommand(model, command)
+	if model.selected == nil || model.selected.offset != 50 || model.selected.index != visible-1 {
+		t.Fatalf("PageDown selected occurrence = %+v, want next-page index %d", model.selected, visible-1)
+	}
+}
+
+func TestProjectWorkspacePickerPageDownAfterWindowAdvancePreservesVisibleDistance(t *testing.T) {
+	loader := &workspacePickerLoader{
+		responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
+			0:   workspacePickerResponse("project-1", 0, projectWorkspacePickerPageSize, true),
+			50:  workspacePickerResponse("project-1", 50, projectWorkspacePickerPageSize, true),
+			100: workspacePickerResponse("project-1", 100, projectWorkspacePickerPageSize, true),
+		},
+		errors: map[int32]error{},
+	}
+	model := newProjectWorkspacePickerModel(context.Background(), loader, "project-1", "dark")
+	model.height = 9
+	applyWorkspacePickerCommand(model, model.Init())
+	applyWorkspacePickerCommand(model, model.startPageRequest(50, projectWorkspacePickerPageNext))
+	model.selectIndex(2*projectWorkspacePickerPageSize - 1)
+	visible := model.visiblePageDistance()
+	_, command := model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	applyWorkspacePickerCommand(model, command)
+	if model.selected == nil || model.selected.offset != 100 || model.selected.index != visible-1 {
+		t.Fatalf("PageDown after window advance selected occurrence = %+v, want next-page index %d", model.selected, visible-1)
+	}
+}
+
+func TestProjectWorkspacePickerPageUpCrossingPreservesVisibleDistance(t *testing.T) {
+	loader := &workspacePickerLoader{
+		responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
+			0:  workspacePickerResponse("project-1", 0, projectWorkspacePickerPageSize, true),
+			50: workspacePickerResponse("project-1", 50, projectWorkspacePickerPageSize, true),
+		},
+		errors: map[int32]error{},
+	}
+	model := newProjectWorkspacePickerModel(context.Background(), loader, "project-1", "dark")
+	model.height = 9
+	applyWorkspacePickerCommand(model, model.Init())
+	model.segments = []projectWorkspacePickerPageSegment{
+		{generation: 10, offset: 50, workspaces: cloneProjectWorkspaceCatalogRows(loader.responses[50].Workspaces)},
+	}
+	model.selected = &projectWorkspacePickerOccurrence{
+		generation: 10, offset: 50, index: 0, workspace: "workspace-050",
+	}
+	model.viewport = model.selected
+	model.cursor = 0
+	model.offset = 0
+	model.phase = projectWorkspacePickerReady
+	model.previousEdge.state = projectWorkspacePickerEdgeUnknown
+	visible := model.visiblePageDistance()
+	_, command := model.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	applyWorkspacePickerCommand(model, command)
+	if model.selected == nil || model.selected.offset != 0 || model.selected.index != projectWorkspacePickerPageSize-visible {
+		t.Fatalf("PageUp selected occurrence = %+v, want previous-page index %d", model.selected, projectWorkspacePickerPageSize-visible)
 	}
 }
