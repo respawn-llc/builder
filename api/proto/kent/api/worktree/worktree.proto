@@ -99,53 +99,25 @@ enum SetupExecutionTargetMode {
 }
 
 message GitFacts {
-  string canonical_root = 1 [(buf.validate.field).string.min_len = 1];
-  string head_object = 2 [(buf.validate.field).string.min_len = 1];
-  optional string branch_ref = 3 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.branch_ref_nonblank"
-      message: "branch_ref must be non-blank when present"
-      expression: "this.trim() != ''"
-    }
-  ];
-  optional string branch_name = 4 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.branch_name_nonblank"
-      message: "branch_name must be non-blank when present"
-      expression: "this.trim() != ''"
-    }
-  ];
+  string canonical_root = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string head_object = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string branch_ref = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string branch_name = 4 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   bool detached = 5;
   bool bare = 6;
-  optional string locked_reason = 7 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.locked_reason_nonblank"
-      message: "locked_reason must be non-blank when present"
-      expression: "this.trim() != ''"
-    }
-  ];
-  optional string prunable_reason = 8 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.prunable_reason_nonblank"
-      message: "prunable_reason must be non-blank when present"
-      expression: "this.trim() != ''"
-    }
-  ];
+  optional string locked_reason = 7 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string prunable_reason = 8 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   bool is_main = 9;
   bool path_available = 10;
 }
 
 message KentFacts {
-  string worktree_id = 1 [(buf.validate.field).string.min_len = 1];
-  string canonical_root = 2 [(buf.validate.field).string.min_len = 1];
-  string display_name = 3 [(buf.validate.field).string.min_len = 1];
+  string worktree_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string canonical_root = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string display_name = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   bool managed = 4;
   bool created_branch = 5;
-  optional string origin_session_id = 6 [(buf.validate.field).string.min_len = 1];
+  optional string origin_session_id = 6 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message RegisteredFacts {
@@ -181,7 +153,7 @@ message SwitchOperation {
     defined_only: true
     not_in: [0]
   }];
-  optional string selector = 2 [(buf.validate.field).string.min_len = 1];
+  optional string selector = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 
   option (buf.validate.message).cel = {
     id: "kent.worktree.switch_selector"
@@ -193,26 +165,61 @@ message SwitchOperation {
 }
 
 message DeletePreviewOperation {
-  string selector = 1 [(buf.validate.field).string.min_len = 1];
+  string selector = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message ListProjection {
-  string selector = 1 [(buf.validate.field).string.min_len = 1];
+  string selector = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   bool is_current = 2;
   optional SwitchOperation switch = 3;
   optional DeletePreviewOperation delete_preview = 4;
-  optional string fallback_identity = 5 [(buf.validate.field).string.min_len = 1];
+  optional string fallback_identity = 5 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message ListEntry {
   TopologyEntry topology = 1 [(buf.validate.field).required = true];
   ListProjection projection = 2 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.list_entry_switch"
+    message: "worktree switch projection must match topology and selector"
+    expression:
+      "!has(this.projection.switch) || "
+      "(!this.projection.is_current && "
+      "((has(this.topology.registered) && this.topology.registered.git.path_available && "
+      "((this.topology.registered.git.is_main && this.projection.switch.kind == 2) || "
+      "(!this.topology.registered.git.is_main && this.projection.switch.kind == 1 && "
+      "this.projection.switch.selector == this.projection.selector))) || "
+      "(has(this.topology.external) && this.topology.external.git.path_available && "
+      "((this.topology.external.git.is_main && this.projection.switch.kind == 2) || "
+      "(!this.topology.external.git.is_main && this.projection.switch.kind == 1 && "
+      "this.projection.switch.selector == this.projection.selector)))))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.list_entry_delete_preview"
+    message: "worktree delete preview projection must match topology"
+    expression:
+      "!has(this.projection.delete_preview) || "
+      "(has(this.topology.registered) && !this.topology.registered.git.is_main && "
+      "this.projection.delete_preview.selector == this.topology.registered.kent.worktree_id) || "
+      "(has(this.topology.external) && !this.topology.external.git.is_main && "
+      "this.projection.delete_preview.selector == this.topology.external.git.canonical_root) || "
+      "(has(this.topology.missing) && "
+      "this.projection.delete_preview.selector == this.topology.missing.kent.worktree_id)"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.list_entry_fallback"
+    message: "fallback identity is present only for an unnamed external worktree"
+    expression:
+      "has(this.projection.fallback_identity) == "
+      "(has(this.topology.external) && !has(this.topology.external.git.branch_name))"
+  };
 }
 
 message SessionExecutionWorktreeTarget {
-  string id = 1 [(buf.validate.field).string.min_len = 1];
-  string name = 2 [(buf.validate.field).string.min_len = 1];
-  string root = 3 [(buf.validate.field).string.min_len = 1];
+  string id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string name = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string root = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   kent.api.project.ProjectAvailability availability = 4 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
@@ -220,16 +227,16 @@ message SessionExecutionWorktreeTarget {
 }
 
 message SessionExecutionTarget {
-  string workspace_id = 1 [(buf.validate.field).string.min_len = 1];
-  string workspace_name = 2;
-  string workspace_root = 3 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string workspace_name = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string workspace_root = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   kent.api.project.ProjectAvailability workspace_availability = 4 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
   }];
   optional SessionExecutionWorktreeTarget worktree = 5;
-  string cwd_relpath = 6;
-  string effective_workdir = 7 [(buf.validate.field).string.min_len = 1];
+  string cwd_relpath = 6 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string effective_workdir = 7 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message StatusProblem {
@@ -237,8 +244,8 @@ message StatusProblem {
     defined_only: true
     not_in: [0]
   }];
-  optional string root = 2 [(buf.validate.field).string.min_len = 1];
-  optional string ref = 3 [(buf.validate.field).string.min_len = 1];
+  optional string root = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string ref = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 
   option (buf.validate.message).cel = {
     id: "kent.worktree.status_problem_payload"
@@ -250,11 +257,11 @@ message StatusProblem {
 }
 
 message StatusTarget {
-  string recorded_root = 1 [(buf.validate.field).string.min_len = 1];
-  optional string observed_root = 2 [(buf.validate.field).string.min_len = 1];
-  optional string display_name = 3 [(buf.validate.field).string.min_len = 1];
-  optional string recorded_branch_ref = 4 [(buf.validate.field).string.min_len = 1];
-  optional string observed_branch_ref = 5 [(buf.validate.field).string.min_len = 1];
+  string recorded_root = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string observed_root = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string display_name = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string recorded_branch_ref = 4 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string observed_branch_ref = 5 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message DirtyState {
@@ -263,7 +270,7 @@ message DirtyState {
     not_in: [0]
   }];
   optional int32 dirty_file_count = 2 [(buf.validate.field).int32.gt = 0];
-  optional string unknown_cause = 3 [(buf.validate.field).string.min_len = 1];
+  optional string unknown_cause = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 
   option (buf.validate.message).cel = {
     id: "kent.worktree.dirty_state_payload"
@@ -280,8 +287,8 @@ message BranchCleanupOutcome {
     defined_only: true
     not_in: [0]
   }];
-  optional string branch_name = 2 [(buf.validate.field).string.min_len = 1];
-  optional string diagnostic = 3 [(buf.validate.field).string.min_len = 1];
+  optional string branch_name = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string diagnostic = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 
   option (buf.validate.message).cel = {
     id: "kent.worktree.branch_cleanup_payload"
@@ -344,7 +351,7 @@ message SelectorErrorDetails {
     defined_only: true
     not_in: [0]
   }];
-  string input = 2 [(buf.validate.field).string.min_len = 1];
+  string input = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   repeated SelectorCandidate candidates = 3;
 
   option (buf.validate.message).cel = {
@@ -358,8 +365,8 @@ message SelectorErrorDetails {
 
 message SetupRetainedDetails {
   RegisteredFacts worktree = 1 [(buf.validate.field).required = true];
-  string script_path = 2 [(buf.validate.field).string.min_len = 1];
-  string diagnostic = 3 [(buf.validate.field).string.min_len = 1];
+  string script_path = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string diagnostic = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional RetainedPreviousWorktree retained_previous_worktree = 4;
 }
 
@@ -378,7 +385,7 @@ message CreateFailureDetails {
     defined_only: true
     not_in: [0]
   }];
-  string diagnostic = 2 [(buf.validate.field).string.min_len = 1];
+  string diagnostic = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message BlockedDetails {
@@ -438,6 +445,21 @@ message ListRequest {
 message ListSuccess {
   SessionExecutionTarget target = 1 [(buf.validate.field).required = true];
   repeated ListEntry worktrees = 2;
+
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.session_list_projection"
+    message: "session worktree projections must expose every eligible operation"
+    expression:
+      "this.worktrees.all(w, "
+      "has(w.projection.switch) == "
+      "(!w.projection.is_current && "
+      "((has(w.topology.registered) && w.topology.registered.git.path_available) || "
+      "(has(w.topology.external) && w.topology.external.git.path_available))) && "
+      "has(w.projection.delete_preview) == "
+      "((has(w.topology.registered) && !w.topology.registered.git.is_main) || "
+      "(has(w.topology.external) && !w.topology.external.git.is_main) || "
+      "has(w.topology.missing)))"
+  };
 }
 
 message ListError {
@@ -475,8 +497,16 @@ message WorkspaceListRequest {
 }
 
 message WorkspaceListSuccess {
-  string workspace_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   repeated ListEntry worktrees = 2;
+
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.workspace_list_projection"
+    message: "workspace worktree projections cannot expose session operations"
+    expression:
+      "this.worktrees.all(w, !w.projection.is_current && "
+      "!has(w.projection.switch) && !has(w.projection.delete_preview))"
+  };
 }
 
 message WorkspaceListError {
@@ -519,6 +549,20 @@ message SelectorResolveRequest {
 
 message SelectorResolveSuccess {
   ListEntry worktree = 1 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.selector_resolve_projection"
+    message: "resolved worktree must expose every eligible session operation"
+    expression:
+      "has(this.worktree.projection.switch) == "
+      "(!this.worktree.projection.is_current && "
+      "((has(this.worktree.topology.registered) && this.worktree.topology.registered.git.path_available) || "
+      "(has(this.worktree.topology.external) && this.worktree.topology.external.git.path_available))) && "
+      "has(this.worktree.projection.delete_preview) == "
+      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main) || "
+      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main) || "
+      "has(this.worktree.topology.missing))"
+  };
 }
 
 message SelectorResolveError {
@@ -561,8 +605,20 @@ message DeletePreviewRequest {
 
 message DeletePreviewSuccess {
   TopologyEntry worktree = 1 [(buf.validate.field).required = true];
-  string deletion_selector = 2 [(buf.validate.field).string.min_len = 1];
+  string deletion_selector = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   DirtyState cleanliness = 3 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.delete_preview_authority"
+    message: "delete preview selector and cleanliness must match its topology"
+    expression:
+      "(has(this.worktree.registered) && !this.worktree.registered.git.is_main && "
+      "this.deletion_selector == this.worktree.registered.kent.worktree_id) || "
+      "(has(this.worktree.external) && !this.worktree.external.git.is_main && "
+      "this.deletion_selector == this.worktree.external.git.canonical_root) || "
+      "(has(this.worktree.missing) && this.deletion_selector == this.worktree.missing.kent.worktree_id && "
+      "this.cleanliness.kind == 1)"
+  };
 }
 
 message DeletePreviewError {
@@ -608,12 +664,12 @@ message CreateTargetResolveRequest {
 }
 
 message CreateTargetResolution {
-  string input = 1 [(buf.validate.field).string.min_len = 1];
+  string input = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   CreateTargetResolutionKind kind = 2 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
   }];
-  optional string resolved_ref = 3 [(buf.validate.field).string.min_len = 1];
+  optional string resolved_ref = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 
   option (buf.validate.message).cel = {
     id: "kent.worktree.create_target_resolution"
@@ -697,6 +753,20 @@ message CreateRequest {
 message CreateSuccess {
   SessionExecutionTarget target = 1 [(buf.validate.field).required = true];
   ListEntry worktree = 2 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.worktree.create_projection"
+    message: "created worktree must expose every eligible session operation"
+    expression:
+      "has(this.worktree.projection.switch) == "
+      "(!this.worktree.projection.is_current && "
+      "((has(this.worktree.topology.registered) && this.worktree.topology.registered.git.path_available) || "
+      "(has(this.worktree.topology.external) && this.worktree.topology.external.git.path_available))) && "
+      "has(this.worktree.projection.delete_preview) == "
+      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main) || "
+      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main) || "
+      "has(this.worktree.topology.missing))"
+  };
 }
 
 message CreateError {
@@ -880,7 +950,7 @@ message SetupExecutionTargetSelection {
     defined_only: true
     not_in: [0]
   }];
-  optional string custom_ref = 2 [(buf.validate.field).string.min_len = 1];
+  optional string custom_ref = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 
   option (buf.validate.message).cel = {
     id: "kent.worktree.setup_execution_target"
@@ -892,30 +962,9 @@ message SetupExecutionTargetSelection {
 }
 
 message SetupStarted {
-  string source_workspace_root = 1 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.setup_source_root_nonblank"
-      message: "source_workspace_root must be non-blank"
-      expression: "this.trim() != ''"
-    }
-  ];
-  string worktree_root = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.setup_worktree_root_nonblank"
-      message: "worktree_root must be non-blank"
-      expression: "this.trim() != ''"
-    }
-  ];
-  string script_path = 3 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.setup_script_path_nonblank"
-      message: "script_path must be non-blank"
-      expression: "this.trim() != ''"
-    }
-  ];
+  string source_workspace_root = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string worktree_root = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string script_path = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message SetupCompleted {
@@ -966,8 +1015,8 @@ message SetupFailed {
     not_in: [0]
   }];
   SetupFailureCause cause = 2 [(buf.validate.field).required = true];
-  string diagnostic = 3 [(buf.validate.field).string.min_len = 1];
-  optional string script_path = 4 [(buf.validate.field).string.min_len = 1];
+  string diagnostic = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string script_path = 4 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional SetupExecutionTargetSelection execution_target = 5;
   optional RegisteredFacts retained_worktree = 6;
   optional RetainedPreviousWorktree retained_previous_worktree = 7;
@@ -1045,7 +1094,7 @@ message SetupCompletion {
   // transcript_close_reason is excluded because Worktree setup is not a
   // transcript stream and its completion path never produces that fact.
   optional int32 code = 1;
-  optional string diagnostic = 2 [(buf.validate.field).string.min_len = 1];
+  optional string diagnostic = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 
   option (buf.validate.message).cel = {
     id: "kent.worktree.setup_completion"
