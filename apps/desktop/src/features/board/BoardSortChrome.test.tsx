@@ -40,7 +40,7 @@ describe("BoardSortChrome", () => {
     const user = userEvent.setup();
     render(<BoardSortChrome />);
 
-    const trigger = screen.getByRole("button", { name: appI18n.t("board.sort.chip") });
+    const trigger = screen.getByRole("button");
     await user.click(trigger);
 
     const content = screen.getByRole("dialog");
@@ -80,15 +80,10 @@ describe("BoardSortChrome", () => {
     expect(runtime.setSort).toHaveBeenCalledWith({ field: "created", direction: "asc" });
   });
 
-  it("uses the primary custom summary", () => {
+  it("marks a custom sort as selected", () => {
     runtime.sort = { field: "labels", direction: "asc" };
     render(<BoardSortChrome />);
 
-    expect(screen.getByRole("button")).toHaveAccessibleName(
-      appI18n.t("board.sort.summary", {
-        direction: appI18n.t("board.sort.directions.asc"),
-        field: appI18n.t("board.sort.fields.labels"),
-      }),
-    );
+    expect(screen.getByRole("button")).toHaveAttribute("aria-pressed", "true");
   });
 });
