@@ -209,7 +209,8 @@ func messagePreservesLastCommittedAssistantFinalAnswer(message llm.Message) bool
 }
 
 func (e *Engine) ContextUsage() ContextUsage {
-	window := e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
+	planning := e.compactionPlanningSnapshot()
+	window := e.compactionPlannerState().contextWindowTokens(planning)
 	used := e.currentTokenUsage()
 	cacheHitPercent, hasCacheHitPercentage := e.usageTrackingState().CacheHitSnapshot()
 	if used < 0 {
@@ -219,10 +220,11 @@ func (e *Engine) ContextUsage() ContextUsage {
 		window = 0
 	}
 	return ContextUsage{
-		UsedTokens:            used,
-		WindowTokens:          window,
-		CacheHitPercent:       cacheHitPercent,
-		HasCacheHitPercentage: hasCacheHitPercentage,
+		UsedTokens:               used,
+		WindowTokens:             window,
+		AutomaticThresholdTokens: int(planning.policy.AutomaticThresholdTokens),
+		CacheHitPercent:          cacheHitPercent,
+		HasCacheHitPercentage:    hasCacheHitPercentage,
 	}
 }
 

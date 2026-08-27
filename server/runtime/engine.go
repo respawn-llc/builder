@@ -124,10 +124,11 @@ type ReviewerConfig struct {
 }
 
 type ContextUsage struct {
-	UsedTokens            int
-	WindowTokens          int
-	CacheHitPercent       int
-	HasCacheHitPercentage bool
+	UsedTokens               int
+	WindowTokens             int
+	AutomaticThresholdTokens int
+	CacheHitPercent          int
+	HasCacheHitPercentage    bool
 }
 
 type Engine struct {

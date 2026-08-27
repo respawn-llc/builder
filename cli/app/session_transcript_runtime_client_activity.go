@@ -86,10 +86,7 @@ func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message c
 	case clientui.TranscriptMessageSessionIdentity:
 		applyTranscriptSessionIdentityToRuntimeMainView(view, message.Payload().(clientui.TranscriptSessionIdentity))
 	case clientui.TranscriptMessageContextUsage:
-		view.Status.ContextUsage = mergeRuntimeContextUsagePolicy(
-			view.Status.ContextUsage,
-			runtimeContextUsageFromTranscript(message.Payload().(clientui.TranscriptContextUsage)),
-		)
+		view.Status.ContextUsage = runtimeContextUsageFromTranscript(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
 		view.Status.Goal = runtimeGoalFromTranscript(message.Payload().(clientui.TranscriptGoalStatus))
 	default:
@@ -99,15 +96,11 @@ func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message c
 }
 
 func applyTranscriptHydrationMetadataToMainView(view *clientui.RuntimeMainView, hydration clientui.TranscriptHydration) {
-	previousSessionID := view.Session.SessionID
 	applyTranscriptSessionStatusToRuntimeStatus(&view.Status, hydration.SessionStatus)
 	applyTranscriptSessionIdentityToRuntimeMainView(view, hydration.SessionIdentity)
 	usage := clientui.RuntimeContextUsage{}
 	if hydration.ContextUsage != nil {
 		usage = runtimeContextUsageFromTranscript(*hydration.ContextUsage)
-	}
-	if previousSessionID != "" && previousSessionID == view.Session.SessionID {
-		usage = mergeRuntimeContextUsagePolicy(view.Status.ContextUsage, usage)
 	}
 	view.Status.ContextUsage = usage
 	view.Status.Goal = nil
@@ -156,6 +149,10 @@ func runtimeContextUsageFromTranscript(usage clientui.TranscriptContextUsage) cl
 	projected := clientui.RuntimeContextUsage{
 		UsedTokens:   usage.UsedTokens,
 		WindowTokens: usage.WindowTokens,
+	}
+	if usage.AutomaticThresholdTokens != nil {
+		projected.AutomaticThresholdTokens = *usage.AutomaticThresholdTokens
+		projected.HasAutomaticThreshold = true
 	}
 	if usage.CacheHitPercent != nil {
 		projected.CacheHitPercent = *usage.CacheHitPercent
