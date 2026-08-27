@@ -34,7 +34,7 @@ import {
 import type {
   RpcCallOptions,
   DescriptorRpcTransport,
-  DescriptorSubscriptionHandler,
+  DescriptorSubscriptionInput,
   RpcDedicatedCallOptions,
   RpcEventHandler,
   RpcSubscription,
@@ -159,7 +159,14 @@ class JsonRpcWebSocketTransport implements RpcTransport {
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription {
     const controller = new AbortController();
     void this.#openSubscription(
-      (socket) => this.#runJsonSubscription(socket, method, params, handler, controller.signal),
+      async (socket) =>
+        this.#runJsonSubscription({
+          socket,
+          method,
+          params,
+          handler,
+          signal: controller.signal,
+        }),
       handler.onError,
       controller.signal,
     );
@@ -174,28 +181,14 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     Method extends DescMethod,
     EventDescriptor extends DescMessage,
     CompletionDescriptor extends DescMessage,
-  >(
-    method: Method,
-    request: MessageShape<Method["input"]>,
-    eventDescriptor: EventDescriptor,
-    completionDescriptor: CompletionDescriptor,
-    onStart: (result: MessageShape<Method["output"]>) => void,
-    handler: DescriptorSubscriptionHandler<
-      MessageShape<EventDescriptor>,
-      MessageShape<CompletionDescriptor>
-    >,
-  ): RpcSubscription {
+  >(input: DescriptorSubscriptionInput<Method, EventDescriptor, CompletionDescriptor>): RpcSubscription {
     const controller = new AbortController();
+    const { handler } = input;
     void this.#openSubscription(
-      (socket) =>
+      async (socket) =>
         runSocketDescriptorSubscription({
           socket,
-          method,
-          request,
-          eventDescriptor,
-          completionDescriptor,
-          onStart,
-          handler,
+          ...input,
           signal: controller.signal,
         }),
       handler.onError,
@@ -458,13 +451,19 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     }
   }
 
-  async #runJsonSubscription(
-    socket: WebSocket,
-    method: string,
-    params: JsonValue,
-    handler: RpcEventHandler,
-    signal: AbortSignal,
-  ): Promise<void> {
+  async #runJsonSubscription({
+    socket,
+    method,
+    params,
+    handler,
+    signal,
+  }: Readonly<{
+    socket: WebSocket;
+    method: string;
+    params: JsonValue;
+    handler: RpcEventHandler;
+    signal: AbortSignal;
+  }>): Promise<void> {
     const terminalCompleteRef: { current: Readonly<{ code: number; message: string }> | null } = {
       current: null,
     };

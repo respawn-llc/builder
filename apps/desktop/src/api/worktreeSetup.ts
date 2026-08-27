@@ -32,15 +32,15 @@ export function subscribeWorktreeSetup(
     notify?.();
   };
   const method = SetupService.method.subscribe;
-  subscription = transport.subscribeDescriptor(
+  subscription = transport.subscribeDescriptor({
     method,
-    create(method.input, { setupOperationId: setupOperationID.toJSONValue() }),
-    SetupEventSchema,
-    SetupCompletionSchema,
-    (result) => {
+    request: create(method.input, { setupOperationId: setupOperationID.toJSONValue() }),
+    eventDescriptor: SetupEventSchema,
+    completionDescriptor: SetupCompletionSchema,
+    onStart(result) {
       requireWorktreeSuccess(method, result);
     },
-    {
+    handler: {
       ...(handler.onOpen === undefined
         ? {}
         : {
@@ -54,16 +54,15 @@ export function subscribeWorktreeSetup(
         if (event.phase.case !== "started") finish(handler.onComplete);
       },
       onComplete(completion) {
-        if (completion.code === undefined) {
+        const code = completion.code;
+        if (code === undefined) {
           finish(handler.onComplete);
           return;
         }
         const diagnostic = required(completion.diagnostic);
         finish(() => {
           handler.onError(
-            new TransportError(
-              `Worktree setup completed with code ${completion.code?.toString()}: ${diagnostic}`,
-            ),
+            new TransportError(`Worktree setup completed with code ${code.toString()}: ${diagnostic}`),
           );
         });
       },
@@ -73,7 +72,7 @@ export function subscribeWorktreeSetup(
         });
       },
     },
-  );
+  });
   return { close: finish };
 }
 

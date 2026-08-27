@@ -29,6 +29,7 @@ import {
 import {
   ConnectionStore,
   type DescriptorRpcTransport,
+  type DescriptorSubscriptionInput,
   type JsonValue,
   type RpcCallOptions,
   type RpcDedicatedCallOptions,
@@ -265,22 +266,8 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     Method extends DescMethod,
     EventDescriptor extends DescMessage,
     CompletionDescriptor extends DescMessage,
-  >(
-    ...args: [
-      descriptor: Method,
-      request: MessageShape<Method["input"]>,
-      eventDescriptor: EventDescriptor,
-      completionDescriptor: CompletionDescriptor,
-      onStart: (result: MessageShape<Method["output"]>) => void,
-      handler: Readonly<{
-        onOpen?(): void;
-        onEvent(event: MessageShape<EventDescriptor>): void;
-        onComplete(completion: MessageShape<CompletionDescriptor>): void;
-        onError(error: Error): void;
-      }>,
-    ]
-  ): RpcSubscription {
-    const [descriptor, request, eventDescriptor, completionDescriptor, onStart, handler] = args;
+  >(input: DescriptorSubscriptionInput<Method, EventDescriptor, CompletionDescriptor>): RpcSubscription {
+    const { method: descriptor, request, eventDescriptor, completionDescriptor, onStart, handler } = input;
     const operation = operationName(descriptor);
     const route = this.#descriptorSubscriptionRoutes.get(operation);
     if (route === undefined) throw new Error(`Missing fake descriptor subscription route: ${operation}`);

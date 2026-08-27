@@ -14,11 +14,9 @@ import {
   TransitionService,
   type CreateError,
   type CreateSuccess,
-  type CreateTargetResolveError,
   type CreateTargetResolveSuccess,
   type DeleteError,
   type DeletePreviewError,
-  type DeletePreviewSuccess,
   type DeleteSuccess,
   type EnterError,
   type LeaveError,
@@ -208,10 +206,19 @@ export type WorktreeFailure =
   | SetupStartError;
 
 export type WorktreeErrorDetail =
-  | Readonly<{ kind: "selector"; details: Extract<WorktreeFailure["detail"], { case: "selectorError" }>["value"] }>
+  | Readonly<{
+      kind: "selector";
+      details: Extract<WorktreeFailure["detail"], { case: "selectorError" }>["value"];
+    }>
   | Readonly<{ kind: "create"; owner: "base_ref" | "form"; diagnostic: string }>
-  | Readonly<{ kind: "setup_retained"; details: Extract<CreateError["detail"], { case: "setupRetained" }>["value"] }>
-  | Readonly<{ kind: "delete_precondition"; details: Extract<DeleteError["detail"], { case: "deletePrecondition" }>["value"] }>
+  | Readonly<{
+      kind: "setup_retained";
+      details: Extract<CreateError["detail"], { case: "setupRetained" }>["value"];
+    }>
+  | Readonly<{
+      kind: "delete_precondition";
+      details: Extract<DeleteError["detail"], { case: "deletePrecondition" }>["value"];
+    }>
   | Readonly<{ kind: "blocked" }>;
 
 export class WorktreeError extends RpcError {

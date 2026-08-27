@@ -35,13 +35,15 @@ export function authorizeWorktreeListEntry(entry: ListEntry): void {
 }
 
 export function authorizeWorktreeDeletePreview(value: DeletePreviewSuccess): WorktreeDeletePreview {
-  return authorize("delete", value);
+  authorize("delete", value);
+  return value;
 }
 
 export function authorizeWorktreeCreateTargetResolution(
   value: CreateTargetResolution,
 ): WorktreeCreateTargetResolution {
-  return authorize("create", value);
+  authorize("create", value);
+  return value;
 }
 
 export function requireWorktreeAuthority(value: WorktreeSwitch, authority: "switch"): WorktreeSwitch;
@@ -60,17 +62,16 @@ export function requireWorktreeAuthority(value: object, authority: AuthorityKind
   return value;
 }
 
-function authorize<Value extends object>(kind: AuthorityKind, value: Value): DeepReadonly<Value> {
+function authorize(kind: AuthorityKind, value: object): void {
   deepFreeze(value);
   authorities.set(value, kind);
-  return value as DeepReadonly<Value>;
 }
 
-function deepFreeze<Value extends object>(value: Value, visited = new WeakSet<object>()): Value {
+function deepFreeze<Value extends object>(value: Value, visited = new WeakSet()): Value {
   if (visited.has(value)) return value;
   visited.add(value);
   for (const fact of Object.values(value)) {
-    if (fact !== null && typeof fact === "object") deepFreeze(fact, visited);
+    if (fact instanceof Object) deepFreeze(fact, visited);
   }
   return Object.freeze(value);
 }

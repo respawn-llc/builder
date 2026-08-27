@@ -22,10 +22,7 @@ import {
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, TransportError } from "./errors";
 import { jsonValueSchema, type JsonValue } from "./json";
 import { protobufRpcError } from "./protobufRpc";
-import type {
-  DescriptorSubscriptionHandler,
-  RpcEventHandler,
-} from "./transport";
+import type { DescriptorSubscriptionInput, RpcEventHandler } from "./transport";
 
 export const protocolVersion = __KENT_PROTOCOL_VERSION__;
 export const jsonRpcVersion = "2.0";
@@ -133,22 +130,13 @@ export async function runSocketDescriptorSubscription<
   EventDescriptor extends DescMessage,
   CompletionDescriptor extends DescMessage,
 >(
-  input: Readonly<{
-    socket: WebSocket;
-    method: Method;
-    request: MessageShape<Method["input"]>;
-    eventDescriptor: EventDescriptor;
-    completionDescriptor: CompletionDescriptor;
-    onStart(result: MessageShape<Method["output"]>): void;
-    handler: DescriptorSubscriptionHandler<
-      MessageShape<EventDescriptor>,
-      MessageShape<CompletionDescriptor>
-    >;
-    signal: AbortSignal;
-  }>,
+  input: DescriptorSubscriptionInput<Method, EventDescriptor, CompletionDescriptor> &
+    Readonly<{
+      socket: WebSocket;
+      signal: AbortSignal;
+    }>,
 ): Promise<void> {
-  const { socket, method, request, eventDescriptor, completionDescriptor, onStart, handler, signal } =
-    input;
+  const { socket, method, request, eventDescriptor, completionDescriptor, onStart, handler, signal } = input;
   const associations = subscriptionAssociations(method);
   requireAssociatedDescriptor(associations.event.input, eventDescriptor, "event");
   requireAssociatedDescriptor(associations.completion.input, completionDescriptor, "completion");

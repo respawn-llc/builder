@@ -20,6 +20,19 @@ export type DescriptorSubscriptionHandler<Event, Completion> = Readonly<{
   onError(error: Error): void;
 }>;
 
+export type DescriptorSubscriptionInput<
+  Method extends DescMethod,
+  EventDescriptor extends DescMessage,
+  CompletionDescriptor extends DescMessage,
+> = Readonly<{
+  method: Method;
+  request: MessageShape<Method["input"]>;
+  eventDescriptor: EventDescriptor;
+  completionDescriptor: CompletionDescriptor;
+  onStart(result: MessageShape<Method["output"]>): void;
+  handler: DescriptorSubscriptionHandler<MessageShape<EventDescriptor>, MessageShape<CompletionDescriptor>>;
+}>;
+
 export type RpcCallOptions = Readonly<{
   timeoutMs?: number | null;
 }>;
@@ -54,14 +67,6 @@ export type DescriptorRpcTransport = RpcTransport &
       EventDescriptor extends DescMessage,
       CompletionDescriptor extends DescMessage,
     >(
-      method: Method,
-      request: MessageShape<Method["input"]>,
-      eventDescriptor: EventDescriptor,
-      completionDescriptor: CompletionDescriptor,
-      onStart: (result: MessageShape<Method["output"]>) => void,
-      handler: DescriptorSubscriptionHandler<
-        MessageShape<EventDescriptor>,
-        MessageShape<CompletionDescriptor>
-      >,
+      input: DescriptorSubscriptionInput<Method, EventDescriptor, CompletionDescriptor>,
     ): RpcSubscription;
   }>;
