@@ -24,14 +24,6 @@ type RuntimeActivityResolver interface {
 	RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error)
 }
 
-type sessionIdentityPublisher interface {
-	PublishSessionIdentity(sessionID string) error
-}
-
-type sessionStatusPublisher interface {
-	PublishSessionStatus(sessionID string) error
-}
-
 type PromptHistoryStore interface {
 	RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error)
 }
@@ -301,13 +293,7 @@ func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSe
 		return err
 	}
 	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		if err := engine.SetSessionName(callbackCtx, req.Name); err != nil {
-			return err
-		}
-		if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
-			return publisher.PublishSessionIdentity(req.SessionID)
-		}
-		return nil
+		return engine.SetSessionName(callbackCtx, req.Name)
 	})
 }
 
@@ -316,10 +302,7 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 		return err
 	}
 	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		if err := engine.SetThinkingLevel(callbackCtx, req.Level); err != nil {
-			return err
-		}
-		return s.publishSessionStatus(req.SessionID)
+		return engine.SetThinkingLevel(callbackCtx, req.Level)
 	})
 }
 
@@ -363,7 +346,7 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 			return err
 		}
 		resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
-		return s.publishSessionStatus(req.SessionID)
+		return nil
 	})
 	return resp, err
 }
@@ -396,7 +379,7 @@ func committedRuntimeMutation[Resp any](
 		if !receipt.Committed {
 			return mutationErr
 		}
-		resultErr = errors.Join(mutationErr, service.publishSessionStatus(sessionID))
+		resultErr = mutationErr
 		return nil
 	})
 	if err != nil {
@@ -425,13 +408,6 @@ func runtimeCommandNotAccepted(cause error) error {
 		cause = errors.New("runtime command completed without accepting a mutation")
 	}
 	return serverapi.NewRuntimeCommandNotAcceptedError(cause)
-}
-
-func (s *Service) publishSessionStatus(sessionID string) error {
-	if publisher, ok := s.activity.(sessionStatusPublisher); ok {
-		return publisher.PublishSessionStatus(sessionID)
-	}
-	return nil
 }
 
 func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {

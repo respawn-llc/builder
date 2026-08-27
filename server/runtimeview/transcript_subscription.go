@@ -657,10 +657,11 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row.Kind = clientui.TranscriptRowUser
 		row.User = &clientui.TranscriptUserRow{
-			StepID:           optionalRuntimeTranscriptStepID(fact.StepID, "committed user row"),
-			Text:             fact.User.Text,
-			CondensedText:    optionalNonBlankString(fact.User.CondensedText),
-			RollbackTargetID: textutil.Pointer(fact.User.RollbackTargetID),
+			StepID:            optionalRuntimeTranscriptStepID(fact.StepID, "committed user row"),
+			Text:              fact.User.Text,
+			CondensedText:     optionalNonBlankString(fact.User.CondensedText),
+			RollbackTargetID:  textutil.Pointer(fact.User.RollbackTargetID),
+			CommittedAtUnixMs: textutil.Pointer(fact.User.CommittedAtUnixMs),
 		}
 	case runtime.TranscriptCommittedRowFactAssistant:
 		if fact.Assistant == nil {
@@ -668,10 +669,11 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row.Kind = clientui.TranscriptRowAssistant
 		row.Assistant = &clientui.TranscriptAssistantRow{
-			StepID:        mustRuntimeTranscriptStepID(fact.StepID, "committed assistant row"),
-			Text:          fact.Assistant.Text,
-			CondensedText: optionalNonBlankString(fact.Assistant.CondensedText),
-			Phase:         transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
+			StepID:            mustRuntimeTranscriptStepID(fact.StepID, "committed assistant row"),
+			Text:              fact.Assistant.Text,
+			CondensedText:     optionalNonBlankString(fact.Assistant.CondensedText),
+			Phase:             transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
+			CommittedAtUnixMs: textutil.Pointer(fact.Assistant.CommittedAtUnixMs),
 		}
 		if fact.Assistant.StreamID != nil {
 			streamID := mustTranscriptAssistantStreamID(fact.Assistant.StreamID, "committed assistant row")

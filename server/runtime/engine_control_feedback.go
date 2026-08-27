@@ -57,7 +57,11 @@ func (e *Engine) mutateChatSettingWithCommittedFeedback(
 		receipt = settings.CommitReceipt
 	}
 	apply()
-	return settings.Changed, receipt, errors.Join(settingsErr, feedbackErr)
+	return settings.Changed, receipt, errors.Join(
+		settingsErr,
+		feedbackErr,
+		e.emitRaw(Event{Kind: EventSessionStatusChanged}),
+	)
 }
 
 func (e *Engine) stopAfterDefinitelyUncommittedChatSetting(receipt session.CommitReceipt, err error) bool {

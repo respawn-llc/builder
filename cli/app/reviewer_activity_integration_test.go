@@ -178,7 +178,7 @@ func TestReviewerActivityPublishesRunningAndTerminalStateToTUI(t *testing.T) {
 
 type reviewerActivityMainClient struct{}
 
-func (reviewerActivityMainClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (reviewerActivityMainClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return reviewerActivityMainResponse(), nil
 }
 
@@ -223,7 +223,7 @@ func newBlockingReviewerActivityClient() *blockingReviewerActivityClient {
 	}
 }
 
-func (c *blockingReviewerActivityClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *blockingReviewerActivityClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.calls.Add(1)
 	c.startOnce.Do(func() { close(c.started) })
 	select {

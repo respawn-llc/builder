@@ -347,7 +347,10 @@ func (e *Engine) applyStreamingStateMutationForStep(stepID string, mutate func(*
 
 func (e *Engine) SetSessionName(ctx context.Context, name string) error {
 	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
-		return struct{}{}, e.store.SetName(name)
+		if err := e.store.SetName(name); err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, e.emitRaw(Event{Kind: EventSessionIdentityChanged})
 	})
 	return err
 }
@@ -362,7 +365,11 @@ func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
 			return struct{}{}, settingsErr
 		}
-		return struct{}{}, errors.Join(settingsErr, e.setThinkingValue(normalized))
+		return struct{}{}, errors.Join(
+			settingsErr,
+			e.setThinkingValue(normalized),
+			e.emitRaw(Event{Kind: EventSessionStatusChanged}),
+		)
 	})
 	return err
 }
@@ -441,7 +448,10 @@ func (e *Engine) SetAutoCompactionEnabled(ctx context.Context, enabled bool) (bo
 		return struct {
 			changed bool
 			enabled bool
-		}{changed: settings.Changed, enabled: enabled}, settingsErr
+		}{changed: settings.Changed, enabled: enabled}, errors.Join(
+			settingsErr,
+			e.emitRaw(Event{Kind: EventSessionStatusChanged}),
+		)
 	})
 	if err != nil {
 		return false, e.AutoCompactionEnabled(), err

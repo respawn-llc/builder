@@ -377,6 +377,43 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 }
 
+func TestTranscriptCommittedRowsProjectCommitTime(t *testing.T) {
+	committedAt := transcript.CommittedAtUnixMs(123)
+	stepID := runtimeStepIDPointer(transcriptProjectionStepID)
+	for _, fact := range []runtime.TranscriptCommittedRowFact{
+		{
+			Kind: runtime.TranscriptCommittedRowFactUser,
+			User: &runtime.TranscriptUserRowFact{
+				Text:              "user",
+				CommittedAtUnixMs: &committedAt,
+			},
+		},
+		{
+			StepID: stepID,
+			Kind:   runtime.TranscriptCommittedRowFactAssistant,
+			Assistant: &runtime.TranscriptAssistantRowFact{
+				Text:              "assistant",
+				Phase:             llm.MessagePhaseFinal,
+				CommittedAtUnixMs: &committedAt,
+			},
+		},
+	} {
+		row := transcriptRowFromFact(fact)
+		switch {
+		case row.User != nil:
+			if row.User.CommittedAtUnixMs == nil || row.User.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
+				t.Fatalf("user committed time = %v, want %d", row.User.CommittedAtUnixMs, committedAt.UnixMs())
+			}
+		case row.Assistant != nil:
+			if row.Assistant.CommittedAtUnixMs == nil || row.Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
+				t.Fatalf("assistant committed time = %v, want %d", row.Assistant.CommittedAtUnixMs, committedAt.UnixMs())
+			}
+		default:
+			t.Fatalf("projected row = %+v, want user or assistant", row)
+		}
+	}
+}
+
 func TestRuntimeScopedUserFlushProjectsWithoutExactStep(t *testing.T) {
 	messages, err := TranscriptMessagesFromRuntimeEventChecked(runtime.Event{
 		Kind:             runtime.EventUserMessageFlushed,

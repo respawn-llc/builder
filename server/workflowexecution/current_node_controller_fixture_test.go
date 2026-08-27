@@ -938,7 +938,7 @@ type callbackCurrentNodeLLMClient struct {
 	generate func(context.Context, llm.Request) (llm.Response, error)
 }
 
-func (c callbackCurrentNodeLLMClient) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
+func (c callbackCurrentNodeLLMClient) Generate(ctx context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	return c.generate(ctx, request)
 }
 

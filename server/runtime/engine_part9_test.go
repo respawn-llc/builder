@@ -8,8 +8,6 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
-	"errors"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
