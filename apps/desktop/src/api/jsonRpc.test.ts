@@ -13,12 +13,6 @@ import {
   ServerNotReadyReason,
   ServerService,
 } from "@app/server-api-contract/gen/kent/api/server/server_pb";
-import {
-  SetupCompletionSchema,
-  SetupEventSchema,
-  SetupService,
-  SetupStartResultSchema,
-} from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 import { z } from "zod";
 import type { RpcEventHandler } from "./transport";
 
@@ -489,186 +483,6 @@ describe("JsonRpcWebSocketTransport", () => {
     subscription.close();
   });
 
-  it("classifies generated descriptor subscription completion without JSON sentinels", async () => {
-    const terminals: unknown[] = [];
-    const errors: string[] = [];
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const subscription = transport.subscribeDescriptor(
-      SetupService.method.subscribe,
-      create(SetupService.method.subscribe.input, {
-        setupOperationId: "123e4567-e89b-42d3-a456-426614174000",
-      }),
-      {
-        eventDescriptor: SetupEventSchema,
-        completionDescriptor: SetupCompletionSchema,
-        projectStart(result) {
-          if (result.outcome.case !== "success") throw new Error("setup subscription rejected");
-        },
-        projectEvent(event) {
-          return event.setupOperationId;
-        },
-        classifyCompletion(completion) {
-          return completion.code === undefined
-            ? { kind: "normal" as const }
-            : {
-                kind: "error" as const,
-                code: completion.code,
-                diagnostic: completion.diagnostic ?? "",
-              };
-        },
-      },
-      {
-        onEvent() {
-          return;
-        },
-        onTerminal(outcome) {
-          terminals.push(outcome);
-        },
-        onError(error) {
-          errors.push(error.message);
-        },
-      },
-    );
-    const socket = sockets[0] ?? failTest("descriptor subscription socket missing");
-    await socket.setup();
-    binaryAck(socket, 1, SetupService.method.subscribe, {
-      result: create(SetupStartResultSchema, {
-        outcome: { case: "success", value: {} },
-      }),
-    });
-    await flushPromises();
-
-    binaryNotification(socket, SetupService.method.complete, create(SetupCompletionSchema));
-    await flushPromises();
-
-    expect(terminals).toEqual([{ kind: "normal" }]);
-    expect(errors).toEqual([]);
-    expect(sockets).toHaveLength(1);
-    subscription.close();
-  });
-
-  it("preserves generated descriptor error completion before reconnect", async () => {
-    const observed: string[] = [];
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const subscription = transport.subscribeDescriptor(
-      SetupService.method.subscribe,
-      create(SetupService.method.subscribe.input, {
-        setupOperationId: "123e4567-e89b-42d3-a456-426614174000",
-      }),
-      {
-        eventDescriptor: SetupEventSchema,
-        completionDescriptor: SetupCompletionSchema,
-        projectStart(result) {
-          if (result.outcome.case !== "success") throw new Error("setup subscription rejected");
-        },
-        projectEvent(event) {
-          return event.setupOperationId;
-        },
-        classifyCompletion(completion) {
-          return completion.code === undefined
-            ? { kind: "normal" as const }
-            : {
-                kind: "error" as const,
-                code: completion.code,
-                diagnostic: completion.diagnostic ?? "",
-              };
-        },
-      },
-      {
-        onEvent() {
-          return;
-        },
-        onTerminal(outcome) {
-          observed.push(`terminal:${outcome.kind}`);
-        },
-        onError() {
-          observed.push("error");
-        },
-      },
-    );
-    const firstSocket = sockets[0] ?? failTest("descriptor subscription socket missing");
-    await firstSocket.setup();
-    binaryAck(firstSocket, 1, SetupService.method.subscribe, {
-      result: create(SetupStartResultSchema, {
-        outcome: { case: "success", value: {} },
-      }),
-    });
-    await flushPromises();
-    binaryNotification(
-      firstSocket,
-      SetupService.method.complete,
-      create(SetupCompletionSchema, { code: 409, diagnostic: "stream gap" }),
-    );
-
-    await vi.waitFor(() => {
-      expect(sockets.length).toBeGreaterThanOrEqual(2);
-    });
-    expect(observed).toEqual(["terminal:error", "error"]);
-    subscription.close();
-  });
-
-  it("rejects malformed generated descriptor event payload before projection", async () => {
-    const events: string[] = [];
-    const errors: Error[] = [];
-    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const subscription = transport.subscribeDescriptor(
-      SetupService.method.subscribe,
-      create(SetupService.method.subscribe.input, {
-        setupOperationId: "123e4567-e89b-42d3-a456-426614174000",
-      }),
-      {
-        eventDescriptor: SetupEventSchema,
-        completionDescriptor: SetupCompletionSchema,
-        projectStart(result) {
-          if (result.outcome.case !== "success") throw new Error("setup subscription rejected");
-        },
-        projectEvent(event) {
-          return event.setupOperationId;
-        },
-        classifyCompletion() {
-          return { kind: "normal" };
-        },
-      },
-      {
-        onEvent(event) {
-          events.push(event);
-        },
-        onTerminal() {
-          return;
-        },
-        onError(error) {
-          errors.push(error);
-        },
-      },
-    );
-    const socket = sockets[0] ?? failTest("descriptor subscription socket missing");
-    await socket.setup();
-    binaryAck(socket, 1, SetupService.method.subscribe, {
-      result: create(SetupStartResultSchema, {
-        outcome: { case: "success", value: {} },
-      }),
-    });
-    await flushPromises();
-
-    const malformedEvent = encodeEnvelope({
-      frame: {
-        case: "notificationEvent",
-        value: {
-          operation: operationName(SetupService.method.event),
-          payload: new Uint8Array([0xff]),
-        },
-      },
-    });
-    const malformedEventBuffer = new ArrayBuffer(malformedEvent.byteLength);
-    new Uint8Array(malformedEventBuffer).set(malformedEvent);
-    socket.receive(malformedEventBuffer);
-    await flushPromises();
-
-    expect(events).toEqual([]);
-    expect(errors).toHaveLength(1);
-    subscription.close();
-  });
-
   it("keeps subscriptions active for non-terminal events ending with complete", async () => {
     const events: string[] = [];
     const completions: string[] = [];
@@ -902,8 +716,7 @@ function binaryAck<
   Method extends
     | typeof ServerService.method.getReadiness
     | typeof ConnectionService.method.handshake
-    | typeof ConnectionService.method.attachSession
-    | typeof SetupService.method.subscribe,
+    | typeof ConnectionService.method.attachSession,
 >(
   socket: MockWebSocket,
   sentIndex: number,
@@ -940,23 +753,6 @@ function binaryAck<
   const responseBuffer = new ArrayBuffer(encodedResponse.byteLength);
   new Uint8Array(responseBuffer).set(encodedResponse);
   socket.receive(responseBuffer);
-}
-
-function binaryNotification<
-  Method extends typeof SetupService.method.event | typeof SetupService.method.complete,
->(socket: MockWebSocket, method: Method, message: ReturnType<typeof create<Method["input"]>>): void {
-  const encoded = encodeEnvelope({
-    frame: {
-      case: "notificationEvent",
-      value: {
-        operation: operationName(method),
-        payload: encode(method.input, message),
-      },
-    },
-  });
-  const buffer = new ArrayBuffer(encoded.byteLength);
-  new Uint8Array(buffer).set(encoded);
-  socket.receive(buffer);
 }
 
 function malformedBinaryAck(socket: MockWebSocket, sentIndex: number): void {

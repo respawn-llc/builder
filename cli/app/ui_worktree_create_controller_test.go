@@ -7,6 +7,7 @@ import (
 
 	"core/cli/app/internal/worktreeui"
 	"core/shared/invariant"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -68,7 +69,7 @@ func TestWorktreeCreateControllerNavigatesFields(t *testing.T) {
 		t.Fatalf("focus after shift+tab = %v, want branch target", updated.worktrees.create.focus)
 	}
 
-	updated.worktrees.create.resolution = worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindNewBranch}
+	updated.worktrees.create.resolution = worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
 	updated, _ = applyWorktreeCreateControllerKey(updated, tea.KeyMsg{Type: tea.KeyDown})
 	if updated.worktrees.create.focus != uiWorktreeCreateFieldBaseRef {
 		t.Fatalf("focus after down with new branch = %v, want base ref", updated.worktrees.create.focus)
@@ -93,7 +94,7 @@ func TestWorktreeCreateControllerCyclesActions(t *testing.T) {
 func TestWorktreeCreateControllerSubmitStartsResolution(t *testing.T) {
 	client := &worktreeCommandTestClient{
 		listResp:    testMainWorktreeListResponse(),
-		resolveResp: worktreecontract.CreateTargetResolveResponse{Resolution: worktreecontract.CreateTargetResolution{Input: "feature/new", Kind: worktreecontract.CreateTargetResolutionKindNewBranch}},
+		resolveResp: &worktreepb.CreateTargetResolveSuccess{Resolution: &worktreepb.CreateTargetResolution{Input: "feature/new", Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}},
 	}
 	model := newWorktreeCreateControllerTestModel(t, client)
 	model.worktrees.create.branchTarget.Replace(strings.NewReplacer("\r", "", "\n", "").Replace("feature/new"))
@@ -124,13 +125,14 @@ func TestWorktreeCreateSetupEventUpdatesPendingOperationState(t *testing.T) {
 	model := newWorktreeCreateControllerTestModel(t, &worktreeCommandTestClient{listResp: testMainWorktreeListResponse()})
 	model.worktrees.mutationToken = 7
 	model.worktrees.create.submitting = true
-	event := worktreecontract.SetupEvent{
-		SetupOperationID: worktreecontract.NewSetupOperationID(),
-		Phase:            worktreecontract.SetupPhaseStarted,
-		Started: &worktreecontract.SetupStarted{
-			SourceWorkspaceRoot: "/repo",
-			WorktreeRoot:        "/repo/.worktrees/feature",
-			ScriptPath:          "/repo/scripts/setup.sh",
+	event := &worktreepb.SetupEvent{
+		SetupOperationId: worktreecontract.NewSetupOperationID().String(),
+		Phase: &worktreepb.SetupEvent_Started{
+			Started: &worktreepb.SetupStarted{
+				SourceWorkspaceRoot: "/repo",
+				WorktreeRoot:        "/repo/.worktrees/feature",
+				ScriptPath:          "/repo/scripts/setup.sh",
+			},
 		},
 	}
 
@@ -139,9 +141,9 @@ func TestWorktreeCreateSetupEventUpdatesPendingOperationState(t *testing.T) {
 	if updated.worktrees.create.setupEvent == nil {
 		t.Fatal("setup event was not reduced into create state")
 	}
-	if updated.worktrees.create.setupEvent.Started == nil ||
-		updated.worktrees.create.setupEvent.Started.ScriptPath != event.Started.ScriptPath ||
-		updated.worktrees.create.setupEvent.Started.WorktreeRoot != event.Started.WorktreeRoot {
+	if updated.worktrees.create.setupEvent.GetStarted() == nil ||
+		updated.worktrees.create.setupEvent.GetStarted().ScriptPath != event.GetStarted().ScriptPath ||
+		updated.worktrees.create.setupEvent.GetStarted().WorktreeRoot != event.GetStarted().WorktreeRoot {
 		t.Fatalf("setup event state = %+v, want script/worktree paths", updated.worktrees.create.setupEvent)
 	}
 	if !updated.worktrees.create.submitting {
@@ -166,7 +168,7 @@ func TestWorktreeCreateCompletionSwitchesByStableWorktreeID(t *testing.T) {
 
 	next, cmd := model.Update(worktreeCreateDoneMsg{
 		token: 7,
-		resp:  worktreecontract.CreateResponse{Worktree: created},
+		resp:  &worktreepb.CreateSuccess{Worktree: created},
 	})
 	_ = next.(*uiModel)
 	_ = collectCmdMessages(t, cmd)
@@ -178,7 +180,7 @@ func TestWorktreeCreateCompletionSwitchesByStableWorktreeID(t *testing.T) {
 
 func TestWorktreeCreateErrorOwnershipStopsSpinnerAndPreservesForm(t *testing.T) {
 	model := newWorktreeCreateControllerTestModel(t, nil)
-	model.worktrees.create.resolution = worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindNewBranch}
+	model.worktrees.create.resolution = worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
 	model.worktrees.create.branchTarget.Replace(strings.NewReplacer("\r", "", "\n", "").Replace("feature/entered"))
 	model.worktrees.create.baseRef.Replace(strings.NewReplacer("\r", "", "\n", "").Replace("HEAD"))
 	model.worktrees.create.submitting = true
@@ -229,7 +231,7 @@ func TestWorktreeCreateFormErrorsUseDialogErrorRegion(t *testing.T) {
 func TestWorktreeCreateNonTypedAndSetupRetainedErrorsUseFormRegion(t *testing.T) {
 	for _, source := range []error{
 		errors.New("transport failed"),
-		&worktreecontract.SetupRetainedError{Diagnostic: "setup retained"},
+		&worktreecontract.SetupRetainedError{Details: &worktreepb.SetupRetainedDetails{Diagnostic: "setup retained"}},
 		&worktreecontract.CreateContractError{Cause: errors.New("invalid contract")},
 	} {
 		model := newWorktreeCreateControllerTestModel(t, nil)
@@ -246,7 +248,7 @@ func TestWorktreeCreateNonTypedAndSetupRetainedErrorsUseFormRegion(t *testing.T)
 
 func TestWorktreeCreateFieldErrorClearsWhenBaseRefIsEdited(t *testing.T) {
 	model := newWorktreeCreateControllerTestModel(t, nil)
-	model.worktrees.create.resolution = worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindNewBranch}
+	model.worktrees.create.resolution = worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
 	model.worktrees.create.focus = uiWorktreeCreateFieldBaseRef
 	model.worktrees.create.baseRefErrorText = "old base ref error"
 
@@ -260,10 +262,10 @@ func TestWorktreeCreateFieldErrorClearsWhenBaseRefIsEdited(t *testing.T) {
 func TestWorktreeCreateFieldErrorClearsWhenBaseRefBecomesHidden(t *testing.T) {
 	model := newWorktreeCreateControllerTestModel(t, nil)
 	model.worktrees.create.baseRefErrorText = "old base ref error"
-	model.worktrees.create.resolution = worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindNewBranch}
+	model.worktrees.create.resolution = worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
 
 	model.worktrees.create.applyResolveState(worktreeui.State{
-		Resolution: worktreecontract.CreateTargetResolution{Kind: worktreecontract.CreateTargetResolutionKindExistingBranch},
+		Resolution: worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH},
 	})
 
 	if model.worktrees.create.baseRefErrorText != "" {

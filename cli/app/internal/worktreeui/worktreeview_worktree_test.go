@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/textutil"
 	"core/shared/worktreecontract"
 )
@@ -39,28 +40,29 @@ func TestSanitizeBranchSuggestion(t *testing.T) {
 func testWorktreeItem(t *testing.T, id, name, root, branch string, main, current bool) Item {
 	t.Helper()
 	branchValue := branch
-	entry := worktreecontract.ListEntry{
-		Topology: worktreecontract.TopologyEntry{
-			Variant: worktreecontract.TopologyVariantRegistered,
-			Registered: &worktreecontract.RegisteredFacts{
-				Git: worktreecontract.GitFacts{
-					CanonicalRoot: root,
-					HeadObject:    "deadbeef",
-					BranchRef:     textutil.OptionalTrimmedString("refs/heads/" + branch),
-					BranchName:    &branchValue,
-					IsMain:        main,
-					PathAvailable: true,
-				},
-				Kent: worktreecontract.KentFacts{
-					WorktreeID:    id,
-					CanonicalRoot: root,
-					DisplayName:   name,
-					Managed:       true,
-					CreatedBranch: !main,
+	entry := &worktreepb.ListEntry{
+		Topology: &worktreepb.TopologyEntry{
+			Topology: &worktreepb.TopologyEntry_Registered{
+				Registered: &worktreepb.RegisteredFacts{
+					Git: &worktreepb.GitFacts{
+						CanonicalRoot: root,
+						HeadObject:    "deadbeef",
+						BranchRef:     textutil.OptionalTrimmedString("refs/heads/" + branch),
+						BranchName:    &branchValue,
+						IsMain:        main,
+						PathAvailable: true,
+					},
+					Kent: &worktreepb.KentFacts{
+						WorktreeId:    id,
+						CanonicalRoot: root,
+						DisplayName:   name,
+						Managed:       true,
+						CreatedBranch: !main,
+					},
 				},
 			},
 		},
-		Projection: worktreecontract.ListProjection{Selector: branch, IsCurrent: current},
+		Projection: &worktreepb.ListProjection{Selector: branch, IsCurrent: current},
 	}
 	item, err := ProjectItem(entry)
 	if err != nil {

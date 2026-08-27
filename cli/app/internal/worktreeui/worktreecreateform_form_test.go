@@ -1,23 +1,24 @@
 package worktreeui
 
 import (
-	"core/shared/worktreecontract"
 	"testing"
+
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 func TestOrderedFieldsIncludesBaseRefOnlyForNewBranch(t *testing.T) {
-	got := OrderedFields(worktreecontract.CreateTargetResolutionKindNewBranch)
+	got := OrderedFields(worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH)
 	if len(got) != 3 || got[0] != FieldBranchTarget || got[1] != FieldBaseRef || got[2] != FieldActions {
 		t.Fatalf("new branch fields = %+v", got)
 	}
-	got = OrderedFields(worktreecontract.CreateTargetResolutionKindExistingBranch)
+	got = OrderedFields(worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH)
 	if len(got) != 2 || got[0] != FieldBranchTarget || got[1] != FieldActions {
 		t.Fatalf("existing branch fields = %+v", got)
 	}
 }
 
 func TestMoveFieldSkipsDisabledBaseRef(t *testing.T) {
-	got := MoveField(FieldBranchTarget, worktreecontract.CreateTargetResolutionKindExistingBranch, 1)
+	got := MoveField(FieldBranchTarget, worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH, 1)
 	if got != FieldActions {
 		t.Fatalf("field = %v, want FieldActions", got)
 	}

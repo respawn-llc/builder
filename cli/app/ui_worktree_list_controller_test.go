@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"core/cli/app/internal/worktreeui"
-	"core/shared/worktreecontract"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -184,7 +184,7 @@ func TestWorktreeSlashDeleteResolvesSelectorsWithServer(t *testing.T) {
 			if len(client.selectorRequests) != 1 {
 				t.Fatalf("selector requests = %+v, want one authoritative resolution", client.selectorRequests)
 			}
-			if got := client.selectorRequests[0]; got.SessionID != "session-1" || got.Selector != selector {
+			if got := client.selectorRequests[0]; got.SessionId != "session-1" || got.Selector != selector {
 				t.Fatalf("selector request = %+v, want session-scoped selector %q", got, selector)
 			}
 			if updated.worktrees.phase != uiWorktreeOverlayPhaseDeleteConfirm {
@@ -306,7 +306,7 @@ func TestUnorderedListWithoutResolvedIdentityCannotDismissDeleteConfirmation(t *
 	resolvedEntry := testResolvedFeatureWorktreeEntry()
 	for _, tc := range []struct {
 		name     string
-		response worktreecontract.ListResponse
+		response *worktreepb.ListSuccess
 	}{
 		{
 			name:     "target omitted",
@@ -314,8 +314,8 @@ func TestUnorderedListWithoutResolvedIdentityCannotDismissDeleteConfirmation(t *
 		},
 		{
 			name: "target reclassified external",
-			response: worktreecontract.ListResponse{
-				Worktrees: []worktreecontract.ListEntry{
+			response: &worktreepb.ListSuccess{
+				Worktrees: []*worktreepb.ListEntry{
 					testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, true, true, false),
 					testExternalWorktreeListEntry("/wt/feature-renamed", "feature-renamed", false),
 				},
@@ -363,8 +363,8 @@ func TestClosedWorktreeDeleteResolutionCannotOpenReplacementOverlay(t *testing.T
 
 func TestClosedWorktreeListResultCannotHydrateReplacementOverlay(t *testing.T) {
 	client := &worktreeCommandTestClient{
-		listResp: worktreecontract.ListResponse{
-			Worktrees: []worktreecontract.ListEntry{
+		listResp: &worktreepb.ListSuccess{
+			Worktrees: []*worktreepb.ListEntry{
 				testRegisteredWorktreeListEntry("wt-stale", "stale", "/wt/stale", "stale", false, false, true, true),
 			},
 		},
@@ -412,19 +412,19 @@ func TestWorktreeListRefreshPreservesSelectionAndDeleteTargetByKentID(t *testing
 	}
 }
 
-func testSelectorPreview(entry worktreecontract.ListEntry) worktreecontract.SelectorResolveResponse {
-	return worktreecontract.SelectorResolveResponse{
+func testSelectorPreview(entry *worktreepb.ListEntry) *worktreepb.SelectorResolveSuccess {
+	return &worktreepb.SelectorResolveSuccess{
 		Worktree: entry,
 	}
 }
 
-func testResolvedFeatureWorktreeEntry() worktreecontract.ListEntry {
+func testResolvedFeatureWorktreeEntry() *worktreepb.ListEntry {
 	return testRegisteredWorktreeListEntry("wt-feature", "renamed", "/wt/feature-renamed", "feature/renamed", false, false, true, true)
 }
 
-func testRefreshedWorktreeListResponse() worktreecontract.ListResponse {
-	return worktreecontract.ListResponse{
-		Worktrees: []worktreecontract.ListEntry{
+func testRefreshedWorktreeListResponse() *worktreepb.ListSuccess {
+	return &worktreepb.ListSuccess{
+		Worktrees: []*worktreepb.ListEntry{
 			testRegisteredWorktreeListEntry("wt-other", "other", "/wt/other", "feature", false, false, true, true),
 			testRegisteredWorktreeListEntry("wt-feature", "renamed", "/wt/feature", "feature-renamed", false, false, true, true),
 		},

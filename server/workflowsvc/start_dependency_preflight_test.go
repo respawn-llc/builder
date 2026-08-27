@@ -58,7 +58,7 @@ func TestStartDependencyPreflightWarnsBeforeExecutionTargetWorkAndProceedSkipsRe
 
 	warning, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           blocked.Task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 		BranchName:       &branchName,
 	})
 	if err != nil {
@@ -85,7 +85,7 @@ func TestStartDependencyPreflightWarnsBeforeExecutionTargetWorkAndProceedSkipsRe
 
 	proceeded, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:                     blocked.Task.ID,
-		SetupOperationID:           serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID:           serverapi.NewWorkflowSetupOperationID(),
 		ProceedDespiteDependencies: true,
 	})
 	if err != nil {
@@ -117,7 +117,7 @@ func TestStartDependencyPreflightReturnsBeforeTargetInfrastructure(t *testing.T)
 
 	_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           taskID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
 		},

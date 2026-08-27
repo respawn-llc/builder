@@ -21,7 +21,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/protocol"
 	"core/shared/serverapi"
-	"core/shared/worktreecontract"
 
 	"golang.org/x/net/websocket"
 	sqlitedriver "modernc.org/sqlite"
@@ -535,12 +534,12 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 			if test.resume {
 				sendGatewayRequest(t, conn, "explicit", protocol.MethodWorkflowTaskResume, serverapi.WorkflowTaskResumeRequest{
 					TaskID:           task.ID,
-					SetupOperationID: serverapi.WorkflowSetupOperationID(worktreecontract.NewSetupOperationID()),
+					SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 				})
 			} else {
 				sendGatewayRequest(t, conn, "explicit", protocol.MethodWorkflowTaskStart, serverapi.WorkflowTaskStartRequest{
 					TaskID:           task.ID,
-					SetupOperationID: serverapi.WorkflowSetupOperationID(worktreecontract.NewSetupOperationID()),
+					SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 				})
 			}
 			requireGatewayResponse(t, conn, "explicit")

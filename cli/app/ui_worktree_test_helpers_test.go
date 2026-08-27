@@ -10,116 +10,114 @@ import (
 	"time"
 
 	"core/cli/app/internal/worktreeui"
+	"core/shared/apicontract"
 	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
-	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type worktreeCommandTestClient struct {
-	listResp          worktreecontract.ListResponse
+	listResp          *worktreepb.ListSuccess
 	listErr           error
 	listCtx           context.Context
-	listRequests      []worktreecontract.ListRequest
+	listRequests      []*worktreepb.ListRequest
 	selectorCtx       context.Context
-	selectorResp      worktreecontract.SelectorResolveResponse
+	selectorResp      *worktreepb.SelectorResolveSuccess
 	selectorErr       error
-	selectorRequests  []worktreecontract.SelectorResolveRequest
+	selectorRequests  []*worktreepb.SelectorResolveRequest
 	resolveCtx        context.Context
-	resolveResp       worktreecontract.CreateTargetResolveResponse
+	resolveResp       *worktreepb.CreateTargetResolveSuccess
 	resolveErr        error
 	createCtx         context.Context
-	createResp        worktreecontract.CreateResponse
+	createResp        *worktreepb.CreateSuccess
 	createErr         error
-	enterRequests     []worktreecontract.EnterRequest
+	enterRequests     []*worktreepb.EnterRequest
 	enterErr          error
 	deleteCtx         context.Context
-	deleteResp        worktreecontract.DeleteResult
+	deleteResp        *worktreepb.DeleteSuccess
 	deleteErr         error
-	resolveRequests   []worktreecontract.CreateTargetResolveRequest
-	createRequests    []worktreecontract.CreateRequest
-	deleteRequests    []worktreecontract.DeleteRequest
+	resolveRequests   []*worktreepb.CreateTargetResolveRequest
+	createRequests    []*worktreepb.CreateRequest
+	deleteRequests    []*worktreepb.DeleteRequest
 	reconnectFailures map[string]int
 }
 
-func (c *worktreeCommandTestClient) GetWorktreeStatus(context.Context, worktreecontract.StatusRequest) (worktreecontract.StatusResponse, error) {
-	return worktreecontract.StatusResponse{}, nil
+func (c *worktreeCommandTestClient) GetWorktreeStatus(context.Context, *worktreepb.StatusRequest) (*worktreepb.StatusSuccess, error) {
+	return &worktreepb.StatusSuccess{}, nil
 }
 
-func (c *worktreeCommandTestClient) ListWorktrees(ctx context.Context, req worktreecontract.ListRequest) (worktreecontract.ListResponse, error) {
+func (c *worktreeCommandTestClient) ListWorktrees(ctx context.Context, req *worktreepb.ListRequest) (*worktreepb.ListSuccess, error) {
 	c.listCtx = ctx
 	c.listRequests = append(c.listRequests, req)
 	return c.listResp, c.listErr
 }
 
-func (c *worktreeCommandTestClient) ListWorkspaceWorktrees(context.Context, worktreecontract.WorkspaceListRequest) (worktreecontract.WorkspaceListResponse, error) {
-	return worktreecontract.WorkspaceListResponse{}, errors.New("unexpected workspace worktree list request")
+func (c *worktreeCommandTestClient) ListWorkspaceWorktrees(context.Context, *worktreepb.WorkspaceListRequest) (*worktreepb.WorkspaceListSuccess, error) {
+	return nil, errors.New("unexpected workspace worktree list request")
 }
 
-func (c *worktreeCommandTestClient) ResolveWorktreeSelector(ctx context.Context, req worktreecontract.SelectorResolveRequest) (worktreecontract.SelectorResolveResponse, error) {
+func (c *worktreeCommandTestClient) ResolveWorktreeSelector(ctx context.Context, req *worktreepb.SelectorResolveRequest) (*worktreepb.SelectorResolveSuccess, error) {
 	c.selectorCtx = ctx
 	c.selectorRequests = append(c.selectorRequests, req)
 	return c.selectorResp, c.selectorErr
 }
 
-func (c *worktreeCommandTestClient) PreviewWorktreeDelete(context.Context, worktreecontract.DeletePreviewRequest) (worktreecontract.DeletePreviewResponse, error) {
-	return worktreecontract.DeletePreviewResponse{}, errors.New("unexpected worktree delete preview request")
+func (c *worktreeCommandTestClient) PreviewWorktreeDelete(context.Context, *worktreepb.DeletePreviewRequest) (*worktreepb.DeletePreviewSuccess, error) {
+	return nil, errors.New("unexpected worktree delete preview request")
 }
 
-func (c *worktreeCommandTestClient) ResolveWorktreeCreateTarget(ctx context.Context, req worktreecontract.CreateTargetResolveRequest) (worktreecontract.CreateTargetResolveResponse, error) {
+func (c *worktreeCommandTestClient) ResolveWorktreeCreateTarget(ctx context.Context, req *worktreepb.CreateTargetResolveRequest) (*worktreepb.CreateTargetResolveSuccess, error) {
 	c.resolveCtx = ctx
 	c.resolveRequests = append(c.resolveRequests, req)
 	if c.resolveErr != nil {
-		return worktreecontract.CreateTargetResolveResponse{}, c.resolveErr
+		return nil, c.resolveErr
 	}
-	if c.resolveResp.Resolution.Kind != "" {
+	if c.resolveResp != nil && c.resolveResp.GetResolution().GetKind() != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_UNSPECIFIED {
 		return c.resolveResp, nil
 	}
-	return worktreecontract.CreateTargetResolveResponse{Resolution: worktreecontract.CreateTargetResolution{Input: req.Target, Kind: worktreecontract.CreateTargetResolutionKindNewBranch}}, nil
+	return &worktreepb.CreateTargetResolveSuccess{Resolution: &worktreepb.CreateTargetResolution{Input: req.Target, Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}}, nil
 }
 
-func (c *worktreeCommandTestClient) CreateWorktree(ctx context.Context, req worktreecontract.CreateRequest) (worktreecontract.CreateResponse, error) {
+func (c *worktreeCommandTestClient) CreateWorktree(ctx context.Context, req *worktreepb.CreateRequest) (*worktreepb.CreateSuccess, error) {
 	c.createCtx = ctx
 	c.createRequests = append(c.createRequests, req)
 	if c.consumeReconnectFailure("create") {
-		return worktreecontract.CreateResponse{}, serverapi.ErrRuntimeUnavailable
+		return nil, serverapi.ErrRuntimeUnavailable
 	}
 	return c.createResp, c.createErr
 }
 
-func (c *worktreeCommandTestClient) EnterWorktree(_ context.Context, req worktreecontract.EnterRequest) (worktreecontract.ScheduledAcknowledgement, error) {
+func (c *worktreeCommandTestClient) EnterWorktree(_ context.Context, req *worktreepb.EnterRequest) (*worktreepb.ScheduledAcknowledgement, error) {
 	c.enterRequests = append(c.enterRequests, req)
 	if c.consumeReconnectFailure("enter") {
-		return worktreecontract.ScheduledAcknowledgement{}, serverapi.ErrRuntimeUnavailable
+		return nil, serverapi.ErrRuntimeUnavailable
 	}
-	return worktreecontract.ScheduledAcknowledgement{OperationID: req.OperationID}, c.enterErr
+	return &worktreepb.ScheduledAcknowledgement{OperationId: req.OperationId}, c.enterErr
 }
 
-func (c *worktreeCommandTestClient) LeaveWorktree(context.Context, worktreecontract.LeaveRequest) (worktreecontract.ScheduledAcknowledgement, error) {
-	return worktreecontract.ScheduledAcknowledgement{}, nil
+func (c *worktreeCommandTestClient) LeaveWorktree(context.Context, *worktreepb.LeaveRequest) (*worktreepb.ScheduledAcknowledgement, error) {
+	return &worktreepb.ScheduledAcknowledgement{}, nil
 }
 
-func (c *worktreeCommandTestClient) DeleteWorktree(ctx context.Context, req worktreecontract.DeleteRequest) (worktreecontract.DeleteResult, error) {
+func (c *worktreeCommandTestClient) DeleteWorktree(ctx context.Context, req *worktreepb.DeleteRequest) (*worktreepb.DeleteSuccess, error) {
 	c.deleteCtx = ctx
 	c.deleteRequests = append(c.deleteRequests, req)
 	if c.consumeReconnectFailure("delete") {
-		return worktreecontract.DeleteResult{}, serverapi.ErrRuntimeUnavailable
+		return nil, serverapi.ErrRuntimeUnavailable
 	}
 	return c.deleteResp, c.deleteErr
 }
 
-func (c *worktreeCommandTestClient) SubscribeWorktreeSetup(ctx context.Context, req worktreecontract.SetupSubscribeRequest) (worktreecontract.SetupSubscription, error) {
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
+func (c *worktreeCommandTestClient) SubscribeWorktreeSetup(ctx context.Context, req *worktreepb.SetupSubscribeRequest) (apicontract.WorktreeSetupSubscription, error) {
 	return worktreeCommandNoopSetupSubscription{}, nil
 }
 
 type worktreeCommandNoopSetupSubscription struct{}
 
-func (worktreeCommandNoopSetupSubscription) Next(ctx context.Context) (worktreecontract.SetupEvent, error) {
-	return worktreecontract.SetupEvent{}, io.EOF
+func (worktreeCommandNoopSetupSubscription) Next(ctx context.Context) (*worktreepb.SetupEvent, error) {
+	return nil, io.EOF
 }
 
 func (worktreeCommandNoopSetupSubscription) Close() error { return nil }
@@ -169,82 +167,84 @@ func applyWorktreeCmdMessages(t *testing.T, model *uiModel, cmd tea.Cmd) *uiMode
 	return model
 }
 
-func testMainWorktreeListResponse() worktreecontract.ListResponse {
-	return worktreecontract.ListResponse{
-		Target: worktreecontract.SessionExecutionTarget{
-			WorkspaceID:      "workspace-1",
+func testMainWorktreeListResponse() *worktreepb.ListSuccess {
+	return &worktreepb.ListSuccess{
+		Target: &worktreepb.SessionExecutionTarget{
+			WorkspaceId:      "workspace-1",
 			WorkspaceRoot:    "/repo",
 			EffectiveWorkdir: "/repo",
 		},
-		Worktrees: []worktreecontract.ListEntry{
+		Worktrees: []*worktreepb.ListEntry{
 			testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, true, true, false),
 		},
 	}
 }
 
-func testLinkedWorktreeListResponse() worktreecontract.ListResponse {
-	return worktreecontract.ListResponse{
-		Target: worktreecontract.SessionExecutionTarget{
-			WorkspaceID:      "workspace-1",
+func testLinkedWorktreeListResponse() *worktreepb.ListSuccess {
+	return &worktreepb.ListSuccess{
+		Target: &worktreepb.SessionExecutionTarget{
+			WorkspaceId:      "workspace-1",
 			WorkspaceRoot:    "/repo",
-			Worktree:         &worktreecontract.SessionExecutionWorktreeTarget{ID: "wt-feature", Root: "/wt/feature-a"},
+			Worktree:         &worktreepb.SessionExecutionWorktreeTarget{Id: "wt-feature", Root: "/wt/feature-a"},
 			EffectiveWorkdir: "/wt/feature-a/pkg",
 		},
-		Worktrees: []worktreecontract.ListEntry{
+		Worktrees: []*worktreepb.ListEntry{
 			testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, false, true, false),
 			testRegisteredWorktreeListEntry("wt-feature", "feature-a", "/wt/feature-a", "feature/a", false, true, true, true),
 		},
 	}
 }
 
-func testRegisteredWorktreeListEntry(id, name, root, branch string, main, current, managed, createdBranch bool) worktreecontract.ListEntry {
+func testRegisteredWorktreeListEntry(id, name, root, branch string, main, current, managed, createdBranch bool) *worktreepb.ListEntry {
 	branchRef := "refs/heads/" + branch
 	branchName := branch
 	originSessionID := "session-1"
-	kent := worktreecontract.KentFacts{
-		WorktreeID:    id,
+	kent := &worktreepb.KentFacts{
+		WorktreeId:    id,
 		CanonicalRoot: root,
 		DisplayName:   name,
 		Managed:       managed,
 		CreatedBranch: createdBranch,
 	}
 	if createdBranch {
-		kent.OriginSessionID = &originSessionID
+		kent.OriginSessionId = &originSessionID
 	}
-	return worktreecontract.ListEntry{
-		Topology: worktreecontract.TopologyEntry{
-			Variant: worktreecontract.TopologyVariantRegistered,
-			Registered: &worktreecontract.RegisteredFacts{
-				Git: worktreecontract.GitFacts{
-					CanonicalRoot: root,
-					HeadObject:    "deadbeef",
-					BranchRef:     &branchRef,
-					BranchName:    &branchName,
-					IsMain:        main,
-					PathAvailable: true,
+	return &worktreepb.ListEntry{
+		Topology: &worktreepb.TopologyEntry{
+			Topology: &worktreepb.TopologyEntry_Registered{
+				Registered: &worktreepb.RegisteredFacts{
+					Git: &worktreepb.GitFacts{
+						CanonicalRoot: root,
+						HeadObject:    "deadbeef",
+						BranchRef:     &branchRef,
+						BranchName:    &branchName,
+						IsMain:        main,
+						PathAvailable: true,
+					},
+					Kent: kent,
 				},
-				Kent: kent,
 			},
 		},
-		Projection: worktreecontract.ListProjection{Selector: branch, IsCurrent: current},
+		Projection: &worktreepb.ListProjection{Selector: branch, IsCurrent: current},
 	}
 }
 
-func testExternalWorktreeListEntry(root string, selector string, current bool) worktreecontract.ListEntry {
+func testExternalWorktreeListEntry(root string, selector string, current bool) *worktreepb.ListEntry {
 	fallbackIdentity := filepath.Base(root)
-	return worktreecontract.ListEntry{
-		Topology: worktreecontract.TopologyEntry{
-			Variant: worktreecontract.TopologyVariantExternal,
-			External: &worktreecontract.ExternalFacts{
-				Git: worktreecontract.GitFacts{
-					CanonicalRoot: root,
-					HeadObject:    "deadbeef",
-					Detached:      true,
-					PathAvailable: true,
+	return &worktreepb.ListEntry{
+		Topology: &worktreepb.TopologyEntry{
+			Topology: &worktreepb.TopologyEntry_External{
+				External: &worktreepb.ExternalFacts{
+					Git: &worktreepb.GitFacts{
+						CanonicalRoot: root,
+						HeadObject:    "deadbeef",
+						Detached:      true,
+						PathAvailable: true,
+					},
 				},
 			},
 		},
-		Projection: worktreecontract.ListProjection{
+		Projection: &worktreepb.ListProjection{
 			Selector:         selector,
 			IsCurrent:        current,
 			FallbackIdentity: &fallbackIdentity,
@@ -252,7 +252,7 @@ func testExternalWorktreeListEntry(root string, selector string, current bool) w
 	}
 }
 
-func mustProjectWorktreeItem(t *testing.T, entry worktreecontract.ListEntry) worktreeui.Item {
+func mustProjectWorktreeItem(t *testing.T, entry *worktreepb.ListEntry) worktreeui.Item {
 	t.Helper()
 	item, err := worktreeui.ProjectItem(entry)
 	if err != nil {

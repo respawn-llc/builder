@@ -1,4 +1,5 @@
 import {
+  create,
   decode,
   encode,
   operationName,
@@ -7,19 +8,33 @@ import {
   type Message,
   type MessageShape,
 } from "@app/server-api-contract";
+import { ProjectAvailability } from "@app/server-api-contract/gen/kent/api/project/project_pb";
+import {
+  BranchCleanupOutcomeKind,
+  CreateResultSchema,
+  CreateService,
+  CreateTargetResolutionKind,
+  CreateTargetResolveResultSchema,
+  CreateTargetService,
+  DeletePreviewResultSchema,
+  DeletePreviewService,
+  DeleteResultSchema,
+  DirtyStateKind,
+  EnterResultSchema,
+  SelectorResolveResultSchema,
+  SelectorService,
+  SwitchOperationKind,
+  TransitionService,
+} from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 import {
   ConnectionStore,
   type DescriptorRpcTransport,
-  type DescriptorSubscriptionContract,
-  type DescriptorSubscriptionHandler,
   type JsonValue,
   type RpcCallOptions,
   type RpcDedicatedCallOptions,
   type RpcEventHandler,
   type RpcSubscription,
 } from "@/api/composition";
-
-export { worktreeQueryAuthorityRoutes } from "./worktree";
 
 type FakeJsonRoute = Readonly<{
   method: string;
@@ -41,6 +56,129 @@ type FakeDescriptorSubscriptionRoute = Readonly<{
 }>;
 
 export type FakeRoute = FakeJsonRoute | FakeDescriptorRoute | FakeDescriptorSubscriptionRoute;
+
+export function worktreeQueryFixtureRoutes(): readonly FakeRoute[] {
+  const topology = {
+    topology: {
+      case: "external",
+      value: {
+        git: {
+          canonicalRoot: "/repo/feature",
+          headObject: "abc123",
+          branchName: "feature",
+          detached: false,
+          bare: false,
+          isMain: false,
+          pathAvailable: true,
+        },
+      },
+    },
+  } as const;
+  const projected = (selector: string) => ({
+    topology,
+    projection: {
+      selector,
+      isCurrent: false,
+      switch: {
+        kind: SwitchOperationKind.WORKTREE_SWITCH_OPERATION_ENTER,
+        selector,
+      },
+      deletePreview: { selector: "/repo/feature" },
+    },
+  });
+  return [
+    {
+      descriptor: CreateTargetService.method.resolve,
+      resultFactory: (_request, callIndex) =>
+        create(CreateTargetResolveResultSchema, {
+          outcome: {
+            case: "success",
+            value: {
+              resolution: {
+                kind: CreateTargetResolutionKind.WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH,
+                input: "feature",
+                resolvedRef: `refs/heads/feature-${String(callIndex)}`,
+              },
+            },
+          },
+        }),
+    },
+    {
+      descriptor: SelectorService.method.resolve,
+      resultFactory: (_request, callIndex) =>
+        create(SelectorResolveResultSchema, {
+          outcome: {
+            case: "success",
+            value: { worktree: projected(`feature-${String(callIndex)}`) },
+          },
+        }),
+    },
+    {
+      descriptor: DeletePreviewService.method.get,
+      resultFactory: (_request, callIndex) =>
+        create(DeletePreviewResultSchema, {
+          outcome: {
+            case: "success",
+            value: {
+              worktree: topology,
+              deletionSelector: "/repo/feature",
+              cleanliness:
+                callIndex === 0
+                  ? { kind: DirtyStateKind.DIRTY_STATE_CLEAN }
+                  : { kind: DirtyStateKind.DIRTY_STATE_DIRTY, dirtyFileCount: callIndex },
+            },
+          },
+        }),
+    },
+    {
+      descriptor: CreateService.method.create,
+      result: create(CreateResultSchema, {
+        outcome: {
+          case: "success",
+          value: {
+            target: {
+              workspaceId: "workspace-1",
+              workspaceName: "Workspace",
+              workspaceRoot: "/repo",
+              workspaceAvailability: ProjectAvailability.AVAILABLE,
+              cwdRelpath: ".",
+              effectiveWorkdir: "/repo",
+            },
+            worktree: projected("feature"),
+          },
+        },
+      }),
+    },
+    {
+      descriptor: TransitionService.method.enter,
+      result: create(EnterResultSchema, {
+        outcome: {
+          case: "error",
+          value: {
+            code: "internal_failure",
+            detail: {
+              case: "internalFailure",
+              value: { operation: "worktree.enter", cause: "fixture failure" },
+            },
+          },
+        },
+      }),
+    },
+    {
+      descriptor: TransitionService.method.delete,
+      result: create(DeleteResultSchema, {
+        outcome: {
+          case: "success",
+          value: {
+            cleanup: {
+              kind: BranchCleanupOutcomeKind.WORKTREE_BRANCH_CLEANUP_OUTCOME_NOT_REQUESTED,
+            },
+          },
+        },
+      }),
+    },
+  ];
+}
 
 export class FakeRpcTransport implements DescriptorRpcTransport {
   readonly connection = new ConnectionStore();
@@ -127,13 +265,22 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     Method extends DescMethod,
     EventDescriptor extends DescMessage,
     CompletionDescriptor extends DescMessage,
-    Event,
   >(
-    descriptor: Method,
-    request: MessageShape<Method["input"]>,
-    contract: DescriptorSubscriptionContract<Method, EventDescriptor, CompletionDescriptor, Event>,
-    handler: DescriptorSubscriptionHandler<Event>,
+    ...args: [
+      descriptor: Method,
+      request: MessageShape<Method["input"]>,
+      eventDescriptor: EventDescriptor,
+      completionDescriptor: CompletionDescriptor,
+      onStart: (result: MessageShape<Method["output"]>) => void,
+      handler: Readonly<{
+        onOpen?(): void;
+        onEvent(event: MessageShape<EventDescriptor>): void;
+        onComplete(completion: MessageShape<CompletionDescriptor>): void;
+        onError(error: Error): void;
+      }>,
+    ]
   ): RpcSubscription {
+    const [descriptor, request, eventDescriptor, completionDescriptor, onStart, handler] = args;
     const operation = operationName(descriptor);
     const route = this.#descriptorSubscriptionRoutes.get(operation);
     if (route === undefined) throw new Error(`Missing fake descriptor subscription route: ${operation}`);
@@ -142,7 +289,7 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
       descriptor,
       open: () => {
         try {
-          contract.projectStart(
+          onStart(
             decode<Method["output"]>(
               descriptor.output,
               encode(route.subscriptionDescriptor.output, route.startResult),
@@ -154,18 +301,14 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
         }
       },
       event: (payload: Uint8Array) => {
-        handler.onEvent(contract.projectEvent(decode(contract.eventDescriptor, payload)));
+        try {
+          handler.onEvent(decode(eventDescriptor, payload));
+        } catch (cause) {
+          handler.onError(cause instanceof Error ? cause : new Error("Descriptor event failed."));
+        }
       },
       complete: (payload: Uint8Array) => {
-        const outcome = contract.classifyCompletion(decode(contract.completionDescriptor, payload));
-        handler.onTerminal(outcome);
-        if (outcome.kind === "error") {
-          handler.onError(
-            new Error(
-              `${operation} subscription completed with code ${outcome.code.toString()}: ${outcome.diagnostic}`,
-            ),
-          );
-        }
+        handler.onComplete(decode(completionDescriptor, payload));
       },
       fail: handler.onError,
     };
@@ -262,12 +405,22 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     for (const subscriber of this.#descriptorSubscribersFor(descriptor)) subscriber.open();
   }
 
+  get descriptorSubscriptions(): readonly DescMethod[] {
+    return this.#descriptorSubscribers.map(({ descriptor }) => descriptor);
+  }
+
   emitDescriptor<EventMethod extends DescMethod>(
     subscriptionDescriptor: DescMethod,
     eventDescriptor: EventMethod,
     message: MessageShape<EventMethod["input"]>,
   ): void {
     const payload = encode(eventDescriptor.input, message);
+    for (const subscriber of this.#descriptorSubscribersFor(subscriptionDescriptor)) {
+      subscriber.event(payload);
+    }
+  }
+
+  emitDescriptorBytes(subscriptionDescriptor: DescMethod, payload: Uint8Array): void {
     for (const subscriber of this.#descriptorSubscribersFor(subscriptionDescriptor)) {
       subscriber.event(payload);
     }

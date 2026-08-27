@@ -41,7 +41,6 @@ import (
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -624,7 +623,7 @@ func TestGatewayHandshakeAndProjectList(t *testing.T) {
 	handshakeGateway(t, conn)
 
 	malformedCorrelation := "malformed-call"
-	malformedCall, err := proto.Marshal(&sharedpb.Envelope{
+	malformedCall, err := protoapi.Marshal(&sharedpb.Envelope{
 		Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
 			Correlation: &malformedCorrelation,
 		}},

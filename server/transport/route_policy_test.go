@@ -18,6 +18,7 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -445,6 +446,39 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 		routeScopeParams{},
 	); err != nil {
 		t.Fatalf("workspace Chat materialization with attached project: %v", err)
+	}
+	workspaceListMethod := worktreepb.File_kent_api_worktree_worktree_proto.Services().
+		ByName("ListService").Methods().ByName("ListWorkspace")
+	workspaceListOperation, err := protoapi.OperationFromDescriptor(workspaceListMethod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizeWorkspaceList := func(request *worktreepb.WorkspaceListRequest) error {
+		scopeParams, err := worktreeWorkspaceScope(request)
+		if err != nil {
+			return err
+		}
+		return executor.authorizeScopeFacts(
+			ctx,
+			&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
+			routeScopePolicy(workspaceListOperation.Options.ScopePolicy),
+			workspaceListOperation.Name,
+			scopeParams,
+		)
+	}
+	if err := authorizeWorkspaceList(&worktreepb.WorkspaceListRequest{
+		ProjectId:   fixture.bindingA.ProjectID,
+		WorkspaceId: fixture.bindingA.WorkspaceID,
+	}); err != nil {
+		t.Fatalf("workspace list with matching project/workspace: %v", err)
+	}
+	for _, request := range []*worktreepb.WorkspaceListRequest{
+		{ProjectId: fixture.bindingB.ProjectID, WorkspaceId: fixture.bindingB.WorkspaceID},
+		{ProjectId: fixture.bindingA.ProjectID, WorkspaceId: fixture.bindingB.WorkspaceID},
+	} {
+		if err := authorizeWorkspaceList(request); err == nil {
+			t.Fatalf("foreign workspace list unexpectedly allowed: %+v", request)
+		}
 	}
 	unboundCore, unboundServer := newUnboundGatewayTestServer(t)
 	unboundServer.Close()
