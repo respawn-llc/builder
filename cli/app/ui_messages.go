@@ -74,7 +74,6 @@ type goalRuntimeDoneMsg struct {
 	operation      goalRuntimeOperation
 	objective      string
 	goal           *clientui.RuntimeGoal
-	mutation       clientui.GoalMutationResult
 	err            error
 }
 
@@ -120,9 +119,8 @@ type injectedQueueDiscardDoneMsg struct {
 }
 
 type compactDoneMsg struct {
+	requestID     runtimeids.CompactionRequestID
 	submittedText string
-	origin        uiCompactionOrigin
-	invoked       bool
 	err           error
 }
 
@@ -140,7 +138,6 @@ type activeSubmitState struct {
 	text            string
 	queuedID        string
 	origin          activeSubmitOrigin
-	clientRequestID runtimeids.RuntimeClientRequestID
 	submissionOrder inputSubmissionOrder
 }
 

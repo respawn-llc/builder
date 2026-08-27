@@ -122,8 +122,8 @@ func TestDetailModeNewestRefreshPreservesCachedNavigationWhenSelectedRowSurvives
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyUp})
 	model = next.(*uiModel)
-	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
-		t.Fatalf("cached navigation selected action = %v, want expandable surviving row", action)
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionNone {
+		t.Fatalf("cached navigation selected action = %v, want no action for complete surviving row", action)
 	}
 
 	sessionViews.results <- controlledTranscriptPageResult{response: serverapi.SessionTranscriptPageResponse{
@@ -137,8 +137,8 @@ func TestDetailModeNewestRefreshPreservesCachedNavigationWhenSelectedRowSurvives
 		},
 	}}
 	model = updateUIModel(t, model, waitForDetailTranscriptCompletion(t, done))
-	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
-		t.Fatalf("newest refresh selected action = %v, want surviving cached selection", action)
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionNone {
+		t.Fatalf("newest refresh selected action = %v, want no action for complete surviving row", action)
 	}
 }
 
@@ -170,8 +170,8 @@ func TestDetailModeNewestRefreshAnchorsAtEndWhenCachedWindowHasNewerContent(t *t
 	model.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail})
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyUp})
 	model = next.(*uiModel)
-	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
-		t.Fatalf("cached older-window selected action = %v, want expandable row", action)
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionNone {
+		t.Fatalf("cached older-window selected action = %v, want no action for complete row", action)
 	}
 
 	model.applyDetailTranscriptLoad(detailTestSessionID, clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
@@ -374,14 +374,14 @@ func TestDetailTranscriptNewestRefreshReplacesChangedSelectedRow(t *testing.T) {
 	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, newest)
 	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, older)
 	model.view = mustUpdateTUIModel(t, model.view, tea.KeyMsg{Type: tea.KeyEnter})
-	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
-		t.Fatalf("detail selection action after expand = %v, want collapse", got)
+	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionNone {
+		t.Fatalf("detail selection action after Enter = %v, want no action for complete row", got)
 	}
 
 	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, refreshedNewest)
 
-	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionExpand {
-		t.Fatalf("detail selection action after newest refresh = %v, want refreshed row collapsed at page end", got)
+	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionNone {
+		t.Fatalf("detail selection action after newest refresh = %v, want no action for complete row", got)
 	}
 	got := model.detailTranscript.page().Entries
 	want := refreshedNewest.Entries

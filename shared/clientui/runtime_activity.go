@@ -3,9 +3,6 @@ package clientui
 import (
 	"fmt"
 	"strings"
-
-	"core/shared/runtimeids"
-	"core/shared/runtimeinput"
 )
 
 type ReadModelVersion struct {
@@ -57,6 +54,22 @@ const (
 	RuntimeActivityClosing        RuntimeActivityState = "closing"
 )
 
+type ReviewerActivity string
+
+const (
+	ReviewerActivityInactive ReviewerActivity = "inactive"
+	ReviewerActivityRunning  ReviewerActivity = "running"
+)
+
+func (a ReviewerActivity) Validate() error {
+	switch a {
+	case ReviewerActivityInactive, ReviewerActivityRunning:
+		return nil
+	default:
+		return fmt.Errorf("unknown reviewer activity %q", a)
+	}
+}
+
 type RuntimeActivityActiveKind string
 
 const (
@@ -84,35 +97,4 @@ func (k RuntimeActivityActiveKind) Validate() error {
 	default:
 		return fmt.Errorf("unknown runtime activity active kind %q", k)
 	}
-}
-
-type RuntimeSubmitRequest struct {
-	ClientRequestID runtimeids.RuntimeClientRequestID
-	Input           runtimeinput.Input
-}
-
-func (r RuntimeSubmitRequest) Validate() error {
-	if r.ClientRequestID.IsZero() {
-		return fmt.Errorf("runtime submit requires client request id")
-	}
-	return r.Input.Validate()
-}
-
-type RuntimeShellRequest struct {
-	Command string
-}
-
-func (r RuntimeShellRequest) Validate() error {
-	if strings.TrimSpace(r.Command) == "" {
-		return fmt.Errorf("shell command is required")
-	}
-	return nil
-}
-
-type RuntimeCompactRequest struct {
-	Args string
-}
-
-func (r RuntimeCompactRequest) Validate() error {
-	return nil
 }

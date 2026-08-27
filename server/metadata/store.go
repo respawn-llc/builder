@@ -73,7 +73,6 @@ type sessionMetadataDocument struct {
 	HeadlessActive                  bool                                   `json:"headless_active"`
 	CompactionSoonReminderIssued    bool                                   `json:"compaction_soon_reminder_issued"`
 	GeneratedRecoveredWarningIssued bool                                   `json:"generated_recovered_warning_issued"`
-	PendingModelRecovery            *session.PendingModelRecovery          `json:"pending_model_recovery"`
 	WorktreeReminder                *session.WorktreeReminderState         `json:"worktree_reminder"`
 	RebindReminder                  *session.SessionRebindReminder         `json:"rebind_reminder,omitempty"`
 	Goal                            *session.GoalState                     `json:"goal"`
@@ -2603,7 +2602,6 @@ func (s *Store) upsertSessionSnapshotWithQueries(
 		HeadlessActive:                  snapshot.Meta.HeadlessActive,
 		CompactionSoonReminderIssued:    snapshot.Meta.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: snapshot.Meta.GeneratedRecoveredWarningIssued,
-		PendingModelRecovery:            snapshot.Meta.PendingModelRecovery,
 		WorktreeReminder:                persistedWorktreeReminder,
 		RebindReminder:                  snapshot.Meta.RebindReminder,
 		Goal:                            snapshot.Meta.Goal,
@@ -2818,7 +2816,6 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		HeadlessActive:                  metadataPayload.HeadlessActive,
 		CompactionSoonReminderIssued:    metadataPayload.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: metadataPayload.GeneratedRecoveredWarningIssued,
-		PendingModelRecovery:            metadataPayload.PendingModelRecovery,
 		WorktreeReminder:                metadataPayload.WorktreeReminder,
 		RebindReminder:                  metadataPayload.RebindReminder,
 		Goal:                            metadataPayload.Goal,

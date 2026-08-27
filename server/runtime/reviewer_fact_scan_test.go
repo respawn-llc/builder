@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -49,7 +50,8 @@ func TestPersistedTranscriptScanReconstructsTypedReviewerFactsInBoundedWindows(t
 	}
 	if page.Entries[0].ReviewerError.ID != reviewerError.ID ||
 		page.Entries[0].ReviewerError.Detail != reviewerError.Detail ||
-		page.Entries[0].StepID != "22222222-2222-4222-8222-222222222222" ||
+		page.Entries[0].StepID == nil ||
+		*page.Entries[0].StepID != "22222222-2222-4222-8222-222222222222" ||
 		page.Entries[0].Visibility != transcript.EntryVisibilityOngoing {
 		t.Fatalf("projected Reviewer error = %+v", page.Entries[0])
 	}
@@ -96,7 +98,7 @@ func TestReopenedEngineHydratesTypedReviewerFacts(t *testing.T) {
 	if _, _, err := appendTestEvent(t, store, stepID, reviewerError); err != nil {
 		t.Fatalf("append error: %v", err)
 	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows
 	assertReviewerRuntimeFacts(t, rows, stepID, feedback, reviewerError)
 }
@@ -128,7 +130,7 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 			}
 		}
 	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	newest := mustEngineNewestSegmentPage(t, engine)
 	var pages []TranscriptSegmentPage
 	for page := newest; ; {
@@ -143,7 +145,7 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 		for _, entry := range page.Snapshot.Entries {
 			if entry.ReviewerFeedback != nil {
 				feedbackEntries++
-				if entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoingCollapsed ||
+				if entry.StepID == nil || *entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoingCollapsed ||
 					entry.ReviewerFeedback.ID != feedback.ID ||
 					!reflect.DeepEqual(entry.ReviewerFeedback.Suggestions, feedback.Suggestions) {
 					t.Fatalf("paged feedback payload changed: %+v", entry)
@@ -151,7 +153,7 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 			}
 			if entry.ReviewerError != nil {
 				errorEntries++
-				if entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoing ||
+				if entry.StepID == nil || *entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoing ||
 					entry.ReviewerError.ID != reviewerError.ID ||
 					entry.ReviewerError.Detail != reviewerError.Detail {
 					t.Fatalf("paged Reviewer error payload changed: %+v", entry)
@@ -170,7 +172,7 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 			}
 		}
 	}
-	reopened := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	reopened := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	assertReviewerRuntimeFacts(t, mustTranscriptHydrationSnapshot(t, reopened).CommittedRows, stepID, feedback, reviewerError)
 }
 
@@ -196,7 +198,7 @@ func TestReviewerFactsSurviveSessionCloneReplay(t *testing.T) {
 		t.Fatalf("clone session: %v", err)
 	}
 	t.Cleanup(func() { _ = child.RemoveDurable() })
-	engine := mustNewTestEngine(t, child, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, child, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	assertReviewerRuntimeFacts(t, mustTranscriptHydrationSnapshot(t, engine).CommittedRows, stepID, feedback, reviewerError)
 }
 
@@ -219,13 +221,13 @@ func assertReviewerRuntimeFacts(
 	}
 	gotFeedback := typedRows[0].ReviewerFeedback
 	gotError := typedRows[1].ReviewerError
-	if gotFeedback.ID != feedback.ID || typedRows[0].StepID != stepID ||
+	if gotFeedback.ID != feedback.ID || typedRows[0].StepID == nil || *typedRows[0].StepID != stepID ||
 		!reflect.DeepEqual(gotFeedback.Suggestions, feedback.Suggestions) ||
 		gotFeedback.SuggestionCount != len(feedback.Suggestions) ||
 		typedRows[0].Visibility != transcript.EntryVisibilityOngoingCollapsed {
 		t.Fatalf("feedback payload changed: %+v", typedRows[0])
 	}
-	if gotError.ID != reviewerError.ID || typedRows[1].StepID != stepID ||
+	if gotError.ID != reviewerError.ID || typedRows[1].StepID == nil || *typedRows[1].StepID != stepID ||
 		gotError.Detail != reviewerError.Detail ||
 		typedRows[1].Visibility != transcript.EntryVisibilityOngoing {
 		t.Fatalf("Reviewer error payload changed: %+v", typedRows[1])
@@ -265,9 +267,11 @@ func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Run("uncommitted", func(t *testing.T) {
 				store := mustCreateTestSession(t)
-				engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+				engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+				restoreStep := setTestActiveStep(engine, "11111111-1111-4111-8111-111111111111")
+				defer restoreStep()
 				mustBlockTestEventLogAppends(t, store)
-				err := engine.steer("11111111-1111-4111-8111-111111111111", testCase.intent())
+				err := engine.steer(runtimeTestStepID("11111111-1111-4111-8111-111111111111"), testCase.intent())
 				if err == nil {
 					t.Fatal("uncommitted typed Reviewer append succeeded")
 				}
@@ -279,9 +283,11 @@ func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 				observerErr := errors.New("typed Reviewer observer failed")
 				gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 				store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-				engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+				engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+				restoreStep := setTestActiveStep(engine, "22222222-2222-4222-8222-222222222222")
+				defer restoreStep()
 				gate.FailNext(observerErr)
-				err := engine.steer("22222222-2222-4222-8222-222222222222", testCase.intent())
+				err := engine.steer(runtimeTestStepID("22222222-2222-4222-8222-222222222222"), testCase.intent())
 				if !errors.Is(err, observerErr) {
 					t.Fatalf("committed typed Reviewer error = %v, want %v", err, observerErr)
 				}

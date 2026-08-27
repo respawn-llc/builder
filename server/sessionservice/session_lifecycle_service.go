@@ -8,7 +8,6 @@ import (
 
 	"core/server/auth"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/shared/rollbacktarget"
@@ -27,8 +26,6 @@ type SessionLifecycleService struct {
 	navigation      sessionNavigationTargetResolver
 	authManager     *auth.Manager
 	persisted       session.PersistedSessionResolver
-	drafts          *requestmemo.Memo[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse]
-	transitions     *requestmemo.Memo[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]
 }
 
 func (s *SessionLifecycleService) WithPersistedSessionResolver(resolver session.PersistedSessionResolver) *SessionLifecycleService {
@@ -36,16 +33,6 @@ func (s *SessionLifecycleService) WithPersistedSessionResolver(resolver session.
 		s.persisted = resolver
 	}
 	return s
-}
-
-type sessionDraftMemoRequest struct {
-	SessionID string
-	Input     string
-}
-
-type sessionTransitionMemoRequest struct {
-	SessionID  string
-	Transition serverapi.SessionTransition
 }
 
 type sessionWorkspaceRetargeter interface {
@@ -62,8 +49,6 @@ func NewSessionLifecycleService(persistenceRoot string, authority *sessionruntim
 		containerDir: strings.TrimSpace(persistenceRoot),
 		authority:    authority,
 		authManager:  authManager,
-		drafts:       requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](),
-		transitions:  requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse](),
 	}
 }
 
@@ -72,8 +57,6 @@ func NewGlobalSessionLifecycleService(persistenceRoot string, authority *session
 		persistenceRoot: strings.TrimSpace(persistenceRoot),
 		authority:       authority,
 		authManager:     authManager,
-		drafts:          requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](),
-		transitions:     requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse](),
 	}
 }
 
@@ -140,13 +123,10 @@ func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req ser
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionPersistInputDraftResponse{}, err
 	}
-	memoReq := sessionDraftMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Input: req.Input}
-	return s.drafts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionDraftMemoRequest, func(runCtx context.Context) (serverapi.SessionPersistInputDraftResponse, error) {
-		err := s.withStore(runCtx, req.SessionID, func(_ context.Context, store *session.Store) error {
-			return persistSessionInputDraft(store, req.Input)
-		})
-		return serverapi.SessionPersistInputDraftResponse{}, err
+	err := s.withStore(ctx, req.SessionID, func(_ context.Context, store *session.Store) error {
+		return persistSessionInputDraft(store, req.Input)
 	})
+	return serverapi.SessionPersistInputDraftResponse{}, err
 }
 
 func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
@@ -197,31 +177,7 @@ func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req ser
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
 	}
-	if req.Transition.Action != serverapi.SessionTransitionActionForkRollback {
-		return s.resolveTransitionOnce(ctx, req)
-	}
-	memoReq := sessionTransitionMemoRequest{
-		SessionID:  strings.TrimSpace(req.SessionID),
-		Transition: req.Transition,
-	}
-	return s.transitions.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionTransitionMemoRequest, func(context.Context) (serverapi.SessionResolveTransitionResponse, error) {
-		return s.resolveTransitionOnce(ctx, req)
-	})
-}
-
-func sameSessionTransitionMemoRequest(a sessionTransitionMemoRequest, b sessionTransitionMemoRequest) bool {
-	return a.SessionID == b.SessionID &&
-		a.Transition.Action == b.Transition.Action &&
-		a.Transition.InitialPrompt == b.Transition.InitialPrompt &&
-		a.Transition.InitialPromptHistoryRecorded == b.Transition.InitialPromptHistoryRecorded &&
-		textutil.EqualOptional(a.Transition.InitialInput, b.Transition.InitialInput) &&
-		a.Transition.TargetSessionID == b.Transition.TargetSessionID &&
-		a.Transition.ForkRollbackTargetID == b.Transition.ForkRollbackTargetID &&
-		textutil.EqualOptional(a.Transition.PreviousSessionID, b.Transition.PreviousSessionID)
-}
-
-func sameSessionDraftMemoRequest(a sessionDraftMemoRequest, b sessionDraftMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Input == b.Input
+	return s.resolveTransitionOnce(ctx, req)
 }
 
 func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {

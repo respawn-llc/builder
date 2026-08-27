@@ -501,9 +501,8 @@ func TestRemotePersistInputDraftSendsComposerInput(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "draft-1",
-		SessionID:       "session-1",
-		Input:           "visible draft",
+		SessionID: "session-1",
+		Input:     "visible draft",
 	})
 	if err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
@@ -822,7 +821,6 @@ func TestRemoteWorkflowProjectSubscriptionRejectsInvalidResourceActionCombinatio
 }
 
 func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
-	operationID := serverapi.NewWorktreeOperationID()
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -835,19 +833,23 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			t.Fatalf("unmarshal delete params: %v", err)
 		}
-		if params.OperationID != operationID ||
+		if params.SessionID != "session-1" ||
 			params.Selector != "wt-1" ||
 			params.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 			t.Fatalf("unexpected delete params: %+v", params)
 		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(req.Params, &fields); err != nil {
+			t.Fatalf("unmarshal delete fields: %v", err)
+		}
+		if _, exists := fields["operation_id"]; exists {
+			t.Fatal("delete request unexpectedly contains operation_id")
+		}
 		branchName := "feature-a"
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeDeleteResult{
-			Kind: serverapi.WorktreeDeleteResultKindCompleted,
-			Completed: &serverapi.WorktreeDeleteCompletedResult{
-				Cleanup: serverapi.WorktreeBranchCleanupOutcome{
-					Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
-					BranchName: &branchName,
-				},
+			Cleanup: serverapi.WorktreeBranchCleanupOutcome{
+				Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
+				BranchName: &branchName,
 			},
 		})); err != nil {
 			t.Fatalf("send delete response: %v", err)
@@ -861,17 +863,14 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.DeleteWorktree(context.Background(), serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: operationID,
-			SessionID:   "session-1",
-		},
+		SessionID:           "session-1",
 		Selector:            "wt-1",
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if resp.Completed == nil || resp.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
+	if resp.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
 		t.Fatalf("unexpected delete response: %+v", resp)
 	}
 }
@@ -1278,9 +1277,8 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "request-1",
-		SessionID:       source.SessionID,
-		WorkspaceRoot:   source.TargetRoot,
+		SessionID:     source.SessionID,
+		WorkspaceRoot: source.TargetRoot,
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }
@@ -1339,14 +1337,6 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 				FallbackIdentity: "/repo/feature",
 			}},
 		},
-		&serverapi.WorktreeTransitionPendingError{
-			SessionID:          "session",
-			PendingOperationID: operationID,
-		},
-		serverapi.NewWorktreeImmediateTransitionError(
-			serverapi.WorktreeImmediateTransitionOriginInactive,
-			errors.New("originating model step ended"),
-		),
 		&serverapi.WorktreeSetupRetainedError{
 			Worktree: serverapi.WorktreeTopologyEntry{
 				Variant: serverapi.WorktreeTopologyVariantRegistered,
@@ -1385,16 +1375,6 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 		var decoded *serverapi.WorktreeSelectorError
 		if !errors.As(err, &decoded) || len(decoded.Candidates) != 1 || decoded.Candidates[0].FallbackIdentity != "/repo/feature" {
 			t.Fatalf("decoded selector error = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeTransitionPendingError:
-		var decoded *serverapi.WorktreeTransitionPendingError
-		if !errors.As(err, &decoded) || decoded.PendingOperationID != operationID || decoded.SessionID != "session" {
-			t.Fatalf("decoded pending transition = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeImmediateTransitionError:
-		var decoded *serverapi.WorktreeImmediateTransitionError
-		if !errors.As(err, &decoded) || decoded.Kind != serverapi.WorktreeImmediateTransitionOriginInactive {
-			t.Fatalf("decoded immediate transition = %+v (%v)", decoded, err)
 		}
 	case *serverapi.WorktreeSetupRetainedError:
 		var decoded *serverapi.WorktreeSetupRetainedError
@@ -1476,6 +1456,105 @@ func TestProtocolErrorMapsEquivalentRuntimeSentinel(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesPendingWorkNotPending(t *testing.T) {
+	id := runtimeids.NewQueueItemID()
+	source := &serverapi.PendingWorkNotPendingError{ItemID: id}
+	decoded := protocolError(&protocol.ResponseError{Code: source.RPCErrorCode(), Message: source.Error(), Data: source.RPCErrorData()})
+	var typed *serverapi.PendingWorkNotPendingError
+	if !errors.Is(decoded, serverapi.ErrPendingWorkNotPending) || !errors.As(decoded, &typed) || typed.ItemID != id {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+	if err := serverapi.DecodePendingWorkNotPendingError((&serverapi.PendingWorkNotPendingError{}).RPCErrorData()); err == nil {
+		t.Fatal("invalid internal item id encoded as typed not-pending")
+	}
+}
+
+func TestProtocolErrorDecodesPendingWorkCapacityDirectly(t *testing.T) {
+	source := &serverapi.PendingWorkCapacityError{}
+	decoded := protocolError(&protocol.ResponseError{
+		Code:    source.RPCErrorCode(),
+		Message: source.Error(),
+		Data:    source.RPCErrorData(),
+	})
+	var typed *serverapi.PendingWorkCapacityError
+	if !errors.Is(decoded, serverapi.ErrPendingWorkCapacity) || !errors.As(decoded, &typed) {
+		t.Fatalf("decoded = %T %v, want typed Pending Work capacity", decoded, decoded)
+	}
+	if err := serverapi.DecodePendingWorkCapacityError(json.RawMessage(`{"reason":"other"}`)); err == nil {
+		t.Fatal("invalid Pending Work capacity reason decoded as typed capacity")
+	}
+}
+
+func TestRemotePendingWorkContractsPreserveTypedResults(t *testing.T) {
+	guidance, exact := "keep details", " /compact   keep details "
+	requestID := runtimeids.NewCompactionRequestID()
+	wire := mustJSON(t, serverapi.RuntimeCompactContextRequest{
+		SessionID: "session-1", RequestID: requestID,
+		Admission: serverapi.ManualCompactionAdmission{Guidance: &guidance, RestorationInput: exact}})
+	var compactRequest serverapi.RuntimeCompactContextRequest
+	if err := json.Unmarshal(wire, &compactRequest); err != nil {
+		t.Fatal(err)
+	}
+	if compactRequest.RequestID != requestID ||
+		compactRequest.Admission.Guidance == nil ||
+		*compactRequest.Admission.Guidance != guidance ||
+		compactRequest.Admission.RestorationInput != exact {
+		t.Fatalf("compact request = %+v", compactRequest)
+	}
+	id := runtimeids.NewQueueItemID()
+	list := serverapi.RuntimeListPendingWorkResponse{PendingWork: serverapi.PendingWork{Items: []serverapi.PendingWorkItem{{
+		ID: id, Lane: serverapi.PendingWorkLaneSteer, Kind: serverapi.PendingWorkItemKindManualCompaction,
+		State: serverapi.PendingWorkItemStatePending, ManualCompaction: &serverapi.PendingWorkManualCompaction{
+			Guidance: &guidance, RestorationInput: exact},
+	}}}}
+	removed := serverapi.RuntimeRemovePendingWorkResponse{Restoration: serverapi.PendingWorkRestoration{
+		Kind:             serverapi.PendingWorkItemKindManualCompaction,
+		ManualCompaction: &serverapi.PendingWorkManualCompactionRestoration{Input: exact},
+	}}
+	invalid := list
+	invalid.PendingWork.Items = []serverapi.PendingWorkItem{list.PendingWork.Items[0]}
+	invalid.PendingWork.Items[0].ManualCompaction = nil
+	methods := []string{protocol.MethodRuntimeListPendingWork, protocol.MethodRuntimeRemovePendingWork, protocol.MethodRuntimeListPendingWork}
+	responses := []any{list, removed, invalid}
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		for index, response := range responses {
+			var request protocol.Request
+			if err := websocket.JSON.Receive(ws, &request); err != nil {
+				t.Fatal(err)
+			}
+			if request.Method != methods[index] {
+				t.Fatalf("method = %q, want %q", request.Method, methods[index])
+			}
+			if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, response)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = remote.Close() }()
+	gotList, err := remote.ListPendingWork(context.Background(), serverapi.RuntimeListPendingWorkRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compaction := gotList.PendingWork.Items[0].ManualCompaction
+	if compaction == nil || compaction.Guidance == nil || *compaction.Guidance != guidance || compaction.RestorationInput != exact {
+		t.Fatalf("listed compaction = %+v", compaction)
+	}
+	gotRemoval, err := remote.RemovePendingWork(context.Background(), serverapi.RuntimeRemovePendingWorkRequest{SessionID: "session-1", ItemID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRemoval.Restoration.ManualCompaction == nil || gotRemoval.Restoration.ManualCompaction.Input != exact {
+		t.Fatalf("removal = %+v", gotRemoval.Restoration)
+	}
+	if _, err := remote.ListPendingWork(context.Background(), serverapi.RuntimeListPendingWorkRequest{SessionID: "session-1"}); err == nil {
+		t.Fatal("invalid list response was accepted")
+	}
+}
 func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 	command := runtimeinput.PromptCommandReviewName
 	promptCause := &serverapi.PromptCommandError{
@@ -1515,6 +1594,12 @@ func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 		{name: "runtime unavailable", cause: serverapi.ErrRuntimeUnavailable, check: func(t *testing.T, err error) {
 			if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 				t.Fatalf("decoded cause = %v, want runtime unavailable", err)
+			}
+		}},
+		{name: "Pending Work capacity", cause: &serverapi.PendingWorkCapacityError{}, check: func(t *testing.T, err error) {
+			var typed *serverapi.PendingWorkCapacityError
+			if !errors.Is(err, serverapi.ErrPendingWorkCapacity) || !errors.As(err, &typed) {
+				t.Fatalf("decoded cause = %T %v, want typed Pending Work capacity", err, err)
 			}
 		}},
 	} {

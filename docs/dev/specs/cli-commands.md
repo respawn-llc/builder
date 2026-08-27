@@ -101,8 +101,8 @@
 - `kent rebind --project <project-id> <session-id> <path>` is required for cross-Project movement. It may attach an unbound target path to the explicit Project and reports that attachment, but rejects a path already attached only to other Projects.
 - Failed rebinds never change bindings or Session attachment.
 - Sessions attached to Workflow Nodes cannot move across Projects.
-- Same-Project rebind is explicit. It waits for the current step, prevents concurrent new execution and queued steering, and rejects rebind when the Session owns a background command.
-- Cross-Project rebind never waits for a non-idle Session Runtime. It rejects immediately while the Runtime is non-idle, accepts an idle or Dormant Session, and prevents concurrent new execution and queued steering while the accepted move is in progress.
+- Same-Project rebind is explicit. A human request waits for the current Agent Step and rejects rebind when the Session owns a background command.
+- Cross-Project rebind rejects a human request immediately while the Runtime is non-idle and accepts an idle or Dormant Session.
 - When the Session's active agent invokes rebind for its own Session, the command returns a scheduled acknowledgement without waiting for the Agent Step to finish. The move applies at the next between-Agent-Step boundary before queued user work.
 - A self-agent rebind ignores Session-owned background commands. Those commands continue in the directories where they started.
 - A cross-Project move either changes both Session location and artifact location or leaves both unchanged.
@@ -169,17 +169,10 @@
 
 - Models may use normal shell commands `kent goal show`, `kent goal complete`, and first-time `kent goal set <objective>` for the current Session, but other Goal commands detect invocation by the agent and refuse it.
 - Agent `goal set` is allowed only when no active or paused Goal exists. Completed Goals do not block the next agent-set Goal.
+- An allowed agent `goal set` or confirmed `goal complete` prints the projected scheduled Goal and returns before the Goal mutation applies. Earlier accepted Goal mutations participate in that projection.
 - Goal completion is explicit CLI state mutation, not natural-language inference.
 - Goal CLI never mutates Session storage directly. It submits Goal commands to the server.
-- A successful Goal mutation prints authoritative Goal details when present, prints objective and status for a queued Set or replacement preview, and prints no applied Goal-state output when neither is present.
 - Any `kent service` command that affects server state detects invocation by Kent itself and refuses to run because it is human-only.
-- On Linux and Windows, server exit status `2` must suppress automatic crash recovery for the current service-manager activation. A later independent service-manager activation may run the installed service again.
-- On Linux, every server exit other than status `2` must retain automatic restoration while the current service-manager activation expects Kent to run. On macOS, every server exit must retain automatic restoration while the current service-manager activation expects Kent to run.
-- On Windows, every observed numeric server exit status other than `2` must retain automatic restoration while the current service-manager activation expects Kent to run.
-- On Windows, status `2` must make the registered service report `Stopped` without Windows recovery. An unexpected registered-service failure must retain Windows recovery.
-- When Kent cannot confirm Windows server termination, Kent must retain ownership. Kent must not report `Stopped`. Kent must not start a replacement.
-- When Windows confirms termination without a numeric status, Kent must release the server. Kent must not start a replacement. Kent must report `Stopped` for the current activation.
-- A human start or restart must begin a new activation. An install that requests startup must begin a new activation. `kent service install --no-start` must not start the service.
 
 ## Headless Run And Shared Control
 
@@ -190,8 +183,6 @@
 - `--fast` selects the built-in fast role and cannot be combined with `--agent`.
 - Named roles are file-only `[subagents.<role>]` settings and inherit main settings unless overridden.
 - Headless execution runs one non-interactive prompt with ordinary Session persistence.
-- When the configured workspace path is unavailable to the target server and does not resolve to an attached Workspace, Headless Run returns a selection-required failure even if exactly one remote Workspace exists. It never selects a remote Workspace implicitly.
-- The selection-required failure directs the operator to register or attach a server-visible path or use interactive Kent to choose an existing Project and Workspace.
 - New unnamed Sessions are named `<session-id> subagent`.
 - Timeout is unlimited unless `--timeout` is given.
 - Default progress mode is `--progress-mode=stderr`: committed assistant commentary and final text go to stdout; lifecycle notices go to stderr.
@@ -223,7 +214,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - Prompt history stores the complete wrapped message.
 - `kent run stop <session-id>` interrupts an active Session regardless of client origin.
 - Run stop requires a Session ID, rejects attempts by a Session to target itself, prints `Stopped` when accepted, and prints `No active execution` as a successful no-op for idle or nonexistent Sessions.
-- Accepted pending steering is not executed after stop. If it cannot resume before the runtime closes, Kent visibly reports that it stopped or failed before dropping it.
+- Run stop returns after direct exact-live cancellation. Pending human Steering for the stopped execution is removed when that execution unwinds; the CLI neither waits for that cleanup nor promises restoration.
 - `kent run wait <session-id>` waits for an active Session's final result.
 - `kent run wait …` always selects the Run wait command. A headless prompt beginning with `wait` uses `kent run -- wait …`.
 - Run wait requires a canonical UUIDv4 Session ID, rejects attempts by a Session to target itself, and fails without final-answer output if no execution is active.
@@ -259,9 +250,9 @@ To respond, run: kent run steer <source-session-id> "message"
 - Without Session context, the list is markerless, and Kent never infers a Session from workspace history.
 - Agent Worktree deletion always retains branches.
 - Agent Worktree creation stops after setup and prints a separate enter action.
-- Worktree enter and leave return before an active Agent Step finishes.
-- Human-readable `worktree enter` and `worktree leave` confirm scheduling for the next agent step without an operation ID.
-- Worktree `--json` includes the scheduled operation ID.
+- Worktree enter and leave for an Active Session Runtime return the Worktree Operation acknowledgement before an active Agent Step or the transition finishes.
+- Human-readable `worktree enter` and `worktree leave` confirm acceptance without printing the Worktree Operation ID.
+- Worktree `--json` includes the Worktree Operation ID.
 
 ## Task Observation
 
@@ -364,39 +355,6 @@ To respond, run: kent run steer <source-session-id> "message"
 - Kent does not bind an offset to a previous query.
 - If items are inserted, removed, or reordered between offset requests, later results may repeat or skip items.
 
-### Task Session listing
-
-- `kent task sessions <task-short-id-or-task-id>` lists every retained agent Session associated with the selected Task.
-- A Task Short ID uses `--project`, which defaults to the Project attached to the current workspace.
-- Script Nodes do not produce Session rows.
-- Sessions from parallel branches are ordinary rows and receive no special grouping or treatment.
-- The command accepts `--offset`, `--limit`, and `--json`.
-- Human and JSON output use the common offset-pagination contract.
-- Kent may project the complete task-scoped active Session set because actual concurrent runtime work is already bounded by configured Workflow concurrency, finite live Workflow Nodes, and machine capacity; registered-idle resources are excluded from this set and it receives no duplicate pagination limit.
-- Reads through retained Idle Session history remain bounded by the requested limit and do not read Session transcript history.
-- A Session is `Running` when it has live runtime activity in startup, active work, draining, or closing.
-- A Session is `Question` while waiting on any runtime prompt, including an ordinary Question, an Approval, or both.
-- Every retained Session without live runtime activity is `Idle`.
-- A retained Task Session continued through the ordinary Session launch path uses the same live statuses even when it is not currently executing through a Workflow Node.
-- The command exposes no separate `Approval` Session status.
-- The command defines no durable `Completed` Session status.
-- `Running` Sessions precede `Question` Sessions, which precede `Idle` Sessions.
-- Within each status group, Sessions are ordered by creation time descending and then Session ID descending.
-- Human output chooses a label from Session name, the associated Node's current display name, then Assignee.
-- If the retained Node association does not resolve, human output continues directly to the Assignee fallback.
-- The command does not retain a historical Node-name snapshot.
-- A human row is `<label> (<session-id>): <status>`.
-- If the selected label equals the Session ID, the row is `<session-id>: <status>`.
-- Human output has no heading.
-- An empty human result writes nothing.
-- JSON output is one object with `task_id`, `items`, and optional `next_offset`.
-- Each JSON item has `session_id`, optional `session_name`, optional `node_name`, `agent_role`, and `status`.
-- JSON status is `running`, `question`, or `idle`.
-- JSON does not expose the human fallback label.
-- Concurrent Session startup or runtime-state changes may temporarily omit a just-starting Session or report a stale status.
-- Every retained Session remains eligible for a later listing after its durable Task association settles.
-- The command adds no retry, synchronization, or special error behavior.
-
 ### Workflow and Task mutation
 
 - Agents can build and edit complete Workflow definitions through high-level commands and graph inspect/apply.
@@ -405,13 +363,13 @@ To respond, run: kent run steer <source-session-id> "message"
 - Graph inspect preserves the authored order of every graph collection.
 - `kent workflow graph apply <path-or-dash>` reads graph editing JSON from the selected file. A selector of `-` reads standard input.
 - Graph apply changes the complete authored Workflow graph, including graph-owned configuration. `kent workflow update` remains the CLI authority for Workflow name, description, and Execution Target Policy.
-- Each new Node, Node Group, Transition Group, and Transition Branch in graph editing JSON must use canonical bare UUID v4 text. The server's authoritative graph-save operation rejects prefixed identities, other UUID versions, non-canonical spellings, and surrounding whitespace for additions. Graph apply preserves existing graph entity identities and never assigns temporary or persistent identities.
+- Graph apply requires canonical bare UUID v4 text for each new Node, Node Group, Transition Group, and Transition Branch. It rejects prefixed identities, other UUID versions, non-canonical spellings, and surrounding whitespace for additions. It preserves existing graph entity identities and never assigns temporary or persistent identities.
 - Node membership in graph editing JSON uses `group_id` only. Graph inspect never emits `group_key`, and graph apply rejects `group_key` rather than treating it as an alternate membership reference.
 - Graph apply ignores unknown JSON object fields. Unknown or misspelled authored fields are not preserved when Kent saves the complete submitted graph.
 - Graph apply uses the installed JSON library's duplicate-field semantics. It rejects trailing JSON values and missing required fields before it contacts the server.
-- The server's authoritative graph-save operation compares the expected Workflow Version before it classifies graph entity identities. A mismatch returns `blocked` with `version_changed`, including when a legacy identity in the stale document no longer exists or now belongs to another entity type.
-- For a current-version document, the server's authoritative graph-save operation preserves submitted identities that match existing graph entities of the same type, preserves submitted collection order, and rejects additions without canonical bare UUID v4 identities.
-- Graph apply submits the current Workflow Draft and expected Workflow Version to the server's authoritative graph-save operation without independently comparing Workflow Version or classifying graph entity identities. It surfaces the server's typed rejection. A non-destructive graph that has no blocker saves immediately.
+- Graph apply loads the current Workflow and compares Workflow Version before it classifies graph entity identities. A mismatch returns `blocked` with `version_changed`, including when a legacy identity in the stale document no longer exists or now belongs to another entity type.
+- For a current-version document, graph apply preserves submitted identities that match existing graph entities of the same type, preserves submitted collection order, and rejects additions without canonical bare UUID v4 identities before save.
+- Graph apply submits the document to the server's graph-save operation. A non-destructive graph that has no blocker saves immediately.
 - When confirmation is required, an unconfirmed graph apply reports the impact and changes nothing. With `--confirm`, the command confirms the impact returned by that invocation and retries the save.
 - A Workflow Version or impact-count change before the confirmed save rejects the save and changes nothing.
 - Graph-save impact lists every removed graph entity by stable entity type and persistent identity. It reports Task references as aggregate counts and never materializes an unbounded Task-reference collection.
@@ -462,16 +420,15 @@ To respond, run: kent run steer <source-session-id> "message"
 ### Task completion
 
 - `shell_command` Workflow completion instructs an agent to run `kent task complete`.
-- In an agent Session, Task complete resolves the assigned Task and Current Node from the current Session.
-- Outside an agent Session, Task complete requires `--force` and a Session selector or a Task selector that matches exactly one idle executable Current Node.
+- In an agent Session, Task complete resolves the assigned Task and Current Node from the current Session and requires the matching Exact Execution Scope, Run, and Agent Step from the Kent execution environment.
+- Outside an agent Session, Task complete requires `--force` plus a Session or Task selector. It does not select an idle completion authority.
+- Human `kent task complete --force` composes existing Workflow operations: Interrupt the selected Task's live execution, wait until that Interrupt completes, then invoke the same Manual Move owner with the selected outgoing Transition, commentary, and Parameter values.
+- Forced Task complete may begin while the selected Task is executing. It adds no completion-specific gate, fallback, or lifecycle state.
 - The plain-text `kent task complete` acknowledgement omits identifiers.
 - Task complete accepts dynamic Parameter flags, repeatable `--param name=value`, and `--json` or `--json-file` completion payload input.
 - JSON input modes print JSON responses.
-- Plain-text output is exactly `Completion scheduled. The transition <source display name> → <destination display name> will execute now. Your next agent turn will begin with the next workflow instructions.`
-- The acknowledgement uses the target Node display name for an ordinary Transition.
-- A Fan-Out uses its shared target Node Group display name when present and otherwise its Transition display name.
-- The same acknowledgement is used for agent-Session and forced human completion.
-- It always promises a next agent turn regardless of Context-Preservation Mode or whether another turn occurs.
+- Live agent completion uses the completion acknowledgement. Forced human completion uses the ordinary Manual Move outcome after its Interrupt phase.
+- Neither acknowledgement promises that another Agent Turn will occur.
 - It does not expose Approval or Transition state.
 - JSON completion output retains its existing field set and does not include the plain-text acknowledgement.
 
@@ -496,8 +453,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - Catalog JSON returns Label records for create, rename, and list, and the deleted Label ID for delete.
 - Assignment JSON returns the Task ID and authoritative resulting Label IDs.
 - Human assignment output is a short acknowledgement.
-- Human Task show/list output adds one `Labels:` line only for assigned Labels and quotes every name.
-- Task show/list JSON exposes one `label_ids` field and does not duplicate assignments as named objects.
+- Human Task show output adds one `Labels:` line only for assigned Labels and quotes every name.
+- Task show JSON exposes one `label_ids` field and does not duplicate assignments as named objects.
 - Task-list Label filtering uses repeatable literal `--label` selectors for included conditions and repeatable literal `--not-label` selectors for excluded conditions.
 - `--label-match any|all` combines every included and excluded condition and defaults to `any`.
 - `--unlabeled` selects Tasks with no assignments and is mutually exclusive with both selector flags and an explicitly supplied match mode.
@@ -511,11 +468,16 @@ To respond, run: kent run steer <source-session-id> "message"
 - `--attention` filters typed attention.
 - `--column` filters Workflow Node Keys and requires an explicit Workflow.
 - Column sorting requires an explicit Workflow.
-- Project-wide human Task rows omit column output.
-- Project-wide JSON Task items omit `column_keys`.
-- Workflow-narrowed lists expose all Current Node Keys in board order.
-- Human rows include Workflow names only when the filtered query can return Tasks from several Workflows.
-- JSON Task items always include their bare Workflow UUID.
+- Machine-readable Task-list output exposes the complete enriched Task-list result. It includes Workflow display information, assigned Label display information, dependency progress, and pagination information.
+- Project-wide machine-readable Task rows include Workflow display information and omit Workflow-relative Current Node information, including when exactly one Workflow matches.
+- Workflow-narrowed machine-readable Task rows omit Workflow display information and include all Current Node Keys in board order, including an empty collection.
+- Each human Task row starts with `<SHORT_ID>: <TITLE>.` followed by `Status: <status>`.
+- A human Task row includes `Labels: <quoted names>` immediately after Status when Labels are assigned, preserving Project Label order.
+- A human Task row includes `Workflow: <workflow_name>` only when the filtered query can return Tasks from several Workflows.
+- A Workflow-narrowed human Task row includes `Current nodes: <comma-separated node keys>` after the optional Workflow line. An empty collection renders as `Current nodes: (none)`.
+- A human Task row includes `Deps: <satisfied>/<total>` after the optional Current Nodes line only when dependency progress has a positive total and at least one dependency is unsatisfied.
+- Human Task rows omit dependency progress when it is absent or fully satisfied.
+- Human Task rows have no blank separator.
 - `kent task list --unblocked` includes Tasks with zero unsatisfied direct Task Dependencies.
 - `kent task list --blocked` includes Tasks with one or more unsatisfied direct Task Dependencies.
 - The two dependency flags are mutually exclusive.

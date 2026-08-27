@@ -248,9 +248,8 @@ func TestPlanLaunchSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	}); err != nil || !receipt.Committed {
 		t.Fatalf("append event-log entry: receipt=%+v error=%v", receipt, err)
 	}
-	if _, _, err := meta.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
+	if _, err := meta.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
 		SessionID: store.Meta().SessionID,
-		SourceID:  "req-1",
 		Text:      "db-history",
 	}); err != nil {
 		t.Fatalf("record metadata prompt history: %v", err)

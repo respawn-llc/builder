@@ -106,7 +106,7 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		if !exists {
 			quiescent = false
 		}
-		observation.Quiescence[taskID] = quiescent
+		observation.Quiescence[taskID] = quiescent && len(observation.Executions[taskID].Executions) == 0
 	}
 	return observation, nil
 }

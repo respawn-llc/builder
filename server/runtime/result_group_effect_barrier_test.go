@@ -88,12 +88,7 @@ func persistAcceptedToolCallIntents(
 			t.Fatalf("unsupported accepted response call source %d", ref.source)
 		}
 	}
-	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventDefault,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: ordered}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID(stepID), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: ordered}})); err != nil {
 		t.Fatalf("persist accepted tool-call intents: %v", err)
 	}
 }
@@ -121,9 +116,12 @@ func TestQuestionBarrierCommitsReadyHostedSiblingBeforeInteraction(t *testing.T)
 		}),
 		Config{Model: "gpt-5", DurabilityObserver: flushes},
 	)
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),
-		"step",
+		stepID,
 		questionBarrierAcceptedCalls(),
 	)
 	if err != nil {
@@ -196,6 +194,9 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 		}),
 		Config{Model: "gpt-5", DurabilityObserver: flushes},
 	)
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	calls := questionBarrierAcceptedCalls()
 	calls.local[0] = llm.ToolCall{
 		ID:    "patch",
@@ -203,7 +204,7 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 		Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: approval-barrier.txt\n+approved\n*** End Patch\n"}`),
 	}
 
-	results, err := engine.executeAcceptedToolCalls(context.Background(), "step", calls)
+	results, err := engine.executeAcceptedToolCalls(context.Background(), stepID, calls)
 	if err != nil {
 		t.Fatalf("execute accepted calls: %v", err)
 	}

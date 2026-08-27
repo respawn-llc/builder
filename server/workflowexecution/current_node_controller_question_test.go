@@ -34,7 +34,7 @@ func (f failingResolutionPromptFeed) PromptResolvedScope(
 	return f.err
 }
 
-func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescent(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptClosesWaitingQuestionAndRunningScope(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -54,33 +54,12 @@ func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescen
 		_, _ = pending.handle.Wait(context.Background())
 	})
 
-	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   "project-test",
-		WorkflowID:  currentNodeControllerTestWorkflowID,
-		CurrentNode: running,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	runningHandle, err := fixture.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
+	runningHandle := startLiveTestWorkflowScript(t, fixture.controller, fixture.authority, running, sessionruntime.ScriptExecutionRequest{
 		Command: sessionruntime.ScriptCommand{
 			Path: shellPath,
 			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
-	}
-	runningKey, err := running.Key()
-	if err != nil {
-		t.Fatalf("running Current Node key: %v", err)
-	}
-	fixture.controller.mu.Lock()
-	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
-	fixture.controller.liveByNode[runningKey] = lease.ScopeID()
-	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.Interrupt(context.Background(), InterruptSelector{TaskID: running.TaskID}); err != nil {
@@ -89,21 +68,29 @@ func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescen
 	if _, live := fixture.authority.ExecutionByScope(runningHandle.Scope().ID()); live {
 		t.Fatal("Task Interrupt left the actively executing Script live")
 	}
-	if _, live := fixture.authority.ExecutionByScope(pending.handle.Scope().ID()); !live {
-		t.Fatal("Task Interrupt stopped the non-interruptible waiting Question")
+	if _, live := fixture.authority.ExecutionByScope(pending.handle.Scope().ID()); live {
+		t.Fatal("Task Interrupt left the waiting Question live")
 	}
-	if err := fixture.controller.EnsureTaskQuiescent(running.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("quiescence with waiting Question = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+	select {
+	case result := <-pending.result:
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("waiting Question result = %v, want context cancellation", result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Task Interrupt did not cancel the waiting Question")
 	}
-	if _, interrupted := fixture.store.interruption(question); interrupted {
-		t.Fatal("Task Interrupt persisted interruption for the waiting Question")
+	if err := fixture.controller.EnsureTaskQuiescent(running.TaskID); err != nil {
+		t.Fatalf("quiescence after Task Interrupt: %v", err)
+	}
+	if _, interrupted := fixture.store.interruption(question); !interrupted {
+		t.Fatal("Task Interrupt did not persist interruption for the waiting Question")
 	}
 	if _, interrupted := fixture.store.interruption(running); !interrupted {
 		t.Fatal("Task Interrupt did not persist interruption for the running Script")
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptRejectsDurablyInterruptedWaitingQuestion(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptClosesDurablyInterruptedWaitingQuestion(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-interrupted-question", "node-question")
 	request := askquestion.AskQuestionRequest{
@@ -128,15 +115,26 @@ func TestCurrentNodeControllerTaskInterruptRejectsDurablyInterruptedWaitingQuest
 	if err := fixture.controller.Interrupt(
 		context.Background(),
 		InterruptSelector{TaskID: reference.TaskID},
-	); !errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
-		t.Fatalf("Interrupt durably interrupted waiting Question error = %v, want %v", err, sessionruntime.ErrWorkflowQuestionPending)
+	); err != nil {
+		t.Fatalf("Interrupt durably interrupted waiting Question: %v", err)
 	}
-	if _, live := fixture.authority.ExecutionByScope(pending.handle.Scope().ID()); !live {
-		t.Fatal("Interrupt stopped the waiting Question")
+	if _, live := fixture.authority.ExecutionByScope(pending.handle.Scope().ID()); live {
+		t.Fatal("Interrupt left the waiting Question live")
+	}
+	select {
+	case result := <-pending.result:
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("waiting Question result = %v, want context cancellation", result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Interrupt did not cancel the waiting Question")
+	}
+	if err := fixture.controller.EnsureTaskQuiescent(reference.TaskID); err != nil {
+		t.Fatalf("quiescence after waiting Question interrupt: %v", err)
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptRejectsDurablyInterruptedPendingApproval(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptClosesDurablyInterruptedPendingApproval(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-interrupted-approval", "node-approval")
 	request := askquestion.AskQuestionRequest{
@@ -162,11 +160,22 @@ func TestCurrentNodeControllerTaskInterruptRejectsDurablyInterruptedPendingAppro
 	if err := fixture.controller.Interrupt(
 		context.Background(),
 		InterruptSelector{TaskID: reference.TaskID},
-	); !errors.Is(err, sessionruntime.ErrWorkflowApprovalPending) {
-		t.Fatalf("Interrupt durably interrupted pending Approval error = %v, want %v", err, sessionruntime.ErrWorkflowApprovalPending)
+	); err != nil {
+		t.Fatalf("Interrupt durably interrupted pending Approval: %v", err)
 	}
-	if _, live := fixture.authority.ExecutionByScope(pending.handle.Scope().ID()); !live {
-		t.Fatal("Interrupt stopped the pending Approval")
+	if _, live := fixture.authority.ExecutionByScope(pending.handle.Scope().ID()); live {
+		t.Fatal("Interrupt left the pending Approval live")
+	}
+	select {
+	case result := <-pending.result:
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("pending Approval result = %v, want context cancellation", result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Interrupt did not cancel the pending Approval")
+	}
+	if err := fixture.controller.EnsureTaskQuiescent(reference.TaskID); err != nil {
+		t.Fatalf("quiescence after pending Approval interrupt: %v", err)
 	}
 }
 
@@ -189,33 +198,12 @@ func TestCurrentNodeControllerManualMoveCancelsWaitingQuestionAndStopsSibling(t 
 		pending.handle.RequestStop()
 		_, _ = pending.handle.Wait(context.Background())
 	})
-	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   "project-test",
-		WorkflowID:  currentNodeControllerTestWorkflowID,
-		CurrentNode: running,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	runningHandle, err := fixture.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
+	runningHandle := startLiveTestWorkflowScript(t, fixture.controller, fixture.authority, running, sessionruntime.ScriptExecutionRequest{
 		Command: sessionruntime.ScriptCommand{
 			Path: shellPath,
 			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
-	}
-	key, err := running.Key()
-	if err != nil {
-		t.Fatalf("running Current Node key: %v", err)
-	}
-	fixture.controller.mu.Lock()
-	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
-	fixture.controller.liveByNode[key] = lease.ScopeID()
-	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID, nil); err != nil {
@@ -340,7 +328,7 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 	}
 }
 
-func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *testing.T) {
+func TestCurrentNodeControllerReleasesTaskMutationLaneAfterAcceptingAnswer(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question-permit", "node-question")
 	firstID := uuid.NewString()

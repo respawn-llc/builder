@@ -124,10 +124,7 @@ func TestPreviewWorktreeDeleteBindsExternalConfirmationToCanonicalRoot(t *testin
 	runGit(t, env.workspaceRoot, "worktree", "add", rootB, branch)
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            preview.DeletionSelector,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})

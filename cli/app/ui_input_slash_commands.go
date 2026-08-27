@@ -35,7 +35,7 @@ func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea
 	return true, next, cmd
 }
 
-func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, tea.Model, tea.Cmd) {
+func (c uiInputController) handleEnteredSlashCommandInput(text, submittedText string) (bool, tea.Model, tea.Cmd) {
 	m := c.model
 	selection := m.resolveSlashCommandSelection(text)
 	if !selection.hasCommand {
@@ -65,12 +65,7 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 			recordCmd = m.recordPromptHistory(commandText)
 		}
 		m.clearCommandInput(command, draft)
-		next, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(
-			commandResult,
-			preSubmitQueueBack,
-			activeSubmitOriginDirect,
-			text,
-		)
+		next, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(commandResult, preSubmitQueueBack, activeSubmitOriginDirect, submittedText)
 		return true, next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 	}
 	return false, m, nil

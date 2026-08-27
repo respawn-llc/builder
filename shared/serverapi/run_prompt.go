@@ -15,7 +15,6 @@ import (
 )
 
 type RunPromptRequest struct {
-	ClientRequestID string              `json:"client_request_id"`
 	Intent          SessionLaunchIntent `json:"intent"`
 	CallerSessionID *string             `json:"caller_session_id,omitempty"`
 	Prompt          string              `json:"prompt"`
@@ -25,7 +24,6 @@ type RunPromptRequest struct {
 
 func (r *RunPromptRequest) UnmarshalJSON(data []byte) error {
 	type wire struct {
-		ClientRequestID string              `json:"client_request_id"`
 		Intent          SessionLaunchIntent `json:"intent"`
 		CallerSessionID *string             `json:"caller_session_id"`
 		Prompt          string              `json:"prompt"`
@@ -37,7 +35,6 @@ func (r *RunPromptRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	request := RunPromptRequest{
-		ClientRequestID: decoded.ClientRequestID,
 		Intent:          decoded.Intent,
 		CallerSessionID: decoded.CallerSessionID,
 		Prompt:          decoded.Prompt,
@@ -109,9 +106,6 @@ func ValidateOptionalIdentifier(field string, value *string) error {
 }
 
 func (r RunPromptRequest) Validate() error {
-	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return errors.New("client_request_id is required")
-	}
 	if strings.TrimSpace(r.Prompt) == "" {
 		return errors.New("prompt is required")
 	}

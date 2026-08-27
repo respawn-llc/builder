@@ -12,14 +12,13 @@ import (
 )
 
 const (
-	metadataQuerySourceDirectory            = "server/metadata/querysrc"
-	renderedQueriesPath                     = "server/metadata/queries.sql"
-	sqlcConfigPath                          = "sqlc.yaml"
-	generatedQueriesDirectory               = "server/metadata/sqlitegen"
-	generatedQueriesFilename                = "queries.sql.go"
-	generatedPageDescriptorsFilename        = "task_search_page_descriptors_generated.go"
-	generatedSchemaContractFilename         = "task_search_schema_contract_generated.go"
-	generatedDependencyInvalidationFilename = "workflow_session_dependency_invalidation_generated.go"
+	metadataQuerySourceDirectory     = "server/metadata/querysrc"
+	renderedQueriesPath              = "server/metadata/queries.sql"
+	sqlcConfigPath                   = "sqlc.yaml"
+	generatedQueriesDirectory        = "server/metadata/sqlitegen"
+	generatedQueriesFilename         = "queries.sql.go"
+	generatedPageDescriptorsFilename = "task_search_page_descriptors_generated.go"
+	generatedSchemaContractFilename  = "task_search_schema_contract_generated.go"
 )
 
 func main() {
@@ -117,18 +116,7 @@ func generateMetadataQueriesCommand(args []string) (err error) {
 	); err != nil {
 		return err
 	}
-	invalidationQuery, err := renderer.RenderWorkflowSessionDependencyInvalidation()
-	if err != nil {
-		return err
-	}
-	invalidationAdapter, err := generateWorkflowSessionDependencyInvalidation(invalidationQuery)
-	if err != nil {
-		return err
-	}
-	return writeGeneratedFile(
-		filepath.Join(generatedDir, generatedDependencyInvalidationFilename),
-		invalidationAdapter,
-	)
+	return nil
 }
 
 func writeGeneratedFile(path string, source []byte) error {

@@ -74,11 +74,10 @@ func (a *Activation) ReleaseWithClosePolicy(closePolicy serverapi.SessionRuntime
 	ctx, cancel := context.WithTimeout(context.Background(), ReleaseTimeout)
 	defer cancel()
 	_, err := a.service.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: uuid.NewString(),
-		Attachment:      a.attachment,
-		DropOwner:       true,
-		ClosePolicy:     closePolicy,
-		OwnerID:         a.ownerID,
+		Attachment:  a.attachment,
+		DropOwner:   true,
+		ClosePolicy: closePolicy,
+		OwnerID:     a.ownerID,
 	})
 	return err
 }
@@ -96,7 +95,6 @@ func activate(ctx context.Context, service servicecontract.SessionRuntimeService
 
 func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActivateRequest {
 	return serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:          uuid.NewString(),
 		SessionID:                req.SessionID,
 		OwnerID:                  ownerID,
 		ActiveSettings:           req.ActiveSettings,

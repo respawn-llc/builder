@@ -22,7 +22,7 @@ func TestValidateTranscriptPageRejectsDuplicateLocatorsButAllowsIndependentRecur
 			RowOrdinal:    1,
 		},
 		User: &clientui.TranscriptUserRow{
-			StepID: stepID,
+			StepID: &stepID,
 			Text:   "hello",
 		},
 	}

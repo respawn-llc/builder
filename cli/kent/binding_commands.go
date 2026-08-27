@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/clientui"
@@ -248,11 +246,10 @@ func retargetSessionWorkspace(ctx context.Context, remote apicontract.SessionLif
 		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
 	return remote.RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       sessionID,
-		WorkspaceRoot:   workspaceRoot,
-		ProjectID:       projectID,
-		Origin:          origin,
+		SessionID:     sessionID,
+		WorkspaceRoot: workspaceRoot,
+		ProjectID:     projectID,
+		Origin:        origin,
 	})
 }
 
@@ -261,7 +258,12 @@ func sessionRetargetRuntimeOrigin(sessionID string) (*serverapi.RuntimeStepOrigi
 	if !ok || currentSessionID != strings.TrimSpace(sessionID) {
 		return nil, nil
 	}
-	return worktreeCommandRuntimeOrigin()
+	runID, stepID := sessionenv.LookupRunStepID(os.LookupEnv)
+	if runID == "" && stepID == "" {
+		return nil, nil
+	}
+	origin := &serverapi.RuntimeStepOrigin{RunID: runID, StepID: stepID}
+	return origin, origin.Validate()
 }
 
 func listProjects(ctx context.Context) ([]clientui.ProjectSummary, error) {

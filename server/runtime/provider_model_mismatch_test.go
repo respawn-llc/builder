@@ -87,10 +87,18 @@ func TestQueuedAgentSteerStartsNewMismatchWarningStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAgentSteer: %v", err)
 	}
-	if _, accepted, err := engine.QueueAgentSteerForActiveRun(context.Background(), steer, liveRunTestRequestID(t), nil); err != nil || !accepted {
-		t.Fatalf("queue Agent Steer accepted=%t err=%v", accepted, err)
-	}
+	queued := make(chan error, 1)
+	go func() {
+		_, accepted, err := engine.QueueAgentSteerForActiveRun(context.Background(), steer, nil)
+		if err == nil && !accepted {
+			err = errors.New("queue Agent Steer was not accepted")
+		}
+		queued <- err
+	}()
 	release()
+	if err := <-queued; err != nil {
+		t.Fatal(err)
+	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +107,7 @@ func TestQueuedAgentSteerStartsNewMismatchWarningStep(t *testing.T) {
 	}
 }
 func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *testing.T) {
+	stepID := runtimeTestStepID("step-1")
 	t.Run("warning failure still attempts usage", func(t *testing.T) {
 		warningErr := errors.New("warning observer failed")
 		store, engine, gate := newAcceptedPersistenceTest(t)
@@ -106,7 +115,7 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
 			return snapshot.Meta.LastSequence > baselineSequence && snapshot.Meta.UsageState == nil
 		}, warningErr)
-		_, err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate(), false)
+		_, err := engine.commitAcceptedResponseCandidate(stepID, acceptedMismatchCandidate(), false)
 		requireErrorIs(t, err, warningErr)
 		if store.Meta().UsageState == nil {
 			t.Fatal("usage checkpoint was not attempted after warning failure")
@@ -118,7 +127,7 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
 			return snapshot.Meta.UsageState != nil
 		}, usageErr)
-		_, err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate(), false)
+		_, err := engine.commitAcceptedResponseCandidate(stepID, acceptedMismatchCandidate(), false)
 		requireErrorIs(t, err, usageErr)
 		if warnings := providerModelMismatchWarnings(t, store); len(warnings) != 1 {
 			t.Fatalf("provider-model mismatch warning count = %d, want one", len(warnings))
@@ -131,7 +140,7 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 			return snapshot.Meta.UsageState != nil
 		}, usageErr)
 		blocker := mustBlockTestEventLogAppends(t, store)
-		_, err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate(), false)
+		_, err := engine.commitAcceptedResponseCandidate(stepID, acceptedMismatchCandidate(), false)
 		requireErrorIs(t, err, usageErr)
 		joined, ok := err.(interface{ Unwrap() []error })
 		if !ok || len(joined.Unwrap()) != 2 {

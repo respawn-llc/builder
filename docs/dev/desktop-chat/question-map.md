@@ -420,9 +420,9 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Confirm after Dirty/Unknown authorizes force folder removal; Clean does not. Delete rechecks current state. A clean-to-dirty race refreshes the same popup preview and requires a new informed click, without reservation/revision/locking.
 - Another immediate Delete failure keeps the popup open with the authoritative inline error and restores its existing confirmation actions. Confirm itself is the retry after the blocker is addressed; no separate Retry or Sonner appears.
 - The popup remains dismissible during Delete. Dismissal does not cancel the request; a later failure, including a clean-to-dirty rejection, uses Sonner and never reopens the popup.
-- Delete copies TUI's Completed/Scheduled split. Its popup loads only until one result arrives: Completed closes and refreshes; Scheduled returns to the refreshed list immediately and never keeps a long-lived deletion spinner.
-- Completed deletion, Scheduled deletion, and later successful transition completion show no Sonner or other success notice. Final failure uses Sonner while authoritative outcomes refresh state.
-- A typed Completed result with retained requested branch cleanup or a leftover filesystem root shows one warning Sonner with the branch/root and authoritative diagnostic. It does not reopen the popup.
+- Delete keeps its popup loading until the server finishes Session retargeting and Worktree removal. Success closes the popup and refreshes the list.
+- Successful deletion shows no Sonner or other success notice.
+- A deletion result with retained requested branch cleanup or a leftover filesystem root shows one warning Sonner with the branch/root and authoritative diagnostic. It does not reopen the popup.
 - Missing rows cannot Switch and retain trash for stale-record cleanup. Detached available rows can Switch and retain trash without a branch-cleanup choice.
 - The `+` child state is the smart-target create form: Branch or ref first, asynchronous New branch / Existing branch / Detached ref resolution, and no explicit target-kind selector.
 - Branch or ref starts focused and prefills only from the sanitized Session title. Without a usable title it is empty; never fall back to current branch, main, or a generic name.

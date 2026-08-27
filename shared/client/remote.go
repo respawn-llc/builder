@@ -853,8 +853,26 @@ func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRe
 	return response, nil
 }
 
-func (c *Remote) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-	return callControlRPC[serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](c, ctx, protocol.MethodRuntimeDiscardQueuedUserMessage, req)
+func (c *Remote) ListPendingWork(ctx context.Context, req serverapi.RuntimeListPendingWorkRequest) (serverapi.RuntimeListPendingWorkResponse, error) {
+	response, err := callControlRPC[serverapi.RuntimeListPendingWorkRequest, serverapi.RuntimeListPendingWorkResponse](c, ctx, protocol.MethodRuntimeListPendingWork, req)
+	if err != nil {
+		return serverapi.RuntimeListPendingWorkResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeListPendingWorkResponse{}, invalidResponseError("runtime pending work list", err)
+	}
+	return response, nil
+}
+
+func (c *Remote) RemovePendingWork(ctx context.Context, req serverapi.RuntimeRemovePendingWorkRequest) (serverapi.RuntimeRemovePendingWorkResponse, error) {
+	response, err := callControlRPC[serverapi.RuntimeRemovePendingWorkRequest, serverapi.RuntimeRemovePendingWorkResponse](c, ctx, protocol.MethodRuntimeRemovePendingWork, req)
+	if err != nil {
+		return serverapi.RuntimeRemovePendingWorkResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeRemovePendingWorkResponse{}, invalidResponseError("runtime pending work removal", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) RecordPromptHistory(ctx context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {
@@ -865,24 +883,24 @@ func (c *Remote) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequ
 	return callValidatedControlRPC[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalShow, req)
 }
 
-func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
+func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
 }
 
-func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
+func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
 }
 
-func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
+func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
 }
 
-func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
+func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
 }
 
-func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
+func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
 }
 
 func callValidatedControlRPC[Request any, Response interface{ Validate() error }](c *Remote, ctx context.Context, method string, req Request) (Response, error) {

@@ -157,12 +157,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			})
 			return 1
 		}
-		expectedScope := taskListExpectedScope{
-			ProjectID:     projectID,
-			WorkflowID:    selectedWorkflowID,
-			WorkflowOwner: taskListExpectedWorkflowFromRequest,
-		}
-		return writeTaskListResponse(stdout, stderr, resp, expectedScope, *jsonOut)
+		return writeTaskListResponse(stdout, stderr, resp, *jsonOut)
 	})
 }
 
@@ -203,34 +198,36 @@ func parseTaskListLabelMatch(raw string, explicit bool, selectorCount int, unlab
 	return mode, nil
 }
 
-func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
-	projection, err := taskListProjectionFromResponse(resp, expectedScope)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
+func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, jsonOut bool) int {
 	if jsonOut {
-		return writeCommandJSON(stdout, stderr, projection.Output)
+		return writeCommandJSON(stdout, stderr, resp)
 	}
-	for _, row := range projection.Rows {
-		statusText, err := taskStatusText(row.Item.Status)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\n", row.Item.ShortID, row.Item.Title, statusText)
-		if row.WorkflowName != nil {
-			fmt.Fprintf(stdout, "Workflow: %s\n", *row.WorkflowName)
-		}
-		if row.ShowColumns {
-			fmt.Fprintf(stdout, "Columns: %s\n", taskListColumnKeysText(*row.Item.ColumnKeys))
-		}
-		if len(row.LabelNames) > 0 {
+	for _, task := range resp.Tasks {
+		fmt.Fprintf(stdout, "%s: %s.\n", task.ShortID, task.Title)
+		fmt.Fprintf(stdout, "Status: %s\n", task.Status.Kind)
+		if len(task.Labels) > 0 {
 			fmt.Fprint(stdout, "Labels:")
-			for _, name := range row.LabelNames {
-				fmt.Fprintf(stdout, " %q", name)
+			for _, label := range task.Labels {
+				fmt.Fprintf(stdout, " %q", label.Name)
 			}
 			fmt.Fprintln(stdout)
+		}
+		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple &&
+			task.WorkflowName != nil {
+			fmt.Fprintf(stdout, "Workflow: %s\n", *task.WorkflowName)
+		}
+		if task.ColumnKeys != nil {
+			fmt.Fprintf(stdout, "Current nodes: %s\n", taskListColumnKeysText(*task.ColumnKeys))
+		}
+		if task.DependencyProgress != nil &&
+			task.DependencyProgress.TotalCount > 0 &&
+			task.DependencyProgress.SatisfiedCount < task.DependencyProgress.TotalCount {
+			fmt.Fprintf(
+				stdout,
+				"Deps: %d/%d\n",
+				task.DependencyProgress.SatisfiedCount,
+				task.DependencyProgress.TotalCount,
+			)
 		}
 	}
 	if resp.NextOffset != nil {

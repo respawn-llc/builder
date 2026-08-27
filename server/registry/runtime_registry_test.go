@@ -667,7 +667,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	}
 	registry.PublishAuthorityRuntimeEvent(staleRef, runtime.Event{
 		Kind:                       runtime.EventAssistantMessage,
-		StepID:                     registryTestStepID,
+		StepID:                     textutil.Value(registryTestStepID),
 		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("stale authority event")},
 		CommittedTranscriptChanged: true,
 	})
@@ -676,7 +676,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	}
 	registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:                       runtime.EventAssistantMessage,
-		StepID:                     registryTestStepID,
+		StepID:                     textutil.Value(registryTestStepID),
 		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("authority event")},
 		CommittedTranscriptChanged: true,
 		CommittedProvenance:        &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
@@ -733,7 +733,7 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 	publishRunState(registry, engine.SessionID(), true)
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:   runtime.EventRunStateChanged,
-		StepID: registryTestStepID,
+		StepID: textutil.Value(registryTestStepID),
 		RunState: &runtime.RunState{
 			Lifecycle:  runtime.RunningRunLifecycle(runtime.RunModeTurn),
 			RunID:      registryTestRunID,
@@ -746,7 +746,7 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 	}
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:   runtime.EventReasoningDelta,
-		StepID: registryTestStepID,
+		StepID: textutil.Value(registryTestStepID),
 		ReasoningDelta: &llm.ReasoningSummaryDelta{
 			SourceCoordinate: &llm.ReasoningSourceCoordinate{
 				OutputIndex: func() *int64 { value := int64(0); return &value }(),
@@ -768,21 +768,15 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 		t.Fatalf("publish active reasoning: %v", err)
 	}
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
-		Kind:   runtime.EventReviewerStarted,
-		StepID: registryTestStepID,
-	}); err != nil {
-		t.Fatalf("publish active reviewer: %v", err)
-	}
-	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:       runtime.EventCompactionStarted,
-		StepID:     registryTestStepID,
+		StepID:     textutil.Value(registryTestStepID),
 		Compaction: &runtime.CompactionStatus{Mode: "auto", Count: 1},
 	}); err != nil {
 		t.Fatalf("publish active compaction: %v", err)
 	}
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:   runtime.EventToolCallStarted,
-		StepID: registryTestStepID,
+		StepID: textutil.Value(registryTestStepID),
 		ToolCall: &llm.ToolCall{
 			ID:    "tool-1",
 			Name:  "exec_command",
@@ -807,12 +801,6 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 		t.Fatalf(
 			"hydrated active reasoning = status %+v traces %+v, want none after canonical runtime became idle",
 			payload.ActiveThinkingStatus, payload.ActiveReasoningTraces,
-		)
-	}
-	if payload.ActiveReviewer != nil {
-		t.Fatalf(
-			"hydrated active reviewer = %+v, want none after canonical runtime became idle",
-			payload.ActiveReviewer,
 		)
 	}
 	if payload.ActiveCompaction != nil {
@@ -970,6 +958,7 @@ func assertNoSleepObserverState(t *testing.T, notifications <-chan bool) {
 func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) {
 	activity := clientui.RuntimeActivity{
 		State:          clientui.RuntimeActivityRegisteredIdle,
+		Reviewer:       clientui.ReviewerActivityInactive,
 		QueueAccepting: true,
 	}
 	if running {
@@ -982,7 +971,8 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 			panic(err)
 		}
 		activity = clientui.RuntimeActivity{
-			State: clientui.RuntimeActivityRunning,
+			State:    clientui.RuntimeActivityRunning,
+			Reviewer: clientui.ReviewerActivityInactive,
 			ActiveStep: &clientui.RuntimeActiveStep{
 				RunID:      runID,
 				StepID:     stepID,
@@ -1119,7 +1109,11 @@ func registryTestReadModelUpdate(
 	if err != nil {
 		t.Fatalf("NewReadModelVersion: %v", err)
 	}
-	activity := clientui.RuntimeActivity{State: state, QueueAccepting: true}
+	activity := clientui.RuntimeActivity{
+		State:          state,
+		Reviewer:       clientui.ReviewerActivityInactive,
+		QueueAccepting: true,
+	}
 	if state == clientui.RuntimeActivityRunning {
 		runID, err := runtimeids.ParseRunID(registryTestRunID)
 		if err != nil {

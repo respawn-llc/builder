@@ -26,11 +26,6 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	}
 	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
-		m.goalRuntimeMutationSerial = nextNonZeroToken(m.goalRuntimeMutationSerial)
-		if m.goal.open {
-			m.goal.goal = goalCoreFromRuntimeGoal(admission.view.Status.Goal)
-			m.goal.pending = nil
-		}
 		return m.applyTranscriptHydration(message.Payload().(clientui.TranscriptHydration), admission)
 	case clientui.TranscriptMessageThinkingStatusUpdate:
 		m.applyTranscriptThinkingStatusUpdate(message.Payload().(clientui.TranscriptThinkingStatusUpdate))
@@ -41,10 +36,12 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return m.applyTranscriptUserMessageFlushed(message.Payload().(clientui.TranscriptUserMessageFlushed))
 	case clientui.TranscriptMessageQueuedMessageState:
 		return m.applyTranscriptQueuedMessageState(message.Payload().(clientui.TranscriptQueuedMessageState))
+	case clientui.TranscriptMessagePendingWorkReplaced:
+		return m.applyPendingWorkReplacement(message.Payload().(clientui.TranscriptPendingWorkReplaced).PendingWork)
+	case clientui.TranscriptMessageHumanInputInterrupted:
+		return m.applyTranscriptHumanInputInterrupted(message.Payload().(clientui.TranscriptHumanInputInterrupted))
 	case clientui.TranscriptMessageStepState:
 		m.applyTranscriptStepState(message.Payload().(clientui.TranscriptStepState))
-	case clientui.TranscriptMessageReviewerState:
-		m.applyTranscriptReviewerState(message.Payload().(clientui.TranscriptReviewerState))
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
 		return m.applyTranscriptRuntimeReadModelUpdate(admission)
 	case clientui.TranscriptMessageSessionStatus:
@@ -54,14 +51,22 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageCompactionStatus:
 		// RuntimeActivity is the authoritative compaction lifecycle. This event
 		// carries lifecycle notification facts, not live-session state.
+		status := message.Payload().(clientui.TranscriptCompactionStatus)
+		if status.Mode == clientui.CompactionModeManual && status.RequestID != nil {
+			switch status.State {
+			case clientui.CompactionCompleted:
+				if m.clearPendingCompactionRequest(*status.RequestID) && m.turnQueueHook != nil {
+					m.turnQueueHook.OnUserCompactionCompleted(m.inputController().turnQueueDrained())
+				}
+			case clientui.CompactionFailed:
+				m.clearPendingCompactionRequest(*status.RequestID)
+			}
+		}
 	case clientui.TranscriptMessageContextUsage:
 		m.applyTranscriptContextUsage(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
-		m.goalRuntimeMutationSerial = nextNonZeroToken(m.goalRuntimeMutationSerial)
-		if m.goal.open {
-			m.goal.goal = goalCoreFromRuntimeGoal(admission.view.Status.Goal)
-			m.goal.pending = nil
-		}
+		// The runtime-client main-view cache is the goal read model used by the
+		// status line and goal flow.
 	case clientui.TranscriptMessageBackgroundActivity:
 		m.applyTranscriptBackgroundActivity(message.Payload().(clientui.TranscriptBackgroundActivity))
 		if m.processList.open {
@@ -94,15 +99,11 @@ func (m *uiModel) applyTranscriptHydration(
 	if hydration.ActiveThinkingStatus != nil {
 		m.applyTranscriptThinkingStatusUpdate(*hydration.ActiveThinkingStatus)
 	}
-	m.clearReviewerState()
-	if hydration.ActiveReviewer != nil {
-		m.applyTranscriptReviewerState(*hydration.ActiveReviewer)
-	}
 	if hydration.ActiveStep != nil {
 		m.applyTranscriptStepState(*hydration.ActiveStep)
 	}
 
-	m.reconcileTranscriptQueuedMessages(hydration.QueuedMessages)
+	m.pendingWork = hydration.PendingWork
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
 	cmds = append(cmds, m.releasePendingPromptCtrlCContinuation())
 	currentSessionID := strings.TrimSpace(m.sessionID)
@@ -163,22 +164,6 @@ func (m *uiModel) applyTranscriptStepState(state clientui.TranscriptStepState) {
 		return
 	}
 	m.reasoningStatusHeader = ""
-	m.clearReviewerState()
-}
-
-func (m *uiModel) applyTranscriptReviewerState(state clientui.TranscriptReviewerState) {
-	switch state.State {
-	case clientui.ReviewerStateRunning:
-		reviewer, err := clientui.NewReviewerLifecycle(true, true)
-		if err != nil {
-			panic(err)
-		}
-		m.runtimeLifecycle.Reviewer = reviewer
-	case clientui.ReviewerStateCompleted:
-		m.runtimeLifecycle.Reviewer = clientui.ReviewerLifecycleIdle
-	default:
-		panic(fmt.Sprintf("unsupported transcript reviewer state %q", state.State))
-	}
 }
 
 func (m *uiModel) applyTranscriptThinkingStatusUpdate(update clientui.TranscriptThinkingStatusUpdate) {
@@ -222,6 +207,7 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	if previousSessionID == "" || previousSessionID == nextSessionID {
 		return titleCmd
 	}
+	m.pendingCompactionRequestIDs = nil
 	m.askController().cancelActiveDelivery()
 	m.ask.pendingCtrlCContinuation = nil
 	promptCmd := m.reconcileTranscriptPrompts(nil)
@@ -243,35 +229,21 @@ func (m *uiModel) applyTranscriptContextUsage(usage clientui.TranscriptContextUs
 func (m *uiModel) applyTranscriptUserMessageFlushed(flushed clientui.TranscriptUserMessageFlushed) tea.Cmd {
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	m.localConversationTurn = true
-	ids := queuedMessageIdentityStrings(flushed.Messages)
-	var cmd tea.Cmd
-	for _, answer := range m.removeInjectedQueueItemsByIDs(ids) {
-		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
-	}
-	return cmd
+	return nil
 }
 
 func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQueuedMessageState) tea.Cmd {
-	if state.Status == clientui.QueuedUserMessageFailed &&
-		state.FailureReason != nil &&
-		*state.FailureReason == clientui.QueuedUserMessageFailureStopped &&
-		m.hasPendingInterrupt() {
-		return m.acknowledgePendingInterrupt()
-	}
 	if state.Status == clientui.QueuedUserMessageAccepted {
 		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-			ID:              state.QueueItemID.String(),
-			Text:            dereferenceTranscriptText(state.Text),
-			ClientRequestID: state.ClientRequestID.String(),
+			ID:   state.QueueItemID.String(),
+			Text: dereferenceTranscriptText(state.Text),
 		})
 		return nil
 	}
-	ids := []string{state.ClientRequestID.String(), state.QueueItemID.String()}
-	index := m.injectedQueueIndexByAnyID(state.ClientRequestID.String())
+	ids := []string{state.QueueItemID.String()}
+	index := m.injectedQueueIndexByAnyID(state.QueueItemID.String())
 	if index < 0 {
-		index = m.injectedQueueIndexByAnyID(state.QueueItemID.String())
-	}
-	if index < 0 {
+		m.retainUnownedQueuedTerminalState(state)
 		return nil
 	}
 	localText := m.injectedQueue[index].Text
@@ -292,25 +264,36 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 	))
 }
 
-func (m *uiModel) reconcileTranscriptQueuedMessages(states []clientui.TranscriptQueuedMessageState) {
-	for _, state := range states {
-		if state.Status != clientui.QueuedUserMessageAccepted {
-			continue
+func (m *uiModel) applyTranscriptHumanInputInterrupted(event clientui.TranscriptHumanInputInterrupted) tea.Cmd {
+	ids := make([]string, 0, len(event.Items))
+	texts := make([]string, 0, len(event.Items))
+	for _, item := range event.Items {
+		id := item.QueueItemID.String()
+		if m.injectedQueueIndexByAnyID(id) < 0 {
+			m.retainUnownedQueuedTerminalState(clientui.TranscriptQueuedMessageState{
+				QueueItemID: item.QueueItemID,
+				Status:      clientui.QueuedUserMessageDiscarded,
+			})
+		} else {
+			ids = append(ids, id)
 		}
-		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-			ID:              state.QueueItemID.String(),
-			Text:            dereferenceTranscriptText(state.Text),
-			ClientRequestID: state.ClientRequestID.String(),
-		})
+		texts = append(texts, item.Text)
 	}
-}
-
-func queuedMessageIdentityStrings(messages []clientui.QueuedUserMessageIdentity) []string {
-	ids := make([]string, 0, len(messages)*2)
-	for _, message := range messages {
-		ids = append(ids, message.ClientRequestID.String(), message.QueueItemID.String())
+	var cmd tea.Cmd
+	for _, answer := range m.removeInjectedQueueItemsByIDs(ids) {
+		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
 	}
-	return ids
+	m.inputController().restoreServerOrderedTextBeforeComposer(strings.Join(texts, "\n\n"))
+	if m.hasPendingInterrupt() {
+		cmd = tea.Batch(cmd, m.acknowledgePendingInterrupt())
+	}
+	return tea.Batch(cmd, m.sendTransientStatusWithNoticeID(
+		"interrupted input was restored",
+		uiStatusNoticeError,
+		transientStatusDuration,
+		uiStatusNoticeReplace,
+		"",
+	))
 }
 
 func dereferenceTranscriptText(text *string) string {
@@ -378,14 +361,6 @@ func (m *uiModel) applyTranscriptOperationalDiagnostic(diagnostic clientui.Trans
 	case clientui.OperationalDiagnosticInFlightClearFailed:
 		return m.sendTransientStatusWithNoticeID(
 			"run cleanup failed: "+diagnostic.Detail,
-			uiStatusNoticeError,
-			transientStatusDuration,
-			uiStatusNoticeReplace,
-			"",
-		)
-	case clientui.OperationalDiagnosticProviderTurnStateInvalid:
-		return m.sendTransientStatusWithNoticeID(
-			"Provider routing state was invalid. Kent ignored it and continued; retry if model work behaves unexpectedly.",
 			uiStatusNoticeError,
 			transientStatusDuration,
 			uiStatusNoticeReplace,

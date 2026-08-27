@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -243,9 +242,6 @@ func TestUIProcessClientUsesSharedControlWhenAvailable(t *testing.T) {
 	}
 	if len(controls.killed) != 1 || controls.killed[0] != "proc-1" {
 		t.Fatalf("unexpected killed requests: %+v", controls.killed)
-	}
-	if strings.TrimSpace(controls.killedReq.ClientRequestID) == "" {
-		t.Fatal("expected KillProcess to generate client_request_id")
 	}
 }
 

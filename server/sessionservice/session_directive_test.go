@@ -73,8 +73,7 @@ func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-				ClientRequestID: "transition-" + test.name,
-				Transition:      test.transition,
+				Transition: test.transition,
 			})
 			if err != nil {
 				t.Fatalf("ResolveTransition: %v", err)
@@ -96,8 +95,7 @@ func TestSessionTransitionRollbackLaunchesCreatedFork(t *testing.T) {
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	result, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "rollback-result",
-		SessionID:       store.Meta().SessionID,
+		SessionID: store.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:                       serverapi.SessionTransitionActionForkRollback,
 			InitialPrompt:                "edited prompt",
@@ -145,9 +143,8 @@ func TestSessionTransitionLogoutResultDependsOnCurrentSession(t *testing.T) {
 	currentID := mustSessionLifecycleResultID(t, "current-session")
 
 	withCurrent, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "logout-current",
-		SessionID:       currentID.String(),
-		Transition:      serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
+		SessionID:  currentID.String(),
+		Transition: serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
 	})
 	if err != nil {
 		t.Fatalf("ResolveTransition with current session: %v", err)
@@ -168,8 +165,7 @@ func TestSessionTransitionLogoutResultDependsOnCurrentSession(t *testing.T) {
 	)
 
 	withoutCurrent, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "logout-no-current",
-		Transition:      serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
+		Transition: serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
 	})
 	if err != nil {
 		t.Fatalf("ResolveTransition without current session: %v", err)

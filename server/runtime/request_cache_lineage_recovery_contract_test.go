@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/tools"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -22,7 +23,7 @@ func TestCommittedCacheResponseObserverFailureRetainsLineage(t *testing.T) {
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(7)}},
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(0)}},
 	}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:            "gpt-5",
 		CacheWarningMode: config.CacheWarningModeDefault,
 	})
@@ -30,25 +31,21 @@ func TestCommittedCacheResponseObserverFailureRetainsLineage(t *testing.T) {
 		return snapshot.Meta.LastSequence == 2
 	}, observerErr)
 
-	if _, err := engine.generateWithRetryClient(
+	if _, err := generateTestActiveStep(
 		context.Background(),
+		engine,
 		"first",
 		client,
 		cacheLineageRequest("conversation", transcript.CacheWarningScopeConversation, "alpha"),
-		nil,
-		nil,
-		nil,
 	); !errors.Is(err, observerErr) {
 		t.Fatalf("first cache observation error = %v, want observer error", err)
 	}
-	if _, err := engine.generateWithRetryClient(
+	if _, err := generateTestActiveStep(
 		context.Background(),
+		engine,
 		"second",
 		client,
 		cacheLineageRequest("conversation", transcript.CacheWarningScopeConversation, "beta"),
-		nil,
-		nil,
-		nil,
 	); err != nil {
 		t.Fatalf("second cache observation: %v", err)
 	}
@@ -63,30 +60,26 @@ func TestVerboseCacheReuseDropPersistsTypedWarning(t *testing.T) {
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(4)}},
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(0)}},
 	}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:            "gpt-5",
 		CacheWarningMode: config.CacheWarningModeVerbose,
 	})
 
-	if _, err := engine.generateWithRetryClient(
+	if _, err := generateTestActiveStep(
 		context.Background(),
+		engine,
 		"first",
 		client,
 		cacheLineageRequest("conversation", transcript.CacheWarningScopeConversation, "alpha"),
-		nil,
-		nil,
-		nil,
 	); err != nil {
 		t.Fatalf("first cache observation: %v", err)
 	}
-	if _, err := engine.generateWithRetryClient(
+	if _, err := generateTestActiveStep(
 		context.Background(),
+		engine,
 		"second",
 		client,
 		cacheLineageRequest("conversation", transcript.CacheWarningScopeConversation, "alpha", "omega"),
-		nil,
-		nil,
-		nil,
 	); err != nil {
 		t.Fatalf("second cache observation: %v", err)
 	}
@@ -103,7 +96,7 @@ func TestReviewerCacheLineagePersistsScopedWarning(t *testing.T) {
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(10)}},
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(0)}},
 	}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:            "gpt-5",
 		CacheWarningMode: config.CacheWarningModeVerbose,
 	})
@@ -114,7 +107,7 @@ func TestReviewerCacheLineagePersistsScopedWarning(t *testing.T) {
 		cacheLineageRequest("reviewer", transcript.CacheWarningScopeReviewer, "gamma"),
 	}
 	for index, request := range requests {
-		if _, err := engine.generateWithRetryClient(context.Background(), "cache-lineage", client, request, nil, nil, nil); err != nil {
+		if _, err := generateTestActiveStep(context.Background(), engine, "cache-lineage", client, request); err != nil {
 			t.Fatalf("cache observation %d: %v", index, err)
 		}
 	}

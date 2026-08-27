@@ -761,6 +761,14 @@ type StreamCallbacks struct {
 	OnStreamActivity        func()
 }
 
+type RequestInputTokenCountClient interface {
+	CountRequestInputTokens(ctx context.Context, request Request) (int, error)
+}
+
+type RequestInputTokenCountSupportClient interface {
+	SupportsRequestInputTokenCount(ctx context.Context) (bool, error)
+}
+
 type ModelContextWindowClient interface {
 	ResolveModelContextWindow(ctx context.Context, model string) (int, error)
 }

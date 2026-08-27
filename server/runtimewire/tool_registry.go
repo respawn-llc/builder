@@ -188,11 +188,20 @@ func (b *LocalToolRegistryBinding) rebuild() error {
 
 func (b *LocalToolRegistryBinding) rebuildLocked() error {
 	if b.registry == nil {
-		return fmt.Errorf("local static tool registry is required")
+		b.registry = tools.NewRegistry()
 	}
-	handlers := make([]tools.HandlerRegistration, 0, len(b.enabled))
-	enabledSet := make(map[toolspec.ID]struct{}, len(b.enabled))
-	for _, id := range b.enabled {
+	handlers, err := localRuntimeHandlers(b.enabled, b.ctx)
+	if err != nil {
+		return err
+	}
+	b.registry.ReplaceHandlers(handlers...)
+	return nil
+}
+
+func localRuntimeHandlers(enabled []toolspec.ID, ctx LocalToolRuntimeContext) ([]tools.HandlerRegistration, error) {
+	handlers := make([]tools.HandlerRegistration, 0, len(enabled))
+	enabledSet := make(map[toolspec.ID]struct{}, len(enabled))
+	for _, id := range enabled {
 		enabledSet[id] = struct{}{}
 	}
 	for _, id := range tools.CatalogIDs() {
@@ -204,18 +213,18 @@ func (b *LocalToolRegistryBinding) rebuildLocked() error {
 		}
 		def, ok := tools.DefinitionFor(id)
 		if !ok {
-			return fmt.Errorf("missing tool definition for %q", id)
+			return nil, fmt.Errorf("missing tool definition for %q", id)
 		}
 		if !def.AvailableInLocalRuntime() {
 			continue
 		}
-		handler, err := BuildLocalRuntimeHandler(def, b.ctx)
+		handler, err := BuildLocalRuntimeHandler(def, ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		handlers = append(handlers, tools.HandlerRegistration{ID: id, Handler: handler})
 	}
-	return b.registry.ReplaceHandlers(handlers...)
+	return handlers, nil
 }
 
 type LocalToolRegistryOptions struct {

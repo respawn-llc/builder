@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"testing"
 
 	"core/server/llm"
@@ -19,7 +18,7 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 		Model:           "gpt-5",
 		GlobalConfigDir: globalConfigDir,
 	})
-	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
+	if _, err := engine.SetGoal(t.Context(), "goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set active goal: %v", err)
 	}
 	mustSetWorktreeReminderState(t, store, testWorktreeReminderState(
@@ -29,18 +28,11 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 		t.TempDir(),
 		t.TempDir(),
 	))
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact context: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {

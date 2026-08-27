@@ -142,9 +142,8 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		draftState,
 		draftRoute,
 		serverapi.SessionPersistInputDraftRequest{
-			ClientRequestID: "rebind-draft",
-			SessionID:       fixture.reboundSessionID,
-			Input:           "preserved draft",
+			SessionID: fixture.reboundSessionID,
+			Input:     "preserved draft",
 		},
 	); err != nil {
 		t.Fatalf("rebind source project draft handoff: %v", err)
@@ -154,9 +153,8 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		&connectionState{attachedProject: fixture.bindingA.ProjectID},
 		draftRoute,
 		serverapi.SessionPersistInputDraftRequest{
-			ClientRequestID: "detached-rebind-draft",
-			SessionID:       fixture.reboundSessionID,
-			Input:           "must remain inaccessible",
+			SessionID: fixture.reboundSessionID,
+			Input:     "must remain inaccessible",
 		},
 	); err == nil {
 		t.Fatal("detached source-project draft mutation unexpectedly allowed")
@@ -166,9 +164,8 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		draftState,
 		draftRoute,
 		serverapi.SessionPersistInputDraftRequest{
-			ClientRequestID: "foreign-draft",
-			SessionID:       fixture.foreignSessionID,
-			Input:           "must remain inaccessible",
+			SessionID: fixture.foreignSessionID,
+			Input:     "must remain inaccessible",
 		},
 	); err == nil {
 		t.Fatal("unrelated foreign-project draft mutation unexpectedly allowed")
@@ -293,9 +290,8 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	stopRoute := routeForTest(t, protocol.MethodRuntimeLiveStop)
 
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       fixture.ownSessionID,
-		Text:            "steer",
+		SessionID: fixture.ownSessionID,
+		Text:      "steer",
 	}); err != nil {
 		t.Fatalf("live steer root-scoped existing session: %v", err)
 	}
@@ -304,15 +300,13 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	}
 	missing := "6ff7ace4-e08b-43fc-b425-73242f0b3d26"
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       missing,
-		Text:            "steer",
+		SessionID: missing,
+		Text:      "steer",
 	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		t.Fatalf("missing required live session error = %v, want ErrRuntimeUnavailable", err)
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{}, stopRoute, serverapi.RuntimeLiveStopRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       missing,
+		SessionID: missing,
 	}); err != nil {
 		t.Fatalf("optional live stop missing session: %v", err)
 	}

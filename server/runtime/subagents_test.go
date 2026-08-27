@@ -280,11 +280,14 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 				EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
 				SubagentCatalogSettings: tt.settings,
 			}
-			if tt.workflow {
-				cfg.CurrentNodeExecution = testWorkflowConfig(nil, config.WorkflowCompletionModeTool)
-			}
 			eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
-			if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
+			if tt.workflow {
+				publishTestWorkflowExecution(t, eng, testWorkflowConfig(nil, config.WorkflowCompletionModeTool))
+			}
+			stepID := runtimeTestStepID("base")
+			if err := runTestActiveStep(eng, stepID, func() error {
+				return eng.steerBaseMetaContextIfNeeded(stepID)
+			}); err != nil {
 				t.Fatalf("steer base meta context: %v", err)
 			}
 			if got := hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()); got != tt.workerVisible {
@@ -336,7 +339,10 @@ func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits
 				EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
 				SubagentCatalogSettings: settings,
 			})
-			if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
+			stepID := runtimeTestStepID("base")
+			if err := runTestActiveStep(eng, stepID, func() error {
+				return eng.steerBaseMetaContextIfNeeded(stepID)
+			}); err != nil {
 				t.Fatalf("steer base meta context: %v", err)
 			}
 			if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
@@ -385,7 +391,10 @@ func TestSubagentCatalogIgnoresPersistedCallerTargetPolicyInBaseAndCompaction(t 
 		EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
 		SubagentCatalogSettings: settings,
 	})
-	if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
+	stepID := runtimeTestStepID("base")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		return eng.steerBaseMetaContextIfNeeded(stepID)
+	}); err != nil {
 		t.Fatalf("steer base meta context: %v", err)
 	}
 	if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
@@ -582,14 +591,12 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 		Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 
 	completeManualEligibilityAgentStep(t, eng)
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
 		t.Fatalf("expected in-memory canonical transcript to keep subagent catalog, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
 	}

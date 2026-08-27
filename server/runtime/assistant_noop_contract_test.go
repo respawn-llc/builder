@@ -32,7 +32,7 @@ func TestBlankFinalStaysHiddenAndSkipsReviewer(t *testing.T) {
 		t,
 		store,
 		mainClient,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model: "gpt-5",
 			Reviewer: ReviewerConfig{
@@ -48,7 +48,7 @@ func TestBlankFinalStaysHiddenAndSkipsReviewer(t *testing.T) {
 						*event.Message.Phase == llm.MessagePhaseFinal {
 						assistantFinalPublications.Add(1)
 					}
-				case EventReviewerStarted:
+				case EventRuntimeActivityChanged:
 					reviewerStarts.Add(1)
 				}
 			},
@@ -121,7 +121,7 @@ func TestBlankFinalWhitespaceStaysHiddenAndSkipsReviewer(t *testing.T) {
 		t,
 		store,
 		mainClient,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model: "gpt-5",
 			Reviewer: ReviewerConfig{
@@ -194,7 +194,7 @@ func TestBlankFinalWithAcceptedToolCallsFailsBeforeExecution(t *testing.T) {
 func TestFormerMarkerIsOrdinaryFinal(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{finalTextResponse("NO_OP")}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 
 	message, err := engine.SubmitUserMessage(context.Background(), "turn")
 	if err != nil {

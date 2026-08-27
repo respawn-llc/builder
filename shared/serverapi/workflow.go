@@ -25,7 +25,7 @@ const (
 	WorkflowRequestErrorTooLong      = "workflow.request.too_long"
 )
 
-const WorkflowPaginationMaxLimit = OffsetPaginationMaxLimit
+const WorkflowPaginationMaxLimit = 100
 const WorkflowTaskListMaxSortSelectors = 7
 const WorkflowBoardNodeCardsMaxPageSize = 25
 
@@ -1034,21 +1034,41 @@ func (e WorkflowTaskCompleteSelectorAmbiguousError) Is(target error) bool {
 }
 
 type WorkflowTaskCompleteRequest struct {
-	SessionID      string            `json:"session_id,omitempty"`
-	TaskID         string            `json:"task_id,omitempty"`
-	TransitionID   string            `json:"transition_id,omitempty"`
-	OutputValues   map[string]string `json:"output_values,omitempty"`
-	Commentary     string            `json:"commentary,omitempty"`
-	ActorKind      string            `json:"actor_kind"`
-	AgentSessionID string            `json:"agent_session_id,omitempty"`
-	Force          bool              `json:"force,omitempty"`
+	SessionID      string             `json:"session_id,omitempty"`
+	TaskID         string             `json:"task_id,omitempty"`
+	TransitionID   string             `json:"transition_id,omitempty"`
+	OutputValues   map[string]string  `json:"output_values,omitempty"`
+	Commentary     string             `json:"commentary,omitempty"`
+	ActorKind      string             `json:"actor_kind"`
+	AgentSessionID string             `json:"agent_session_id,omitempty"`
+	RunID          *runtimeids.RunID  `json:"run_id,omitempty"`
+	StepID         *runtimeids.StepID `json:"step_id,omitempty"`
+	Force          bool               `json:"force,omitempty"`
 }
 
 type WorkflowTaskCompleteResponse struct {
+	AgentCompletion *WorkflowTaskAgentCompletion      `json:"agent_completion"`
+	ForcedMove      *WorkflowTaskForcedCompletionMove `json:"forced_move"`
+}
+
+func (r WorkflowTaskCompleteResponse) Validate() error {
+	if (r.AgentCompletion == nil) == (r.ForcedMove == nil) {
+		return errors.New("workflow task completion response must contain exactly one outcome")
+	}
+	return nil
+}
+
+type WorkflowTaskAgentCompletion struct {
 	TaskID            string                        `json:"task_id"`
 	CurrentNodes      []WorkflowTaskCurrentNode     `json:"current_nodes"`
 	PendingApprovalID *string                       `json:"pending_approval_id,omitempty"`
 	Handoff           WorkflowTaskCompletionHandoff `json:"handoff"`
+}
+
+type WorkflowTaskForcedCompletionMove struct {
+	TaskID       string                   `json:"task_id"`
+	TargetNodeID string                   `json:"target_node_id"`
+	Outcome      WorkflowTaskMoveResponse `json:"outcome"`
 }
 
 type WorkflowTaskCompletionHandoff struct {
@@ -2138,23 +2158,6 @@ func (r WorkflowGraphDeriveWiringRequest) Validate() error {
 }
 
 func (r WorkflowGraphSavePreviewRequest) Validate() error {
-	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
-		return err
-	}
-	if err := validateWorkflowGraphDraftEnvelope(r.Graph); err != nil {
-		return err
-	}
-	return validateWorkflowGraphEntityIDs(r.Graph)
-}
-
-func (r WorkflowGraphSavePreviewRequest) ValidateRPC() error {
-	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
-		return err
-	}
-	return validateWorkflowGraphDraftCollectionBounds(r.Graph)
-}
-
-func validateWorkflowGraphSavePreviewFields(r WorkflowGraphSavePreviewRequest) error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
@@ -2164,37 +2167,29 @@ func validateWorkflowGraphSavePreviewFields(r WorkflowGraphSavePreviewRequest) e
 	if r.ExpectedVersion < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "expected_version", "expected_version must be non-negative")
 	}
-	return nil
+	if err := validateWorkflowGraphDraftEnvelope(r.Graph); err != nil {
+		return err
+	}
+	return validateWorkflowGraphEntityIDs(r.Graph)
 }
 
 func (r WorkflowGraphSaveRequest) Validate() error {
 	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).Validate(); err != nil {
 		return err
 	}
-	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
-}
-
-func (r WorkflowGraphSaveRequest) ValidateRPC() error {
-	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).ValidateRPC(); err != nil {
-		return err
-	}
-	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
-}
-
-func validateWorkflowGraphSaveConfirmation(confirmation *WorkflowGraphSaveConfirmation) error {
-	if confirmation == nil {
+	if r.Confirmation == nil {
 		return nil
 	}
 	for _, field := range []struct {
 		name  string
 		value int64
 	}{
-		{"expected_removed_node_group_count", confirmation.ExpectedRemovedNodeGroupCount},
-		{"expected_removed_node_count", confirmation.ExpectedRemovedNodeCount},
-		{"expected_removed_transition_group_count", confirmation.ExpectedRemovedTransitionGroupCount},
-		{"expected_removed_edge_count", confirmation.ExpectedRemovedEdgeCount},
-		{"expected_node_task_reference_count", confirmation.ExpectedNodeTaskReferenceCount},
-		{"expected_edge_task_reference_count", confirmation.ExpectedEdgeTaskReferenceCount},
+		{"expected_removed_node_group_count", r.Confirmation.ExpectedRemovedNodeGroupCount},
+		{"expected_removed_node_count", r.Confirmation.ExpectedRemovedNodeCount},
+		{"expected_removed_transition_group_count", r.Confirmation.ExpectedRemovedTransitionGroupCount},
+		{"expected_removed_edge_count", r.Confirmation.ExpectedRemovedEdgeCount},
+		{"expected_node_task_reference_count", r.Confirmation.ExpectedNodeTaskReferenceCount},
+		{"expected_edge_task_reference_count", r.Confirmation.ExpectedEdgeTaskReferenceCount},
 	} {
 		if field.value < 0 {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field.name, field.name+" must be non-negative")
@@ -2364,8 +2359,19 @@ func validateWorkflowGraphValidationModes(modes []WorkflowValidationMode) error 
 }
 
 func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
-	if err := validateWorkflowGraphDraftCollectionBounds(graph); err != nil {
-		return err
+	for _, field := range []struct {
+		name  string
+		count int
+		limit int
+	}{
+		{"node_groups", len(graph.NodeGroups), WorkflowGraphDraftMaxNodeGroups},
+		{"nodes", len(graph.Nodes), WorkflowGraphDraftMaxNodes},
+		{"transition_groups", len(graph.TransitionGroups), WorkflowGraphDraftMaxTransitionGroups},
+		{"edges", len(graph.Edges), WorkflowGraphDraftMaxEdges},
+	} {
+		if field.count > field.limit {
+			return workflowRequestError(WorkflowRequestErrorTooLong, "graph."+field.name, fmt.Sprintf("%s must be <= %d", field.name, field.limit))
+		}
 	}
 	for _, node := range graph.Nodes {
 		if kind := WorkflowNodeKind(strings.TrimSpace(node.Kind)); !slices.Contains([]WorkflowNodeKind{WorkflowNodeKindStart, WorkflowNodeKindAgent, WorkflowNodeKindScript, WorkflowNodeKindJoin, WorkflowNodeKindTerminal}, kind) {
@@ -2398,24 +2404,6 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 	for _, group := range graph.TransitionGroups {
 		if len([]rune(group.Description)) > 1000 {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.transition_groups.description", "description must be <= 1000 characters")
-		}
-	}
-	return nil
-}
-
-func validateWorkflowGraphDraftCollectionBounds(graph WorkflowGraphDraft) error {
-	for _, field := range []struct {
-		name  string
-		count int
-		limit int
-	}{
-		{"node_groups", len(graph.NodeGroups), WorkflowGraphDraftMaxNodeGroups},
-		{"nodes", len(graph.Nodes), WorkflowGraphDraftMaxNodes},
-		{"transition_groups", len(graph.TransitionGroups), WorkflowGraphDraftMaxTransitionGroups},
-		{"edges", len(graph.Edges), WorkflowGraphDraftMaxEdges},
-	} {
-		if field.count > field.limit {
-			return workflowRequestError(WorkflowRequestErrorTooLong, "graph."+field.name, fmt.Sprintf("%s must be <= %d", field.name, field.limit))
 		}
 	}
 	return nil
@@ -3150,7 +3138,16 @@ func (r WorkflowTaskCompleteRequest) Validate() error {
 		if strings.TrimSpace(r.AgentSessionID) == "" {
 			return workflowRequestError(WorkflowRequestErrorRequired, "agent_session_id", "agent_session_id is required for agent completion")
 		}
+		if r.RunID == nil || r.RunID.IsZero() {
+			return workflowRequestError(WorkflowRequestErrorRequired, "run_id", "run_id is required for agent completion")
+		}
+		if r.StepID == nil || r.StepID.IsZero() {
+			return workflowRequestError(WorkflowRequestErrorRequired, "step_id", "step_id is required for agent completion")
+		}
 		return nil
+	}
+	if r.RunID != nil || r.StepID != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "provenance", "run_id and step_id are only allowed for agent completion")
 	}
 	if !r.Force {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "force", "force is required for non-agent completion")
@@ -3385,9 +3382,6 @@ func (r WorkflowBoardNodeCardsListRequest) validateScopeAndPage() error {
 		return err
 	}
 	if err := validateRequired("node_id", r.NodeID); err != nil {
-		return err
-	}
-	if err := validateGraphEntityID("node_id", r.NodeID); err != nil {
 		return err
 	}
 	if r.PageSize < 0 {

@@ -25,13 +25,8 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 		mustCreateTestSession(t),
 		&fakeClient{},
 		&workflowruntime.CurrentNodeExecutionConfig{
-			ScopeID: scopeID,
-			Contract: workflowruntime.CompletionContract{
-				Transitions: []workflowruntime.CompletionTransition{{
-					ID:         "done",
-					Parameters: []workflow.Parameter{{Key: "artifact"}},
-				}},
-			},
+			ScopeID:        scopeID,
+			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeTool,
 			Controller:     &externallyCompletedWorkflowController{},
 		},
@@ -49,13 +44,13 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 		t.Fatalf("workflow tool choice mode = %q, want required", request.ToolChoiceMode)
 	}
 
-	advertised := make(map[toolspec.ID]llm.Tool, len(request.Tools))
+	advertised := make(map[toolspec.ID]struct{}, len(request.Tools))
 	for _, tool := range request.Tools {
 		id, ok := toolspec.ParseID(tool.Name)
 		if !ok {
 			t.Fatalf("workflow request advertised unknown tool: %+v", tool)
 		}
-		advertised[id] = tool
+		advertised[id] = struct{}{}
 	}
 	if len(advertised) != 2 {
 		t.Fatalf("workflow request advertised tools = %v, want ask_question and complete_node", request.Tools)
@@ -64,18 +59,6 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 		if _, ok := advertised[id]; !ok {
 			t.Fatalf("workflow request omitted tool %q: %+v", id, request.Tools)
 		}
-	}
-	var completionSchema struct {
-		Properties map[string]json.RawMessage `json:"properties"`
-	}
-	if err := json.Unmarshal(advertised[toolspec.ToolCompleteNode].Schema.JSON(), &completionSchema); err != nil {
-		t.Fatalf("decode complete_node schema: %v", err)
-	}
-	if _, ok := completionSchema.Properties["artifact"]; !ok {
-		t.Fatalf(
-			"complete_node schema omitted active contract parameter: %s",
-			advertised[toolspec.ToolCompleteNode].Schema.JSON(),
-		)
 	}
 }
 
@@ -183,17 +166,17 @@ func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model: "gpt-5",
-			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-				ScopeID:        scopeID,
-				Contract:       workflowruntime.CompletionContract{},
-				CompletionMode: workflowruntime.CompletionModeShellCommand,
-				Controller:     &externallyCompletedWorkflowController{},
-			},
 		},
 	)
+	publishTestWorkflowExecution(t, engine, &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID:        scopeID,
+		Contract:       workflowruntime.CompletionContract{},
+		CompletionMode: workflowruntime.CompletionModeShellCommand,
+		Controller:     &externallyCompletedWorkflowController{},
+	})
 
 	if _, err := engine.buildRequest(context.Background(), "step", true); !errors.Is(err, llm.ErrInvalidRequest) {
 		t.Fatalf("build shell workflow request error = %v, want invalid request", err)
@@ -301,20 +284,20 @@ func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *test
 				results = append(results, *event.ToolResult)
 				resultMu.Unlock()
 			},
-			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-				ScopeID: scopeID,
-				Contract: workflowruntime.CompletionContract{
-					Transitions: []workflowruntime.CompletionTransition{{
-						ID:         "done",
-						Parameters: []workflow.Parameter{{Key: "summary"}},
-					}},
-				},
-				CompletionMode:               workflowruntime.CompletionModeTool,
-				MaxInvalidCompletionAttempts: 2,
-				Controller:                   controller,
-			},
 		},
 	)
+	publishTestWorkflowExecution(t, engine, &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: scopeID,
+		Contract: workflowruntime.CompletionContract{
+			Transitions: []workflowruntime.CompletionTransition{{
+				ID:         "done",
+				Parameters: []workflow.Parameter{{Key: "summary"}},
+			}},
+		},
+		CompletionMode:               workflowruntime.CompletionModeTool,
+		MaxInvalidCompletionAttempts: 2,
+		Controller:                   controller,
+	})
 
 	if _, err := engine.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit workflow turn: %v", err)
@@ -437,7 +420,10 @@ func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
 	}
 	request := requests[0]
 	if request.TransitionID != "done" ||
-		request.OutputValues["summary"] != "done" {
+		request.OutputValues["summary"] != "done" ||
+		request.Provenance.ScopeID != scopeID ||
+		request.Provenance.RunID.IsZero() ||
+		request.Provenance.StepID.IsZero() {
 		t.Fatalf("unstructured workflow completion request = %+v", request)
 	}
 	if terminal := engine.WorkflowTerminalState(); !terminal.Completed ||
@@ -602,26 +588,38 @@ func (t *workflowSideEffectTool) Call(_ context.Context, call tools.Call) (tools
 type workflowCompletionAccountingController struct {
 	externallyCompletedWorkflowController
 	completionMu       sync.Mutex
-	completionRequests []workflowruntime.CompletionRequest
+	completionRequests []workflowruntime.AgentCompletionRequest
 	completions        atomic.Int32
 	violations         atomic.Int32
 }
 
-func (c *workflowCompletionAccountingController) CompleteCurrentNode(
+func (c *workflowCompletionAccountingController) CompleteAgentCurrentNode(
 	_ context.Context,
-	request workflowruntime.CompletionRequest,
+	request workflowruntime.AgentCompletionRequest,
 ) (workflowruntime.CompletionResult, error) {
 	c.completionMu.Lock()
 	c.completionRequests = append(c.completionRequests, request)
 	c.completionMu.Unlock()
 	c.completions.Add(1)
-	return workflowruntime.CompletionResult{}, nil
+	return applyWorkflowCompletionForTest(
+		c.externallyCompletedWorkflowController.engine,
+		request,
+		workflowruntime.CompletionResult{State: workflowruntime.CompletionStateApplied},
+	)
 }
 
-func (c *workflowCompletionAccountingController) CompletionRequests() []workflowruntime.CompletionRequest {
+func (c *workflowCompletionAccountingController) CompleteScriptCurrentNode(
+	context.Context,
+	workflowruntime.ScriptCompletionRequest,
+) (workflowruntime.CompletionResult, error) {
+	err := errors.New("unexpected Script completion")
+	return workflowruntime.CompletionResult{}, err
+}
+
+func (c *workflowCompletionAccountingController) CompletionRequests() []workflowruntime.AgentCompletionRequest {
 	c.completionMu.Lock()
 	defer c.completionMu.Unlock()
-	return append([]workflowruntime.CompletionRequest(nil), c.completionRequests...)
+	return append([]workflowruntime.AgentCompletionRequest(nil), c.completionRequests...)
 }
 
 func (c *workflowCompletionAccountingController) RecordProtocolViolation(

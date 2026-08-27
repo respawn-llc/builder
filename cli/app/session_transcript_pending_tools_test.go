@@ -57,7 +57,7 @@ func TestCommittedToolRowAppendsImmediatelyAndRemovesPendingToolInSameEvent(t *t
 		Kind:       clientui.TranscriptRowTool,
 		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		Tool: &clientui.TranscriptToolRow{
-			StepID:     ongoingTestStepID(),
+			StepID:     ongoingTestStepIDPointer(),
 			ToolCallID: "tool-1",
 			ToolName:   "shell",
 			Text:       "done",
@@ -168,7 +168,7 @@ func TestPendingToolStartUsesPresentationMetadata(t *testing.T) {
 		Kind:       clientui.TranscriptRowTool,
 		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		Tool: &clientui.TranscriptToolRow{
-			StepID:       ongoingTestStepID(),
+			StepID:       ongoingTestStepIDPointer(),
 			ToolCallID:   "77777777-7777-4777-8777-777777777777",
 			ToolName:     "exec_command",
 			Text:         "No output",

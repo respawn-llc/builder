@@ -7,10 +7,6 @@ import (
 	"core/shared/runtimeids"
 )
 
-// ErrClientRequestIDRequired is returned when a lifecycle request omits its
-// client_request_id.
-var ErrClientRequestIDRequired = errors.New("client_request_id is required")
-
 type SessionTransitionAction string
 
 const (
@@ -43,19 +39,22 @@ type SessionInitialInputResponse struct {
 }
 
 type SessionPersistInputDraftRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Input           string `json:"input,omitempty"`
+	SessionID string `json:"session_id"`
+	Input     string `json:"input,omitempty"`
 }
 
 type SessionPersistInputDraftResponse struct{}
 
+type RuntimeStepOrigin struct {
+	RunID  string `json:"run_id"`
+	StepID string `json:"step_id"`
+}
+
 type SessionRetargetWorkspaceRequest struct {
-	ClientRequestID string             `json:"client_request_id"`
-	SessionID       string             `json:"session_id"`
-	WorkspaceRoot   string             `json:"workspace_root"`
-	ProjectID       *string            `json:"project_id,omitempty"`
-	Origin          *RuntimeStepOrigin `json:"origin,omitempty"`
+	SessionID     string             `json:"session_id"`
+	WorkspaceRoot string             `json:"workspace_root"`
+	ProjectID     *string            `json:"project_id,omitempty"`
+	Origin        *RuntimeStepOrigin `json:"origin,omitempty"`
 }
 
 type SessionRetargetWorkspaceResponse struct {
@@ -65,17 +64,13 @@ type SessionRetargetWorkspaceResponse struct {
 }
 
 type SessionResolveTransitionRequest struct {
-	ClientRequestID string            `json:"client_request_id"`
-	SessionID       string            `json:"session_id,omitempty"`
-	Transition      SessionTransition `json:"transition"`
+	SessionID  string            `json:"session_id,omitempty"`
+	Transition SessionTransition `json:"transition"`
 }
 
 type SessionResolveTransitionResponse = SessionDirective
 
 func (r SessionPersistInputDraftRequest) Validate() error {
-	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return ErrClientRequestIDRequired
-	}
 	if err := validateScopedSessionID(r.SessionID); err != nil {
 		return err
 	}
@@ -90,9 +85,6 @@ func (r SessionInitialInputRequest) Validate() error {
 }
 
 func (r SessionRetargetWorkspaceRequest) Validate() error {
-	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return ErrClientRequestIDRequired
-	}
 	if err := validateScopedSessionID(r.SessionID); err != nil {
 		return err
 	}
@@ -106,6 +98,13 @@ func (r SessionRetargetWorkspaceRequest) Validate() error {
 		return r.Origin.Validate()
 	}
 	return nil
+}
+
+func (origin RuntimeStepOrigin) Validate() error {
+	if err := runtimeids.ValidateUUIDv4(origin.RunID, "run_id"); err != nil {
+		return err
+	}
+	return runtimeids.ValidateUUIDv4(origin.StepID, "step_id")
 }
 
 func (r SessionRetargetWorkspaceResponse) Validate() error {
@@ -128,9 +127,6 @@ func (r SessionRetargetWorkspaceResponse) Validate() error {
 }
 
 func (r SessionResolveTransitionRequest) Validate() error {
-	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return ErrClientRequestIDRequired
-	}
 	if strings.TrimSpace(r.SessionID) != "" {
 		if err := validateScopedSessionID(r.SessionID); err != nil {
 			return err

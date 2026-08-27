@@ -27,9 +27,7 @@ func (e *Engine) isWorkflowAgent() bool {
 		return false
 	}
 	if e.currentNodeExecutionActive() ||
-		e.cfg.CurrentNodeExecution != nil ||
 		e.cfg.WorkflowPrompt != nil ||
-		e.workflowPromptContract != nil ||
 		e.WorkflowTerminalState().Completed {
 		return true
 	}
@@ -43,12 +41,6 @@ func (e *Engine) isWorkflowAgent() bool {
 			(meta.Locked != nil && meta.Locked.WorkflowCompletionMode != nil) {
 			return true
 		}
-	}
-	e.workflowAssignmentMu.Lock()
-	pendingAssignment := len(e.pendingWorkflowAssignments) != 0
-	e.workflowAssignmentMu.Unlock()
-	if pendingAssignment {
-		return true
 	}
 	for _, toolID := range e.cfg.EnabledTools {
 		if toolID == toolspec.ToolCompleteNode {

@@ -9,6 +9,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -16,7 +17,10 @@ import (
 func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing.T) {
 	t.Run("overlapping traces and measured zero", func(t *testing.T) {
 		store := mustCreateTestSession(t)
-		engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		stepID := runtimeTestStepID("step")
+		restoreStep := setTestActiveStep(engine, stepID)
+		defer restoreStep()
 		now := time.Unix(100, 0)
 		state := engine.transcriptRuntimeState()
 		state.now = func() time.Time { return now }
@@ -25,24 +29,24 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 		secondOutput, secondPart := int64(1), int64(0)
 		first := &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &firstPart}
 		second := &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &secondPart}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: first, Text: "first",
 		})); err != nil {
 			t.Fatalf("seed first trace: %v", err)
 		}
 		now = now.Add(1500 * time.Millisecond)
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: first, Text: "first update",
 		})); err != nil {
 			t.Fatalf("update first trace: %v", err)
 		}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: second, Text: "second",
 		})); err != nil {
 			t.Fatalf("seed second trace: %v", err)
 		}
 		now = now.Add(1000 * time.Millisecond)
-		if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{
+		if err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{
 			{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "first", SourceCoordinate: first},
 			{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "second", SourceCoordinate: second},
 		}); err != nil {
@@ -68,12 +72,12 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 
 		zeroOutput, zeroPart := int64(2), int64(0)
 		zero := &llm.ReasoningSourceCoordinate{OutputIndex: &zeroOutput, PartIndex: &zeroPart}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: zero, Text: "zero",
 		})); err != nil {
 			t.Fatalf("seed zero trace: %v", err)
 		}
-		if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+		if err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "zero", SourceCoordinate: zero,
 		}}); err != nil {
 			t.Fatalf("reconcile zero trace: %v", err)
@@ -96,20 +100,22 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 
 	t.Run("failed commit retries from original start", func(t *testing.T) {
 		store := mustCreateTestSession(t)
-		engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		restoreStep := setTestActiveStep(engine, "step")
+		defer restoreStep()
 		now := time.Unix(200, 0)
 		engine.transcriptRuntimeState().now = func() time.Time { return now }
 		executor := &defaultStepExecutor{engine: engine}
 		output, part := int64(0), int64(0)
 		coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: coordinate, Text: "retry",
 		})); err != nil {
 			t.Fatalf("seed retry trace: %v", err)
 		}
 		now = now.Add(time.Second)
 		blocker := mustBlockTestEventLogAppends(t, store)
-		err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+		err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "retry", SourceCoordinate: coordinate,
 		}})
 		if err == nil {
@@ -119,7 +125,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 			t.Fatalf("restore blocked event log: %v", restoreErr)
 		}
 		now = now.Add(time.Second)
-		if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+		if err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "retry", SourceCoordinate: coordinate,
 		}}); err != nil {
 			t.Fatalf("retry reasoning commit: %v", err)
@@ -142,30 +148,33 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 
 	t.Run("reset starts a fresh interval and completed-only is absent", func(t *testing.T) {
 		store := mustCreateTestSession(t)
-		engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		stepID := runtimeTestStepID("step")
+		restoreStep := setTestActiveStep(engine, stepID)
+		defer restoreStep()
 		now := time.Unix(300, 0)
 		engine.transcriptRuntimeState().now = func() time.Time { return now }
 		executor := &defaultStepExecutor{engine: engine}
 		oldOutput, oldPart := int64(0), int64(0)
 		old := &llm.ReasoningSourceCoordinate{OutputIndex: &oldOutput, PartIndex: &oldPart}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: old, Text: "old",
 		})); err != nil {
 			t.Fatalf("seed old trace: %v", err)
 		}
 		now = now.Add(2 * time.Second)
-		if err := executor.resetProvisionalReasoning("step"); err != nil {
+		if err := executor.resetProvisionalReasoning(stepID); err != nil {
 			t.Fatalf("reset old trace: %v", err)
 		}
 		freshOutput, freshPart := int64(1), int64(0)
 		fresh := &llm.ReasoningSourceCoordinate{OutputIndex: &freshOutput, PartIndex: &freshPart}
-		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 			SourceCoordinate: fresh, Text: "fresh",
 		})); err != nil {
 			t.Fatalf("seed fresh trace: %v", err)
 		}
 		now = now.Add(300 * time.Millisecond)
-		if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+		if err := executor.reconcileReasoning(stepID, []llm.ReasoningEntry{{
 			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "fresh", SourceCoordinate: fresh,
 		}}); err != nil {
 			t.Fatalf("reconcile fresh trace: %v", err)
@@ -191,15 +200,17 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 
 func TestReasoningTraceDurationRestoresThroughPersistedTranscript(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	output, part := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate, Text: "restored",
 	})); err != nil {
 		t.Fatalf("seed restored trace: %v", err)
 	}
-	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning("step", []llm.ReasoningEntry{{
+	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "restored", SourceCoordinate: coordinate,
 	}}); err != nil {
 		t.Fatalf("persist restored trace: %v", err)
@@ -208,7 +219,7 @@ func TestReasoningTraceDurationRestoresThroughPersistedTranscript(t *testing.T) 
 		t.Fatalf("close original engine: %v", err)
 	}
 	reopenedStore := mustOpenTestSession(t, store.Dir())
-	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	if err := reopened.restoreMessages(); err != nil {
 		t.Fatalf("restore persisted transcript: %v", err)
 	}
@@ -226,11 +237,13 @@ func TestReasoningTraceDurationRestoresThroughPersistedTranscript(t *testing.T) 
 
 func TestCompletedResponseAbortThenReasoningResetWithoutAssistantStream(t *testing.T) {
 	var events []Event
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
-	const stepID = "reasoning-only-discard"
+	stepID := runtimeTestStepID("reasoning-only-discard")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	outputIndex, partIndex := int64(0), int64(0)
 	if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex},
@@ -310,10 +323,12 @@ func TestTranscriptReasoningStateRetainsMetadataWithoutChangingPublicIdentity(t 
 }
 
 func TestReconcileReasoningRejectsInvalidCoordinateAndConsumesCommittedTrace(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	executor := &defaultStepExecutor{engine: engine}
 	invalidOutput, validPart := int64(-1), int64(0)
-	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+	if err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role:             textPointer(string(transcript.EntryRoleReasoning)),
 		Text:             "invalid",
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &invalidOutput, PartIndex: &validPart},
@@ -323,13 +338,13 @@ func TestReconcileReasoningRejectsInvalidCoordinateAndConsumesCommittedTrace(t *
 
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate,
 		Text:             "provisional",
 	})); err != nil {
 		t.Fatalf("seed provisional reasoning: %v", err)
 	}
-	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+	if err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role:             textPointer(string(transcript.EntryRoleReasoning)),
 		Text:             "completed",
 		SourceCoordinate: coordinate,
@@ -346,18 +361,20 @@ func TestReconcileReasoningConsumesTraceAfterCommittedObserverError(t *testing.T
 	observerErr := errors.New("reasoning observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate,
 		Text:             "provisional",
 	})); err != nil {
 		t.Fatalf("seed provisional reasoning: %v", err)
 	}
 	gate.FailNext(observerErr)
-	err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+	err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role:             textPointer(string(transcript.EntryRoleReasoning)),
 		Text:             "completed",
 		SourceCoordinate: coordinate,
@@ -372,12 +389,14 @@ func TestReconcileReasoningConsumesTraceAfterCommittedObserverError(t *testing.T
 }
 
 func TestReconcileReasoningRejectsCompletedIdentityConflictWithStream(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
 	streamIdentity := &llm.ReasoningItemIdentity{ItemID: "reason_stream", PartIndex: &partIndex}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate,
 		ItemIdentity:     streamIdentity,
 		Text:             "streamed",
@@ -385,7 +404,7 @@ func TestReconcileReasoningRejectsCompletedIdentityConflictWithStream(t *testing
 		t.Fatalf("seed streamed reasoning: %v", err)
 	}
 	completedIdentity := &llm.ReasoningItemIdentity{ItemID: "reason_completed", PartIndex: &partIndex}
-	err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+	err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role:             textPointer(string(transcript.EntryRoleReasoning)),
 		Text:             "completed",
 		SourceCoordinate: coordinate,
@@ -402,18 +421,20 @@ func TestReconcileReasoningRejectsCompletedIdentityConflictWithStream(t *testing
 
 func TestReconcileReasoningKeepsTraceWhenCommitIsNotDurable(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate,
 		Text:             "provisional",
 	})); err != nil {
 		t.Fatalf("seed provisional reasoning: %v", err)
 	}
 	mustBlockTestEventLogAppends(t, store)
-	err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+	err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role:             textPointer(string(transcript.EntryRoleReasoning)),
 		Text:             "completed",
 		SourceCoordinate: coordinate,
@@ -428,10 +449,12 @@ func TestReconcileReasoningKeepsTraceWhenCommitIsNotDurable(t *testing.T) {
 }
 
 func TestReconcileReasoningPersistsValidUnprovisionedCoordinateAsCompletedOnly(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	executor := &defaultStepExecutor{engine: engine}
 	outputIndex, partIndex := int64(8), int64(2)
-	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+	if err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role: textPointer(string(transcript.EntryRoleReasoning)),
 		Text: "completed only",
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{
@@ -449,7 +472,8 @@ func TestReconcileReasoningPersistsValidUnprovisionedCoordinateAsCompletedOnly(t
 }
 
 func TestReconcileReasoningUsesFirstSeenProvisionalOrder(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreFirstStep := setTestActiveStep(engine, "step")
 	executor := &defaultStepExecutor{engine: engine}
 	firstOutput, secondOutput, part := int64(9), int64(1), int64(0)
 	first := &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &part}
@@ -458,28 +482,31 @@ func TestReconcileReasoningUsesFirstSeenProvisionalOrder(t *testing.T) {
 		{SourceCoordinate: first, Text: "first"},
 		{SourceCoordinate: second, Text: "second"},
 	} {
-		if err := engine.steer("step", steerReasoningDeltaIntent(item)); err != nil {
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(item)); err != nil {
 			t.Fatalf("seed provisional reasoning: %v", err)
 		}
 	}
-	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{
+	if err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{
 		{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "first", SourceCoordinate: first},
 		{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "second", SourceCoordinate: second},
 	}); err != nil {
 		t.Fatalf("reconcile first-seen order: %v", err)
 	}
 
-	engine = mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	restoreFirstStep()
+	engine = mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreSecondStep := setTestActiveStep(engine, "step")
+	defer restoreSecondStep()
 	executor = &defaultStepExecutor{engine: engine}
 	for _, item := range []llm.ReasoningSummaryDelta{
 		{SourceCoordinate: first, Text: "first"},
 		{SourceCoordinate: second, Text: "second"},
 	} {
-		if err := engine.steer("step", steerReasoningDeltaIntent(item)); err != nil {
+		if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(item)); err != nil {
 			t.Fatalf("seed reordered reasoning: %v", err)
 		}
 	}
-	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{
+	if err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{
 		{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "second", SourceCoordinate: second},
 		{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "first", SourceCoordinate: first},
 	}); err == nil {
@@ -488,9 +515,9 @@ func TestReconcileReasoningUsesFirstSeenProvisionalOrder(t *testing.T) {
 }
 
 func TestReconcileReasoningRejectsMalformedCompletedOnlyIdentity(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	executor := &defaultStepExecutor{engine: engine}
-	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+	if err := executor.reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role:         textPointer(string(transcript.EntryRoleReasoning)),
 		Text:         "malformed",
 		ItemIdentity: &llm.ReasoningItemIdentity{ItemID: "reason_1"},
@@ -561,9 +588,11 @@ func TestRunStepLoopNoopAcceptanceCommitsReasoning(t *testing.T) {
 
 func TestReasoningCumulativeUpdatesKeepIdentityAndPosition(t *testing.T) {
 	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	firstOutput, secondOutput, part := int64(0), int64(1), int64(0)
 	providerIdentity := &llm.ReasoningItemIdentity{ItemID: "reason_provider", PartIndex: &part}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &part},
 		ItemIdentity:     providerIdentity,
 		Text:             "provider first",
@@ -576,7 +605,7 @@ func TestReasoningCumulativeUpdatesKeepIdentityAndPosition(t *testing.T) {
 	}
 	providerPublicIdentity := traces[0].Identity
 
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &part},
 		Text:             "Kent first",
 	})); err != nil {
@@ -590,13 +619,13 @@ func TestReasoningCumulativeUpdatesKeepIdentityAndPosition(t *testing.T) {
 
 	// A cumulative provider update can omit metadata, while a cumulative Kent
 	// update can gain provider metadata. Neither transition changes its public ID.
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &part},
 		Text:             "provider cumulative",
 	})); err != nil {
 		t.Fatalf("steer provider cumulative reasoning: %v", err)
 	}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &part},
 		ItemIdentity:     &llm.ReasoningItemIdentity{ItemID: "reason_metadata", PartIndex: &part},
 		Text:             "Kent cumulative",
@@ -621,6 +650,9 @@ func TestReasoningCumulativeUpdatesKeepIdentityAndPosition(t *testing.T) {
 
 func TestReasoningResetClearsEveryTraceAndRetainsStatus(t *testing.T) {
 	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	for index, text := range []string{"one", "two"} {
 		output, part := int64(index), int64(0)
 		delta := llm.ReasoningSummaryDelta{
@@ -630,11 +662,11 @@ func TestReasoningResetClearsEveryTraceAndRetainsStatus(t *testing.T) {
 		if index == 0 {
 			delta.CurrentStatus = &llm.ReasoningStatus{Text: "Thinking"}
 		}
-		if err := engine.steer("step", steerReasoningDeltaIntent(delta)); err != nil {
+		if err := engine.steer(stepID, steerReasoningDeltaIntent(delta)); err != nil {
 			t.Fatalf("steer reset trace: %v", err)
 		}
 	}
-	if err := (&defaultStepExecutor{engine: engine}).resetProvisionalReasoning("step"); err != nil {
+	if err := (&defaultStepExecutor{engine: engine}).resetProvisionalReasoning(stepID); err != nil {
 		t.Fatalf("reset reasoning: %v", err)
 	}
 	status, traces := engine.transcriptRuntimeState().ReasoningSnapshot()
@@ -646,18 +678,20 @@ func TestReasoningResetClearsEveryTraceAndRetainsStatus(t *testing.T) {
 func TestCorrelatedReasoningCommitEmitsOneRowAndConsumesIdentity(t *testing.T) {
 	var events []Event
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5", OnEvent: func(event Event) { events = append(events, event) },
 	})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	output, part := int64(0), int64(0)
 	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
 	identity := &llm.ReasoningItemIdentity{ItemID: "reason_1", PartIndex: &part}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+	if err := engine.steer(runtimeTestStepID("step"), steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
 		SourceCoordinate: coordinate, ItemIdentity: identity, Text: "trace",
 	})); err != nil {
 		t.Fatalf("seed correlated trace: %v", err)
 	}
-	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning("step", []llm.ReasoningEntry{{
+	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "trace",
 		SourceCoordinate: coordinate, ItemIdentity: identity,
 	}}); err != nil {
@@ -716,9 +750,11 @@ func TestCorrelatedReasoningCommitEmitsOneRowAndConsumesIdentity(t *testing.T) {
 
 func TestReasoningProjectionDoesNotRewritePersistedText(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	raw := "**raw reasoning**"
-	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning("step", []llm.ReasoningEntry{{
+	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning(runtimeTestStepID("step"), []llm.ReasoningEntry{{
 		Role: textPointer(string(transcript.EntryRoleReasoning)), Text: raw,
 	}}); err != nil {
 		t.Fatalf("persist raw reasoning: %v", err)

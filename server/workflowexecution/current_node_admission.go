@@ -2,15 +2,15 @@ package workflowexecution
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
 
+	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
-	"core/server/workflowstore"
-	"core/shared/runtimeids"
 )
 
 const (
@@ -74,7 +74,6 @@ type currentNodeAgentCapacityOwner uint8
 
 const (
 	currentNodeAgentCapacityReservation currentNodeAgentCapacityOwner = iota
-	currentNodeAgentCapacityGate
 	currentNodeAgentCapacityLive
 	currentNodeAgentCapacityReleased
 )
@@ -85,29 +84,57 @@ type currentNodeAgentCapacityLease struct {
 
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
+	nodeKind           workflow.NodeKind
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
-	requiresAssignment bool
-	assignment         *CurrentNodeClassifiedAssignment
-	assignmentWait     CurrentNodeAssignmentSteer
-	holdFor            *runtimeids.ExecutionScopeID
+	assignmentSteer    CurrentNodeAssignmentSteer
 	policy             currentNodeAdmissionPolicy
-	done               chan struct{}
+	completion         *currentNodeAdmissionCompletion
 	agentCapacityLease *currentNodeAgentCapacityLease
 }
 
-type currentNodeAdmissionGate struct {
-	reference          workflow.CurrentNodeReference
-	lease              sessionruntime.WorkflowExecutionLease
-	policy             currentNodeAdmissionPolicy
-	done               <-chan struct{}
-	agentCapacityLease *currentNodeAgentCapacityLease
+type currentNodeAdmissionCompletion struct {
+	once   sync.Once
+	done   chan struct{}
+	handle sessionruntime.ExecutionHandle
+	err    error
 }
 
-type currentNodeLiveScope struct {
-	reference          workflow.CurrentNodeReference
-	lease              sessionruntime.WorkflowExecutionLease
-	policy             currentNodeAdmissionPolicy
-	agentCapacityLease *currentNodeAgentCapacityLease
+func newCurrentNodeAdmissionCompletion() *currentNodeAdmissionCompletion {
+	return &currentNodeAdmissionCompletion{done: make(chan struct{})}
+}
+
+func (c *currentNodeAdmissionCompletion) resolve(handle sessionruntime.ExecutionHandle, err error) {
+	if c == nil {
+		return
+	}
+	c.once.Do(func() {
+		c.handle = handle
+		c.err = err
+		close(c.done)
+	})
+}
+
+func (c *currentNodeAdmissionCompletion) wait(
+	ctx context.Context,
+) (sessionruntime.ExecutionHandle, error) {
+	if c == nil {
+		return nil, errors.New("current node admission completion is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-c.done:
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
+	if c.err != nil {
+		return nil, c.err
+	}
+	if c.handle == nil {
+		return nil, errors.New("current node admission completed without an execution")
+	}
+	return c.handle, nil
 }
 
 type currentNodeAdmissionError struct {
@@ -142,6 +169,96 @@ func (e *TaskStartPreparationError) InterruptionDetail() workflow.CurrentNodeInt
 	return e.detail
 }
 
+type pendingCurrentNodeAssignmentSteer struct {
+	ready chan struct{}
+	once  sync.Once
+	steer CurrentNodeAssignmentSteer
+	err   error
+}
+
+func newPendingCurrentNodeAssignmentSteer() *pendingCurrentNodeAssignmentSteer {
+	return &pendingCurrentNodeAssignmentSteer{ready: make(chan struct{})}
+}
+
+func (s *pendingCurrentNodeAssignmentSteer) resolve(steer CurrentNodeAssignmentSteer, err error) {
+	s.once.Do(func() {
+		s.steer = steer
+		s.err = err
+		close(s.ready)
+	})
+}
+
+func (s *pendingCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
+	steer, err := s.resolved(ctx)
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	return steer.Wait(ctx)
+}
+
+func (s *pendingCurrentNodeAssignmentSteer) resolved(ctx context.Context) (CurrentNodeAssignmentSteer, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-s.ready:
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.steer == nil {
+		return nil, errors.New("resolved current node assignment steer is absent")
+	}
+	return s.steer, nil
+}
+
+func resolvedCurrentNodeAssignmentSteer(ctx context.Context, steer CurrentNodeAssignmentSteer) (CurrentNodeAssignmentSteer, error) {
+	if steer == nil {
+		return nil, nil
+	}
+	if pending, ok := steer.(*pendingCurrentNodeAssignmentSteer); ok {
+		var err error
+		steer, err = pending.resolved(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	receipt, err := steer.Wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !receipt.Committed {
+		return nil, errors.New("current node assignment was not committed")
+	}
+	return steer, nil
+}
+
+func prepareCurrentNodeAssignmentSteer(
+	ctx context.Context,
+	steer CurrentNodeAssignmentSteer,
+) (CurrentNodeAssignmentSteer, error) {
+	if steer == nil {
+		return nil, nil
+	}
+	if pending, ok := steer.(*pendingCurrentNodeAssignmentSteer); ok {
+		var err error
+		steer, err = pending.resolved(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	preparation, ok := steer.(CurrentNodeAssignmentPreparation)
+	if !ok {
+		return steer, nil
+	}
+	if err := preparation.Prepare(ctx); err != nil {
+		return nil, err
+	}
+	return steer, nil
+}
+
 func (e currentNodeAdmissionError) Error() string {
 	return e.cause.Error()
 }
@@ -150,399 +267,276 @@ func (e currentNodeAdmissionError) Unwrap() error {
 	return e.cause
 }
 
-func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueuedStart) (err error) {
+func (c *CurrentNodeController) admit(
+	ctx context.Context,
+	start currentNodeQueuedStart,
+) (sessionruntime.ExecutionHandle, error) {
 	if c == nil {
-		return errors.New("current node workflow controller is required")
+		return nil, errors.New("current node workflow controller is required")
 	}
 	reference := start.reference
 	if err := reference.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 	key, err := reference.Key()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if start.assignment == nil &&
+	defer c.releaseReservation(key, start.policy, start.agentCapacityLease)
+	scriptPublication, err := c.runner.PrepareScriptPublication(ctx, reference, c)
+	if err != nil {
+		return nil, err
+	}
+	if scriptPublication != nil {
+		start.nodeKind = workflow.NodeKindScript
+		return c.admitPreparedScript(ctx, start, key, scriptPublication)
+	}
+	if start.nodeKind == workflow.NodeKindScript {
+		return nil, errors.New("Script publication preparation returned no publication")
+	}
+	if start.nodeKind == "" {
+		start.nodeKind = workflow.NodeKindAgent
+	}
+	if start.assignmentSteer == nil &&
 		(start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment ||
-			start.policy == currentNodeAdmissionAutomaticAgent) {
-		prepared, err := c.steerAssignment(ctx, reference)
+			start.policy.isAutomatic()) {
+		assignment, err := c.steerAssignment(ctx, reference)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		decision := classifyCurrentNodeAssignment(ctx, reference, prepared)
-		if decision.diagnostic != nil || decision.assignment == nil {
-			return fmt.Errorf("wait for initial current node assignment %v: %w", reference, decision.diagnostic)
-		}
-		start.assignment = decision.assignment
+		start.assignmentSteer = assignment
 	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return errors.New("current node workflow controller is closed")
+	start.assignmentSteer, err = prepareCurrentNodeAssignmentSteer(ctx, start.assignmentSteer)
+	if err != nil {
+		return nil, err
 	}
-	c.mu.Unlock()
+	assignmentSteer, err := resolvedCurrentNodeAssignmentSteer(ctx, start.assignmentSteer)
+	if err != nil {
+		return nil, err
+	}
+	return c.admitAgent(ctx, start, key, assignmentSteer)
+}
 
-	var lease sessionruntime.WorkflowExecutionLease
-retryAdmission:
-	if err := c.mutations.Run(ctx, reference.TaskID, func(ctx context.Context) error {
+func (c *CurrentNodeController) admitPreparedScript(
+	ctx context.Context,
+	start currentNodeQueuedStart,
+	key workflow.CurrentNodeReferenceKey,
+	publication CurrentNodeScriptPublication,
+) (sessionruntime.ExecutionHandle, error) {
+	defer publication.Cancel()
+	var handle sessionruntime.ExecutionHandle
+	var launch func()
+	err := c.runTaskMutation(ctx, start.reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
-		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
+		if err := c.ensureTaskAvailableLocked(start.reference.TaskID); err != nil {
 			c.mu.Unlock()
 			return err
 		}
 		reservation, reserved := c.admissionReservationLocked(key, start.policy)
-		if !reserved || reservation.done != start.done {
+		if !reserved || reservation.completion != start.completion {
 			c.mu.Unlock()
-			return sessionruntime.ErrExecutionNoLongerLive
-		}
-		c.mu.Unlock()
-		scope, err := c.store.TaskExecutionScope(ctx, reference.TaskID)
-		if err != nil {
-			return err
-		}
-		next, err := c.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-			ProjectID: scope.ProjectID, WorkflowID: scope.WorkflowID, CurrentNode: reference,
-		})
-		if err != nil {
-			return err
-		}
-		c.mu.Lock()
-		if c.closed {
-			c.mu.Unlock()
-			next.Cancel()
-			return errors.New("current node workflow controller is closed")
-		}
-		if _, exists := c.gates[key]; exists {
-			c.mu.Unlock()
-			next.Cancel()
-			return fmt.Errorf("current node %v is already being admitted", reference)
-		}
-		if _, exists := c.liveByNode[key]; exists {
-			c.mu.Unlock()
-			next.Cancel()
-			return fmt.Errorf("current node %v already has a live execution scope", reference)
-		}
-		if _, stopping := c.stopping[next.ScopeID()]; stopping {
-			c.mu.Unlock()
-			next.Cancel()
-			return sessionruntime.ErrExecutionNoLongerLive
-		}
-		reservation, reserved = c.admissionReservationLocked(key, start.policy)
-		if !reserved || reservation.done != start.done {
-			c.mu.Unlock()
-			next.Cancel()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
 		c.deleteAdmissionReservationLocked(key, start.policy)
-		c.transitionAgentCapacityLocked(
-			start.agentCapacityLease,
-			currentNodeAgentCapacityReservation,
-			currentNodeAgentCapacityGate,
-		)
-		// The gate precedes the durable restart marker, so any conflicting
-		// lifecycle mutation sees admission before slow runner preparation.
-		c.gates[key] = currentNodeAdmissionGate{
-			reference:          reference,
-			lease:              next,
-			policy:             start.policy,
-			done:               start.done,
-			agentCapacityLease: start.agentCapacityLease,
-		}
 		c.mu.Unlock()
-
-		if err := c.store.AdmitCurrentNode(ctx, reference); err != nil {
-			c.removeGate(key, next.ScopeID())
-			next.Cancel()
-			return err
+		var publishErr error
+		admitted := false
+		handle, launch, publishErr = publication.Publish(ctx, func() error {
+			receipt, err := c.store.AdmitCurrentNode(context.WithoutCancel(ctx), start.reference)
+			admitted = receipt.Committed
+			if admissionErr := classifyCurrentNodeAdmission(receipt, err); admissionErr != nil {
+				return admissionErr
+			}
+			return nil
+		}, nil)
+		if publishErr != nil {
+			return currentNodeAdmissionError{cause: publishErr, admitted: admitted}
 		}
-		lease = next
 		return nil
-	}); err != nil {
-		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-			return currentNodeAdmissionError{cause: err}
+	})
+	if err != nil {
+		var admissionErr currentNodeAdmissionError
+		if errors.As(err, &admissionErr) {
+			return nil, admissionErr
 		}
-		c.mu.Lock()
-		fence := c.interrupts.taskFence(reference.TaskID)
-		selected := c.interrupts.currentNodeFenced(key)
-		c.mu.Unlock()
-		if fence == nil || selected {
-			return currentNodeAdmissionError{cause: err}
-		}
-		select {
-		case <-fence.done:
-		case <-ctx.Done():
-			return currentNodeAdmissionError{cause: context.Cause(ctx)}
-		}
-		goto retryAdmission
+		return nil, currentNodeAdmissionError{cause: err}
 	}
-	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, start.assignment, lease, c); err != nil {
-		return currentNodeAdmissionError{
-			cause:    c.discardAdmission(reference, key, lease, err),
-			admitted: true,
-		}
-	}
-	if err := c.mutations.Run(ctx, reference.TaskID, func(context.Context) error {
-		handle, ok := c.authority.ExecutionByScope(lease.ScopeID())
-		if !ok {
-			return errors.New("current node runner returned without its exact live scope")
-		}
-		scopeRef, ok := handle.Scope().Workflow()
-		if !ok || !scopeRef.CurrentNode.Equal(reference) {
-			return errors.New("current node runner started a mismatched workflow scope")
-		}
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		gate, exists := c.gates[key]
-		if !exists || gate.lease.ScopeID() != lease.ScopeID() {
-			return errors.New("current node admission gate was replaced before live scope registration")
-		}
-		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
-			return err
-		}
-		if _, stopping := c.stopping[lease.ScopeID()]; stopping {
-			return sessionruntime.ErrExecutionNoLongerLive
-		}
-		delete(c.gates, key)
-		c.transitionAgentCapacityLocked(
-			gate.agentCapacityLease,
-			currentNodeAgentCapacityGate,
-			currentNodeAgentCapacityLive,
-		)
-		c.live[lease.ScopeID()] = currentNodeLiveScope{
-			reference:          reference,
-			lease:              lease,
-			policy:             gate.policy,
-			agentCapacityLease: gate.agentCapacityLease,
-		}
-		c.liveByNode[key] = lease.ScopeID()
-		lease.Release()
-		return nil
-	}); err != nil {
-		return currentNodeAdmissionError{
-			cause:    c.discardAdmission(reference, key, lease, err),
+	launch()
+	scope := handle.Scope()
+	scopeRef, ok := scope.Workflow()
+	if !ok || !scopeRef.CurrentNode.Equal(start.reference) {
+		return nil, currentNodeAdmissionError{
+			cause:    errors.New("detached Script publication started a mismatched Workflow scope"),
 			admitted: true,
 		}
 	}
 	if !start.policy.isAutomatic() {
 		c.wakeAdmissionWorker()
 	}
-	return nil
+	return handle, nil
 }
 
-func (c *CurrentNodeController) removeGate(key workflow.CurrentNodeReferenceKey, scopeID runtimeids.ExecutionScopeID) {
-	c.mu.Lock()
-	wake := false
-	if gate, exists := c.gates[key]; exists && gate.lease.ScopeID() == scopeID {
-		delete(c.gates, key)
-		delete(c.stopping, scopeID)
-		c.releaseAgentCapacityLocked(gate.agentCapacityLease)
-		wake = true
+func (c *CurrentNodeController) admitAgent(
+	ctx context.Context,
+	start currentNodeQueuedStart,
+	key workflow.CurrentNodeReferenceKey,
+	assignmentSteer CurrentNodeAssignmentSteer,
+) (sessionruntime.ExecutionHandle, error) {
+	admitted := false
+	err := c.runTaskMutation(ctx, start.reference.TaskID, func(ctx context.Context) error {
+		c.mu.Lock()
+		if err := c.ensureTaskAvailableLocked(start.reference.TaskID); err != nil {
+			c.mu.Unlock()
+			return err
+		}
+		reservation, reserved := c.admissionReservationLocked(key, start.policy)
+		if !reserved || reservation.completion != start.completion {
+			c.mu.Unlock()
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		c.deleteAdmissionReservationLocked(key, start.policy)
+		c.transitionAgentCapacityLocked(
+			start.agentCapacityLease,
+			currentNodeAgentCapacityReservation,
+			currentNodeAgentCapacityLive,
+		)
+		c.mu.Unlock()
+		receipt, err := c.store.AdmitCurrentNode(context.WithoutCancel(ctx), start.reference)
+		admitted = receipt.Committed
+		return classifyCurrentNodeAdmission(receipt, err)
+	})
+	if err != nil {
+		c.mu.Lock()
+		c.releaseAgentCapacityLocked(start.agentCapacityLease)
+		c.mu.Unlock()
+		return nil, currentNodeAdmissionError{cause: err, admitted: admitted}
 	}
-	c.mu.Unlock()
-	if wake {
+	handle, err := c.runner.StartAgentCurrentNode(
+		ctx,
+		start.reference,
+		start.taskPromptDelivery,
+		assignmentSteer,
+		func() { c.releaseAgentCapacity(start.agentCapacityLease) },
+		c,
+	)
+	if err != nil {
+		c.mu.Lock()
+		c.releaseAgentCapacityLocked(start.agentCapacityLease)
+		c.mu.Unlock()
+		return nil, currentNodeAdmissionError{cause: err, admitted: true}
+	}
+	if handle == nil {
+		c.mu.Lock()
+		c.releaseAgentCapacityLocked(start.agentCapacityLease)
+		c.mu.Unlock()
+		return nil, currentNodeAdmissionError{
+			cause:    errors.New("Agent start returned no execution"),
+			admitted: true,
+		}
+	}
+	scope := handle.Scope()
+	scopeRef, ok := scope.Workflow()
+	if !ok || !scopeRef.CurrentNode.Equal(start.reference) {
+		return nil, currentNodeAdmissionError{
+			cause:    errors.New("Agent start returned a mismatched Workflow scope"),
+			admitted: true,
+		}
+	}
+	if !start.policy.isAutomatic() {
 		c.wakeAdmissionWorker()
 	}
+	return handle, nil
 }
 
-func (c *CurrentNodeController) discardAdmission(reference workflow.CurrentNodeReference, key workflow.CurrentNodeReferenceKey, lease sessionruntime.WorkflowExecutionLease, cause error) error {
-	c.removeGate(key, lease.ScopeID())
-	c.mu.Lock()
-	if live, exists := c.live[lease.ScopeID()]; exists {
-		c.releaseAgentCapacityLocked(live.agentCapacityLease)
-		delete(c.live, lease.ScopeID())
-	}
-	if current, exists := c.liveByNode[key]; exists && current == lease.ScopeID() {
-		delete(c.liveByNode, key)
-	}
-	c.mu.Unlock()
-	lease.Cancel()
-	return cause
-}
-
-func (c *CurrentNodeController) enqueueAutomaticIntents(intents []CurrentNodeAutomaticIntent) {
-	c.enqueueStarts(automaticQueuedStarts(intents))
-}
-
-type currentNodeAssignmentOutcome struct {
-	accepted   *currentNodeQueuedStart
-	diagnostic error
-}
-
-type currentNodeAssignmentBatch struct {
-	preparations sync.WaitGroup
-	classifiers  sync.WaitGroup
-	outcomes     []currentNodeAssignmentOutcome
-}
-
-type currentNodeAssignmentUncommittedError struct {
-	reference workflow.CurrentNodeReference
-}
-
-type currentNodeAssignmentDecision struct {
-	assignment *CurrentNodeClassifiedAssignment
-	diagnostic error
-}
-
-func newCurrentNodeAssignmentUncommittedError(
-	reference workflow.CurrentNodeReference,
-) *currentNodeAssignmentUncommittedError {
-	return &currentNodeAssignmentUncommittedError{reference: reference}
-}
-
-func (e *currentNodeAssignmentUncommittedError) Error() string {
-	if e == nil {
-		return "current node assignment was not committed"
-	}
-	return fmt.Sprintf("current node assignment %v was not committed", e.reference)
-}
-
-func classifyCurrentNodeAssignment(
-	ctx context.Context,
-	reference workflow.CurrentNodeReference,
-	prepared CurrentNodeAssignmentSteer,
-) currentNodeAssignmentDecision {
-	receipt, diagnostic := prepared.Wait(ctx)
+func classifyCurrentNodeAdmission(receipt session.CommitReceipt, err error) error {
 	if receipt.Committed {
-		return currentNodeAssignmentDecision{
-			assignment: newCurrentNodeClassifiedAssignment(reference, prepared),
-			diagnostic: diagnostic,
-		}
+		return nil
 	}
-	if diagnostic == nil {
-		diagnostic = newCurrentNodeAssignmentUncommittedError(reference)
+	if err == nil {
+		panic("Current Node admission returned neither a commit nor an error")
 	}
-	return currentNodeAssignmentDecision{diagnostic: diagnostic}
+	if errors.Is(err, session.ErrMutationDefinitelyUncommitted) {
+		return err
+	}
+	panic(fmt.Sprintf("Current Node admission commit certainty is indeterminate: %v", err))
 }
 
-func (c *CurrentNodeController) prepareCurrentNodeAssignments(
+func (c *CurrentNodeController) steerStartsAssignments(ctx context.Context, starts []currentNodeQueuedStart) ([]currentNodeQueuedStart, error) {
+	steered := append([]currentNodeQueuedStart(nil), starts...)
+	for index := range steered {
+		if steered[index].nodeKind == workflow.NodeKindScript {
+			continue
+		}
+		assignment, err := c.steerAssignment(ctx, steered[index].reference)
+		if err != nil {
+			return steered[:index], err
+		}
+		steered[index].assignmentSteer = assignment
+	}
+	return steered, nil
+}
+
+func (c *CurrentNodeController) steerAndWaitStarts(
 	ctx context.Context,
 	starts []currentNodeQueuedStart,
-	transferUnresolved bool,
-	holdFor *runtimeids.ExecutionScopeID,
-) *currentNodeAssignmentBatch {
-	batch := &currentNodeAssignmentBatch{
-		outcomes: make([]currentNodeAssignmentOutcome, len(starts)),
+	recovery currentNodeStartFailureRecovery,
+) ([]currentNodeQueuedStart, error) {
+	steered, steerErr := c.steerStartsAssignments(ctx, starts)
+	outcome := waitCurrentNodeAssignmentSteers(ctx, steered)
+	cause := errors.Join(steerErr, outcome.err)
+	if cause != nil {
+		if len(outcome.pending) != 0 {
+			c.continueCurrentNodeAssignmentStarts(steered, steerErr)
+			return nil, cause
+		}
+		recoveryStarts := outcome.committed
+		if recovery == recoverAllCurrentNodeStarts {
+			recoveryStarts = starts
+		}
+		return nil, errors.Join(cause, c.recoverCurrentNodeStartFailures(ctx, recoveryStarts, false, cause))
 	}
-	batch.preparations.Add(len(starts))
-	batch.classifiers.Add(len(starts))
-	for index := range starts {
-		go func(index int) {
-			defer batch.classifiers.Done()
-			start := starts[index]
-			assignment, err := c.steerAssignment(ctx, start.reference)
-			batch.preparations.Done()
-			batch.outcomes[index] = c.classifyPreparedAutomaticStart(
-				ctx,
-				start,
-				assignment,
-				err,
-				transferUnresolved,
-				holdFor,
-			)
-		}(index)
-	}
-	batch.preparations.Wait()
-	return batch
+	return steered, nil
 }
 
-func (c *CurrentNodeController) classifyAutomaticStarts(
+type currentNodeStartFailureRecovery uint8
+
+const (
+	recoverCommittedCurrentNodeStarts currentNodeStartFailureRecovery = iota
+	recoverAllCurrentNodeStarts
+)
+
+func pendingCurrentNodeAssignmentStarts(starts []currentNodeQueuedStart) ([]currentNodeQueuedStart, []*pendingCurrentNodeAssignmentSteer) {
+	pendingStarts := append([]currentNodeQueuedStart(nil), starts...)
+	pending := make([]*pendingCurrentNodeAssignmentSteer, len(pendingStarts))
+	for index := range pendingStarts {
+		if pendingStarts[index].nodeKind == workflow.NodeKindScript {
+			continue
+		}
+		pending[index] = newPendingCurrentNodeAssignmentSteer()
+		pendingStarts[index].assignmentSteer = pending[index]
+	}
+	return pendingStarts, pending
+}
+
+func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteers(
 	ctx context.Context,
 	starts []currentNodeQueuedStart,
-	holdFor *runtimeids.ExecutionScopeID,
-) ([]currentNodeQueuedStart, error) {
-	return c.classifyPreparedAutomaticStarts(
-		c.prepareCurrentNodeAssignments(ctx, starts, true, holdFor),
-	)
-}
-
-func (c *CurrentNodeController) classifyPreparedAutomaticStarts(
-	batch *currentNodeAssignmentBatch,
-) ([]currentNodeQueuedStart, error) {
-	if batch == nil {
-		return nil, nil
-	}
-	batch.classifiers.Wait()
-	accepted := make([]currentNodeQueuedStart, 0, len(batch.outcomes))
-	var diagnostics []error
-	for _, outcome := range batch.outcomes {
-		if outcome.accepted != nil {
-			accepted = append(accepted, *outcome.accepted)
-		}
-		if outcome.diagnostic != nil {
-			diagnostics = append(diagnostics, outcome.diagnostic)
-		}
-	}
-	return accepted, errors.Join(diagnostics...)
-}
-
-func (c *CurrentNodeController) classifyPreparedAutomaticStart(
-	ctx context.Context,
-	start currentNodeQueuedStart,
-	prepared CurrentNodeAssignmentSteer,
-	preparation error,
-	transferUnresolved bool,
-	holdFor *runtimeids.ExecutionScopeID,
-) currentNodeAssignmentOutcome {
-	if preparation != nil {
-		return currentNodeAssignmentOutcome{diagnostic: errors.Join(
-			preparation,
-			c.interruptUncommittedAutomaticStart(ctx, start, preparation),
-		)}
-	}
-	decision := classifyCurrentNodeAssignment(ctx, start.reference, prepared)
-	if decision.assignment == nil {
-		if cancellation := context.Cause(ctx); transferUnresolved &&
-			cancellation != nil &&
-			errors.Is(decision.diagnostic, cancellation) {
-			start.assignmentWait = prepared
-			start.holdFor = holdFor
-			c.enqueueStarts([]currentNodeQueuedStart{start})
-			return currentNodeAssignmentOutcome{diagnostic: fmt.Errorf(
-				"wait for current node assignment %v: %w",
-				start.reference,
-				decision.diagnostic,
-			)}
-		}
-		return currentNodeAssignmentOutcome{diagnostic: errors.Join(
-			fmt.Errorf(
-				"wait for current node assignment %v: %w",
-				start.reference,
-				decision.diagnostic,
-			),
-			c.interruptUncommittedAutomaticStart(ctx, start, decision.diagnostic),
-		)}
-	}
-	start.assignment = decision.assignment
-	c.deliverClassifiedStarts([]currentNodeQueuedStart{start}, holdFor)
-	outcome := currentNodeAssignmentOutcome{accepted: &start}
-	if decision.diagnostic != nil {
-		outcome.diagnostic = fmt.Errorf(
-			"wait for current node assignment %v: %w",
-			start.reference,
-			decision.diagnostic,
-		)
-	}
-	return outcome
-}
-
-func (c *CurrentNodeController) interruptUncommittedAutomaticStart(
-	ctx context.Context,
-	start currentNodeQueuedStart,
-	cause error,
+	pending []*pendingCurrentNodeAssignmentSteer,
 ) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptCleanupTimeout)
-	defer cancel()
-	committed, diagnostic := c.interruptCurrentNodeStartFailure(cleanupCtx, start, false, cause)
-	if !committed && start.policy.isAutomatic() {
-		panicCurrentNodeAutomaticInterruptionPersistence(
-			"assignment",
-			start,
-			workflow.CurrentNodeSchedulingReady,
-			cause,
-			diagnostic,
-		)
+	for index, start := range starts {
+		if start.nodeKind == workflow.NodeKindScript {
+			continue
+		}
+		assignment, err := c.steerAssignment(ctx, start.reference)
+		pending[index].resolve(assignment, err)
+		if err != nil {
+			for _, unresolved := range pending[index+1:] {
+				unresolved.resolve(nil, err)
+			}
+			return err
+		}
 	}
-	return diagnostic
+	return nil
 }
 
 func (c *CurrentNodeController) steerAssignment(
@@ -559,15 +553,72 @@ func (c *CurrentNodeController) steerAssignment(
 	return assignment, nil
 }
 
-func (c *CurrentNodeController) deliverClassifiedStarts(
+type currentNodeAssignmentWaitOutcome struct {
+	committed []currentNodeQueuedStart
+	pending   []currentNodeQueuedStart
+	err       error
+}
+
+func waitCurrentNodeAssignmentSteers(
+	ctx context.Context,
 	starts []currentNodeQueuedStart,
-	holdFor *runtimeids.ExecutionScopeID,
+) currentNodeAssignmentWaitOutcome {
+	outcome := currentNodeAssignmentWaitOutcome{
+		committed: make([]currentNodeQueuedStart, 0, len(starts)),
+		pending:   make([]currentNodeQueuedStart, 0, len(starts)),
+	}
+	for _, start := range starts {
+		if start.nodeKind == workflow.NodeKindScript {
+			outcome.committed = append(outcome.committed, start)
+			continue
+		}
+		if start.assignmentSteer == nil {
+			outcome.err = errors.Join(outcome.err, fmt.Errorf(
+				"current node assignment %v has no steer completion",
+				start.reference,
+			))
+			continue
+		}
+		assignmentSteer, prepareErr := prepareCurrentNodeAssignmentSteer(ctx, start.assignmentSteer)
+		if prepareErr != nil {
+			outcome.err = errors.Join(outcome.err, fmt.Errorf(
+				"prepare current node assignment %v: %w",
+				start.reference,
+				prepareErr,
+			))
+			continue
+		}
+		start.assignmentSteer = assignmentSteer
+		receipt, err := start.assignmentSteer.Wait(ctx)
+		if receipt.Committed {
+			outcome.committed = append(outcome.committed, start)
+		}
+		if err != nil {
+			if cause := context.Cause(ctx); !receipt.Committed && cause != nil && errors.Is(err, cause) {
+				outcome.pending = append(outcome.pending, start)
+			}
+			outcome.err = errors.Join(outcome.err, fmt.Errorf(
+				"wait for current node assignment %v: %w",
+				start.reference,
+				err,
+			))
+			continue
+		}
+		if !receipt.Committed {
+			outcome.err = errors.Join(outcome.err, fmt.Errorf(
+				"current node assignment %v was not committed",
+				start.reference,
+			))
+		}
+	}
+	return outcome
+}
+
+func (c *CurrentNodeController) continueCurrentNodeAssignmentStarts(
+	starts []currentNodeQueuedStart,
+	priorErr error,
 ) {
 	if len(starts) == 0 {
-		return
-	}
-	if holdFor == nil {
-		c.enqueueStarts(starts)
 		return
 	}
 	c.mu.Lock()
@@ -575,13 +626,21 @@ func (c *CurrentNodeController) deliverClassifiedStarts(
 		c.mu.Unlock()
 		return
 	}
-	if _, live := c.live[*holdFor]; live {
-		c.heldStarts[*holdFor] = append(c.heldStarts[*holdFor], starts...)
-		c.mu.Unlock()
-		return
-	}
+	c.workerWG.Add(1)
 	c.mu.Unlock()
-	c.enqueueStarts(starts)
+	go func() {
+		defer c.workerWG.Done()
+		outcome := waitCurrentNodeAssignmentSteers(c.workerContext, starts)
+		if context.Cause(c.workerContext) != nil {
+			return
+		}
+		cause := errors.Join(priorErr, outcome.err)
+		if cause != nil {
+			c.handleCurrentNodeStartFailures(automaticFailureRecoveryStarts(starts, outcome.committed), false, cause)
+			return
+		}
+		c.enqueueStarts(starts)
+	}()
 }
 
 func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
@@ -593,12 +652,6 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 		c.mu.Unlock()
 		return
 	}
-	c.queueStartsLocked(starts)
-	c.mu.Unlock()
-	c.wakeAdmissionWorker()
-}
-
-func (c *CurrentNodeController) queueStartsLocked(starts []currentNodeQueuedStart) {
 	for _, start := range starts {
 		var err error
 		if start.policy.isAutomatic() {
@@ -610,11 +663,16 @@ func (c *CurrentNodeController) queueStartsLocked(starts []currentNodeQueuedStar
 			c.workerErr = errors.Join(c.workerErr, err)
 		}
 	}
+	c.mu.Unlock()
+	c.wakeAdmissionWorker()
 }
 
 func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueuedStart) error {
 	if start.policy != currentNodeAdmissionExplicitOverride {
 		return errors.New("explicit current node start cannot be automatic")
+	}
+	if start.completion == nil {
+		start.completion = newCurrentNodeAdmissionCompletion()
 	}
 	key, err := start.reference.Key()
 	if err != nil {
@@ -632,6 +690,9 @@ func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueued
 func (c *CurrentNodeController) queueAutomaticStartLocked(start currentNodeQueuedStart) error {
 	if !start.policy.isAutomatic() {
 		return errors.New("automatic current node start requires an automatic admission policy")
+	}
+	if start.completion == nil {
+		start.completion = newCurrentNodeAdmissionCompletion()
 	}
 	key, err := start.reference.Key()
 	if err != nil {
@@ -681,11 +742,7 @@ func (c *CurrentNodeController) currentNodeOwnedLocked(key workflow.CurrentNodeR
 	if _, reserved := c.automaticReservations[key]; reserved {
 		return true
 	}
-	if _, gated := c.gates[key]; gated {
-		return true
-	}
-	_, live := c.liveByNode[key]
-	return live
+	return false
 }
 
 func (c *CurrentNodeController) wakeAdmissionWorker() {
@@ -721,116 +778,18 @@ func (c *CurrentNodeController) runAdmissions() {
 }
 
 func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
-	key := start.referenceKey()
-	ownsWorker := true
 	defer c.admissionWG.Done()
-	defer c.wakeAdmissionWorker()
-	defer close(start.done)
-	defer func() { c.finishTaskInterruptAdmission(start.reference, ownsWorker) }()
+	defer c.finishAdmissionWorker(start)
+	defer c.finishTaskInterruptAdmission(start.reference)
+	var (
+		handle sessionruntime.ExecutionHandle
+		err    error
+	)
 	defer func() {
-		if !ownsWorker {
-			return
-		}
-		c.releaseReservation(key, start.policy, start.agentCapacityLease)
-		c.finishAdmissionWorker(start)
+		start.completion.resolve(handle, err)
 	}()
-	c.mu.Lock()
-	closed := c.closed
-	c.mu.Unlock()
-	if closed {
-		return
-	}
-	if start.assignmentWait != nil {
-		decision := classifyCurrentNodeAssignment(
-			c.workerContext,
-			start.reference,
-			start.assignmentWait,
-		)
-		start.assignmentWait = nil
-		key := start.referenceKey()
-		c.mu.Lock()
-		interrupted := c.interrupts.currentNodeFenced(key)
-		canceled := context.Cause(c.workerContext) != nil
-		if decision.diagnostic != nil && !canceled {
-			c.workerDiagnostics = errors.Join(
-				c.workerDiagnostics,
-				fmt.Errorf(
-					"wait for current node assignment %v: %w",
-					start.reference,
-					decision.diagnostic,
-				),
-			)
-		}
-		c.mu.Unlock()
-		if decision.assignment == nil {
-			if interrupted {
-				c.replaceTransferredUserInterruption(start, decision.diagnostic)
-				return
-			}
-			if canceled {
-				return
-			}
-			c.handleAdmissionFailure(start, false, decision.diagnostic)
-			return
-		}
-		if interrupted || canceled {
-			return
-		}
-		start.assignment = decision.assignment
-	}
-	if start.holdFor != nil {
-		if source, live := c.authority.ExecutionByScope(*start.holdFor); live {
-			_ = source.Close(c.workerContext)
-		}
-		c.mu.Lock()
-		interrupted := c.interrupts.currentNodeFenced(start.referenceKey())
-		c.mu.Unlock()
-		if interrupted || context.Cause(c.workerContext) != nil {
-			return
-		}
-		start.holdFor = nil
-	}
-	c.lifecycleBarrier.RLock()
-	defer c.lifecycleBarrier.RUnlock()
-	c.mu.Lock()
-	closed = c.closed || c.closing
-	c.mu.Unlock()
-	if closed {
-		return
-	}
-	if start.policy.countsAgentCapacity() && start.agentCapacityLease == nil {
-		c.mu.Lock()
-		reservation, reserved := c.automaticReservations[key]
-		worker, working := c.admissionWorkers[key]
-		switch {
-		case c.closed || c.interrupts.currentNodeFenced(key):
-			c.mu.Unlock()
-			return
-		case !reserved || !working ||
-			reservation.done != start.done ||
-			worker.done != start.done:
-			c.mu.Unlock()
-			panic("transferred Agent admission lost its reservation owner")
-		case c.agentCapacityActive >= c.agentConcurrency:
-			delete(c.automaticReservations, key)
-			delete(c.admissionWorkers, key)
-			start.done = nil
-			c.automaticQueue.append(start)
-			c.queued[key] = struct{}{}
-			ownsWorker = false
-			c.mu.Unlock()
-			return
-		default:
-			start.agentCapacityLease = &currentNodeAgentCapacityLease{
-				owner: currentNodeAgentCapacityReservation,
-			}
-			c.agentCapacityActive++
-			c.automaticReservations[key] = start
-			c.admissionWorkers[key] = start
-			c.mu.Unlock()
-		}
-	}
-	if err := c.admit(c.workerContext, start); err != nil {
+	handle, err = c.admit(c.workerContext, start)
+	if err != nil {
 		key, keyErr := start.reference.Key()
 		if keyErr != nil {
 			panic(fmt.Sprintf("inspect failed current node admission: %v", keyErr))
@@ -851,58 +810,6 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 	}
 }
 
-func (c *CurrentNodeController) replaceTransferredUserInterruption(
-	start currentNodeQueuedStart,
-	cause error,
-) {
-	key := start.referenceKey()
-	c.mu.Lock()
-	current, owned := c.admissionWorkers[key]
-	fenced := c.interrupts.currentNodeFenced(key)
-	c.mu.Unlock()
-	if !owned || current.done != start.done || !fenced {
-		panic("transferred assignment failure requires its fenced admission worker generation")
-	}
-	detail := workflow.CurrentNodeInterruptionDetail{
-		Code:   string(reasonCurrentNodeRuntimeStartFailed),
-		Fields: map[string]string{"error": cause.Error()},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
-	defer cancel()
-	var committed bool
-	var diagnostic error
-	err := c.mutations.Run(ctx, start.reference.TaskID, func(ctx context.Context) error {
-		committed, diagnostic = classifyCurrentNodeInterruption(
-			c.store.ReplaceUserInterruptionWithAssignmentFailure(ctx, start.reference, detail),
-		)
-		return diagnostic
-	})
-	diagnostic = err
-	if !committed {
-		panicCurrentNodeAutomaticInterruptionPersistence(
-			"transferred_assignment",
-			start,
-			workflow.CurrentNodeSchedulingInterrupted,
-			cause,
-			diagnostic,
-		)
-	}
-	c.publishPendingInterruptedCurrentNode(ctx, start.reference, reasonCurrentNodeRuntimeStartFailed)
-	if diagnostic != nil {
-		c.mu.Lock()
-		c.workerDiagnostics = errors.Join(c.workerDiagnostics, cause, diagnostic)
-		c.mu.Unlock()
-	}
-}
-
-func (s currentNodeQueuedStart) referenceKey() workflow.CurrentNodeReferenceKey {
-	key, err := s.reference.Key()
-	if err != nil {
-		panic(fmt.Sprintf("inspect Current Node queued start: %v", err))
-	}
-	return key
-}
-
 func (c *CurrentNodeController) takeExplicitStart() (currentNodeQueuedStart, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -917,7 +824,9 @@ func (c *CurrentNodeController) takeExplicitStart() (currentNodeQueuedStart, boo
 		panic(fmt.Sprintf("take explicit current node start: %v", err))
 	}
 	delete(c.explicitQueued, key)
-	start.done = make(chan struct{})
+	if start.completion == nil {
+		start.completion = newCurrentNodeAdmissionCompletion()
+	}
 	c.explicitReservations[key] = start
 	c.admissionWorkers[key] = start
 	c.admissionWG.Add(1)
@@ -942,10 +851,10 @@ func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeQueuedStart, b
 	}
 	delete(c.queued, key)
 	start.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
-	start.done = make(chan struct{})
-	if start.policy.countsAgentCapacity() &&
-		start.assignmentWait == nil &&
-		start.holdFor == nil {
+	if start.completion == nil {
+		start.completion = newCurrentNodeAdmissionCompletion()
+	}
+	if start.policy.countsAgentCapacity() {
 		start.agentCapacityLease = &currentNodeAgentCapacityLease{
 			owner: currentNodeAgentCapacityReservation,
 		}
@@ -978,7 +887,7 @@ func (c *CurrentNodeController) releaseAgentCapacityLocked(lease *currentNodeAge
 		return
 	}
 	switch lease.owner {
-	case currentNodeAgentCapacityReservation, currentNodeAgentCapacityGate, currentNodeAgentCapacityLive:
+	case currentNodeAgentCapacityReservation, currentNodeAgentCapacityLive:
 		lease.owner = currentNodeAgentCapacityReleased
 	default:
 		panic(fmt.Sprintf("automatic Agent capacity has invalid owner %d", lease.owner))
@@ -991,13 +900,8 @@ func (c *CurrentNodeController) releaseAgentCapacityLocked(lease *currentNodeAge
 
 func (c *CurrentNodeController) inFlightAdmissionCountLocked(policy currentNodeAdmissionPolicy) int {
 	count := 0
-	for key, start := range c.admissionWorkers {
+	for _, start := range c.admissionWorkers {
 		if start.policy == policy {
-			if policy.countsAgentCapacity() {
-				if _, live := c.liveByNode[key]; live {
-					continue
-				}
-			}
 			count++
 		}
 	}
@@ -1046,7 +950,7 @@ func (c *CurrentNodeController) finishAdmissionWorker(start currentNodeQueuedSta
 	}
 	c.mu.Lock()
 	current, exists := c.admissionWorkers[key]
-	if !exists || current.done != start.done || current.policy != start.policy {
+	if !exists || current.completion != start.completion || current.policy != start.policy {
 		c.mu.Unlock()
 		panic("current node admission worker ownership was replaced before completion")
 	}
@@ -1058,53 +962,57 @@ func (c *CurrentNodeController) finishAdmissionWorker(start currentNodeQueuedSta
 	}
 }
 
-func (c *CurrentNodeController) handleAdmissionFailure(
-	start currentNodeQueuedStart,
+func (c *CurrentNodeController) handleAdmissionFailure(start currentNodeQueuedStart, admitted bool, cause error) {
+	c.handleCurrentNodeStartFailures([]currentNodeQueuedStart{start}, admitted, cause)
+}
+
+func (c *CurrentNodeController) handleCurrentNodeStartFailures(
+	starts []currentNodeQueuedStart,
 	admitted bool,
 	cause error,
 ) {
 	c.mu.Lock()
-	closed := c.closed
+	closed := c.closed || c.closing
 	c.mu.Unlock()
 	if closed {
 		return
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
-	committed, diagnostic := c.interruptCurrentNodeStartFailure(cleanupCtx, start, admitted, cause)
-	if !committed && start.policy.isAutomatic() {
-		operation := "ready_start"
-		expectedScheduling := workflow.CurrentNodeSchedulingReady
-		if admitted {
-			operation = "admitted_start"
-			expectedScheduling = workflow.CurrentNodeSchedulingAdmitted
-		}
-		panicCurrentNodeAutomaticInterruptionPersistence(
-			operation,
-			start,
-			expectedScheduling,
-			cause,
-			diagnostic,
-		)
-	}
-	if diagnostic == nil {
+	err := c.recoverCurrentNodeStartFailures(cleanupCtx, starts, admitted, cause)
+	if err == nil {
 		return
 	}
 	c.mu.Lock()
-	if committed {
-		c.workerDiagnostics = errors.Join(c.workerDiagnostics, cause, diagnostic)
-	} else {
-		c.workerErr = errors.Join(c.workerErr, cause, diagnostic)
+	if c.closed || c.closing {
+		c.mu.Unlock()
+		return
 	}
+	c.workerErr = errors.Join(c.workerErr, cause, err)
 	c.mu.Unlock()
 }
 
-func (c *CurrentNodeController) interruptCurrentNodeStartFailure(
+func (c *CurrentNodeController) recoverCurrentNodeStartFailures(
 	ctx context.Context,
-	start currentNodeQueuedStart,
+	starts []currentNodeQueuedStart,
 	admitted bool,
 	cause error,
-) (bool, error) {
+) error {
+	taskIDs := make([]workflow.TaskID, 0, len(starts))
+	for _, start := range starts {
+		taskIDs = append(taskIDs, start.reference.TaskID)
+	}
+	return c.runTaskMutations(ctx, taskIDs, func(ctx context.Context) error {
+		return c.interruptCurrentNodeStartFailures(ctx, starts, admitted, cause)
+	})
+}
+
+func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
+	ctx context.Context,
+	starts []currentNodeQueuedStart,
+	admitted bool,
+	cause error,
+) error {
 	interrupt := c.store.InterruptCurrentNode
 	if admitted {
 		interrupt = c.store.InterruptAdmittedCurrentNode
@@ -1117,25 +1025,55 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailure(
 	if errors.As(cause, &preparationErr) {
 		detail = preparationErr.InterruptionDetail()
 	}
-	var committed bool
-	err := c.mutations.Run(ctx, start.reference.TaskID, func(ctx context.Context) error {
-		var diagnostic error
-		committed, diagnostic = classifyCurrentNodeInterruption(interrupt(
-			ctx,
-			start.reference,
-			reasonCurrentNodeRuntimeStartFailed,
-			detail,
-		))
-		return diagnostic
-	})
-	if committed {
-		c.publishPendingInterruptedCurrentNode(
-			ctx,
-			start.reference,
-			reasonCurrentNodeRuntimeStartFailed,
-		)
+	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(starts))
+	var interruptErrs []error
+	for _, start := range starts {
+		key, err := start.reference.Key()
+		if err != nil {
+			return err
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		err = interrupt(ctx, start.reference, reasonCurrentNodeRuntimeStartFailed, detail)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			if start.policy.isAutomatic() {
+				operation := "ready_start"
+				expectedScheduling := workflow.CurrentNodeSchedulingReady
+				if admitted {
+					operation = "admitted_start"
+					expectedScheduling = workflow.CurrentNodeSchedulingAdmitted
+				}
+				panicCurrentNodeAutomaticInterruptionPersistence(
+					operation,
+					start,
+					expectedScheduling,
+					cause,
+					err,
+				)
+			}
+			interruptErrs = append(interruptErrs, err)
+			continue
+		}
+		c.publishPendingInterruptedCurrentNode(ctx, start.reference, reasonCurrentNodeRuntimeStartFailed)
 	}
-	return committed, err
+	return errors.Join(interruptErrs...)
+}
+
+func automaticFailureRecoveryStarts(
+	starts []currentNodeQueuedStart,
+	committed []currentNodeQueuedStart,
+) []currentNodeQueuedStart {
+	for _, start := range starts {
+		if start.policy.isAutomatic() {
+			return starts
+		}
+	}
+	return committed
 }
 
 func panicCurrentNodeAutomaticInterruptionPersistence(
@@ -1154,26 +1092,6 @@ func panicCurrentNodeAutomaticInterruptionPersistence(
 	})
 }
 
-func currentNodeAutomaticIntents(source []workflowstore.CurrentNodeAutomaticIntent) ([]CurrentNodeAutomaticIntent, error) {
-	intents := make([]CurrentNodeAutomaticIntent, 0, len(source))
-	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(source))
-	for index, intent := range source {
-		key, err := intent.CurrentNode.Key()
-		if err != nil {
-			return nil, fmt.Errorf("automatic successor current node at index %d: %w", index, err)
-		}
-		if _, exists := seen[key]; exists {
-			return nil, fmt.Errorf("automatic successor current node at index %d is duplicated", index)
-		}
-		if intent.NodeKind != workflow.NodeKindAgent && intent.NodeKind != workflow.NodeKindScript {
-			return nil, fmt.Errorf("automatic successor current node at index %d has non-executable kind %q", index, intent.NodeKind)
-		}
-		seen[key] = struct{}{}
-		intents = append(intents, intent)
-	}
-	return intents, nil
-}
-
 func automaticQueuedStarts(intents []CurrentNodeAutomaticIntent) []currentNodeQueuedStart {
 	starts := make([]currentNodeQueuedStart, 0, len(intents))
 	for _, intent := range intents {
@@ -1183,6 +1101,7 @@ func automaticQueuedStarts(intents []CurrentNodeAutomaticIntent) []currentNodeQu
 		}
 		starts = append(starts, currentNodeQueuedStart{
 			reference: intent.CurrentNode,
+			nodeKind:  intent.NodeKind,
 			policy:    policy,
 		})
 	}
@@ -1207,7 +1126,6 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueue
 		starts = append(starts, currentNodeQueuedStart{
 			reference:          currentNode.Reference,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
-			requiresAssignment: currentNode.AgentExecutionSelection != nil,
 		})
 	}
 	return starts, nil

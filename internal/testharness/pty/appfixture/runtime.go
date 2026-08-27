@@ -320,7 +320,7 @@ func appendSeedTranscriptEntry(
 	switch strings.TrimSpace(entry.Kind) {
 	case "", "message":
 		msg := seedMessage(entry)
-		receipt, err := serverruntime.SteerPersistedMessage(store, stepID, msg)
+		receipt, err := serverruntime.SteerPersistedMessage(store, msg)
 		if err != nil {
 			return fmt.Errorf("append seed message %d: %w", idx, err)
 		}
@@ -336,7 +336,7 @@ func appendSeedTranscriptEntry(
 		if _, _, err := log.AppendRecord(&stepID, result); err != nil {
 			return fmt.Errorf("append seed tool completion %d: %w", idx, err)
 		}
-		receipt, err := serverruntime.SteerPersistedMessage(store, stepID, message)
+		receipt, err := serverruntime.SteerPersistedMessage(store, message)
 		if err != nil {
 			return fmt.Errorf("append seed tool message %d: %w", idx, err)
 		}

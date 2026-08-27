@@ -47,7 +47,7 @@ func (e *Engine) reportContextFactPersistenceError(stepID, field string, err err
 	diagnostic := fmt.Errorf("persist Session Context %s: %w", field, err)
 	if steerErr := e.steer(stepID, steerEventIntent(Event{
 		Kind:   EventContextFactsPersistFailed,
-		StepID: stepID,
+		StepID: &stepID,
 		Error:  diagnostic.Error(),
 	})); steerErr != nil {
 		e.surfaceRunError(fmt.Errorf("%w; surface diagnostic: %v", diagnostic, steerErr))

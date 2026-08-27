@@ -2,10 +2,11 @@ package runtime
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
+	"core/server/llm"
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 )
 
@@ -14,20 +15,42 @@ type WorkflowCompletionSource string
 const (
 	WorkflowCompletionSourceTool             WorkflowCompletionSource = "tool"
 	WorkflowCompletionSourceStructuredOutput WorkflowCompletionSource = "structured_output"
+	WorkflowCompletionSourceShellCommand     WorkflowCompletionSource = "shell_command"
 	WorkflowCompletionSourceUnstructured     WorkflowCompletionSource = "unstructured_output"
-	WorkflowCompletionSourceObserved         WorkflowCompletionSource = "observed"
 )
 
 type WorkflowTerminalState struct {
 	Completed   bool
 	Generation  int64
 	Source      WorkflowCompletionSource
+	Completion  workflowruntime.CompletionResult
 	CompletedAt time.Time
 }
 
+type WorkflowTurnResult struct {
+	Assistant  llm.Message
+	Completion *workflowruntime.CompletionResult
+}
+
+func workflowCompletionSource(mode workflowruntime.CompletionMode) WorkflowCompletionSource {
+	switch mode {
+	case workflowruntime.CompletionModeTool:
+		return WorkflowCompletionSourceTool
+	case workflowruntime.CompletionModeStructuredOutput:
+		return WorkflowCompletionSourceStructuredOutput
+	case workflowruntime.CompletionModeShellCommand:
+		return WorkflowCompletionSourceShellCommand
+	case workflowruntime.CompletionModeUnstructuredOutput:
+		return WorkflowCompletionSourceUnstructured
+	default:
+		return ""
+	}
+}
+
 type WorkflowSessionState struct {
-	TaskID     workflow.TaskID
-	WorkflowID runtimeids.WorkflowID
+	TaskID      workflow.TaskID
+	WorkflowID  runtimeids.WorkflowID
+	CurrentNode workflow.CurrentNodeReference
 }
 
 func (e *Engine) WorkflowSessionState() (*WorkflowSessionState, error) {
@@ -36,15 +59,16 @@ func (e *Engine) WorkflowSessionState() (*WorkflowSessionState, error) {
 	}
 	if execution, active := e.currentNodeExecutionConfig(); active {
 		instructions := execution.Instructions
-		if strings.TrimSpace(string(instructions.CurrentNode.TaskID)) == "" {
-			return nil, fmt.Errorf("active Workflow execution has no Task ID")
+		if err := instructions.CurrentNode.Validate(); err != nil {
+			return nil, fmt.Errorf("active Workflow execution has invalid Current Node: %w", err)
 		}
 		if instructions.WorkflowID.IsZero() {
 			return nil, fmt.Errorf("active Workflow execution has no Workflow ID")
 		}
 		return &WorkflowSessionState{
-			TaskID:     instructions.CurrentNode.TaskID,
-			WorkflowID: instructions.WorkflowID,
+			TaskID:      instructions.CurrentNode.TaskID,
+			WorkflowID:  instructions.WorkflowID,
+			CurrentNode: instructions.CurrentNode,
 		}, nil
 	}
 	return nil, nil
@@ -72,17 +96,7 @@ func (e *Engine) failQueuedUserWorkIfTerminal() bool {
 	return true
 }
 
-func (e *Engine) setWorkflowTerminalState(source WorkflowCompletionSource) {
-	if e == nil || !e.currentNodeExecutionActive() {
-		return
-	}
-	transitioned := e.recordWorkflowTerminalState(source)
-	if transitioned {
-		e.cascadeCompleteActiveGoalOnWorkflowCompletion()
-	}
-}
-
-func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) bool {
+func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource, completion workflowruntime.CompletionResult) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.workflowTerminal.Completed {
@@ -90,7 +104,9 @@ func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) bo
 	}
 	e.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
+		Generation:  e.workflowTerminal.Generation + 1,
 		Source:      source,
+		Completion:  completion,
 		CompletedAt: time.Now(),
 	}
 	return true

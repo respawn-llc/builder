@@ -57,8 +57,7 @@ type resultGroupCallIdentity struct {
 }
 
 type resultGroupUnit struct {
-	result                       tools.Result
-	workflowCompletionDiagnostic error
+	result tools.Result
 }
 
 type resultGroupSlot struct {
@@ -390,10 +389,7 @@ func (c *resultGroupCollector) close() error {
 }
 
 func cloneResultGroupUnit(unit resultGroupUnit) resultGroupUnit {
-	return resultGroupUnit{
-		result:                       cloneToolResult(unit.result),
-		workflowCompletionDiagnostic: unit.workflowCompletionDiagnostic,
-	}
+	return resultGroupUnit{result: cloneToolResult(unit.result)}
 }
 
 type resultGroupPreparedUnit struct {
@@ -553,19 +549,7 @@ func (e *Engine) prepareResultGroupProjection(
 		if unit.result.CallID != slot.call.CallID {
 			return resultGroupProjectionPlan{}, fmt.Errorf("result group unit call %q does not match slot %q at ordinal %d", unit.result.CallID, slot.call.CallID, slot.ordinal)
 		}
-		finalized := e.finalizeLiveToolCompletion(unit.result)
-		if unit.workflowCompletionDiagnostic != nil {
-			if finalized.OperatorFeedback != nil {
-				panic("workflow completion diagnostic conflicts with existing tool operator feedback")
-			}
-			callID := finalized.Result.CallID
-			feedback := workflowCompletionOperatorDiagnostic(
-				unit.workflowCompletionDiagnostic,
-				&callID,
-			)
-			finalized.OperatorFeedback = &feedback
-		}
-		completion, err := e.prepareFinalizedToolCompletion(finalized)
+		completion, err := e.prepareFinalizedToolCompletion(e.finalizeLiveToolCompletion(unit.result))
 		if err != nil {
 			return resultGroupProjectionPlan{}, fmt.Errorf("prepare result group completion %q: %w", slot.call.CallID, err)
 		}
@@ -578,7 +562,7 @@ func (e *Engine) prepareResultGroupProjection(
 			Name:        textutil.Value(string(completion.completion.Result.Name)),
 			MessageType: llm.ToolOutputMessageType(slot.call.OutputKind == session.ToolOutputKindCustom),
 		}
-		preparedOutput, err := e.prepareMessageProjection(stepID, output)
+		preparedOutput, err := e.prepareMessageProjection(textutil.OptionalExactString(stepID), output)
 		if err != nil {
 			return resultGroupProjectionPlan{}, fmt.Errorf("prepare result group output %q: %w", slot.call.CallID, err)
 		}
@@ -631,7 +615,7 @@ func (e *Engine) applyResultGroupProjection(
 		}
 		e.transcriptRuntimeState().CompleteLiveTool(unit.completion.completion.Result.CallID)
 		if err := e.applyPreparedMessageProjection(
-			stepID,
+			textutil.OptionalExactString(stepID),
 			unit.output,
 			&outputProvenance,
 		); err != nil {
@@ -655,7 +639,7 @@ func (e *Engine) applyResultGroupProjection(
 		result := cloneToolResult(projection.unit.completion.completion.Result)
 		if err := e.emitResultGroupProjectionEvent(Event{
 			Kind:                       EventToolCallCompleted,
-			StepID:                     stepID,
+			StepID:                     exactStepIDPointer(stepID),
 			ToolResult:                 &result,
 			CommittedTranscriptChanged: true,
 			CommittedEntryStart:        projection.completionStart,
@@ -666,10 +650,10 @@ func (e *Engine) applyResultGroupProjection(
 			return err
 		}
 		if projection.unit.completion.feedback != nil {
-			entry := localEntryChatEntryForStep(*projection.unit.completion.feedback, stepID)
+			entry := localEntryChatEntryForStep(*projection.unit.completion.feedback, textutil.OptionalExactString(stepID))
 			if err := e.emitResultGroupProjectionEvent(Event{
 				Kind:                       EventLocalEntryAdded,
-				StepID:                     stepID,
+				StepID:                     exactStepIDPointer(stepID),
 				LocalEntry:                 entry,
 				CommittedTranscriptChanged: true,
 				CommittedEntryStart:        projection.feedbackStart,

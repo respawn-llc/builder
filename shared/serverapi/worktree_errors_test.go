@@ -50,15 +50,6 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 			FallbackIdentity: "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
 		}},
 	}
-	operationID := NewWorktreeOperationID()
-	pending := &WorktreeTransitionPendingError{
-		SessionID:          "session",
-		PendingOperationID: operationID,
-	}
-	immediate := NewWorktreeImmediateTransitionError(
-		WorktreeImmediateTransitionOriginInactive,
-		errors.New("originating step ended"),
-	)
 	retained := &WorktreeSetupRetainedError{
 		Worktree: WorktreeTopologyEntry{
 			Variant: WorktreeTopologyVariantRegistered,
@@ -81,7 +72,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		},
 	}
 
-	for _, source := range []protocol.StructuredRPCError{selector, pending, immediate, retained, precondition} {
+	for _, source := range []protocol.StructuredRPCError{selector, retained, precondition} {
 		if source.RPCErrorCode() >= 0 {
 			t.Fatalf("%T protocol error code = %d, want implementation-defined error code", source, source.RPCErrorCode())
 		}
@@ -97,27 +88,6 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 	}
 	if selectorError.Input != selector.Input || len(selectorError.Candidates) != 1 || selectorError.Candidates[0].FallbackIdentity != selector.Candidates[0].FallbackIdentity {
 		t.Fatalf("selector facts changed: %+v", selectorError)
-	}
-
-	decodedPending := DecodeWorktreeRPCError(pending.RPCErrorData(), pending.Error())
-	var pendingError *WorktreeTransitionPendingError
-	if !errors.As(decodedPending, &pendingError) {
-		t.Fatalf("pending decode = %T, want WorktreeTransitionPendingError", decodedPending)
-	}
-	if !errors.Is(decodedPending, ErrWorktreeTransitionPending) {
-		t.Fatalf("pending decode does not preserve pending state: %v", decodedPending)
-	}
-	if pendingError.SessionID != pending.SessionID || pendingError.PendingOperationID != operationID {
-		t.Fatalf("pending facts changed: %+v", pendingError)
-	}
-
-	decodedImmediate := DecodeWorktreeRPCError(immediate.RPCErrorData(), immediate.Error())
-	var immediateError *WorktreeImmediateTransitionError
-	if !errors.As(decodedImmediate, &immediateError) {
-		t.Fatalf("immediate decode = %T, want WorktreeImmediateTransitionError", decodedImmediate)
-	}
-	if immediateError.Kind != WorktreeImmediateTransitionOriginInactive {
-		t.Fatalf("immediate kind = %q, want origin inactive", immediateError.Kind)
 	}
 
 	decodedRetained := DecodeWorktreeRPCError(retained.RPCErrorData(), retained.Error())
@@ -161,11 +131,6 @@ func TestWorktreeStructuredErrorsRejectInvalidTypedData(t *testing.T) {
 		stringPointer("status unavailable"),
 	); err == nil {
 		t.Fatal("unknown dirty-state with a count validated")
-	}
-	if err := (&WorktreeTransitionPendingError{
-		PendingOperationID: NewWorktreeOperationID(),
-	}).Validate(); err == nil {
-		t.Fatal("pending transition without session validated")
 	}
 }
 

@@ -81,14 +81,6 @@ func TestMetadataMutationsLeaveOpaqueEventLogUnchanged(t *testing.T) {
 	if _, _, err := store.SetGoal("ship metadata boundary", GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
-	if err := store.SetPendingModelRecovery(PendingModelRecovery{
-		RecoveryID: "recovery-1",
-		Reason:     "provider_disconnect",
-		CreatedAt:  now,
-	}); err != nil {
-		t.Fatalf("set pending recovery: %v", err)
-	}
-
 	after := eventLogFingerprint(t, eventsPath)
 	if !before.equal(after) {
 		t.Fatalf("metadata mutations changed event log: before=%+v after=%+v", before, after)
@@ -154,27 +146,16 @@ func TestCurrentMetadataOperationsLeaveEventLogUnchanged(t *testing.T) {
 	if _, _, err := store.ClearGoal(GoalActorUser); err != nil {
 		t.Fatalf("clear metadata-only goal: %v", err)
 	}
-	if err := store.SetPendingModelRecovery(PendingModelRecovery{
-		RecoveryID: "recovery-1",
-		Reason:     "provider_disconnect",
-		CreatedAt:  now,
-	}); err != nil {
-		t.Fatalf("set pending recovery: %v", err)
-	}
-	if err := store.ClearPendingModelRecovery(); err != nil {
-		t.Fatalf("clear pending recovery: %v", err)
-	}
-
 	after := eventLogFingerprint(t, eventsPath)
 	if !before.equal(after) {
 		t.Fatalf("current metadata operations changed event log: before=%+v after=%+v", before, after)
 	}
 	if store.materializedEventLog != nil {
-		t.Fatal("metadata-only goal/recovery mutations materialized the event log")
+		t.Fatal("metadata-only goal mutations materialized the event log")
 	}
 	if got := storeTestMeta(store).LastSequence; got != beforeRevision {
 		t.Fatalf(
-			"metadata-only goal/recovery mutations changed event revision: got %d want %d",
+			"metadata-only goal mutations changed event revision: got %d want %d",
 			got,
 			beforeRevision,
 		)
