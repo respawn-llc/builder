@@ -8,7 +8,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -47,11 +46,6 @@ func TestBoardProjectsQuiescentCurrentNodeAsDeletable(t *testing.T) {
 		t.Fatalf("board cards = %+v, want one Current Node card", cards.Cards)
 	}
 	card := cards.Cards[0]
-	for _, nodeID := range card.ActiveNodeIDs {
-		if _, err := runtimeids.GraphEntityIDBlob(nodeID); err != nil {
-			t.Fatalf("board card active Node ID %q is not canonical UUIDv4: %v", nodeID, err)
-		}
-	}
 	if card.TaskID != string(started.task.ID) ||
 		len(card.ActiveNodeIDs) != 1 ||
 		card.ActiveNodeIDs[0] != string(fixture.agentNodeID) ||

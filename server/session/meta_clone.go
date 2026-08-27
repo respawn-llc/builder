@@ -12,11 +12,6 @@ func cloneMeta(in Meta) Meta {
 	}
 	out.Continuation = cloneContinuationContext(in.Continuation)
 	out.ChatSettings = cloneChatSettingsOverrides(in.ChatSettings)
-	if in.PendingModelRecovery != nil {
-		pending := *in.PendingModelRecovery
-		pending.OutstandingToolCallIDs = append([]string(nil), in.PendingModelRecovery.OutstandingToolCallIDs...)
-		out.PendingModelRecovery = &pending
-	}
 	out.WorktreeReminder = CloneWorktreeReminderState(in.WorktreeReminder)
 	if in.UsageState != nil {
 		usage := *in.UsageState

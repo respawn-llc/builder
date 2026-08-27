@@ -84,22 +84,17 @@ export async function deleteWorktree(
   ) {
     throw new TypeError("Worktree Delete confirmation is invalid for this preview.");
   }
-  const id = parseWorktreeOperationID(crypto.randomUUID());
   const result = await call(
     transport,
     "worktree.delete",
     {
       ...session(sessionID),
-      operation_id: id.toJSONValue(),
       selector: authority.deletionSelector,
       force_folder_removal: authority.cleanliness.kind !== "clean",
       branch_cleanup_policy: choice === "confirm" ? "auto_if_kent_created" : "delete_safe",
     },
     { schema: worktree.worktreeDeleteResultSchema },
   );
-  if (result.kind === "scheduled") {
-    requireMatchingOperationID(id.toJSONValue(), result.acknowledgement);
-  }
   return result;
 }
 
@@ -171,19 +166,6 @@ const errorSchemas = {
     owner: z.enum(["base_ref", "form"]),
     diagnostic: worktree.nonBlankString,
   }).transform((value) => ({ kind: "create" as const, ...value })),
-  [rpcErrorCodes.worktreeTransitionPending]: strict({
-    type: z.literal("worktree_transition_pending"),
-    session_id: worktree.nonBlankString,
-    pending_operation_id: worktree.worktreeOperationIDSchema,
-  }).transform((value) => ({
-    kind: "transition_pending" as const,
-    sessionID: value.session_id,
-    pendingOperationID: value.pending_operation_id,
-  })),
-  [rpcErrorCodes.worktreeImmediateTransition]: strict({
-    type: z.literal("worktree_immediate_transition"),
-    kind: z.enum(["origin_inactive", "apply_failed"]),
-  }).transform((value) => ({ kind: "immediate_transition" as const, reason: value.kind })),
   [rpcErrorCodes.worktreeDeletePrecondition]: strict({
     type: z.literal("worktree_delete_precondition"),
     dirty_state: worktree.worktreeCleanlinessSchema.refine(

@@ -15,20 +15,17 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 16)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
+	restoreStep := setTestActiveStep(engine, "step-1")
+	defer restoreStep()
 	calls := []llm.ToolCall{
 		{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 		{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 	}
-	if err := engine.steer("step-1", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: calls}},
-	)); err != nil {
+	if err := engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: calls}})); err != nil {
 		t.Fatalf("append assistant tool calls: %v", err)
 	}
 	results := []tools.Result{
@@ -38,7 +35,7 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 	liveLocators := make(map[string]transcript.CommittedRowLocator, len(results))
 	for _, result := range results {
 		before := len(events)
-		if err := engine.steer("step-1", steerToolCompletionIntent(result)); err != nil {
+		if err := engine.steer(runtimeTestStepID("step-1"), steerToolCompletionIntent(result)); err != nil {
 			t.Fatalf("persist tool completion %s: %v", result.CallID, err)
 		}
 		for _, event := range events[before:] {
@@ -57,12 +54,7 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 			Name:       textutil.Value(string(result.Name)),
 			Content:    textutil.Value(string(result.Output)),
 		}
-		if err := engine.steer("step-1", steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventDefault,
-			true,
-			[]llm.Message{mirror},
-		)); err != nil {
+		if err := engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{mirror})); err != nil {
 			t.Fatalf("materialize tool mirror %s: %v", result.CallID, err)
 		}
 	}
@@ -102,7 +94,7 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 	if err := engine.Close(); err != nil {
 		t.Fatalf("close engine: %v", err)
 	}
-	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	reopenedFacts := TranscriptCommittedRowFactsFromSnapshot(mustEngineNewestSegmentPage(t, reopened).Snapshot)
 	assertToolFactsFollowLocatorOrder(t, reopenedFacts, "reopened page")
 	assertToolFactsFollowLocatorOrder(t, hydrationSnapshot(t, reopened).CommittedRows, "reopened hydration")

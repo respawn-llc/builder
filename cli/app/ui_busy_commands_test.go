@@ -253,14 +253,8 @@ func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
 
 	next, cmd := updated.Update(submitDoneMsg{message: "done"})
 	updated = next.(*uiModel)
-	if cmd == nil || updated.isCompacting() || updated.postTurnCompactionsInFlight != 1 || len(updated.queued) != 0 {
-		t.Fatalf(
-			"compact drain = cmd %v, compacting %t, blockers %d, queued %+v",
-			cmd,
-			updated.isCompacting(),
-			updated.postTurnCompactionsInFlight,
-			updated.queued,
-		)
+	if cmd == nil || updated.isBusy() || updated.isCompacting() || len(updated.queued) != 0 {
+		t.Fatalf("compact drain = cmd %v, busy %t, compacting %t, queued %+v", cmd, updated.isBusy(), updated.isCompacting(), updated.queued)
 	}
 }
 
@@ -269,7 +263,7 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 	model := newProjectedTestUIModel(client)
 	model.startupCmds = nil
 
-	if cmd := model.inputController().startCompactionWithOrigin("/compact", "", uiCompactionOriginManual); cmd == nil {
+	if cmd := model.inputController().startCompaction(""); cmd == nil {
 		t.Fatal("expected compaction command")
 	}
 	if model.isCompacting() || model.blocksRuntimeInput() || model.layout().mainInputPrefix() != "› " {

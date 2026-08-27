@@ -32,7 +32,7 @@ func (p *clientLifecycleProxy) AcceptTranscript(message clientui.TranscriptMessa
 				time.Now().UTC(),
 				p.isFocused(),
 				p.context(),
-				status.Mode,
+				string(status.Mode),
 			))
 		}
 	case clientui.TranscriptMessagePrompt:

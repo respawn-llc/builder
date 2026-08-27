@@ -7,16 +7,14 @@ import (
 )
 
 const (
-	validLiveSessionID       = "9b9447ad-04e7-4c70-b4b0-f0eb1a53b47d"
-	validLiveClientRequestID = "8b0364cc-5c6c-412e-a4e8-31380661d1e1"
-	validLiveQueueItemID     = "540a27aa-1e97-4696-8483-6d528ff8bbdd"
+	validLiveSessionID   = "9b9447ad-04e7-4c70-b4b0-f0eb1a53b47d"
+	validLiveQueueItemID = "540a27aa-1e97-4696-8483-6d528ff8bbdd"
 )
 
 func TestRuntimeLiveSteerRequestValidateUsesUUIDV4Boundaries(t *testing.T) {
 	req := RuntimeLiveSteerRequest{
-		ClientRequestID: validLiveClientRequestID,
-		SessionID:       validLiveSessionID,
-		Text:            " steer the run ",
+		SessionID: validLiveSessionID,
+		Text:      " steer the run ",
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("Validate valid request: %v", err)
@@ -28,10 +26,9 @@ func TestRuntimeLiveSteerRequestValidateUsesUUIDV4Boundaries(t *testing.T) {
 	}
 
 	cases := []RuntimeLiveSteerRequest{
-		{ClientRequestID: "request-1", SessionID: validLiveSessionID, Text: "text"},
-		{ClientRequestID: validLiveClientRequestID, SessionID: "session-1", Text: "text"},
-		{ClientRequestID: validLiveClientRequestID, SessionID: "018f3f8c-5b1a-7b72-8cb9-01af2c01a7e8", Text: "text"},
-		{ClientRequestID: validLiveClientRequestID, SessionID: validLiveSessionID, Text: " \t "},
+		{SessionID: "session-1", Text: "text"},
+		{SessionID: "018f3f8c-5b1a-7b72-8cb9-01af2c01a7e8", Text: "text"},
+		{SessionID: validLiveSessionID, Text: " \t "},
 	}
 	for _, tc := range cases {
 		if err := tc.Validate(); err == nil {
@@ -43,7 +40,6 @@ func TestRuntimeLiveSteerRequestValidateUsesUUIDV4Boundaries(t *testing.T) {
 func TestRuntimeLiveSteerRequestRejectsMalformedCallerProvenance(t *testing.T) {
 	for _, caller := range []string{"", "/invalid/session", "session-1", "  " /* whitespace is not canonical */} {
 		req := RuntimeLiveSteerRequest{
-			ClientRequestID: validLiveClientRequestID,
 			SessionID:       validLiveSessionID,
 			Text:            "text",
 			CallerSessionID: &caller,
@@ -56,8 +52,7 @@ func TestRuntimeLiveSteerRequestRejectsMalformedCallerProvenance(t *testing.T) {
 
 func TestRuntimeLiveStopRequestValidateAndStatus(t *testing.T) {
 	if err := (RuntimeLiveStopRequest{
-		ClientRequestID: validLiveClientRequestID,
-		SessionID:       validLiveSessionID,
+		SessionID: validLiveSessionID,
 	}).Validate(); err != nil {
 		t.Fatalf("Validate valid stop: %v", err)
 	}

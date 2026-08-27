@@ -3,14 +3,11 @@ package core
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
-	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
@@ -625,9 +622,8 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 		t.Fatalf("materialized Agent was not editable: %v", err)
 	}
 	if _, err := appCore.RuntimeControlClient().SubmitUserTurn(t.Context(), serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: "separate-failing-turn",
-		SessionID:       materialized.SessionId,
-		Input:           runtimeinput.Text("ordinary operation fails without an active runtime"),
+		SessionID: materialized.SessionId,
+		Input:     runtimeinput.Text("ordinary operation fails without an active runtime"),
 	}); err == nil {
 		t.Fatal("ordinary text operation unexpectedly succeeded without a runtime")
 	}
@@ -866,82 +862,6 @@ func TestSessionChatSettingsPreparationUsesLockedPromptFacingModelCapabilities(t
 	}
 	if slices.Contains(prepared.SupportedThinkingValues, "ultra") {
 		t.Fatalf("locked gpt-5 Thinking values = %v, want no ultra", prepared.SupportedThinkingValues)
-	}
-}
-
-func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstances(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			t.Fatalf("unexpected path %q", r.URL.Path)
-		}
-		if got := r.Header.Get("Authorization"); got == "" {
-			t.Fatal("expected authorization header")
-		}
-		modelstub.WriteCompletedResponseStream(w, "ok", 1, 1)
-	}))
-	defer server.Close()
-
-	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
-	if err != nil {
-		t.Fatalf("ResolveConfig: %v", err)
-	}
-	resolved.Config.Settings.Model = "gpt-5"
-	resolved.Config.Settings.OpenAIBaseURL = server.URL
-	binding, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, resolved.Config.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterBinding: %v", err)
-	}
-	appCore := newCoreTestAppWithLoadOptions(t, resolved.Config, auth.State{
-		Scope:  auth.ScopeGlobal,
-		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
-	}, brand.LoadOptions{
-		Model:         "gpt-5",
-		OpenAIBaseURL: server.URL,
-	})
-
-	firstClient, err := appCore.RunPromptClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
-	if err != nil {
-		t.Fatalf("RunPromptClientForProjectWorkspace first: %v", err)
-	}
-	secondClient, err := appCore.RunPromptClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
-	if err != nil {
-		t.Fatalf("RunPromptClientForProjectWorkspace second: %v", err)
-	}
-	req := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}
-	firstRun, err := firstClient.RunPrompt(context.Background(), req, nil)
-	if err != nil {
-		t.Fatalf("RunPrompt first: %v", err)
-	}
-	secondRun, err := secondClient.RunPrompt(context.Background(), req, nil)
-	if err != nil {
-		t.Fatalf("RunPrompt second: %v", err)
-	}
-	if firstRun.SessionID != secondRun.SessionID {
-		t.Fatalf("session ids = %q and %q, want stable replay", firstRun.SessionID, secondRun.SessionID)
-	}
-	if firstRun.Result != "ok" || secondRun.Result != "ok" {
-		t.Fatalf("results = (%q, %q), want both ok", firstRun.Result, secondRun.Result)
-	}
-	offset := int32(0)
-	limit := int32(20)
-	page, err := appCore.ProjectViewClient().ListSessionPage(context.Background(), &projectpb.SessionPageRequest{
-		ProjectId: binding.ProjectID,
-		Category:  projectpb.SessionCategory_SESSION_CATEGORY_SUBAGENT,
-		Offset:    &offset,
-		Limit:     &limit,
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage: %v", err)
-	}
-	if len(page.Sessions) != 1 {
-		t.Fatalf("session count = %d, want 1", len(page.Sessions))
-	}
-	if page.Sessions[0].SessionId != firstRun.SessionID {
-		t.Fatalf("persisted session id = %q, want %q", page.Sessions[0].SessionId, firstRun.SessionID)
 	}
 }
 

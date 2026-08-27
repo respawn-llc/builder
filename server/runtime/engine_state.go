@@ -254,20 +254,20 @@ func (e *Engine) LiveChatContextSnapshot() chatcontext.ProjectionInput {
 	}
 }
 
-func (e *Engine) AppendCommittedEntry(role, text string) error {
-	return e.AppendCommittedEntryWithCondensedText(role, text, "")
+func (e *Engine) AppendCommittedEntry(ctx context.Context, role, text string) error {
+	return e.AppendCommittedEntryWithCondensedText(ctx, role, text, "")
 }
 
-func (e *Engine) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility) error {
-	return e.appendCommittedEntry(storedLocalEntry{
+func (e *Engine) AppendCommittedEntryWithVisibility(ctx context.Context, role, text string, visibility transcript.EntryVisibility) error {
+	return e.appendCommittedEntry(ctx, storedLocalEntry{
 		Visibility: normalizeRuntimeEntryVisibility(visibility),
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
 	})
 }
 
-func (e *Engine) AppendCommittedEntryWithNoticeID(role, text, noticeID string) error {
-	return e.appendCommittedEntry(storedLocalEntry{
+func (e *Engine) AppendCommittedEntryWithNoticeID(ctx context.Context, role, text, noticeID string) error {
+	return e.appendCommittedEntry(ctx, storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
@@ -275,8 +275,8 @@ func (e *Engine) AppendCommittedEntryWithNoticeID(role, text, noticeID string) e
 	})
 }
 
-func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText string) error {
-	return e.appendCommittedEntry(storedLocalEntry{
+func (e *Engine) AppendCommittedEntryWithCondensedText(ctx context.Context, role, text, condensedText string) error {
+	return e.appendCommittedEntry(ctx, storedLocalEntry{
 		Visibility:    transcript.EntryVisibilityAuto,
 		Role:          strings.TrimSpace(role),
 		Text:          strings.TrimSpace(text),
@@ -284,14 +284,15 @@ func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText
 	})
 }
 
-func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
-	_, err := e.appendCommittedEntryWithCommitReceipt(entry)
+func (e *Engine) appendCommittedEntry(ctx context.Context, entry storedLocalEntry) error {
+	_, err := e.appendCommittedEntryWithCommitReceipt(ctx, entry)
 	return err
 }
 
 func (e *Engine) SetStreamingError(text string) {
-	e.transcriptRuntimeState().SetStreamingError(text)
-	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+	e.applyStreamingStateMutation(func(state *transcriptRuntimeState) {
+		state.SetStreamingError(text)
+	})
 }
 
 func (e *Engine) ReportPromptHistoryPersistError(reason string) {
@@ -302,40 +303,89 @@ func (e *Engine) ReportPromptHistoryPersistError(reason string) {
 	if reason == "" {
 		return
 	}
-	_ = e.steer("", steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
+	_ = e.steerRuntime(steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
 }
 
 func (e *Engine) ClearStreamingError() {
-	e.transcriptRuntimeState().ClearStreamingError()
-	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+	e.applyStreamingStateMutation(func(state *transcriptRuntimeState) {
+		state.ClearStreamingError()
+	})
 }
 
-func (e *Engine) SetSessionName(name string) error {
-	return e.store.SetName(name)
+func (e *Engine) applyStreamingStateMutation(mutate func(*transcriptRuntimeState)) {
+	if mutate == nil {
+		return
+	}
+	_, _ = awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		return struct{}{}, e.applyStreamingStateMutationRaw(mutate)
+	})
 }
 
-func (e *Engine) SetThinkingLevel(level string) error {
+func (e *Engine) applyStreamingStateMutationRaw(mutate func(*transcriptRuntimeState)) error {
+	if mutate == nil {
+		return nil
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	mutate(e.transcriptRuntimeState())
+	return e.steerOrderedRaw(sessionSteeringProvenance(), steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+}
+
+func (e *Engine) applyStreamingStateMutationForStep(stepID string, mutate func(*transcriptRuntimeState)) error {
+	if mutate == nil {
+		return nil
+	}
+	provenance, err := exactSteeringProvenance(stepID)
+	if err != nil {
+		return err
+	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
+	mutate(e.transcriptRuntimeState())
+	return e.steerOrderedRaw(provenance, steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+}
+
+func (e *Engine) SetSessionName(ctx context.Context, name string) error {
+	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
+		return struct{}{}, e.store.SetName(name)
+	})
+	return err
+}
+
+func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 	normalized := strings.TrimSpace(level)
 	if normalized == "" {
 		return errors.New("thinking level is required")
 	}
-	return e.setThinkingValue(normalized)
+	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
+		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{Thinking: &normalized})
+		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
+			return struct{}{}, settingsErr
+		}
+		return struct{}{}, errors.Join(settingsErr, e.setThinkingValue(normalized))
+	})
+	return err
 }
 
-// SetWorkflowThinkingValue applies a workflow-owned thinking value. Workflow
-// values may be standard Kent levels or provider-specific values, so they do
-// not use the operator-config normalization contract.
+// SetWorkflowThinkingValue applies a workflow-owned thinking value through the
+// same ordered Runtime mutation owner as operator settings.
 func (e *Engine) SetWorkflowThinkingValue(value workflow.ThinkingValue) error {
 	if err := value.Validate(); err != nil {
 		return err
 	}
-	return e.setThinkingValue(string(value))
+	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		return struct{}{}, e.setThinkingValue(string(value))
+	})
+	return err
 }
 
 // ClearWorkflowThinkingValue removes a workflow-owned thinking override while
 // preserving the current prompt-cache lineage and contract generation.
 func (e *Engine) ClearWorkflowThinkingValue() error {
-	return e.setThinkingValue("")
+	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		return struct{}{}, e.setThinkingValue("")
+	})
+	return err
 }
 
 func (e *Engine) setThinkingValue(value string) error {
@@ -349,11 +399,11 @@ func (e *Engine) SetFastModeEnabled(enabled bool) (bool, error) {
 	if enabled && !e.FastModeAvailable() {
 		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed := e.localFastModeEnabledChange(enabled)
-	e.applyFastModeEnabled(enabled)
-	return changed, nil
+	return awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (bool, error) {
+		changed := e.localFastModeEnabledChange(enabled)
+		e.applyFastModeEnabled(enabled)
+		return changed, nil
+	})
 }
 
 func (e *Engine) localFastModeEnabledChange(enabled bool) bool {
@@ -375,21 +425,37 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 	return changed
 }
 
-func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
+func (e *Engine) SetAutoCompactionEnabled(ctx context.Context, enabled bool) (bool, bool, error) {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
+		changed bool
+		enabled bool
+	}, error) {
+		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{AutoCompaction: &enabled})
+		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
+			return struct {
+				changed bool
+				enabled bool
+			}{enabled: e.AutoCompactionEnabled()}, settingsErr
+		}
+		e.applyAutoCompactionEnabled(enabled)
+		return struct {
+			changed bool
+			enabled bool
+		}{changed: settings.Changed, enabled: enabled}, settingsErr
+	})
+	if err != nil {
+		return false, e.AutoCompactionEnabled(), err
+	}
+	return result.changed, result.enabled, nil
+}
+
+func (e *Engine) applyAutoCompactionEnabled(enabled bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	current := true
-	if e.cfg.AutoCompactionEnabled != nil {
-		current = *e.cfg.AutoCompactionEnabled
-	}
-	if current == enabled {
-		return false, current
-	}
 	if e.cfg.AutoCompactionEnabled == nil {
 		e.cfg.AutoCompactionEnabled = new(bool)
 	}
 	*e.cfg.AutoCompactionEnabled = enabled
-	return true, enabled
 }
 
 func (e *Engine) QuestionsEnabled() bool {
@@ -402,14 +468,24 @@ func (e *Engine) QuestionsEnabled() bool {
 }
 
 func (e *Engine) SetQuestionsEnabled(enabled bool) (bool, bool) {
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed, current := e.questionsEnabledChange(enabled)
-	if changed {
-		e.applyQuestionsEnabled(enabled)
-		current = enabled
+	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+		changed bool
+		enabled bool
+	}, error) {
+		changed, current := e.questionsEnabledChange(enabled)
+		if changed {
+			e.applyQuestionsEnabled(enabled)
+			current = enabled
+		}
+		return struct {
+			changed bool
+			enabled bool
+		}{changed: changed, enabled: current}, nil
+	})
+	if err != nil {
+		return false, e.QuestionsEnabled()
 	}
-	return changed, current
+	return result.changed, result.enabled
 }
 
 func (e *Engine) questionsEnabledChange(enabled bool) (bool, bool) {
@@ -440,14 +516,24 @@ func (e *Engine) applyQuestionsEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed, mode, err := e.reviewerEnabledChange(enabled)
-	if err != nil {
-		return false, mode, err
-	}
-	e.applyReviewerEnabled(enabled, mode)
-	return changed, mode, nil
+	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
+		changed bool
+		mode    string
+	}, error) {
+		changed, mode, err := e.reviewerEnabledChange(enabled)
+		if err != nil {
+			return struct {
+				changed bool
+				mode    string
+			}{mode: mode}, err
+		}
+		e.applyReviewerEnabled(enabled, mode)
+		return struct {
+			changed bool
+			mode    string
+		}{changed: changed, mode: mode}, nil
+	})
+	return result.changed, result.mode, err
 }
 
 func (e *Engine) PrepareReviewerFrequency(frequency string) (string, error) {
@@ -478,7 +564,10 @@ func (e *Engine) setReviewerFrequency(frequency string) bool {
 }
 
 func (e *Engine) SetReviewerFrequency(frequency string) bool {
-	return e.setReviewerFrequency(frequency)
+	changed, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (bool, error) {
+		return e.setReviewerFrequency(frequency), nil
+	})
+	return err == nil && changed
 }
 
 func (e *Engine) reviewerEnabledChange(enabled bool) (bool, string, error) {
@@ -880,7 +969,8 @@ func (e *Engine) modelRequests() *modelRequestRuntimeState {
 
 func (e *Engine) emitRaw(evt Event) error {
 	if evt.Kind == EventToolCallStarted && e.liveRun != nil {
-		e.liveRun.recordToolStart(evt.StepID)
+		stepID, _ := textutil.OptionalExact(evt.StepID)
+		e.liveRun.recordToolStart(stepID)
 	}
 	revision, err := e.TranscriptRevision()
 	if err != nil {
@@ -934,7 +1024,7 @@ func (e *Engine) publishLiveRunFinished(result LiveRunResult) {
 	copyResult := result
 	e.emitRaw(Event{
 		Kind:          EventLiveRunFinished,
-		StepID:        result.StepID.String(),
+		StepID:        textutil.Value(result.StepID.String()),
 		LiveRunResult: &copyResult,
 	})
 }

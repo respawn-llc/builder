@@ -30,7 +30,10 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 	eng := mustNewTestEngine(t, store, &fakeCompactionClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5"})
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	stepID := runtimeTestStepID("seed-step")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		return eng.steerBaseMetaContextIfNeeded(stepID)
+	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
 	for _, message := range []llm.Message{
@@ -38,7 +41,7 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}},
 		{Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`{"output":"/tmp"}`)},
 	} {
-		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+		if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 			t.Fatalf("append transcript message: %v", err)
 		}
 	}
@@ -86,6 +89,22 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
+		inputTokenCountFn: func(req llm.Request) int {
+			total := 0
+			for _, item := range req.Items {
+				switch item.Type {
+				case llm.ResponseItemTypeMessage:
+					total += 1000
+				case llm.ResponseItemTypeFunctionCall:
+					total += 3000
+				case llm.ResponseItemTypeFunctionCallOutput:
+					total += 1000
+				default:
+					total += 500
+				}
+			}
+			return total
+		},
 		compactionErrors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
 			nil,
@@ -101,22 +120,25 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	stepID := runtimeTestStepID("seed-step")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		return eng.steerBaseMetaContextIfNeeded(stepID)
+	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	reasoningPayload := strings.Repeat("encrypted-reasoning", 4_000)
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 		ID: "rs-preserve", EncryptedContent: reasoningPayload,
 	}}}})); err != nil {
 		t.Fatalf("append reasoning message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}})); err != nil {
 		t.Fatalf("append tool call: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`)}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`)}})); err != nil {
 		t.Fatalf("append tool output: %v", err)
 	}
 
@@ -129,16 +151,18 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	if err != nil {
 		t.Fatalf("build seed request: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "seed-cache", &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded")},
-		Usage:     llm.Usage{CachedInputTokens: textutil.Value(512)},
-	}}}, seedRequest, nil, nil, nil); err != nil {
+	cacheStepID := runtimeTestStepID("seed-cache")
+	if err := runTestActiveStep(eng, cacheStepID, func() error {
+		_, err := eng.generateWithRetryClient(context.Background(), cacheStepID, &fakeClient{responses: []llm.Response{{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded")},
+			Usage:     llm.Usage{CachedInputTokens: textutil.Value(512)},
+		}}}, seedRequest, nil, nil, nil)
+		return err
+	}); err != nil {
 		t.Fatalf("seed cache lineage: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("compaction calls = %d, want overflow repair retry", len(client.compactionCalls))
 	}
@@ -201,18 +225,21 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	stepID := runtimeTestStepID("seed-step")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		return eng.steerBaseMetaContextIfNeeded(stepID)
+	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 		ID: "call-view-image-1", Name: string(toolspec.ToolViewImage), Input: json.RawMessage(`{"path":"doc.pdf"}`),
 	}}}})); err != nil {
 		t.Fatalf("append view-image tool call: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role: llm.RoleTool, ToolCallID: textutil.Value("call-view-image-1"), Name: textutil.Value(string(toolspec.ToolViewImage)),
 		Content: textutil.Value(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
 	}})); err != nil {
@@ -233,8 +260,13 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 	if err != nil {
 		t.Fatalf("marshal initial input: %v", err)
 	}
-	if err := eng.CompactContext(context.Background(), ""); err == nil {
-		t.Fatal("expected unsupported view-image payload to fail compaction repair")
+	var events []Event
+	eng.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	scheduleManualCompactionAndWait(t, eng)
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("unsupported view-image compaction events = %+v, want failed event", events)
 	}
 	if len(client.compactionCalls) != 1 {
 		t.Fatalf("compaction calls = %d, want no retry for unsupported payload", len(client.compactionCalls))
@@ -260,22 +292,28 @@ func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *tes
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	stepID := runtimeTestStepID("seed-step")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		return eng.steerBaseMetaContextIfNeeded(stepID)
+	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 		ID: "rs-heavy", EncryptedContent: strings.Repeat("reasoning-heavy-history", 12_000),
 	}}}})); err != nil {
 		t.Fatalf("append reasoning message: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err == nil {
-		t.Fatal("expected ordinary-history overflow to fail without repair retry")
-	} else if !llm.IsContextLengthOverflowError(err) {
-		t.Fatalf("expected context overflow error, got %v", err)
+	var events []Event
+	eng.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	scheduleManualCompactionAndWait(t, eng)
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("ordinary-history overflow events = %+v, want failed event", events)
 	}
 	if len(client.compactionCalls) != 1 {
 		t.Fatalf("compaction calls = %d, want no retry without supported payload", len(client.compactionCalls))
@@ -298,16 +336,17 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5"})
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	stepID := runtimeTestStepID("seed-step")
+	restoreStep := setTestActiveStep(eng, stepID)
+	if err := eng.steerBaseMetaContextIfNeeded(stepID); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
+	restoreStep()
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("compaction calls = %d, want one transient retry", len(client.compactionCalls))
 	}

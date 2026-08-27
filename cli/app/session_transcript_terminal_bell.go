@@ -12,8 +12,6 @@ func (h *bellHooks) OnTranscriptMessage(message clientui.TranscriptMessage) {
 	case clientui.TranscriptMessageToolStart:
 		tool := message.Payload().(clientui.TranscriptToolStart)
 		h.recordToolCall(tool.StepID)
-	case clientui.TranscriptMessageReviewerState:
-		h.recordReviewerState(message.Payload().(clientui.TranscriptReviewerState))
 	case clientui.TranscriptMessageStepState:
 		step := message.Payload().(clientui.TranscriptStepState)
 		if step.Lifecycle == clientui.StepLifecycleFinished {

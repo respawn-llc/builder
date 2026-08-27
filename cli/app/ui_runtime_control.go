@@ -6,7 +6,6 @@ import (
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
@@ -28,110 +27,9 @@ func (m *uiModel) hasRuntimeClient() bool {
 	return m.runtimeClient() != nil
 }
 
-func (m *uiModel) setRuntimeSessionName(name string) error {
-	m.checkTUIBlockingOperation("runtime control mutation", "set session name")
-	if client := m.runtimeClient(); client != nil {
-		err := client.SetSessionName(name)
-		m.observeRuntimeRequestResult(err)
-		return err
-	}
-	return nil
-}
-
-func (m *uiModel) setRuntimeThinkingLevel(level string) error {
-	m.checkTUIBlockingOperation("runtime control mutation", "set thinking level")
-	if client := m.runtimeClient(); client != nil {
-		err := client.SetThinkingLevel(level)
-		m.observeRuntimeRequestResult(err)
-		return err
-	}
-	return nil
-}
-
-func (m *uiModel) setRuntimeFastModeEnabled(enabled bool) (bool, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "set fast mode")
-	if client := m.runtimeClient(); client != nil {
-		changed, err := client.SetFastModeEnabled(enabled)
-		m.observeRuntimeRequestResult(err)
-		return changed, err
-	}
-	return false, nil
-}
-
-func (m *uiModel) setRuntimeReviewerEnabled(enabled bool) (bool, string, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "set reviewer")
-	if client := m.runtimeClient(); client != nil {
-		changed, mode, err := client.SetReviewerEnabled(enabled)
-		m.observeRuntimeRequestResult(err)
-		return changed, mode, err
-	}
-	return false, "", nil
-}
-
-func (m *uiModel) setRuntimeAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "set auto compaction")
-	if client := m.runtimeClient(); client != nil {
-		changed, nextEnabled, err := client.SetAutoCompactionEnabled(enabled)
-		m.observeRuntimeRequestResult(err)
-		return changed, nextEnabled, err
-	}
-	return false, false, nil
-}
-
-func (m *uiModel) showRuntimeGoal() (*clientui.RuntimeGoal, error) {
-	m.checkTUIBlockingOperation("runtime control read", "show goal")
-	if client := m.runtimeClient(); client != nil {
-		goal, err := client.ShowGoal()
-		m.observeRuntimeRequestResult(err)
-		return goal, err
-	}
-	return nil, nil
-}
-
-func (m *uiModel) setRuntimeGoal(objective string) (clientui.GoalMutationResult, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "set goal")
-	if client := m.runtimeClient(); client != nil {
-		result, err := client.SetGoal(objective)
-		m.observeRuntimeRequestResult(err)
-		return result, err
-	}
-	return clientui.GoalMutationResult{}, nil
-}
-
-func (m *uiModel) pauseRuntimeGoal() (clientui.GoalMutationResult, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "pause goal")
-	if client := m.runtimeClient(); client != nil {
-		result, err := client.PauseGoal()
-		m.observeRuntimeRequestResult(err)
-		return result, err
-	}
-	return clientui.GoalMutationResult{}, nil
-}
-
-func (m *uiModel) resumeRuntimeGoal() (clientui.GoalMutationResult, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "resume goal")
-	if client := m.runtimeClient(); client != nil {
-		result, err := client.ResumeGoal()
-		m.observeRuntimeRequestResult(err)
-		return result, err
-	}
-	return clientui.GoalMutationResult{}, nil
-}
-
-func (m *uiModel) clearRuntimeGoal() (clientui.GoalMutationResult, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "clear goal")
-	if client := m.runtimeClient(); client != nil {
-		result, err := client.ClearGoal()
-		m.observeRuntimeRequestResult(err)
-		return result, err
-	}
-	return clientui.GoalMutationResult{}, nil
-}
-
 func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
 	return m.submitRuntimeInput(ctx, clientui.RuntimeSubmitRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		Input:           runtimeinput.Text(text),
+		Input: runtimeinput.Text(text),
 	})
 }
 
@@ -144,10 +42,6 @@ func (m *uiModel) submitRuntimeInput(ctx context.Context, req clientui.RuntimeSu
 	return clientui.UserTurnSubmission{}, nil
 }
 
-func (m *uiModel) submitRuntimeUserShellCommand(ctx context.Context, command string) error {
-	return m.submitRuntimeShell(ctx, clientui.RuntimeShellRequest{Command: command})
-}
-
 func (m *uiModel) submitRuntimeShell(ctx context.Context, req clientui.RuntimeShellRequest) error {
 	if client := m.runtimeClient(); client != nil {
 		err := client.RunUserShell(ctx, req)
@@ -157,16 +51,14 @@ func (m *uiModel) submitRuntimeShell(ctx context.Context, req clientui.RuntimeSh
 	return nil
 }
 
-func (m *uiModel) interruptRuntime() error {
-	m.checkTUIBlockingOperation("runtime control mutation", "interrupt")
-	candidate, err := executeRuntimeInterrupt(runtimeInterruptRequestFromModel(m))
-	if err == nil && candidate != nil {
-		if client, ok := m.runtimeClient().(*sessionRuntimeClient); ok {
-			client.mergeRuntimeTuple(*candidate, runtimeTupleIngressIncremental)
-		}
+func (m *uiModel) compactRuntimeInput(ctx context.Context, req clientui.RuntimeCompactRequest) error {
+	m.checkTUIBlockingOperation("runtime control mutation", "compact")
+	if client := m.runtimeClient(); client != nil {
+		err := client.CompactRuntime(ctx, req)
+		m.observeRuntimeRequestResult(err)
+		return err
 	}
-	m.observeRuntimeRequestResult(err)
-	return err
+	return nil
 }
 
 type runtimeInterruptRequest struct {
@@ -192,24 +84,6 @@ func executeRuntimeInterrupt(req runtimeInterruptRequest) (*runtimeTupleCandidat
 		return &candidate, nil
 	}
 	return nil, req.client.Interrupt()
-}
-
-func (m *uiModel) discardQueuedRuntimeUserMessage(queueItemID string) bool {
-	m.checkTUIBlockingOperation("runtime queue mutation", "discard queued user message")
-	if client := m.runtimeClient(); client != nil {
-		return client.DiscardQueuedUserMessage(queueItemID)
-	}
-	return false
-}
-
-func (m *uiModel) recordRuntimePromptHistory(text string) error {
-	m.checkTUIBlockingOperation("runtime control mutation", "record prompt history")
-	if client := m.runtimeClient(); client != nil {
-		err := client.RecordPromptHistory(text)
-		m.observeRuntimeRequestResult(err)
-		return err
-	}
-	return nil
 }
 
 type runtimeControlPendingState struct {

@@ -1,5 +1,7 @@
 package jsoncontract
 
+import "encoding/json"
+
 type Internal struct {
 	prepared
 }
@@ -24,6 +26,16 @@ func (p Preparer) Function(owner string, source any, customizers ...Customize) (
 
 func (p Preparer) Structured(owner string, source any, customizers ...Customize) (Structured, error) {
 	value, err := p.prepare(owner, source, profileStructured, customizers)
+	return Structured{prepared: value}, err
+}
+
+func (p Preparer) FunctionDocument(owner string, document json.RawMessage) (Function, error) {
+	value, err := p.prepareDocument(owner, document, profileFunction)
+	return Function{prepared: value}, err
+}
+
+func (p Preparer) StructuredDocument(owner string, document json.RawMessage) (Structured, error) {
+	value, err := p.prepareDocument(owner, document, profileStructured)
 	return Structured{prepared: value}, err
 }
 

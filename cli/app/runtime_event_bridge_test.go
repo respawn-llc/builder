@@ -6,6 +6,7 @@ import (
 
 	"core/server/runtime"
 	"core/server/runtimewire"
+	"core/shared/textutil"
 )
 
 func TestRuntimeEventBridgeDropsWhenFullWithoutBlocking(t *testing.T) {
@@ -14,12 +15,12 @@ func TestRuntimeEventBridgeDropsWhenFullWithoutBlocking(t *testing.T) {
 		dropCount = total
 	})
 
-	bridge.Publish(runtime.Event{Kind: runtime.EventAssistantDelta, StepID: "s1"})
+	bridge.Publish(runtime.Event{Kind: runtime.EventAssistantDelta, StepID: textutil.Value("s1")})
 
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 10_000; i++ {
-			bridge.Publish(runtime.Event{Kind: runtime.EventAssistantDelta, StepID: "s2"})
+			bridge.Publish(runtime.Event{Kind: runtime.EventAssistantDelta, StepID: textutil.Value("s2")})
 		}
 		close(done)
 	}()
@@ -40,7 +41,7 @@ func TestRuntimeEventBridgeDropsWhenFullWithoutBlocking(t *testing.T) {
 
 func TestRuntimeEventBridgeDeliversWhenConsumerReady(t *testing.T) {
 	bridge := runtimewire.NewEventBridge(2, nil)
-	want := runtime.Event{Kind: runtime.EventAssistantMessage, StepID: "step-1"}
+	want := runtime.Event{Kind: runtime.EventAssistantMessage, StepID: textutil.Value("step-1")}
 	bridge.Publish(want)
 
 	select {

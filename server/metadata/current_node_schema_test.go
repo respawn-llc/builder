@@ -214,13 +214,10 @@ func TestTaskCurrentNodeSchemaUsesNaturalReferencesAndLeanFanoutStorage(t *testi
 		"task_id": {},
 	})
 	assertExactTableColumns(t, store.db, "task_active_fanout_branches", map[string]struct{}{
-		"task_id":                        {},
-		"transition_branch_key":          {},
-		"arrival_state":                  {},
-		"arrival_values_json":            {},
-		"continuation_source_kind":       {},
-		"continuation_source_session_id": {},
-		"legacy_materialized":            {},
+		"task_id":               {},
+		"transition_branch_key": {},
+		"arrival_state":         {},
+		"arrival_values_json":   {},
 	})
 }
 

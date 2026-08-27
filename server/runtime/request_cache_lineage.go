@@ -227,6 +227,22 @@ func cacheWarningEntryVisibility(mode config.CacheWarningMode) transcript.EntryV
 }
 
 func (e *Engine) observePromptCacheResponse(stepID string, prepared preparedCacheRequestObservation, usage llm.Usage) error {
+	provenance, err := exactSteeringProvenance(stepID)
+	if err != nil {
+		return err
+	}
+	return e.observePromptCacheResponseWithProvenance(
+		provenance,
+		prepared,
+		usage,
+	)
+}
+
+func (e *Engine) observePromptCacheResponseRuntime(prepared preparedCacheRequestObservation, usage llm.Usage) error {
+	return e.observePromptCacheResponseWithProvenance(sessionSteeringProvenance(), prepared, usage)
+}
+
+func (e *Engine) observePromptCacheResponseWithProvenance(provenance steeringProvenance, prepared preparedCacheRequestObservation, usage llm.Usage) error {
 	if e == nil || e.modelRequests().RequestCache() == nil || strings.TrimSpace(prepared.request.CacheKey) == "" {
 		return nil
 	}
@@ -271,8 +287,8 @@ func (e *Engine) observePromptCacheResponse(stepID string, prepared preparedCach
 		return fmt.Errorf("adapt cache response record: %w", err)
 	}
 	records = append(records, responseRecord)
-	_, err = e.steerWithCommitReceipt(
-		stepID,
+	_, err = e.steerWithCommitReceiptRaw(
+		provenance,
 		steerCacheObservationIntent(records, response, warning, cacheWarningEntryVisibility(e.cfg.CacheWarningMode), true),
 	)
 	return err

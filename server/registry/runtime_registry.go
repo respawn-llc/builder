@@ -361,6 +361,9 @@ func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(sessionID string) runt
 	snapshot.Active = runtimeactivity.ActiveStepFromProvider(engine)
 	if engine != nil {
 		snapshot.LiveRunActive = engine.HasActiveLiveRunGroup()
+		if engine.ReviewerRunning() {
+			snapshot.Reviewer = clientui.ReviewerActivityRunning
+		}
 	}
 	if len(r.pendingPrompts.List(id)) > 0 {
 		snapshot.PromptWait = true
@@ -446,6 +449,9 @@ func (r *RuntimeRegistry) PublishAuthorityRuntimeEvent(ref runtimeids.SessionRes
 }
 
 func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt runtime.Event) error {
+	if evt.Kind == runtime.EventRuntimeActivityChanged {
+		return r.publishCurrentRuntimeActivity(entry.ref.SessionID().String())
+	}
 	if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
 		messages, err := runtimeview.TranscriptMessagesFromRuntimeEventChecked(evt)
 		if err != nil {

@@ -20,7 +20,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/worktreecontract"
 )
@@ -1546,10 +1545,7 @@ func TestDeleteWorktreeRecreatesNonTerminalTaskManagedWorktreeOnRestore(t *testi
 	task, created, _ := materializeAndLockTaskWorktree(t, env)
 
 	_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            taskWorktreeID(created.Worktree),
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
@@ -1610,10 +1606,7 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	}
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            taskWorktreeID(created.Worktree),
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
@@ -1655,43 +1648,6 @@ func TestDeleteTaskWorktreeRemovesManagedWorktreeAndBranch(t *testing.T) {
 	}
 	if row.ManagedWorktreeID.Valid {
 		t.Fatalf("task managed worktree id = %+v, want cleared after worktree record delete", row.ManagedWorktreeID)
-	}
-}
-
-func TestDeleteTaskWorktreeRollsBackSessionTargetWhenRemovalFails(t *testing.T) {
-	env := newServiceTestEnv(t)
-	task, _ := createTaskWorktreeTestTask(t, env)
-	created, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
-		TaskID:         task.ID,
-		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
-	})
-	if err != nil {
-		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
-	}
-	worktreeID := taskWorktreeID(created.Worktree)
-	worktreeRoot := taskWorktreeRoot(created.Worktree)
-	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, worktreeID, ".")
-	targetBefore := mustResolveServiceTestTarget(t, env)
-	runGit(t, env.workspaceRoot, "worktree", "lock", worktreeRoot)
-	t.Cleanup(func() {
-		if _, err := os.Stat(worktreeRoot); err == nil {
-			runGit(t, env.workspaceRoot, "worktree", "unlock", worktreeRoot)
-		}
-	})
-
-	if _, err := env.service.DeleteTaskWorktree(env.ctx, DeleteTaskWorktreeRequest{TaskID: string(task.ID)}); err == nil {
-		t.Fatal("DeleteTaskWorktree succeeded for locked worktree")
-	}
-	targetAfter := mustResolveServiceTestTarget(t, env)
-	if sessionTargetWorktreeID(targetAfter) != sessionTargetWorktreeID(targetBefore) ||
-		targetAfter.EffectiveWorkdir != targetBefore.EffectiveWorkdir {
-		t.Fatalf("session target changed after failed task worktree removal: before=%+v after=%+v", targetBefore, targetAfter)
-	}
-	if _, err := os.Stat(worktreeRoot); err != nil {
-		t.Fatalf("locked task worktree root changed after failed removal: %v", err)
-	}
-	if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); err != nil {
-		t.Fatalf("task worktree record changed after failed removal: %v", err)
 	}
 }
 
@@ -1807,9 +1763,9 @@ func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sou
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	agentID := workflow.NodeID(runtimeids.NewGraphEntityID())
-	startGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
-	doneGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	agentID := workflow.NodeID("node-agent-" + created.ID.String())
+	startGroupID := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	doneGroupID := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	workflowfixture.SaveStoreGraph(t, env.ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startID := taskWorktreeNodeIDByKind(t, definition, workflow.NodeKindStart)
 		doneID := taskWorktreeNodeIDByKind(t, definition, workflow.NodeKindTerminal)
@@ -1822,8 +1778,8 @@ func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sou
 			workflowstore.TransitionGroupRecord{ID: doneGroupID, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 		)
 		request.Edges = append(request.Edges,
-			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	if _, err := store.LinkWorkflow(env.ctx, env.binding.ProjectID, created.ID, true); err != nil {

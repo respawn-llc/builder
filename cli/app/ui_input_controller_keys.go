@@ -190,11 +190,10 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			command, _ := m.commandRegistry.Command(trimmedText)
 			recordCmd := m.recordPromptHistory(trimmedText)
 			m.clearCommandInput(command, draft)
-			next, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(
+			next, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndOrigin(
 				commandResult,
 				preSubmitQueueBack,
 				activeSubmitOriginDirect,
-				submittedText,
 			)
 			return next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 		}

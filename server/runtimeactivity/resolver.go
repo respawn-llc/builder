@@ -27,6 +27,7 @@ type ActiveStepSnapshot struct {
 type ResolverSnapshot struct {
 	Registry            RegistrySnapshot
 	Active              *ActiveStepSnapshot
+	Reviewer            clientui.ReviewerActivity
 	LiveRunActive       bool
 	PromptWait          bool
 	PendingContinuation PendingContinuationSnapshot
@@ -37,7 +38,10 @@ func ResolveRuntimeActivity(snapshot ResolverSnapshot) (clientui.RuntimeActivity
 }
 
 func resolveRuntimeFeedActivity(snapshot ResolverSnapshot) (clientui.RuntimeActivity, error) {
-	var activity clientui.RuntimeActivity
+	activity := clientui.RuntimeActivity{Reviewer: snapshot.Reviewer}
+	if activity.Reviewer == "" {
+		activity.Reviewer = clientui.ReviewerActivityInactive
+	}
 	if !snapshot.Registry.Registered {
 		activity.State = clientui.RuntimeActivityUnavailable
 	} else if snapshot.Registry.Closing {

@@ -18,8 +18,13 @@
 
 ## Activity Indicator
 
-- Leftmost element: a steady dot when quiescent, an animated spinner while working. Spinning = runtime busy (except while a question prompt is waiting on the user), or compaction running, or reviewer running.
-- The indicator carries a color role and an optional one-word label, first match wins: compacting → secondary + `compacting`; reviewer running → success + `review`; rollback selection active → `editing`; goal present → primary + `goal`; runtime error state → error + `error`; otherwise primary with no label.
+- Leftmost element: a steady dot when quiescent and an animated spinner while working.
+- The spinner appears for runtime work except while a Question waits for the user or during compaction. It also appears while the server's live Reviewer activity is `running`.
+- The indicator carries a color role and an optional one-word label, first match wins: compacting → secondary + `compacting`; live Reviewer activity `running` → success + `review`; rollback selection active → `editing`; goal present → primary + `goal`; runtime error state → error + `error`; otherwise primary with no label.
+- The TUI never infers Reviewer activity from transcript rows, notifications, or ordinary Runtime activity.
+- A matching live update removes `review` when Reviewer succeeds, fails, is canceled, or the Runtime closes.
+- Reviewer status is best-effort live state.
+- Reconnect, Runtime replacement, transcript hydration, or restart may omit an earlier review.
 - The Goal indicator spins only while Goal work executes. An active but idle Goal shows the idle dot.
 
 ## Segments

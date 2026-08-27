@@ -75,28 +75,6 @@ func (l *transcriptLiveToolLedger) Complete(callID string) {
 	l.mu.Unlock()
 }
 
-func (l *transcriptLiveToolLedger) AbortAll() []TranscriptLiveToolStart {
-	if l == nil {
-		return nil
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if len(l.inFlight) == 0 {
-		return nil
-	}
-	out := make([]TranscriptLiveToolStart, 0, len(l.inFlight))
-	for node := l.order.Front(); node != nil; node = node.Next() {
-		callID := node.Value.(string)
-		if start, ok := l.inFlight[callID]; ok {
-			out = append(out, cloneTranscriptLiveToolStart(start))
-		}
-	}
-	l.inFlight = make(map[string]TranscriptLiveToolStart)
-	l.order.Init()
-	clear(l.nodes)
-	return out
-}
-
 func (l *transcriptLiveToolLedger) Snapshot() []TranscriptLiveToolStart {
 	if l == nil {
 		return nil

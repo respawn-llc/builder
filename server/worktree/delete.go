@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"core/server/metadata"
-	"core/server/session"
 	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -21,20 +20,6 @@ import (
 func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
-	}
-	transitionRequest := worktreeTransitionRequest{
-		operationID: req.OperationID,
-		sessionID:   strings.TrimSpace(req.SessionID),
-		kind:        clientui.WorktreeTransitionDelete,
-		selector:    strings.TrimSpace(req.Selector),
-		force:       req.ForceFolderRemoval,
-		cleanup:     req.BranchCleanupPolicy,
-	}
-	if ack, ok := s.replayPendingWorktreeTransition(transitionRequest); ok {
-		return serverapi.WorktreeDeleteResult{
-			Kind:      serverapi.WorktreeDeleteResultKindScheduled,
-			Scheduled: &ack,
-		}, nil
 	}
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
 	if err != nil {
@@ -54,60 +39,12 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		release()
 		return serverapi.WorktreeDeleteResult{}, err
 	}
-	if topologyIsCurrent(match.entry, workspaceCtx.target) {
-		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, match.entry, req.ForceFolderRemoval); err != nil {
-			release()
-			return serverapi.WorktreeDeleteResult{}, err
-		}
-		deleteTarget, err := scheduledKentWorktreeTargetFromEntry(match.entry)
-		if err != nil {
-			release()
-			return serverapi.WorktreeDeleteResult{}, err
-		}
-		release()
-		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, _ transitionAuthority, sync transitionTargetSync) error {
-			_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
-			return err
-		}, req.WorktreeTransitionHeader.Origin)
-		if err != nil {
-			return serverapi.WorktreeDeleteResult{}, err
-		}
-		return serverapi.WorktreeDeleteResult{
-			Kind:      serverapi.WorktreeDeleteResultKindScheduled,
-			Scheduled: &ack,
-		}, nil
-	}
 	defer release()
-	completed, err := s.executeDeleteLocked(ctx, workspaceCtx, match.entry, req, nil)
+	result, err := s.executeDeleteLocked(ctx, workspaceCtx, match.entry, req)
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
 	}
-	return serverapi.WorktreeDeleteResult{
-		Kind:      serverapi.WorktreeDeleteResultKindCompleted,
-		Completed: &completed,
-	}, nil
-}
-
-func (s *Service) executeScheduledDelete(
-	ctx context.Context,
-	req serverapi.WorktreeDeleteRequest,
-	deleteTarget scheduledWorktreeTarget,
-	sync transitionTargetSync,
-) (serverapi.WorktreeDeleteCompletedResult, error) {
-	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
-	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
-	}
-	defer release()
-	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
-	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
-	}
-	entry, err := deleteTarget.resolve(topology)
-	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
-	}
-	return s.executeDeleteLocked(ctx, workspaceCtx, entry, req, sync)
+	return result, nil
 }
 
 func (s *Service) executeDeleteLocked(
@@ -115,18 +52,17 @@ func (s *Service) executeDeleteLocked(
 	workspaceCtx sessionWorkspaceContext,
 	entry serverapi.WorktreeTopologyEntry,
 	req serverapi.WorktreeDeleteRequest,
-	currentSync transitionTargetSync,
-) (serverapi.WorktreeDeleteCompletedResult, error) {
+) (serverapi.WorktreeDeleteResult, error) {
 	if _, err := entry.DeletionSelector(); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	target, record, err := s.deleteTarget(ctx, workspaceCtx, entry)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	retainRecord, err := s.retainManagedTaskWorktreeRecord(ctx, record)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	var targetRoot *string
 	if target != nil {
@@ -134,24 +70,20 @@ func (s *Service) executeDeleteLocked(
 	} else if record != nil {
 		targetRoot = &record.CanonicalRoot
 	}
-	currentSessionID, err := deleteActivityCurrentSessionID(workspaceCtx.sessionID)
+	activityLease, err := s.acquireDeleteTargetActivity(ctx, record, targetRoot)
 	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
-	}
-	activityLease, err := s.acquireDeleteTargetActivity(ctx, currentSessionID, record, targetRoot)
-	if err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	defer activityLease.Close()
 	mutationCtx := activityLease.Context()
 	if err := s.ensureDeleteFolderRemovalAuthorized(ctx, entry, req.ForceFolderRemoval); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
-		retargetCompensation, err = s.retargetDeleteSessions(mutationCtx, workspaceCtx, *record, currentSync)
+		retargetCompensation, err = s.retargetDeleteSessions(mutationCtx, workspaceCtx, *record)
 		if err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
+			return serverapi.WorktreeDeleteResult{}, err
 		}
 	}
 	leftoverRoot := missingLeftoverRoot(entry)
@@ -166,20 +98,20 @@ func (s *Service) executeDeleteLocked(
 		if err != nil {
 			var recoveryError *PrunableWorktreeRecoveryError
 			if errors.As(err, &recoveryError) && recoveryError.Destructive {
-				return serverapi.WorktreeDeleteCompletedResult{}, err
+				return serverapi.WorktreeDeleteResult{}, err
 			}
-			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
+			return serverapi.WorktreeDeleteResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
 		}
 	}
 	if record != nil && !retainRecord {
 		if err := s.metadata.DeleteWorktreeRecordByID(ctx, record.ID); err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
+			return serverapi.WorktreeDeleteResult{}, err
 		}
 	}
 	cleanup := s.cleanupDeletedBranch(ctx, workspaceCtx.workspaceRoot, entry, record, req.BranchCleanupPolicy)
-	result := serverapi.WorktreeDeleteCompletedResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}
+	result := serverapi.WorktreeDeleteResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}
 	if err := result.Validate(); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	return result, nil
 }
@@ -255,24 +187,12 @@ func (s *Service) retainManagedTaskWorktreeRecord(ctx context.Context, record *m
 	return taskManagers > 0, nil
 }
 
-func deleteActivityCurrentSessionID(raw string) (*runtimeids.SessionID, error) {
-	sessionID, err := runtimeids.ParseSessionID(raw)
-	if err != nil {
-		return nil, fmt.Errorf("parse current delete session id: %w", err)
-	}
-	return &sessionID, nil
-}
-
 func (s *Service) acquireDeleteTargetActivity(
 	ctx context.Context,
-	currentSessionID *runtimeids.SessionID,
 	record *metadata.WorktreeRecord,
 	worktreeRoot *string,
 ) (deleteTargetActivityLease, error) {
 	lease := deleteTargetActivityLease{ctx: ctx, close: func() {}}
-	if currentSessionID != nil && currentSessionID.IsZero() {
-		return deleteTargetActivityLease{}, errors.New("current delete session id must not be blank when present")
-	}
 	if worktreeRoot != nil && strings.TrimSpace(*worktreeRoot) == "" {
 		return deleteTargetActivityLease{}, errors.New("delete target root must not be blank when present")
 	}
@@ -290,9 +210,6 @@ func (s *Service) acquireDeleteTargetActivity(
 			sessionID, err := runtimeids.ParseSessionID(target.SessionID)
 			if err != nil {
 				return deleteTargetActivityLease{}, fmt.Errorf("parse worktree-targeting session id %q: %w", target.SessionID, err)
-			}
-			if currentSessionID != nil && sessionID == *currentSessionID {
-				continue
 			}
 			targets = append(targets, targetSession{id: sessionID, blocker: target})
 		}
@@ -319,6 +236,15 @@ func (s *Service) acquireDeleteTargetActivity(
 				return deleteTargetActivityLease{}, err
 			}
 			if active {
+				activeBlockers = append(activeBlockers, target.blocker)
+				continue
+			}
+			retired, err := s.authority.RetireIdleRuntime(lease.ctx, target.id.String())
+			if err != nil {
+				lease.Close()
+				return deleteTargetActivityLease{}, err
+			}
+			if !retired {
 				activeBlockers = append(activeBlockers, target.blocker)
 			}
 		}
@@ -355,7 +281,6 @@ func (s *Service) retargetDeleteSessions(
 	ctx context.Context,
 	workspaceCtx sessionWorkspaceContext,
 	record metadata.WorktreeRecord,
-	currentSync transitionTargetSync,
 ) (worktreeSessionRetargetCompensation, error) {
 	return s.retargetSessionsFromWorktree(
 		ctx,
@@ -363,32 +288,11 @@ func (s *Service) retargetDeleteSessions(
 		workspaceCtx.workspaceRoot,
 		record,
 		worktreeSessionRetargetOptions{
-			reminder: worktreeReminderStateForExitedWorktree,
-			sync: func(
-				syncCtx context.Context,
-				sessionID string,
-				target clientui.SessionExecutionTarget,
-				reminder *session.WorktreeReminderState,
-			) error {
-				return s.syncDeleteSession(syncCtx, workspaceCtx.sessionID, sessionID, target, reminder, currentSync)
-			},
+			reminder:        worktreeReminderStateForExitedWorktree,
+			sync:            s.syncExecutionTarget,
 			rollbackOnError: true,
 		},
 	)
-}
-
-func (s *Service) syncDeleteSession(
-	ctx context.Context,
-	currentSessionID string,
-	sessionID string,
-	target clientui.SessionExecutionTarget,
-	reminder *session.WorktreeReminderState,
-	currentSync transitionTargetSync,
-) error {
-	if strings.TrimSpace(sessionID) == strings.TrimSpace(currentSessionID) && currentSync != nil {
-		return currentSync(ctx, target, reminder)
-	}
-	return s.syncExecutionTarget(ctx, sessionID, target, reminder)
 }
 
 func missingLeftoverRoot(entry serverapi.WorktreeTopologyEntry) *string {

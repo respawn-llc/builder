@@ -20,12 +20,10 @@ type TranscriptHydrationSnapshot struct {
 	ActiveReasoningTraces   []TranscriptReasoningTraceState
 	InFlightTools           []TranscriptLiveToolStart
 	QueuedMessages          []QueuedUserMessage
-	ActiveReviewer          *TranscriptReviewerState
 	ActiveCompaction        *TranscriptCompactionState
 	CompactionCount         int
 	ContextUsage            *ContextUsage
 	Goal                    *session.GoalState
-	GoalAvailability        session.GoalAvailability
 	GoalSuspended           bool
 }
 
@@ -48,14 +46,11 @@ type TranscriptReasoningTraceState struct {
 	startedAt        time.Time
 }
 
-type TranscriptReviewerState struct {
-	StepID string
-}
-
 type TranscriptCompactionState struct {
-	StepID string
-	Mode   string
-	Count  int
+	StepID    string
+	RequestID *runtimeids.CompactionRequestID
+	Mode      string
+	Count     int
 }
 
 func (e *Engine) WithTranscriptHydrationSnapshot(fn func(TranscriptHydrationSnapshot) error) error {
@@ -71,20 +66,16 @@ func (e *Engine) WithTranscriptHydrationSnapshot(fn func(TranscriptHydrationSnap
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	snapshot, err := e.transcriptHydrationSegmentLocked()
-	if err != nil {
-		return err
-	}
-	return fn(snapshot)
+	return fn(e.transcriptHydrationSegmentLocked())
 }
 
-func (e *Engine) transcriptHydrationSegmentLocked() (TranscriptHydrationSnapshot, error) {
+func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot {
 	if e == nil {
-		return TranscriptHydrationSnapshot{}, nil
+		return TranscriptHydrationSnapshot{}
 	}
 	chat := e.transcriptRuntimeState().chatProjection()
 	if chat == nil {
-		return TranscriptHydrationSnapshot{}, nil
+		return TranscriptHydrationSnapshot{}
 	}
 	snapshot := chat.deliverySnapshot()
 	thinkingStatus, reasoningTraces := e.transcriptRuntimeState().ReasoningSnapshot()
@@ -93,10 +84,6 @@ func (e *Engine) transcriptHydrationSegmentLocked() (TranscriptHydrationSnapshot
 		queuedMessages = e.messageFlow.PendingUserMessages()
 	}
 	usage := e.ContextUsage()
-	goalAvailability, err := e.GoalAvailability()
-	if err != nil {
-		return TranscriptHydrationSnapshot{}, err
-	}
 	return TranscriptHydrationSnapshot{
 		CommittedRows:           snapshot.Rows,
 		ActiveAssistantText:     snapshot.Streaming,
@@ -107,12 +94,10 @@ func (e *Engine) transcriptHydrationSegmentLocked() (TranscriptHydrationSnapshot
 		ActiveReasoningTraces:   reasoningTraces,
 		InFlightTools:           e.transcriptRuntimeState().LiveToolSnapshot(),
 		QueuedMessages:          queuedMessages,
-		ActiveReviewer:          e.reviewerRuntimeState().ActiveStepSnapshot(),
 		ActiveCompaction:        e.compactionRuntimeState().ActiveSnapshot(),
 		CompactionCount:         e.CompactionCount(),
 		ContextUsage:            &usage,
 		Goal:                    e.Goal(),
-		GoalAvailability:        goalAvailability,
 		GoalSuspended:           e.GoalLoopSuspended(),
-	}, nil
+	}
 }

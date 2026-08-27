@@ -427,7 +427,8 @@ func TestPromptCtrlCContinuationDoesNotAffectReplacementExecution(t *testing.T) 
 			name:      "step",
 			sessionID: ongoingTestSessionID().String(),
 			activity: clientui.RuntimeActivity{
-				State: clientui.RuntimeActivityRunning,
+				State:    clientui.RuntimeActivityRunning,
+				Reviewer: clientui.ReviewerActivityInactive,
 				ActiveStep: &clientui.RuntimeActiveStep{
 					RunID:      replacementRunID,
 					StepID:     replacementStepID,
@@ -438,7 +439,10 @@ func TestPromptCtrlCContinuationDoesNotAffectReplacementExecution(t *testing.T) 
 		{
 			name:      "starting",
 			sessionID: ongoingTestSessionID().String(),
-			activity:  clientui.RuntimeActivity{State: clientui.RuntimeActivityStarting},
+			activity: clientui.RuntimeActivity{
+				State:    clientui.RuntimeActivityStarting,
+				Reviewer: clientui.ReviewerActivityInactive,
+			},
 		},
 	}
 	for _, test := range tests {
@@ -668,7 +672,8 @@ func TestStalePromptCtrlCContinuationDoesNotClearNewerPendingContinuation(t *tes
 		t.Fatalf("parse newer step id: %v", err)
 	}
 	newerActivity := clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityAwaitingPrompt,
+		State:    clientui.RuntimeActivityAwaitingPrompt,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID:      newerRunID,
 			StepID:     newerStepID,

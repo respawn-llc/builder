@@ -125,8 +125,8 @@ func TestRuntimeUUIDIDsRoundTripAsJSONString(t *testing.T) {
 		t.Fatalf("ParseBackgroundActivityID: %v", err)
 	}
 
-	assertRuntimeUUIDJSONRoundTrip(t, NewRuntimeClientRequestID(), new(RuntimeClientRequestID))
 	assertRuntimeUUIDJSONRoundTrip(t, NewQueueItemID(), new(QueueItemID))
+	assertRuntimeUUIDJSONRoundTrip(t, NewCompactionRequestID(), new(CompactionRequestID))
 	assertRuntimeUUIDJSONRoundTrip(t, NewLiveRunGroupID(), new(LiveRunGroupID))
 	assertRuntimeUUIDJSONRoundTrip(t, runID, new(RunID))
 	assertRuntimeUUIDJSONRoundTrip(t, stepID, new(StepID))
@@ -135,8 +135,8 @@ func TestRuntimeUUIDIDsRoundTripAsJSONString(t *testing.T) {
 }
 
 func TestZeroRuntimeUUIDIDCannotMarshal(t *testing.T) {
-	if _, err := json.Marshal(RuntimeClientRequestID{}); err == nil {
-		t.Fatal("zero RuntimeClientRequestID marshaled successfully")
+	if _, err := json.Marshal(QueueItemID{}); err == nil {
+		t.Fatal("zero QueueItemID marshaled successfully")
 	}
 }
 

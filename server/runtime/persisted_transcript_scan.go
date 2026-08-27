@@ -105,13 +105,12 @@ func clonePersistedChatEntries(entries []ChatEntry) []ChatEntry {
 
 func clonePersistedChatEntry(entry ChatEntry) ChatEntry {
 	copyEntry := entry
+	copyEntry.StepID = cloneOptionalStepID(entry.StepID)
 	copyEntry.RollbackTargetID = textutil.Pointer(entry.RollbackTargetID)
 	copyEntry.DurationMs = textutil.Pointer(entry.DurationMs)
 	copyEntry.CompactionNumber = textutil.Pointer(entry.CompactionNumber)
 	copyEntry.BackgroundExitCode = textutil.Pointer(entry.BackgroundExitCode)
 	copyEntry.WorktreeContext = session.CloneWorktreeContext(entry.WorktreeContext)
-	copyEntry.ToolOutputRepair = textutil.Pointer(entry.ToolOutputRepair)
-	copyEntry.ProviderModelMismatch = textutil.Pointer(entry.ProviderModelMismatch)
 	copyEntry.ToolCall = clonePersistedToolCallMeta(entry.ToolCall)
 	copyEntry.CommittedProvenance = cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
 	if entry.ReviewerFeedback != nil {

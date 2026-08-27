@@ -11,7 +11,11 @@ import (
 	"core/server/session"
 )
 
+var ErrWorktreeDeleteBlockedByQueuedWork = errors.New("worktree deletion is blocked by accepted Session work")
+
 const queuedUserSubmissionBusyRetryDelay = 25 * time.Millisecond
+
+var ErrReviewerRunning = errors.New("Reviewer is running")
 
 // CommandAcceptance serializes caller cancellation with a candidate mutation that reports whether it committed.
 type CommandAcceptance func(commit func() (bool, error)) (bool, error)
@@ -63,29 +67,87 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind
 // Turn at its next Step Boundary. Queued user steering remains paused until the
 // execution target and its model-visible reminder are updated together.
 func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) error {
+	return e.runWorktreeTransition(ctx, nil, fn)
+}
+
+func (e *Engine) runWorktreeTransition(ctx context.Context, admit func() error, fn func() error) error {
 	if fn == nil {
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	reservation := &exclusiveStepReservation{
-		Kind:      exclusiveStepReservationWorktreeTransition,
-		queueable: true,
-	}
-	if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
+	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[struct{}], error) {
+		reservation := &exclusiveStepReservation{
+			Kind:      exclusiveStepReservationWorktreeTransition,
+			queueable: true,
+		}
+		if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
+			return runtimeDeferred[struct{}]{}, err
+		}
+		deferred := newRuntimeDeferred[struct{}]()
+		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+			defer e.stepLifecycle.ReleaseReservation(reservation)
+			transitionCtx, cancel := context.WithCancelCause(lifecycleCtx)
+			stopCallerCancellation := context.AfterFunc(ctx, func() {
+				cancel(context.Cause(ctx))
+			})
+			defer func() {
+				stopCallerCancellation()
+				cancel(context.Canceled)
+			}()
+			e.pauseQueuedUserAutoDrain()
+			defer e.resumeQueuedUserAutoDrain()
+			runErr := runExclusiveStepWhenIdle(
+				transitionCtx,
+				e.stepLifecycle,
+				ActiveKindRuntimeMaintenance,
+				reservation,
+				func(context.Context, string) error {
+					if admit != nil {
+						if err := admit(); err != nil {
+							return err
+						}
+					}
+					return fn()
+				},
+			)
+			deferred.complete(struct{}{}, runErr)
+			fatal, abort := resultGroupFatalFromError(runErr)
+			if abort {
+				return fatal
+			}
+			return nil
+		})
+		if !launched {
+			e.stepLifecycle.ReleaseReservation(reservation)
+			deferred.complete(struct{}{}, ErrEngineClosed)
+		}
+		return deferred, nil
+	})
+	if err != nil {
 		return err
 	}
-	defer e.stepLifecycle.ReleaseReservation(reservation)
-	e.pauseQueuedUserAutoDrain()
-	defer e.resumeQueuedUserAutoDrain()
-	return runExclusiveStepWhenIdle(
-		ctx,
-		e.stepLifecycle,
-		ActiveKindRuntimeMaintenance,
-		reservation,
-		func(context.Context, string) error {
-			return fn()
-		},
-	)
+	_, err = terminal.Await(ctx)
+	return err
+}
+
+func (e *Engine) ApplyWorktreeTransitionTerminal(
+	ctx context.Context,
+	apply func(context.Context) error,
+) error {
+	if apply == nil {
+		return errors.New("worktree transition terminal mutation is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	deferred := submitEngineRuntimeOperation(e, func(operationCtx context.Context) (struct{}, error) {
+		return struct{}{}, apply(operationCtx)
+	})
+	_, err := deferred.Await(context.WithoutCancel(ctx))
+	return err
 }
 
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user
@@ -123,7 +185,11 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 				return err
 			}
-			flushResult, err := e.flushPendingUserInjections(stepID, allPendingUserInjectionSelection{})
+			var selection userInjectionSelection = allPendingUserInjectionSelection{}
+			if len(queueItemIDs) > 0 {
+				selection = steerUserInjections(queueItemIDs)
+			}
+			flushResult, err := e.flushPendingUserInjections(stepID, selection)
 			if flushResult.receipt.Committed {
 				receipt = flushResult.receipt
 			}
@@ -186,58 +252,23 @@ func (e *Engine) waitQueuedUserAutoDrainAllowed(ctx context.Context) error {
 	}
 }
 
-func (e *Engine) SubmitUserMessageOrSteer(ctx context.Context, text string, clientRequestID string) (assistant llm.Message, queued *QueuedUserMessage, err error) {
-	return e.SubmitUserMessageOrSteerWithAcceptedHook(ctx, text, clientRequestID, nil)
-}
-
-func (e *Engine) SubmitUserMessageOrSteerWithAcceptedHook(ctx context.Context, text string, clientRequestID string, onAccepted func(queued bool)) (assistant llm.Message, queued *QueuedUserMessage, err error) {
-	return e.SubmitUserMessageOrSteerWithHooks(ctx, text, clientRequestID, nil, onAccepted)
-}
-
-func (e *Engine) SubmitUserMessageOrSteerWithHooks(ctx context.Context, text string, clientRequestID string, onActive func(), onAccepted func(queued bool)) (assistant llm.Message, queued *QueuedUserMessage, err error) {
-	result, queued, err := e.SubmitUserMessageOrSteerWithOutcomeHooks(ctx, text, clientRequestID, onActive, onAccepted)
-	if result.FinalAnswer != nil {
-		assistant = *result.FinalAnswer
-	}
-	return assistant, queued, err
-}
-
-func (e *Engine) SubmitUserMessageOrSteerWithOutcomeHooks(ctx context.Context, text string, clientRequestID string, onActive func(), onAccepted func(queued bool)) (result UserTurnResult, queued *QueuedUserMessage, err error) {
-	return e.submitUserMessageOrSteerWithOutcome(ctx, text, clientRequestID, onActive, onAccepted, nil)
-}
-
-func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, clientRequestID string, accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
-	return e.submitUserMessageOrSteerWithOutcome(ctx, text, clientRequestID, nil, nil, accept)
-}
-
-func (e *Engine) submitUserMessageOrSteerWithOutcome(ctx context.Context, text string, clientRequestID string, onActive func(), onAccepted func(queued bool), accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
+func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
 	if strings.TrimSpace(text) == "" {
 		return UserTurnResult{}, nil, errors.New("empty message")
 	}
-	result, err = e.submitUserMessageWithOutcome(ctx, text, onActive, func() {
-		if onAccepted != nil {
-			onAccepted(false)
-		}
-	}, accept)
-	if errors.Is(err, ErrAgentBusy) {
-		item, queueErr := e.QueueUserMessageForAutoDrainWithAcceptance(text, clientRequestID, accept)
-		if queueErr != nil {
-			return UserTurnResult{}, nil, queueErr
-		}
-		if onAccepted != nil {
-			onAccepted(true)
-		}
-		return UserTurnResult{}, &item, nil
+	item, err := e.QueueUserMessageForAutoDrainWithAcceptance(ctx, text, accept)
+	if err != nil {
+		return UserTurnResult{}, nil, err
 	}
-	return result, nil, err
+	return UserTurnResult{}, &item, nil
 }
 
-func (e *Engine) QueueUserMessageForAutoDrain(text string, clientRequestID string) (QueuedUserMessage, error) {
-	return e.queueUserMessageWithClientRequestID(text, clientRequestID, true, nil)
+func (e *Engine) QueueUserMessageForAutoDrain(ctx context.Context, text string) (QueuedUserMessage, error) {
+	return e.queueUserMessage(ctx, text, true, nil)
 }
 
-func (e *Engine) QueueUserMessageForAutoDrainWithAcceptance(text string, clientRequestID string, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return e.queueUserMessageWithClientRequestID(text, clientRequestID, true, accept)
+func (e *Engine) QueueUserMessageForAutoDrainWithAcceptance(ctx context.Context, text string, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.queueUserMessage(ctx, text, true, accept)
 }
 
 func (e *Engine) HasQueuedUserWork() bool {
@@ -301,28 +332,39 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 		return false
 	}
 	e.queuedUserWorkMu.Lock()
+	if len(e.queuedUserWorkAutoDrainIDs) == 0 {
+		e.queuedUserWorkMu.Unlock()
+		return false
+	}
 	if e.queuedUserWorkScheduled {
 		e.queuedUserWorkMu.Unlock()
 		return true
 	}
+	completion := newRuntimeDeferred[struct{}]()
 	e.queuedUserWorkScheduled = true
+	e.queuedUserWorkCompletion = completion
 	e.queuedUserWorkMu.Unlock()
-	if !e.launchLifecycleTask(e.processQueuedUserWork) {
-		e.clearQueuedUserWorkScheduled()
+	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
+		return e.processQueuedUserWork(ctx, completion)
+	}) {
+		e.clearQueuedUserWorkScheduled(completion, ErrEngineClosed)
 		return false
 	}
 	return true
 }
 
-func (e *Engine) processQueuedUserWork(ctx context.Context) (runtimeAbort *resultGroupFatal) {
+func (e *Engine) processQueuedUserWork(
+	ctx context.Context,
+	completion runtimeDeferred[struct{}],
+) (runtimeAbort *resultGroupFatal) {
 	completed := false
 	defer func() {
-		e.clearQueuedUserWorkScheduled()
+		e.clearQueuedUserWorkScheduled(completion, nil)
 		if !completed {
 			return
 		}
 		e.ensureOrchestrationCollaborators()
-		if e.messageFlow.HasPendingUserInjections() {
+		if e.hasQueuedUserAutoDrainIDs() {
 			e.scheduleQueuedUserInjectionsIfIdle()
 		}
 	}()
@@ -356,10 +398,35 @@ func (e *Engine) HasScheduledQueuedUserWork() bool {
 	return e.queuedUserWorkScheduled
 }
 
-func (e *Engine) clearQueuedUserWorkScheduled() {
+func (e *Engine) WaitForScheduledQueuedUserWork(ctx context.Context) error {
+	if e == nil {
+		return ErrEngineClosed
+	}
 	e.queuedUserWorkMu.Lock()
-	e.queuedUserWorkScheduled = false
+	if !e.queuedUserWorkScheduled {
+		e.queuedUserWorkMu.Unlock()
+		return nil
+	}
+	completion := e.queuedUserWorkCompletion
 	e.queuedUserWorkMu.Unlock()
+	_, err := completion.Await(ctx)
+	return err
+}
+
+func (e *Engine) clearQueuedUserWorkScheduled(
+	completion runtimeDeferred[struct{}],
+	err error,
+) {
+	e.queuedUserWorkMu.Lock()
+	if e.queuedUserWorkCompletion.state != completion.state {
+		e.queuedUserWorkMu.Unlock()
+		completion.complete(struct{}{}, err)
+		return
+	}
+	e.queuedUserWorkScheduled = false
+	e.queuedUserWorkCompletion = runtimeDeferred[struct{}]{}
+	e.queuedUserWorkMu.Unlock()
+	completion.complete(struct{}{}, err)
 }
 
 func (e *Engine) hasQueuedUserAutoDrainIDs() bool {

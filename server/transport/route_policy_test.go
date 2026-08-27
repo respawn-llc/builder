@@ -228,9 +228,8 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	stopRoute := routeForTest(t, protocol.MethodRuntimeLiveStop)
 
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       fixture.ownSessionID,
-		Text:            "steer",
+		SessionID: fixture.ownSessionID,
+		Text:      "steer",
 	}); err != nil {
 		t.Fatalf("live steer root-scoped existing session: %v", err)
 	}
@@ -239,15 +238,13 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	}
 	missing := "6ff7ace4-e08b-43fc-b425-73242f0b3d26"
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       missing,
-		Text:            "steer",
+		SessionID: missing,
+		Text:      "steer",
 	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		t.Fatalf("missing required live session error = %v, want ErrRuntimeUnavailable", err)
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{}, stopRoute, serverapi.RuntimeLiveStopRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       missing,
+		SessionID: missing,
 	}); err != nil {
 		t.Fatalf("optional live stop missing session: %v", err)
 	}

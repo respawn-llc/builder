@@ -177,7 +177,7 @@ func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	if got := client.enterRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "feature/a" {
 		t.Fatalf("enter request = %+v", got)
 	}
-	if got := client.deleteRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "wt-3" || !got.ForceFolderRemoval || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
+	if got := client.deleteRequests[0]; got.SessionID != "session-1" || got.Selector != "wt-3" || !got.ForceFolderRemoval || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 		t.Fatalf("delete request = %+v", got)
 	}
 }

@@ -44,6 +44,16 @@ func TestDelayedTranscriptRuntimeTupleCannotRollBackNewerUnaryState(t *testing.T
 	}
 }
 
+func TestRuntimeTupleEqualityIncludesReviewerActivity(t *testing.T) {
+	inactive := runtimeTupleTestIdleActivity()
+	running := inactive
+	running.Reviewer = clientui.ReviewerActivityRunning
+
+	if runtimeActivitiesEqual(inactive, running) {
+		t.Fatal("runtime activities with different Reviewer state compared equal")
+	}
+}
+
 func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing.T) {
 	v10 := runtimeTupleTestView(10, runtimeTupleTestIdleActivity())
 	v10.Status = clientui.RuntimeStatus{
@@ -186,12 +196,17 @@ func runtimeTupleTestUpdateMessage(
 }
 
 func runtimeTupleTestIdleActivity() clientui.RuntimeActivity {
-	return clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true}
+	return clientui.RuntimeActivity{
+		State:          clientui.RuntimeActivityRegisteredIdle,
+		Reviewer:       clientui.ReviewerActivityInactive,
+		QueueAccepting: true,
+	}
 }
 
 func runtimeTupleTestRunningActivity() clientui.RuntimeActivity {
 	return clientui.RuntimeActivity{
 		State:          clientui.RuntimeActivityRunning,
+		Reviewer:       clientui.ReviewerActivityInactive,
 		QueueAccepting: true,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID:      ongoingTestRunID(),

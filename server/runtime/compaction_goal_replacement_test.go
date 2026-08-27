@@ -1,10 +1,12 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -18,29 +20,34 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 		remoteCompactionReplacement(1_000, 100, 200_000),
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	inputStepID := runtimeTestStepID("inactive-goal-compaction-input")
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{
+		activeStepID: inputStepID,
+		snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: inputStepID},
+	}
 
 	t.Run("inactive goal transition sequence", func(t *testing.T) {
 		t.Run("absent", func(t *testing.T) {
 			assertInactiveGoalCompaction(t, engine, "absent")
 		})
-		if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
+		if _, err := engine.SetGoal(t.Context(), "goal", session.GoalActorUser); err != nil {
 			t.Fatalf("set goal: %v", err)
 		}
 		t.Run("paused", func(t *testing.T) {
-			if _, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
+			if _, err := engine.SetGoalStatus(t.Context(), session.GoalStatusPaused, session.GoalActorUser); err != nil {
 				t.Fatalf("pause goal: %v", err)
 			}
 			assertInactiveGoalCompaction(t, engine, "paused")
 		})
 		t.Run("complete", func(t *testing.T) {
-			if _, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorUser); err != nil {
+			if _, err := engine.SetGoalStatus(t.Context(), session.GoalStatusComplete, session.GoalActorUser); err != nil {
 				t.Fatalf("complete goal: %v", err)
 			}
 			assertInactiveGoalCompaction(t, engine, "complete")
 		})
 		t.Run("cleared", func(t *testing.T) {
-			if _, err := engine.ClearGoal(session.GoalActorUser); err != nil {
+			if _, err := engine.ClearGoal(t.Context(), session.GoalActorUser); err != nil {
 				t.Fatalf("clear goal: %v", err)
 			}
 			assertInactiveGoalCompaction(t, engine, "cleared")
@@ -62,7 +69,12 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 			},
 			Config{Model: "gpt-5"},
 		)
-		if _, err := workflowEngine.SetGoal("goal", session.GoalActorUser); err != nil {
+		workflowInputStepID := runtimeTestStepID("inactive-workflow-goal-compaction-input")
+		workflowEngine.stepLifecycle = &stubExclusiveStepLifecycle{
+			activeStepID: workflowInputStepID,
+			snapshot:     &RunSnapshot{RunID: "11111111-1111-4111-8111-111111111111", StepID: workflowInputStepID},
+		}
+		if _, err := workflowEngine.SetGoal(t.Context(), "goal", session.GoalActorUser); err != nil {
 			t.Fatalf("set workflow goal: %v", err)
 		}
 		assertInactiveGoalCompaction(t, workflowEngine, "workflow")
@@ -71,17 +83,13 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 
 func assertInactiveGoalCompaction(t *testing.T, engine *Engine, name string) {
 	t.Helper()
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input " + name)}},
-	)); err != nil {
+	stepID := engine.stepLifecycle.Snapshot().StepID
+	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input " + name)}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	_, receipt, err := compactNowInActiveTestRun(
-		t,
-		engine,
+	_, receipt, err := engine.compactNow(
+		context.Background(),
+		stepID,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

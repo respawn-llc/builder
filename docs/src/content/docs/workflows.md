@@ -413,17 +413,6 @@ kent task search "retry policy" --project . --status backlog,running
 
 Run `kent task search --help` for matching modes, filters, result pagination, output contracts, and validation behavior.
 
-### Inspect Task Sessions
-
-`kent task sessions <short-id-or-task-id>` lists retained agent Sessions for a Task, including parallel branches. Use `--project` to select the Project for a Task Short ID. Results use zero-based `--offset` pagination; `--limit` defaults to 100 and accepts at most 100.
-
-Sessions are ordered as Running, Question, then Idle, with newer Sessions first within each status. Running covers active runtime work, Question covers waits for a question, Approval, or both, and Idle means the retained Session has no live runtime activity.
-
-```bash
-kent task sessions KENT-123 --project .
-kent task sessions KENT-123 --project . --offset 100 --limit 100 --json
-```
-
 ### Manually Move A Task
 
 Manual Move evaluates the destination through the workflow server before changing the task. Agent and Script destinations use a usable incoming Transition even when the destination is not connected to the task's Current Node. A single usable Transition is selected automatically; multiple choices require `--transition` with the authored Transition key. Fan-out Transitions move the whole Task-wide parallel group and create every branch.
@@ -440,7 +429,7 @@ Desktop shows the server's Transition choices and required values, including exp
 
 ### Complete Work From The CLI
 
-An Agent completing its own workflow Session runs `kent task complete` with its transition result. Kent resolves that completion through the Session identity supplied to the agent.
+An Agent completing its own workflow Session runs `kent task complete` with its transition result. Kent resolves that completion through the Session identity plus the `KENT_RUN_ID` and `KENT_STEP_ID` values supplied to the active Agent Step. Missing or stale execution identity rejects completion without changing the Workflow.
 
 Human-forced completion requires exactly one selector: a Session, or a Task with one unambiguous idle executable Current Node.
 

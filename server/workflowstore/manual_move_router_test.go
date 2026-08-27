@@ -132,7 +132,7 @@ func completeManualMoveFixtureNode(t *testing.T, ctx context.Context, store *Sto
 	if err != nil {
 		t.Fatalf("%s: %v", label, err)
 	}
-	return result
+	return result.CurrentNodeCompletionResult
 }
 
 func applyManualMoveFixture(t *testing.T, ctx context.Context, store *Store, binding metadata.Binding, req ManualMoveRequest) ManualMoveResult {
@@ -202,11 +202,11 @@ func createManualMoveStaticReviewRouterWorkflow(t *testing.T, ctx context.Contex
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
 	workflowID, suffix := created.ID, created.ID.String()
-	nodeID := func(key string) workflow.NodeID { return testNodeID("node-" + key + "-" + suffix) }
+	nodeID := func(key string) workflow.NodeID { return workflow.NodeID("node-" + key + "-" + suffix) }
 	groupID := func(key string) workflow.TransitionGroupID {
-		return testTransitionGroupID("group-" + key + "-" + suffix)
+		return workflow.TransitionGroupID("group-" + key + "-" + suffix)
 	}
-	edgeID := func(key string) workflow.EdgeID { return testEdgeID("edge-" + key + "-" + suffix) }
+	edgeID := func(key string) workflow.EdgeID { return workflow.EdgeID("edge-" + key + "-" + suffix) }
 	scope, plan, implementation := nodeID("scope-review"), nodeID("plan-checkpoint"), nodeID("implementation")
 	reviewA, reviewB := nodeID("review-a"), nodeID("review-b")
 	join, router, qa := nodeID("code-review-parallel-join"), nodeID("router"), nodeID("qa")

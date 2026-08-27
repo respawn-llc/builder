@@ -101,7 +101,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 		Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if _, err := eng.SetGoal("preserve atomic goal context", session.GoalActorUser); err != nil {
+	if _, err := eng.SetGoal(t.Context(), "preserve atomic goal context", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	mustSetWorktreeReminderState(t, store, testWorktreeReminderState(
@@ -111,11 +111,14 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 		t.TempDir(),
 		t.TempDir(),
 	))
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	stepID := runtimeTestStepID("step-1")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
+	if err := eng.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, _, err := compactNowInActiveTestRun(t, eng, compactionModeManual, compactionInstructionsInput{}, true); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), stepID, compactionModeManual, compactionInstructionsInput{}, true); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 
@@ -214,11 +217,13 @@ func newCommittedCompactionFixture(t *testing.T, observer session.PersistenceObs
 		t.Fatalf("lock prompt snapshots: %v", err)
 	}
 	client := &fakeCompactionClient{
+		inputTokenCount: 2_000,
 		caps: llm.ProviderCapabilities{
-			ProviderID:               "openai",
-			SupportsResponsesAPI:     true,
-			SupportsResponsesCompact: true,
-			IsOpenAIFirstParty:       true,
+			ProviderID:                     "openai",
+			SupportsResponsesAPI:           true,
+			SupportsResponsesCompact:       true,
+			SupportsRequestInputTokenCount: true,
+			IsOpenAIFirstParty:             true,
 		},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
@@ -233,7 +238,7 @@ func newCommittedCompactionFixture(t *testing.T, observer session.PersistenceObs
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { fixture.events = append(fixture.events, event) },
 	})
-	if err := fixture.engine.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := fixture.engine.steer(runtimeTestStepID("step-1"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	fixture.engine.compactionRuntimeState().SetSoonReminderIssued(true)

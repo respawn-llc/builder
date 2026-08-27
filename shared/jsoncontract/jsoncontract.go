@@ -59,9 +59,33 @@ func (p Preparer) prepare(
 	if err != nil {
 		return prepared{}, p.failure(owner, "serialize", err)
 	}
+	fields := make([]string, 0)
+	if document.Properties != nil {
+		for name := range document.Properties.KeysFromOldest() {
+			fields = append(fields, name)
+		}
+	}
+	return p.compile(owner, serialized, strict, fields)
+}
+
+func (p Preparer) prepareDocument(owner string, document json.RawMessage, selected profile) (prepared, error) {
+	var schemaDocument invjsonschema.Schema
+	if err := json.Unmarshal(document, &schemaDocument); err != nil {
+		return prepared{}, p.failure(owner, "parse schema document", err)
+	}
+	fields := make([]string, 0)
+	if schemaDocument.Properties != nil {
+		for name := range schemaDocument.Properties.KeysFromOldest() {
+			fields = append(fields, name)
+		}
+	}
+	return p.compile(owner, document, selected == profileStructured, fields)
+}
+
+func (p Preparer) compile(owner string, serialized []byte, strict bool, fields []string) (prepared, error) {
 	parsed, err := validator.UnmarshalJSON(bytes.NewReader(serialized))
 	if err != nil {
-		return prepared{}, p.failure(owner, "parse reflected schema", err)
+		return prepared{}, p.failure(owner, "parse schema", err)
 	}
 	compiler := validator.NewCompiler()
 	compiler.DefaultDraft(validator.Draft2020)
@@ -71,12 +95,6 @@ func (p Preparer) prepare(
 	compiled, err := compiler.Compile(schemaResource)
 	if err != nil {
 		return prepared{}, p.failure(owner, "compile", err)
-	}
-	fields := make([]string, 0)
-	if document.Properties != nil {
-		for name := range document.Properties.KeysFromOldest() {
-			fields = append(fields, name)
-		}
 	}
 	return prepared{
 		document: bytes.Clone(serialized),

@@ -563,10 +563,8 @@ func protocolError(resp *protocol.ResponseError) error {
 	}
 	switch resp.Code {
 	case protocol.ErrCodeWorktreeSelector,
-		protocol.ErrCodeWorktreeTransitionPending,
 		protocol.ErrCodeWorktreeSetupRetained,
-		protocol.ErrCodeWorktreeDeletePrecondition,
-		protocol.ErrCodeWorktreeImmediateTransition:
+		protocol.ErrCodeWorktreeDeletePrecondition:
 		if len(resp.Data) > 0 {
 			return serverapi.DecodeWorktreeRPCError(resp.Data, message)
 		}

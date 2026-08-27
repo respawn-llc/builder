@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/textutil"
 )
 
@@ -16,28 +17,23 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(autoCompactLimit, 1_000, 200_000),
 	}}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   200_000,
 		AutoCompactTokenLimit: autoCompactLimit,
 	})
-	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
+	if _, err := engine.SetGoal(t.Context(), "goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set active goal: %v", err)
 	}
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 	engine.setLastUsage(llm.Usage{InputTokens: autoCompactLimit, WindowTokens: 200_000})
 
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		return engine.autoCompactIfNeeded(ctx, stepID, compactionModeAuto)
-	})
-	if err != nil {
+	stepID := runtimeTestStepID("compact")
+	if err := runTestActiveStep(engine, stepID, func() error {
+		return engine.autoCompactIfNeeded(context.Background(), stepID, compactionModeAuto)
+	}); err != nil {
 		t.Fatalf("auto compact: %v", err)
 	}
 	usage := engine.ContextUsage()

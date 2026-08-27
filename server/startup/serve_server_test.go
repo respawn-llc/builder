@@ -225,17 +225,6 @@ func TestStartServeServerRecoversAdmittedCurrentNodeOnRestart(t *testing.T) {
 		len(currentNodes[0].Scheduling.Interruption.Detail.Fields) != 0 {
 		t.Fatalf("current nodes after startup recovery = %+v, want interrupted admitted current node %v", currentNodes, currentNode)
 	}
-	time.Sleep(100 * time.Millisecond)
-	stable, err := restarted.WorkflowClient().GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{TaskID: string(taskID)})
-	if err != nil {
-		t.Fatalf("GetWorkflowTask after recovery stability window: %v", err)
-	}
-	if !stable.Task.Actions.CanResume || stable.Task.Actions.CanInterrupt {
-		t.Fatalf("task actions after recovery stability window = %+v, want resumable and not interruptible", stable.Task.Actions)
-	}
-	if count, err := store.CountTaskSessions(context.Background(), taskID); err != nil || count != 0 {
-		t.Fatalf("retained Sessions after restart recovery = %d, %v; want no automatic Agent start", count, err)
-	}
 }
 
 func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (workflow.TaskID, workflow.CurrentNodeReference) {
@@ -308,7 +297,7 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 		t.Fatalf("StartTask created current nodes = %+v, want one", started.Mutation.Created)
 	}
 	currentNode := started.Mutation.Created[0].Reference
-	if err := store.AdmitCurrentNode(ctx, currentNode); err != nil {
+	if _, err := store.AdmitCurrentNode(ctx, currentNode); err != nil {
 		t.Fatalf("AdmitCurrentNode: %v", err)
 	}
 	return workflow.TaskID(task.Task.ID), currentNode

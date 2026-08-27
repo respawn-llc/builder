@@ -12,15 +12,13 @@ import (
 // the Session's dormant admission for the duration of the call.
 func SteerPersistedMessage(
 	store *session.Store,
-	stepID string,
 	message llm.Message,
 ) (session.CommitReceipt, error) {
 	engine, err := newPersistedSteeringEngine(store)
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return engine.steerWithCommitReceipt(
-		stepID,
+	return engine.steerDormantWithCommitReceipt(
 		steerMessagesWithPersistenceIntent(
 			steeringPriorityRuntimeContext,
 			steeringMessageEventDefault,

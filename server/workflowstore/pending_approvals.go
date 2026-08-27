@@ -84,7 +84,7 @@ type pendingApprovalRecord struct {
 	CreatedAtUnixMs           int64
 }
 
-func pendingApprovalRecordFromListRow(row sqlitegen.ListTaskPendingApprovalsRow) pendingApprovalRecord {
+func pendingApprovalRecordFromListRow(row sqlitegen.TaskPendingApproval) pendingApprovalRecord {
 	return pendingApprovalRecordFromValues(
 		row.ID,
 		row.SourceTaskID,
@@ -98,7 +98,7 @@ func pendingApprovalRecordFromListRow(row sqlitegen.ListTaskPendingApprovalsRow)
 	)
 }
 
-func pendingApprovalRecordFromGetRow(row sqlitegen.GetTaskPendingApprovalRow) pendingApprovalRecord {
+func pendingApprovalRecordFromGetRow(row sqlitegen.TaskPendingApproval) pendingApprovalRecord {
 	return pendingApprovalRecordFromValues(
 		row.ID,
 		row.SourceTaskID,
@@ -238,9 +238,6 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 		}
 		if removedCurrentNode != 1 {
 			return PendingApprovalApplyResult{}, sql.ErrNoRows
-		}
-		if err := updateActiveFanoutBranchContinuationSource(ctx, q, approval.Source, targets[0].ContinuationSource); err != nil {
-			return PendingApprovalApplyResult{}, err
 		}
 		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind, nowTime); err != nil {
 			return PendingApprovalApplyResult{}, err

@@ -5,10 +5,10 @@ import (
 
 	"core/internal/testharness/testsetup"
 
-	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 func TestCurrentSessionReconstructionPreservesBranchScopedPromptIdentity(t *testing.T) {
@@ -45,11 +45,7 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 	if err != nil {
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{ProjectID: "project-1", WorkflowID: testsetup.WorkflowID(t, "workflowrunner-inspection"), CurrentNode: reference})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
+	scopeID := runtimeids.NewExecutionScopeID()
 
 	awareness := &taskAwarenessSource{
 		comments:     &taskCommentCountProbe{},
@@ -66,7 +62,7 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 				Parameters: []workflow.Parameter{{Key: "summary"}},
 			}},
 		},
-		lease,
+		scopeID,
 		workflowruntime.TaskPromptDeliveryAssignment,
 		workflowruntime.CompletionModeTool,
 		3,
@@ -77,8 +73,8 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 	if err != nil {
 		t.Fatalf("BuildCurrentNodeRuntimeConfig: %v", err)
 	}
-	if runtimeConfig.ScopeID != lease.ScopeID() {
-		t.Fatalf("Current Node execution scope = %s, want authority scope %s", runtimeConfig.ScopeID, lease.ScopeID())
+	if runtimeConfig.ScopeID != scopeID {
+		t.Fatalf("Current Node execution scope = %s, want authority scope %s", runtimeConfig.ScopeID, scopeID)
 	}
 	if runtimeConfig.TaskPromptDelivery != workflowruntime.TaskPromptDeliveryAssignment {
 		t.Fatalf("Current Node task prompt delivery = %v, want Assignment", runtimeConfig.TaskPromptDelivery)

@@ -17,7 +17,6 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			SessionStatus:          transcriptTestSessionStatus(),
 			RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
 			CommittedRows:          []TranscriptCommittedRow{},
-			GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 			ActiveStep: &TranscriptStepState{
 				RunID:      runID,
 				StepID:     stepID,
@@ -27,7 +26,8 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			},
 		}
 		hydration.RuntimeReadModelUpdate.Activity = RuntimeActivity{
-			State: RuntimeActivityRunning,
+			State:    RuntimeActivityRunning,
+			Reviewer: ReviewerActivityInactive,
 			ActiveStep: &RuntimeActiveStep{
 				RunID:      runID,
 				StepID:     stepID,
@@ -84,15 +84,6 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 					CompactText: "reasoning",
 					Text:        "reasoning",
 				}}
-			},
-		},
-		{
-			name: "reviewer",
-			mutate: func(hydration *TranscriptHydration) {
-				hydration.ActiveReviewer = &TranscriptReviewerState{
-					StepID: otherStepID,
-					State:  ReviewerStateRunning,
-				}
 			},
 		},
 		{
@@ -157,6 +148,7 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 	idle := valid
 	idle.RuntimeReadModelUpdate.Activity = RuntimeActivity{
 		State:          RuntimeActivityRegisteredIdle,
+		Reviewer:       ReviewerActivityInactive,
 		QueueAccepting: true,
 	}
 	if err := idle.Validate(); err == nil {
@@ -184,9 +176,8 @@ func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *test
 		CreatedAt: time.Unix(1_700_000_000, 0),
 	}
 	submittedQueue := TranscriptQueuedMessageState{
-		ClientRequestID: transcriptTestClientRequestID(t),
-		QueueItemID:     transcriptTestQueueItemID(t),
-		Status:          QueuedUserMessageSubmitted,
+		QueueItemID: transcriptTestQueueItemID(t),
+		Status:      QueuedUserMessageSubmitted,
 	}
 	terminalBackground := TranscriptBackgroundActivity{
 		ActivityID:  transcriptTestBackgroundActivityID(t),

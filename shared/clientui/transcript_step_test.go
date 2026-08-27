@@ -23,7 +23,7 @@ func TestTranscriptStepStateUsesTypedLifecycleTransitions(t *testing.T) {
 	}
 }
 
-func TestTranscriptStepAndReviewerStateRejectInvalidTransitions(t *testing.T) {
+func TestTranscriptStepStateRejectsInvalidTransitions(t *testing.T) {
 	step := TranscriptStepState{
 		RunID:      transcriptTestRunID(t),
 		StepID:     transcriptTestStepID(t),
@@ -33,13 +33,5 @@ func TestTranscriptStepAndReviewerStateRejectInvalidTransitions(t *testing.T) {
 	}
 	if err := step.Validate(); err == nil {
 		t.Fatal("accepted started step with completed status")
-	}
-
-	reviewer := TranscriptReviewerState{
-		StepID: transcriptTestStepID(t),
-		State:  ReviewerState("unknown"),
-	}
-	if err := reviewer.Validate(); err == nil {
-		t.Fatal("accepted unknown reviewer transition")
 	}
 }

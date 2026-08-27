@@ -1,6 +1,7 @@
 package workflowsvc
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
@@ -10,10 +11,13 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 func TestServiceManualMoveNoOpRejectsExplicitBranchWithoutPendingMutation(t *testing.T) {
@@ -276,5 +280,52 @@ func TestServiceManualMoveAcceptedBranchReturnsConflictWhenFinalRevalidationBeco
 	}
 	if len(execution.interruptTaskIDs) != 0 {
 		t.Fatalf("stale Manual Move interruptions = %v, want none", execution.interruptTaskIDs)
+	}
+}
+
+func workflowServiceTestManualMoveAssignments(
+	t *testing.T,
+	metadataStore *metadata.Store,
+) workflowstore.ManualMoveTargetAssignmentPreparer {
+	t.Helper()
+	return func(
+		_ context.Context,
+		inputs []workflowstore.CurrentNodeStartContext,
+	) (workflowstore.ManualMoveTargetAssignmentPreparation, error) {
+		assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
+		for _, input := range inputs {
+			if input.Node.Kind != workflow.NodeKindAgent {
+				continue
+			}
+			if input.CurrentNode.SessionID != nil {
+				assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
+					CurrentNode: input.CurrentNode.Reference,
+					SessionID:   *input.CurrentNode.SessionID,
+				})
+				continue
+			}
+			sessionStore, err := session.Create(
+				filepath.Join(metadataStore.PersistenceRoot(), "projects", input.Task.ProjectID, "sessions"),
+				filepath.Base(input.ExecutionRoot.SourceWorkspaceRoot),
+				input.ExecutionRoot.SourceWorkspaceRoot,
+				sessioncontract.SessionCategoryMain,
+				metadataStore.AuthoritativeSessionStoreOptions()...,
+			)
+			if err != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+			}
+			if err := sessionStore.EnsureDurable(); err != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+			}
+			sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
+			if err != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+			}
+			assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
+				CurrentNode: input.CurrentNode.Reference,
+				SessionID:   sessionID,
+			})
+		}
+		return workflowstore.ManualMoveTargetAssignmentPreparation{Assignments: assignments}, nil
 	}
 }

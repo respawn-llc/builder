@@ -272,11 +272,18 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 			return stepLoopResult{}, err
 		}
-		e.stepLifecycle.EndAgentStepBoundary()
+		if err := e.stepLifecycle.BeginAgentStepBoundary(ctx); err != nil {
+			return stepLoopResult{}, err
+		}
+		if e.backgroundFlow != nil {
+			if _, err := e.backgroundFlow.flushPendingNotices(stepID); err != nil {
+				return stepLoopResult{}, err
+			}
+		}
 		if terminal, err := s.workflowDurableCompletionTerminal(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		} else if terminal {
-			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
+			e.cascadeCompleteActiveGoalOnWorkflowCompletion(stepID)
 			return stepLoopResult{ExecutedToolCall: executedToolCall}, nil
 		}
 		if err := s.prepareModelTurn(ctx, stepID); err != nil {
@@ -314,7 +321,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 		resp := candidate.response
 
-		prepared, err := s.prepareCompletedResponse(ctx, stepID, resp)
+		prepared, err := s.prepareCompletedResponse(ctx, stepID, resp, options)
 		if err != nil {
 			return stepLoopResult{}, err
 		}
@@ -336,7 +343,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 		switch prepared.next {
 		case completedResponseNextExternalWorkflowTerminal:
-			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
+			e.cascadeCompleteActiveGoalOnWorkflowCompletion(stepID)
 			return stepLoopResult{ExecutedToolCall: executedToolCall}, nil
 		case completedResponseNextWorkflowPreflightRejected:
 			if prepared.preflightRejection == nil {
@@ -355,7 +362,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			if err != nil {
 				return stepLoopResult{}, err
 			}
-			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
+			e.cascadeCompleteActiveGoalOnWorkflowCompletion(stepID)
 			return stepLoopResult{FinalAnswer: textutil.Value(prepared.assistant), ExecutedToolCall: true}, nil
 		case completedResponseNextAccepted:
 			mismatchWarningCommitted, err = e.commitAcceptedResponseCandidate(stepID, candidate, mismatchWarningCommitted)
@@ -393,12 +400,12 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			if err != nil {
 				return stepLoopResult{}, err
 			}
-			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
+			if err := e.stepLifecycle.CompleteAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
 			patchEditsApplied = patchEditsApplied || applied
 			if terminal {
-				e.cascadeCompleteActiveGoalOnWorkflowCompletion()
+				e.cascadeCompleteActiveGoalOnWorkflowCompletion(stepID)
 				return stepLoopResult{ExecutedToolCall: true}, nil
 			}
 			if _, err := s.flushPendingUserInjections(stepID, options, &mismatchWarningCommitted); err != nil {
@@ -408,7 +415,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		if assistantMsg.Content == nil && responseContainsProgress(resp) {
-			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
+			if err := e.stepLifecycle.CompleteAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
 			continue
@@ -463,7 +470,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				continue
 			}
 			if len(hostedToolExecutions) > 0 {
-				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
+				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: exactStepIDPointer(stepID), CommittedTranscriptChanged: true}))
 				continue
 			}
 			if execution, active := e.currentNodeExecutionConfig(); active && execution.Controller != nil {
@@ -498,11 +505,8 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			}
 
 			resolved := assistantMsg
-			resolvedSilentFinalAnswer := silentFinalAnswer
 			resolvedCommittedCoordinate := cloneCommittedAssistantCoordinate(assistantCommittedCoordinate)
-			var reviewerCompletion *ReviewerStatus
-			reviewerRan := false
-			if resolvedSilentFinalAnswer {
+			if silentFinalAnswer {
 				resolvedCommittedStart, resolvedCommittedStartSet := committedAssistantCoordinateFields(resolvedCommittedCoordinate)
 				return stepLoopResult{SilentFinal: true, ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 			}
@@ -514,49 +518,16 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
-				reviewerRan = true
-				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
-				if startErr != nil {
-					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", startErr)
-				}
 				if !assistantEventEmitted {
-					// The answer is already committed before supervisor entries are appended.
-					// Publish it first so live clients never see supervisor entries as a gap
-					// after an unannounced committed assistant message.
 					_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
 					assistantEventEmitted = true
 				}
-				preReviewMessage := resolved
-				reviewed, err := s.reviewer.RunFollowUp(ctx, stepID, resolved, resolvedCommittedStart, resolvedCommittedStartSet, effectiveReviewerClient)
-				if err == nil {
-					resolved = reviewed.Message
-					reviewerCompletion = reviewed.Completion
-					resolvedCommittedStart = reviewed.AssistantCommittedStart
-					resolvedCommittedStartSet = reviewed.AssistantCommittedStartSet
-					resolvedCommittedCoordinate = committedAssistantCoordinateFromFields(resolvedCommittedStart, resolvedCommittedStartSet)
-					assistantEventEmitted = reviewed.AssistantEventEmitted || (assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved))
-				} else {
-					assistantEventEmitted = assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved)
-				}
-				if err != nil {
-					return stepLoopResult{}, errors.Join(err, s.terminalizeReviewerLifecycle(stepID, nil))
+				if err := e.startReviewer(ctx, stepID, effectiveReviewerClient, s.reviewer); err != nil {
+					e.surfaceRunErrorForStep(stepID, err)
 				}
 			}
 			if !assistantEventEmitted {
 				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
-			}
-			if reviewerRan {
-				var statusErr error
-				if reviewerCompletionHasTranscriptStatus(reviewerCompletion) {
-					statusErr = e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
-						Role: reviewerStatusEntryRole(*reviewerCompletion),
-						Text: reviewerStatusText(*reviewerCompletion, nil),
-					}))
-				}
-				terminalizationErr := s.terminalizeReviewerLifecycle(stepID, reviewerCompletion)
-				if statusErr != nil || terminalizationErr != nil {
-					return stepLoopResult{}, errors.Join(statusErr, terminalizationErr)
-				}
 			}
 			if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 				return stepLoopResult{}, err
@@ -566,30 +537,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 	}
-}
-
-func reviewerCompletionHasTranscriptStatus(status *ReviewerStatus) bool {
-	if status == nil {
-		return false
-	}
-	switch strings.TrimSpace(status.Outcome) {
-	case "applied", "noop", "no_suggestions":
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status *ReviewerStatus) error {
-	if s == nil || s.engine == nil {
-		return errors.New("Reviewer lifecycle terminalizer requires an engine")
-	}
-	err := s.engine.steer(stepID, steerEventIntent(Event{
-		Kind:     EventReviewerCompleted,
-		StepID:   stepID,
-		Reviewer: status,
-	}))
-	return err
 }
 
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) (int, error) {
@@ -622,11 +569,9 @@ func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options step
 	return nil
 }
 
-func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response) (preparedCompletedResponse, error) {
+func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response, options stepLoopOptions) (preparedCompletedResponse, error) {
 	e := s.engine
-	if completed, err := e.observeWorkflowDurableCompletion(ctx); err != nil {
-		return preparedCompletedResponse{}, err
-	} else if completed {
+	if e.WorkflowTerminalState().Completed {
 		return preparedCompletedResponse{
 			next:       completedResponseNextExternalWorkflowTerminal,
 			resolution: completedResponseAbortInstruction(),
@@ -705,10 +650,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		acceptedCalls.hasCalls()
 	patchEditsApplied := false
 	if finalAnswerWithToolCalls {
-		if err := e.markProviderVisibleModelRecovery(stepID); err != nil {
-			return preparedCompletedResponse{}, err
-		}
-		applied, terminal, err := s.materializeFinalAnswerToolCalls(ctx, stepID, acceptedCalls)
+		applied, terminal, err := s.materializeFinalAnswerToolCalls(ctx, stepID, acceptedCalls, options)
 		if err != nil {
 			return preparedCompletedResponse{}, err
 		}
@@ -728,7 +670,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		assistantMsg.ToolCalls = nil
 		acceptedCalls = acceptedResponseCalls{}
 		phaseTurn.Assistant = assistantMsg
-		if err := e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true})); err != nil {
+		if err := e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: exactStepIDPointer(stepID), CommittedTranscriptChanged: true})); err != nil {
 			return preparedCompletedResponse{}, err
 		}
 	}
@@ -741,7 +683,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		}
 		if err := e.steer(stepID, steerEventIntent(Event{
 			Kind:   EventModelResponse,
-			StepID: stepID,
+			StepID: exactStepIDPointer(stepID),
 			ModelResponse: &ModelResponseTrace{
 				AssistantPhase:   assistantPhase,
 				AssistantChars:   assistantChars,
@@ -750,11 +692,6 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 				OutputItemTypes:  summarizeOutputItemTypes(resp.OutputItems),
 			},
 		})); err != nil {
-			return preparedCompletedResponse{}, err
-		}
-	}
-	if !silentFinalAnswer && !finalAnswerWithToolCalls {
-		if err := e.markProviderVisibleModelRecovery(stepID); err != nil {
 			return preparedCompletedResponse{}, err
 		}
 	}
@@ -802,7 +739,7 @@ func classifyCompletedResponsePreflightRejection(workflowActive bool, calls acce
 	return &completedResponsePreflightRejection{cause: err}
 }
 
-func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Context, stepID string, calls acceptedResponseCalls) (bool, bool, error) {
+func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Context, stepID string, calls acceptedResponseCalls, options stepLoopOptions) (bool, bool, error) {
 	e := s.engine
 	toolCallMessage := llm.Message{
 		Role:      llm.RoleAssistant,
@@ -845,20 +782,11 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		return false, false, err
 	}
 	if calls.hasCalls() {
-		if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
+		if err := e.stepLifecycle.CompleteAgentStepBoundary(ctx); err != nil {
 			return false, false, err
 		}
 	}
 	return patchEditsApplied, terminal, nil
-}
-
-func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string) error {
-	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
-	s.engine.persistManualCompactEligibilityBestEffort(stepID, true)
-	if err := s.engine.flushPendingWorkflowAssignments(stepID); err != nil {
-		return err
-	}
-	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 
 func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(
@@ -888,10 +816,9 @@ func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(
 	return patchEditsApplied, terminal || durableTerminal, nil
 }
 
-func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Context, stepID string) (bool, error) {
-	completed, err := s.engine.observeWorkflowDurableCompletion(ctx)
-	if err != nil || !completed {
-		return false, err
+func (s *defaultStepExecutor) workflowDurableCompletionTerminal(_ context.Context, stepID string) (bool, error) {
+	if !s.engine.WorkflowTerminalState().Completed {
+		return false, nil
 	}
 	if err := s.engine.resetReasoningAndClearStreamingState(stepID); err != nil {
 		return false, err
@@ -912,15 +839,12 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	content = strings.TrimSpace(content)
 	var (
 		parsed workflowruntime.ParsedCompletion
-		source WorkflowCompletionSource
 	)
 	switch mode {
 	case workflowruntime.CompletionModeStructuredOutput:
 		parsed, err = workflowruntime.DecodeCompletion([]byte(content), execution.Contract)
-		source = WorkflowCompletionSourceStructuredOutput
 	case workflowruntime.CompletionModeUnstructuredOutput:
 		parsed, err = workflowruntime.DecodeUnstructuredCompletion(content, execution.Contract)
-		source = WorkflowCompletionSourceUnstructured
 	case workflowruntime.CompletionModeShellCommand:
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, errors.New("normal final answers do not complete shell-command workflow nodes"))
 		return true, terminal, nudgeErr
@@ -943,15 +867,14 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, err)
 		return true, terminal, nudgeErr
 	}
-	completed, completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, parsed)
+	completed, completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, stepID, parsed)
 	if completeErr != nil && !completed.IsApplied() {
-		if isWorkflowCompletionOperationalError(completeErr) {
+		if !isWorkflowCompletionValidationError(completeErr) {
 			return true, true, completeErr
 		}
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
 		return true, terminal, nudgeErr
 	}
-	e.setWorkflowTerminalState(source)
 	if completeErr != nil {
 		if err := e.steer(
 			stepID,
@@ -960,14 +883,16 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 			return true, true, err
 		}
 	}
+	e.cascadeCompleteActiveGoalOnWorkflowCompletion(stepID)
 	return true, true, nil
 }
 
 func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(
 	ctx context.Context,
+	stepID string,
 	parsed workflowruntime.ParsedCompletion,
 ) (workflowruntime.CompletionResult, error) {
-	return s.engine.completeWorkflowCurrentNode(ctx, parsed)
+	return s.engine.completeWorkflowCurrentNode(ctx, stepID, parsed)
 }
 
 func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.Context, stepID string, err error) (bool, error) {

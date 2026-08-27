@@ -625,7 +625,7 @@ func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metada
 	if err != nil {
 		s.restoreMetadataMutationLocked(checkpoint)
 		s.mu.Unlock()
-		return CommitReceipt{}, err
+		return CommitReceipt{}, DefinitelyUncommittedMutation(err)
 	}
 	record, recordErr := s.newAppendRecoveryRecord(checkpoint.meta, s.meta, appendRecoveryCommitted, nil)
 	if recordErr == nil {
@@ -637,7 +637,7 @@ func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metada
 			recordErr = s.closeMutationAuthorityLocked("rollback metadata recovery", errors.Join(recordErr, cleanupErr))
 		}
 		s.mu.Unlock()
-		return CommitReceipt{}, recordErr
+		return CommitReceipt{}, DefinitelyUncommittedMutation(recordErr)
 	}
 	s.mu.Unlock()
 	return CommitReceipt{Committed: true},
@@ -703,70 +703,6 @@ func (s *Store) EnsureDurable() error {
 		return errors.New("session store is required")
 	}
 	return s.mutateAndPersist(func() error { return nil })
-}
-
-func (s *Store) SetPendingModelRecovery(recovery PendingModelRecovery) error {
-	next := normalizePendingModelRecovery(recovery)
-	return s.mutateAndPersist(func() error {
-		s.meta.PendingModelRecovery = &next
-		s.meta.UpdatedAt = storeTimestamp(s.options)
-		return nil
-	})
-}
-
-func (s *Store) ClearPendingModelRecovery() error {
-	current := s.Meta().PendingModelRecovery
-	if current == nil {
-		return nil
-	}
-	return s.mutateAndPersist(func() error {
-		s.meta.PendingModelRecovery = nil
-		s.meta.UpdatedAt = storeTimestamp(s.options)
-		return nil
-	})
-}
-
-func (s *Store) ClearPendingModelRecoveryForStep(stepID string) error {
-	current := s.Meta().PendingModelRecovery
-	if current == nil || strings.TrimSpace(current.StepID) != strings.TrimSpace(stepID) {
-		return nil
-	}
-	return s.mutateAndPersist(func() error {
-		s.meta.PendingModelRecovery = nil
-		s.meta.UpdatedAt = storeTimestamp(s.options)
-		return nil
-	})
-}
-
-func (s *Store) DiscardPendingModelRecoveryCandidate() error {
-	current := s.Meta().PendingModelRecovery
-	if current == nil {
-		return nil
-	}
-	return s.mutateAndPersist(func() error {
-		s.meta.PendingModelRecovery = nil
-		s.meta.UpdatedAt = storeTimestamp(s.options)
-		return nil
-	})
-}
-
-func normalizePendingModelRecovery(recovery PendingModelRecovery) PendingModelRecovery {
-	next := recovery
-	next.RecoveryID = strings.TrimSpace(next.RecoveryID)
-	next.StepID = strings.TrimSpace(next.StepID)
-	next.Reason = strings.TrimSpace(next.Reason)
-	if next.CreatedAt.IsZero() {
-		next.CreatedAt = time.Now().UTC()
-	}
-	next.OutstandingToolCallIDs = append([]string(nil), next.OutstandingToolCallIDs...)
-	return next
-}
-
-func clonePendingModelRecovery(recovery *PendingModelRecovery) PendingModelRecovery {
-	if recovery == nil {
-		return PendingModelRecovery{}
-	}
-	return normalizePendingModelRecovery(*recovery)
 }
 
 func (s *Store) SetName(name string) error {
@@ -967,6 +903,20 @@ func (s *Store) SetGoal(objective string, actor GoalActor) (GoalState, CommitRec
 		return GoalState{}, receipt, err
 	}
 	return goal, receipt, err
+}
+
+func (s *Store) ValidateGoalSet(objective string, actor GoalActor) error {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := prepareActiveGoalState(
+		GoalState{Objective: objective},
+		actor,
+		s.meta.Goal,
+		storeTimestamp(s.options),
+	)
+	return err
 }
 
 func (s *Store) SetGoalStatus(status GoalStatus, actor GoalActor) (GoalState, bool, CommitReceipt, error) {

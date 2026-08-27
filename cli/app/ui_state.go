@@ -69,12 +69,13 @@ type uiInputFeatureState struct {
 	// commands, and other client-only actions; server queues only runtime
 	// injected user work.
 	queued                      []queuedInputItem
-	postTurnCompactionsInFlight uint
+	pendingCompactionRequestIDs map[runtimeids.CompactionRequestID]struct{}
 	submitToken                 uint64
 	activeSubmit                activeSubmitState
 
 	injectedQueue               []injectedRuntimeQueueItem
 	injectedQueueToken          uint64
+	unownedQueuedTerminalStates map[string]clientui.TranscriptQueuedMessageState
 	pendingInputSubmissionOrder uint64
 	interruptLifecycle          uiInterruptLifecycle
 	currentRunID                string

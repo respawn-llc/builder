@@ -5,20 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
-
-type recordingCurrentNodeEventPublisher struct {
-	events []WorkflowEventRecord
-	err    error
-}
-
-func (p *recordingCurrentNodeEventPublisher) PublishWorkflowEvent(_ context.Context, event WorkflowEventRecord) error {
-	p.events = append(p.events, event)
-	return p.err
-}
 
 func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *testing.T) {
 	type fixture struct {
@@ -147,7 +138,7 @@ func TestAdmitCurrentNodeMovesReadyNodeToRestartMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	if err := store.AdmitCurrentNode(ctx, started.Mutation.Created[0].Reference); err != nil {
+	if _, err := store.AdmitCurrentNode(ctx, started.Mutation.Created[0].Reference); err != nil {
 		t.Fatalf("AdmitCurrentNode: %v", err)
 	}
 	nodes, err := store.ListCurrentNodes(ctx, task.ID)
@@ -157,33 +148,8 @@ func TestAdmitCurrentNodeMovesReadyNodeToRestartMarker(t *testing.T) {
 	if len(nodes) != 1 || nodes[0].Scheduling == nil || nodes[0].Scheduling.State != workflow.CurrentNodeSchedulingAdmitted {
 		t.Fatalf("current nodes = %+v, want one admitted node in workflow %q", nodes, workflowID)
 	}
-	if err := store.AdmitCurrentNode(ctx, started.Mutation.Created[0].Reference); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := store.AdmitCurrentNode(ctx, started.Mutation.Created[0].Reference); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("second AdmitCurrentNode error = %v, want stale-ready absence", err)
-	}
-}
-
-func TestReplaceUserInterruptionWithAssignmentFailure(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	reference := startTask(t, ctx, store, task.ID).Mutation.Created[0].Reference
-	if err := store.InterruptCurrentNode(ctx, reference, workflow.CurrentNodeInterruptionReasonUserInterrupt, workflow.CurrentNodeInterruptionDetail{}); err != nil {
-		t.Fatalf("InterruptCurrentNode: %v", err)
-	}
-	detail := workflow.NewCurrentNodeInterruptionDetail("workflow_runtime_start_failed", errors.New("assignment failed"))
-	if err := store.ReplaceUserInterruptionWithAssignmentFailure(ctx, reference, detail); err != nil {
-		t.Fatalf("ReplaceUserInterruptionWithAssignmentFailure: %v", err)
-	}
-	nodes, err := store.ListCurrentNodes(ctx, task.ID)
-	if err != nil ||
-		len(nodes) != 1 ||
-		nodes[0].Scheduling == nil ||
-		nodes[0].Scheduling.Interruption == nil ||
-		nodes[0].Scheduling.Interruption.Reason != "workflow_runtime_start_failed" {
-		t.Fatalf("Current Nodes after assignment failure = %+v, %v", nodes, err)
-	}
-	if err := store.ReplaceUserInterruptionWithAssignmentFailure(ctx, reference, detail); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("second replacement error = %v, want stale user-interruption absence", err)
 	}
 }
 
@@ -194,7 +160,7 @@ func TestRecoverExecutableCurrentNodesInterruptsReadyAndAdmittedButPreservesAppr
 	ready := startTask(t, ctx, store, readyTask.ID).Mutation.Created[0]
 	admittedTask := createDefaultTask(t, ctx, store, binding.ProjectID)
 	admitted := startTask(t, ctx, store, admittedTask.ID).Mutation.Created[0]
-	if err := store.AdmitCurrentNode(ctx, admitted.Reference); err != nil {
+	if _, err := store.AdmitCurrentNode(ctx, admitted.Reference); err != nil {
 		t.Fatalf("AdmitCurrentNode: %v", err)
 	}
 
@@ -228,13 +194,9 @@ func TestRecoverExecutableCurrentNodesInterruptsReadyAndAdmittedButPreservesAppr
 	}
 
 	reason := workflow.CurrentNodeInterruptionReason("workflow_startup_recovery")
-	deliveryErr := errors.New("recovery event delivery unavailable")
-	publisher := &recordingCurrentNodeEventPublisher{err: deliveryErr}
-	store.SetWorkflowEventPublisher(publisher)
 	recovered, err := store.RecoverExecutableCurrentNodes(ctx, reason, workflow.CurrentNodeInterruptionDetail{Code: string(reason)})
-	var diagnostic *CurrentNodeInterruptionPostCommitDiagnostic
-	if !errors.As(err, &diagnostic) || !errors.Is(err, deliveryErr) {
-		t.Fatalf("RecoverExecutableCurrentNodes error = %v, want committed diagnostic wrapping %v", err, deliveryErr)
+	if err != nil {
+		t.Fatalf("RecoverExecutableCurrentNodes: %v", err)
 	}
 	if len(recovered) != 2 {
 		t.Fatalf("recovered current nodes = %d, want ready and admitted nodes only", len(recovered))
@@ -308,7 +270,31 @@ func TestResolveCurrentNodeStartContextAppliesPreviousTargetOrNewEffectiveMode(t
 		}
 	})
 
-	t.Run("strict retained target mismatch also starts new", func(t *testing.T) {
+	t.Run("retained prior target session continues", func(t *testing.T) {
+		fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
+		sessionID := associateTaskSessionForTest(
+			t,
+			fixture.ctx,
+			fixture.store,
+			fixture.binding,
+			fixture.cfg,
+			fixture.review.Reference,
+			time.UnixMilli(1_700_000_000_000).UTC(),
+		)
+		target := completeReworkCurrentNodeForStartContextTest(t, fixture)
+
+		start, err := fixture.store.ResolveCurrentNodeStartContext(fixture.ctx, target.Reference)
+		if err != nil {
+			t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
+		}
+		if start.ContextMode != workflow.ContextModeContinueSession ||
+			start.SourceSessionID == nil ||
+			*start.SourceSessionID != sessionID {
+			t.Fatalf("effective start context = mode %q session %v, want continuation from %q", start.ContextMode, start.SourceSessionID, sessionID)
+		}
+	})
+
+	t.Run("other continuation source still requires retained session", func(t *testing.T) {
 		fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
 		target := completeReworkCurrentNodeForStartContextTest(t, fixture)
 		saveWorkflowGraphFixture(t, fixture.ctx, fixture.store, fixture.workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
@@ -316,12 +302,8 @@ func TestResolveCurrentNodeStartContextAppliesPreviousTargetOrNewEffectiveMode(t
 			edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}
 		})
 
-		start, err := fixture.store.ResolveCurrentNodeStartContext(fixture.ctx, target.Reference)
-		if err != nil {
-			t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
-		}
-		if start.ContextMode != workflow.ContextModeNewSession || start.SourceSessionID != nil {
-			t.Fatalf("effective start context = mode %q session %v, want new_session without source", start.ContextMode, start.SourceSessionID)
+		if _, err := fixture.store.ResolveCurrentNodeStartContext(fixture.ctx, target.Reference); err == nil {
+			t.Fatal("ResolveCurrentNodeStartContext accepted continuation without a retained session")
 		}
 	})
 }

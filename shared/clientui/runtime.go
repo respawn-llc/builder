@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 )
 
 type ConversationFreshness uint8
@@ -82,9 +83,8 @@ type RuntimeMainView struct {
 }
 
 type QueuedUserMessage struct {
-	ID              string
-	Text            string
-	ClientRequestID string
+	ID   string
+	Text string
 }
 
 type UserTurnResultKind string
@@ -100,6 +100,37 @@ type UserTurnSubmission struct {
 	Message    *string
 	ResultKind UserTurnResultKind
 	Queued     QueuedUserMessage
+}
+
+type RuntimeSubmitRequest struct {
+	Input runtimeinput.Input
+}
+
+func (r RuntimeSubmitRequest) Validate() error {
+	return r.Input.Validate()
+}
+
+type RuntimeShellRequest struct {
+	Command string
+}
+
+func (r RuntimeShellRequest) Validate() error {
+	if strings.TrimSpace(r.Command) == "" {
+		return errors.New("shell command is required")
+	}
+	return nil
+}
+
+type RuntimeCompactRequest struct {
+	RequestID runtimeids.CompactionRequestID
+	Args      string
+}
+
+func (r RuntimeCompactRequest) Validate() error {
+	if r.RequestID.IsZero() {
+		return errors.New("compaction request id is required")
+	}
+	return nil
 }
 
 type SessionExecutionTarget struct {
@@ -201,11 +232,11 @@ type RuntimeClient interface {
 	SetAutoCompactionEnabled(enabled bool) (bool, bool, error)
 	SetQuestionsEnabled(enabled bool) (bool, error)
 	ShowGoal() (*RuntimeGoal, error)
-	SetGoal(objective string) (GoalMutationResult, error)
-	PauseGoal() (GoalMutationResult, error)
-	ResumeGoal() (GoalMutationResult, error)
-	CompleteGoal() (GoalMutationResult, error)
-	ClearGoal() (GoalMutationResult, error)
+	SetGoal(objective string) (*RuntimeGoal, error)
+	PauseGoal() (*RuntimeGoal, error)
+	ResumeGoal() (*RuntimeGoal, error)
+	CompleteGoal() (*RuntimeGoal, error)
+	ClearGoal() (*RuntimeGoal, error)
 	AppendCommittedEntry(role, text string) error
 	AppendCommittedEntryWithNoticeID(role, text, noticeID string) error
 	SubmitRuntimeInput(ctx context.Context, req RuntimeSubmitRequest) (UserTurnSubmission, error)

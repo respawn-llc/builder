@@ -501,9 +501,8 @@ func TestRemotePersistInputDraftSendsComposerInput(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "draft-1",
-		SessionID:       "session-1",
-		Input:           "visible draft",
+		SessionID: "session-1",
+		Input:     "visible draft",
 	})
 	if err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
@@ -822,7 +821,6 @@ func TestRemoteWorkflowProjectSubscriptionRejectsInvalidResourceActionCombinatio
 }
 
 func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
-	operationID := serverapi.NewWorktreeOperationID()
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -835,19 +833,23 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			t.Fatalf("unmarshal delete params: %v", err)
 		}
-		if params.OperationID != operationID ||
+		if params.SessionID != "session-1" ||
 			params.Selector != "wt-1" ||
 			params.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 			t.Fatalf("unexpected delete params: %+v", params)
 		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(req.Params, &fields); err != nil {
+			t.Fatalf("unmarshal delete fields: %v", err)
+		}
+		if _, exists := fields["operation_id"]; exists {
+			t.Fatal("delete request unexpectedly contains operation_id")
+		}
 		branchName := "feature-a"
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeDeleteResult{
-			Kind: serverapi.WorktreeDeleteResultKindCompleted,
-			Completed: &serverapi.WorktreeDeleteCompletedResult{
-				Cleanup: serverapi.WorktreeBranchCleanupOutcome{
-					Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
-					BranchName: &branchName,
-				},
+			Cleanup: serverapi.WorktreeBranchCleanupOutcome{
+				Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
+				BranchName: &branchName,
 			},
 		})); err != nil {
 			t.Fatalf("send delete response: %v", err)
@@ -861,17 +863,14 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.DeleteWorktree(context.Background(), serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: operationID,
-			SessionID:   "session-1",
-		},
+		SessionID:           "session-1",
 		Selector:            "wt-1",
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if resp.Completed == nil || resp.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
+	if resp.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
 		t.Fatalf("unexpected delete response: %+v", resp)
 	}
 }
@@ -1278,9 +1277,8 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "request-1",
-		SessionID:       source.SessionID,
-		WorkspaceRoot:   source.TargetRoot,
+		SessionID:     source.SessionID,
+		WorkspaceRoot: source.TargetRoot,
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }
@@ -1339,14 +1337,6 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 				FallbackIdentity: "/repo/feature",
 			}},
 		},
-		&serverapi.WorktreeTransitionPendingError{
-			SessionID:          "session",
-			PendingOperationID: operationID,
-		},
-		serverapi.NewWorktreeImmediateTransitionError(
-			serverapi.WorktreeImmediateTransitionOriginInactive,
-			errors.New("originating model step ended"),
-		),
 		&serverapi.WorktreeSetupRetainedError{
 			Worktree: serverapi.WorktreeTopologyEntry{
 				Variant: serverapi.WorktreeTopologyVariantRegistered,
@@ -1385,16 +1375,6 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 		var decoded *serverapi.WorktreeSelectorError
 		if !errors.As(err, &decoded) || len(decoded.Candidates) != 1 || decoded.Candidates[0].FallbackIdentity != "/repo/feature" {
 			t.Fatalf("decoded selector error = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeTransitionPendingError:
-		var decoded *serverapi.WorktreeTransitionPendingError
-		if !errors.As(err, &decoded) || decoded.PendingOperationID != operationID || decoded.SessionID != "session" {
-			t.Fatalf("decoded pending transition = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeImmediateTransitionError:
-		var decoded *serverapi.WorktreeImmediateTransitionError
-		if !errors.As(err, &decoded) || decoded.Kind != serverapi.WorktreeImmediateTransitionOriginInactive {
-			t.Fatalf("decoded immediate transition = %+v (%v)", decoded, err)
 		}
 	case *serverapi.WorktreeSetupRetainedError:
 		var decoded *serverapi.WorktreeSetupRetainedError
