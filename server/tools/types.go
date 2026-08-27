@@ -50,6 +50,10 @@ type Result struct {
 	// PresentationDelta is transient handler output. Runtime consumes it before
 	// persistence and materializes Presentation from authoritative call input.
 	PresentationDelta *transcript.ToolResultPresentationDelta `json:"-"`
+
+	// CompletedBackgroundSessionID is transient completion provenance consumed
+	// by runtime orchestration before the result is persisted.
+	CompletedBackgroundSessionID *int `json:"-"`
 }
 
 type Definition struct {

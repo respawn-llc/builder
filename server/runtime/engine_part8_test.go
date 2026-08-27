@@ -20,6 +20,45 @@ import (
 	"core/shared/toolspec"
 )
 
+type delayedGenerateClient struct {
+	*fakeClient
+	delay time.Duration
+}
+
+func (c *delayedGenerateClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	callCount := len(c.calls)
+	c.mu.Unlock()
+	if callCount == 1 {
+		time.Sleep(c.delay)
+	}
+	return c.fakeClient.Generate(ctx, req)
+}
+
+func forwardBackgroundEvents(t *testing.T, manager *shelltool.Manager, eng *Engine, ownerSessionID string) {
+	t.Helper()
+	manager.SetEventHandler(func(evt shelltool.Event) bool {
+		summary, err := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
+		if err != nil {
+			t.Errorf("SummarizeBackgroundEvent: %v", err)
+			return false
+		}
+		preview, previewRemoved := summary.RuntimePreview()
+		var exitCode *int
+		if evt.Snapshot.ExitCode != nil {
+			value := *evt.Snapshot.ExitCode
+			exitCode = &value
+		}
+		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+			Type: backgroundShellEventTypeForTest(evt.Type), ID: evt.Snapshot.ID, State: evt.Snapshot.State,
+			Command: evt.Snapshot.Command, Workdir: evt.Snapshot.Workdir, LogPath: evt.Snapshot.LogPath,
+			Preview: preview, PreviewRemoved: previewRemoved, ExitCode: exitCode,
+			NoticeSuppressed: evt.NoticeSuppressed,
+		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == ownerSessionID && !evt.NoticeSuppressed)
+		return true
+	})
+}
+
 func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -146,7 +185,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	}
 }
 
-func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T) {
+func TestCompletedWriteStdinGuardConsumesPendingBackgroundNotice(t *testing.T) {
 	store := mustCreateTestSession(t)
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
 	if err != nil {
@@ -156,22 +195,22 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 		_ = manager.Close()
 	}()
 
-	client := &fakeClient{responses: []llm.Response{
+	client := &delayedGenerateClient{fakeClient: &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("start background"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_exec_1",
 				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"cmd":"read line; echo done","shell":"/bin/sh","login":false,"tty":true,"yield_time_ms":1}`),
+				Input: json.RawMessage(`{"cmd":"sleep 0.1; printf '12345678901234567890123456789012345678901234567890123456789012345678901234567890'","shell":"/bin/sh","login":false,"tty":true,"yield_time_ms":1}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("wait for it"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("poll background"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
-				ID:    "call_poll_1",
+				ID:    "call_stdin_1",
 				Name:  string(toolspec.ToolWriteStdin),
-				Input: json.RawMessage(`{"session_id":1000,"chars":"\n","yield_time_ms":15000}`),
+				Input: json.RawMessage(`{"session_id":1000,"yield_time_ms":15000,"max_output_tokens":21}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -179,45 +218,15 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("unexpected extra turn"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
+	}}, delay: 300 * time.Millisecond}
 	registry := newTestToolRegistry(t,
-		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, manager, store.Meta().SessionID)},
-		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, manager)},
+		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, 40, manager, store.Meta().SessionID)},
+		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, 40, manager)},
 	)
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
-	manager.SetEventHandler(func(evt shelltool.Event) bool {
-		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
-		if summaryErr != nil {
-			t.Errorf("SummarizeBackgroundEvent: %v", summaryErr)
-			return false
-		}
-		preview, previewRemoved := summary.RuntimePreview()
-		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-			Type:           backgroundShellEventTypeForTest(evt.Type),
-			ID:             evt.Snapshot.ID,
-			State:          evt.Snapshot.State,
-			Command:        evt.Snapshot.Command,
-			Workdir:        evt.Snapshot.Workdir,
-			LogPath:        evt.Snapshot.LogPath,
-			Preview:        preview,
-			PreviewRemoved: previewRemoved,
-			ExitCode: func() *int {
-				if evt.Snapshot.ExitCode == nil {
-					return nil
-				}
-				out := *evt.Snapshot.ExitCode
-				return &out
-			}(),
-			NoticeSuppressed: evt.NoticeSuppressed,
-		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
-		return true
-	})
+	forwardBackgroundEvents(t, manager, eng, store.Meta().SessionID)
 
-	assistant, err := eng.SubmitUserMessage(context.Background(), "run and wait")
+	assistant, err := eng.SubmitUserMessage(context.Background(), "run and poll")
 	if err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
@@ -228,12 +237,39 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 	callCount := len(client.calls)
 	client.mu.Unlock()
 	if callCount != 3 {
-		t.Fatalf("model call count = %d, want 3", callCount)
+		t.Fatalf("model call count = %d, want 3 without an extra background continuation", callCount)
 	}
+	var backgroundNoticeCount int
 	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
 		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice {
-			t.Fatalf("did not expect background notice after write_stdin harvested completion: %+v", msg)
+			backgroundNoticeCount++
 		}
+	}
+	if backgroundNoticeCount != 0 {
+		t.Fatalf("background notice count = %d, want 0", backgroundNoticeCount)
+	}
+	completion, ok := eng.transcriptRuntimeState().ToolCompletionSnapshot("call_stdin_1")
+	if !ok {
+		t.Fatal("expected persisted guarded poll completion")
+	}
+	if !completion.IsError {
+		t.Fatalf("guarded poll completion = %+v, want error result", completion)
+	}
+	var payload struct {
+		Error  *string `json:"error"`
+		Output *string `json:"output"`
+	}
+	if err := json.Unmarshal(completion.Output, &payload); err != nil {
+		t.Fatalf("decode guarded poll result: %v", err)
+	}
+	if payload.Error == nil || payload.Output != nil {
+		t.Fatalf("guarded poll payload = %+v, want typed error without command output", payload)
+	}
+	if completion.Presentation == nil ||
+		completion.Presentation.MovedToBackground ||
+		completion.Presentation.ShellExitCode == nil ||
+		*completion.Presentation.ShellExitCode != 0 {
+		t.Fatalf("guarded poll presentation = %+v, want terminal shell facts", completion.Presentation)
 	}
 }
 

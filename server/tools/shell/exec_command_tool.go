@@ -46,14 +46,15 @@ type ExecCommandTool struct {
 	defaultShell         string
 	defaultLogin         bool
 	outputLimit          int
+	oversizedOutputGuard oversizedOutputGuard
 	background           *Manager
 	ownerSessionID       string
 	postprocessor        *postprocess.Runner
 	executionCorrelation *runtimeids.ExecutionCorrelation
 }
 
-func NewExecCommandTool(workspaceRoot string, outputLimit int, background *Manager, ownerSessionID string) *ExecCommandTool {
-	return NewExecCommandToolWithConfig(workspaceRoot, outputLimit, background, ownerSessionID, ExecCommandToolConfig{})
+func NewExecCommandTool(workspaceRoot string, outputLimit int, contextWindowTokens int, background *Manager, ownerSessionID string) *ExecCommandTool {
+	return NewExecCommandToolWithConfig(workspaceRoot, outputLimit, contextWindowTokens, background, ownerSessionID, ExecCommandToolConfig{})
 }
 
 type ExecCommandToolConfig struct {
@@ -61,7 +62,7 @@ type ExecCommandToolConfig struct {
 	ExecutionCorrelation *runtimeids.ExecutionCorrelation
 }
 
-func NewExecCommandToolWithConfig(workspaceRoot string, outputLimit int, background *Manager, ownerSessionID string, config ExecCommandToolConfig) *ExecCommandTool {
+func NewExecCommandToolWithConfig(workspaceRoot string, outputLimit int, contextWindowTokens int, background *Manager, ownerSessionID string, config ExecCommandToolConfig) *ExecCommandTool {
 	defaultShell := strings.TrimSpace(os.Getenv("SHELL"))
 	if defaultShell == "" {
 		defaultShell = "/bin/sh"
@@ -74,6 +75,7 @@ func NewExecCommandToolWithConfig(workspaceRoot string, outputLimit int, backgro
 		defaultShell:         defaultShell,
 		defaultLogin:         true,
 		outputLimit:          outputLimit,
+		oversizedOutputGuard: newOversizedOutputGuard(contextWindowTokens),
 		background:           background,
 		ownerSessionID:       strings.TrimSpace(ownerSessionID),
 		postprocessor:        config.Postprocessor,
@@ -81,8 +83,8 @@ func NewExecCommandToolWithConfig(workspaceRoot string, outputLimit int, backgro
 	}
 }
 
-func NewExecCommandToolWithPostprocessor(workspaceRoot string, outputLimit int, background *Manager, ownerSessionID string, runner *postprocess.Runner) *ExecCommandTool {
-	return NewExecCommandToolWithConfig(workspaceRoot, outputLimit, background, ownerSessionID, ExecCommandToolConfig{
+func NewExecCommandToolWithPostprocessor(workspaceRoot string, outputLimit int, contextWindowTokens int, background *Manager, ownerSessionID string, runner *postprocess.Runner) *ExecCommandTool {
+	return NewExecCommandToolWithConfig(workspaceRoot, outputLimit, contextWindowTokens, background, ownerSessionID, ExecCommandToolConfig{
 		Postprocessor: runner,
 	})
 }
@@ -162,20 +164,25 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 	if strings.TrimSpace(result.ToolError) != "" {
 		return tools.ErrorResultWith(c, formatToolError(result.Warning, result.ToolError), marshalNoHTMLEscape), nil
 	}
-	body, marshalErr := marshalNoHTMLEscape(formatExecResponse(result))
+	presentation := shellResultPresentationDelta(
+		in.Raw,
+		result.Truncated,
+		result.MovedToBackground,
+		result.ExitCode,
+	)
+	modelVisibleOutput := formatExecResponse(result)
+	if guarded, ok := t.oversizedOutputGuard.FailedResult(c, in.MaxOutputTokens, modelVisibleOutput, result.OutputPath, presentation); ok {
+		return guarded, nil
+	}
+	body, marshalErr := marshalNoHTMLEscape(modelVisibleOutput)
 	if marshalErr != nil {
 		return tools.Result{}, marshalErr
 	}
 	toolResult := tools.Result{
-		CallID: c.ID,
-		Name:   c.Name,
-		Output: body,
-		PresentationDelta: shellResultPresentationDelta(
-			in.Raw,
-			result.Truncated,
-			result.MovedToBackground,
-			result.ExitCode,
-		),
+		CallID:            c.ID,
+		Name:              c.Name,
+		Output:            body,
+		PresentationDelta: presentation,
 	}
 	return toolResult, nil
 }

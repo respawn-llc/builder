@@ -87,6 +87,13 @@
 
 - Kent truncates large tool output for model context with standardized head/tail content and truncation metadata. The threshold is configurable and applies after command post-processing.
 - Foreground shell output is evaluated after sanitization, post-processing, warnings, truncation, and presentation trimming. Whitespace-only content is no output.
+- Each `shell` and `write_stdin` call independently applies the oversized-output guard after its existing output processing and ordinary truncation. The guard carries no state between calls.
+- The oversized-output threshold is half of the active Session's established context window.
+- The oversized-output guard is eligible only when the current call explicitly requests `max_output_tokens` above the threshold.
+- For an eligible call, Kent applies its standard token estimate to the final model-visible result. When that estimate exceeds the threshold, Kent omits all command output and returns a failed tool result.
+- An oversized-output failure must say `Command was executed but the output you requested exceeded 0.5 of your memory size. It was forcibly truncated still to prevent your memory overload, and the output written to ${command.output_path} . Next time be more careful with larger outputs.`, replacing `${command.output_path}` with the retained shell-log path.
+- An oversized-output failure never stops a running command or changes command execution, the complete shell log, or later independent polls.
+- An omitted `max_output_tokens`, a requested cap at or below the threshold, or an eligible call whose estimated final result is at or below the threshold retains existing behavior.
 - A successful foreground command with output returns only that plaintext. Any completed foreground command without output returns `Exit code N, no output.`. An unsuccessful foreground command with output returns `Exit code N, output:` followed by the output.
 - Background completion and polling always include the exit code. Completion with no output says `Exit code N, no output.`. Lifecycle facts remain separate from output summaries.
 - Concise background output may hide an inline preview, but completion must expose the exit code and output-file location when output exists and must not claim there was no output. Recoverable warnings remain visible and count as output, but do not imply command-log content.

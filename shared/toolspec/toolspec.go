@@ -95,6 +95,10 @@ func ConfigName(id ID) string {
 	return string(id)
 }
 
+func IsShellTool(id ID) bool {
+	return id == ToolExecCommand || id == ToolWriteStdin
+}
+
 func CatalogIDs() []ID {
 	out := make([]ID, len(catalogIDs))
 	copy(out, catalogIDs)

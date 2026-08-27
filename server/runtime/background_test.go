@@ -239,10 +239,11 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 
 			presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{ToolName: string(toolspec.ToolWriteStdin)})
 			receipt, _, err := engine.persistToolCompletionRaw("step", tools.Result{
-				CallID:       "write-stdin-call",
-				Name:         toolspec.ToolWriteStdin,
-				Output:       json.RawMessage(`{"background_session_id":42,"background_running":false,"backgrounded":true}`),
-				Presentation: &presentation,
+				CallID:                       "write-stdin-call",
+				Name:                         toolspec.ToolWriteStdin,
+				Output:                       json.RawMessage(`{"background_session_id":42,"background_running":false,"backgrounded":true}`),
+				Presentation:                 &presentation,
+				CompletedBackgroundSessionID: textutil.Value(42),
 			})
 			if receipt.Committed == tt.wantPending {
 				t.Fatalf("completion receipt = %+v, want committed=%t", receipt, !tt.wantPending)
@@ -255,6 +256,62 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 			}
 			if got := scheduler.HasPendingNotices(); got != tt.wantPending {
 				t.Fatalf("pending notice after completion = %t, want %t", got, tt.wantPending)
+			}
+		})
+	}
+}
+
+func TestInvalidWriteStdinCompletionProvenanceFailsWithoutPersistence(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		debug bool
+	}{
+		{name: "production", debug: false},
+		{name: "debug", debug: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+				Model: "gpt-5",
+				Debug: test.debug,
+			})
+			presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{ToolName: string(toolspec.ToolWriteStdin)})
+
+			persist := func() (session.CommitReceipt, error) {
+				receipt, _, err := engine.persistToolCompletionRaw("step", tools.Result{
+					CallID:                       "write-stdin-call",
+					Name:                         toolspec.ToolWriteStdin,
+					Output:                       json.RawMessage(`{"error":"invalid completion"}`),
+					IsError:                      true,
+					Presentation:                 &presentation,
+					CompletedBackgroundSessionID: textutil.Value(0),
+				})
+				return receipt, err
+			}
+
+			if test.debug {
+				defer func() {
+					recovered := recover()
+					var provenanceErr invalidBackgroundCompletionProvenanceError
+					panicErr, ok := recovered.(error)
+					if !ok || !errors.As(panicErr, &provenanceErr) {
+						t.Fatalf("debug invalid completion panic = %v, want typed provenance error", recovered)
+					}
+				}()
+				_, _ = persist()
+				t.Fatal("debug invalid completion did not panic")
+			}
+
+			receipt, err := persist()
+			if receipt.Committed {
+				t.Fatal("invalid completion provenance was persisted")
+			}
+			var provenanceErr invalidBackgroundCompletionProvenanceError
+			if !errors.As(err, &provenanceErr) {
+				t.Fatalf("persist invalid completion error = %v, want typed provenance error", err)
+			}
+			if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("write-stdin-call"); found {
+				t.Fatal("invalid completion provenance was applied to runtime state")
 			}
 		})
 	}

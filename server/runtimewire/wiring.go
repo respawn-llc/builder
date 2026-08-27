@@ -108,6 +108,7 @@ func NewRuntimeWiringWithBackground(
 		Enabled:                  enabledTools,
 		MinimumExecToBgTime:      time.Duration(active.MinimumExecToBgSeconds) * time.Second,
 		ShellOutputMaxChars:      active.ShellOutputMaxChars,
+		ModelContextWindow:       active.ModelContextWindow,
 		AllowNonCwdEdits:         active.AllowNonCwdEdits,
 		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
 		Logger:                   logger,
