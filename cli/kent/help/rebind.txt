@@ -11,8 +11,9 @@ the source project.
 --project moves the session to that project. Kent attaches an unbound target
 workspace automatically and reports the new attachment.
 
-Human-initiated rebind waits for active model work to reach its maintenance
-boundary. A running session-owned background process blocks that move.
+A human same-project rebind waits for active model work to reach its maintenance
+boundary. A human cross-project rebind rejects immediately while the runtime is
+non-idle. A running session-owned background process blocks either move.
 
 When the active agent rebinds its own session, Kent acknowledges the scheduled
 move immediately and applies it between agent steps. Existing background

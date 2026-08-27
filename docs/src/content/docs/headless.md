@@ -139,7 +139,7 @@ This is needed to enable functionality related to project management and allows 
 - `kent rebind <session-id> <new-path>` retargets a session while keeping its source project and attaches an unbound target workspace to that project.
 - `kent rebind --project <project-id> <session-id> <new-path>` moves a non-workflow session to another project and attaches an unbound target workspace.
 
-Human-initiated rebind waits for active model work and rejects a Session with a running Session-owned background command. When the active agent rebinds its own Session, Kent acknowledges the scheduled move immediately, applies it between Agent Steps, and leaves existing background commands in the directories where they started.
+A human same-Project rebind waits for active model work. A human cross-Project rebind rejects immediately while the Runtime is non-idle. Either human rebind rejects a Session with a running Session-owned background command. When the active agent rebinds its own Session, Kent acknowledges the scheduled move immediately, applies it between Agent Steps, and leaves existing background commands in the directories where they started.
 
 Detach and default-workspace selection require an explicit project ID. Path selectors are converted to absolute server paths before the request. A shared path can be detached from one project without changing its binding in another project.
 
