@@ -188,14 +188,12 @@ export function ProjectTasksSurface({
     setDisclosure(next);
   };
   const taskDetailID = activeDestination?.kind === "taskDetail" ? activeDestination.taskID : null;
-  const activeTaskDetailMode =
-    activeDestination?.kind === "taskDetail" ? (activeDestination.mode ?? "shift") : null;
   const openTaskDetail = useCallback(
     (taskID: string) => {
       setLabelEditorTaskID(null);
-      open({ kind: "taskDetail", mode: activeTaskDetailMode ?? sidebarMode, taskID });
+      open({ kind: "taskDetail", mode: sidebarMode, taskID });
     },
-    [activeTaskDetailMode, open, sidebarMode],
+    [open, sidebarMode],
   );
   const openTaskDependencies = useCallback(
     (taskID: string) => {
@@ -203,11 +201,11 @@ export function ProjectTasksSurface({
       open({
         kind: "taskDetail",
         initialFocus: { kind: "dependencies" },
-        mode: activeTaskDetailMode ?? sidebarMode,
+        mode: sidebarMode,
         taskID,
       });
     },
-    [activeTaskDetailMode, open, sidebarMode],
+    [open, sidebarMode],
   );
   const presentation = projectTasksPresentation({
     data,
