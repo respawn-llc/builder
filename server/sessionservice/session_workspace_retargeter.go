@@ -76,6 +76,10 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 		return metadata.SessionWorkspaceRetargetResult{}, err
 	}
 	maintenanceCtx := releaseStarts.AuthorizeMaintenance(ctx)
+	plan, err = s.metadata.PlanSessionWorkspaceRetarget(maintenanceCtx, req)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetResult{}, errors.Join(err, releaseStarts.Close(context.Background()))
+	}
 
 	var result metadata.SessionWorkspaceRetargetResult
 	var publicationErr error

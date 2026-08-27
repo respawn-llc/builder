@@ -43,6 +43,30 @@ func (f retargetIdentityPublisherFunc) PublishSessionIdentity(sessionID string) 
 	return f(sessionID)
 }
 
+type staleFirstProjectBoundaryMetadata struct {
+	sessionRetargetMetadata
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *staleFirstProjectBoundaryMetadata) PlanSessionWorkspaceRetarget(
+	ctx context.Context,
+	req metadata.SessionWorkspaceRetargetRequest,
+) (metadata.SessionWorkspaceRetargetPlan, error) {
+	plan, err := m.sessionRetargetMetadata.PlanSessionWorkspaceRetarget(ctx, req)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetPlan{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.calls == 1 {
+		plan.SourceProject = plan.TargetProject
+	}
+	return plan, nil
+}
+
 type failingRetargetResourceLifecycle struct {
 	err error
 }
@@ -661,6 +685,55 @@ func TestSessionWorkspaceRetargeterRejectsActiveCrossProjectRuntimeImmediately(t
 	var retargetErr *serverapi.SessionRetargetError
 	if !errors.As(err, &retargetErr) || retargetErr.Reason != serverapi.SessionRetargetRuntimeActive {
 		t.Fatalf("RetargetWorkspace error = %v, want active-Runtime rejection", err)
+	}
+}
+
+func TestSessionWorkspaceRetargeterChoosesAdmissionFromCurrentProjectBoundary(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	targetProjectID := fixture.targetProject.ProjectID
+	request := metadata.SessionWorkspaceRetargetRequest{
+		SessionID:     fixture.child.Meta().SessionID,
+		WorkspaceRoot: fixture.targetWorkspaceRoot,
+		ProjectID:     &targetProjectID,
+	}
+	client := &queuedFailureRetargetRuntimeClient{
+		run:           func() error { return nil },
+		scheduled:     make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+		secondStarted: make(chan struct{}),
+	}
+	engine := fixture.openRuntimeWithClient(t, client)
+	stepDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "keep this Session active")
+		stepDone <- err
+	}()
+	select {
+	case <-client.scheduled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("active Agent Step did not start")
+	}
+	defer func() {
+		close(client.releaseFirst)
+		if err := <-stepDone; err != nil {
+			t.Errorf("finish active Agent Step: %v", err)
+		}
+	}()
+
+	metadataSource := &staleFirstProjectBoundaryMetadata{sessionRetargetMetadata: fixture.metadata}
+	retargetDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.retargeter(metadataSource, retargetProcessSource{}).RetargetWorkspace(context.Background(), request)
+		retargetDone <- err
+	}()
+	select {
+	case err := <-retargetDone:
+		var retargetErr *serverapi.SessionRetargetError
+		if !errors.As(err, &retargetErr) || retargetErr.Reason != serverapi.SessionRetargetRuntimeActive {
+			t.Fatalf("RetargetWorkspace error = %v, want active-Runtime rejection", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("RetargetWorkspace waited using the stale same-Project classification")
 	}
 }
 
