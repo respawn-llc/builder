@@ -466,7 +466,7 @@ func enabledToolsNeedEditDenyPolicy(enabled []toolspec.ID) bool {
 
 func enabledToolsContainShell(enabled []toolspec.ID) bool {
 	for _, id := range enabled {
-		if id == toolspec.ToolExecCommand || id == toolspec.ToolWriteStdin {
+		if toolspec.IsShellTool(id) {
 			return true
 		}
 	}
