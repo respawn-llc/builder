@@ -311,11 +311,20 @@ func (r *agentResource) withEngineUnderAdmission(
 	if callback == nil {
 		return errors.New("agent resource callback is required")
 	}
+	engine, err := r.beginEngineCallbackUnderAdmission()
+	if err != nil {
+		return err
+	}
+	defer r.releaseCallbackCount()
+	return callback(ctx, engine)
+}
+
+func (r *agentResource) beginEngineCallbackUnderAdmission() (*runtime.Engine, error) {
 	r.mu.Lock()
 	if r.rejectsNewUseLocked() || r.engine == nil {
 		ref := r.ref
 		r.mu.Unlock()
-		return errors.Join(
+		return nil, errors.Join(
 			serverapi.ErrRuntimeUnavailable,
 			fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation()),
 		)
@@ -324,8 +333,7 @@ func (r *agentResource) withEngineUnderAdmission(
 	r.callbacks++
 	r.signalLocked()
 	r.mu.Unlock()
-	defer r.releaseCallbackCount()
-	return callback(ctx, engine)
+	return engine, nil
 }
 
 func (r *agentResource) releaseCallbackCount() {

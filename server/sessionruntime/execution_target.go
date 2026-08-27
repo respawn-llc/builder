@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
@@ -19,13 +20,25 @@ import (
 type ActiveRuntimeMaintenance struct {
 	PreviousFilesystemContext tools.FilesystemContext
 	Replace                   func(tools.FilesystemContext) error
+	steerSessionRebindFailure func(session.SessionRebindReminder) (session.CommitReceipt, error)
 	retire                    bool
+}
+
+func (m *ActiveRuntimeMaintenance) SteerSessionRebindFailure(reminder session.SessionRebindReminder) (session.CommitReceipt, error) {
+	if m == nil || m.steerSessionRebindFailure == nil {
+		return session.CommitReceipt{}, errors.New("active runtime Session rebind failure steering is unavailable")
+	}
+	return m.steerSessionRebindFailure(reminder)
 }
 
 func (m *ActiveRuntimeMaintenance) RetireRuntime() {
 	if m != nil {
 		m.retire = true
 	}
+}
+
+func (m *ActiveRuntimeMaintenance) RetirementScheduled() bool {
+	return m != nil && m.retire
 }
 
 func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
@@ -153,41 +166,122 @@ func (a *Authority) RunSessionMaintenance(
 		}
 		var retire bool
 		err := engine.RunWhenIdleBeforeQueuedUserWork(runCtx, runtime.ActiveKindRuntimeMaintenance, func() error {
-			previousContext := tools.FilesystemContext{}
-			if resource.localTools != nil {
-				previousContext = resource.localTools.FilesystemContext()
-			}
-			currentContext := previousContext.Clone()
-			active := true
-			maintenance := &ActiveRuntimeMaintenance{
-				PreviousFilesystemContext: previousContext,
-				Replace: func(next tools.FilesystemContext) error {
-					if !active {
-						return errors.New("active runtime maintenance rebind is no longer active")
-					}
-					if err := rebindResourceContext(resource, engine, next); err != nil {
-						return err
-					}
-					currentContext = next.Clone()
-					return nil
-				},
-			}
-			callbackErr := fn(runCtx, store, maintenance)
-			active = false
-			retire = retire || maintenance.retire
-			if callbackErr == nil || currentContext.Equal(previousContext) {
-				return callbackErr
-			}
-			rollbackErr := rebindResourceContext(resource, engine, previousContext)
-			if rollbackErr != nil {
-				retire = true
-				engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureRuntimeUnavailable)
-				rollbackErr = fmt.Errorf("rollback runtime filesystem context: %w", rollbackErr)
-			}
-			return errors.Join(callbackErr, rollbackErr)
+			var runErr error
+			retire, runErr = runActiveRuntimeMaintenance(resource, engine, func(maintenance *ActiveRuntimeMaintenance) error {
+				return fn(runCtx, store, maintenance)
+			})
+			return runErr
 		})
 		return retire, err
 	})
+}
+
+func (a *Authority) RunSessionMaintenanceIfIdle(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error,
+) error {
+	if fn == nil {
+		return nil
+	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
+		if resource == nil {
+			return false, fn(runCtx, store, nil)
+		}
+		if hasBlockingRuntimeActivity(resource) {
+			return false, ErrRuntimeActivityBusy
+		}
+		var retire bool
+		started, runErr := engine.RunIfIdleBeforeQueuedUserWork(runCtx, runtime.ActiveKindRuntimeMaintenance, func() error {
+			var maintenanceErr error
+			retire, maintenanceErr = runActiveRuntimeMaintenance(resource, engine, func(maintenance *ActiveRuntimeMaintenance) error {
+				return fn(runCtx, store, maintenance)
+			})
+			return maintenanceErr
+		})
+		if !started && errors.Is(runErr, runtime.ErrAgentBusy) {
+			return false, ErrRuntimeActivityBusy
+		}
+		return retire, runErr
+	})
+}
+
+func (a *Authority) RunSessionMaintenanceAtStepBoundary(
+	ctx context.Context,
+	sessionID string,
+	origin serverapi.RuntimeStepOrigin,
+	onScheduled func(),
+	fn func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error,
+) error {
+	if fn == nil {
+		return nil
+	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return a.withExactStepBoundaryMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
+		if resource == nil {
+			return false, runtime.ErrActiveStepInactive
+		}
+		activeStep := runtimeactivity.ActiveStepFromProvider(engine)
+		if activeStep == nil || activeStep.RunID != origin.RunID || activeStep.StepID != origin.StepID {
+			return false, runtime.ErrActiveStepInactive
+		}
+		var retire bool
+		err := engine.RunExecutionTargetTransition(runCtx, onScheduled, func() error {
+			var runErr error
+			retire, runErr = runActiveRuntimeMaintenance(resource, engine, func(maintenance *ActiveRuntimeMaintenance) error {
+				return fn(runCtx, store, maintenance)
+			})
+			return runErr
+		})
+		return retire, err
+	})
+}
+
+func runActiveRuntimeMaintenance(
+	resource *agentResource,
+	engine *runtime.Engine,
+	fn func(*ActiveRuntimeMaintenance) error,
+) (bool, error) {
+	previousContext := tools.FilesystemContext{}
+	if resource.localTools != nil {
+		previousContext = resource.localTools.FilesystemContext()
+	}
+	currentContext := previousContext.Clone()
+	active := true
+	maintenance := &ActiveRuntimeMaintenance{
+		PreviousFilesystemContext: previousContext,
+		Replace: func(next tools.FilesystemContext) error {
+			if !active {
+				return errors.New("active runtime maintenance rebind is no longer active")
+			}
+			if err := rebindResourceContext(resource, engine, next); err != nil {
+				return err
+			}
+			currentContext = next.Clone()
+			return nil
+		},
+		steerSessionRebindFailure: engine.SteerSessionRebindFailure,
+	}
+	callbackErr := fn(maintenance)
+	active = false
+	retire := maintenance.retire
+	if callbackErr == nil || currentContext.Equal(previousContext) {
+		return retire, callbackErr
+	}
+	rollbackErr := rebindResourceContext(resource, engine, previousContext)
+	if rollbackErr != nil {
+		retire = true
+		engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureRuntimeUnavailable)
+		rollbackErr = fmt.Errorf("rollback runtime filesystem context: %w", rollbackErr)
+	}
+	return retire, errors.Join(callbackErr, rollbackErr)
 }
 
 func (a *Authority) ClearWorktreeReminder(ctx context.Context, sessionID string) error {
@@ -220,18 +314,24 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 	if resource == nil {
 		return false, nil
 	}
+	return hasBlockingRuntimeActivity(resource), nil
+}
+
+func hasBlockingRuntimeActivity(resource *agentResource) bool {
 	resource.mu.Lock()
 	state := resource.state
 	current := resource.current
 	steps := resource.steps
 	engine := resource.engine
 	resource.mu.Unlock()
+	active := state != AgentResourceReady || current != nil
+	if engine == nil {
+		return active || steps != 0
+	}
 	snapshot := engine.ActiveRun()
 	maintenanceStep := steps != 0 && snapshot != nil && snapshot.ActiveKind == runtime.ActiveKindRuntimeMaintenance
-	active := state != AgentResourceReady ||
-		current != nil ||
-		(steps != 0 && !maintenanceStep)
-	if !active && engine != nil {
+	active = active || (steps != 0 && !maintenanceStep)
+	if !active {
 		liveRun := engine.HasActiveLiveRunGroup()
 		if snapshot != nil && snapshot.ActiveKind == runtime.ActiveKindRuntimeMaintenance {
 			liveRun = false
@@ -243,7 +343,7 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 			engine.CurrentNodeExecutionConfigured() ||
 			engine.ReviewerRunning()
 	}
-	return active, nil
+	return active
 }
 
 func (a *Authority) RetireIdleRuntime(ctx context.Context, sessionID string) (bool, error) {
@@ -513,7 +613,27 @@ func ParseSessionIDs(raw []string) ([]runtimeids.SessionID, error) {
 
 type maintenanceCallback func(context.Context, *session.Store, *agentResource, *runtime.Engine) (retire bool, err error)
 
+type maintenanceAdmission uint8
+
+const (
+	maintenanceAdmissionAuthorized maintenanceAdmission = iota + 1
+	maintenanceAdmissionExactStepBoundary
+)
+
 func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runtimeids.SessionID, callback maintenanceCallback) error {
+	return a.withMaintenanceResourceAdmission(ctx, sessionID, maintenanceAdmissionAuthorized, callback)
+}
+
+func (a *Authority) withExactStepBoundaryMaintenanceResource(ctx context.Context, sessionID runtimeids.SessionID, callback maintenanceCallback) error {
+	return a.withMaintenanceResourceAdmission(ctx, sessionID, maintenanceAdmissionExactStepBoundary, callback)
+}
+
+func (a *Authority) withMaintenanceResourceAdmission(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	admission maintenanceAdmission,
+	callback maintenanceCallback,
+) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
 	}
@@ -525,8 +645,9 @@ func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runti
 	}
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
-	defer gate.lock.Unlock()
-	if block := gate.unauthorizedMaintenanceBlock(ctx); block != nil {
+	if block := gate.unauthorizedMaintenanceBlock(ctx); block != nil &&
+		(admission != maintenanceAdmissionExactStepBoundary || block.reason != SessionStartBlockMaintenance) {
+		gate.lock.Unlock()
 		return errors.Join(
 			ErrSessionStartsBlocked,
 			fmt.Errorf("session %s maintenance is blocked by session start block %d", sessionID, block.reason),
@@ -536,6 +657,7 @@ func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runti
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
 	if resource == nil {
+		defer gate.lock.Unlock()
 		descriptor, err := session.NewOpenSessionDescriptor(sessionID)
 		if err != nil {
 			return err
@@ -546,19 +668,33 @@ func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runti
 		}
 		return err
 	}
+	engine, err := resource.beginEngineCallbackUnderAdmission()
+	if err != nil {
+		gate.lock.Unlock()
+		return err
+	}
+	store := resource.store
+	gate.lock.Unlock()
 	retire := false
-	err := resource.withEngine(ctx, resource.ref, func(runCtx context.Context, engine *runtime.Engine) (err error) {
-		retire, err = callback(runCtx, resource.store, resource, engine)
-		return
-	})
+	err = func() error {
+		defer resource.releaseCallbackCount()
+		var callbackErr error
+		retire, callbackErr = callback(ctx, store, resource, engine)
+		return callbackErr
+	}()
 	if retire {
 		err = errors.Join(err, a.retireExactResource(ctx, resource))
+	} else {
+		err = errors.Join(err, a.closeRetiringResource(context.Background(), resource))
 	}
 	return err
 }
 
 func (a *Authority) retireExactResource(ctx context.Context, resource *agentResource) error {
 	sessionID := resource.ref.SessionID()
+	gate := a.gateFor(sessionID)
+	gate.lock.Lock()
+	defer gate.lock.Unlock()
 	a.mu.Lock()
 	if a.resources[sessionID] != resource {
 		a.mu.Unlock()

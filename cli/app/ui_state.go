@@ -159,6 +159,8 @@ type uiSessionTransitionFeatureState struct {
 	nextSessionID                           string
 	nextForkRollbackTargetID                string
 	nextPreviousSessionID                   *runtimeids.SessionID
+	sessionExecutionTarget                  *clientui.SessionExecutionTarget
+	sessionRetargeted                       bool
 	sessionName                             string
 	sessionID                               string
 	forcedLocalExit                         bool

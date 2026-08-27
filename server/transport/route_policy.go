@@ -256,6 +256,8 @@ func (e routePolicyExecutor) authorizeScopeFacts(
 			return nil
 		}
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
+	case rpccontract.ScopeSessionDraftHandoffProject:
+		return e.gateway.requireSessionInActiveProjectOrAttached(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionAttachedProject:
 		return e.gateway.requireSessionInAttachedProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeAttachedSession:
@@ -295,6 +297,7 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 	case rpccontract.ScopeAttachSession,
 		rpccontract.ScopeSessionActiveProject,
 		rpccontract.ScopeSessionActiveProjectIfSet,
+		rpccontract.ScopeSessionDraftHandoffProject,
 		rpccontract.ScopeSessionAttachedProject,
 		rpccontract.ScopeAttachedSession,
 		rpccontract.ScopeGoalSession,
@@ -506,6 +509,19 @@ func (g *Gateway) requireSessionInActiveProject(ctx context.Context, state *conn
 		return sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
 	}
 	return nil
+}
+
+func (g *Gateway) requireSessionInActiveProjectOrAttached(ctx context.Context, state *connectionState, sessionID string) error {
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return errors.New("session id is required")
+	}
+	if state != nil &&
+		state.attachedSession != nil &&
+		state.attachedSession.String() == trimmedSessionID {
+		return nil
+	}
+	return g.requireSessionInActiveProject(ctx, state, trimmedSessionID)
 }
 
 func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectionState, sessionID string) error {

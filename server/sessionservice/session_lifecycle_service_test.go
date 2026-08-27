@@ -101,9 +101,21 @@ func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.
 var sessionServiceTestPersistence = sessiontest.NewPersistence()
 
 type sessionLifecycleRetargeterStub struct {
-	result metadata.SessionWorkspaceRetargetResult
-	err    error
-	req    metadata.SessionWorkspaceRetargetRequest
+	result    metadata.SessionWorkspaceRetargetResult
+	err       error
+	req       metadata.SessionWorkspaceRetargetRequest
+	scheduled bool
+}
+
+func (s *sessionLifecycleRetargeterStub) ScheduleWorkspaceRetarget(
+	_ context.Context,
+	req metadata.SessionWorkspaceRetargetRequest,
+	_ serverapi.RuntimeStepOrigin,
+	operationID serverapi.WorktreeOperationID,
+) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	s.req = req
+	s.scheduled = true
+	return serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID}, s.err
 }
 
 type sessionNavigationTargetResolverStub struct {
@@ -313,11 +325,31 @@ func TestServiceRetargetSessionWorkspaceDelegatesAndMapsBinding(t *testing.T) {
 	if retargeter.req.ProjectID == nil || *retargeter.req.ProjectID != projectID {
 		t.Fatalf("retarget request = %+v, want target project %q", retargeter.req, projectID)
 	}
-	if resp.Binding.ProjectID != projectID || resp.Binding.ProjectKey != "TAR" {
+	if resp.Binding == nil || resp.Binding.ProjectID != projectID || resp.Binding.ProjectKey != "TAR" {
 		t.Fatalf("binding = %+v, want mapped retarget result", resp.Binding)
 	}
 	if !resp.WorkspaceBindingCreated {
 		t.Fatal("WorkspaceBindingCreated = false, want true")
+	}
+}
+
+func TestServiceRetargetSessionWorkspaceSchedulesOnlyForRuntimeOrigin(t *testing.T) {
+	retargeter := &sessionLifecycleRetargeterStub{}
+	service := NewGlobalSessionLifecycleService(t.TempDir(), nil, nil).WithWorkspaceRetargeter(retargeter)
+	origin := &serverapi.RuntimeStepOrigin{
+		RunID:  "11111111-1111-4111-8111-111111111111",
+		StepID: "22222222-2222-4222-8222-222222222222",
+	}
+	response, err := service.RetargetSessionWorkspace(t.Context(), serverapi.SessionRetargetWorkspaceRequest{
+		SessionID:     "session-1",
+		WorkspaceRoot: t.TempDir(),
+		Origin:        origin,
+	})
+	if err != nil {
+		t.Fatalf("RetargetSessionWorkspace: %v", err)
+	}
+	if !retargeter.scheduled || response.Scheduled == nil || response.Binding != nil {
+		t.Fatalf("scheduled response = %+v, retargeter scheduled = %t", response, retargeter.scheduled)
 	}
 }
 

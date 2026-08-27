@@ -11,3 +11,11 @@ func TestSessionPersistInputDraftAcceptsComposerDraft(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 }
+func TestSessionRetargetWorkspaceResponseAcceptsScheduledAcknowledgement(t *testing.T) {
+	response := SessionRetargetWorkspaceResponse{
+		Scheduled: &WorktreeScheduledAcknowledgement{OperationID: NewWorktreeOperationID()},
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}

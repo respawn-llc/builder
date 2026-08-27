@@ -97,6 +97,7 @@ func validateMethodOptions(options *sharedpb.KentMethodOptions) error {
 		sharedpb.ScopePolicy_SCOPE_POLICY_PROJECT_WORKSPACE_BINDING,
 		sharedpb.ScopePolicy_SCOPE_POLICY_SESSION_ACTIVE_PROJECT,
 		sharedpb.ScopePolicy_SCOPE_POLICY_SESSION_ACTIVE_PROJECT_IF_SET,
+		sharedpb.ScopePolicy_SCOPE_POLICY_SESSION_DRAFT_HANDOFF_PROJECT,
 		sharedpb.ScopePolicy_SCOPE_POLICY_SESSION_ATTACHED_PROJECT,
 		sharedpb.ScopePolicy_SCOPE_POLICY_ATTACHED_SESSION,
 		sharedpb.ScopePolicy_SCOPE_POLICY_GOAL_SESSION,

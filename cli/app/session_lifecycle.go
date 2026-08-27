@@ -11,6 +11,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/lifecyclecontract"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -31,6 +32,11 @@ type sessionTransitionServer interface {
 type sessionWorkspaceChangeServer interface {
 	sessionLifecycleClientProvider
 	sessionConfigProvider
+}
+
+type sessionReattachServer interface {
+	sessionLifecycleClientProvider
+	ReattachSession(context.Context, string) error
 }
 
 type promptCommandCatalogServer interface {
@@ -191,11 +197,22 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		if runErr != nil {
 			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, runErr)
 		}
+		transition := extractUITransition(finalModel)
+		if transition.SessionRetargeted {
+			reattacher, ok := server.(sessionReattachServer)
+			if !ok {
+				return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, errors.New("Session rebind requires a Remote server"))
+			}
+			next, err = reopenRetargetedSession(ctx, reattacher, runtimePlan, plan.SessionID, finalModel)
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
 			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
 		}
 
-		transition := extractUITransition(finalModel)
 		if transition.Exit {
 			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, nil)
 		}
@@ -205,6 +222,39 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		}
 		next = resolved
 	}
+}
+
+func reopenRetargetedSession(
+	ctx context.Context,
+	server sessionReattachServer,
+	runtimePlan *runtimeLaunchPlan,
+	rawSessionID string,
+	finalModel any,
+) (serverapi.SessionDirective, error) {
+	sessionID, err := runtimeids.ParseSessionID(rawSessionID)
+	if err != nil {
+		return serverapi.SessionDirective{}, releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
+	}
+	if err := persistSessionDraftToServer(ctx, server, rawSessionID, finalModel); err != nil {
+		return serverapi.SessionDirective{}, releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
+	}
+	if runtimePlan.stopEventStreams != nil {
+		runtimePlan.stopEventStreams()
+	}
+	if err := runtimePlan.Close(); err != nil {
+		return serverapi.SessionDirective{}, err
+	}
+	if err := server.ReattachSession(ctx, rawSessionID); err != nil {
+		return serverapi.SessionDirective{}, err
+	}
+	return serverapi.LaunchSessionDirective(
+		serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		serverapi.NewSessionLaunchPreparation(
+			nil,
+			serverapi.RestoreStoredDraftSessionDraftDisposition(),
+			serverapi.SessionAuthPreparationKeepCurrent,
+		),
+	), nil
 }
 
 func bindNavigationSessionContext(ctx context.Context, server interactiveSessionServer, preparation serverapi.SessionLaunchPreparation) (interactiveSessionServer, bool, error) {

@@ -223,6 +223,7 @@ func (m *uiModel) Transition() UITransition {
 		TargetSessionID:              strings.TrimSpace(m.nextSessionID),
 		ForkRollbackTargetID:         m.nextForkRollbackTargetID,
 		PreviousSessionID:            m.nextPreviousSessionID,
+		SessionRetargeted:            m.sessionRetargeted,
 	}
 }
 

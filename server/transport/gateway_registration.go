@@ -267,6 +267,8 @@ func routeScopePolicy(scope sharedpb.ScopePolicy) apicontract.ScopePolicy {
 		return apicontract.ScopeSessionActiveProject
 	case sharedpb.ScopePolicy_SCOPE_POLICY_SESSION_ACTIVE_PROJECT_IF_SET:
 		return apicontract.ScopeSessionActiveProjectIfSet
+	case sharedpb.ScopePolicy_SCOPE_POLICY_SESSION_DRAFT_HANDOFF_PROJECT:
+		return apicontract.ScopeSessionDraftHandoffProject
 	case sharedpb.ScopePolicy_SCOPE_POLICY_SESSION_ATTACHED_PROJECT:
 		return apicontract.ScopeSessionAttachedProject
 	case sharedpb.ScopePolicy_SCOPE_POLICY_ATTACHED_SESSION:

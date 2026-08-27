@@ -59,6 +59,7 @@ const (
 	MessageTypeWorkflowModeExit               = clientui.MessageTypeWorkflowModeExit
 	MessageTypeWorktreeMode                   = clientui.MessageTypeWorktreeMode
 	MessageTypeWorktreeModeExit               = clientui.MessageTypeWorktreeModeExit
+	MessageTypeSessionRebind                  = clientui.MessageTypeSessionRebind
 	MessageTypeGoal                           = clientui.MessageTypeGoal
 	MessageTypeActiveGoalContinuation         = clientui.MessageTypeActiveGoalContinuation
 	MessageTypeAgentSteer                     = clientui.MessageTypeAgentSteer

@@ -507,6 +507,21 @@ func RenderWorktreeModeExitPrompt(branch, cwd, worktreePath, workspaceRoot strin
 	})
 }
 
+func RenderSessionRebindPrompt(sourceProject, targetProject string, sameProject bool, workingDirectory *string) string {
+	sourceProject = strings.TrimSpace(sourceProject)
+	targetProject = strings.TrimSpace(targetProject)
+	var firstLine string
+	if sameProject {
+		firstLine = fmt.Sprintf("This Session moved to another workspace in Project %s.", targetProject)
+	} else {
+		firstLine = fmt.Sprintf("This Session moved from Project %s to Project %s.", sourceProject, targetProject)
+	}
+	if workingDirectory == nil {
+		return firstLine
+	}
+	return fmt.Sprintf("%s\nYour Working Directory is now %s, starting with this message.", firstLine, strings.TrimSpace(*workingDirectory))
+}
+
 func RenderWorkflowTaskInstructions(kind WorkflowTaskPromptKind, args WorkflowNodeContextArgs, nodeCompletionInstructions string) (string, error) {
 	name, text, err := workflowTaskPromptTemplate(kind)
 	if err != nil {

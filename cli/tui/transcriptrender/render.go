@@ -710,6 +710,12 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if text, ok := worktreeNoticeText(row, worktreeMode); ok {
 		return role, text
 	}
+	if row.MessageType != nil && *row.MessageType == clientui.TranscriptMessageSessionRebind {
+		if mode == ModeDetailExpanded && row.Diagnostic != nil {
+			return role, row.Diagnostic.Detail
+		}
+		return role, clientui.SessionRebindCompactLabel
+	}
 	cacheWarningText := cacheWarningNoticeText(row.CacheWarning)
 	if isError {
 		switch row.Reason {
@@ -842,6 +848,7 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 		return StyleRoleNoticeSecondary
 	case clientui.TranscriptMessageHandoffFutureMessage,
 		clientui.TranscriptMessageWorktreeMode,
+		clientui.TranscriptMessageSessionRebind,
 		clientui.TranscriptMessageSubagents:
 		return StyleRoleNotice
 	case clientui.TranscriptMessageGoal, clientui.TranscriptMessageWorkflowMode:

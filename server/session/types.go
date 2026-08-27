@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"github.com/google/uuid"
 )
@@ -167,6 +168,21 @@ type WorktreeReminderState struct {
 	WorktreeContext
 }
 
+type SessionRebindReminder struct {
+	Kind              SessionRebindReminderKind  `json:"kind"`
+	SourceProject     serverapi.ProjectReference `json:"source_project"`
+	TargetProject     serverapi.ProjectReference `json:"target_project"`
+	WorkingDirectory  *string                    `json:"working_directory,omitempty"`
+	FailureDiagnostic *string                    `json:"failure_diagnostic,omitempty"`
+}
+
+type SessionRebindReminderKind string
+
+const (
+	SessionRebindReminderSucceeded SessionRebindReminderKind = "succeeded"
+	SessionRebindReminderFailed    SessionRebindReminderKind = "failed"
+)
+
 type GoalStatus string
 
 const (
@@ -213,6 +229,7 @@ type Meta struct {
 	GeneratedRecoveredWarningIssued bool                             `json:"generated_recovered_warning_issued,omitempty"`
 	LegacyInFlightStepRecovery      bool                             `json:"-"`
 	WorktreeReminder                *WorktreeReminderState           `json:"worktree_reminder,omitempty"`
+	RebindReminder                  *SessionRebindReminder           `json:"rebind_reminder,omitempty"`
 	UsageState                      *UsageState                      `json:"usage_state,omitempty"`
 	Goal                            *GoalState                       `json:"goal,omitempty"`
 	Locked                          *LockedContract                  `json:"locked,omitempty"`

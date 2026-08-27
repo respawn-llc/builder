@@ -8705,17 +8705,27 @@ SET
     artifact_relpath = ?3,
     updated_at_unix_ms = ?4,
     metadata_json = json_remove(
-        json_set(
-            CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
-            '$.workspace_root', CAST(?5 AS TEXT),
-            '$.workspace_container', CAST(?6 AS TEXT),
-            '$.worktree_reminder', json('null')
-        ),
+        CASE WHEN CAST(?5 AS TEXT) IS NULL THEN
+            json_set(
+                CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+                '$.workspace_root', CAST(?6 AS TEXT),
+                '$.workspace_container', CAST(?7 AS TEXT),
+                '$.worktree_reminder', json('null')
+            )
+        ELSE
+            json_set(
+                CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+                '$.workspace_root', CAST(?6 AS TEXT),
+                '$.workspace_container', CAST(?7 AS TEXT),
+                '$.worktree_reminder', json('null'),
+                '$.rebind_reminder', json(CAST(?5 AS TEXT))
+            )
+        END,
         '$.workflow_session'
     )
-WHERE id = ?7
-  AND project_id = ?8
-  AND artifact_relpath = ?9
+WHERE id = ?8
+  AND project_id = ?9
+  AND artifact_relpath = ?10
 `
 
 type RetargetSessionWorkspaceProjectParams struct {
@@ -8723,6 +8733,7 @@ type RetargetSessionWorkspaceProjectParams struct {
 	TargetWorkspaceID        sql.NullString
 	TargetArtifactRelpath    string
 	UpdatedAtUnixMs          int64
+	RebindReminderJson       sql.NullString
 	TargetWorkspaceRoot      string
 	TargetWorkspaceContainer string
 	SessionID                string
@@ -8736,13 +8747,14 @@ func (q *Queries) RetargetSessionWorkspaceProject(ctx context.Context, arg Retar
 		arg.TargetWorkspaceID,
 		arg.TargetArtifactRelpath,
 		arg.UpdatedAtUnixMs,
+		arg.RebindReminderJson,
 		arg.TargetWorkspaceRoot,
 		arg.TargetWorkspaceContainer,
 		arg.SessionID,
 		arg.SourceProjectID,
 		arg.SourceArtifactRelpath,
 	)
-	err = recordQueryError(ctx, err, retargetSessionWorkspaceProject, 9)
+	err = recordQueryError(ctx, err, retargetSessionWorkspaceProject, 10)
 
 	if err != nil {
 		return 0, err
