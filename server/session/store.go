@@ -348,6 +348,9 @@ func openPersistedSession(
 	if err := normalizeMetaWorktreeReminder(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session worktree context: %w", err)
 	}
+	if err := normalizeMetaSessionRebindReminder(&s.meta); err != nil {
+		return nil, fmt.Errorf("validate session rebind reminder: %w", err)
+	}
 	if err := validateMetaCategory(&s.meta); err != nil {
 		return nil, err
 	}
@@ -449,6 +452,7 @@ type ArtifactRelocationTarget struct {
 	WorkspaceRoot      string
 	WorkspaceContainer string
 	UpdatedAt          time.Time
+	RebindReminder     *SessionRebindReminder
 }
 
 func (s *Store) RunArtifactRelocation(target ArtifactRelocationTarget, relocate func() error) error {
@@ -496,6 +500,9 @@ func (s *Store) RunArtifactRelocation(target ArtifactRelocationTarget, relocate 
 	s.meta.WorkspaceRoot = target.WorkspaceRoot
 	s.meta.WorkspaceContainer = target.WorkspaceContainer
 	s.meta.WorktreeReminder = nil
+	if target.RebindReminder != nil {
+		s.meta.RebindReminder = CloneSessionRebindReminder(target.RebindReminder)
+	}
 	s.meta.UpdatedAt = target.UpdatedAt
 	return nil
 }
@@ -879,6 +886,47 @@ func normalizeMetaWorktreeReminder(meta *Meta) error {
 		return err
 	}
 	meta.WorktreeReminder = &normalized
+	return nil
+}
+
+func (s *Store) SetSessionRebindReminder(reminder *SessionRebindReminder) error {
+	var next *SessionRebindReminder
+	if reminder != nil {
+		normalized, err := NormalizeSessionRebindReminder(*reminder)
+		if err != nil {
+			return err
+		}
+		next = &normalized
+	}
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	s.mu.Lock()
+	statesEqual := s.meta.RebindReminder == nil && next == nil
+	if s.meta.RebindReminder != nil && next != nil {
+		statesEqual = SessionRebindReminderEqual(*s.meta.RebindReminder, *next)
+	}
+	if statesEqual && (!s.persisted || s.hasDurableMetadataLocked()) {
+		s.mu.Unlock()
+		return nil
+	}
+	if err := s.requireMetadataPersistenceLocked(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.meta.RebindReminder = CloneSessionRebindReminder(next)
+	s.meta.UpdatedAt = time.Now().UTC()
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
+}
+
+func normalizeMetaSessionRebindReminder(meta *Meta) error {
+	if meta == nil || meta.RebindReminder == nil {
+		return nil
+	}
+	normalized, err := NormalizeSessionRebindReminder(*meta.RebindReminder)
+	if err != nil {
+		return err
+	}
+	meta.RebindReminder = &normalized
 	return nil
 }
 

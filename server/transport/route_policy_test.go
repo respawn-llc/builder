@@ -111,6 +111,48 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, latestFinalRoute, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign latest final answer unexpectedly allowed")
 	}
+	draftRoute := routeForTest(t, protocol.MethodSessionPersistInputDraft)
+	reboundSessionID, err := runtimeids.ParseSessionID(fixture.reboundSessionID)
+	if err != nil {
+		t.Fatalf("parse rebound Session ID: %v", err)
+	}
+	draftState := &connectionState{
+		attachedProject: fixture.bindingA.ProjectID,
+		attachedSession: &reboundSessionID,
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		draftState,
+		draftRoute,
+		serverapi.SessionPersistInputDraftRequest{
+			SessionID: fixture.reboundSessionID,
+			Input:     "preserved draft",
+		},
+	); err != nil {
+		t.Fatalf("rebind source project draft handoff: %v", err)
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		draftRoute,
+		serverapi.SessionPersistInputDraftRequest{
+			SessionID: fixture.reboundSessionID,
+			Input:     "must remain inaccessible",
+		},
+	); err == nil {
+		t.Fatal("detached source-project draft mutation unexpectedly allowed")
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		draftState,
+		draftRoute,
+		serverapi.SessionPersistInputDraftRequest{
+			SessionID: fixture.foreignSessionID,
+			Input:     "must remain inaccessible",
+		},
+	); err == nil {
+		t.Fatal("unrelated foreign-project draft mutation unexpectedly allowed")
+	}
 	typedSessionID, err := runtimeids.ParseSessionID(fixture.ownSessionID)
 	if err != nil {
 		t.Fatalf("parse execution-environment session ID: %v", err)
@@ -174,6 +216,26 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		routeScopeParams{sessionID: fixture.foreignSessionID},
 	); err == nil {
 		t.Fatal("attach foreign session unexpectedly allowed")
+	}
+}
+
+func TestRoutePolicyAllowsRuntimeReleaseAfterSessionMovesProjects(t *testing.T) {
+	fixture := newRoutePolicyFixture(t)
+	// The handler injects the connection-owned runtime owner ID; Project scope
+	// must not reject the release before Runtime authority validates that owner.
+	err := newRoutePolicyExecutor(fixture.gateway).authorizeScope(
+		context.Background(),
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		routeForTest(t, protocol.MethodSessionRuntimeRelease),
+		serverapi.SessionRuntimeReleaseRequest{
+			Attachment: serverapi.SessionRuntimeAttachment{
+				SessionID:  fixture.foreignSessionID,
+				Generation: 1,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("authorize moved Session runtime release: %v", err)
 	}
 }
 
@@ -417,6 +479,7 @@ type routePolicyFixture struct {
 	bindingB         metadata.Binding
 	ownSessionID     string
 	foreignSessionID string
+	reboundSessionID string
 	workspaceB       string
 }
 
@@ -472,6 +535,17 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 	if err := foreignStore.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable foreign: %v", err)
 	}
+	reboundStore, err := session.Create(
+		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
+		"workspace-b",
+		resolvedB.Config.WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create rebound: %v", err)
+	}
+	if err := reboundStore.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable rebound: %v", err)
+	}
 	gateway, err := NewGateway(appCore, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -483,6 +557,7 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 		bindingB:         bindingB,
 		ownSessionID:     ownStore.Meta().SessionID,
 		foreignSessionID: foreignStore.Meta().SessionID,
+		reboundSessionID: reboundStore.Meta().SessionID,
 		workspaceB:       resolvedB.Config.WorkspaceRoot,
 	}
 }

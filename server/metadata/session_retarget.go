@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -32,6 +33,7 @@ type SessionWorkspaceRetargetPlan struct {
 	TargetArtifactRelpath string
 	SourceSessionDir      string
 	TargetSessionDir      string
+	RebindReminder        *session.SessionRebindReminder
 }
 
 func (p SessionWorkspaceRetargetPlan) CrossProject() bool {
@@ -182,6 +184,18 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 	if err != nil {
 		return SessionWorkspaceRetargetResult{}, err
 	}
+	var reminderJSON sql.NullString
+	if plan.RebindReminder != nil {
+		normalized, err := session.NormalizeSessionRebindReminder(*plan.RebindReminder)
+		if err != nil {
+			return SessionWorkspaceRetargetResult{}, fmt.Errorf("validate session rebind reminder: %w", err)
+		}
+		encoded, err := json.Marshal(normalized)
+		if err != nil {
+			return SessionWorkspaceRetargetResult{}, fmt.Errorf("marshal session rebind reminder: %w", err)
+		}
+		reminderJSON = sql.NullString{String: string(encoded), Valid: true}
+	}
 	rows, err := q.RetargetSessionWorkspaceProject(ctx, sqlitegen.RetargetSessionWorkspaceProjectParams{
 		TargetProjectID:          plan.TargetProject.ID,
 		TargetWorkspaceID:        sql.NullString{String: binding.WorkspaceID, Valid: true},
@@ -189,6 +203,7 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 		UpdatedAtUnixMs:          updatedAt.UnixMilli(),
 		TargetWorkspaceRoot:      binding.CanonicalRoot,
 		TargetWorkspaceContainer: binding.WorkspaceName,
+		RebindReminderJson:       reminderJSON,
 		SessionID:                plan.SessionID,
 		SourceProjectID:          plan.SourceProject.ID,
 		SourceArtifactRelpath:    plan.SourceArtifactRelpath,

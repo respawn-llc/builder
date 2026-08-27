@@ -33,9 +33,11 @@ const (
 	MessageTypeWorkflowModeExit               MessageType = "workflow_mode_exit"
 	MessageTypeWorktreeMode                   MessageType = "worktree_mode"
 	MessageTypeWorktreeModeExit               MessageType = "worktree_mode_exit"
+	MessageTypeSessionRebind                  MessageType = "session_rebind"
 	MessageTypeGoal                           MessageType = "goal"
 	MessageTypeActiveGoalContinuation         MessageType = "active_goal_continuation"
 	MessageTypeAgentSteer                     MessageType = MessageType(transcript.MessageTypeAgentSteer)
 )
 
 const GoalNudgeCompactLabel = "Goal nudge"
+const SessionRebindCompactLabel = "Session moved"

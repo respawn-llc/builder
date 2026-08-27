@@ -126,6 +126,7 @@ const (
 	TranscriptMessageWorkflowModeExit               TranscriptMessageType = "workflow_mode_exit"
 	TranscriptMessageWorktreeMode                   TranscriptMessageType = "worktree_mode"
 	TranscriptMessageWorktreeModeExit               TranscriptMessageType = "worktree_mode_exit"
+	TranscriptMessageSessionRebind                  TranscriptMessageType = "session_rebind"
 	TranscriptMessageGoal                           TranscriptMessageType = "goal"
 	TranscriptMessageActiveGoalContinuation         TranscriptMessageType = "active_goal_continuation"
 	TranscriptMessageAgentSteer                     TranscriptMessageType = TranscriptMessageType(MessageTypeAgentSteer)
@@ -575,6 +576,7 @@ func (t TranscriptMessageType) Validate() error {
 		TranscriptMessageWorkflowModeExit,
 		TranscriptMessageWorktreeMode,
 		TranscriptMessageWorktreeModeExit,
+		TranscriptMessageSessionRebind,
 		TranscriptMessageGoal,
 		TranscriptMessageActiveGoalContinuation,
 		TranscriptMessageAgentSteer:

@@ -148,18 +148,10 @@ func (s diagnosticManualMoveAssignmentSteerer) PrepareManualMoveAssignments(
 
 func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResponse {
 	return llm.CompactionResponse{
-		OutputItems: []llm.ResponseItem{
-			{
-				Type:        llm.ResponseItemTypeMessage,
-				Role:        textutil.Value(llm.RoleUser),
-				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-				Content:     textutil.Value(summary),
-			},
-			{
-				Type:             llm.ResponseItemTypeCompaction,
-				ID:               textutil.Value("workflow-post-completion"),
-				EncryptedContent: textutil.Value("encrypted"),
-			},
+		Checkpoint: llm.ResponseItem{
+			Type:             llm.ResponseItemTypeCompaction,
+			ID:               textutil.Value("workflow-post-completion"),
+			EncryptedContent: textutil.Value("encrypted"),
 		},
 		Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 	}
@@ -1638,18 +1630,10 @@ func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t 
 			SupportsPromptCacheKey:   true,
 		},
 		[]llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{
-				{
-					Type:        llm.ResponseItemTypeMessage,
-					Role:        textutil.Value(llm.RoleUser),
-					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-					Content:     textutil.Value("completed source"),
-				},
-				{
-					Type:             llm.ResponseItemTypeCompaction,
-					ID:               textutil.Value("workflow-post-completion"),
-					EncryptedContent: textutil.Value("encrypted"),
-				},
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				ID:               textutil.Value("workflow-post-completion"),
+				EncryptedContent: textutil.Value("encrypted"),
 			},
 			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 		}},
@@ -1694,16 +1678,14 @@ func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t 
 	if len(compactions) != 1 {
 		t.Fatalf("post-completion compactions = %d, want one", len(compactions))
 	}
-	summaries := 0
+	checkpoints := 0
 	for _, item := range requests[2].Items {
-		if item.Type == llm.ResponseItemTypeMessage &&
-			item.MessageType != nil &&
-			*item.MessageType == llm.MessageTypeCompactionSummary {
-			summaries++
+		if item.Type == llm.ResponseItemTypeCompaction {
+			checkpoints++
 		}
 	}
-	if summaries != 1 {
-		t.Fatalf("target request compaction summaries = %d, want one", summaries)
+	if checkpoints != 1 {
+		t.Fatalf("target request compaction checkpoints = %d, want one", checkpoints)
 	}
 	if requests[1].PromptCacheKey == "" || requests[2].PromptCacheKey == "" ||
 		requests[1].PromptCacheKey != requests[2].PromptCacheKey {
@@ -1747,14 +1729,14 @@ func TestPostCommitDiagnosticPreservesApprovalAndCACBoundary(t *testing.T) {
 		t.Fatalf("apply Approval after diagnostic: %v", err)
 	}
 	requests := f.waitForModelRequests(t, 3)
-	summaries := 0
+	checkpoints := 0
 	for _, item := range requests[2].Items {
-		if item.MessageType != nil && *item.MessageType == llm.MessageTypeCompactionSummary {
-			summaries++
+		if item.Type == llm.ResponseItemTypeCompaction {
+			checkpoints++
 		}
 	}
-	if len(client.CompactionCalls()) != 1 || summaries != 1 {
-		t.Fatalf("CAC boundary = %d compactions, %d summaries; want 1, 1", len(client.CompactionCalls()), summaries)
+	if len(client.CompactionCalls()) != 1 || checkpoints != 1 {
+		t.Fatalf("CAC boundary = %d compactions, %d checkpoints; want 1, 1", len(client.CompactionCalls()), checkpoints)
 	}
 }
 
@@ -1767,18 +1749,10 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 			SupportsPromptCacheKey:   true,
 		},
 		[]llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{
-				{
-					Type:        llm.ResponseItemTypeMessage,
-					Role:        textutil.Value(llm.RoleUser),
-					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-					Content:     textutil.Value("target-time CAC"),
-				},
-				{
-					Type:             llm.ResponseItemTypeCompaction,
-					ID:               textutil.Value("target-time-cac"),
-					EncryptedContent: textutil.Value("encrypted"),
-				},
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				ID:               textutil.Value("target-time-cac"),
+				EncryptedContent: textutil.Value("encrypted"),
 			},
 			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 		}},
@@ -2391,16 +2365,14 @@ func TestWorkflowPostCompletionCompactsFanoutSourceBeforeBranchClones(t *testing
 	}
 	requests := f.waitForModelRequests(t, 3)
 	for index, request := range requests[1:] {
-		summaries := 0
+		checkpoints := 0
 		for _, item := range request.Items {
-			if item.Type == llm.ResponseItemTypeMessage &&
-				item.MessageType != nil &&
-				*item.MessageType == llm.MessageTypeCompactionSummary {
-				summaries++
+			if item.Type == llm.ResponseItemTypeCompaction {
+				checkpoints++
 			}
 		}
-		if summaries != 1 {
-			t.Fatalf("branch request %d compaction summaries = %d, want one", index+2, summaries)
+		if checkpoints != 1 {
+			t.Fatalf("branch request %d compaction checkpoints = %d, want one", index+2, checkpoints)
 		}
 	}
 	if requests[1].PromptCacheKey == "" ||

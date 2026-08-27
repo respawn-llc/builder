@@ -96,6 +96,7 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 ## Multi-Client Attach
 
 - Opening a Session that another client uses gives this client Equal Full-Control Attach. Startup has no read-only or reduced-control mode.
+- When an open Session moves to another Workspace, the TUI closes its current view and automatically reopens and rehydrates the same Session in its new location.
 
 ## Errors
 

@@ -131,7 +131,7 @@ func TestCompactionSoonReminderUsesResponseBaselineAfterTranscriptMutation(t *te
 	}
 }
 
-func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutPreservedUserMessage(t *testing.T) {
+func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithPreservedUserMessage(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -162,6 +162,7 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutPreserve
 	if len(client.calls) != 1 {
 		t.Fatalf("expected one local-summary model call, got %d", len(client.calls))
 	}
+	assertCompactionReplacementOrder(t, eng.transcriptRuntimeState().SnapshotItems(), true)
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	var futureMessage *llm.Message
@@ -183,9 +184,63 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutPreserve
 		*futureMessage.Content != prompts.FormatHandoffFutureAgentMessage("resume with tests") {
 		t.Fatalf("future-agent message = %+v", *futureMessage)
 	}
-	if foundPreservedUserMessage {
-		t.Fatalf("did not expect a compaction-preserved user message for trigger_handoff, got %+v", messages)
+	if !foundPreservedUserMessage {
+		t.Fatalf("expected a compaction-preserved user message for trigger_handoff, got %+v", messages)
 	}
+}
+
+func TestTriggerHandoffWithProviderCompactionCarriesPreservedUserMessageInOrder(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{{
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				EncryptedContent: textutil.Value("encrypted"),
+			},
+			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
+		}},
+	}
+	eng := mustNewHandoffTestEngine(t, store, client, Config{
+		Model:          "gpt-5",
+		CompactionMode: "native",
+	})
+	if err := steerTestActiveStep(eng, "handoff-input", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("provider handoff carryover")}},
+	)); err != nil {
+		t.Fatalf("append carryover prompt: %v", err)
+	}
+	eng.compactionRuntimeState().SetSoonReminderIssued(true)
+	activeCall := llm.ToolCall{
+		ID:    "call-provider-handoff",
+		Name:  string(toolspec.ToolTriggerHandoff),
+		Input: json.RawMessage(`{"summarizer_prompt":"keep provider details","future_agent_message":"continue provider work"}`),
+	}
+	if _, futureAdded, err := eng.TriggerHandoff(
+		context.Background(),
+		"step-provider-handoff",
+		activeCall,
+		"keep provider details",
+		"continue provider work",
+	); err != nil {
+		t.Fatalf("trigger provider handoff: %v", err)
+	} else if !futureAdded {
+		t.Fatal("provider handoff did not persist future-agent message")
+	}
+	err := withActiveTestRun(t, eng, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		_, applyErr := eng.applyPendingHandoffIfNeeded(ctx, stepID)
+		return applyErr
+	})
+	if err != nil {
+		t.Fatalf("apply provider handoff: %v", err)
+	}
+	if len(client.compactionCalls) != 1 {
+		t.Fatalf("provider compaction calls = %d, want one", len(client.compactionCalls))
+	}
+	assertCompactionReplacementOrder(t, eng.transcriptRuntimeState().SnapshotItems(), true)
 }
 
 func TestTriggerHandoffWithBlankFutureMessageAppendsNoFutureMessage(t *testing.T) {

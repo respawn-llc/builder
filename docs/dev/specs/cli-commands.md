@@ -101,7 +101,10 @@
 - `kent rebind --project <project-id> <session-id> <path>` is required for cross-Project movement. It may attach an unbound target path to the explicit Project and reports that attachment, but rejects a path already attached only to other Projects.
 - Failed rebinds never change bindings or Session attachment.
 - Sessions attached to Workflow Nodes cannot move across Projects.
-- Rebinding is explicit. It waits for the current step, prevents concurrent new execution and queued steering, and rejects rebind when the Session owns a background command.
+- Same-Project rebind is explicit. A human request waits for the current Agent Step and rejects rebind when the Session owns a background command.
+- Cross-Project rebind rejects a human request immediately while the Runtime is non-idle and accepts an idle or Dormant Session.
+- When the Session's active agent invokes rebind for its own Session, the command returns a scheduled acknowledgement without waiting for the Agent Step to finish. The move applies at the next between-Agent-Step boundary before queued user work.
+- A self-agent rebind ignores Session-owned background commands. Those commands continue in the directories where they started.
 - A cross-Project move either changes both Session location and artifact location or leaves both unchanged.
 
 ## Question Commands

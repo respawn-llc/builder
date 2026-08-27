@@ -151,7 +151,6 @@ func compactNowInActiveTestRun(
 	engine *Engine,
 	mode compactionMode,
 	instructions compactionInstructionsInput,
-	includePreservedUserMessage bool,
 ) (compactionResult, session.CommitReceipt, error) {
 	t.Helper()
 	var result compactionResult
@@ -163,7 +162,7 @@ func compactNowInActiveTestRun(
 			stepID,
 			mode,
 			instructions,
-			includePreservedUserMessage,
+			false,
 		)
 		return compactErr
 	})

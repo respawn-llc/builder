@@ -13,6 +13,7 @@ func cloneMeta(in Meta) Meta {
 	out.Continuation = cloneContinuationContext(in.Continuation)
 	out.ChatSettings = cloneChatSettingsOverrides(in.ChatSettings)
 	out.WorktreeReminder = CloneWorktreeReminderState(in.WorktreeReminder)
+	out.RebindReminder = CloneSessionRebindReminder(in.RebindReminder)
 	if in.UsageState != nil {
 		usage := *in.UsageState
 		out.UsageState = &usage

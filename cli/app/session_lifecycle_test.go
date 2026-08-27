@@ -232,6 +232,102 @@ func TestRuntimeReleaseUsesFinalModelPolicyAndPreservesErrors(t *testing.T) {
 	})
 }
 
+func TestReopenRetargetedSessionPersistsDraftBeforeReleasingSourceRuntime(t *testing.T) {
+	sourceRemoteOpen := true
+	released := false
+	var persistedDraft string
+	sourceLifecycle := &recordingSessionLifecycleClient{
+		persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+			if released {
+				return serverapi.SessionPersistInputDraftResponse{}, errors.New("source runtime was released before draft persistence")
+			}
+			persistedDraft = req.Input
+			return serverapi.SessionPersistInputDraftResponse{}, nil
+		},
+	}
+	var server *reattachSessionLifecycleServer
+	server = &reattachSessionLifecycleServer{
+		lifecycle: sourceLifecycle,
+		reattach: func(context.Context, string) error {
+			if !released {
+				return errors.New("source runtime owner is still attached")
+			}
+			sourceRemoteOpen = false
+			return nil
+		},
+	}
+	runtimePlan := &runtimeLaunchPlan{close: func() error {
+		if !sourceRemoteOpen {
+			return errors.New("source remote is closed")
+		}
+		released = true
+		return nil
+	}}
+	sessionID := "11111111-1111-4111-8111-111111111111"
+	model := newUIModelDefaults(nil)
+	testSetMainInput(model, "draft after rebind")
+
+	next, err := reopenRetargetedSession(
+		context.Background(),
+		server,
+		runtimePlan,
+		sessionID,
+		model,
+	)
+	if err != nil {
+		t.Fatalf("reopen retargeted Session: %v", err)
+	}
+	if !released || sourceRemoteOpen {
+		t.Fatalf("handoff state released=%t source_remote_open=%t", released, sourceRemoteOpen)
+	}
+	if persistedDraft != "draft after rebind" {
+		t.Fatalf("persisted draft = %q, want destination draft", persistedDraft)
+	}
+	if target := requireSessionOpenDestination(t, next); target != sessionID {
+		t.Fatalf("reopen destination = %q, want %q", target, sessionID)
+	}
+}
+
+func TestReopenRetargetedSessionPreservesDraftWhenDestinationReattachmentFails(t *testing.T) {
+	reattachErr := errors.New("destination unavailable")
+	var persistedDraft string
+	server := &reattachSessionLifecycleServer{
+		lifecycle: &recordingSessionLifecycleClient{
+			persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+				persistedDraft = req.Input
+				return serverapi.SessionPersistInputDraftResponse{}, nil
+			},
+		},
+		reattach: func(context.Context, string) error {
+			return reattachErr
+		},
+	}
+	released := false
+	runtimePlan := &runtimeLaunchPlan{close: func() error {
+		released = true
+		return nil
+	}}
+	model := newUIModelDefaults(nil)
+	testSetMainInput(model, "draft survives failed reattachment")
+
+	_, err := reopenRetargetedSession(
+		context.Background(),
+		server,
+		runtimePlan,
+		"11111111-1111-4111-8111-111111111111",
+		model,
+	)
+	if !errors.Is(err, reattachErr) {
+		t.Fatalf("reopen error = %v, want %v", err, reattachErr)
+	}
+	if !released {
+		t.Fatal("source runtime was not released")
+	}
+	if persistedDraft != "draft survives failed reattachment" {
+		t.Fatalf("persisted draft = %q, want preserved composer input", persistedDraft)
+	}
+}
+
 type narrowSessionLifecycleServer struct {
 	lifecycle      apicontract.SessionLifecycleService
 	cfg            config.App
@@ -249,6 +345,26 @@ func (s narrowSessionLifecycleServer) Reauthenticate(ctx context.Context, intera
 		return nil
 	}
 	return s.reauthenticate(ctx, interactor)
+}
+
+type reattachSessionLifecycleServer struct {
+	lifecycle           apicontract.SessionLifecycleService
+	reattachedLifecycle apicontract.SessionLifecycleService
+	reattach            func(context.Context, string) error
+}
+
+func (s *reattachSessionLifecycleServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
+	return s.lifecycle
+}
+
+func (s *reattachSessionLifecycleServer) ReattachSession(ctx context.Context, sessionID string) error {
+	if err := s.reattach(ctx, sessionID); err != nil {
+		return err
+	}
+	if s.reattachedLifecycle != nil {
+		s.lifecycle = s.reattachedLifecycle
+	}
+	return nil
 }
 
 type recordingSessionLifecycleClient struct {

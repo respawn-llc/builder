@@ -14,20 +14,14 @@ import (
 
 func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T) {
 	t.Parallel()
+	const preservedUserMessage = "input"
 	store := mustCreateTestSession(t)
 	var events []Event
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
-		OutputItems: []llm.ResponseItem{
-			{
-				Type:    llm.ResponseItemTypeMessage,
-				Role:    textutil.Value(llm.RoleUser),
-				Content: textutil.Value("provider-preserved prompt"),
-			},
-			{
-				Type:             llm.ResponseItemTypeCompaction,
-				ID:               textutil.Value("checkpoint"),
-				EncryptedContent: textutil.Value("encrypted"),
-			},
+		Checkpoint: llm.ResponseItem{
+			Type:             llm.ResponseItemTypeCompaction,
+			ID:               textutil.Value("checkpoint"),
+			EncryptedContent: textutil.Value("encrypted"),
 		},
 		Usage: llm.Usage{InputTokens: 100, WindowTokens: 200_000},
 	}}}
@@ -38,7 +32,12 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 	})
 	if err := steerTestActiveStep(engine,
 		"input",
-		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventNone,
+			true,
+			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(preservedUserMessage)}},
+		),
 	); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
@@ -48,12 +47,13 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 	for _, event := range events {
 		liveFacts = append(liveFacts, TranscriptCommittedRowFactsFromEvent(event)...)
 	}
-	assertSingleCompactionSummaryAndPreservedUserFact(t, liveFacts)
+	assertSingleCompactionSummaryAndPreservedUserFact(t, liveFacts, preservedUserMessage)
 
 	page := mustEngineNewestSegmentPage(t, engine)
 	assertSingleCompactionSummaryAndPreservedUserFact(
 		t,
 		TranscriptCommittedRowFactsFromSnapshot(page.Snapshot),
+		preservedUserMessage,
 	)
 	if err := engine.Close(); err != nil {
 		t.Fatalf("close live engine: %v", err)
@@ -71,6 +71,7 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 	assertSingleCompactionSummaryAndPreservedUserFact(
 		t,
 		TranscriptCommittedRowFactsFromSnapshot(reopenedPage.Snapshot),
+		preservedUserMessage,
 	)
 
 	eventLog := mustMaterializeTestEventLog(t, reopenedStore)
@@ -87,14 +88,20 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 	assertSingleCompactionSummaryAndPreservedUserFact(
 		t,
 		TranscriptCommittedRowFactsFromSnapshot(scan.CollectedPageSnapshot()),
+		preservedUserMessage,
 	)
 }
 
 func assertSingleCompactionSummaryAndPreservedUserFact(
 	t *testing.T,
 	facts []TranscriptCommittedRowFact,
+	wantPreservedUserMessage string,
 ) {
 	t.Helper()
+	wantMessage, ok := compactionPreservedUserMessage(wantPreservedUserMessage)
+	if !ok || wantMessage.Content == nil {
+		t.Fatalf("invalid expected preserved user message %q", wantPreservedUserMessage)
+	}
 	summaries := 0
 	preservedUsers := 0
 	for _, fact := range facts {
@@ -110,9 +117,14 @@ func assertSingleCompactionSummaryAndPreservedUserFact(
 		case llm.MessageTypeCompactionSummary:
 			summaries++
 		case llm.MessageTypeCompactionPreservedUserMessage:
-			if fact.Notice.DiagnosticDetail == "provider-preserved prompt" {
-				preservedUsers++
+			if fact.Notice.DiagnosticDetail != *wantMessage.Content {
+				t.Fatalf(
+					"preserved user detail = %q, want %q",
+					fact.Notice.DiagnosticDetail,
+					*wantMessage.Content,
+				)
 			}
+			preservedUsers++
 		}
 	}
 	if summaries != 1 || preservedUsers != 1 {

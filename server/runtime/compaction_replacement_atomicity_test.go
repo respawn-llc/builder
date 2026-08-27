@@ -67,9 +67,8 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 		llm.MessageTypeWorktreeMode,
 		llm.MessageTypeAgentsMD,
 		llm.MessageTypeActiveGoalContinuation,
-		llm.MessageTypeCompactionSummary,
-		llm.MessageTypeCompactionPreservedUserMessage,
 		llm.MessageTypeEnvironment,
+		llm.MessageTypeCompactionPreservedUserMessage,
 	})
 
 	for _, event := range window.Records[replacementIndex+1:] {
@@ -96,7 +95,7 @@ func assertOrderedReplacementMessageTypes(
 	if next != len(want) {
 		t.Fatalf("replacement message types = %+v, want ordered subsequence %+v", messageTypes, want)
 	}
-	if len(messageTypes) == 0 || messageTypes[len(messageTypes)-1] != llm.MessageTypeEnvironment {
-		t.Fatalf("replacement message types = %+v, want environment last", messageTypes)
+	if len(messageTypes) == 0 || messageTypes[len(messageTypes)-1] != llm.MessageTypeCompactionPreservedUserMessage {
+		t.Fatalf("replacement message types = %+v, want carryover last", messageTypes)
 	}
 }

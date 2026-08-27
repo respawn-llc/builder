@@ -9,6 +9,7 @@ import "kent/api/shared/foundation.proto";
 import "kent/api/shared/validation.proto";
 import "kent/api/session_launch/validation.proto";
 import "kent/api/session_launch/session_launch.proto";
+import "kent/api/worktree/worktree.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/session_launch;sessionlaunchpb";
 
@@ -99,11 +100,13 @@ message SessionRetargetWorkspaceRequest {
       expression: "this.trim() != ''"
     }
   ];
+  optional kent.api.worktree.RuntimeStepOrigin origin = 4;
 }
 
 message SessionRetargetWorkspaceSuccess {
-  kent.api.project.ProjectBinding binding = 1 [(buf.validate.field).required = true];
+  kent.api.project.ProjectBinding binding = 1;
   bool workspace_binding_created = 2;
+  kent.api.worktree.ScheduledAcknowledgement scheduled = 3;
 }
 
 message ProjectReference {
@@ -147,6 +150,10 @@ message SessionRetargetBackgroundProcessActiveDetails {
   SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
 }
 
+message SessionRetargetRuntimeActiveDetails {
+  SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
+}
+
 message SessionRetargetWorkspaceError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
@@ -181,6 +188,12 @@ message SessionRetargetWorkspaceError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    SessionRetargetRuntimeActiveDetails runtime_active = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "runtime_active"
       }
     ];
   }
@@ -471,7 +484,7 @@ service SessionLifecycleService {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      scope_policy: SCOPE_POLICY_SESSION_DRAFT_HANDOFF_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
       legacy_wire_name: "session.persistInputDraft"
@@ -517,7 +530,7 @@ service SessionRuntimeService {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      scope_policy: SCOPE_POLICY_NONE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
       legacy_wire_name: "session.runtime.release"

@@ -59,8 +59,6 @@ func (c *compactingScriptedClient) Compact(ctx context.Context, request llm.Comp
 	if err := ctx.Err(); err != nil {
 		return llm.CompactionResponse{}, err
 	}
-	response.TrimmedItemsCount = new(int)
-	*response.TrimmedItemsCount = len(request.InputItems)
 	return response, nil
 }
 

@@ -2531,12 +2531,22 @@ SET
     artifact_relpath = sqlc.arg(target_artifact_relpath),
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
     metadata_json = json_remove(
-        json_set(
-            CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
-            '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
-            '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
-            '$.worktree_reminder', json('null')
-        ),
+        CASE WHEN CAST(sqlc.narg(rebind_reminder_json) AS TEXT) IS NULL THEN
+            json_set(
+                CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+                '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
+                '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
+                '$.worktree_reminder', json('null')
+            )
+        ELSE
+            json_set(
+                CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+                '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
+                '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
+                '$.worktree_reminder', json('null'),
+                '$.rebind_reminder', json(CAST(sqlc.narg(rebind_reminder_json) AS TEXT))
+            )
+        END,
         '$.workflow_session'
     )
 WHERE id = sqlc.arg(session_id)

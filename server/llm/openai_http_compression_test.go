@@ -201,8 +201,8 @@ func TestCompactChatGPTCodexCompressesResponsesBody(t *testing.T) {
 	if requestEncoding != "zstd" {
 		t.Fatalf("Content-Encoding = %q, want zstd", requestEncoding)
 	}
-	if len(requestBody) == 0 || len(response.OutputItems) != 1 {
-		t.Fatalf("compact request/response = body=%d output_items=%d", len(requestBody), len(response.OutputItems))
+	if len(requestBody) == 0 || response.Checkpoint.Type != ResponseItemTypeCompaction {
+		t.Fatalf("compact request/response = body=%d checkpoint=%+v", len(requestBody), response.Checkpoint)
 	}
 }
 

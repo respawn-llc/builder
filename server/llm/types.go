@@ -59,6 +59,7 @@ const (
 	MessageTypeWorkflowModeExit               = clientui.MessageTypeWorkflowModeExit
 	MessageTypeWorktreeMode                   = clientui.MessageTypeWorktreeMode
 	MessageTypeWorktreeModeExit               = clientui.MessageTypeWorktreeModeExit
+	MessageTypeSessionRebind                  = clientui.MessageTypeSessionRebind
 	MessageTypeGoal                           = clientui.MessageTypeGoal
 	MessageTypeActiveGoalContinuation         = clientui.MessageTypeActiveGoalContinuation
 	MessageTypeAgentSteer                     = clientui.MessageTypeAgentSteer
@@ -718,9 +719,8 @@ type CompactionRequest struct {
 }
 
 type CompactionResponse struct {
-	OutputItems       []ResponseItem
-	Usage             Usage
-	TrimmedItemsCount *int
+	Checkpoint ResponseItem
+	Usage      Usage
 }
 
 type CompactionClient interface {
