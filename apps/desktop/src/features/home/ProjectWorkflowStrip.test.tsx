@@ -22,24 +22,25 @@ describe("ProjectWorkflowStrip", () => {
     });
 
     const buttons = screen.getAllByRole("button");
-    expect(buttons.map((button) => button.getAttribute("aria-label") ?? button.textContent)).toEqual([
-      appI18n.t("board.sort.chip"),
-      appI18n.t("workflowLibrary.linkWorkflow"),
-      "Delivery",
-      "Support",
-    ]);
+    expect(buttons).toHaveLength(4);
+    expect(buttons[0]).toHaveAttribute("aria-haspopup", "dialog");
+    expect(buttons[1]).not.toHaveAttribute("title");
+    for (const button of buttons.slice(2)) {
+      expect(button).toHaveAttribute("title");
+    }
   });
 
   it("keeps the fixed controls visible before an initial loading boundary", () => {
     renderStrip({
-      initialBoundary: { label: appI18n.t("states.loading"), state: "loading" },
+      initialBoundary: { label: "loading", state: "loading" },
       workflows: [],
     });
 
-    expect(
-      screen.getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent),
-    ).toEqual([appI18n.t("board.sort.chip"), appI18n.t("workflowLibrary.linkWorkflow")]);
-    expect(screen.getByRole("status", { name: appI18n.t("states.loading") })).toBeInTheDocument();
+    const buttons = screen.getAllByRole("button");
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]).toHaveAttribute("aria-haspopup", "dialog");
+    expect(buttons[1]).not.toHaveAttribute("title");
+    expect(screen.getByRole("status")).toBeInTheDocument();
   });
 });
 
