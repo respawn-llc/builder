@@ -313,12 +313,13 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 	if err != nil {
 		return PreparedChatSettingsOperationInput{}, err
 	}
-	entry, available := catalog.Lookup(raw.Agent)
-	if !available {
-		entry, available = catalog.Lookup(config.DefaultSubagentRole)
-	}
-	if !available {
-		return PreparedChatSettingsOperationInput{}, errors.New("default Chat Agent baseline is missing")
+	entry, selectedAvailable := catalog.Lookup(raw.Agent)
+	if !selectedAvailable {
+		var defaultAvailable bool
+		entry, defaultAvailable = catalog.Lookup(config.DefaultSubagentRole)
+		if !defaultAvailable {
+			return PreparedChatSettingsOperationInput{}, errors.New("default Chat Agent baseline is missing")
+		}
 	}
 	effective, err := session.ResolveEffectiveChatSettings(raw.Settings, nil, entry.Settings.Baseline)
 	if err != nil {
@@ -327,7 +328,7 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 	effective = normalizeProjectedChatSettings(effective, entry.Settings)
 	persistedQuestions := effective.Questions
 	persistedThinking := effective.Thinking
-	if !available {
+	if !selectedAvailable {
 		persistedQuestions = entry.Settings.Baseline.Questions
 		persistedThinking = entry.Settings.Baseline.Thinking
 	} else if raw.Settings != nil {
@@ -720,7 +721,7 @@ func applyPreparedAgentChatSettings(
 	roleOverride serverapi.RunPromptAgentRoleOverride,
 	preparedOverrides launch.PreparedRunPromptOverrides,
 	meta session.Meta,
-) (session.Meta, bool, *session.ChatAgentSelection, error) {
+) (session.Meta, bool, *session.ChatSettingsState, error) {
 	state, err := session.ChatSettingsStateFromMeta(meta)
 	if err != nil {
 		return session.Meta{}, false, nil, err
@@ -777,7 +778,6 @@ func applyPreparedAgentChatSettings(
 	if targetAgent == state.Agent {
 		return meta, true, nil, nil
 	}
-	selection := session.ChatAgentSelection{Agent: targetAgent, Baseline: prepared.Baseline}
 	target, err := session.ChatSettingsStateFromCompleteSettings(targetAgent, prepared.Baseline)
 	if err != nil {
 		return session.Meta{}, false, nil, err
@@ -792,7 +792,7 @@ func applyPreparedAgentChatSettings(
 	if !changed {
 		return projected, true, nil, nil
 	}
-	return projected, true, &selection, nil
+	return projected, true, &target, nil
 }
 
 func preparePromptFacingTarget(
@@ -908,14 +908,23 @@ func sessionPlanSuccessFromResult(result PlanResult) (*sessionlaunchpb.SessionPl
 	}
 	if result.Plan.ActivationAgentSelection != nil {
 		selection := result.Plan.ActivationAgentSelection
+		settings := selection.Settings
+		if settings == nil ||
+			settings.Supervisor == nil ||
+			settings.Thinking == nil ||
+			settings.Fast == nil ||
+			settings.Questions == nil ||
+			settings.AutoCompaction == nil {
+			return nil, errors.New("activation Agent selection has incomplete Chat settings")
+		}
 		plan.ActivationAgentSelection = &sessionlaunchpb.SessionRuntimeAgentSelection{
 			Agent: selection.Agent,
 			Baseline: &sessionlaunchpb.SessionRuntimeChatSettings{
-				Supervisor:     selection.Baseline.Supervisor,
-				Thinking:       selection.Baseline.Thinking,
-				Fast:           selection.Baseline.Fast,
-				Questions:      selection.Baseline.Questions,
-				AutoCompaction: selection.Baseline.AutoCompaction,
+				Supervisor:     *settings.Supervisor,
+				Thinking:       *settings.Thinking,
+				Fast:           *settings.Fast,
+				Questions:      *settings.Questions,
+				AutoCompaction: *settings.AutoCompaction,
 			},
 		}
 	}

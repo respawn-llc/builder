@@ -219,7 +219,7 @@ func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Mod
 	normalized, ok := clientui.NormalizeThinkingLevel(requested)
 	if !ok {
 		errText := "invalid thinking level " + strconv.Quote(requested) + " (expected low|medium|high|xhigh|max|ultra)"
-		return m, c.model.appendLocalEntryWithNoticeID("error", errText, "")
+		return m, m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	if m.hasRuntimeClient() {
 		value := normalized
@@ -229,7 +229,7 @@ func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Mod
 		})
 	}
 	m.thinkingLevel = normalized
-	return m, c.model.sendThinkingLevelSetStatus(m.thinkingLevel)
+	return m, m.sendTransientStatusWithNoticeID("Thinking: "+m.thinkingLevel, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (m *uiModel) sendThinkingLevelQueryStatus(level string) tea.Cmd {
@@ -238,10 +238,6 @@ func (m *uiModel) sendThinkingLevelQueryStatus(level string) tea.Cmd {
 		current = "unknown"
 	}
 	return m.sendTransientStatusWithNoticeID("Thinking level is "+current, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
-}
-
-func (m *uiModel) sendThinkingLevelSetStatus(level string) tea.Cmd {
-	return m.sendTransientStatusWithNoticeID("Thinking level set to "+strings.TrimSpace(level), uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, tea.Cmd) {
@@ -254,12 +250,12 @@ func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, t
 		if currentEnabled {
 			status = "on"
 		}
-		return m, c.model.appendLocalEntryWithNoticeID("system", "Fast mode is "+status, "")
+		return m, c.model.sendTransientStatusWithNoticeID("Fast: "+status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
 	case "", "on", "off":
 		// supported
 	default:
 		errText := "Usage: /fast [on|off|status]"
-		return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", errText, ""), c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+		return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	if m.hasRuntimeClient() {
 		return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationFast, requested)
@@ -284,8 +280,14 @@ func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, t
 		m.fastModeEnabled = targetEnabled
 	}
 
-	status := serverapi.FastModeToggleStatusMessage(m.fastModeEnabled, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeSuccess)
+	if !changed {
+		return m, nil
+	}
+	value := "off"
+	if m.fastModeEnabled {
+		value = "on"
+	}
+	return m, m.sendTransientStatusWithNoticeID("Fast: "+value, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Model, tea.Cmd) {
@@ -302,7 +304,7 @@ func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Mo
 		targetEnabled = false
 	default:
 		errText := "invalid supervisor mode " + strconv.Quote(requested) + " (expected on|off)"
-		return m, c.model.appendLocalEntryWithNoticeID("error", errText, "")
+		return m, m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	if m.hasRuntimeClient() {
 		if requested == "" || requested == "on" {
@@ -334,8 +336,10 @@ func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Mo
 	}
 	m.reviewerMode = nextMode
 	m.reviewerEnabled = nextMode != "off"
-	status := serverapi.ReviewerToggleStatusMessage(m.reviewerEnabled, nextMode, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
+	if !changed {
+		return m, nil
+	}
+	return m, m.sendTransientStatusWithNoticeID("Supervisor: "+nextMode, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, tea.Cmd) {
@@ -352,7 +356,7 @@ func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, 
 		targetEnabled = false
 	default:
 		errText := "invalid questions mode " + strconv.Quote(requested) + " (expected on|off)"
-		return m, c.model.appendLocalEntryWithNoticeID("error", errText, "")
+		return m, m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	if m.hasRuntimeClient() {
 		return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationQuestions, requested)
@@ -369,15 +373,20 @@ func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, 
 		changed = currentEnabled != targetEnabled
 	}
 	m.questionsEnabled = nextEnabled
-	status := serverapi.QuestionsToggleStatusMessage(nextEnabled, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
+	if !changed {
+		return m, nil
+	}
+	value := "off"
+	if nextEnabled {
+		value = "on"
+	}
+	return m, m.sendTransientStatusWithNoticeID("Questions: "+value, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Model, tea.Cmd) {
 	m := c.model
 	requested = strings.ToLower(strings.TrimSpace(requested))
 	currentEnabled := m.cachedRuntimeStatus().AutoCompactionEnabled
-	currentCompactionMode := m.cachedRuntimeStatus().CompactionMode
 	targetEnabled := currentEnabled
 	switch requested {
 	case "":
@@ -388,7 +397,7 @@ func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Mo
 		targetEnabled = false
 	default:
 		errText := "invalid autocompaction mode " + strconv.Quote(requested) + " (expected on|off)"
-		return m, c.model.appendLocalEntryWithNoticeID("error", errText, "")
+		return m, m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	if m.hasRuntimeClient() {
 		return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationAutoCompaction, requested)
@@ -405,6 +414,12 @@ func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Mo
 		changed = currentEnabled != targetEnabled
 	}
 	m.autoCompactionEnabled = nextEnabled
-	status := serverapi.AutoCompactionToggleStatusMessage(nextEnabled, changed, currentCompactionMode)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
+	if !changed {
+		return m, nil
+	}
+	value := "off"
+	if nextEnabled {
+		value = "on"
+	}
+	return m, m.sendTransientStatusWithNoticeID("Auto-compaction: "+value, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 }

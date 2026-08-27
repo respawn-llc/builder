@@ -59,6 +59,16 @@ func newProjectedStaticUIModel(opts ...UIOption) *uiModel {
 	return newProjectedTestUIModel(nil, opts...)
 }
 
+type unavailableChatSettingsService struct{}
+
+func (unavailableChatSettingsService) ReadChatSettings(context.Context, serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
+	return serverapi.ChatSettingsReadResponse{}, serverapi.ErrRuntimeUnavailable
+}
+
+func (unavailableChatSettingsService) MutateChatSettings(context.Context, serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
+	return serverapi.ChatSettingsMutationResponse{}, serverapi.ErrRuntimeUnavailable
+}
+
 type recordingPromptControl struct {
 	singlePromptOnlyControl
 	batchRequests chan serverapi.PromptAnswerBatchRequest
@@ -228,7 +238,7 @@ func newProjectedAuthorityRuntime(
 	})
 	reads := sessionview.NewService(persistence, activity, nil)
 	controls := runtimecontrol.NewService(authority).WithRuntimeActivityResolver(activity)
-	runtimeClient := newUIRuntimeClientWithReads(sessionID.String(), reads, controls).(*sessionRuntimeClient)
+	runtimeClient := newUIRuntimeClientWithReads(sessionID.String(), reads, controls, unavailableChatSettingsService{}).(*sessionRuntimeClient)
 	snapshot, err := activity.RuntimeReadModelFeedSnapshot(context.Background(), sessionID.String())
 	if err != nil {
 		t.Fatalf("projected runtime snapshot: %v", err)
@@ -262,7 +272,7 @@ func newUnavailableRuntimeControlService() *runtimecontrol.Service {
 }
 
 func newTestSessionRuntimeClient(reads apicontract.SessionViewService, controls apicontract.RuntimeControlService) *sessionRuntimeClient {
-	return newUIRuntimeClientWithReads("session-1", reads, controls).(*sessionRuntimeClient)
+	return newUIRuntimeClientWithReads("session-1", reads, controls, unavailableChatSettingsService{}).(*sessionRuntimeClient)
 }
 
 func newTestSessionRuntimeClientWithControls(controls apicontract.RuntimeControlService) *sessionRuntimeClient {

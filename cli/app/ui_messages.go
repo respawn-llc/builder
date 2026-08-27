@@ -83,11 +83,6 @@ type runtimeControlOperation string
 
 const (
 	runtimeControlSetSessionName    runtimeControlOperation = "set_session_name"
-	runtimeControlSetThinkingLevel  runtimeControlOperation = "set_thinking_level"
-	runtimeControlSetFastMode       runtimeControlOperation = "set_fast_mode"
-	runtimeControlSetReviewer       runtimeControlOperation = "set_reviewer"
-	runtimeControlSetAutoCompaction runtimeControlOperation = "set_auto_compaction"
-	runtimeControlSetQuestions      runtimeControlOperation = "set_questions"
 	runtimeControlInterrupt         runtimeControlOperation = "interrupt"
 )
 
@@ -96,10 +91,6 @@ type runtimeControlDoneMsg struct {
 	sessionID      string
 	operation      runtimeControlOperation
 	text           string
-	enabled        bool
-	changed        bool
-	mode           string
-	compactionMode string
 	runtimeTuple   *runtimeTupleCandidate
 	err            error
 }

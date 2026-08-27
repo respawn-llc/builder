@@ -217,46 +217,6 @@ func (m *uiModel) setRuntimeSessionName(name string) error {
 	return nil
 }
 
-func (m *uiModel) setRuntimeThinkingLevel(level string) error {
-	m.checkTUIBlockingOperation("runtime control mutation", "set thinking level")
-	if client := m.runtimeClient(); client != nil {
-		err := client.SetThinkingLevel(level)
-		m.observeRuntimeRequestResult(err)
-		return err
-	}
-	return nil
-}
-
-func (m *uiModel) setRuntimeFastModeEnabled(enabled bool) (bool, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "set fast mode")
-	if client := m.runtimeClient(); client != nil {
-		changed, err := client.SetFastModeEnabled(enabled)
-		m.observeRuntimeRequestResult(err)
-		return changed, err
-	}
-	return false, nil
-}
-
-func (m *uiModel) setRuntimeReviewerEnabled(enabled bool) (bool, string, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "set reviewer")
-	if client := m.runtimeClient(); client != nil {
-		changed, mode, err := client.SetReviewerEnabled(enabled)
-		m.observeRuntimeRequestResult(err)
-		return changed, mode, err
-	}
-	return false, "", nil
-}
-
-func (m *uiModel) setRuntimeAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "set auto compaction")
-	if client := m.runtimeClient(); client != nil {
-		changed, nextEnabled, err := client.SetAutoCompactionEnabled(enabled)
-		m.observeRuntimeRequestResult(err)
-		return changed, nextEnabled, err
-	}
-	return false, false, nil
-}
-
 func (m *uiModel) showRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	m.checkTUIBlockingOperation("runtime control read", "show goal")
 	if client := m.runtimeClient(); client != nil {
@@ -392,13 +352,10 @@ func (m *uiModel) recordRuntimePromptHistory(text string) error {
 }
 
 type runtimeControlPendingState struct {
-	sessionID       string
-	inFlight        bool
-	inFlightText    string
-	inFlightEnabled bool
-	desiredText     string
-	desiredEnabled  bool
-	compactionMode  string
+	sessionID    string
+	inFlight     bool
+	inFlightText string
+	desiredText  string
 }
 
 func (m *uiModel) nextRuntimeControlToken(operation runtimeControlOperation) uint64 {
@@ -426,31 +383,23 @@ func (m *uiModel) beginRuntimeControlMutation(operation runtimeControlOperation,
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	text = strings.TrimSpace(text)
-	if !runtimeControlOperationUsesEnabledTarget(operation) && !runtimeControlOperationUsesTextTarget(operation) {
+	if operation != runtimeControlSetSessionName {
 		return m.nextRuntimeControlToken(operation), true
 	}
 	if m.runtimeControlPending == nil {
 		m.runtimeControlPending = make(map[runtimeControlOperation]runtimeControlPendingState)
 	}
 	if pending, ok := m.runtimeControlPending[operation]; ok && pending.inFlight && pending.sessionID == sessionID {
-		if runtimeControlOperationUsesTextTarget(operation) {
-			pending.desiredText = text
-		} else {
-			pending.desiredEnabled = enabled
-			pending.compactionMode = strings.TrimSpace(compactionMode)
-		}
+		pending.desiredText = text
 		m.runtimeControlPending[operation] = pending
 		return 0, false
 	}
 	token := m.nextRuntimeControlToken(operation)
 	m.runtimeControlPending[operation] = runtimeControlPendingState{
-		sessionID:       sessionID,
-		inFlight:        true,
-		inFlightText:    text,
-		inFlightEnabled: enabled,
-		desiredText:     text,
-		desiredEnabled:  enabled,
-		compactionMode:  strings.TrimSpace(compactionMode),
+		sessionID:    sessionID,
+		inFlight:     true,
+		inFlightText: text,
+		desiredText:  text,
 	}
 	return token, true
 }
@@ -462,32 +411,9 @@ func (m *uiModel) clearRuntimeControlPending(operation runtimeControlOperation) 
 	delete(m.runtimeControlPending, operation)
 }
 
-func (m *uiModel) runtimeControlPendingEnabled(operation runtimeControlOperation, sessionID string, fallback bool) bool {
-	if m == nil || m.runtimeControlPending == nil {
-		return fallback
-	}
-	pending, ok := m.runtimeControlPending[operation]
-	if !ok {
-		return fallback
-	}
-	if pending.sessionID != strings.TrimSpace(sessionID) {
-		return fallback
-	}
-	return pending.desiredEnabled
-}
-
-func runtimeControlOperationUsesEnabledTarget(operation runtimeControlOperation) bool {
-	switch operation {
-	case runtimeControlSetFastMode, runtimeControlSetReviewer, runtimeControlSetAutoCompaction, runtimeControlSetQuestions:
-		return true
-	default:
-		return false
-	}
-}
-
 func runtimeControlOperationUsesTextTarget(operation runtimeControlOperation) bool {
 	switch operation {
-	case runtimeControlSetSessionName, runtimeControlSetThinkingLevel:
+	case runtimeControlSetSessionName:
 		return true
 	default:
 		return false
@@ -513,20 +439,10 @@ func (m *uiModel) runtimeControlCommand(operation runtimeControlOperation, text 
 		return nil
 	}
 	return func() tea.Msg {
-		msg := runtimeControlDoneMsg{token: token, sessionID: sessionID, operation: operation, text: text, enabled: enabled, compactionMode: compactionMode}
+		msg := runtimeControlDoneMsg{token: token, sessionID: sessionID, operation: operation, text: text}
 		switch operation {
 		case runtimeControlSetSessionName:
 			msg.err = client.SetSessionName(text)
-		case runtimeControlSetThinkingLevel:
-			msg.err = client.SetThinkingLevel(text)
-		case runtimeControlSetFastMode:
-			msg.changed, msg.err = client.SetFastModeEnabled(enabled)
-		case runtimeControlSetReviewer:
-			msg.changed, msg.mode, msg.err = client.SetReviewerEnabled(enabled)
-		case runtimeControlSetAutoCompaction:
-			msg.changed, msg.enabled, msg.err = client.SetAutoCompactionEnabled(enabled)
-		case runtimeControlSetQuestions:
-			msg.changed, msg.err = client.SetQuestionsEnabled(enabled)
 		case runtimeControlInterrupt:
 			msg.runtimeTuple, msg.err = executeRuntimeInterrupt(interruptReq)
 		}
@@ -555,16 +471,6 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 		)
 	}
 	var followUpCmd tea.Cmd
-	if runtimeControlOperationUsesEnabledTarget(msg.operation) {
-		pending := m.runtimeControlPending[msg.operation]
-		if pending.inFlight && pending.desiredEnabled != pending.inFlightEnabled {
-			pending.inFlight = false
-			m.runtimeControlPending[msg.operation] = pending
-			followUpCmd = m.runtimeControlCommand(msg.operation, "", pending.desiredEnabled, pending.compactionMode)
-		} else {
-			m.clearRuntimeControlPending(msg.operation)
-		}
-	}
 	if runtimeControlOperationUsesTextTarget(msg.operation) {
 		pending := m.runtimeControlPending[msg.operation]
 		if pending.inFlight && pending.desiredText != pending.inFlightText {
@@ -579,30 +485,6 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 	case runtimeControlSetSessionName:
 		m.sessionName = strings.TrimSpace(msg.text)
 		return sequenceCmds(tea.SetWindowTitle(sessionTitle(m.sessionName)), followUpCmd)
-	case runtimeControlSetThinkingLevel:
-		m.thinkingLevel = strings.TrimSpace(msg.text)
-		return sequenceCmds(m.sendThinkingLevelSetStatus(m.thinkingLevel), followUpCmd)
-	case runtimeControlSetFastMode:
-		m.fastModeEnabled = msg.enabled
-		status := serverapi.FastModeToggleStatusMessage(m.fastModeEnabled, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
-	case runtimeControlSetReviewer:
-		nextMode := strings.TrimSpace(msg.mode)
-		if nextMode == "" {
-			nextMode = "off"
-		}
-		m.reviewerMode = nextMode
-		m.reviewerEnabled = nextMode != "off"
-		status := serverapi.ReviewerToggleStatusMessage(m.reviewerEnabled, nextMode, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
-	case runtimeControlSetAutoCompaction:
-		m.autoCompactionEnabled = msg.enabled
-		status := serverapi.AutoCompactionToggleStatusMessage(msg.enabled, msg.changed, msg.compactionMode)
-		return sequenceCmds(m.inputController().appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo), followUpCmd)
-	case runtimeControlSetQuestions:
-		m.questionsEnabled = msg.enabled
-		status := serverapi.QuestionsToggleStatusMessage(msg.enabled, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
 	case runtimeControlInterrupt:
 		var merge runtimeTupleMergeResult
 		if msg.runtimeTuple != nil {

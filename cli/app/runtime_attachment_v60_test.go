@@ -50,6 +50,7 @@ func (c *recordingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Contex
 func (s runtimeAttachmentTestServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 	return runtimeAttachmentClients{
 		RuntimeControls:   s.runtimeControl,
+		ChatSettings:      unavailableChatSettingsService{},
 		SessionRuntime:    s.runtime,
 		SessionTranscript: s.sessionTranscript,
 		SessionViews:      s.sessionViews,

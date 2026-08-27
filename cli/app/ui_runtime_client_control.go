@@ -83,69 +83,6 @@ func (c *sessionRuntimeClient) SetSessionName(name string) error {
 	return nil
 }
 
-func (c *sessionRuntimeClient) SetThinkingLevel(level string) error {
-	if err := runtimeControlCallNoResult(c, func(ctx context.Context, requestID string) error {
-		return c.controls.SetThinkingLevel(ctx, serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: requestID, SessionID: c.sessionID, Level: level})
-	}); err != nil {
-		return err
-	}
-	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		view.Status.ThinkingLevel = level
-	})
-	return nil
-}
-
-func (c *sessionRuntimeClient) SetFastModeEnabled(enabled bool) (bool, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-		return c.controls.SetFastModeEnabled(ctx, serverapi.RuntimeSetFastModeEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
-	})
-	if err == nil {
-		c.patchMainView(func(view *clientui.RuntimeMainView) {
-			view.Status.FastModeEnabled = enabled
-		})
-	}
-	return resp.Changed, err
-}
-
-func (c *sessionRuntimeClient) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-		return c.controls.SetReviewerEnabled(ctx, serverapi.RuntimeSetReviewerEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
-	})
-	if err == nil {
-		c.patchMainView(func(view *clientui.RuntimeMainView) {
-			view.Status.ReviewerFrequency = resp.Mode
-			view.Status.ReviewerEnabled = resp.Mode != "" && resp.Mode != "off"
-		})
-	}
-	return resp.Changed, resp.Mode, err
-}
-
-func (c *sessionRuntimeClient) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-		return c.controls.SetAutoCompactionEnabled(ctx, serverapi.RuntimeSetAutoCompactionEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
-	})
-	if err != nil {
-		return false, false, err
-	}
-	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		view.Status.AutoCompactionEnabled = resp.Enabled
-	})
-	return resp.Changed, resp.Enabled, nil
-}
-
-func (c *sessionRuntimeClient) SetQuestionsEnabled(enabled bool) (bool, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-		return c.controls.SetQuestionsEnabled(ctx, serverapi.RuntimeSetQuestionsEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
-	})
-	if err != nil {
-		return false, err
-	}
-	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		view.Status.QuestionsEnabled = resp.Enabled
-	})
-	return resp.Changed, nil
-}
-
 func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	resp, err := runtimeControlCall(c, false, func(ctx context.Context, _ string) (serverapi.RuntimeGoalShowResponse, error) {
 		return c.controls.ShowGoal(ctx, serverapi.RuntimeGoalShowRequest{SessionID: c.sessionID})

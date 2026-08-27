@@ -666,26 +666,6 @@ func (c *Remote) MutateChatSettings(
 	return response, nil
 }
 
-func (c *Remote) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSetThinkingLevelRequest) error {
-	return c.call(ctx, protocol.MethodRuntimeSetThinkingLevel, req, nil)
-}
-
-func (c *Remote) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-	return callControlRPC[serverapi.RuntimeSetFastModeEnabledRequest, serverapi.RuntimeSetFastModeEnabledResponse](c, ctx, protocol.MethodRuntimeSetFastModeEnabled, req)
-}
-
-func (c *Remote) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-	return callControlRPC[serverapi.RuntimeSetReviewerEnabledRequest, serverapi.RuntimeSetReviewerEnabledResponse](c, ctx, protocol.MethodRuntimeSetReviewerEnabled, req)
-}
-
-func (c *Remote) SetAutoCompactionEnabled(ctx context.Context, req serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-	return callControlRPC[serverapi.RuntimeSetAutoCompactionEnabledRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse](c, ctx, protocol.MethodRuntimeSetAutoCompactionEnabled, req)
-}
-
-func (c *Remote) SetQuestionsEnabled(ctx context.Context, req serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-	return callControlRPC[serverapi.RuntimeSetQuestionsEnabledRequest, serverapi.RuntimeSetQuestionsEnabledResponse](c, ctx, protocol.MethodRuntimeSetQuestionsEnabled, req)
-}
-
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	return callValidatedControlRPC[serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](c, ctx, protocol.MethodSessionGetMainView, req)
 }

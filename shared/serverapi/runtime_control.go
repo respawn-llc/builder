@@ -16,55 +16,6 @@ type RuntimeSetSessionNameRequest struct {
 	Name            string `json:"name"`
 }
 
-type RuntimeSetThinkingLevelRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Level           string `json:"level"`
-}
-
-type RuntimeSetFastModeEnabledRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Enabled         bool   `json:"enabled"`
-}
-
-type RuntimeSetFastModeEnabledResponse struct {
-	Changed bool `json:"changed"`
-}
-
-type RuntimeSetReviewerEnabledRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Enabled         bool   `json:"enabled"`
-}
-
-type RuntimeSetReviewerEnabledResponse struct {
-	Changed bool   `json:"changed"`
-	Mode    string `json:"mode"`
-}
-
-type RuntimeSetAutoCompactionEnabledRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Enabled         bool   `json:"enabled"`
-}
-
-type RuntimeSetAutoCompactionEnabledResponse struct {
-	Changed bool `json:"changed"`
-	Enabled bool `json:"enabled"`
-}
-
-type RuntimeSetQuestionsEnabledRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Enabled         bool   `json:"enabled"`
-}
-
-type RuntimeSetQuestionsEnabledResponse struct {
-	Changed bool `json:"changed"`
-	Enabled bool `json:"enabled"`
-}
-
 type RuntimeAppendCommittedEntryRequest struct {
 	ClientRequestID string `json:"client_request_id"`
 	SessionID       string `json:"session_id"`
@@ -314,21 +265,6 @@ func validateRuntimeControlRequest(clientRequestID string, sessionID string) err
 }
 
 func (r RuntimeSetSessionNameRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
-}
-func (r RuntimeSetThinkingLevelRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
-}
-func (r RuntimeSetFastModeEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
-}
-func (r RuntimeSetReviewerEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
-}
-func (r RuntimeSetAutoCompactionEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
-}
-func (r RuntimeSetQuestionsEnabledRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeAppendCommittedEntryRequest) Validate() error {

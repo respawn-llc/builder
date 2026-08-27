@@ -34,25 +34,6 @@ type PreparedChatAgentCatalog struct {
 	entries []PreparedChatAgentCatalogEntry
 }
 
-func NewPreparedChatAgentCatalog(entries ...PreparedChatAgentCatalogEntry) (PreparedChatAgentCatalog, error) {
-	if len(entries) == 0 || entries[0].Choice.Role != config.DefaultSubagentRole {
-		return PreparedChatAgentCatalog{}, errors.New("default Chat Agent catalog entry is required first")
-	}
-	seen := make(map[string]struct{}, len(entries))
-	for index := range entries {
-		role, ok := session.NormalizeChatAgent(entries[index].Choice.Role)
-		if !ok {
-			return PreparedChatAgentCatalog{}, fmt.Errorf("Chat Agent %q is invalid", entries[index].Choice.Role)
-		}
-		if _, duplicate := seen[role]; duplicate {
-			return PreparedChatAgentCatalog{}, fmt.Errorf("Chat Agent %q is duplicated", role)
-		}
-		seen[role] = struct{}{}
-		entries[index].Choice.Role = role
-	}
-	return PreparedChatAgentCatalog{entries: append([]PreparedChatAgentCatalogEntry(nil), entries...)}, nil
-}
-
 type preparedChatAgentComparison struct {
 	Settings             config.Settings
 	Tools                []toolspec.ID

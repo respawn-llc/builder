@@ -9,12 +9,10 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 )
 
 func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
@@ -358,92 +356,6 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 			t.Fatalf("committed message events: %+v", events)
 		}
 	})
-}
-
-func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
-	t.Parallel()
-	type controlCase struct {
-		name      string
-		newEngine func(*testing.T, *session.Store) *Engine
-		apply     func(*Engine) (bool, session.CommitReceipt, error)
-		isApplied func(*Engine) bool
-	}
-	cases := []controlCase{
-		{
-			name: "fast mode",
-			newEngine: func(t *testing.T, store *session.Store) *Engine {
-				return mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{
-					ProviderID:           "openai",
-					SupportsResponsesAPI: true,
-					IsOpenAIFirstParty:   true,
-				}}, Config{Model: "gpt-5.3-codex"})
-			},
-			apply: func(engine *Engine) (bool, session.CommitReceipt, error) {
-				return engine.SetFastModeEnabledWithCommittedFeedback(true, func(bool) string {
-					return "feedback"
-				})
-			},
-			isApplied: func(engine *Engine) bool { return engine.FastModeEnabled() },
-		},
-		{
-			name: "questions",
-			newEngine: func(t *testing.T, store *session.Store) *Engine {
-				return mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-			},
-			apply: func(engine *Engine) (bool, session.CommitReceipt, error) {
-				changed, _, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(false, func(bool, bool) string {
-					return "feedback"
-				})
-				return changed, receipt, err
-			},
-			isApplied: func(engine *Engine) bool { return !engine.QuestionsEnabled() },
-		},
-		{
-			name: "reviewer",
-			newEngine: func(t *testing.T, store *session.Store) *Engine {
-				return mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
-					ID:      toolspec.ToolExecCommand,
-					Handler: fakeTool{name: toolspec.ToolExecCommand},
-				}), Config{
-					Model: "gpt-5",
-					Reviewer: ReviewerConfig{
-						Frequency:     "off",
-						Model:         "gpt-5",
-						ThinkingLevel: "low",
-						Client:        &fakeClient{},
-					},
-				})
-			},
-			apply: func(engine *Engine) (bool, session.CommitReceipt, error) {
-				changed, _, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(true, func(bool, string, bool) string {
-					return "feedback"
-				})
-				return changed, receipt, err
-			},
-			isApplied: func(engine *Engine) bool { return engine.ReviewerFrequency() == "edits" },
-		},
-	}
-
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			observerErr := errors.New("control feedback observer failed")
-			gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-			store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-			engine := testCase.newEngine(t, store)
-			gate.FailNext(observerErr)
-
-			changed, receipt, err := testCase.apply(engine)
-			if !errors.Is(err, observerErr) {
-				t.Fatalf("control error = %v, want observer error", err)
-			}
-			if !receipt.Committed || !changed || !testCase.isApplied(engine) {
-				t.Fatalf("committed control feedback did not apply state: receipt=%+v changed=%v", receipt, changed)
-			}
-			if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 1 {
-				t.Fatalf("committed control feedback projected rows: %+v", rows)
-			}
-		})
-	}
 }
 
 func mustTranscriptHydrationSnapshot(t *testing.T, engine *Engine) TranscriptHydrationSnapshot {

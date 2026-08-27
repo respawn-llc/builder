@@ -184,11 +184,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore).
-		WithChatSettingsPreparationResolver(sessionChatSettingsPreparationResolver{
-			metadataStore:   metadataStore,
-			authManager:     authSupport.AuthManager,
-			persistenceRoot: cfg.PersistenceRoot,
-		}).
 		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
 	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
 		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{

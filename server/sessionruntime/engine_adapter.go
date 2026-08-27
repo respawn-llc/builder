@@ -43,7 +43,7 @@ type AgentRuntimePlanOptions struct {
 	OnLoggingFailure                    func(string)
 	StartLogLines                       []string
 	RecoveredWarningProvider            func() (string, bool, error)
-	AgentSelection                      *session.ChatAgentSelection
+	AgentSelection                      *session.ChatSettingsState
 }
 
 type AgentRuntimePlan struct {

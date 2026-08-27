@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"core/prompts"
-	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
@@ -582,20 +581,6 @@ func newRuntimeControlTestServiceWithFeeds(
 	service := NewService(authority).
 		WithPromptHistoryStore(history).
 		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
-	service.WithChatSettingsPreparationResolver(staticChatSettingsPreparationResolver{
-		prepared: launch.PreparedChatSettings{
-			Baseline: session.ChatSettings{
-				Supervisor:     settings.Reviewer.Frequency,
-				Thinking:       settings.ThinkingLevel,
-				Fast:           settings.PriorityRequestMode,
-				Questions:      runtime.DefaultQuestionsEnabled,
-				AutoCompaction: runtime.DefaultAutoCompactionEnabled,
-			},
-			SupportedThinkingValues: []string{"low", "medium", "high"},
-			FastAvailable:           true,
-			QuestionsAvailable:      true,
-		},
-	})
 	return store, engine, service
 }
 
@@ -1470,23 +1455,6 @@ func TestServiceDurableWorkflowSessionAllowsGoalControl(t *testing.T) {
 	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
 	if _, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID}); err != nil {
 		t.Fatalf("ShowGoal for workflow task session = %v, want allowed", err)
-	}
-}
-
-func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
-
-	_, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
-		ClientRequestID: "req-auto-off-durable-workflow",
-		SessionID:       store.Meta().SessionID,
-		Enabled:         false,
-	})
-	if !errors.Is(err, errWorkflowTaskSessionAutoCompactionDisable) {
-		t.Fatalf("SetAutoCompactionEnabled error = %v, want workflow auto-compaction rejection", err)
-	}
-	if !engine.AutoCompactionEnabled() {
-		t.Fatal("auto-compaction disabled despite durable workflow session marker")
 	}
 }
 

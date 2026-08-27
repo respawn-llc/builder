@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -12,50 +13,46 @@ import (
 
 type runtimeControlStatusPatchClient struct {
 	reconnectRetryRuntimeControlClient
-	fastModeResp       serverapi.RuntimeSetFastModeEnabledResponse
-	reviewerResp       serverapi.RuntimeSetReviewerEnabledResponse
-	autoCompactionResp serverapi.RuntimeSetAutoCompactionEnabledResponse
+	settings serverapi.ChatSettings
 }
 
-func (c *runtimeControlStatusPatchClient) SetFastModeEnabled(context.Context, serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-	return c.fastModeResp, nil
+func (c *runtimeControlStatusPatchClient) ReadChatSettings(context.Context, serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
+	return serverapi.ChatSettingsReadResponse{Settings: c.settings}, nil
 }
 
-func (c *runtimeControlStatusPatchClient) SetReviewerEnabled(context.Context, serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-	return c.reviewerResp, nil
+func (c *runtimeControlStatusPatchClient) MutateChatSettings(context.Context, serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
+	return serverapi.ChatSettingsMutationResponse{
+		Result:   serverapi.ChatSettingsMutationResult{Kind: serverapi.ChatSettingsMutationApplied, Changed: true},
+		Settings: c.settings,
+	}, nil
 }
 
-func (c *runtimeControlStatusPatchClient) SetAutoCompactionEnabled(context.Context, serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-	return c.autoCompactionResp, nil
-}
-
-func (c *runtimeControlStatusPatchClient) SetQuestionsEnabled(context.Context, serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-	return serverapi.RuntimeSetQuestionsEnabledResponse{}, nil
-}
+var _ apicontract.ChatSettingsService = (*runtimeControlStatusPatchClient)(nil)
 
 func TestRuntimeClientControlMutationsPatchCachedSessionStatus(t *testing.T) {
 	controls := &runtimeControlStatusPatchClient{
-		fastModeResp:       serverapi.RuntimeSetFastModeEnabledResponse{Changed: true},
-		reviewerResp:       serverapi.RuntimeSetReviewerEnabledResponse{Changed: true, Mode: "edits"},
-		autoCompactionResp: serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: true, Enabled: true},
+		settings: serverapi.ChatSettings{
+			SelectedAgent: serverapi.ChatSettingsAgentSummary{Role: "default", Thinking: "high"},
+			Supervisor:    serverapi.ChatSettingsSupervisor{Value: serverapi.ChatSettingsSupervisorAfterEdits},
+			Fast:          &serverapi.ChatSettingsFast{Value: true},
+			Questions:     serverapi.ChatSettingsQuestions{Enabled: false},
+			AutoCompaction: serverapi.ChatSettingsAutoCompaction{
+				Stored: true,
+			},
+		},
 	}
-	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls).(*sessionRuntimeClient)
+	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls, controls).(*sessionRuntimeClient)
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 
 	if err := runtimeClient.SetSessionName("renamed"); err != nil {
 		t.Fatalf("SetSessionName: %v", err)
 	}
-	if err := runtimeClient.SetThinkingLevel("high"); err != nil {
-		t.Fatalf("SetThinkingLevel: %v", err)
-	}
-	if changed, err := runtimeClient.SetFastModeEnabled(true); err != nil || !changed {
-		t.Fatalf("SetFastModeEnabled changed=%v err=%v, want changed", changed, err)
-	}
-	if changed, mode, err := runtimeClient.SetReviewerEnabled(true); err != nil || !changed || mode != "edits" {
-		t.Fatalf("SetReviewerEnabled changed=%v mode=%q err=%v, want edits", changed, mode, err)
-	}
-	if changed, enabled, err := runtimeClient.SetAutoCompactionEnabled(true); err != nil || !changed || !enabled {
-		t.Fatalf("SetAutoCompactionEnabled changed=%v enabled=%v err=%v, want enabled", changed, enabled, err)
+	thinking := "high"
+	if response, err := runtimeClient.MutateChatSettings(serverapi.ChatSettingsMutationOperation{
+		Kind:  serverapi.ChatSettingsMutationThinking,
+		Value: &thinking,
+	}); err != nil || response.Result.Kind != serverapi.ChatSettingsMutationApplied {
+		t.Fatalf("Thinking mutation response = %+v, err=%v", response, err)
 	}
 
 	view, ok := runtimeClient.CachedMainView()
@@ -74,7 +71,7 @@ func TestRuntimeClientControlMutationsPatchCachedSessionStatus(t *testing.T) {
 
 func TestRuntimeClientInputRequestUsesCallerRequestIdentity(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{}
-	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls).(*sessionRuntimeClient)
+	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls, unavailableChatSettingsService{}).(*sessionRuntimeClient)
 	requestID := runtimeids.NewRuntimeClientRequestID()
 
 	if _, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{

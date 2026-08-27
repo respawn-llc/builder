@@ -88,26 +88,6 @@ func (c *reconnectRetryRuntimeControlClient) SetSessionName(context.Context, ser
 	return nil
 }
 
-func (c *reconnectRetryRuntimeControlClient) SetThinkingLevel(context.Context, serverapi.RuntimeSetThinkingLevelRequest) error {
-	return nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) SetFastModeEnabled(context.Context, serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-	return serverapi.RuntimeSetFastModeEnabledResponse{}, nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) SetReviewerEnabled(context.Context, serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-	return serverapi.RuntimeSetReviewerEnabledResponse{}, nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) SetAutoCompactionEnabled(context.Context, serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-	return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) SetQuestionsEnabled(context.Context, serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-	return serverapi.RuntimeSetQuestionsEnabledResponse{}, nil
-}
-
 func (c *reconnectRetryRuntimeControlClient) AppendCommittedEntry(_ context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

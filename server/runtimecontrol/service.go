@@ -8,18 +8,15 @@ import (
 	"strings"
 	"sync"
 
-	"core/server/launch"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/runtimecommand"
 	"core/server/session"
-	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
@@ -31,10 +28,6 @@ type RuntimeActivityResolver interface {
 
 type sessionIdentityPublisher interface {
 	PublishSessionIdentity(sessionID string) error
-}
-
-type sessionStatusPublisher interface {
-	PublishSessionStatus(sessionID string) error
 }
 
 type PromptHistoryStore interface {
@@ -49,12 +42,6 @@ type WorkflowTaskSessionResolver interface {
 	SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error)
 }
 
-type ChatSettingsPreparationResolver interface {
-	PrepareSessionChatSettings(ctx context.Context, store *session.Store, agent string) (launch.PreparedChatSettings, error)
-}
-
-var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction cannot be disabled for workflow task sessions")
-
 type Service struct {
 	authority            *sessionruntime.Authority
 	execution            *runtimecommand.ExecutionAdapter
@@ -64,16 +51,10 @@ type Service struct {
 	promptCommands       PromptCommandResolver
 	workflowTasks        WorkflowTaskSessionResolver
 	persisted            session.PersistedSessionResolver
-	chatSettings         ChatSettingsPreparationResolver
 	askViews             servicecontract.AskViewService
 	approvalViews        servicecontract.ApprovalViewService
 	attention            servicecontract.AttentionNotificationService
 	sessionNames         *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	thinkingLevels       *requestmemo.Memo[sessionStringMemoRequest, committedRuntimeMutationResult[struct{}]]
-	fastModes            *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]]
-	reviewers            *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]]
-	autoCompacts         *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetAutoCompactionEnabledResponse]]
-	questions            *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]]
 	userTurns            *requestmemo.Memo[sessionUserTurnMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSubmitUserTurnResponse]]
 	userShells           *requestmemo.Memo[sessionCommandMemoRequest, committedRuntimeMutationResult[struct{}]]
 	compactions          *requestmemo.Memo[sessionStringMemoRequest, committedRuntimeMutationResult[struct{}]]
@@ -102,11 +83,6 @@ type committedGoalMutationResult struct {
 type sessionStringMemoRequest struct {
 	SessionID string
 	Value     string
-}
-
-type sessionBoolMemoRequest struct {
-	SessionID string
-	Enabled   bool
 }
 
 type sessionTextMemoRequest struct {
@@ -204,11 +180,6 @@ func NewServiceWithGoalCommands(
 		execution:            execution,
 		goalAuthority:        goalAuthority,
 		sessionNames:         requestmemo.New[sessionStringMemoRequest, struct{}](),
-		thinkingLevels:       requestmemo.New[sessionStringMemoRequest, committedRuntimeMutationResult[struct{}]](),
-		fastModes:            requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]](),
-		reviewers:            requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]](),
-		autoCompacts:         requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetAutoCompactionEnabledResponse]](),
-		questions:            requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]](),
 		userTurns:            requestmemo.New[sessionUserTurnMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSubmitUserTurnResponse]](),
 		userShells:           requestmemo.New[sessionCommandMemoRequest, committedRuntimeMutationResult[struct{}]](),
 		compactions:          requestmemo.New[sessionStringMemoRequest, committedRuntimeMutationResult[struct{}]](),
@@ -273,14 +244,6 @@ func (s *Service) WithPersistedSessionResolver(resolver session.PersistedSession
 		return nil
 	}
 	s.persisted = resolver
-	return s
-}
-
-func (s *Service) WithChatSettingsPreparationResolver(resolver ChatSettingsPreparationResolver) *Service {
-	if s == nil {
-		return nil
-	}
-	s.chatSettings = resolver
 	return s
 }
 
@@ -409,275 +372,6 @@ func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSe
 	return err
 }
 
-func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSetThinkingLevelRequest) error {
-	if err := req.Validate(); err != nil {
-		return err
-	}
-	level := strings.TrimSpace(req.Level)
-	if level == "" {
-		return errors.New("thinking level is required")
-	}
-	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: level}
-	_, err := memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.thinkingLevels, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
-		_, accepted, mutationErr := s.mutateChatSettings(ctx, req.SessionID, func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
-			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationThinking, Value: level}, nil
-		})
-		return struct{}{}, accepted, mutationErr
-	})
-	return err
-}
-
-func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSetFastModeEnabledResponse{}, err
-	}
-	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.fastModes, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetFastModeEnabledResponse, bool, error) {
-		result, accepted, err := s.mutateChatSettings(ctx, req.SessionID, func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
-			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationFast, Enabled: req.Enabled}, nil
-		})
-		return serverapi.RuntimeSetFastModeEnabledResponse{Changed: result.Changed}, accepted, err
-	})
-}
-
-func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSetReviewerEnabledResponse{}, err
-	}
-	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.reviewers, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetReviewerEnabledResponse, bool, error) {
-		mode := "off"
-		result, accepted, err := s.mutateChatSettings(ctx, req.SessionID, func(input sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
-			if req.Enabled {
-				mode = input.Effective.Supervisor
-				if mode == "off" {
-					entry, ok := input.Catalog.Lookup(input.Raw.Agent)
-					if !ok {
-						entry, _ = input.Catalog.Lookup(config.DefaultSubagentRole)
-					}
-					mode = entry.Settings.Baseline.Supervisor
-					if mode == "off" {
-						mode = "edits"
-					}
-				}
-			}
-			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationSupervisor, Value: mode}, nil
-		})
-		return serverapi.RuntimeSetReviewerEnabledResponse{Changed: result.Changed, Mode: mode}, accepted, err
-	})
-}
-
-func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, err
-	}
-	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.autoCompacts, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetAutoCompactionEnabledResponse, bool, error) {
-		result, accepted, mutationErr := s.mutateChatSettings(ctx, req.SessionID, func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
-			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationAutoCompaction, Enabled: req.Enabled}, nil
-		})
-		if !accepted {
-			return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, false, mutationErr
-		}
-		return serverapi.RuntimeSetAutoCompactionEnabledResponse{
-			Changed: result.Changed,
-			Enabled: req.Enabled,
-		}, true, mutationErr
-	})
-}
-
-func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSetQuestionsEnabledResponse{}, err
-	}
-	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.questions, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetQuestionsEnabledResponse, bool, error) {
-		result, accepted, err := s.mutateChatSettings(ctx, req.SessionID, func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
-			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationQuestions, Enabled: req.Enabled}, nil
-		})
-		return serverapi.RuntimeSetQuestionsEnabledResponse{
-			Changed: result.Changed,
-			Enabled: req.Enabled,
-		}, accepted, err
-	})
-}
-
-func (s *Service) mutateChatSettings(
-	ctx context.Context,
-	sessionID string,
-	operation func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error),
-) (result sessionlaunch.PreparedChatSettingsOperationResult, accepted bool, resultErr error) {
-	if s == nil || s.authority == nil {
-		return result, false, errors.New("session runtime authority is required")
-	}
-	err := s.authority.WithSessionChatSettings(ctx, sessionID, func(
-		runCtx context.Context,
-		store *session.Store,
-		engine *runtime.Engine,
-	) (bool, error) {
-		input, err := s.prepareChatSettingsOperation(runCtx, sessionID, store, engine)
-		if err != nil {
-			return false, err
-		}
-		requested, err := operation(input)
-		if err != nil {
-			return false, err
-		}
-		result, err = sessionlaunch.ProjectPreparedChatSettingsOperation(input, requested)
-		if err != nil {
-			return false, err
-		}
-		if result.Rejection != nil {
-			return false, chatSettingsRejectionError(result.Rejection.Reason)
-		}
-		agentChanged := input.Raw.Agent != result.State.Agent
-		if engine != nil && !agentChanged {
-			if _, err := engine.PrepareReviewerFrequency(result.Effective.Supervisor); err != nil {
-				return false, err
-			}
-			if result.Effective.Fast && !engine.FastModeAvailable() {
-				return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
-			}
-		}
-		committed, err := store.CommitChatSettingsState(result.State)
-		if err != nil && !committed.Committed {
-			return false, err
-		}
-		accepted = true
-		resultErr = err
-		result.Changed = committed.Changed
-		if engine == nil {
-			return false, nil
-		}
-		if agentChanged && committed.Changed {
-			return true, nil
-		}
-		if err := engine.SetThinkingLevel(result.Effective.Thinking); err != nil {
-			resultErr = errors.Join(resultErr, err)
-		}
-		if _, err := engine.SetFastModeEnabled(result.Effective.Fast); err != nil {
-			resultErr = errors.Join(resultErr, err)
-		}
-		engine.SetReviewerFrequency(result.Effective.Supervisor)
-		engine.SetQuestionsEnabled(result.Effective.Questions)
-		engine.SetAutoCompactionEnabled(result.Effective.AutoCompaction)
-		return false, nil
-	})
-	if !accepted {
-		return result, false, err
-	}
-	return result, true, errors.Join(resultErr, err)
-}
-
-func (s *Service) prepareChatSettingsOperation(
-	ctx context.Context,
-	sessionID string,
-	store *session.Store,
-	engine *runtime.Engine,
-) (sessionlaunch.PreparedChatSettingsOperationInput, error) {
-	state, err := session.ChatSettingsStateFromMeta(store.Meta())
-	if err != nil {
-		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
-	}
-	selected, err := s.chatSettings.PrepareSessionChatSettings(ctx, store, state.Agent)
-	if err != nil {
-		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
-	}
-	defaults := selected
-	if state.Agent != config.DefaultSubagentRole {
-		defaults, err = s.chatSettings.PrepareSessionChatSettings(ctx, store, config.DefaultSubagentRole)
-		if err != nil {
-			return sessionlaunch.PreparedChatSettingsOperationInput{}, err
-		}
-	}
-	entries := []launch.PreparedChatAgentCatalogEntry{{
-		Choice:   serverapi.ChatSettingsAgentChoice{Role: config.DefaultSubagentRole},
-		Settings: defaults,
-	}}
-	if state.Agent != config.DefaultSubagentRole {
-		entries = append(entries, launch.PreparedChatAgentCatalogEntry{
-			Choice:   serverapi.ChatSettingsAgentChoice{Role: state.Agent},
-			Settings: selected,
-		})
-	}
-	catalog, err := launch.NewPreparedChatAgentCatalog(entries...)
-	if err != nil {
-		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
-	}
-	effective, err := session.ResolveEffectiveChatSettings(state.Settings, nil, selected.Baseline)
-	if err != nil {
-		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
-	}
-	persistedQuestions := effective.Questions
-	persistedThinking := effective.Thinking
-	if state.Settings != nil {
-		if state.Settings.Questions != nil {
-			persistedQuestions = *state.Settings.Questions
-		}
-		if state.Settings.Thinking != nil {
-			persistedThinking = *state.Settings.Thinking
-		}
-	}
-	workflowLocked, err := s.workflowTaskSession(ctx, sessionID, engine)
-	if err != nil {
-		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
-	}
-	return sessionlaunch.PreparedChatSettingsOperationInput{
-		Raw:                state,
-		Effective:          effective,
-		PersistedQuestions: persistedQuestions,
-		PersistedThinking:  persistedThinking,
-		Catalog:            catalog,
-		AgentLocked:        store.Meta().Locked != nil,
-		WorkflowLocked:     workflowLocked,
-		CompactionMode:     config.CompactionModeLocal,
-	}, nil
-}
-
-func chatSettingsRejectionError(reason sessionlaunch.ChatSettingsRejectionReason) error {
-	switch reason {
-	case sessionlaunch.ChatSettingsThinkingUnavailable:
-		return errors.New("thinking level is unavailable for the selected Session Agent")
-	case sessionlaunch.ChatSettingsFastUnavailable:
-		return errors.New("fast mode is only available for OpenAI-based Responses providers")
-	case sessionlaunch.ChatSettingsAutoCompactionPolicyLock:
-		return errWorkflowTaskSessionAutoCompactionDisable
-	case sessionlaunch.ChatSettingsAgentLocked:
-		return session.ErrChatAgentLocked
-	case sessionlaunch.ChatSettingsAgentUnavailable:
-		return errors.New("Chat Agent is unavailable")
-	default:
-		return fmt.Errorf("Chat settings mutation was rejected: %s", reason)
-	}
-}
-
-func memoizedChatSettingsMutation[Req any, Resp any](
-	service *Service,
-	ctx context.Context,
-	requestID string,
-	sessionID string,
-	req Req,
-	memo *requestmemo.Memo[Req, committedRuntimeMutationResult[Resp]],
-	same func(Req, Req) bool,
-	run func(context.Context) (Resp, bool, error),
-) (Resp, error) {
-	var zero Resp
-	result, err := memo.Do(ctx, requestID, req, same, func(ctx context.Context) (committedRuntimeMutationResult[Resp], error) {
-		response, accepted, mutationErr := run(ctx)
-		if !accepted {
-			return committedRuntimeMutationResult[Resp]{}, mutationErr
-		}
-		return committedRuntimeMutationResult[Resp]{
-			Response: response,
-			Err:      errors.Join(mutationErr, service.publishSessionStatus(sessionID)),
-		}, nil
-	})
-	if err != nil {
-		return zero, err
-	}
-	return result.Response, result.Err
-}
-
 func memoizedRuntimeCommand[Req any, Resp any](
 	ctx context.Context,
 	requestID string,
@@ -708,13 +402,6 @@ func runtimeCommandNotAccepted(cause error) error {
 		cause = errors.New("runtime command completed without accepting a mutation")
 	}
 	return serverapi.NewRuntimeCommandNotAcceptedError(cause)
-}
-
-func (s *Service) publishSessionStatus(sessionID string) error {
-	if publisher, ok := s.activity.(sessionStatusPublisher); ok {
-		return publisher.PublishSessionStatus(sessionID)
-	}
-	return nil
 }
 
 func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {
@@ -932,7 +619,6 @@ var (
 	sameLiveStopMemoRequest          = sameComparable[liveStopMemoRequest]
 	sameQueuedUserMessageMemoRequest = sameComparable[queuedUserMessageMemoRequest]
 	sameSessionStringMemoRequest     = sameComparable[sessionStringMemoRequest]
-	sameSessionBoolMemoRequest       = sameComparable[sessionBoolMemoRequest]
 	sameSessionCommandMemoRequest    = sameComparable[sessionCommandMemoRequest]
 	sameLocalEntryMemoRequest        = sameComparable[localEntryMemoRequest]
 	sameGoalSetMemoRequest           = sameComparable[goalSetMemoRequest]

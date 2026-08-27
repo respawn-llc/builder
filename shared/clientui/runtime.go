@@ -195,11 +195,6 @@ type RuntimeClient interface {
 	Status() RuntimeStatus
 	SessionView() RuntimeSessionView
 	SetSessionName(name string) error
-	SetThinkingLevel(level string) error
-	SetFastModeEnabled(enabled bool) (bool, error)
-	SetReviewerEnabled(enabled bool) (bool, string, error)
-	SetAutoCompactionEnabled(enabled bool) (bool, bool, error)
-	SetQuestionsEnabled(enabled bool) (bool, error)
 	ShowGoal() (*RuntimeGoal, error)
 	SetGoal(objective string) (GoalMutationResult, error)
 	PauseGoal() (GoalMutationResult, error)

@@ -284,6 +284,13 @@ func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText
 	})
 }
 
+func (e *Engine) appendCommittedEntryWithCommitReceipt(entry storedLocalEntry) (session.CommitReceipt, error) {
+	if entry.Role == "" || entry.Text == "" {
+		return session.CommitReceipt{}, nil
+	}
+	return e.steerWithCommitReceipt("", steerLocalEntryIntent(entry))
+}
+
 func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
 	_, err := e.appendCommittedEntryWithCommitReceipt(entry)
 	return err

@@ -14,6 +14,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 type sessionChatContextWorkspaceResolver struct {
@@ -54,8 +55,24 @@ func TestReadDormantSessionChatContextUsesExactExecutionRootAndBoundedFacts(t *t
 		t.Fatalf("SetSessionContextFacts: %v", err)
 	}
 	autoCompaction := false
-	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{AutoCompaction: &autoCompaction}); err != nil {
-		t.Fatalf("MutateChatSettings: %v", err)
+	state, err := session.ChatSettingsStateFromMeta(store.Meta())
+	if err != nil {
+		t.Fatalf("read Chat settings: %v", err)
+	}
+	overrides := session.ChatSettingsOverrides{
+		Supervisor:     textutil.Value("off"),
+		Thinking:       textutil.Value("medium"),
+		Fast:           textutil.Value(false),
+		Questions:      textutil.Value(true),
+		AutoCompaction: &autoCompaction,
+	}
+	if state.Settings != nil {
+		overrides = *state.Settings
+	}
+	overrides.AutoCompaction = &autoCompaction
+	state.Settings = &overrides
+	if _, err := store.CommitChatSettingsState(state); err != nil {
+		t.Fatalf("commit Chat settings: %v", err)
 	}
 	settings := config.DefaultOnboardingSettings()
 	settings.ModelContextWindow = 100_000

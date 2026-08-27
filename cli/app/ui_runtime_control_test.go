@@ -25,10 +25,6 @@ type runtimeControlFakeClient struct {
 	cachedMainView        clientui.RuntimeMainView
 	hasCachedMainView     bool
 	setSessionNameArg     string
-	setThinkingLevelArg   string
-	setFastModeArg        bool
-	setFastModeCalls      int
-	setAutoCompactCalls   int
 	goal                  *clientui.RuntimeGoal
 	showGoalCalls         int
 	setGoalArg            string
@@ -116,25 +112,39 @@ func (f *runtimeControlFakeClient) SetSessionName(name string) error {
 	f.setSessionNameArg = name
 	return f.err
 }
-func (f *runtimeControlFakeClient) SetThinkingLevel(level string) error {
-	f.setThinkingLevelArg = level
-	return f.err
+func (f *runtimeControlFakeClient) ReadChatSettings() (serverapi.ChatSettings, error) {
+	return f.chatSettings(), f.err
 }
-func (f *runtimeControlFakeClient) SetFastModeEnabled(enabled bool) (bool, error) {
-	f.setFastModeArg = enabled
-	f.setFastModeCalls++
-	f.status.FastModeEnabled = enabled
-	return true, f.err
+func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {
+	settings := f.chatSettings()
+	switch operation.Kind {
+	case serverapi.ChatSettingsMutationThinking:
+		settings.SelectedAgent.Thinking = *operation.Value
+	case serverapi.ChatSettingsMutationFast:
+		settings.Fast.Value = *operation.Enabled
+	case serverapi.ChatSettingsMutationSupervisor:
+		settings.Supervisor.Value = serverapi.ChatSettingsSupervisorValue(*operation.Value)
+	case serverapi.ChatSettingsMutationQuestions:
+		settings.Questions.Enabled = *operation.Enabled
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		settings.AutoCompaction.Stored = *operation.Enabled
+	}
+	return serverapi.ChatSettingsMutationResponse{
+		Result:   serverapi.ChatSettingsMutationResult{Kind: serverapi.ChatSettingsMutationApplied, Changed: true},
+		Settings: settings,
+	}, f.err
 }
-func (f *runtimeControlFakeClient) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	return true, "edits", f.err
-}
-func (f *runtimeControlFakeClient) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	f.setAutoCompactCalls++
-	return true, enabled, f.err
-}
-func (f *runtimeControlFakeClient) SetQuestionsEnabled(enabled bool) (bool, error) {
-	return true, f.err
+func (f *runtimeControlFakeClient) chatSettings() serverapi.ChatSettings {
+	return serverapi.ChatSettings{
+		SelectedAgent: serverapi.ChatSettingsAgentSummary{Role: "default", Thinking: f.status.ThinkingLevel},
+		Supervisor: serverapi.ChatSettingsSupervisor{
+			Value:    serverapi.ChatSettingsSupervisorValue(f.status.ReviewerFrequency),
+			Baseline: serverapi.ChatSettingsSupervisorAfterEdits,
+		},
+		Fast: &serverapi.ChatSettingsFast{Value: f.status.FastModeEnabled},
+		Questions: serverapi.ChatSettingsQuestions{Enabled: f.status.QuestionsEnabled},
+		AutoCompaction: serverapi.ChatSettingsAutoCompaction{Stored: f.status.AutoCompactionEnabled},
+	}
 }
 func (f *runtimeControlFakeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	f.showGoalCalls++
@@ -412,12 +422,16 @@ func TestThinkingRuntimeCompletionUsesStatusOnly(t *testing.T) {
 
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client)
-	cmd := m.runtimeControlCommand(runtimeControlSetThinkingLevel, "high", false, "")
+	value := "high"
+	cmd := m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
+		Kind:  serverapi.ChatSettingsMutationThinking,
+		Value: &value,
+	})
 	msgs := collectCmdMessages(t, cmd)
 
-	var done runtimeControlDoneMsg
+	var done chatSettingsDoneMsg
 	for _, msg := range msgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
+		if typed, ok := msg.(chatSettingsDoneMsg); ok {
 			done = typed
 		}
 	}
@@ -445,7 +459,11 @@ func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 	m.startupCmds = nil
 
 	sessionCmd := m.runtimeControlCommand(runtimeControlSetSessionName, "incident triage", false, "")
-	thinkingCmd := m.runtimeControlCommand(runtimeControlSetThinkingLevel, "high", false, "")
+	value := "high"
+	thinkingCmd := m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
+		Kind:  serverapi.ChatSettingsMutationThinking,
+		Value: &value,
+	})
 	sessionMsgs := collectCmdMessages(t, sessionCmd)
 	thinkingMsgs := collectCmdMessages(t, thinkingCmd)
 
@@ -455,9 +473,9 @@ func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 			sessionDone = typed
 		}
 	}
-	var thinkingDone runtimeControlDoneMsg
+	var thinkingDone chatSettingsDoneMsg
 	for _, msg := range thinkingMsgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
+		if typed, ok := msg.(chatSettingsDoneMsg); ok {
 			thinkingDone = typed
 		}
 	}

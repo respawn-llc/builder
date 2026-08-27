@@ -37,20 +37,16 @@ type sessionRuntimeClient struct {
 	metadataRevision uint64
 }
 
-func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService, chatSettings ...apicontract.ChatSettingsService) clientui.RuntimeClient {
+func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService, chatSettings apicontract.ChatSettingsService) clientui.RuntimeClient {
 	if reads == nil || controls == nil {
 		return nil
-	}
-	var settings apicontract.ChatSettingsService
-	if len(chatSettings) > 0 {
-		settings = chatSettings[0]
 	}
 	return &sessionRuntimeClient{
 		sessionID:    sessionID,
 		reactivator:  newRuntimeReactivator(),
 		reads:        reads,
 		controls:     controls,
-		chatSettings: settings,
+		chatSettings: chatSettings,
 		mainView:     clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}},
 	}
 }

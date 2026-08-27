@@ -66,9 +66,23 @@ func TestCurrentNodeStartUsesMaterializedSelectedRoleAtCompactionBoundary(t *tes
 	if err := store.EnsureDurable(); err != nil {
 		t.Fatalf("persist retained Session: %v", err)
 	}
-	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
-		AutoCompaction: textutil.Value(false),
-	}); err != nil {
+	state, err := session.ChatSettingsStateFromMeta(store.Meta())
+	if err != nil {
+		t.Fatalf("read retained Session Chat settings: %v", err)
+	}
+	settings := session.ChatSettingsOverrides{
+		Supervisor:     textutil.Value("off"),
+		Thinking:       textutil.Value("medium"),
+		Fast:           textutil.Value(false),
+		Questions:      textutil.Value(true),
+		AutoCompaction: textutil.Value(true),
+	}
+	if state.Settings != nil {
+		settings = *state.Settings
+	}
+	settings.AutoCompaction = textutil.Value(false)
+	state.Settings = &settings
+	if _, err := store.CommitChatSettingsState(state); err != nil {
 		t.Fatalf("disable retained Session Auto-compaction: %v", err)
 	}
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
