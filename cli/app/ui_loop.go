@@ -14,14 +14,17 @@ import (
 	"core/shared/config"
 
 	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 type uiProgramComposition struct {
-	model   *uiModel
-	options []tea.ProgramOption
-	logger  uiLogger
-	output  io.Writer
-	close   func()
+	model                 *uiModel
+	options               []tea.ProgramOption
+	logger                uiLogger
+	output                io.Writer
+	close                 func()
+	terminalOutput        *uiTerminalOutput
+	nativeProgressEnabled bool
 }
 
 type uiLoopRequest struct {
@@ -58,6 +61,17 @@ func runUIProgram(composition *uiProgramComposition, initialModel tea.Model) (te
 	}
 	defer composition.close()
 	finalModel, runErr := tea.NewProgram(initialModel, composition.options...).Run()
+	if composition.nativeProgressEnabled {
+		if composition.terminalOutput == nil {
+			if composition.logger != nil {
+				composition.logger.Logf("app.exit native_progress_reset_error=%q", "terminal output is required")
+			}
+		} else if _, err := composition.terminalOutput.Write([]byte(xansi.ResetProgressBar)); err != nil {
+			if composition.logger != nil {
+				composition.logger.Logf("app.exit native_progress_reset_error=%q", err.Error())
+			}
+		}
+	}
 	if runErr != nil {
 		if composition.logger != nil {
 			composition.logger.Logf("app.exit err=%q", runErr.Error())
@@ -133,6 +147,8 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIThinkingLevel(request.active.ThinkingLevel),
 		WithUIModelContractLocked(request.modelContractLocked),
 		WithUITheme(request.active.Theme),
+		WithUINativeProgressBar(request.active.TUINativeProgressBar),
+		WithUITerminalOutput(terminalOutput.uiTerminalOutput),
 		WithUIMarkdownLinkPresentation(terminalCapabilities.MarkdownLinks),
 		WithUIDebug(request.active.Debug),
 		WithUICommandRegistry(request.commandRegistry),
@@ -188,10 +204,12 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		model.applyAdmittedTranscriptMessageState,
 	)
 	return &uiProgramComposition{
-		model:   model,
-		options: options,
-		logger:  uiLogger,
-		output:  output,
+		model:                 model,
+		options:               options,
+		logger:                uiLogger,
+		output:                output,
+		terminalOutput:        terminalOutput.uiTerminalOutput,
+		nativeProgressEnabled: request.active.TUINativeProgressBar,
 		close: func() {
 			model.Close()
 			if tuiLogger != nil {

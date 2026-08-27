@@ -92,8 +92,16 @@ func (m *uiModel) isCompacting() bool {
 	}
 }
 
-func (m *uiModel) isReviewerRunning() bool {
-	return m != nil && m.runtimeActivityProjection.Reviewer == clientui.ReviewerActivityRunning
+func (m *uiModel) isReviewerActive() bool {
+	if m == nil {
+		return false
+	}
+	switch m.runtimeActivityProjection.Reviewer {
+	case clientui.ReviewerActivityInvoking, clientui.ReviewerActivityAddressingFeedback:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *uiModel) hasPendingInterrupt() bool {

@@ -319,7 +319,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - The Reviewer receives shorter tool output than the main agent and returns minimal JSON `{"suggestions":["..."]}`.
 - Invalid Reviewer payloads are ignored non-fatally.
 - A Reviewer generation failure creates one later Reviewer error row when the Runtime can still receive it.
-- Reviewer running and completion create no transcript row.
+- Reviewer phase changes and completion create no transcript row.
 - Nonempty suggestions create one later Reviewer feedback row and request one ordinary main-agent follow-up at the next available model boundary.
 - A follow-up that returns a nonblank final answer reports the suggestions as applied.
 - An explicitly blank silent follow-up reports that no changes were applied.
@@ -327,7 +327,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - `reviewer.verbose_output` never controls whether feedback exists.
 - If Kent cannot apply issued nonempty feedback, the feedback remains visible and the Session follows its ordinary Runtime failure behavior.
 - Reviewer runs once and does not review its own follow-up.
-- Live Reviewer activity is best-effort `inactive` or `running` state.
+- Live Reviewer activity follows the phase contract in the Runtime Steering specification.
 - Live Reviewer activity is not persisted or reconstructed from transcript history.
 - Persistent Reviewer activity across later lifecycle boundaries, Runtime replacement, reconnect, or restart is outside this specification.
 

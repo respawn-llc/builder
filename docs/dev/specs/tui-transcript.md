@@ -120,7 +120,7 @@
 - Reviewer feedback uses `O` when `reviewer.verbose_output` is enabled and `OC` when it is disabled. Every nonempty Reviewer result creates one feedback row when the suggestions are issued, before the follow-up begins. `O` renders the complete ordered Markdown suggestion list in ongoing scrollback without truncation or ellipsis. `OC` renders the suggestion count in ongoing and collapsed Detail; expanded Detail renders the complete ordered Markdown suggestion list.
 - A successful Reviewer follow-up creates a separate `OC` outcome row after the follow-up. The outcome reports whether Kent applied the suggestions or made no changes.
 - Reviewer errors use `O` and show their complete failure detail.
-- Reviewer running and completion lifecycle create no transcript row.
+- Reviewer phase changes and completion create no transcript row.
 - `background_notice`: `OC`
 - `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
@@ -381,11 +381,11 @@
 - Reviewer contract is minimal JSON `{"suggestions":["..."]}`; invalid payloads are ignored non-fatally.
 - Kent shows the main answer without waiting for Reviewer.
 - Input and ordinary model or tool work remain available while review runs.
-- The TUI status line shows `review` only while the server's live Reviewer activity is `running`.
+- The TUI status line shows `review` only while the server's live Reviewer activity is `invoking` or `addressing_feedback`.
 - The TUI does not infer Reviewer activity from transcript rows, notifications, or ordinary Runtime activity.
 - Reviewer status is best-effort live state.
 - Reconnect, Runtime replacement, or restart may show no earlier review.
-- Reviewer running and completion create no transcript row.
+- Reviewer phase changes and completion create no transcript row.
 - A Reviewer generation failure creates one expanded Reviewer error row later when the Runtime can still receive it.
 - If suggestions exist, Kent later creates one Reviewer feedback row and requests one ordinary main-agent follow-up.
 - The Reviewer feedback row preserves the ordered Markdown suggestions and uses their count as its compact summary.

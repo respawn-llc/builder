@@ -133,3 +133,15 @@ func TestRuntimeActivityRejectsActiveIdentityOutsideRunningStates(t *testing.T) 
 		}
 	}
 }
+
+func TestReviewerActivityContractDistinguishesInvocationFromAddressingFeedback(t *testing.T) {
+	for _, activity := range []ReviewerActivity{
+		ReviewerActivityInactive,
+		ReviewerActivityInvoking,
+		ReviewerActivityAddressingFeedback,
+	} {
+		if err := activity.Validate(); err != nil {
+			t.Fatalf("validate Reviewer activity %q: %v", activity, err)
+		}
+	}
+}

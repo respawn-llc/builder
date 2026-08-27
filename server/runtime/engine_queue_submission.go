@@ -15,7 +15,7 @@ var ErrWorktreeDeleteBlockedByQueuedWork = errors.New("worktree deletion is bloc
 
 const queuedUserSubmissionBusyRetryDelay = 25 * time.Millisecond
 
-var ErrReviewerRunning = errors.New("Reviewer is running")
+var ErrReviewerActive = errors.New("Reviewer is active")
 
 // CommandAcceptance serializes caller cancellation with a candidate mutation that reports whether it committed.
 type CommandAcceptance func(commit func() (bool, error)) (bool, error)

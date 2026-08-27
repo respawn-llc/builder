@@ -16,6 +16,13 @@ type defaultReviewerPipeline struct {
 	engine *Engine
 }
 
+func completeReviewerActivityError(e *Engine, stepID string) error {
+	if err := e.completeReviewerActivity(stepID); err != nil {
+		return fmt.Errorf("complete Reviewer activity: %w", err)
+	}
+	return nil
+}
+
 func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool {
 	if reviewerClient == nil {
 		return false
@@ -94,28 +101,49 @@ func (e *Engine) startReviewer(
 	reviewerClient llm.Client,
 	pipeline reviewerPipeline,
 ) error {
-	if e.ReviewerRunning() {
+	if e.ReviewerActive() {
 		return nil
 	}
 	prepared, prepareErr := pipeline.Prepare(ctx, stepID, reviewerClient)
-	started, err := e.startReviewerActivity(stepID)
-	if err != nil {
-		return fmt.Errorf("start Reviewer activity: %w", err)
-	}
-	if !started {
-		return nil
-	}
 	if prepareErr != nil {
+		var err error
 		prepared.originStepID, err = runtimeids.ParseStepID(stepID)
 		if err != nil {
-			_ = e.completeReviewerActivity(stepID)
 			return err
 		}
+	}
+	if prepareErr == nil && !e.reserveReviewerActivity(stepID) {
+		if e.closed.Load() {
+			return ErrEngineClosed
+		}
+		return nil
 	}
 	if !e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
 		result := reviewerProviderResult{err: prepareErr}
 		if prepareErr == nil {
+			started, err := e.startReviewerActivity(stepID)
+			if err != nil {
+				e.releaseReviewerActivity(stepID)
+				e.surfaceRunError(fmt.Errorf("start Reviewer activity: %w", err))
+				return nil
+			}
+			if !started {
+				e.releaseReviewerActivity(stepID)
+				return nil
+			}
 			result = pipeline.Run(lifecycleCtx, prepared)
+			if result.err != nil || len(result.suggestions.Suggestions) == 0 {
+				if err := completeReviewerActivityError(e, stepID); err != nil {
+					e.surfaceRunError(err)
+				}
+			} else if err := e.setReviewerAddressingFeedback(stepID); err != nil {
+				completionErr := completeReviewerActivityError(e, stepID)
+				e.surfaceRunError(errors.Join(
+					fmt.Errorf("set Reviewer addressing-feedback activity: %w", err),
+					completionErr,
+				))
+				return nil
+			}
 		}
 		deferred := submitEngineRuntimeOperation(e, func(context.Context) (struct{}, error) {
 			return struct{}{}, e.applyReviewerProviderResult(prepared, result)
@@ -124,14 +152,19 @@ func (e *Engine) startReviewer(
 		if applyErr == nil {
 			return nil
 		}
-		_ = e.completeReviewerActivity(stepID)
+		completionErr := completeReviewerActivityError(e, stepID)
 		if errors.Is(applyErr, ErrEngineClosed) || errors.Is(applyErr, context.Canceled) {
+			if completionErr != nil {
+				e.surfaceRunError(completionErr)
+			}
 			return nil
 		}
-		e.surfaceRunError(fmt.Errorf("apply Reviewer result: %w", applyErr))
+		e.surfaceRunError(fmt.Errorf("apply Reviewer result: %w", errors.Join(applyErr, completionErr)))
 		return nil
 	}) {
-		_ = e.completeReviewerActivity(stepID)
+		if prepareErr == nil {
+			e.releaseReviewerActivity(stepID)
+		}
 		return ErrEngineClosed
 	}
 	return nil
@@ -148,18 +181,17 @@ func (e *Engine) applyReviewerProviderResult(
 			originProvenance,
 			steerReviewerErrorIntent(result.err.Error()),
 		)
-		return errors.Join(persistErr, e.completeReviewerActivity(originStepID))
+		return errors.Join(persistErr, completeReviewerActivityError(e, originStepID))
 	}
 	if err := e.observePromptCacheResponseRuntime(
 		prepared.cacheObservation,
 		result.usage,
 	); err != nil {
-		_ = e.completeReviewerActivity(originStepID)
-		return err
+		return errors.Join(err, completeReviewerActivityError(e, originStepID))
 	}
 	suggestions := result.suggestions.Suggestions
 	if len(suggestions) == 0 {
-		return e.completeReviewerActivity(originStepID)
+		return completeReviewerActivityError(e, originStepID)
 	}
 
 	visibility := transcript.EntryVisibilityOngoingCollapsed
@@ -170,8 +202,10 @@ func (e *Engine) applyReviewerProviderResult(
 		originProvenance,
 		steerReviewerFeedbackIntent(suggestions, visibility),
 	); err != nil {
-		_ = e.completeReviewerActivity(originStepID)
-		return fmt.Errorf("persist Reviewer feedback: %w", err)
+		return errors.Join(
+			fmt.Errorf("persist Reviewer feedback: %w", err),
+			completeReviewerActivityError(e, originStepID),
+		)
 	}
 	instruction := formatReviewerDeveloperInstruction(suggestions)
 	if err := e.steerOrdered(sessionSteeringProvenance(), steerMessagesWithPersistenceIntent(
@@ -184,14 +218,15 @@ func (e *Engine) applyReviewerProviderResult(
 			Content:     textutil.Value(instruction),
 		}},
 	)); err != nil {
-		_ = e.completeReviewerActivity(originStepID)
-		return fmt.Errorf("persist Reviewer follow-up instruction: %w", err)
+		return errors.Join(
+			fmt.Errorf("persist Reviewer follow-up instruction: %w", err),
+			completeReviewerActivityError(e, originStepID),
+		)
 	}
 	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
 		return e.runReviewerContinuation(ctx, prepared.originStepID, result.suggestions)
 	}) {
-		_ = e.completeReviewerActivity(originStepID)
-		return ErrEngineClosed
+		return errors.Join(ErrEngineClosed, completeReviewerActivityError(e, originStepID))
 	}
 	return nil
 }

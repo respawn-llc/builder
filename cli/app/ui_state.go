@@ -120,6 +120,9 @@ type uiInputFeatureState struct {
 
 type uiPresentationFeatureState struct {
 	theme                       string
+	tuiNativeProgressBar        bool
+	terminalOutput              *uiTerminalOutput
+	nativeProgress              uiNativeProgressState
 	markdownLinks               transcriptrender.MarkdownLinkPresentation
 	activeSurface               uiSurface
 	altScreenActive             bool

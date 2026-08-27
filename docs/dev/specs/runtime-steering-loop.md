@@ -138,8 +138,11 @@
 - A Session runs at most one Reviewer request at a time.
 - Another eligible answer is not queued for later review while one Reviewer is active.
 - Nonempty feedback or a Reviewer failure returns later through ordinary Session mutation order and may request an ordinary continuation.
-- Reviewer activity is live best-effort state with values `inactive` and `running`.
-- The active TUI reads that server state to show Reviewer activity and removes it when the matching review succeeds, fails, is canceled, or the Runtime closes.
+- Reviewer activity is live best-effort state with values `inactive`, `invoking`, and `addressing_feedback`.
+- Reviewer activity is `invoking` while the Reviewer model request is active.
+- Nonempty Reviewer feedback moves activity to `addressing_feedback` before the ordinary main-agent follow-up begins.
+- Reviewer activity returns to `inactive` when the review succeeds without feedback, fails, is canceled, finishes addressing feedback, or the Runtime closes.
+- The active TUI shows Reviewer activity during `invoking` and `addressing_feedback`.
 - Reviewer activity creates no transcript lifecycle row and is not retained across Runtime replacement, reconnect, transcript hydration, or application restart.
 - Persistent Reviewer activity across later lifecycle boundaries or reconnects is outside this specification.
 
