@@ -64,6 +64,57 @@ func TestRuntimeWiringRequiresEffectiveSessionSettings(t *testing.T) {
 	}
 }
 
+func TestRuntimeWireAdvertisesOnlyCanonicalToolAndParameterNames(t *testing.T) {
+	contracts, err := toolcontracts.Prepare(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare static tool contracts: %v", err)
+	}
+	want := map[toolspec.ID]map[string]bool{
+		toolspec.ToolExecCommand: {
+			"cmd": true, "workdir": true, "shell": true, "login": true, "tty": true,
+			"raw": true, "yield_time_ms": true, "max_output_tokens": true,
+		},
+		toolspec.ToolWriteStdin: {
+			"session_id": true, "chars": true, "yield_time_ms": true, "max_output_tokens": true,
+		},
+		toolspec.ToolViewImage: {"path": true, "raw": true},
+		toolspec.ToolPatch:     {"patch": true},
+		toolspec.ToolEdit:      {"path": true, "old_string": true, "new_string": true, "replace_all": true},
+		toolspec.ToolAskQuestion: {
+			"question": true, "suggestions": true, "recommended_option_index": true,
+		},
+		toolspec.ToolTriggerHandoff: {"summarizer_prompt": true, "future_agent_message": true},
+		toolspec.ToolWebSearch:      {"query": true, "allowed_domains": true, "blocked_domains": true},
+	}
+	for id, fields := range want {
+		registry, err := tools.NewStaticToolRegistry(contracts, tools.HandlerRegistration{
+			ID:      id,
+			Handler: mismatchedDeletionPresentationHandler{},
+		})
+		if err != nil {
+			t.Fatalf("create %s static registry: %v", id, err)
+		}
+		definitions := registry.Definitions()
+		if len(definitions) != 1 {
+			t.Fatalf("%s definition count = %d, want 1", id, len(definitions))
+		}
+		definition := definitions[0]
+		var schema struct {
+			Properties map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(definition.Schema.JSON(), &schema); err != nil {
+			t.Fatalf("decode %s schema: %v", definition.ID, err)
+		}
+		got := make(map[string]bool, len(schema.Properties))
+		for field := range schema.Properties {
+			got[field] = true
+		}
+		if !reflect.DeepEqual(got, fields) {
+			t.Fatalf("%s schema fields = %v, want %v", definition.ID, got, fields)
+		}
+	}
+}
+
 type mismatchedDeletionPresentationHandler struct{}
 
 func (mismatchedDeletionPresentationHandler) Call(_ context.Context, call tools.Call) (tools.Result, error) {
@@ -167,21 +218,20 @@ func TestRuntimeWirePreparesExactlyEightOrdinaryStaticContracts(t *testing.T) {
 		t.Fatalf("prepare static tool contracts: %v", err)
 	}
 	ids := toolspec.CatalogIDs()
-	registrations := make([]tools.HandlerRegistration, 0, len(ids))
+	definitions := make([]tools.Definition, 0, len(ids))
 	for _, id := range ids {
 		if id == toolspec.ToolCompleteNode {
 			continue
 		}
-		registrations = append(registrations, tools.HandlerRegistration{
+		registry, err := tools.NewStaticToolRegistry(contracts, tools.HandlerRegistration{
 			ID:      id,
 			Handler: mismatchedDeletionPresentationHandler{},
 		})
+		if err != nil {
+			t.Fatalf("create static registry for %s: %v", id, err)
+		}
+		definitions = append(definitions, registry.Definitions()[0])
 	}
-	registry, err := tools.NewStaticToolRegistry(contracts, registrations...)
-	if err != nil {
-		t.Fatalf("create static registry: %v", err)
-	}
-	definitions := registry.Definitions()
 	if len(definitions) != 8 {
 		t.Fatalf("static definition count = %d, want 8", len(definitions))
 	}
@@ -317,7 +367,7 @@ func TestLocalToolRegistrySiblingWorkspaceBypassesNativeToolApprovals(t *testing
 	}
 	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		FilesystemContext:   filesystemContext,
-		Enabled:             []toolspec.ID{toolspec.ToolEdit, toolspec.ToolPatch, toolspec.ToolViewImage},
+		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolViewImage},
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
 		SupportsVision:      true,
@@ -330,23 +380,6 @@ func TestLocalToolRegistrySiblingWorkspaceBypassesNativeToolApprovals(t *testing
 		approvalRequests++
 		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionDeny}, nil
 	})
-
-	editHandler, ok := binding.Registry().Get(toolspec.ToolEdit)
-	if !ok {
-		t.Fatal("missing edit handler")
-	}
-	editInput, err := json.Marshal(map[string]any{
-		"path":       editPath,
-		"old_string": "before",
-		"new_string": "after",
-	})
-	if err != nil {
-		t.Fatalf("marshal edit input: %v", err)
-	}
-	editResult, err := editHandler.Call(context.Background(), tools.Call{ID: "sibling-edit", Name: toolspec.ToolEdit, Input: editInput})
-	if err != nil || editResult.IsError {
-		t.Fatalf("sibling edit result = %+v, error=%v", editResult, err)
-	}
 
 	patchHandler, ok := binding.Registry().Get(toolspec.ToolPatch)
 	if !ok {
@@ -399,7 +432,7 @@ func TestLocalToolRegistryTemporaryPathsBypassNativeToolApprovals(t *testing.T) 
 	}
 	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		FilesystemContext:   filesystemContext,
-		Enabled:             []toolspec.ID{toolspec.ToolEdit, toolspec.ToolPatch, toolspec.ToolViewImage},
+		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolViewImage},
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
 		SupportsVision:      true,
@@ -412,23 +445,6 @@ func TestLocalToolRegistryTemporaryPathsBypassNativeToolApprovals(t *testing.T) 
 		approvalRequests++
 		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionDeny}, nil
 	})
-
-	editHandler, ok := binding.Registry().Get(toolspec.ToolEdit)
-	if !ok {
-		t.Fatal("missing edit handler")
-	}
-	editInput, err := json.Marshal(map[string]any{
-		"path":       editPath,
-		"old_string": "before",
-		"new_string": "after",
-	})
-	if err != nil {
-		t.Fatalf("marshal edit input: %v", err)
-	}
-	editResult, err := editHandler.Call(context.Background(), tools.Call{ID: "temporary-edit", Name: toolspec.ToolEdit, Input: editInput})
-	if err != nil || editResult.IsError {
-		t.Fatalf("temporary edit result = %+v, error=%v", editResult, err)
-	}
 
 	patchHandler, ok := binding.Registry().Get(toolspec.ToolPatch)
 	if !ok {
@@ -521,7 +537,6 @@ func TestOutsideWorkspaceToolsInheritTypedApprovalBarrierFromCallContext(t *test
 		t,
 		workspace,
 		toolspec.ToolPatch,
-		toolspec.ToolEdit,
 		toolspec.ToolViewImage,
 	)
 	handlerCalled := false
@@ -554,17 +569,6 @@ func TestOutsideWorkspaceToolsInheritTypedApprovalBarrierFromCallContext(t *test
 				"patch": "*** Begin Patch\n*** Update File: " + patchPath + "\n-before\n+after\n*** End Patch\n",
 			}),
 			unchangedPath: patchPath,
-			wantContents:  []byte("before\n"),
-		},
-		{
-			name:   "edit",
-			toolID: toolspec.ToolEdit,
-			input: encode(map[string]any{
-				"path":       editPath,
-				"old_string": "before",
-				"new_string": "after",
-			}),
-			unchangedPath: editPath,
 			wantContents:  []byte("before\n"),
 		},
 		{
@@ -630,7 +634,7 @@ func TestRuntimewireGeneratedWritePolicyUsesActivePersistenceRoot(t *testing.T) 
 	if err := os.MkdirAll(generatedRoot, 0o755); err != nil {
 		t.Fatalf("mkdir generated root: %v", err)
 	}
-	registry, _ := newRuntimeWireToolRegistryWithConfig(t, workspace, configRoot, false, toolspec.ToolPatch, toolspec.ToolEdit)
+	registry, _ := newRuntimeWireToolRegistryWithConfig(t, workspace, configRoot, false, toolspec.ToolPatch)
 
 	patchHandler, ok := registry.Get(toolspec.ToolPatch)
 	if !ok {
@@ -656,26 +660,6 @@ func TestRuntimewireGeneratedWritePolicyUsesActivePersistenceRoot(t *testing.T) 
 		t.Fatalf("expected generated missing-ancestor denial, got error=%t output=%s", missingAncestorResult.IsError, string(missingAncestorResult.Output))
 	}
 
-	editHandler, ok := registry.Get(toolspec.ToolEdit)
-	if !ok {
-		t.Fatal("expected edit handler")
-	}
-	editInput, _ := json.Marshal(map[string]any{"path": filepath.Join(generatedRoot, "edit.txt"), "old_string": "", "new_string": "generated\n"})
-	editResult, err := editHandler.Call(context.Background(), tools.Call{ID: "edit-generated", Name: toolspec.ToolEdit, Input: editInput})
-	if err != nil {
-		t.Fatalf("edit call: %v", err)
-	}
-	if !editResult.IsError || !strings.Contains(string(editResult.Output), filepath.Join(configRoot, "skills")+string(filepath.Separator)) {
-		t.Fatalf("expected generated edit denial with active skills path, got error=%t output=%s", editResult.IsError, string(editResult.Output))
-	}
-	rootEditInput, _ := json.Marshal(map[string]any{"path": generatedRoot, "old_string": "old", "new_string": "new"})
-	rootEditResult, err := editHandler.Call(context.Background(), tools.Call{ID: "edit-generated-root", Name: toolspec.ToolEdit, Input: rootEditInput})
-	if err != nil {
-		t.Fatalf("edit root call: %v", err)
-	}
-	if !rootEditResult.IsError || !strings.Contains(string(rootEditResult.Output), filepath.Join(configRoot, "skills")+string(filepath.Separator)) {
-		t.Fatalf("expected generated root denial, got error=%t output=%s", rootEditResult.IsError, string(rootEditResult.Output))
-	}
 }
 
 func TestRuntimewireGeneratedWritePolicyDefaultGuidanceAndSiblingFallthrough(t *testing.T) {
@@ -860,7 +844,7 @@ func TestReplaceFilesystemContextReplacesNativeToolTrustAndProjectWorkspaces(t *
 	}
 	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		FilesystemContext:   initial,
-		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolEdit, toolspec.ToolViewImage},
+		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolViewImage},
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
 		SupportsVision:      true,
@@ -888,11 +872,6 @@ func TestReplaceFilesystemContextReplacesNativeToolTrustAndProjectWorkspaces(t *
 	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
 		"patch": "*** Begin Patch\n*** Update File: " + filepath.Join(rootB, "patch.txt") + "\n-before\n+after\n*** End Patch\n",
 	})
-	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolEdit, map[string]any{
-		"path":       filepath.Join(rootB, "edit.txt"),
-		"old_string": "before",
-		"new_string": "after",
-	})
 	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{
 		"path": filepath.Join(rootB, "image.pdf"),
 	})
@@ -906,19 +885,14 @@ func TestReplaceFilesystemContextReplacesNativeToolTrustAndProjectWorkspaces(t *
 	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
 		"patch": "*** Begin Patch\n*** Update File: " + filepath.Join(rootA, "patch.txt") + "\n-before\n+after\n*** End Patch\n",
 	})
-	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolEdit, map[string]any{
-		"path":       filepath.Join(rootA, "edit.txt"),
-		"old_string": "before",
-		"new_string": "after",
-	})
 	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{
 		"path": filepath.Join(rootA, "image.pdf"),
 	})
 	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
 		"patch": "*** Begin Patch\n*** Update File: " + filepath.Join(projectRootA, "patch.txt") + "\n-before\n+after\n*** End Patch\n",
 	})
-	if approvalRequests != 4 {
-		t.Fatalf("retired roots triggered %d approval requests, want 4", approvalRequests)
+	if approvalRequests != 3 {
+		t.Fatalf("retired roots triggered %d approval requests, want 3", approvalRequests)
 	}
 }
 
@@ -949,7 +923,7 @@ func TestReplaceFilesystemContextReplacesMutationManagedWorktreePolicyWithoutRes
 	initial := runtimewirefixture.FilesystemContext(t, currentRoot)
 	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		FilesystemContext:   initial,
-		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolEdit, toolspec.ToolViewImage},
+		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolViewImage},
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
 		AllowNonCwdEdits:    true,
@@ -966,11 +940,6 @@ func TestReplaceFilesystemContextReplacesMutationManagedWorktreePolicyWithoutRes
 
 	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
 		"patch": "*** Begin Patch\n*** Update File: " + foreignPatch + "\n-before\n+after\n*** End Patch\n",
-	})
-	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolEdit, map[string]any{
-		"path":       foreignEdit,
-		"old_string": "before",
-		"new_string": "after",
 	})
 	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{
 		"path": foreignImage,
@@ -997,7 +966,7 @@ func TestReplaceFilesystemContextPreservesSessionApprovalsAcrossRebuildAndReject
 	}
 	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		FilesystemContext:   runtimewirefixture.FilesystemContext(t, rootA),
-		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolEdit, toolspec.ToolViewImage},
+		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolViewImage},
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
 		SupportsVision:      true,
@@ -1031,11 +1000,6 @@ func TestReplaceFilesystemContextPreservesSessionApprovalsAcrossRebuildAndReject
 		t.Fatal("failed filesystem context replacement changed the active context")
 	}
 
-	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolEdit, map[string]any{
-		"path":       editAfter,
-		"old_string": "before",
-		"new_string": "after",
-	})
 	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{"path": imageAfter})
 	if approvalRequests != 2 {
 		t.Fatalf("approval requests after rebuild = %d, want cached edit/read decisions", approvalRequests)
@@ -1712,7 +1676,7 @@ func shellPwdOutput(t *testing.T, registry *tools.Registry) string {
 	if !ok {
 		t.Fatal("expected exec_command handler")
 	}
-	result, err := handler.Call(context.Background(), tools.Call{ID: "call-pwd", Name: toolspec.ToolExecCommand, Input: json.RawMessage(`{"command":"pwd"}`)})
+	result, err := handler.Call(context.Background(), tools.Call{ID: "call-pwd", Name: toolspec.ToolExecCommand, Input: json.RawMessage(`{"cmd":"pwd"}`)})
 	if err != nil {
 		t.Fatalf("exec_command call: %v", err)
 	}

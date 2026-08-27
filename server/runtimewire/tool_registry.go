@@ -194,7 +194,9 @@ func (b *LocalToolRegistryBinding) rebuildLocked() error {
 	if err != nil {
 		return err
 	}
-	b.registry.ReplaceHandlers(handlers...)
+	if err := b.registry.ReplaceHandlers(handlers...); err != nil {
+		return err
+	}
 	return nil
 }
 
