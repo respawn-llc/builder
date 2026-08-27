@@ -7,6 +7,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -300,6 +301,23 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 			updated.injectedQueue,
 			updated.isCompacting(),
 		)
+	}
+}
+
+func TestRejectedCompactionAtPendingWorkCapacityRestoresVerbatimInput(t *testing.T) {
+	client := &runtimeControlFakeClient{
+		err: serverapi.NewRuntimeCommandNotAcceptedError(&serverapi.PendingWorkCapacityError{}),
+	}
+	model := newProjectedTestUIModel(client)
+	submittedText := "  /compact   preserve guidance  "
+
+	cmd := model.inputController().startCompaction(submittedText, "preserve guidance")
+	for _, msg := range collectCmdMessages(t, cmd) {
+		model = updateUIModel(t, model, msg)
+	}
+
+	if got := testMainInput(model); got != submittedText {
+		t.Fatalf("restored composer = %q, want verbatim %q", got, submittedText)
 	}
 }
 

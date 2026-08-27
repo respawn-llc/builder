@@ -119,8 +119,9 @@ type injectedQueueDiscardDoneMsg struct {
 }
 
 type compactDoneMsg struct {
-	requestID runtimeids.CompactionRequestID
-	err       error
+	requestID     runtimeids.CompactionRequestID
+	submittedText string
+	err           error
 }
 
 type activeSubmitOrigin uint8

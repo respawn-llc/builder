@@ -196,22 +196,28 @@ func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, 
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
-			return compactDoneMsg{requestID: requestID, err: errors.New("runtime engine is not configured")}
+			return compactDoneMsg{
+				requestID:     requestID,
+				submittedText: submittedText,
+				err:           errors.New("runtime engine is not configured"),
+			}
 		}
 		var guidance *string
 		if value := strings.TrimSpace(args); value != "" {
 			guidance = &value
 		}
-		if strings.TrimSpace(submittedText) == "" {
-			submittedText = "/compact"
+		restorationInput := submittedText
+		if strings.TrimSpace(restorationInput) == "" {
+			restorationInput = "/compact"
 		}
 		return compactDoneMsg{
-			requestID: requestID,
+			requestID:     requestID,
+			submittedText: submittedText,
 			err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{
 				RequestID: requestID,
 				Admission: runtimeinput.ManualCompactionAdmission{
 					Guidance:         guidance,
-					RestorationInput: submittedText,
+					RestorationInput: restorationInput,
 				},
 			}),
 		}
@@ -373,6 +379,9 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	if msg.err != nil {
 		m.clearPendingCompactionRequest(msg.requestID)
 		restoreInjectedCmd := c.restoreInjectedInputsIntoComposer()
+		if errors.Is(msg.err, serverapi.ErrPendingWorkCapacity) {
+			c.restoreSubmittedTextIntoInput(msg.submittedText)
+		}
 		c.restoreQueuedMessagesIntoInput()
 		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
