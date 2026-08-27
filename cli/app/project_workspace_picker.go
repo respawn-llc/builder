@@ -431,32 +431,69 @@ func (m *projectWorkspacePickerModel) requestEdge(direction projectWorkspacePick
 		return nil
 	}
 	if edge.state == projectWorkspacePickerEdgeFailed {
-		request, ok := m.retry(direction, crossing, pageMove, visibleDistance)
+		request, ok := m.retryEdge(direction, crossing, pageMove, visibleDistance)
 		if !ok {
 			return nil
 		}
 		return m.loadPageRequest(request)
 	}
-	offset := 0
-	if direction == projectWorkspacePickerPageNext {
-		last := m.segments[len(m.segments)-1]
-		if last.nextOffset == nil {
-			edge.state = projectWorkspacePickerEdgeExhausted
-			return nil
-		}
-		offset = int(*last.nextOffset)
-	} else {
+	offset, ok := m.edgeOffset(direction)
+	if !ok {
+		edge.state = projectWorkspacePickerEdgeExhausted
+		return nil
+	}
+	return m.startPageRequestWithIntent(offset, direction, crossing, pageMove, visibleDistance)
+}
+
+func (m *projectWorkspacePickerModel) retryEdge(
+	direction projectWorkspacePickerPageDirection,
+	crossing bool,
+	pageMove bool,
+	visibleDistance int,
+) (projectWorkspacePickerPageRequest, bool) {
+	edge := m.edge(direction)
+	if edge.failedRequest == nil {
+		return projectWorkspacePickerPageRequest{}, false
+	}
+	offset, ok := m.edgeOffset(direction)
+	if !ok {
+		return projectWorkspacePickerPageRequest{}, false
+	}
+	if visibleDistance < 1 {
+		visibleDistance = edge.failedRequest.visibleDistance
+	}
+	return m.begin(
+		direction,
+		offset,
+		m.pageBoundary(direction),
+		crossing,
+		pageMove,
+		visibleDistance,
+		edge.failedRequest.move,
+	)
+}
+
+func (m *projectWorkspacePickerModel) edgeOffset(direction projectWorkspacePickerPageDirection) (int, bool) {
+	switch direction {
+	case projectWorkspacePickerPagePrevious:
 		first := m.segments[0]
 		if first.offset == 0 {
-			edge.state = projectWorkspacePickerEdgeExhausted
-			return nil
+			return 0, false
 		}
-		offset = first.offset - projectWorkspacePickerPageSize
+		offset := first.offset - projectWorkspacePickerPageSize
 		if offset < 0 {
 			offset = 0
 		}
+		return offset, true
+	case projectWorkspacePickerPageNext:
+		last := m.segments[len(m.segments)-1]
+		if last.nextOffset == nil {
+			return 0, false
+		}
+		return int(*last.nextOffset), true
+	default:
+		return 0, false
 	}
-	return m.startPageRequestWithIntent(offset, direction, crossing, pageMove, visibleDistance)
 }
 
 func (m *projectWorkspacePickerModel) startPageRequest(offset int, direction projectWorkspacePickerPageDirection) tea.Cmd {
@@ -689,6 +726,7 @@ func (m *projectWorkspacePickerModel) completeStalePage(request projectWorkspace
 	}
 	edge := m.edge(request.direction)
 	edge.state = projectWorkspacePickerEdgeUnknown
+	m.clearFailure(m.operationID(request.direction), request.generation)
 	m.syncBoundaryEdges()
 	m.phase, m.failure = m.edgeFailurePhase(), nil
 }
@@ -697,6 +735,8 @@ func (m *projectWorkspacePickerModel) syncBoundaryEdges() {
 	if len(m.segments) == 0 {
 		return
 	}
+	m.invalidateStaleFailedEdge(projectWorkspacePickerPagePrevious)
+	m.invalidateStaleFailedEdge(projectWorkspacePickerPageNext)
 	first := m.segments[0]
 	if m.previousEdge.state != projectWorkspacePickerEdgeFailed && m.previousEdge.state != projectWorkspacePickerEdgeLoading {
 		m.previousEdge.state = projectWorkspacePickerEdgeUnknown
@@ -711,6 +751,21 @@ func (m *projectWorkspacePickerModel) syncBoundaryEdges() {
 			m.nextEdge.state = projectWorkspacePickerEdgeExhausted
 		}
 	}
+}
+
+func (m *projectWorkspacePickerModel) invalidateStaleFailedEdge(direction projectWorkspacePickerPageDirection) {
+	edge := m.edge(direction)
+	if edge.state != projectWorkspacePickerEdgeFailed || edge.failedRequest == nil {
+		return
+	}
+	failedRequest := *edge.failedRequest
+	if m.pageBoundaryMatches(failedRequest) {
+		return
+	}
+	edge.state = projectWorkspacePickerEdgeUnknown
+	edge.failedRequest = nil
+	edge.diagnostic = nil
+	m.clearFailure(m.operationID(direction), failedRequest.generation)
 }
 
 func (m *projectWorkspacePickerModel) edgeFailurePhase() projectWorkspacePickerPhase {

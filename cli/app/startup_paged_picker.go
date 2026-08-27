@@ -123,30 +123,6 @@ func (w *startupPickerPageWindow[P]) begin(
 	return request, true
 }
 
-func (w *startupPickerPageWindow[P]) retry(
-	direction startupPickerPageDirection,
-	crossing bool,
-	pageMove bool,
-	visibleDistance int,
-) (startupPickerPageRequest, bool) {
-	edge := w.edge(direction)
-	if edge.failedRequest == nil {
-		return startupPickerPageRequest{}, false
-	}
-	if visibleDistance < 1 {
-		visibleDistance = edge.failedRequest.visibleDistance
-	}
-	return w.begin(
-		direction,
-		edge.failedRequest.offset,
-		edge.failedRequest.boundary,
-		crossing,
-		pageMove,
-		visibleDistance,
-		edge.failedRequest.move,
-	)
-}
-
 func (w *startupPickerPageWindow[P]) requestFor(direction startupPickerPageDirection) *startupPickerPageRequest {
 	if direction == startupPickerPageInitial {
 		return w.request

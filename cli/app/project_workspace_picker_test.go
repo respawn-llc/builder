@@ -455,7 +455,8 @@ func TestProjectWorkspacePickerKeepsDirectionalFailuresIndependent(t *testing.T)
 	delete(loader.errors, 0)
 	applyWorkspacePickerCommand(model, model.requestEdge(projectWorkspacePickerPagePrevious, true, false, 0))
 	if model.previousEdge.state == projectWorkspacePickerEdgeFailed ||
-		model.nextEdge.state != projectWorkspacePickerEdgeFailed {
+		model.nextEdge.state != projectWorkspacePickerEdgeUnknown ||
+		projectStartupPickerStatus(model.startupStatus).Failure != nil {
 		t.Fatalf("opposite-edge recovery changed unrelated state: next=%+v previous=%+v",
 			model.nextEdge, model.previousEdge)
 	}
@@ -471,6 +472,127 @@ func TestProjectWorkspacePickerKeepsDirectionalFailuresIndependent(t *testing.T)
 	}
 	if previousRetries != 3 || nextRetries != 1 {
 		t.Fatalf("directional retry calls = previous:%d next:%d, want previous:3 next:1", previousRetries, nextRetries)
+	}
+}
+
+func TestProjectWorkspacePickerRebasesFailedEdgeAfterBoundaryMoves(t *testing.T) {
+	diagnostic := errors.New("previous edge failed")
+	loader := &workspacePickerLoader{
+		responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
+			0:   workspacePickerResponse("project-1", 0, projectWorkspacePickerPageSize, true),
+			50:  workspacePickerResponse("project-1", 50, projectWorkspacePickerPageSize, true),
+			100: workspacePickerResponse("project-1", 100, projectWorkspacePickerPageSize, true),
+			150: workspacePickerResponse("project-1", 150, 1, false),
+		},
+		errors: map[int32]error{},
+	}
+	model := newProjectWorkspacePickerModel(context.Background(), loader, "project-1", "dark")
+	applyWorkspacePickerCommand(model, model.Init())
+	applyWorkspacePickerCommand(model, model.startPageRequest(50, projectWorkspacePickerPageNext))
+	model.selectIndex(50)
+	model.viewport = model.selected
+	model.offset = 50
+	applyWorkspacePickerCommand(model, model.startPageRequest(100, projectWorkspacePickerPageNext))
+	if len(model.segments) != 2 || model.segments[0].offset != 50 || model.segments[1].offset != 100 {
+		t.Fatalf("setup resident offsets = %+v", model.segments)
+	}
+
+	loader.errors[0] = diagnostic
+	applyWorkspacePickerCommand(model, model.requestEdge(projectWorkspacePickerPagePrevious, true, false, 0))
+	if model.previousEdge.state != projectWorkspacePickerEdgeFailed {
+		t.Fatalf("previous edge state = %d, want failed", model.previousEdge.state)
+	}
+	if projectStartupPickerStatus(model.startupStatus).Failure == nil {
+		t.Fatal("previous edge failure was not projected")
+	}
+
+	delete(loader.errors, 0)
+	model.selectIndex(50)
+	model.viewport = model.selected
+	model.offset = 50
+	applyWorkspacePickerCommand(model, model.requestEdge(projectWorkspacePickerPageNext, true, false, 0))
+	if model.previousEdge.state == projectWorkspacePickerEdgeFailed {
+		t.Fatalf("boundary change retained stale previous failure: %+v", model.previousEdge)
+	}
+	if projectStartupPickerStatus(model.startupStatus).Failure != nil {
+		t.Fatal("boundary change retained stale previous status failure")
+	}
+
+	before := len(loader.calls)
+	applyWorkspacePickerCommand(model, model.requestEdge(projectWorkspacePickerPagePrevious, true, false, 0))
+	if len(loader.calls) != before+1 || loader.calls[len(loader.calls)-1].Offset != 50 {
+		t.Fatalf("rebased previous retry request = %+v, want offset 50", loader.calls[before:])
+	}
+	if model.previousEdge.state == projectWorkspacePickerEdgeFailed ||
+		projectStartupPickerStatus(model.startupStatus).Failure != nil {
+		t.Fatalf("rebased previous retry did not recover: edge=%+v status=%+v",
+			model.previousEdge, projectStartupPickerStatus(model.startupStatus))
+	}
+}
+
+func TestProjectWorkspacePickerClearsFailureAfterStaleRetryCompletes(t *testing.T) {
+	diagnostic := errors.New("next edge failed")
+	base := &workspacePickerLoader{
+		responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
+			0:   workspacePickerResponse("project-1", 0, projectWorkspacePickerPageSize, true),
+			50:  workspacePickerResponse("project-1", 50, projectWorkspacePickerPageSize, true),
+			100: workspacePickerResponse("project-1", 100, projectWorkspacePickerPageSize, true),
+			150: workspacePickerResponse("project-1", 150, 1, false),
+		},
+		errors: map[int32]error{},
+	}
+	model := newProjectWorkspacePickerModel(context.Background(), base, "project-1", "dark")
+	applyWorkspacePickerCommand(model, model.Init())
+	applyWorkspacePickerCommand(model, model.startPageRequest(50, projectWorkspacePickerPageNext))
+	model.selectIndex(50)
+	model.viewport = model.selected
+	model.offset = 50
+	applyWorkspacePickerCommand(model, model.startPageRequest(100, projectWorkspacePickerPageNext))
+	model.selectIndex(50)
+	model.viewport = model.selected
+	model.offset = 50
+
+	base.errors[150] = diagnostic
+	applyWorkspacePickerCommand(model, model.requestEdge(projectWorkspacePickerPageNext, true, false, 0))
+	if projectStartupPickerStatus(model.startupStatus).Failure == nil {
+		t.Fatal("next edge failure was not projected")
+	}
+	delete(base.errors, 150)
+	model.selectIndex(0)
+	model.viewport = model.selected
+	model.offset = 0
+
+	loader := &delayedWorkspacePickerLoader{
+		base:        base,
+		blockOffset: 150,
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	model.loader = loader
+	retryCommand := model.requestEdge(projectWorkspacePickerPageNext, true, false, 0)
+	if retryCommand == nil {
+		t.Fatal("failed next edge did not start a retry")
+	}
+	retryMessages := make(chan tea.Msg, 1)
+	go func() { retryMessages <- retryCommand() }()
+	<-loader.started
+
+	previousCommand := model.requestEdge(projectWorkspacePickerPagePrevious, true, false, 0)
+	if previousCommand == nil {
+		t.Fatal("opposite edge was blocked while retry was loading")
+	}
+	model.Update(previousCommand())
+	close(loader.release)
+	model.Update(<-retryMessages)
+
+	if len(model.segments) != 2 || model.segments[0].offset != 0 || model.segments[1].offset != 50 {
+		t.Fatalf("stale retry changed resident window: %+v", model.segments)
+	}
+	if model.nextEdge.state == projectWorkspacePickerEdgeFailed ||
+		model.nextEdge.state == projectWorkspacePickerEdgeLoading ||
+		projectStartupPickerStatus(model.startupStatus).Failure != nil {
+		t.Fatalf("stale retry retained failure: edge=%+v status=%+v",
+			model.nextEdge, projectStartupPickerStatus(model.startupStatus))
 	}
 }
 
