@@ -9,6 +9,7 @@ import (
 
 	"core/cli/app/internal/projectbinding"
 	"core/cli/tui"
+	"core/shared/client"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -386,7 +387,7 @@ func (m *projectWorkspacePickerModel) prefetchAtSelection(direction int) tea.Cmd
 	if visible < 1 {
 		visible = 1
 	}
-	if direction < 0 && m.cursor-m.offset < visible {
+	if direction < 0 && m.cursor < visible {
 		if cmd := m.requestEdge(projectWorkspacePickerPagePrevious, false, false, 0); cmd != nil {
 			return cmd
 		}
@@ -576,7 +577,11 @@ func (m *projectWorkspacePickerModel) applyPageLoaded(message projectWorkspacePi
 		m.failPage(request, sessionPickerFailurePageRequest, message.err)
 		return nil
 	}
-	if err := validateProjectWorkspacePickerPage(message.response, m.projectID, request.offset); err != nil {
+	if err := client.ValidateProjectWorkspacePage(message.response, &projectpb.ProjectWorkspaceListRequest{
+		ProjectId: m.projectID,
+		Offset:    int32(request.offset),
+		Limit:     projectWorkspacePickerPageSize,
+	}); err != nil {
 		m.failPage(request, sessionPickerFailurePageContract, err)
 		return nil
 	}
@@ -848,28 +853,6 @@ func occurrenceIndex(occurrence *projectWorkspacePickerOccurrence, segments []pr
 		index += len(segment.workspaces)
 	}
 	return 0, false
-}
-
-func validateProjectWorkspacePickerPage(response *projectpb.ListProjectWorkspacesSuccess, projectID string, offset int) error {
-	if response == nil {
-		return errors.New("project Workspace picker page is empty")
-	}
-	if response.ProjectId != projectID {
-		return fmt.Errorf("project Workspace picker page Project %q does not match requested Project %q", response.ProjectId, projectID)
-	}
-	if response.Offset != int32(offset) {
-		return fmt.Errorf("project Workspace picker page offset %d does not match requested offset %d", response.Offset, offset)
-	}
-	if len(response.Workspaces) > projectWorkspacePickerPageSize {
-		return fmt.Errorf("project Workspace picker page contains %d Workspaces, exceeding requested bound %d", len(response.Workspaces), projectWorkspacePickerPageSize)
-	}
-	if response.NextOffset != nil {
-		expected := int32(offset + projectWorkspacePickerPageSize)
-		if len(response.Workspaces) != projectWorkspacePickerPageSize || *response.NextOffset != expected {
-			return fmt.Errorf("project Workspace picker page next offset %d does not continue offset %d with limit %d", *response.NextOffset, offset, projectWorkspacePickerPageSize)
-		}
-	}
-	return nil
 }
 
 func cloneInt32(value *int32) *int32 {

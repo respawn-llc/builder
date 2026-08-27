@@ -851,3 +851,28 @@ func TestProjectWorkspacePickerPageUpCrossingPreservesVisibleDistance(t *testing
 		t.Fatalf("PageUp selected occurrence = %+v, want previous-page index %d", model.selected, projectWorkspacePickerPageSize-visible)
 	}
 }
+
+func TestProjectWorkspacePickerUpPrefetchUsesResidentWindowStart(t *testing.T) {
+	loader := &workspacePickerLoader{
+		responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
+			0:   workspacePickerResponse("project-1", 0, projectWorkspacePickerPageSize, true),
+			50:  workspacePickerResponse("project-1", 50, projectWorkspacePickerPageSize, true),
+			100: workspacePickerResponse("project-1", 100, projectWorkspacePickerPageSize, true),
+		},
+		errors: map[int32]error{},
+	}
+	model := newProjectWorkspacePickerModel(context.Background(), loader, "project-1", "dark")
+	applyWorkspacePickerCommand(model, model.Init())
+	applyWorkspacePickerCommand(model, model.startPageRequest(50, projectWorkspacePickerPageNext))
+	applyWorkspacePickerCommand(model, model.startPageRequest(100, projectWorkspacePickerPageNext))
+	model.selectIndex(60)
+	model.offset = model.cursor
+	before := len(loader.calls)
+
+	_, command := model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	applyWorkspacePickerCommand(model, command)
+
+	if len(loader.calls) != before {
+		t.Fatalf("upward movement deep in resident window triggered a read: calls=%+v", loader.calls[before:])
+	}
+}
