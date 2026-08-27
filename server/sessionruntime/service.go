@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/server/chatcontext"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runlog"
 	"core/server/runtimewire"
@@ -81,12 +80,7 @@ func applyAgentSelection(store *session.Store, selection *session.ChatAgentSelec
 }
 
 func applyActivationContextPolicy(store *session.Store, settings config.Settings) config.Settings {
-	locked := store.Meta().Locked
-	if locked == nil {
-		return settings
-	}
-	capabilities, _ := llm.ProviderCapabilitiesFromLocked(locked)
-	return chatcontext.ApplyPolicy(settings, chatcontext.ResolvePolicy(settings, capabilities, locked))
+	return chatcontext.ApplyLockedContextBudget(settings, store.Meta().Locked)
 }
 
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {

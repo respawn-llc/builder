@@ -294,14 +294,11 @@ func (m *Manager) waitForExit(entry *processEntry) {
 }
 
 func (m *Manager) buildTerminalEvent(entry *processEntry, eventType EventType, snapshot Snapshot) Event {
-	entry.mu.Lock()
-	noticeSuppressed := entry.noticeSuppressed
-	entry.mu.Unlock()
 	fullOutput, readErr := readOutputFileLimited(entry.logPath, maxFullLogPostprocessBytes)
 	if readErr == nil {
 		processed, postprocessErr := m.applyPostprocessing(context.Background(), entry, fullOutput, snapshot.ExitCode, true, defaultLimit)
 		if postprocessErr == nil && processed.Processed && strings.TrimSpace(processed.UnrecoverableError) == "" {
-			return newFinalizedBackgroundEvent(eventType, snapshot, processed.Output, processed.Warning, noticeSuppressed)
+			return newFinalizedBackgroundEvent(eventType, snapshot, processed.Output, processed.Warning, false)
 		}
 		warning := processed.Warning
 		if postprocessErr != nil {
@@ -315,24 +312,24 @@ func (m *Manager) buildTerminalEvent(entry *processEntry, eventType EventType, s
 				return Event{Type: eventType, Snapshot: snapshot}
 			}
 		}
-		return m.fallbackOrBareBackgroundEvent(eventType, snapshot, warning, noticeSuppressed)
+		return m.fallbackOrBareBackgroundEvent(eventType, snapshot, warning)
 	}
 	warning, warningErr := mergeOperationalWarning(nil, fmt.Sprintf("full output log skipped: %v", readErr))
 	if warningErr != nil {
 		return Event{Type: eventType, Snapshot: snapshot}
 	}
-	return m.fallbackOrBareBackgroundEvent(eventType, snapshot, warning, noticeSuppressed)
+	return m.fallbackOrBareBackgroundEvent(eventType, snapshot, warning)
 }
 
-func (m *Manager) fallbackOrBareBackgroundEvent(eventType EventType, snapshot Snapshot, warning postprocess.Warning, noticeSuppressed bool) Event {
-	fallback, fallbackErr := m.fallbackBackgroundEvent(eventType, snapshot, warning, noticeSuppressed)
+func (m *Manager) fallbackOrBareBackgroundEvent(eventType EventType, snapshot Snapshot, warning postprocess.Warning) Event {
+	fallback, fallbackErr := m.fallbackBackgroundEvent(eventType, snapshot, warning)
 	if fallbackErr != nil {
 		return Event{Type: eventType, Snapshot: snapshot}
 	}
 	return fallback
 }
 
-func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot, warning postprocess.Warning, noticeSuppressed bool) (Event, error) {
+func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot, warning postprocess.Warning) (Event, error) {
 	preview, _, truncated, err := readBackgroundSummaryFromFile(snapshot.LogPath, defaultLimit, BackgroundOutputDefault, !snapshot.RawOutput)
 	if err != nil {
 		warning, err = mergeOperationalWarning(warning, fmt.Sprintf("failed to read output preview: %v", err))
@@ -346,15 +343,12 @@ func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot
 	if truncated {
 		removed = 1
 	}
-	return newFallbackBackgroundEvent(eventType, snapshot, preview, warning, removed, noticeSuppressed), nil
+	return newFallbackBackgroundEvent(eventType, snapshot, preview, warning, removed, false), nil
 }
 
 func (m *Manager) emitCompletionEvent(entry *processEntry, event Event) {
 	entry.interactMu.Lock()
 	defer entry.interactMu.Unlock()
-	entry.mu.Lock()
-	event.NoticeSuppressed = event.NoticeSuppressed || entry.noticeSuppressed
-	entry.mu.Unlock()
 	delivered := m.emitEvent(event)
 	entry.mu.Lock()
 	entry.terminalDelivered = entry.terminalDelivered || delivered

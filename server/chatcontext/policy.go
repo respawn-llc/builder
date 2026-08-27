@@ -53,6 +53,16 @@ func ApplyPolicy(settings config.Settings, policy Policy) config.Settings {
 	return settings
 }
 
+func ApplyLockedContextBudget(settings config.Settings, locked *session.LockedContract) config.Settings {
+	if locked == nil || locked.ContextWindow <= 0 {
+		return settings
+	}
+	policy := ResolvePolicy(settings, llm.ProviderCapabilities{}, locked)
+	settings.ModelContextWindow = int(policy.ContextWindowTokens)
+	settings.ContextCompactionThresholdTokens = int(policy.AutomaticThresholdTokens)
+	return settings
+}
+
 func effectiveCompactionMode(
 	configured config.CompactionMode,
 	capabilities llm.ProviderCapabilities,

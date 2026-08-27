@@ -146,7 +146,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	}
 }
 
-func TestRunningExecGuardDoesNotQueueBackgroundNoticeWithoutFollowUpPoll(t *testing.T) {
+func TestRunningExecGuardLeavesLaterCompletionNoticeIndependent(t *testing.T) {
 	store := mustCreateTestSession(t)
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
 	if err != nil {
@@ -170,12 +170,17 @@ func TestRunningExecGuardDoesNotQueueBackgroundNoticeWithoutFollowUpPoll(t *test
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("background handled"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
 	}}
 	registry := newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, 40, manager, store.Meta().SessionID)},
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, 40, manager)},
 	)
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
+	terminalEvents := make(chan shelltool.Event, 1)
 	manager.SetEventHandler(func(evt shelltool.Event) bool {
 		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
 		if summaryErr != nil {
@@ -201,6 +206,9 @@ func TestRunningExecGuardDoesNotQueueBackgroundNoticeWithoutFollowUpPoll(t *test
 			}(),
 			NoticeSuppressed: evt.NoticeSuppressed,
 		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
+		if evt.Type == shelltool.EventCompleted {
+			terminalEvents <- evt
+		}
 		return true
 	})
 
@@ -217,10 +225,13 @@ func TestRunningExecGuardDoesNotQueueBackgroundNoticeWithoutFollowUpPoll(t *test
 	if callCount != 2 {
 		t.Fatalf("model call count = %d, want 2", callCount)
 	}
-	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice {
-			t.Fatalf("did not expect background notice after write_stdin harvested completion: %+v", msg)
+	select {
+	case event := <-terminalEvents:
+		if event.NoticeSuppressed {
+			t.Fatal("terminal event unexpectedly suppressed after an earlier guarded call")
 		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal background event")
 	}
 }
 

@@ -40,6 +40,5 @@ func (g oversizedOutputGuard) FailedResult(
 		marshalNoHTMLEscape,
 	)
 	result.PresentationDelta = presentation
-	result.OutputPath = textutil.OptionalTrimmedString(outputPath)
 	return result, true
 }

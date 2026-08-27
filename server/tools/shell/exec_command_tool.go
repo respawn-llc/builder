@@ -157,9 +157,6 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		KeepStdinOpen:        in.TTY,
 		Raw:                  in.Raw,
 		Postprocessor:        t.postprocessor,
-		SuppressBackgroundNotice: func(candidate ExecResult) bool {
-			return candidate.Backgrounded && t.oversizedOutputGuard.shouldGuard(in.MaxOutputTokens, formatExecResponse(candidate))
-		},
 	})
 	if err != nil {
 		return tools.ErrorResultWith(c, formatToolCallErrorBase(err), marshalNoHTMLEscape), nil

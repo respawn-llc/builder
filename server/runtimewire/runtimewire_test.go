@@ -1254,32 +1254,6 @@ func TestRuntimeWiringExecCommandUsesEffectiveBuiltinInsteadOfBootstrapNone(t *t
 	}
 }
 
-func TestRuntimeWiringPassesActiveSessionContextWindowToShell(t *testing.T) {
-	root := t.TempDir()
-	store := newRuntimeWireSession(t, root, "shell-context-window")
-	active := runtimeWireShellSettings(config.ShellPostprocessingModeNone, nil)
-	active.ModelContextWindow = 20
-
-	wiring, err := NewRuntimeWiringWithBackground(
-		store,
-		materializedRuntimeWireEventLog(t, store),
-		active,
-		[]toolspec.ID{toolspec.ToolExecCommand},
-		nil,
-		nil,
-		nil,
-		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: &runtimewireCaptureClient{}}),
-	)
-	if err != nil {
-		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
-	}
-	t.Cleanup(func() { _ = wiring.Close() })
-
-	assertRuntimeWireToolError(t, wiring.LocalTools.Registry(), toolspec.ToolExecCommand, map[string]any{
-		"cmd": "printf 123456789012345678901234567890123456789012345678", "shell": "/bin/sh", "login": false, "yield_time_ms": 1_000, "max_output_tokens": 11,
-	})
-}
-
 func TestRuntimeWiringExecCommandUsesEffectiveHookAcrossWorkspaceRebind(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()

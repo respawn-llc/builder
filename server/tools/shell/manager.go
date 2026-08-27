@@ -299,11 +299,6 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	result.Truncated = truncated
 	result.Warning = processed.Warning
 	result.ToolError = processed.UnrecoverableError
-	if req.SuppressBackgroundNotice != nil && req.SuppressBackgroundNotice(result) {
-		entry.mu.Lock()
-		entry.noticeSuppressed = true
-		entry.mu.Unlock()
-	}
 	return result, nil
 }
 
@@ -400,7 +395,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (result Exec
 	}
 	display, displayTruncated, _ := truncateWithTemplate(processed.Output, maxOutputChars, backgroundTruncationBannerTemplate)
 	awaitTerminalDelivery = harvestingCompletion
-	result = ExecResult{
+	return ExecResult{
 		SessionID:          id,
 		WallTime:           time.Since(start),
 		Warning:            postprocess.MergeWarnings(warning, processed.Warning),
@@ -412,13 +407,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (result Exec
 		ExitCode:           textutil.Pointer(snapshot.ExitCode),
 		RawOutputRequested: snapshot.RawOutputRequested,
 		Truncated:          sourceTruncated || displayTruncated,
-	}
-	if req.SuppressBackgroundNotice != nil && req.SuppressBackgroundNotice(result) {
-		entry.mu.Lock()
-		entry.noticeSuppressed = true
-		entry.mu.Unlock()
-	}
-	return result, nil
+	}, nil
 }
 
 func waitForTerminalDelivery(ctx context.Context, entry *processEntry) error {
