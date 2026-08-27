@@ -45,6 +45,9 @@ type workspaceChatDraftPersistence interface {
 }
 type WorkspaceChatDraftInputResolver func(context.Context) (WorkspaceChatDraftResolverInput, error)
 type WorkspaceChatMaterializer func(context.Context, WorkspaceChatDraftResolution) (runtimeids.SessionID, error)
+type WorkspaceChatSettingsMutationResult struct {
+	PreparedChatSettingsOperationResult
+}
 type WorkspaceChatDraftOwner struct {
 	persistence workspaceChatDraftPersistence
 	lanes       *requestmemo.MutationLaneRegistry[string]
@@ -90,6 +93,7 @@ func (o *WorkspaceChatDraftOwner) MaterializeWorkspaceChat(
 	if err != nil {
 		return runtimeids.SessionID{}, err
 	}
+	resolution.Draft = persistenceFacingWorkspaceChatDraft(resolution)
 	sessionID, err := materialize(ctx, resolution)
 	if err != nil {
 		return runtimeids.SessionID{}, err
@@ -156,6 +160,7 @@ func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Contex
 	if err != nil {
 		return WorkspaceChatDraft{}, err
 	}
+	current.Draft = persistenceFacingWorkspaceChatDraft(current)
 	next, err := transform(current)
 	if err != nil {
 		return WorkspaceChatDraft{}, err
@@ -164,16 +169,89 @@ func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Contex
 	if err := validateWorkspaceChatDraftTransform(next, current); err != nil {
 		return WorkspaceChatDraft{}, err
 	}
-	var replacement *WorkspaceChatDraft
-	defaults := current.Baselines[config.DefaultSubagentRole]
-	if strings.TrimSpace(next.Message) != "" || !workspaceChatDraftSettingsEqual(next, defaults) {
-		replacement = &next
-	}
+	replacement := canonicalWorkspaceChatDraft(next, current.Baselines[config.DefaultSubagentRole])
 	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
 		return WorkspaceChatDraft{}, err
 	}
 	return next, nil
 }
+
+func (o *WorkspaceChatDraftOwner) MutateWorkspaceChatSettings(
+	ctx context.Context,
+	id string,
+	resolve WorkspaceChatDraftInputResolver,
+	operation ChatSettingsOperation,
+) (WorkspaceChatSettingsMutationResult, error) {
+	var err error
+	if id, err = o.workspaceID(id); err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	if resolve == nil {
+		return WorkspaceChatSettingsMutationResult{}, errors.New("workspace Chat draft resolver is required")
+	}
+	lane, err := o.lanes.Acquire(ctx, id)
+	if err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	defer lane.Release()
+
+	input, err := resolve(ctx)
+	if err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	stored, err := o.persistence.ReadWorkspaceChatDraft(ctx, id)
+	if err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	resolved, err := ResolveWorkspaceChatDraft(input, stored)
+	if err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	raw := resolved.Baselines[config.DefaultSubagentRole]
+	if stored != nil {
+		raw = *stored
+		raw.Agent = normalizeWorkspaceChatDraftAgent(raw.Agent)
+	}
+	rawState, err := workspaceChatSettingsState(raw)
+	if err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	projected, err := ProjectPreparedChatSettingsOperation(
+		PreparedChatSettingsOperationInput{
+			Raw:                rawState,
+			Effective:          workspaceChatSettings(resolved.Draft),
+			PersistedQuestions: resolved.PersistedQuestionsPolicy,
+			PersistedThinking:  resolved.PersistedThinking,
+			Catalog:            resolved.Catalog,
+			CompactionMode:     resolved.CompactionMode,
+		},
+		operation,
+	)
+	if err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	result := WorkspaceChatSettingsMutationResult{PreparedChatSettingsOperationResult: projected}
+	if projected.Rejection != nil {
+		result.Changed = false
+		return result, nil
+	}
+
+	next, err := workspaceChatDraftFromSettingsState(raw.Message, projected.State)
+	if err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	replacement := canonicalWorkspaceChatDraft(next, resolved.Baselines[config.DefaultSubagentRole])
+	if optionalWorkspaceChatDraftEqual(stored, replacement) {
+		result.Changed = false
+		return result, nil
+	}
+	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	result.Changed = true
+	return result, nil
+}
+
 func (o *WorkspaceChatDraftOwner) ClearWorkspaceChatDraft(ctx context.Context, id string) error {
 	var err error
 	if id, err = o.workspaceID(id); err != nil {
@@ -321,6 +399,65 @@ func resolveWorkspaceChatDraftBaselines(
 func workspaceChatDraftSettingsEqual(a, b WorkspaceChatDraft) bool {
 	return a.Agent == b.Agent && a.Supervisor == b.Supervisor && a.Thinking == b.Thinking && a.Fast == b.Fast && a.Questions == b.Questions && a.AutoCompaction == b.AutoCompaction
 }
+
+func persistenceFacingWorkspaceChatDraft(resolved WorkspaceChatDraftResolution) WorkspaceChatDraft {
+	draft := resolved.Draft
+	draft.Questions = resolved.PersistedQuestionsPolicy
+	return draft
+}
+
+func workspaceChatSettings(draft WorkspaceChatDraft) session.ChatSettings {
+	return session.ChatSettings{
+		Supervisor:     draft.Supervisor,
+		Thinking:       draft.Thinking,
+		Fast:           draft.Fast,
+		Questions:      draft.Questions,
+		AutoCompaction: draft.AutoCompaction,
+	}
+}
+
+func workspaceChatSettingsState(draft WorkspaceChatDraft) (session.ChatSettingsState, error) {
+	return session.ChatSettingsStateFromCompleteSettings(draft.Agent, workspaceChatSettings(draft))
+}
+
+func workspaceChatDraftFromSettingsState(message string, state session.ChatSettingsState) (WorkspaceChatDraft, error) {
+	settings, err := session.NormalizeChatSettingsOverrides(state.Settings)
+	if err != nil {
+		return WorkspaceChatDraft{}, err
+	}
+	if settings == nil ||
+		settings.Supervisor == nil ||
+		settings.Thinking == nil ||
+		settings.Fast == nil ||
+		settings.Questions == nil ||
+		settings.AutoCompaction == nil {
+		return WorkspaceChatDraft{}, errors.New("workspace Chat settings state is incomplete")
+	}
+	return WorkspaceChatDraft{
+		Message:        message,
+		Agent:          state.Agent,
+		Supervisor:     *settings.Supervisor,
+		Thinking:       *settings.Thinking,
+		Fast:           *settings.Fast,
+		Questions:      *settings.Questions,
+		AutoCompaction: *settings.AutoCompaction,
+	}, nil
+}
+
+func canonicalWorkspaceChatDraft(draft, defaults WorkspaceChatDraft) *WorkspaceChatDraft {
+	if strings.TrimSpace(draft.Message) == "" && workspaceChatDraftSettingsEqual(draft, defaults) {
+		return nil
+	}
+	return &draft
+}
+
+func optionalWorkspaceChatDraftEqual(left, right *WorkspaceChatDraft) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
 func validateWorkspaceChatDraftTransform(draft WorkspaceChatDraft, resolved WorkspaceChatDraftResolution) error {
 	if err := draft.Validate(); err != nil {
 		return err
@@ -336,7 +473,9 @@ func validateWorkspaceChatDraftTransform(draft WorkspaceChatDraft, resolved Work
 	if draft.Fast && !limit.fast {
 		return fmt.Errorf("workspace Chat draft fast mode is unavailable for Agent %q", agent)
 	}
-	if draft.Questions && !limit.questions {
+	if draft.Questions &&
+		!limit.questions &&
+		!(agent == normalizeWorkspaceChatDraftAgent(resolved.Draft.Agent) && resolved.PersistedQuestionsPolicy) {
 		return fmt.Errorf("workspace Chat draft questions are unavailable for Agent %q", agent)
 	}
 	return nil

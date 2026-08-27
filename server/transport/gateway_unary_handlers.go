@@ -28,6 +28,28 @@ func gatewayClientCallNoResponse[C any, Req any](getClient func(GatewayDependenc
 	}
 }
 
+func (g *Gateway) authorizeChatSettingsTarget(
+	ctx context.Context,
+	state *connectionState,
+	target serverapi.ChatSettingsReadTarget,
+) error {
+	switch target.TargetKind {
+	case serverapi.ChatSettingsReadTargetLazy:
+		activeProjectID, err := g.activeProjectID(ctx, state)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(*target.ProjectID) != strings.TrimSpace(activeProjectID) {
+			return serverapi.ErrWorkspaceNotRegistered
+		}
+	case serverapi.ChatSettingsReadTargetSession:
+		return g.requireSessionInActiveProject(ctx, state, target.Session.String())
+	default:
+		return errors.New("Chat settings target kind is invalid")
+	}
+	return nil
+}
+
 var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodChatContextGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
@@ -150,25 +172,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowTaskObserve:            gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ObserveWorkflowTask),
 	protocol.MethodChatSettingsRead: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
-			switch params.Target.TargetKind {
-			case serverapi.ChatSettingsReadTargetLazy:
-				activeProjectID, err := g.activeProjectID(ctx, state)
-				if err != nil {
-					return serverapi.ChatSettingsReadResponse{}, err
-				}
-				if strings.TrimSpace(*params.Target.ProjectID) != strings.TrimSpace(activeProjectID) {
-					return serverapi.ChatSettingsReadResponse{}, serverapi.ErrWorkspaceNotRegistered
-				}
-			case serverapi.ChatSettingsReadTargetSession:
-				if err := g.requireSessionInActiveProject(
-					ctx,
-					state,
-					params.Target.Session.String(),
-				); err != nil {
-					return serverapi.ChatSettingsReadResponse{}, err
-				}
-			default:
-				return serverapi.ChatSettingsReadResponse{}, errors.New("Chat settings target kind is invalid")
+			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
+				return serverapi.ChatSettingsReadResponse{}, err
 			}
 			response, err := g.deps.ChatSettingsClient().ReadChatSettings(ctx, params)
 			if err != nil {
@@ -176,6 +181,21 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			}
 			if err := response.ValidateForTarget(params.Target); err != nil {
 				return serverapi.ChatSettingsReadResponse{}, err
+			}
+			return response, nil
+		})
+	},
+	protocol.MethodChatSettingsMutate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
+			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
+				return serverapi.ChatSettingsMutationResponse{}, err
+			}
+			response, err := g.deps.ChatSettingsClient().MutateChatSettings(ctx, params)
+			if err != nil {
+				return serverapi.ChatSettingsMutationResponse{}, err
+			}
+			if err := response.ValidateForTarget(params.Target); err != nil {
+				return serverapi.ChatSettingsMutationResponse{}, err
 			}
 			return response, nil
 		})
@@ -233,11 +253,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		})
 	},
 	protocol.MethodRuntimeSetSessionName:                 gatewayClientCallNoResponse[apicontract.RuntimeControlService, serverapi.RuntimeSetSessionNameRequest](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetSessionName),
-	protocol.MethodRuntimeSetThinkingLevel:               gatewayClientCallNoResponse[apicontract.RuntimeControlService, serverapi.RuntimeSetThinkingLevelRequest](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetThinkingLevel),
-	protocol.MethodRuntimeSetFastModeEnabled:             gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeSetFastModeEnabledRequest, serverapi.RuntimeSetFastModeEnabledResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetFastModeEnabled),
-	protocol.MethodRuntimeSetReviewerEnabled:             gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeSetReviewerEnabledRequest, serverapi.RuntimeSetReviewerEnabledResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetReviewerEnabled),
-	protocol.MethodRuntimeSetAutoCompactionEnabled:       gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeSetAutoCompactionEnabledRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetAutoCompactionEnabled),
-	protocol.MethodRuntimeSetQuestionsEnabled:            gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeSetQuestionsEnabledRequest, serverapi.RuntimeSetQuestionsEnabledResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetQuestionsEnabled),
 	protocol.MethodRuntimeAppendCommittedEntry:           gatewayClientCallNoResponse[apicontract.RuntimeControlService, serverapi.RuntimeAppendCommittedEntryRequest](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.AppendCommittedEntry),
 	protocol.MethodRuntimeShouldCompactBeforeUserMessage: gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeShouldCompactBeforeUserMessageRequest, serverapi.RuntimeShouldCompactBeforeUserMessageResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ShouldCompactBeforeUserMessage),
 	protocol.MethodRuntimeSubmitUserTurn:                 gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SubmitUserTurn),

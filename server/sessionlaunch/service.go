@@ -263,6 +263,97 @@ func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (Works
 	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
 }
 
+func (s *Service) MutateWorkspaceChatSettingsAggregate(
+	ctx context.Context,
+	operation ChatSettingsOperation,
+) (WorkspaceChatSettingsMutationResult, error) {
+	owner, workspaceID, err := s.workspaceChatDraftOwner()
+	if err != nil {
+		return WorkspaceChatSettingsMutationResult{}, err
+	}
+	return owner.MutateWorkspaceChatSettings(
+		ctx,
+		workspaceID,
+		s.workspaceChatDraftResolverInput,
+		operation,
+	)
+}
+
+func (s *Service) PrepareMaterializedChatSettingsOperation(
+	ctx context.Context,
+	store *session.Store,
+) (PreparedChatSettingsOperationInput, error) {
+	if s == nil || s.planner.PersistedSessions == nil {
+		return PreparedChatSettingsOperationInput{}, errors.New("Session launch planner is required")
+	}
+	if store == nil {
+		return PreparedChatSettingsOperationInput{}, errors.New("Session store is required")
+	}
+	planner := s.planner
+	if planner.ReloadConfig != nil {
+		var err error
+		planner.Config, err = planner.ReloadConfig()
+		if err != nil {
+			return PreparedChatSettingsOperationInput{}, err
+		}
+	}
+	authState := auth.EmptyState()
+	var err error
+	if s.authStates != nil {
+		authState, err = s.authStates.StoredState(ctx)
+		if err != nil {
+			return PreparedChatSettingsOperationInput{}, err
+		}
+	}
+	catalog, err := launch.PrepareChatAgentCatalog(planner.Config, authState, false)
+	if err != nil {
+		return PreparedChatSettingsOperationInput{}, err
+	}
+	raw, err := session.ChatSettingsStateFromMeta(store.Meta())
+	if err != nil {
+		return PreparedChatSettingsOperationInput{}, err
+	}
+	entry, available := catalog.Lookup(raw.Agent)
+	if !available {
+		entry, available = catalog.Lookup(config.DefaultSubagentRole)
+	}
+	if !available {
+		return PreparedChatSettingsOperationInput{}, errors.New("default Chat Agent baseline is missing")
+	}
+	effective, err := session.ResolveEffectiveChatSettings(raw.Settings, nil, entry.Settings.Baseline)
+	if err != nil {
+		return PreparedChatSettingsOperationInput{}, err
+	}
+	effective = normalizeProjectedChatSettings(effective, entry.Settings)
+	persistedQuestions := effective.Questions
+	persistedThinking := effective.Thinking
+	if !available {
+		persistedQuestions = entry.Settings.Baseline.Questions
+		persistedThinking = entry.Settings.Baseline.Thinking
+	} else if raw.Settings != nil {
+		if raw.Settings.Questions != nil {
+			persistedQuestions = *raw.Settings.Questions
+		}
+		if raw.Settings.Thinking != nil {
+			persistedThinking = strings.TrimSpace(*raw.Settings.Thinking)
+		}
+	}
+	taskID, err := s.workflowTaskID(ctx, store.Meta().SessionID)
+	if err != nil {
+		return PreparedChatSettingsOperationInput{}, err
+	}
+	return PreparedChatSettingsOperationInput{
+		Raw:                raw,
+		Effective:          effective,
+		PersistedQuestions: persistedQuestions,
+		PersistedThinking:  persistedThinking,
+		Catalog:            catalog,
+		AgentLocked:        store.Meta().Locked != nil,
+		WorkflowLocked:     taskID != nil,
+		CompactionMode:     planner.Config.Settings.CompactionMode,
+	}, nil
+}
+
 func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsReadResponse, error) {
 	resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
 	if err != nil {
@@ -683,17 +774,22 @@ func applyPreparedAgentChatSettings(
 	if err != nil {
 		return session.Meta{}, false, nil, err
 	}
+	if targetAgent == state.Agent {
+		return meta, true, nil, nil
+	}
 	selection := session.ChatAgentSelection{Agent: targetAgent, Baseline: prepared.Baseline}
-	projected, result, err := session.ProjectChatSettingsMutation(meta, session.ChatSettingsMutation{
-		Agent: &selection,
-	})
+	target, err := session.ChatSettingsStateFromCompleteSettings(targetAgent, prepared.Baseline)
+	if err != nil {
+		return session.Meta{}, false, nil, err
+	}
+	projected, changed, err := session.ProjectChatSettingsState(meta, target)
 	if errors.Is(err, session.ErrChatAgentLocked) {
 		return meta, false, nil, nil
 	}
 	if err != nil {
 		return session.Meta{}, false, nil, err
 	}
-	if !result.Changed {
+	if !changed {
 		return projected, true, nil, nil
 	}
 	return projected, true, &selection, nil

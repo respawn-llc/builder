@@ -228,8 +228,8 @@ func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 			if first != second || !first.changed || !first.applied {
 				t.Fatalf("control results = (%+v, %+v), want identical committed result", first, second)
 			}
-			if got := len(localEntryEvents(t, store)); got != 1 {
-				t.Fatalf("durable control feedback count = %d, want 1", got)
+			if got := len(localEntryEvents(t, store)); got != 0 {
+				t.Fatalf("settings mutation transcript entries = %d, want 0", got)
 			}
 			if resolver.publishCount != 1 {
 				t.Fatalf("session status publish count = %d, want 1", resolver.publishCount)

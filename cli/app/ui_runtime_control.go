@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/cli/app/internal/runtimeattach"
@@ -17,6 +18,11 @@ type runtimeInterruptCandidateClient interface {
 	interruptRuntimeCandidate() (runtimeTupleCandidate, error)
 }
 
+type chatSettingsRuntimeClient interface {
+	ReadChatSettings() (serverapi.ChatSettings, error)
+	MutateChatSettings(serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error)
+}
+
 func (m *uiModel) runtimeClient() clientui.RuntimeClient {
 	if m == nil {
 		return nil
@@ -26,6 +32,179 @@ func (m *uiModel) runtimeClient() clientui.RuntimeClient {
 
 func (m *uiModel) hasRuntimeClient() bool {
 	return m.runtimeClient() != nil
+}
+
+func (m *uiModel) chatSettingsMutationCommand(operation serverapi.ChatSettingsMutationOperation) tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	client, ok := m.runtimeClient().(chatSettingsRuntimeClient)
+	if !ok {
+		return nil
+	}
+	return func() tea.Msg {
+		response, err := client.MutateChatSettings(operation)
+		return chatSettingsDoneMsg{operation: operation.Kind, response: response, err: err}
+	}
+}
+
+func (m *uiModel) chatSettingsToggleCommand(
+	kind serverapi.ChatSettingsMutationOperationKind,
+	requested string,
+) tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	client, ok := m.runtimeClient().(chatSettingsRuntimeClient)
+	if !ok {
+		return nil
+	}
+	return func() tea.Msg {
+		settings, err := client.ReadChatSettings()
+		if err != nil {
+			return chatSettingsDoneMsg{operation: kind, err: err}
+		}
+		operation, err := resolveChatSettingsToggle(kind, requested, settings)
+		if err != nil {
+			return chatSettingsDoneMsg{operation: kind, err: err}
+		}
+		response, err := client.MutateChatSettings(operation)
+		return chatSettingsDoneMsg{operation: kind, response: response, err: err}
+	}
+}
+
+func resolveChatSettingsToggle(
+	kind serverapi.ChatSettingsMutationOperationKind,
+	requested string,
+	settings serverapi.ChatSettings,
+) (serverapi.ChatSettingsMutationOperation, error) {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	switch kind {
+	case serverapi.ChatSettingsMutationSupervisor:
+		switch requested {
+		case "on":
+			value := settings.Supervisor.Baseline
+			if value == serverapi.ChatSettingsSupervisorOff {
+				value = serverapi.ChatSettingsSupervisorAfterEdits
+			}
+			encoded := string(value)
+			return serverapi.ChatSettingsMutationOperation{
+				Kind:  kind,
+				Value: &encoded,
+			}, nil
+		case "off":
+			value := string(serverapi.ChatSettingsSupervisorOff)
+			return serverapi.ChatSettingsMutationOperation{Kind: kind, Value: &value}, nil
+		case "":
+			value := string(serverapi.ChatSettingsSupervisorOff)
+			if settings.Supervisor.Value == serverapi.ChatSettingsSupervisorOff {
+				value = string(settings.Supervisor.Baseline)
+				if value == string(serverapi.ChatSettingsSupervisorOff) {
+					value = string(serverapi.ChatSettingsSupervisorAfterEdits)
+				}
+			}
+			return serverapi.ChatSettingsMutationOperation{Kind: kind, Value: &value}, nil
+		}
+	case serverapi.ChatSettingsMutationFast:
+		value := settings.Fast != nil && settings.Fast.Value
+		return enabledChatSettingsOperation(kind, requested, value)
+	case serverapi.ChatSettingsMutationQuestions:
+		return enabledChatSettingsOperation(kind, requested, settings.Questions.Enabled)
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		return enabledChatSettingsOperation(kind, requested, settings.AutoCompaction.Stored)
+	default:
+		return serverapi.ChatSettingsMutationOperation{}, errors.New("unsupported Chat settings toggle")
+	}
+	return serverapi.ChatSettingsMutationOperation{}, errors.New("invalid Chat settings toggle")
+}
+
+func enabledChatSettingsOperation(
+	kind serverapi.ChatSettingsMutationOperationKind,
+	requested string,
+	current bool,
+) (serverapi.ChatSettingsMutationOperation, error) {
+	target := current
+	switch requested {
+	case "":
+		target = !current
+	case "on":
+		target = true
+	case "off":
+		target = false
+	default:
+		return serverapi.ChatSettingsMutationOperation{}, errors.New("invalid Chat settings toggle")
+	}
+	return serverapi.ChatSettingsMutationOperation{
+		Kind:    kind,
+		Enabled: &target,
+	}, nil
+}
+
+func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	if msg.err != nil {
+		errText := runtimeattach.FormatSubmissionError(msg.err)
+		return m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	}
+	response := msg.response
+	settings := response.Settings
+	m.thinkingLevel = settings.SelectedAgent.Thinking
+	m.reviewerMode = string(settings.Supervisor.Value)
+	m.reviewerEnabled = m.reviewerMode != string(serverapi.ChatSettingsSupervisorOff)
+	m.fastModeEnabled = settings.Fast != nil && settings.Fast.Value
+	m.questionsEnabled = settings.Questions.Enabled
+	m.autoCompactionEnabled = settings.AutoCompaction.Stored
+	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
+		reason := "Chat settings mutation rejected"
+		if response.Result.Rejection != nil {
+			reason = response.Result.Rejection.Reason
+		}
+		return m.sendTransientStatusWithNoticeID(reason, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	}
+	if !response.Result.Changed {
+		return nil
+	}
+	name, value := chatSettingsResultValue(msg.operation, settings)
+	return m.sendTransientStatusWithNoticeID(
+		name+": "+value,
+		uiStatusNoticeSuccess,
+		transientStatusDuration,
+		uiStatusNoticeReplace,
+		"",
+	)
+}
+
+func chatSettingsResultValue(
+	operation serverapi.ChatSettingsMutationOperationKind,
+	settings serverapi.ChatSettings,
+) (string, string) {
+	switch operation {
+	case serverapi.ChatSettingsMutationAgent:
+		return "Agent", settings.SelectedAgent.Role
+	case serverapi.ChatSettingsMutationSupervisor:
+		return "Supervisor", string(settings.Supervisor.Value)
+	case serverapi.ChatSettingsMutationThinking:
+		return "Thinking", settings.SelectedAgent.Thinking
+	case serverapi.ChatSettingsMutationFast:
+		if settings.Fast != nil && settings.Fast.Value {
+			return "Fast", "on"
+		}
+		return "Fast", "off"
+	case serverapi.ChatSettingsMutationQuestions:
+		if settings.Questions.Enabled {
+			return "Questions", "on"
+		}
+		return "Questions", "off"
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		if settings.AutoCompaction.Stored {
+			return "Auto-compaction", "on"
+		}
+		return "Auto-compaction", "off"
+	default:
+		return "Chat settings", "updated"
+	}
 }
 
 func (m *uiModel) setRuntimeSessionName(name string) error {

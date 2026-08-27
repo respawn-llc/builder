@@ -73,7 +73,22 @@ func applyAgentSelection(store *session.Store, selection *session.ChatAgentSelec
 	if selection == nil {
 		return false, nil
 	}
-	result, err := store.MutateChatSettings(session.ChatSettingsMutation{Agent: selection})
+	current, err := session.ChatSettingsStateFromMeta(store.Meta())
+	if err != nil {
+		return false, err
+	}
+	agent, ok := session.NormalizeChatAgent(selection.Agent)
+	if !ok {
+		return false, fmt.Errorf("Chat Agent %q is invalid", selection.Agent)
+	}
+	if current.Agent == agent {
+		return false, nil
+	}
+	target, err := session.ChatSettingsStateFromCompleteSettings(agent, selection.Baseline)
+	if err != nil {
+		return false, err
+	}
+	result, err := store.CommitChatSettingsState(target)
 	return result.Changed, err
 }
 

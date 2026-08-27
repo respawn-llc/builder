@@ -8,6 +8,7 @@ import (
 	"core/cli/app/commands"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 
 	"github.com/google/uuid"
 )
@@ -101,6 +102,12 @@ type runtimeControlDoneMsg struct {
 	compactionMode string
 	runtimeTuple   *runtimeTupleCandidate
 	err            error
+}
+
+type chatSettingsDoneMsg struct {
+	operation serverapi.ChatSettingsMutationOperationKind
+	response  serverapi.ChatSettingsMutationResponse
+	err       error
 }
 
 type injectedQueueCreateDoneMsg struct {

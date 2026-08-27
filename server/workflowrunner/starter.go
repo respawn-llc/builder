@@ -860,9 +860,30 @@ func (s *Starter) planCurrentNodeSession(
 		if err := store.EnsureDurable(); err != nil {
 			return err
 		}
-		_, err := store.MutateChatSettings(session.ChatSettingsMutation{
-			AutoCompaction: textutil.Value(true),
-		})
+		state, err := session.ChatSettingsStateFromMeta(store.Meta())
+		if err != nil {
+			return err
+		}
+		effective, err := session.ResolveEffectiveChatSettings(
+			state.Settings,
+			nil,
+			session.ChatSettings{
+				Supervisor:     plan.ActiveSettings.Reviewer.Frequency,
+				Thinking:       plan.ActiveSettings.ThinkingLevel,
+				Fast:           plan.ActiveSettings.PriorityRequestMode,
+				Questions:      plan.QuestionsEnabled,
+				AutoCompaction: plan.AutoCompactionEnabled,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		effective.AutoCompaction = true
+		target, err := session.ChatSettingsStateFromCompleteSettings(state.Agent, effective)
+		if err != nil {
+			return err
+		}
+		_, err = store.CommitChatSettingsState(target)
 		return err
 	}); err != nil {
 		return launch.SessionPlan{}, disposable, err

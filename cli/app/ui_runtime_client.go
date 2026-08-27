@@ -25,6 +25,7 @@ var uiRuntimeReadTimeout = 300 * time.Millisecond
 type sessionRuntimeClient struct {
 	reads                    apicontract.SessionViewService
 	controls                 apicontract.RuntimeControlService
+	chatSettings             apicontract.ChatSettingsService
 	sessionID                string
 	reactivator              *runtimeReactivator
 	connectionStateObserver  func(error)
@@ -36,16 +37,21 @@ type sessionRuntimeClient struct {
 	metadataRevision uint64
 }
 
-func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService) clientui.RuntimeClient {
+func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService, chatSettings ...apicontract.ChatSettingsService) clientui.RuntimeClient {
 	if reads == nil || controls == nil {
 		return nil
 	}
+	var settings apicontract.ChatSettingsService
+	if len(chatSettings) > 0 {
+		settings = chatSettings[0]
+	}
 	return &sessionRuntimeClient{
-		sessionID:   sessionID,
-		reactivator: newRuntimeReactivator(),
-		reads:       reads,
-		controls:    controls,
-		mainView:    clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}},
+		sessionID:    sessionID,
+		reactivator:  newRuntimeReactivator(),
+		reads:        reads,
+		controls:     controls,
+		chatSettings: settings,
+		mainView:     clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}},
 	}
 }
 

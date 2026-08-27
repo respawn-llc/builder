@@ -141,6 +141,7 @@ type SessionLaunchService interface {
 
 type ChatSettingsService interface {
 	ReadChatSettings(ctx context.Context, req serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error)
+	MutateChatSettings(ctx context.Context, req serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error)
 }
 
 type SessionLifecycleService interface {

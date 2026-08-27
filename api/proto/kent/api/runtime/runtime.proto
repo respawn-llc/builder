@@ -963,56 +963,6 @@ service SettingsService {
       legacy_wire_name: "runtime.setSessionName"
     };
   }
-  rpc SetThinkingLevel(SetThinkingLevelRequest) returns (SetThinkingLevelResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setThinkingLevel"
-    };
-  }
-  rpc SetFastModeEnabled(ToggleRequest) returns (SetFastModeEnabledResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setFastModeEnabled"
-    };
-  }
-  rpc SetReviewerEnabled(ToggleRequest) returns (ReviewerToggleResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setReviewerEnabled"
-    };
-  }
-  rpc SetAutoCompactionEnabled(ToggleRequest) returns (SetAutoCompactionEnabledResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setAutoCompactionEnabled"
-    };
-  }
-  rpc SetQuestionsEnabled(ToggleRequest) returns (SetQuestionsEnabledResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setQuestionsEnabled"
-    };
-  }
 }
 
 service TurnService {

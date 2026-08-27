@@ -70,6 +70,7 @@ const (
 	MethodWorkflowTaskGet                               = "workflow.task.get"
 	MethodWorkflowTaskObserve                           = "workflow.task.observe"
 	MethodChatSettingsRead                              = "chat.settings.read"
+	MethodChatSettingsMutate                            = "chat.settings.mutate"
 	MethodSessionGetMainView                            = "session.getMainView"
 	MethodSessionGetExecutionEnvironment                = "session.getExecutionEnvironment"
 	MethodSessionGetTranscriptPage                      = "session.getTranscriptPage"

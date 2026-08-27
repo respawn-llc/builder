@@ -470,47 +470,6 @@ func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 		t.Fatalf("expected independent completions to apply, session=%q thinking=%q", updated.sessionName, updated.thinkingLevel)
 	}
 }
-func TestRuntimeControlStaleSessionCompletionClearsPendingToggle(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client)
-	m.startupCmds = nil
-	m.sessionID = "session-old"
-	m.fastModeAvailable = true
-
-	cmd := m.runtimeControlCommand(runtimeControlSetFastMode, "", true, "")
-	msgs := collectCmdMessages(t, cmd)
-	var done runtimeControlDoneMsg
-	for _, msg := range msgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
-			done = typed
-		}
-	}
-
-	m.sessionID = "session-new"
-	_, blockedCmd := m.inputController().handleFastModeCommand("on")
-	if blockedCmd == nil {
-		t.Fatal("expected new-session fast toggle to start even while old-session command is in flight")
-	}
-	_ = collectCmdMessages(t, blockedCmd)
-	if client.setFastModeArg != true {
-		t.Fatalf("new-session bare fast toggle should target true from cached state, got %t", client.setFastModeArg)
-	}
-
-	next, _ := m.Update(done)
-	updated := next.(*uiModel)
-	pending, exists := updated.runtimeControlPending[runtimeControlSetFastMode]
-	if !exists || pending.sessionID != "session-new" {
-		t.Fatalf("expected stale-session completion to preserve new-session pending toggle, got %+v", updated.runtimeControlPending)
-	}
-	_, nextCmd := updated.inputController().handleFastModeCommand("off")
-	if nextCmd != nil {
-		t.Fatal("expected new-session follow-up target to coalesce without a concurrent command")
-	}
-	if pending := updated.runtimeControlPending[runtimeControlSetFastMode]; pending.desiredEnabled {
-		t.Fatalf("expected coalesced new-session desired target to be false, got %+v", pending)
-	}
-}
-
 func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 

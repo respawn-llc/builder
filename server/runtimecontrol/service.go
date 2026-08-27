@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"sync"
 
@@ -16,9 +15,11 @@ import (
 	"core/server/runtimeactivity"
 	"core/server/runtimecommand"
 	"core/server/session"
+	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
@@ -418,26 +419,9 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: level}
 	_, err := memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.thinkingLevels, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
-		_, accepted, mutationErr := s.mutateChatSettings(
-			ctx,
-			req.SessionID,
-			func(ctx context.Context, store *session.Store, _ *runtime.Engine) (session.ChatSettingsMutation, error) {
-				prepared, err := s.prepareChatSettings(ctx, store)
-				if err != nil {
-					return session.ChatSettingsMutation{}, err
-				}
-				if !slices.Contains(prepared.SupportedThinkingValues, level) {
-					return session.ChatSettingsMutation{}, fmt.Errorf(
-						"thinking level %q is unavailable for the selected Session Agent",
-						level,
-					)
-				}
-				return session.ChatSettingsMutation{Thinking: &level}, nil
-			},
-			func(engine *runtime.Engine, _ session.ChatSettingsMutationResult) error {
-				return engine.SetThinkingLevel(level)
-			},
-		)
+		_, accepted, mutationErr := s.mutateChatSettings(ctx, req.SessionID, func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
+			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationThinking, Value: level}, nil
+		})
 		return struct{}{}, accepted, mutationErr
 	})
 	return err
@@ -449,38 +433,9 @@ func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeS
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
 	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.fastModes, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetFastModeEnabledResponse, bool, error) {
-		result, accepted, err := s.mutateChatSettings(
-			ctx,
-			req.SessionID,
-			func(ctx context.Context, store *session.Store, engine *runtime.Engine) (session.ChatSettingsMutation, error) {
-				if req.Enabled {
-					if engine != nil {
-						if !engine.FastModeAvailable() {
-							return session.ChatSettingsMutation{}, errors.New("fast mode is only available for OpenAI-based Responses providers")
-						}
-					} else {
-						prepared, prepareErr := s.prepareChatSettings(ctx, store)
-						if prepareErr != nil {
-							return session.ChatSettingsMutation{}, prepareErr
-						}
-						if !prepared.FastAvailable {
-							return session.ChatSettingsMutation{}, errors.New("fast mode is only available for OpenAI-based Responses providers")
-						}
-					}
-				}
-				return session.ChatSettingsMutation{Fast: &req.Enabled}, nil
-			},
-			func(engine *runtime.Engine, result session.ChatSettingsMutationResult) error {
-				_, _, applyErr := engine.SetFastModeEnabledWithCommittedFeedback(req.Enabled, func(bool) string {
-					return serverapi.FastModeToggleStatusMessage(req.Enabled, result.Changed)
-				})
-				if applyErr != nil {
-					_, stateErr := engine.SetFastModeEnabled(req.Enabled)
-					applyErr = errors.Join(applyErr, stateErr)
-				}
-				return applyErr
-			},
-		)
+		result, accepted, err := s.mutateChatSettings(ctx, req.SessionID, func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
+			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationFast, Enabled: req.Enabled}, nil
+		})
 		return serverapi.RuntimeSetFastModeEnabledResponse{Changed: result.Changed}, accepted, err
 	})
 }
@@ -492,48 +447,22 @@ func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeS
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
 	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.reviewers, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetReviewerEnabledResponse, bool, error) {
 		mode := "off"
-		result, accepted, err := s.mutateChatSettings(
-			ctx,
-			req.SessionID,
-			func(ctx context.Context, store *session.Store, engine *runtime.Engine) (session.ChatSettingsMutation, error) {
-				if req.Enabled {
-					prepared, prepareErr := s.prepareChatSettings(ctx, store)
-					if prepareErr != nil {
-						return session.ChatSettingsMutation{}, prepareErr
+		result, accepted, err := s.mutateChatSettings(ctx, req.SessionID, func(input sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
+			if req.Enabled {
+				mode = input.Effective.Supervisor
+				if mode == "off" {
+					entry, ok := input.Catalog.Lookup(input.Raw.Agent)
+					if !ok {
+						entry, _ = input.Catalog.Lookup(config.DefaultSubagentRole)
 					}
-					state, stateErr := session.ChatSettingsStateFromMeta(store.Meta())
-					if stateErr != nil {
-						return session.ChatSettingsMutation{}, stateErr
-					}
-					current, resolveErr := session.ResolveEffectiveChatSettings(state.Settings, nil, prepared.Baseline)
-					if resolveErr != nil {
-						return session.ChatSettingsMutation{}, resolveErr
-					}
-					mode = current.Supervisor
+					mode = entry.Settings.Baseline.Supervisor
 					if mode == "off" {
-						mode = prepared.Baseline.Supervisor
-						if mode == "off" {
-							mode = "edits"
-						}
+						mode = "edits"
 					}
 				}
-				if engine != nil {
-					if _, prepareErr := engine.PrepareReviewerFrequency(mode); prepareErr != nil {
-						return session.ChatSettingsMutation{}, prepareErr
-					}
-				}
-				return session.ChatSettingsMutation{Supervisor: &mode}, nil
-			},
-			func(engine *runtime.Engine, result session.ChatSettingsMutationResult) error {
-				_, _, _, applyErr := engine.SetReviewerFrequencyWithCommittedFeedback(mode, func(enabled bool, mode string, _ bool) string {
-					return serverapi.ReviewerToggleStatusMessage(enabled, mode, result.Changed)
-				})
-				if applyErr != nil {
-					engine.SetReviewerFrequency(mode)
-				}
-				return applyErr
-			},
-		)
+			}
+			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationSupervisor, Value: mode}, nil
+		})
 		return serverapi.RuntimeSetReviewerEnabledResponse{Changed: result.Changed, Mode: mode}, accepted, err
 	})
 }
@@ -544,22 +473,9 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
 	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.autoCompacts, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetAutoCompactionEnabledResponse, bool, error) {
-		result, accepted, mutationErr := s.mutateChatSettings(
-			ctx,
-			req.SessionID,
-			func(ctx context.Context, _ *session.Store, engine *runtime.Engine) (session.ChatSettingsMutation, error) {
-				if !req.Enabled {
-					if err := s.rejectWorkflowAutoCompactionDisable(ctx, req.SessionID, engine); err != nil {
-						return session.ChatSettingsMutation{}, err
-					}
-				}
-				return session.ChatSettingsMutation{AutoCompaction: &req.Enabled}, nil
-			},
-			func(engine *runtime.Engine, _ session.ChatSettingsMutationResult) error {
-				engine.SetAutoCompactionEnabled(req.Enabled)
-				return nil
-			},
-		)
+		result, accepted, mutationErr := s.mutateChatSettings(ctx, req.SessionID, func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
+			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationAutoCompaction, Enabled: req.Enabled}, nil
+		})
 		if !accepted {
 			return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, false, mutationErr
 		}
@@ -576,22 +492,9 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
 	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.questions, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetQuestionsEnabledResponse, bool, error) {
-		result, accepted, err := s.mutateChatSettings(
-			ctx,
-			req.SessionID,
-			func(context.Context, *session.Store, *runtime.Engine) (session.ChatSettingsMutation, error) {
-				return session.ChatSettingsMutation{Questions: &req.Enabled}, nil
-			},
-			func(engine *runtime.Engine, result session.ChatSettingsMutationResult) error {
-				_, _, _, applyErr := engine.SetQuestionsEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, _ bool) string {
-					return serverapi.QuestionsToggleStatusMessage(enabled, result.Changed)
-				})
-				if applyErr != nil {
-					engine.SetQuestionsEnabled(req.Enabled)
-				}
-				return applyErr
-			},
-		)
+		result, accepted, err := s.mutateChatSettings(ctx, req.SessionID, func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error) {
+			return sessionlaunch.ChatSettingsOperation{Kind: sessionlaunch.ChatSettingsOperationQuestions, Enabled: req.Enabled}, nil
+		})
 		return serverapi.RuntimeSetQuestionsEnabledResponse{
 			Changed: result.Changed,
 			Enabled: req.Enabled,
@@ -599,23 +502,11 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 	})
 }
 
-func (s *Service) prepareChatSettings(ctx context.Context, store *session.Store) (launch.PreparedChatSettings, error) {
-	if s == nil || s.chatSettings == nil {
-		return launch.PreparedChatSettings{}, errors.New("Session Chat settings preparation is unavailable")
-	}
-	state, err := session.ChatSettingsStateFromMeta(store.Meta())
-	if err != nil {
-		return launch.PreparedChatSettings{}, err
-	}
-	return s.chatSettings.PrepareSessionChatSettings(ctx, store, state.Agent)
-}
-
 func (s *Service) mutateChatSettings(
 	ctx context.Context,
 	sessionID string,
-	prepare func(context.Context, *session.Store, *runtime.Engine) (session.ChatSettingsMutation, error),
-	apply func(*runtime.Engine, session.ChatSettingsMutationResult) error,
-) (result session.ChatSettingsMutationResult, accepted bool, resultErr error) {
+	operation func(sessionlaunch.PreparedChatSettingsOperationInput) (sessionlaunch.ChatSettingsOperation, error),
+) (result sessionlaunch.PreparedChatSettingsOperationResult, accepted bool, resultErr error) {
 	if s == nil || s.authority == nil {
 		return result, false, errors.New("session runtime authority is required")
 	}
@@ -623,26 +514,141 @@ func (s *Service) mutateChatSettings(
 		runCtx context.Context,
 		store *session.Store,
 		engine *runtime.Engine,
-	) error {
-		mutation, err := prepare(runCtx, store, engine)
+	) (bool, error) {
+		input, err := s.prepareChatSettingsOperation(runCtx, sessionID, store, engine)
 		if err != nil {
-			return err
+			return false, err
 		}
-		result, err = store.MutateChatSettings(mutation)
-		if err != nil && !result.Committed {
-			return err
+		requested, err := operation(input)
+		if err != nil {
+			return false, err
+		}
+		result, err = sessionlaunch.ProjectPreparedChatSettingsOperation(input, requested)
+		if err != nil {
+			return false, err
+		}
+		if result.Rejection != nil {
+			return false, chatSettingsRejectionError(result.Rejection.Reason)
+		}
+		agentChanged := input.Raw.Agent != result.State.Agent
+		if engine != nil && !agentChanged {
+			if _, err := engine.PrepareReviewerFrequency(result.Effective.Supervisor); err != nil {
+				return false, err
+			}
+			if result.Effective.Fast && !engine.FastModeAvailable() {
+				return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
+			}
+		}
+		committed, err := store.CommitChatSettingsState(result.State)
+		if err != nil && !committed.Committed {
+			return false, err
 		}
 		accepted = true
 		resultErr = err
-		if engine != nil && apply != nil {
-			resultErr = errors.Join(resultErr, apply(engine, result))
+		result.Changed = committed.Changed
+		if engine == nil {
+			return false, nil
 		}
-		return nil
+		if agentChanged && committed.Changed {
+			return true, nil
+		}
+		if err := engine.SetThinkingLevel(result.Effective.Thinking); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+		if _, err := engine.SetFastModeEnabled(result.Effective.Fast); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+		engine.SetReviewerFrequency(result.Effective.Supervisor)
+		engine.SetQuestionsEnabled(result.Effective.Questions)
+		engine.SetAutoCompactionEnabled(result.Effective.AutoCompaction)
+		return false, nil
 	})
 	if !accepted {
 		return result, false, err
 	}
 	return result, true, errors.Join(resultErr, err)
+}
+
+func (s *Service) prepareChatSettingsOperation(
+	ctx context.Context,
+	sessionID string,
+	store *session.Store,
+	engine *runtime.Engine,
+) (sessionlaunch.PreparedChatSettingsOperationInput, error) {
+	state, err := session.ChatSettingsStateFromMeta(store.Meta())
+	if err != nil {
+		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
+	}
+	selected, err := s.chatSettings.PrepareSessionChatSettings(ctx, store, state.Agent)
+	if err != nil {
+		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
+	}
+	defaults := selected
+	if state.Agent != config.DefaultSubagentRole {
+		defaults, err = s.chatSettings.PrepareSessionChatSettings(ctx, store, config.DefaultSubagentRole)
+		if err != nil {
+			return sessionlaunch.PreparedChatSettingsOperationInput{}, err
+		}
+	}
+	entries := []launch.PreparedChatAgentCatalogEntry{{
+		Choice:   serverapi.ChatSettingsAgentChoice{Role: config.DefaultSubagentRole},
+		Settings: defaults,
+	}}
+	if state.Agent != config.DefaultSubagentRole {
+		entries = append(entries, launch.PreparedChatAgentCatalogEntry{
+			Choice:   serverapi.ChatSettingsAgentChoice{Role: state.Agent},
+			Settings: selected,
+		})
+	}
+	catalog, err := launch.NewPreparedChatAgentCatalog(entries...)
+	if err != nil {
+		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
+	}
+	effective, err := session.ResolveEffectiveChatSettings(state.Settings, nil, selected.Baseline)
+	if err != nil {
+		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
+	}
+	persistedQuestions := effective.Questions
+	persistedThinking := effective.Thinking
+	if state.Settings != nil {
+		if state.Settings.Questions != nil {
+			persistedQuestions = *state.Settings.Questions
+		}
+		if state.Settings.Thinking != nil {
+			persistedThinking = *state.Settings.Thinking
+		}
+	}
+	workflowLocked, err := s.workflowTaskSession(ctx, sessionID, engine)
+	if err != nil {
+		return sessionlaunch.PreparedChatSettingsOperationInput{}, err
+	}
+	return sessionlaunch.PreparedChatSettingsOperationInput{
+		Raw:                state,
+		Effective:          effective,
+		PersistedQuestions: persistedQuestions,
+		PersistedThinking:  persistedThinking,
+		Catalog:            catalog,
+		AgentLocked:        store.Meta().Locked != nil,
+		WorkflowLocked:     workflowLocked,
+		CompactionMode:     config.CompactionModeLocal,
+	}, nil
+}
+
+func chatSettingsRejectionError(reason sessionlaunch.ChatSettingsRejectionReason) error {
+	switch reason {
+	case sessionlaunch.ChatSettingsThinkingUnavailable:
+		return errors.New("thinking level is unavailable for the selected Session Agent")
+	case sessionlaunch.ChatSettingsFastUnavailable:
+		return errors.New("fast mode is only available for OpenAI-based Responses providers")
+	case sessionlaunch.ChatSettingsAutoCompactionPolicyLock:
+		return errWorkflowTaskSessionAutoCompactionDisable
+	case sessionlaunch.ChatSettingsAgentLocked:
+		return session.ErrChatAgentLocked
+	case sessionlaunch.ChatSettingsAgentUnavailable:
+		return errors.New("Chat Agent is unavailable")
+	default:
+		return fmt.Errorf("Chat settings mutation was rejected: %s", reason)
+	}
 }
 
 func memoizedChatSettingsMutation[Req any, Resp any](
@@ -898,17 +904,6 @@ func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, sou
 		SourceID:  strings.TrimSpace(sourceID),
 		Text:      text,
 	})
-}
-
-func (s *Service) rejectWorkflowAutoCompactionDisable(ctx context.Context, sessionID string, engine *runtime.Engine) error {
-	workflowSession, err := s.workflowTaskSession(ctx, sessionID, engine)
-	if err != nil {
-		return err
-	}
-	if workflowSession {
-		return errWorkflowTaskSessionAutoCompactionDisable
-	}
-	return nil
 }
 
 func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, engine *runtime.Engine) (bool, error) {

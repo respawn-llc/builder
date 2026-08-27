@@ -2,15 +2,61 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
 )
 
 func (c *sessionRuntimeClient) sessionRuntimeBoundary() {}
+
+func (c *sessionRuntimeClient) ReadChatSettings() (serverapi.ChatSettings, error) {
+	if c == nil || c.chatSettings == nil {
+		return serverapi.ChatSettings{}, errors.New("Chat settings service is unavailable")
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(c.sessionID))
+	if err != nil {
+		return serverapi.ChatSettings{}, err
+	}
+	response, err := c.chatSettings.ReadChatSettings(context.Background(), serverapi.ChatSettingsReadRequest{
+		Target: serverapi.SessionChatSettingsTarget(sessionID),
+	})
+	if err != nil {
+		return serverapi.ChatSettings{}, err
+	}
+	return response.Settings, nil
+}
+
+func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {
+	if c == nil || c.chatSettings == nil {
+		return serverapi.ChatSettingsMutationResponse{}, errors.New("Chat settings service is unavailable")
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(c.sessionID))
+	if err != nil {
+		return serverapi.ChatSettingsMutationResponse{}, err
+	}
+	response, err := c.chatSettings.MutateChatSettings(context.Background(), serverapi.ChatSettingsMutationRequest{
+		Target:    serverapi.SessionChatSettingsTarget(sessionID),
+		Operation: operation,
+	})
+	if err != nil {
+		return serverapi.ChatSettingsMutationResponse{}, err
+	}
+	c.patchMainView(func(view *clientui.RuntimeMainView) {
+		view.Status.ThinkingLevel = response.Settings.SelectedAgent.Thinking
+		view.Status.ReviewerFrequency = string(response.Settings.Supervisor.Value)
+		view.Status.ReviewerEnabled = response.Settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
+		view.Status.FastModeEnabled = response.Settings.Fast != nil && response.Settings.Fast.Value
+		view.Status.QuestionsEnabled = response.Settings.Questions.Enabled
+		view.Status.AutoCompactionEnabled = response.Settings.AutoCompaction.Stored
+		view.Status.CompactionMode = string(response.Settings.AutoCompaction.Policy)
+	})
+	return response, nil
+}
 
 func runtimeRequestCallWithID[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, requestID string, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
 	return retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, appendWarning, func() (T, error) {
