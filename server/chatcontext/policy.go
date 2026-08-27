@@ -1,6 +1,8 @@
 package chatcontext
 
 import (
+	"strings"
+
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
@@ -9,7 +11,8 @@ import (
 
 // ResolvePolicy is the sole authority for the effective Context window,
 // automatic threshold, and Compaction Mode after Agent-role settings and
-// provider capabilities have been resolved.
+// provider capabilities have been resolved. An absent provider contract leaves
+// the configured compaction mode unchanged until capability resolution occurs.
 func ResolvePolicy(
 	settings config.Settings,
 	effectiveCapabilities llm.ProviderCapabilities,
@@ -53,16 +56,6 @@ func ApplyPolicy(settings config.Settings, policy Policy) config.Settings {
 	return settings
 }
 
-func ApplyLockedContextBudget(settings config.Settings, locked *session.LockedContract) config.Settings {
-	if locked == nil || locked.ContextWindow <= 0 {
-		return settings
-	}
-	policy := ResolvePolicy(settings, llm.ProviderCapabilities{}, locked)
-	settings.ModelContextWindow = int(policy.ContextWindowTokens)
-	settings.ContextCompactionThresholdTokens = int(policy.AutomaticThresholdTokens)
-	return settings
-}
-
 func effectiveCompactionMode(
 	configured config.CompactionMode,
 	capabilities llm.ProviderCapabilities,
@@ -73,11 +66,17 @@ func effectiveCompactionMode(
 	case config.CompactionModeLocal:
 		return serverapi.ChatContextCompactionModeLocal
 	case config.CompactionModeNative:
+		if strings.TrimSpace(capabilities.ProviderID) == "" {
+			return serverapi.ChatContextCompactionModeProviderNative
+		}
 		if capabilities.SupportsResponsesCompact {
 			return serverapi.ChatContextCompactionModeProviderNative
 		}
 		return serverapi.ChatContextCompactionModeLocal
 	default:
+		if strings.TrimSpace(capabilities.ProviderID) == "" {
+			return serverapi.ChatContextCompactionModeLocal
+		}
 		if capabilities.SupportsResponsesCompact {
 			return serverapi.ChatContextCompactionModeProviderNative
 		}

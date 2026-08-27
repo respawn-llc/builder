@@ -20,6 +20,21 @@ import (
 	"core/shared/toolspec"
 )
 
+type delayedGenerateClient struct {
+	*fakeClient
+	delay time.Duration
+}
+
+func (c *delayedGenerateClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	callCount := len(c.calls)
+	c.mu.Unlock()
+	if callCount == 1 {
+		time.Sleep(c.delay)
+	}
+	return c.fakeClient.Generate(ctx, req)
+}
+
 func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -146,6 +161,136 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	}
 }
 
+func TestCompletedWriteStdinGuardConsumesPendingBackgroundNotice(t *testing.T) {
+	store := mustCreateTestSession(t)
+	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() {
+		_ = manager.Close()
+	}()
+
+	client := &delayedGenerateClient{fakeClient: &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("start background"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call_exec_1",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"cmd":"sleep 0.1; printf '12345678901234567890123456789012345678901234567890123456789012345678901234567890'","shell":"/bin/sh","login":false,"tty":true,"yield_time_ms":1}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("poll background"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call_stdin_1",
+				Name:  string(toolspec.ToolWriteStdin),
+				Input: json.RawMessage(`{"session_id":1000,"yield_time_ms":15000,"max_output_tokens":21}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}, delay: 300 * time.Millisecond}
+	toolResults := make(chan tools.Result, 2)
+	registry := newTestToolRegistry(t,
+		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, 40, manager, store.Meta().SessionID)},
+		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, 40, manager)},
+	)
+	eng := mustNewTestEngine(t, store, client, registry, Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind == EventToolCallCompleted && event.ToolResult != nil {
+				toolResults <- *event.ToolResult
+			}
+		},
+	})
+	terminalEvents := make(chan shelltool.Event, 1)
+	manager.SetEventHandler(func(evt shelltool.Event) bool {
+		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
+		if summaryErr != nil {
+			t.Errorf("SummarizeBackgroundEvent: %v", summaryErr)
+			return false
+		}
+		preview, previewRemoved := summary.RuntimePreview()
+		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+			Type:           backgroundShellEventTypeForTest(evt.Type),
+			ID:             evt.Snapshot.ID,
+			State:          evt.Snapshot.State,
+			Command:        evt.Snapshot.Command,
+			Workdir:        evt.Snapshot.Workdir,
+			LogPath:        evt.Snapshot.LogPath,
+			Preview:        preview,
+			PreviewRemoved: previewRemoved,
+			ExitCode: func() *int {
+				if evt.Snapshot.ExitCode == nil {
+					return nil
+				}
+				out := *evt.Snapshot.ExitCode
+				return &out
+			}(),
+			NoticeSuppressed: evt.NoticeSuppressed,
+		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
+		if evt.Type == shelltool.EventCompleted {
+			terminalEvents <- evt
+		}
+		return true
+	})
+
+	assistant, err := eng.SubmitUserMessage(context.Background(), "run and poll")
+	if err != nil {
+		t.Fatalf("submit user message: %v", err)
+	}
+	if messageContent(assistant) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(assistant))
+	}
+	var pollResult tools.Result
+	for index := 0; index < 2; index++ {
+		select {
+		case result := <-toolResults:
+			if result.Name == toolspec.ToolWriteStdin {
+				pollResult = result
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for tool completion")
+		}
+	}
+	if !pollResult.IsError {
+		t.Fatalf("write_stdin result = %+v, want oversized-output failure", pollResult)
+	}
+	var pollBody map[string]string
+	if err := json.Unmarshal(pollResult.Output, &pollBody); err != nil {
+		t.Fatalf("decode guarded result: %v", err)
+	}
+	if len(pollBody) != 1 || !strings.Contains(pollBody["error"], "output you requested exceeded") ||
+		strings.Contains(string(pollResult.Output), "1234567890") {
+		t.Fatalf("guarded output = %s, want only failure without command output", pollResult.Output)
+	}
+	select {
+	case event := <-terminalEvents:
+		if event.NoticeSuppressed {
+			t.Fatal("terminal event unexpectedly suppressed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal background event")
+	}
+	time.Sleep(100 * time.Millisecond)
+	client.mu.Lock()
+	callCount := len(client.calls)
+	client.mu.Unlock()
+	if callCount != 3 {
+		t.Fatalf("model call count = %d, want 3 without an extra background continuation", callCount)
+	}
+	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice {
+			t.Fatalf("did not expect consumed background notice in transcript: %+v", msg)
+		}
+	}
+}
+
 func TestRunningExecGuardLeavesLaterCompletionNoticeIndependent(t *testing.T) {
 	store := mustCreateTestSession(t)
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
@@ -162,7 +307,7 @@ func TestRunningExecGuardLeavesLaterCompletionNoticeIndependent(t *testing.T) {
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_exec_1",
 				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"cmd":"printf '12345678901234567890123456789012345678901234567890123456789012345678901234567890'; sleep 0.2","shell":"/bin/sh","login":false,"yield_time_ms":1,"max_output_tokens":21}`),
+				Input: json.RawMessage(`{"cmd":"printf '12345678901234567890123456789012345678901234567890123456789012345678901234567890'; sleep 1","shell":"/bin/sh","login":false,"yield_time_ms":50,"max_output_tokens":21}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -179,7 +324,15 @@ func TestRunningExecGuardLeavesLaterCompletionNoticeIndependent(t *testing.T) {
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, 40, manager, store.Meta().SessionID)},
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, 40, manager)},
 	)
-	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
+	toolResults := make(chan tools.Result, 1)
+	eng := mustNewTestEngine(t, store, client, registry, Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind == EventToolCallCompleted && event.ToolResult != nil {
+				toolResults <- *event.ToolResult
+			}
+		},
+	})
 	terminalEvents := make(chan shelltool.Event, 1)
 	manager.SetEventHandler(func(evt shelltool.Event) bool {
 		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
@@ -219,6 +372,22 @@ func TestRunningExecGuardLeavesLaterCompletionNoticeIndependent(t *testing.T) {
 	if messageContent(assistant) != "done" {
 		t.Fatalf("assistant content = %q, want done", messageContent(assistant))
 	}
+	select {
+	case result := <-toolResults:
+		if !result.IsError {
+			t.Fatalf("guarded exec result = %+v, want oversized-output failure", result)
+		}
+		var body map[string]string
+		if err := json.Unmarshal(result.Output, &body); err != nil {
+			t.Fatalf("decode guarded exec result: %v", err)
+		}
+		if len(body) != 1 || !strings.Contains(body["error"], "output you requested exceeded") ||
+			strings.Contains(string(result.Output), "1234567890") {
+			t.Fatalf("guarded exec output = %s, want only failure without command output", result.Output)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for guarded exec result")
+	}
 	client.mu.Lock()
 	callCount := len(client.calls)
 	client.mu.Unlock()
@@ -232,6 +401,19 @@ func TestRunningExecGuardLeavesLaterCompletionNoticeIndependent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for terminal background event")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		client.mu.Lock()
+		callCount = len(client.calls)
+		client.mu.Unlock()
+		if callCount == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("model call count after independent completion = %d, want 3", callCount)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

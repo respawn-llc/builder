@@ -71,7 +71,10 @@ func TestResolvePolicyCompactionModes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			settings := config.DefaultOnboardingSettings()
 			settings.CompactionMode = test.mode
-			got := ResolvePolicy(settings, llm.ProviderCapabilities{SupportsResponsesCompact: test.supports}, nil)
+			got := ResolvePolicy(settings, llm.ProviderCapabilities{
+				ProviderID:               "test-provider",
+				SupportsResponsesCompact: test.supports,
+			}, nil)
 			if got.CompactionMode != test.want {
 				t.Fatalf("CompactionMode = %q, want %q", got.CompactionMode, test.want)
 			}

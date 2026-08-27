@@ -7,13 +7,13 @@ import (
 	"strings"
 
 	"core/server/chatcontext"
+	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runlog"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
 	servicecontract "core/shared/apicontract"
-	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -77,10 +77,6 @@ func applyAgentSelection(store *session.Store, selection *session.ChatAgentSelec
 	}
 	result, err := store.MutateChatSettings(session.ChatSettingsMutation{Agent: selection})
 	return result.Changed, err
-}
-
-func applyActivationContextPolicy(store *session.Store, settings config.Settings) config.Settings {
-	return chatcontext.ApplyLockedContextBudget(settings, store.Meta().Locked)
 }
 
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
@@ -157,7 +153,11 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		autoCompaction := effective.AutoCompaction
 		req.QuestionsEnabled = &questions
 		req.AutoCompactionEnabled = &autoCompaction
-		req.ActiveSettings = applyActivationContextPolicy(store, req.ActiveSettings)
+		capabilities, _ := llm.ProviderCapabilitiesFromOverride(req.ActiveSettings.ProviderCapabilities)
+		req.ActiveSettings = chatcontext.ApplyPolicy(
+			req.ActiveSettings,
+			chatcontext.ResolvePolicy(req.ActiveSettings, capabilities, store.Meta().Locked),
+		)
 		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())
 		if planErr != nil {
 			return nil, nil, planErr
