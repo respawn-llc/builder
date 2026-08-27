@@ -450,8 +450,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - Catalog JSON returns Label records for create, rename, and list, and the deleted Label ID for delete.
 - Assignment JSON returns the Task ID and authoritative resulting Label IDs.
 - Human assignment output is a short acknowledgement.
-- Human Task show/list output adds one `Labels:` line only for assigned Labels and quotes every name.
-- Task show/list JSON exposes one `label_ids` field and does not duplicate assignments as named objects.
+- Human Task show output adds one `Labels:` line only for assigned Labels and quotes every name.
+- Task show JSON exposes one `label_ids` field and does not duplicate assignments as named objects.
 - Task-list Label filtering uses repeatable literal `--label` selectors for included conditions and repeatable literal `--not-label` selectors for excluded conditions.
 - `--label-match any|all` combines every included and excluded condition and defaults to `any`.
 - `--unlabeled` selects Tasks with no assignments and is mutually exclusive with both selector flags and an explicitly supplied match mode.
@@ -465,11 +465,16 @@ To respond, run: kent run steer <source-session-id> "message"
 - `--attention` filters typed attention.
 - `--column` filters Workflow Node Keys and requires an explicit Workflow.
 - Column sorting requires an explicit Workflow.
-- Project-wide human Task rows omit column output.
-- Project-wide JSON Task items omit `column_keys`.
-- Workflow-narrowed lists expose all Current Node Keys in board order.
-- Human rows include Workflow names only when the filtered query can return Tasks from several Workflows.
-- JSON Task items always include their bare Workflow UUID.
+- Machine-readable Task-list output exposes the complete enriched Task-list result. It includes Workflow display information, assigned Label display information, dependency progress, and pagination information.
+- Project-wide machine-readable Task rows include Workflow display information and omit Workflow-relative Current Node information, including when exactly one Workflow matches.
+- Workflow-narrowed machine-readable Task rows omit Workflow display information and include all Current Node Keys in board order, including an empty collection.
+- Each human Task row starts with `<SHORT_ID>: <TITLE>.` followed by `Status: <status>`.
+- A human Task row includes `Labels: <quoted names>` immediately after Status when Labels are assigned, preserving Project Label order.
+- A human Task row includes `Workflow: <workflow_name>` only when the filtered query can return Tasks from several Workflows.
+- A Workflow-narrowed human Task row includes `Current nodes: <comma-separated node keys>` after the optional Workflow line. An empty collection renders as `Current nodes: (none)`.
+- A human Task row includes `Deps: <satisfied>/<total>` after the optional Current Nodes line only when dependency progress has a positive total and at least one dependency is unsatisfied.
+- Human Task rows omit dependency progress when it is absent or fully satisfied.
+- Human Task rows have no blank separator.
 - `kent task list --unblocked` includes Tasks with zero unsatisfied direct Task Dependencies.
 - `kent task list --blocked` includes Tasks with one or more unsatisfied direct Task Dependencies.
 - The two dependency flags are mutually exclusive.
