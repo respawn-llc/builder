@@ -97,50 +97,52 @@ var modelToolAliases = newToolAliasCatalog([]toolAliasSpec{
 	{id: ToolEdit, aliases: []string{"edit_file", "str_replace_editor", "replace", "string_replace", "replace_text", "write"}, variations: true, legacyAliases: []string{"replace", "write"}},
 })
 
-var modelParameterAliases = map[ID][]parameterAliasSpec{
-	ToolExecCommand: {
-		{canonical: "cmd", aliases: []string{"command", "script"}},
-		{canonical: "workdir", aliases: []string{"cwd", "working_directory", "working_dir"}},
-		{canonical: "shell", aliases: []string{"shell_path", "interpreter"}},
-		{canonical: "login", aliases: []string{"login_shell"}},
-		{canonical: "tty", aliases: []string{"pty", "use_tty"}},
-		{canonical: "raw", aliases: []string{"raw_output"}},
-		{canonical: "yield_time_ms", aliases: []string{"yield_ms", "wait_ms", "yield-time_ms", "yield-time-ms"}},
-		{canonical: "max_output_tokens", aliases: []string{"max_tokens", "output_token_limit"}},
-	},
-	ToolWriteStdin: {
-		{canonical: "session_id", aliases: []string{"process_id", "shell_id"}},
-		{canonical: "chars", aliases: []string{"input", "stdin", "text"}},
-		{canonical: "yield_time_ms", aliases: []string{"yield_ms", "wait_ms", "yield-time_ms", "yield-time-ms"}},
-		{canonical: "max_output_tokens", aliases: []string{"max_tokens", "output_token_limit"}},
-	},
-	ToolViewImage: {
-		{canonical: "path", aliases: []string{"file_path", "image_path", "file", "pdf_path", "filename"}},
-		{canonical: "raw", aliases: []string{"raw_output", "unoptimized", "disable_optimization", "original_quality"}},
-	},
-	ToolPatch: {
-		{canonical: "patch", aliases: []string{"diff", "patch_text", "content", "patch_content", "input"}},
-	},
-	ToolEdit: {
-		{canonical: "path", aliases: []string{"file_path", "file"}},
-		{canonical: "old_string", aliases: []string{"old_text", "find", "search"}},
-		{canonical: "new_string", aliases: []string{"new_text", "replacement", "replace"}},
-		{canonical: "replace_all", aliases: []string{"all", "global"}},
-	},
-	ToolAskQuestion: {
-		{canonical: "question", aliases: []string{"prompt", "message", "text"}},
-		{canonical: "suggestions", aliases: []string{"options", "choices", "answers"}},
-		{canonical: "recommended_option_index", aliases: []string{"recommended_index", "suggested_option_index", "default_index"}},
-	},
-	ToolTriggerHandoff: {
-		{canonical: "summarizer_prompt", aliases: []string{"summary_prompt", "handoff_prompt", "compaction_prompt"}},
-		{canonical: "future_agent_message", aliases: []string{"next_agent_message", "handoff_message", "continuation_message"}},
-	},
+func approvedModelParameterAliases() map[ID][]parameterAliasSpec {
+	return map[ID][]parameterAliasSpec{
+		ToolExecCommand: {
+			{canonical: "cmd", aliases: []string{"command", "script"}},
+			{canonical: "workdir", aliases: []string{"cwd", "working_directory", "working_dir"}},
+			{canonical: "shell", aliases: []string{"shell_path", "interpreter"}},
+			{canonical: "login", aliases: []string{"login_shell"}},
+			{canonical: "tty", aliases: []string{"pty", "use_tty"}},
+			{canonical: "raw", aliases: []string{"raw_output"}},
+			{canonical: "yield_time_ms", aliases: []string{"yield_ms", "wait_ms", "yield-time_ms", "yield-time-ms"}},
+			{canonical: "max_output_tokens", aliases: []string{"max_tokens", "output_token_limit"}},
+		},
+		ToolWriteStdin: {
+			{canonical: "session_id", aliases: []string{"process_id", "shell_id"}},
+			{canonical: "chars", aliases: []string{"input", "stdin", "text"}},
+			{canonical: "yield_time_ms", aliases: []string{"yield_ms", "wait_ms", "yield-time_ms", "yield-time-ms"}},
+			{canonical: "max_output_tokens", aliases: []string{"max_tokens", "output_token_limit"}},
+		},
+		ToolViewImage: {
+			{canonical: "path", aliases: []string{"file_path", "image_path", "file", "pdf_path", "filename"}},
+			{canonical: "raw", aliases: []string{"raw_output", "unoptimized", "disable_optimization", "original_quality"}},
+		},
+		ToolPatch: {
+			{canonical: "patch", aliases: []string{"diff", "patch_text", "content", "patch_content", "input"}},
+		},
+		ToolEdit: {
+			{canonical: "path", aliases: []string{"file_path", "file"}},
+			{canonical: "old_string", aliases: []string{"old_text", "find", "search"}},
+			{canonical: "new_string", aliases: []string{"new_text", "replacement", "replace"}},
+			{canonical: "replace_all", aliases: []string{"all", "global"}},
+		},
+		ToolAskQuestion: {
+			{canonical: "question", aliases: []string{"prompt", "message", "text"}},
+			{canonical: "suggestions", aliases: []string{"options", "choices", "answers"}},
+			{canonical: "recommended_option_index", aliases: []string{"recommended_index", "suggested_option_index", "default_index"}},
+		},
+		ToolTriggerHandoff: {
+			{canonical: "summarizer_prompt", aliases: []string{"summary_prompt", "handoff_prompt", "compaction_prompt"}},
+			{canonical: "future_agent_message", aliases: []string{"next_agent_message", "handoff_message", "continuation_message"}},
+		},
+	}
 }
 
 func init() {
-	validateParameterAliasCatalog(modelParameterAliases)
-	modelToolAliases.parameters = modelParameterAliases
+	modelToolAliases.parameters = approvedModelParameterAliases()
+	validateParameterAliasCatalog(modelToolAliases.parameters)
 }
 
 func validateParameterAliasCatalog(parameters map[ID][]parameterAliasSpec) {
@@ -286,8 +288,8 @@ func ResolveModelToolName(name string, registered []ID) (ID, bool) {
 }
 
 func resolveModelParameterName(tool ID, name string) (string, int, bool) {
-	spelling := strings.TrimSpace(name)
-	specs := modelParameterAliases[tool]
+	spelling := name
+	specs := modelToolAliases.parameters[tool]
 	for _, spec := range specs {
 		for _, candidate := range canonicalParameterSpellings(spec) {
 			if spelling == candidate {

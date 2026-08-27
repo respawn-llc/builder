@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -196,6 +197,115 @@ func TestExecuteToolCallsRetainsCanonicalInvalidExecInputAndSkipsHandler(t *test
 	}
 	if handler.input != nil {
 		t.Fatalf("handler input = %s, want handler not invoked", handler.input)
+	}
+}
+
+func TestInvalidAliasedCallsPersistCanonicalHistoryAndProviderContext(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		id        toolspec.ID
+		callName  string
+		input     string
+		wantInput string
+		callID    string
+	}{
+		{
+			name:      "ask question",
+			id:        toolspec.ToolAskQuestion,
+			callName:  "ask",
+			input:     `{"text":"Continue?","choices":"not-an-array"}`,
+			wantInput: `{"question":"Continue?","suggestions":"not-an-array"}`,
+			callID:    "call-invalid-ask-persisted",
+		},
+		{
+			name:      "exec command",
+			id:        toolspec.ToolExecCommand,
+			callName:  "run-command",
+			input:     `{"script":"echo hi","pty":"not-a-bool"}`,
+			wantInput: `{"cmd":"echo hi","tty":"not-a-bool"}`,
+			callID:    "call-invalid-exec-persisted",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			handler := &capturingTool{name: test.id}
+			client := &fakeClient{responses: []llm.Response{
+				{
+					Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
+					ToolCalls: []llm.ToolCall{{
+						ID:    test.callID,
+						Name:  test.callName,
+						Input: json.RawMessage(test.input),
+					}},
+				},
+				{
+					Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+				},
+			}}
+			eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
+				ID:      test.id,
+				Handler: handler,
+			}), Config{Model: "claude", EnabledTools: []toolspec.ID{test.id}})
+			if _, err := eng.SubmitUserMessage(context.Background(), "run aliased tool"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			if handler.input != nil {
+				t.Fatalf("handler input = %s, want handler not invoked", handler.input)
+			}
+			if len(client.calls) < 2 {
+				t.Fatalf("provider calls = %d, want continuation request", len(client.calls))
+			}
+			var continued *llm.ToolCall
+			for _, message := range requestMessages(client.calls[1]) {
+				for index := range message.ToolCalls {
+					if message.ToolCalls[index].ID == test.callID {
+						call := message.ToolCalls[index]
+						continued = &call
+					}
+				}
+			}
+			if continued == nil || continued.Name != string(test.id) || string(continued.Input) != test.wantInput {
+				t.Fatalf("continued call = %+v, want canonical name/input %s/%s", continued, test.id, test.wantInput)
+			}
+			records, err := collectTestEventRecords(store)
+			if err != nil {
+				t.Fatalf("collect persisted events: %v", err)
+			}
+			var persisted *llm.ToolCall
+			for _, event := range records {
+				message, ok := mustSessionEventPayload(event.Record).(session.MessageRecord)
+				if !ok {
+					continue
+				}
+				restored, err := llmMessageFromSessionRecord(message)
+				if err != nil {
+					t.Fatalf("restore persisted message: %v", err)
+				}
+				for index := range restored.ToolCalls {
+					if restored.ToolCalls[index].ID == test.callID {
+						call := restored.ToolCalls[index]
+						persisted = &call
+					}
+				}
+			}
+			if persisted == nil || persisted.Name != string(test.id) || string(persisted.Input) != test.wantInput {
+				t.Fatalf("persisted call = %+v, want canonical name/input %s/%s", persisted, test.id, test.wantInput)
+			}
+			foundSnapshot := false
+			for _, entry := range eng.ChatSnapshot().Entries {
+				if entry.ToolCallID == test.callID && entry.ToolCall != nil {
+					foundSnapshot = true
+					if entry.ToolCall.ToolName != string(test.id) {
+						t.Fatalf("snapshot tool name = %q, want %s", entry.ToolCall.ToolName, test.id)
+					}
+				}
+			}
+			if !foundSnapshot {
+				t.Fatalf("snapshot omitted %s", test.callID)
+			}
+		})
 	}
 }
 

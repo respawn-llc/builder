@@ -331,7 +331,9 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 					executableCall.Input = rawInput
 				} else {
 					executableCall.Input = input.Canonical
-					inputErr = input.ValidationError
+					if input.ValidationError != nil {
+						inputErr = fmt.Errorf("prepare %q input: %w", toolID, input.ValidationError)
+					}
 				}
 			}
 		}

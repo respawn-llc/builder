@@ -189,6 +189,7 @@ func TestResolveModelParameterNameAcceptsApprovedAliasesAndGeneratedForms(t *tes
 		{ToolExecCommand, "login_shell", "login"},
 		{ToolExecCommand, "pty", "tty"},
 		{ToolExecCommand, "use-tty", "tty"},
+		{ToolExecCommand, "raw_output", "raw"},
 		{ToolExecCommand, "rawOutput", "raw"},
 		{ToolExecCommand, "yield_ms", "yield_time_ms"},
 		{ToolExecCommand, "wait_ms", "yield_time_ms"},
@@ -196,11 +197,14 @@ func TestResolveModelParameterNameAcceptsApprovedAliasesAndGeneratedForms(t *tes
 		{ToolExecCommand, "yield-time-ms", "yield_time_ms"},
 		{ToolExecCommand, "yieldTimeMs", "yield_time_ms"},
 		{ToolExecCommand, "max-tokens", "max_output_tokens"},
+		{ToolExecCommand, "max_tokens", "max_output_tokens"},
 		{ToolExecCommand, "output_token_limit", "max_output_tokens"},
 		{ToolWriteStdin, "process_id", "session_id"},
 		{ToolWriteStdin, "shellId", "session_id"},
 		{ToolWriteStdin, "stdin", "chars"},
+		{ToolWriteStdin, "input", "chars"},
 		{ToolWriteStdin, "text", "chars"},
+		{ToolWriteStdin, "yield_ms", "yield_time_ms"},
 		{ToolWriteStdin, "yield-time_ms", "yield_time_ms"},
 		{ToolWriteStdin, "wait_ms", "yield_time_ms"},
 		{ToolWriteStdin, "max_tokens", "max_output_tokens"},
@@ -224,15 +228,18 @@ func TestResolveModelParameterNameAcceptsApprovedAliasesAndGeneratedForms(t *tes
 		{ToolEdit, "file", "path"},
 		{ToolEdit, "oldText", "old_string"},
 		{ToolEdit, "old_text", "old_string"},
+		{ToolEdit, "find", "old_string"},
 		{ToolEdit, "search", "old_string"},
 		{ToolEdit, "new-text", "new_string"},
 		{ToolEdit, "new_text", "new_string"},
+		{ToolEdit, "replacement", "new_string"},
 		{ToolEdit, "replace", "new_string"},
 		{ToolEdit, "replaceAll", "replace_all"},
 		{ToolEdit, "all", "replace_all"},
 		{ToolEdit, "global", "replace_all"},
 		{ToolAskQuestion, "prompt", "question"},
 		{ToolAskQuestion, "message", "question"},
+		{ToolAskQuestion, "text", "question"},
 		{ToolAskQuestion, "choices", "suggestions"},
 		{ToolAskQuestion, "options", "suggestions"},
 		{ToolAskQuestion, "answers", "suggestions"},
@@ -271,6 +278,11 @@ func TestResolveModelParameterNameCanonicalDerivedFormsTakePrecedence(t *testing
 		got, ok := ResolveModelParameterName(test.tool, test.name)
 		if !ok || got != test.canonical {
 			t.Fatalf("ResolveModelParameterName(%q, %q) = %q, %t; want %q, true", test.tool, test.name, got, ok, test.canonical)
+		}
+	}
+	for _, name := range []string{" cmd ", " workdir "} {
+		if got, ok := ResolveModelParameterName(ToolExecCommand, name); ok {
+			t.Fatalf("ResolveModelParameterName(%q) = %q, true; whitespace is not an alias", name, got)
 		}
 	}
 }
