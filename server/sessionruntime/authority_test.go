@@ -783,13 +783,17 @@ func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait ownerless execution: %v", err)
 	}
-	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
+	if err := authority.WithRuntime(context.Background(), resource, func(ctx context.Context, engine *runtime.Engine) error {
 		item, queueErr := engine.QueueUserMessage(t.Context(), "steer retained runtime")
 		if queueErr != nil {
 			return queueErr
 		}
-		if !engine.DiscardQueuedUserMessage(item.ID) {
-			return errors.New("discard retained runtime steering")
+		itemID, parseErr := runtimeids.ParseQueueItemID(item.ID)
+		if parseErr != nil {
+			return parseErr
+		}
+		if _, removeErr := engine.RemovePendingWork(ctx, itemID); removeErr != nil {
+			return removeErr
 		}
 		return nil
 	}); err != nil {

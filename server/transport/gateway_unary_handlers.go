@@ -28,6 +28,14 @@ func gatewayClientCallNoResponse[C any, Req any](getClient func(GatewayDependenc
 	}
 }
 
+func runtimePendingWorkClient(deps GatewayDependencies) apicontract.RuntimePendingWorkService {
+	client, ok := deps.RuntimeControlClient().(apicontract.RuntimePendingWorkService)
+	if !ok {
+		panic("Runtime Pending Work service is unavailable")
+	}
+	return client
+}
+
 var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodChatContextGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
@@ -248,7 +256,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodRuntimeLiveStop:                       gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveStop),
 	protocol.MethodRuntimeLiveWait:                       gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveWait),
 	protocol.MethodRuntimeLiveWatch:                      gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveWatchRequest, serverapi.RuntimeLiveWatchResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveWatch),
-	protocol.MethodRuntimeDiscardQueuedUserMessage:       gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.DiscardQueuedUserMessage),
+	protocol.MethodRuntimeListPendingWork:                gatewayClientCall[apicontract.RuntimePendingWorkService, serverapi.RuntimeListPendingWorkRequest, serverapi.RuntimeListPendingWorkResponse](runtimePendingWorkClient, apicontract.RuntimePendingWorkService.ListPendingWork),
+	protocol.MethodRuntimeRemovePendingWork:              gatewayClientCall[apicontract.RuntimePendingWorkService, serverapi.RuntimeRemovePendingWorkRequest, serverapi.RuntimeRemovePendingWorkResponse](runtimePendingWorkClient, apicontract.RuntimePendingWorkService.RemovePendingWork),
 	protocol.MethodRuntimeRecordPromptHistory:            gatewayClientCallNoResponse[apicontract.RuntimeControlService, serverapi.RuntimeRecordPromptHistoryRequest](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.RecordPromptHistory),
 	protocol.MethodRuntimeGoalShow:                       gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ShowGoal),
 	protocol.MethodRuntimeGoalSet:                        gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetGoal),

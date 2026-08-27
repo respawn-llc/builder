@@ -53,9 +53,10 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 	}
 	if len(snapshot.InFlightTools) != 2 || snapshot.InFlightTools[0].ToolCallID != "call-1" ||
 		snapshot.InFlightTools[1].ToolCallID != "call-2" ||
-		len(snapshot.QueuedMessages) != 2 || snapshot.QueuedMessages[0].ID != first.ID ||
-		snapshot.QueuedMessages[1].ID != second.ID {
-		t.Fatalf("owner facts = tools %+v queue %+v", snapshot.InFlightTools, snapshot.QueuedMessages)
+		len(snapshot.PendingWork.Items) != 2 ||
+		snapshot.PendingWork.Items[0].ID.String() != first.ID ||
+		snapshot.PendingWork.Items[1].ID.String() != second.ID {
+		t.Fatalf("owner facts = tools %+v Pending Work %+v", snapshot.InFlightTools, snapshot.PendingWork)
 	}
 	if err := engine.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); err != nil {
 		t.Fatalf("reset reasoning: %v", err)

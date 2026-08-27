@@ -36,6 +36,8 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return m.applyTranscriptUserMessageFlushed(message.Payload().(clientui.TranscriptUserMessageFlushed))
 	case clientui.TranscriptMessageQueuedMessageState:
 		return m.applyTranscriptQueuedMessageState(message.Payload().(clientui.TranscriptQueuedMessageState))
+	case clientui.TranscriptMessagePendingWorkReplaced:
+		return m.applyPendingWorkReplacement(message.Payload().(clientui.TranscriptPendingWorkReplaced).PendingWork)
 	case clientui.TranscriptMessageHumanInputInterrupted:
 		return m.applyTranscriptHumanInputInterrupted(message.Payload().(clientui.TranscriptHumanInputInterrupted))
 	case clientui.TranscriptMessageStepState:
@@ -101,7 +103,7 @@ func (m *uiModel) applyTranscriptHydration(
 		m.applyTranscriptStepState(*hydration.ActiveStep)
 	}
 
-	m.reconcileTranscriptQueuedMessages(hydration.QueuedMessages)
+	m.pendingWork = hydration.PendingWork
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
 	cmds = append(cmds, m.releasePendingPromptCtrlCContinuation())
 	currentSessionID := strings.TrimSpace(m.sessionID)
@@ -278,18 +280,6 @@ func (m *uiModel) applyTranscriptHumanInputInterrupted(event clientui.Transcript
 		uiStatusNoticeReplace,
 		"",
 	))
-}
-
-func (m *uiModel) reconcileTranscriptQueuedMessages(states []clientui.TranscriptQueuedMessageState) {
-	for _, state := range states {
-		if state.Status != clientui.QueuedUserMessageAccepted {
-			continue
-		}
-		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-			ID:   state.QueueItemID.String(),
-			Text: dereferenceTranscriptText(state.Text),
-		})
-	}
 }
 
 func dereferenceTranscriptText(text *string) string {

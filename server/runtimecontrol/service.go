@@ -16,6 +16,7 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/transcript"
 )
@@ -508,7 +509,7 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
 		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			_, compactErr := engine.CompactContextForRequestWithAcceptance(runCtx, req.RequestID, req.Args, attempt.Accept)
+			_, compactErr := engine.CompactContextAdmissionForRequestWithAcceptance(runCtx, req.RequestID, req.Admission, attempt.Accept)
 			return compactErr
 		})
 		return struct{}{}, attempt.Accepted(), commandErr
@@ -575,16 +576,37 @@ func (s *Service) runtimeInterruptResponse(ctx context.Context, sessionID string
 	}, nil
 }
 
-func (s *Service) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
+func (s *Service) ListPendingWork(ctx context.Context, req serverapi.RuntimeListPendingWorkRequest) (serverapi.RuntimeListPendingWorkResponse, error) {
 	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeDiscardQueuedUserMessageResponse{}, err
+		return serverapi.RuntimeListPendingWorkResponse{}, err
 	}
-	var resp serverapi.RuntimeDiscardQueuedUserMessageResponse
+	var response serverapi.RuntimeListPendingWorkResponse
 	err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-		resp.Discarded = engine.DiscardQueuedUserMessage(strings.TrimSpace(req.QueueItemID))
-		return nil
+		var snapshotErr error
+		response.PendingWork, snapshotErr = engine.PendingWorkSnapshot()
+		return snapshotErr
 	})
-	return resp, err
+	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		return serverapi.RuntimeListPendingWorkResponse{}, nil
+	}
+	return response, err
+}
+
+func (s *Service) RemovePendingWork(ctx context.Context, req serverapi.RuntimeRemovePendingWorkRequest) (serverapi.RuntimeRemovePendingWorkResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeRemovePendingWorkResponse{}, err
+	}
+	var response serverapi.RuntimeRemovePendingWorkResponse
+	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		var removeErr error
+		response.Restoration, removeErr = engine.RemovePendingWork(callbackCtx, req.ItemID)
+		var notPending *runtimeinput.PendingWorkRemovalError
+		if errors.As(removeErr, &notPending) {
+			return &serverapi.PendingWorkNotPendingError{ItemID: notPending.ItemID}
+		}
+		return removeErr
+	})
+	return response, err
 }
 
 func (s *Service) RecordPromptHistory(ctx context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {

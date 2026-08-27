@@ -690,7 +690,9 @@ func (e *Engine) emitQueuedUserMessageStatus(
 	if status == QueuedUserMessageAccepted {
 		event.Text = text
 	}
-	e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
+	if err := e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event}); err != nil {
+		e.surfaceRunError(fmt.Errorf("publish queued user message status: %w", err))
+	}
 }
 
 func (e *Engine) emitInterruptedHumanInputs(items []QueuedUserMessage) {
@@ -725,6 +727,9 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 	for _, item := range pending {
 		messages = append(messages, item)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
+	}
+	if len(pending) != 0 {
+		e.publishPendingWorkSnapshot()
 	}
 	return messages
 }

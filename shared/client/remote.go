@@ -846,8 +846,26 @@ func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRe
 	return response, nil
 }
 
-func (c *Remote) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-	return callControlRPC[serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](c, ctx, protocol.MethodRuntimeDiscardQueuedUserMessage, req)
+func (c *Remote) ListPendingWork(ctx context.Context, req serverapi.RuntimeListPendingWorkRequest) (serverapi.RuntimeListPendingWorkResponse, error) {
+	response, err := callControlRPC[serverapi.RuntimeListPendingWorkRequest, serverapi.RuntimeListPendingWorkResponse](c, ctx, protocol.MethodRuntimeListPendingWork, req)
+	if err != nil {
+		return serverapi.RuntimeListPendingWorkResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeListPendingWorkResponse{}, invalidResponseError("runtime pending work list", err)
+	}
+	return response, nil
+}
+
+func (c *Remote) RemovePendingWork(ctx context.Context, req serverapi.RuntimeRemovePendingWorkRequest) (serverapi.RuntimeRemovePendingWorkResponse, error) {
+	response, err := callControlRPC[serverapi.RuntimeRemovePendingWorkRequest, serverapi.RuntimeRemovePendingWorkResponse](c, ctx, protocol.MethodRuntimeRemovePendingWork, req)
+	if err != nil {
+		return serverapi.RuntimeRemovePendingWorkResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeRemovePendingWorkResponse{}, invalidResponseError("runtime pending work removal", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) RecordPromptHistory(ctx context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {

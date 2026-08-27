@@ -178,7 +178,7 @@ func (m *uiModel) beginSubmitAttempt(
 	return m.submitToken
 }
 
-func (c uiInputController) startCompaction(args string) tea.Cmd {
+func (c uiInputController) startCompaction(submittedText, args string) tea.Cmd {
 	m := c.model
 	if m.isCompacting() {
 		return nil
@@ -188,21 +188,31 @@ func (c uiInputController) startCompaction(args string) tea.Cmd {
 	c.startRuntimeOperationAffordance()
 	m.logf("compaction.start args_chars=%d", len(strings.TrimSpace(args)))
 	m.layout().syncViewport()
-	return tea.Batch(c.compactCmd(requestID, args), m.reconcileSpinnerTicking(false))
+	return tea.Batch(c.compactCmd(requestID, submittedText, args), m.reconcileSpinnerTicking(false))
 }
 
-func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, args string) tea.Cmd {
+func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, submittedText, args string) tea.Cmd {
 	m := c.model
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
 			return compactDoneMsg{requestID: requestID, err: errors.New("runtime engine is not configured")}
 		}
+		var guidance *string
+		if value := strings.TrimSpace(args); value != "" {
+			guidance = &value
+		}
+		if strings.TrimSpace(submittedText) == "" {
+			submittedText = "/compact"
+		}
 		return compactDoneMsg{
 			requestID: requestID,
 			err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{
 				RequestID: requestID,
-				Args:      args,
+				Admission: runtimeinput.ManualCompactionAdmission{
+					Guidance:         guidance,
+					RestorationInput: submittedText,
+				},
 			}),
 		}
 	}

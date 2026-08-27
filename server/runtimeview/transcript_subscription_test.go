@@ -14,6 +14,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -260,8 +261,12 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 			}()},
 			Text: "inspect",
 		}},
-		InFlightTools:    []runtime.TranscriptLiveToolStart{{StepID: transcriptProjectionStepID, ToolCallID: "call-1", ToolName: "shell"}},
-		QueuedMessages:   []runtime.QueuedUserMessage{{ID: queueItemID.String(), Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value("queued")}}},
+		InFlightTools: []runtime.TranscriptLiveToolStart{{StepID: transcriptProjectionStepID, ToolCallID: "call-1", ToolName: "shell"}},
+		PendingWork: runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{{
+			ID: queueItemID, Lane: runtimeinput.PendingWorkLaneQueue,
+			Kind: runtimeinput.PendingWorkItemKindMessage, State: runtimeinput.PendingWorkItemStatePending,
+			Message: &runtimeinput.PendingWorkMessage{Text: "queued"},
+		}}},
 		ActiveCompaction: &runtime.TranscriptCompactionState{StepID: transcriptProjectionStepID, Mode: "auto", Count: 3},
 		ContextUsage:     &runtime.ContextUsage{UsedTokens: 123, WindowTokens: 4000, CacheHitPercent: 25, HasCacheHitPercentage: true},
 		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive},
@@ -274,9 +279,8 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	if len(hydration.InFlightTools) != 1 || hydration.InFlightTools[0].ToolCallID != "call-1" {
 		t.Fatalf("tools = %+v", hydration.InFlightTools)
 	}
-	if len(hydration.QueuedMessages) != 1 || hydration.QueuedMessages[0].QueueItemID != queueItemID ||
-		hydration.QueuedMessages[0].Status != clientui.QueuedUserMessageAccepted {
-		t.Fatalf("queue = %+v", hydration.QueuedMessages)
+	if len(hydration.PendingWork.Items) != 1 || hydration.PendingWork.Items[0].ID != queueItemID {
+		t.Fatalf("Pending Work = %+v", hydration.PendingWork)
 	}
 	if hydration.ActiveCompaction == nil || hydration.ActiveCompaction.Count != 3 {
 		t.Fatalf("compaction = %+v", hydration.ActiveCompaction)

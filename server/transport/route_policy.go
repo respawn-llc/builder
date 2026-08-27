@@ -415,7 +415,9 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.RuntimeLiveWatchRequest:
 		return p.SessionID, true
-	case serverapi.RuntimeDiscardQueuedUserMessageRequest:
+	case serverapi.RuntimeListPendingWorkRequest:
+		return p.SessionID, true
+	case serverapi.RuntimeRemovePendingWorkRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeRecordPromptHistoryRequest:
 		return p.SessionID, true

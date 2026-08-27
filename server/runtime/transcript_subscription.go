@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 
 	"github.com/google/uuid"
 )
@@ -19,7 +20,7 @@ type TranscriptHydrationSnapshot struct {
 	ActiveThinkingStatus    *TranscriptThinkingStatusState
 	ActiveReasoningTraces   []TranscriptReasoningTraceState
 	InFlightTools           []TranscriptLiveToolStart
-	QueuedMessages          []QueuedUserMessage
+	PendingWork             runtimeinput.PendingWork
 	ActiveCompaction        *TranscriptCompactionState
 	CompactionCount         int
 	ContextUsage            *ContextUsage
@@ -79,9 +80,9 @@ func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot 
 	}
 	snapshot := chat.deliverySnapshot()
 	thinkingStatus, reasoningTraces := e.transcriptRuntimeState().ReasoningSnapshot()
-	var queuedMessages []QueuedUserMessage
-	if e.messageFlow != nil {
-		queuedMessages = e.messageFlow.PendingUserMessages()
+	pendingWork, err := e.PendingWorkSnapshot()
+	if err != nil {
+		e.surfaceRunError(err)
 	}
 	usage := e.ContextUsage()
 	return TranscriptHydrationSnapshot{
@@ -93,7 +94,7 @@ func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot 
 		ActiveThinkingStatus:    thinkingStatus,
 		ActiveReasoningTraces:   reasoningTraces,
 		InFlightTools:           e.transcriptRuntimeState().LiveToolSnapshot(),
-		QueuedMessages:          queuedMessages,
+		PendingWork:             pendingWork,
 		ActiveCompaction:        e.compactionRuntimeState().ActiveSnapshot(),
 		CompactionCount:         e.CompactionCount(),
 		ContextUsage:            &usage,

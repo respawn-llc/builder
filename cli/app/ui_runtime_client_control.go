@@ -4,7 +4,9 @@ import (
 	"context"
 	"strings"
 
+	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -249,7 +251,7 @@ func (c *sessionRuntimeClient) CompactRuntime(ctx context.Context, req clientui.
 		return struct{}{}, c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{
 			SessionID: c.sessionID,
 			RequestID: req.RequestID,
-			Args:      req.Args,
+			Admission: req.Admission,
 		})
 	})
 	return err
@@ -274,14 +276,22 @@ func (c *sessionRuntimeClient) interruptRuntimeCandidate() (runtimeTupleCandidat
 	return candidate, nil
 }
 
-func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-		return c.controls.DiscardQueuedUserMessage(ctx, serverapi.RuntimeDiscardQueuedUserMessageRequest{SessionID: c.sessionID, QueueItemID: queueItemID})
+func (c *sessionRuntimeClient) RemovePendingWork(queueItemID string) bool {
+	pendingWork, ok := c.controls.(apicontract.RuntimePendingWorkService)
+	if !ok {
+		return false
+	}
+	itemID, err := runtimeids.ParseQueueItemID(queueItemID)
+	if err != nil {
+		return false
+	}
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeRemovePendingWorkResponse, error) {
+		return pendingWork.RemovePendingWork(ctx, serverapi.RuntimeRemovePendingWorkRequest{SessionID: c.sessionID, ItemID: itemID})
 	})
 	if err != nil {
 		return false
 	}
-	return resp.Discarded
+	return resp.Restoration.Message != nil
 }
 
 func (c *sessionRuntimeClient) RecordPromptHistory(text string) error {
