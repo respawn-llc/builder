@@ -202,7 +202,9 @@ const retainedErrorSchema = z
   .strict();
 
 export function decodeWorktreeSetupRetainedError(error: unknown): WorktreeSetupRetainedError | null {
-  if (!(error instanceof RpcError) || error.code !== rpcErrorCodes.worktreeSetupRetained) return null;
+  if (!(error instanceof RpcError) || error.code !== rpcErrorCodes.workflowWorktreeSetupRetained) {
+    return null;
+  }
   const parsed = retainedErrorSchema.safeParse(error.data);
   return parsed.success
     ? new WorktreeSetupRetainedError(
