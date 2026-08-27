@@ -257,7 +257,7 @@ func (e routePolicyExecutor) authorizeScopeFacts(
 		}
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionDraftHandoffProject:
-		return e.gateway.requireSessionDraftHandoffProject(ctx, state, scopeParams.sessionID)
+		return e.gateway.requireSessionInActiveProjectOrAttached(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionAttachedProject:
 		return e.gateway.requireSessionInAttachedProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeAttachedSession:
@@ -509,54 +509,17 @@ func (g *Gateway) requireSessionInActiveProject(ctx context.Context, state *conn
 	return nil
 }
 
-func (g *Gateway) requireSessionDraftHandoffProject(ctx context.Context, state *connectionState, sessionID string) error {
-	projectID, err := g.activeProjectID(ctx, state)
-	if err != nil {
-		return err
-	}
+func (g *Gateway) requireSessionInActiveProjectOrAttached(ctx context.Context, state *connectionState, sessionID string) error {
 	trimmedSessionID := strings.TrimSpace(sessionID)
 	if trimmedSessionID == "" {
 		return errors.New("session id is required")
 	}
-	metadataStore := g.deps.MetadataStore()
-	if metadataStore == nil {
-		return errors.New("metadata store is required")
-	}
-	belongs, err := metadataStore.SessionBelongsToProject(ctx, trimmedSessionID, projectID)
-	if err != nil {
-		return err
-	}
-	if belongs {
+	if state != nil &&
+		state.attachedSession != nil &&
+		state.attachedSession.String() == trimmedSessionID {
 		return nil
 	}
-	record, err := session.ResolvePersistedSessionRecord(ctx, metadataStore, trimmedSessionID)
-	if err != nil {
-		return err
-	}
-	reminder := record.Meta.RebindReminder
-	if reminder == nil {
-		return sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
-	}
-	normalized, err := session.NormalizeSessionRebindReminder(*reminder)
-	if err != nil {
-		return err
-	}
-	if normalized.Kind != session.SessionRebindReminderSucceeded ||
-		normalized.SourceProject.ID != projectID {
-		return sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
-	}
-	belongsToTarget, err := metadataStore.SessionBelongsToProject(
-		ctx,
-		trimmedSessionID,
-		normalized.TargetProject.ID,
-	)
-	if err != nil {
-		return err
-	}
-	if !belongsToTarget {
-		return sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
-	}
-	return nil
+	return g.requireSessionInActiveProject(ctx, state, trimmedSessionID)
 }
 
 func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectionState, sessionID string) error {

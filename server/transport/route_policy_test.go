@@ -129,9 +129,17 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		t.Fatal("active project foreign latest final answer unexpectedly allowed")
 	}
 	draftRoute := routeForTest(t, protocol.MethodSessionPersistInputDraft)
+	reboundSessionID, err := runtimeids.ParseSessionID(fixture.reboundSessionID)
+	if err != nil {
+		t.Fatalf("parse rebound Session ID: %v", err)
+	}
+	draftState := &connectionState{
+		attachedProject: fixture.bindingA.ProjectID,
+		attachedSession: &reboundSessionID,
+	}
 	if err := executor.authorizeScope(
 		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		draftState,
 		draftRoute,
 		serverapi.SessionPersistInputDraftRequest{
 			ClientRequestID: "rebind-draft",
@@ -144,6 +152,18 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	if err := executor.authorizeScope(
 		ctx,
 		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		draftRoute,
+		serverapi.SessionPersistInputDraftRequest{
+			ClientRequestID: "detached-rebind-draft",
+			SessionID:       fixture.reboundSessionID,
+			Input:           "must remain inaccessible",
+		},
+	); err == nil {
+		t.Fatal("detached source-project draft mutation unexpectedly allowed")
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		draftState,
 		draftRoute,
 		serverapi.SessionPersistInputDraftRequest{
 			ClientRequestID: "foreign-draft",
@@ -567,13 +587,6 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 	)
 	if err != nil {
 		t.Fatalf("session.Create rebound: %v", err)
-	}
-	if err := reboundStore.SetSessionRebindReminder(&session.SessionRebindReminder{
-		Kind:          session.SessionRebindReminderSucceeded,
-		SourceProject: serverapi.ProjectReference{ID: bindingA.ProjectID, Name: bindingA.ProjectName},
-		TargetProject: serverapi.ProjectReference{ID: bindingB.ProjectID, Name: bindingB.ProjectName},
-	}); err != nil {
-		t.Fatalf("SetSessionRebindReminder rebound: %v", err)
 	}
 	if err := reboundStore.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable rebound: %v", err)
