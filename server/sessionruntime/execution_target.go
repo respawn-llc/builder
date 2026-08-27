@@ -141,7 +141,7 @@ func (a *Authority) RunWorktreeTransition(
 				},
 			)
 		})
-		if errors.Is(err, runtime.ErrReviewerRunning) ||
+		if errors.Is(err, runtime.ErrReviewerActive) ||
 			errors.Is(err, runtime.ErrWorktreeDeleteBlockedByQueuedWork) {
 			err = errors.Join(worktreecontract.ErrWorktreeBlocked, err)
 		}
@@ -342,7 +342,7 @@ func hasBlockingRuntimeActivity(resource *agentResource) bool {
 			engine.HasQueuedUserWork() ||
 			engine.HasScheduledQueuedUserWork() ||
 			engine.CurrentNodeExecutionConfigured() ||
-			engine.ReviewerRunning()
+			engine.ReviewerActive()
 	}
 	return active
 }

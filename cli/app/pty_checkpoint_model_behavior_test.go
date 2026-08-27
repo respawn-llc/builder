@@ -419,10 +419,11 @@ func newPendingPTYDetailCheckpointModel(t *testing.T) (*uiModel, uuid.UUID) {
 		t.Fatalf("parse detail test session ID: %v", err)
 	}
 	model.pendingDetailTranscript = &uiPendingDetailTranscriptRequest{
-		id:        requestID,
-		sessionID: sessionID,
-		request:   clientui.TranscriptPageRequest{},
-		cancel:    cancel,
+		id:         requestID,
+		sessionID:  sessionID,
+		request:    clientui.TranscriptPageRequest{},
+		detailMode: true,
+		cancel:     cancel,
 	}
 	t.Cleanup(model.Close)
 	return model, requestID

@@ -107,6 +107,18 @@ func WithUITheme(theme string) UIOption {
 	}
 }
 
+func WithUINativeProgressBar(enabled bool) UIOption {
+	return func(m *uiModelConstruction) {
+		m.tuiNativeProgressBar = enabled
+	}
+}
+
+func WithUITerminalOutput(output *uiTerminalOutput) UIOption {
+	return func(m *uiModelConstruction) {
+		m.terminalOutput = output
+	}
+}
+
 func WithUIMarkdownLinkPresentation(
 	linkPresentation transcriptrender.MarkdownLinkPresentation,
 ) UIOption {

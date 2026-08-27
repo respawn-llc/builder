@@ -68,6 +68,26 @@ func TestResolveRuntimeActivityUsesOnlyLiveResolverInputs(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeActivityPreservesReviewerPhase(t *testing.T) {
+	for _, want := range []clientui.ReviewerActivity{
+		clientui.ReviewerActivityInvoking,
+		clientui.ReviewerActivityAddressingFeedback,
+	} {
+		t.Run(string(want), func(t *testing.T) {
+			activity, err := ResolveRuntimeActivity(ResolverSnapshot{
+				Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
+				Reviewer: want,
+			})
+			if err != nil {
+				t.Fatalf("ResolveRuntimeActivity: %v", err)
+			}
+			if activity.Reviewer != want {
+				t.Fatalf("Reviewer activity = %q, want %q", activity.Reviewer, want)
+			}
+		})
+	}
+}
+
 func TestResolveRuntimeActivityCopiesEveryRuntimeOwnedActiveKind(t *testing.T) {
 	for _, kind := range []clientui.RuntimeActivityActiveKind{
 		clientui.RuntimeActivityActiveKindUserTurn,
