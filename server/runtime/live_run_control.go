@@ -10,6 +10,7 @@ import (
 
 	"core/server/llm"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/textutil"
 )
 
@@ -246,7 +247,8 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 		item     QueuedUserMessage
 		accepted bool
 	}, error) {
-		item, accepted, operationErr := e.queueMessageForActiveRunRaw(operationCtx, ctx, message, onActive, beforeQueue, accept)
+		_ = operationCtx
+		item, accepted, operationErr := e.queueMessageForActiveRunRaw(ctx, message, onActive, beforeQueue, accept)
 		return struct {
 			item     QueuedUserMessage
 			accepted bool
@@ -255,7 +257,7 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	return result.item, result.accepted, err
 }
 
-func (e *Engine) queueMessageForActiveRunRaw(operationCtx context.Context, ctx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
+func (e *Engine) queueMessageForActiveRunRaw(ctx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
 	if e == nil {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}
@@ -305,21 +307,27 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx context.Context, ctx c
 			return false, context.Canceled
 		}
 		committed = true
-		e.outputMutationMu.Lock()
-		queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item, queuedUserMessageAssociation{
-			admission: runtimeOperationSequence(operationCtx),
-		})
-		if queueErr != nil {
-			e.outputMutationMu.Unlock()
+		mutationErr := e.mutatePendingWork(true, func(admission *pendingWorkSteerAdmission) (bool, error) {
+			e.outputMutationMu.Lock()
+			defer e.outputMutationMu.Unlock()
+			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item, queuedUserMessageAssociation{
+				lane:           runtimeinput.PendingWorkLaneSteer,
+				steerAdmission: admission,
+			})
+			if queueErr != nil {
+				return false, queueErr
+			}
+			item = queuedItem
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			return true, nil
+		}, nil)
+		if mutationErr != nil {
 			queueItemID := mustQueueItemID(item.ID)
 			e.liveRun.finishQueueItemPublication(queueItemID)
 			e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 			e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
-			return false, queueErr
+			return false, mutationErr
 		}
-		item = queuedItem
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-		e.outputMutationMu.Unlock()
 		return true, nil
 	})
 	if err := commandAcceptanceResult(accepted, err); err != nil {
@@ -331,7 +339,6 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx context.Context, ctx c
 	} else {
 		e.scheduleQueuedUserInjectionsIfIdle()
 	}
-	e.publishPendingWorkSnapshot()
 	return item, true, nil
 }
 
@@ -399,19 +406,20 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 		rawIDs = append(rawIDs, id)
 	}
 	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
-	e.outputMutationMu.Lock()
 	failed := map[runtimeids.QueueItemID]struct{}{}
-	removed := e.messageFlow.DrainPendingUserInjectionsByID(stringIDs)
-	for _, item := range removed {
-		failed[mustQueueItemID(item.ID)] = struct{}{}
-	}
-	pendingWork, pendingWorkErr := e.PendingWorkSnapshot()
-	e.emitInterruptedHumanInputs(removed)
-	e.outputMutationMu.Unlock()
-	if pendingWorkErr != nil {
-		e.surfaceRunError(pendingWorkErr)
-	} else if len(removed) != 0 {
-		e.publishPendingWork(pendingWork)
+	var removed []QueuedUserMessage
+	if err := e.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
+		removed = e.messageFlow.DrainPendingUserInjectionsByID(stringIDs)
+		for _, item := range removed {
+			failed[mustQueueItemID(item.ID)] = struct{}{}
+		}
+		return len(removed) != 0, nil
+	}, func() {
+		e.outputMutationMu.Lock()
+		e.emitInterruptedHumanInputs(removed)
+		e.outputMutationMu.Unlock()
+	}); err != nil {
+		e.surfaceRunError(err)
 	}
 	e.liveRun.clearStoppedQueueItems(failed)
 }
@@ -440,14 +448,8 @@ func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserMessage) []queue
 		}
 		filtered = append(filtered, item)
 	}
-	pendingWork, pendingWorkErr := e.PendingWorkSnapshot()
 	e.emitInterruptedHumanInputs(removed)
 	e.outputMutationMu.Unlock()
-	if pendingWorkErr != nil {
-		e.surfaceRunError(pendingWorkErr)
-	} else if len(removed) != 0 {
-		e.publishPendingWork(pendingWork)
-	}
 	return filtered
 }
 

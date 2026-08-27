@@ -158,6 +158,8 @@
 - Reopening the Session restores its Fast Mode setting.
 - Before a new Session's first prompt, all settings and message text are one draft. An untouched New Chat uses the same effective Agent and setting selection as Session launch for its Project workspace. The server persists a pre-Session draft when its message contains nonblank content or at least one setting differs from the current authoritative defaults. Saving a blank message with all current defaults removes that artifact. The first approved action materializes the complete draft atomically into a durable Session. Materialization does not start an Agent Turn or validate provider or runtime readiness. The triggering text, prompt command, or Goal operation then runs as a separate ordinary Session operation. When materialization cannot complete, New Chat keeps the exact workspace draft and shows the failure. When materialization succeeds but the triggering operation fails or is not received, the Session remains with its composer draft and Kent does not automatically replay the trigger. After a connection interruption, Chat refreshes server state and continues from the authoritative workspace draft or a Session whose identity it already received. If a committed materialization response is lost, the Session remains in the Session browser while the lazy route refreshes to a new empty Chat; Desktop does not infer the Session, switch to it, retry materialization, or replay the trigger. Materialization does not lock Agent; Agent remains editable until the first model request, and other changes apply through normal runtime controls.
 - Requested setting values appear immediately and reject repeat activation while pending. On failure, the control returns to the latest server value and shows notification feedback. Other non-Agent settings remain available while work runs and affect only later applicable work, never work already in flight.
+- Session Name, Thinking, Fast Mode, Supervisor, Questions, and Auto-compaction persist immediately while an Agent Step runs and never enter Pending Work.
+- Every connected Desktop reflects the server's published setting state and typed transient feedback.
 - Sending remains available during a pending setting change. Server operation order determines whether it observes the old or requested value.
 - The unsent message and complete settings draft persist and restore together across navigation, relaunch, and server restart. A materialized Session draft also survives workspace detachment. Detaching a workspace from a Project discards that Project workspace's pre-Session draft. The server owns this one draft; there is no collaborative composer editing.
 - Pre-Session message and setting updates follow server operation order for their Project workspace. Each update preserves the latest unrelated draft fields and must not restore an older message or setting snapshot.
@@ -172,7 +174,7 @@
 - `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation except that it accepts an active workspace-path suggestion.
 - `/compact` runs manual context compaction. Text after the command is optional compaction guidance and follows the same behavior as the terminal command.
 - `/compact` enters Pending Work in accepted Session mutation order.
-- Pending Work shows the exact slash form, including guidance.
+- Pending Work shows canonical `/compact` followed by normalized guidance when guidance is present.
 - Compaction is selected as an Agent Step only after earlier accepted short mutations apply and is never sent to the model as user text.
 - Ctrl+C is never a Desktop Stop shortcut.
 - On macOS, Command-period stops the current Session's stoppable active work immediately.
@@ -183,14 +185,18 @@
 - The composer grows to one-third of available Chat height, then scrolls internally. Up and Down recall prompt history only at whole-buffer boundaries; returning below the newest history item restores the pre-history draft, and editing recalled text detaches it from history.
 - `@` path suggestions search the Session effective working directory. They include files, derived directories, and hidden paths; exclude `.git`; preserve server fuzzy order; and never scan the desktop filesystem or transfer the whole repository.
 - At most seven path suggestions are visible. Up and Down select them; Enter, Tab, or pointer activation inserts the exact `@`-prefixed repository-relative path, with `/` for a directory, without sending. Escape hides suggestions until the query changes.
-- Pending Work appears behind the composer's top edge only while Queue or Steer items remain. It is an unlabeled, scrollable sheet no taller than about five two-line items, with Queue items first in first-in-first-out order, then Steer items in first-in-first-out order. Each item shows no more than two lines and has an accessible Discard action.
-- Normal human-message and manual-compaction admission rejects with a typed capacity failure when the server independently observes at least 100 combined pending Queue and Steer items. Rejection changes no Pending Work membership and leaves the initiating input unchanged.
+- Pending Work appears behind the composer's top edge only while Queue or Steer items remain. It is an unlabeled, scrollable sheet no taller than about five two-line items, with Queue items first in Queue order, then Steer items in server acceptance order across human messages, manual compaction, and Worktree transitions. Each item shows no more than two lines and has an accessible Discard action.
+- Normal human-message, manual-compaction, and Active-Runtime Worktree-transition admission rejects with a typed capacity failure when the server independently observes at least 100 combined pending Queue and Steer items. Rejection changes no Pending Work membership and leaves the initiating input unchanged.
 - Concurrent normal admissions may pass below the limit and temporarily exceed 100 items. Restoring definitely uncommitted human input may also exceed 100 items. Kent never evicts accepted work to enforce the limit, and later normal admission rejects while the independently observed total remains at least 100.
 - Manual compaction is an ordinary Steer item in this sheet. Repeated requests remain separate items and Desktop does not deduplicate them.
-- Discarding a pending compaction restores its exact displayed slash command to the initiating composer, including optional guidance. Button-origin compaction restores `/compact`. Other clients observe only the authoritative removal.
-- Pending Work has no edit, reorder, submit-now, clear-all, full-text preview, or secondary detail view. On successful discard, text returns only to the initiating client's composer: verbatim into an empty composer, otherwise after one newline. Failed discard leaves both item and composer unchanged and shows notification feedback.
+- Active-Runtime Worktree enter and leave are ordinary Steer items in this sheet.
+- Every operational item uses its canonical command presentation regardless of whether a typed command or a control initiated it.
+- Discarding a pending compaction restores its canonical displayed command to the discarding composer. A compaction with no guidance, including the Compact action, restores `/compact`. Other clients observe only the authoritative removal.
+- Discarding a pending Worktree transition restores canonical `/wt switch <selector>` or `/wt leave` to the discarding composer and emits no Worktree outcome.
+- Pending Work has no edit, reorder, submit-now, clear-all, full-text preview, or secondary detail view. On successful discard, text returns only to the discarding client's composer: verbatim into an empty composer, otherwise after one newline. Failed discard leaves both item and composer unchanged and shows notification feedback.
 - The Pending Work sheet preserves its position while inspecting older items and follows additions only at its newest edge.
 - When Desktop observes the source-agnostic interruption event defined by the Runtime Steering specification, it restores the listed removed human message text in server order and then appends its current composer text. Every observing live Desktop does this independently; a disconnected, closed, or otherwise non-observing Desktop loses the stopped pending text.
+- When Desktop observes a definitely-unapplied technical restoration, it restores the canonical presentation through the same composer merge behavior. Every observing live Desktop restores the same broadcast independently; the restoration is not replayed after reconnect.
 
 ## Context And Compaction
 
@@ -286,6 +292,7 @@
 - `/worktree new`, `/worktree create`, `/wt new`, and `/wt create` open the Worktree sidebar directly in its creation state.
 - `new` and `create` accept no arguments. Desktop does not support a raw branch or path bypass.
 - `/worktree switch <target>` and `/wt switch <target>` apply the ordinary Switch action directly without opening the sidebar. They require exactly one target selector.
+- `/worktree leave` and `/wt leave` apply the ordinary Leave action directly without opening the sidebar and accept no target selector.
 - `/worktree delete [target]`, `/worktree remove [target]`, `/worktree rm [target]`, and their `/wt` forms open the ordinary delete flow.
 - A delete command without a target selects the Session's current Worktree. A delete command with a target resolves that selector authoritatively before it opens the preview popup.
 - Delete commands accept at most one target selector.
@@ -330,12 +337,15 @@
 - A successful Switch acknowledgement closes the Worktree sidebar immediately.
 - Desktop does not optimistically change the current target. The under-composer control and selected list row change only after the authoritative target update arrives.
 - For an Active Session Runtime, the server accepts the target change without waiting for it to finish.
-- Desktop adds no second waiting state for an accepted target change.
+- An accepted Active-Runtime target change remains visible in Pending Work until it starts.
+- Once the transition starts, it leaves Pending Work and Desktop adds no second waiting state.
+- Kent resolves a Worktree selector and revalidates mutable safety when the pending transition starts.
 - Accepted human messages retain their own first-in, first-out order, but a Worktree transition takes the next eligible boundary before human model work that is still queued and has not started.
 - A Worktree transition never preempts an Agent Step already running.
 - Human messages remain accepted while a Worktree transition is in progress.
 - The Worktree Operation acknowledgement and a later successful transition completion show no Toast or other success notice.
 - A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic through Sonner, and follows the server's existing model-visible failure-Steer behavior.
+- A selector or other user-correctable Worktree failure after acceptance does not restore the command to the composer.
 - The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
 - Each Worktree row uses the display name as its title.
 - Before adoption gives an External worktree a Kent display name, its title is the branch name when available. A detached External worktree uses the final component of its canonical path as the title.

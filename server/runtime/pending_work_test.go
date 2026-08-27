@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,12 +23,12 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	})
 	guidance := "keep details"
 	admission := runtimeinput.ManualCompactionAdmission{
-		Guidance:         &guidance,
-		RestorationInput: "/compact   keep details",
+		Guidance: &guidance,
 	}
+	requestID := runtimeids.NewCompactionRequestID()
 	if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
 		context.Background(),
-		runtimeids.NewCompactionRequestID(),
+		requestID,
 		admission,
 		nil,
 	); err != nil {
@@ -44,20 +45,21 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	if len(snapshot.Items) != 4 {
 		t.Fatalf("Pending Work = %+v", snapshot.Items)
 	}
-	if snapshot.Items[0].ID.String() != firstSteer.ID ||
-		snapshot.Items[1].Kind != runtimeinput.PendingWorkItemKindManualCompaction ||
-		snapshot.Items[2].ID.String() != secondSteer.ID ||
-		snapshot.Items[3].ID.String() != queued.ID {
+	if snapshot.Items[0].ID.String() != queued.ID ||
+		snapshot.Items[1].ID.String() != firstSteer.ID ||
+		snapshot.Items[2].Kind != runtimeinput.PendingWorkItemKindManualCompaction ||
+		snapshot.Items[2].ID.String() != requestID.String() ||
+		snapshot.Items[3].ID.String() != secondSteer.ID {
 		t.Fatalf("Pending Work order = %+v", snapshot.Items)
 	}
-	if snapshot.Items[1].ManualCompaction == nil ||
-		snapshot.Items[1].ManualCompaction.Guidance == nil ||
-		*snapshot.Items[1].ManualCompaction.Guidance != guidance ||
-		snapshot.Items[1].ManualCompaction.RestorationInput != admission.RestorationInput {
-		t.Fatalf("manual compaction = %+v", snapshot.Items[1])
+	if snapshot.Items[2].ManualCompaction == nil ||
+		snapshot.Items[2].ManualCompaction.Guidance == nil ||
+		*snapshot.Items[2].ManualCompaction.Guidance != guidance ||
+		snapshot.Items[2].CanonicalInput != "/compact keep details" {
+		t.Fatalf("manual compaction = %+v", snapshot.Items[2])
 	}
-	if snapshot.Items[3].Lane != runtimeinput.PendingWorkLaneQueue {
-		t.Fatalf("post-turn item lane = %q", snapshot.Items[3].Lane)
+	if snapshot.Items[0].Lane != runtimeinput.PendingWorkLaneQueue {
+		t.Fatalf("post-turn item lane = %q", snapshot.Items[0].Lane)
 	}
 
 	releaseMaintenance()
@@ -66,7 +68,7 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	for index := range runtimeinput.PendingWorkCapacity {
-		if _, err := engine.messageFlow.QueueUserMessage(fmt.Sprintf("pending %d", index)); err != nil {
+		if _, err := engine.QueueUserMessage(context.Background(), fmt.Sprintf("pending %d", index)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -91,6 +93,16 @@ func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
+	var replacementMu sync.Mutex
+	var replacement runtimeinput.PendingWork
+	engine.cfg.OnEvent = func(event Event) {
+		if event.Kind != EventPendingWorkReplaced || event.PendingWork == nil {
+			return
+		}
+		replacementMu.Lock()
+		replacement = clonePendingWork(*event.PendingWork)
+		replacementMu.Unlock()
+	}
 
 	message := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
 		return engine.QueueUserMessageForAutoDrain(context.Background(), "restore message")
@@ -99,14 +111,20 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 		return runtimeids.ParseQueueItemID(message.ID)
 	})
 	restoration, err := engine.RemovePendingWork(context.Background(), messageID)
-	if err != nil || restoration.Message == nil || restoration.Message.Text != "restore message" {
+	if err != nil || restoration.Kind != runtimeinput.PendingWorkItemKindMessage ||
+		restoration.CanonicalInput != "restore message" {
 		t.Fatalf("message removal = %+v/%v", restoration, err)
 	}
+	replacementMu.Lock()
+	messageReplacement := clonePendingWork(replacement)
+	replacementMu.Unlock()
+	if pendingWorkTestContains(messageReplacement, messageID) {
+		t.Fatalf("message removal replacement = %+v", messageReplacement.Items)
+	}
 
-	guidance := "tighten  spacing"
+	guidance := "tighten spacing"
 	admission := runtimeinput.ManualCompactionAdmission{
-		Guidance:         &guidance,
-		RestorationInput: "/compact   tighten  spacing",
+		Guidance: &guidance,
 	}
 	if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
 		context.Background(),
@@ -130,9 +148,15 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 		t.Fatalf("hydrated Pending Work = %+v", hydrated.Items)
 	}
 	restoration, err = engine.RemovePendingWork(context.Background(), compaction.ID)
-	if err != nil || restoration.ManualCompaction == nil ||
-		restoration.ManualCompaction.Input != admission.RestorationInput {
+	if err != nil || restoration.Kind != runtimeinput.PendingWorkItemKindManualCompaction ||
+		restoration.CanonicalInput != "/compact tighten spacing" {
 		t.Fatalf("compaction removal = %+v/%v", restoration, err)
+	}
+	replacementMu.Lock()
+	compactionReplacement := clonePendingWork(replacement)
+	replacementMu.Unlock()
+	if pendingWorkTestContains(compactionReplacement, compaction.ID) {
+		t.Fatalf("compaction removal replacement = %+v", compactionReplacement.Items)
 	}
 	if _, err := engine.RemovePendingWork(context.Background(), compaction.ID); !errors.Is(err, runtimeinput.ErrPendingWorkNotPending) {
 		t.Fatalf("repeated removal = %v", err)
@@ -141,47 +165,136 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 	releaseMaintenance()
 }
 
-func TestStoppedHumanInputPublishesCapturedPendingWorkReplacement(t *testing.T) {
-	var interruption *HumanInputInterruptedEvent
-	var replacement *runtimeinput.PendingWork
+func TestPendingOperationalWorkLeavesProjectionBeforeDomainExecution(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
-	first := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
-		return engine.QueueUserMessageForAutoDrain(context.Background(), "stopped")
+	requestID := runtimeids.NewCompactionRequestID()
+	itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+		return serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
 	})
-	second := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
-		return engine.QueueUserMessageForAutoDrain(context.Background(), "retained")
-	})
+	domainStarted := make(chan bool, 1)
+	var replacementMu sync.Mutex
+	var replacement runtimeinput.PendingWork
 	engine.cfg.OnEvent = func(event Event) {
 		switch event.Kind {
-		case EventHumanInputInterrupted:
-			interruption = event.HumanInputInterrupted
-			if _, err := engine.messageFlow.QueueUserMessage("admitted by interruption observer"); err != nil {
-				t.Fatal(err)
-			}
 		case EventPendingWorkReplaced:
-			replacement = event.PendingWork
+			if event.PendingWork != nil {
+				replacementMu.Lock()
+				replacement = clonePendingWork(*event.PendingWork)
+				replacementMu.Unlock()
+			}
+		case EventCompactionStarted, EventCompactionFailed:
+			if event.Compaction == nil || event.Compaction.RequestID == nil || *event.Compaction.RequestID != requestID {
+				return
+			}
+			replacementMu.Lock()
+			pending := pendingWorkTestContains(replacement, itemID)
+			replacementMu.Unlock()
+			select {
+			case domainStarted <- pending:
+			default:
+			}
 		}
 	}
 
-	engine.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{
-		pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
-			return runtimeids.ParseQueueItemID(first.ID)
-		}): {},
-	})
-
-	if interruption == nil || len(interruption.Items) != 1 || interruption.Items[0].QueueItemID != first.ID {
-		t.Fatalf("interruption = %+v", interruption)
+	if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
+		context.Background(),
+		requestID,
+		runtimeinput.ManualCompactionAdmission{},
+		nil,
+	); err != nil {
+		t.Fatal(err)
 	}
-	if replacement == nil || len(replacement.Items) != 1 || replacement.Items[0].ID.String() != second.ID {
-		t.Fatalf("captured replacement = %+v", replacement)
+	if !pendingWorkTestContains(pendingWorkTestSnapshot(t, engine), itemID) {
+		t.Fatal("manual compaction was not pending before the boundary")
+	}
+	releaseMaintenance()
+
+	select {
+	case stillPending := <-domainStarted:
+		if stillPending {
+			t.Fatal("manual compaction remained in Pending Work after domain execution started")
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("manual compaction domain execution did not start")
+	}
+}
+
+func TestPendingWorkReplacementDeliveryIsSerializedWithoutBlockingReads(t *testing.T) {
+	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
+	firstReplacementStarted := make(chan struct{})
+	releaseFirstReplacement := make(chan struct{})
+	var firstReplacement sync.Once
+	var replacementsMu sync.Mutex
+	var replacements []runtimeinput.PendingWork
+	engine.cfg.OnEvent = func(event Event) {
+		if event.Kind != EventPendingWorkReplaced || event.PendingWork == nil {
+			return
+		}
+		firstReplacement.Do(func() {
+			close(firstReplacementStarted)
+			<-releaseFirstReplacement
+			event.PendingWork.Items[0].CanonicalInput = "mutated event"
+		})
+		replacementsMu.Lock()
+		replacements = append(replacements, clonePendingWork(*event.PendingWork))
+		replacementsMu.Unlock()
+	}
+
+	type admissionResult struct {
+		item QueuedUserMessage
+		err  error
+	}
+	firstDone := make(chan admissionResult, 1)
+	go func() {
+		item, err := engine.QueueUserMessage(context.Background(), "first")
+		firstDone <- admissionResult{item: item, err: err}
+	}()
+	pendingWorkTestWait(t, firstReplacementStarted, "first Pending Work replacement")
+
+	readDone := make(chan runtimeinput.PendingWork, 1)
+	go func() {
+		snapshot, _ := engine.PendingWorkSnapshot()
+		readDone <- snapshot
+	}()
+	var snapshot runtimeinput.PendingWork
+	select {
+	case snapshot = <-readDone:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("Pending Work read blocked on replacement delivery")
+	}
+	if len(snapshot.Items) != 1 || snapshot.Items[0].CanonicalInput != "first" {
+		t.Fatalf("latest completed Pending Work = %+v", snapshot.Items)
+	}
+	snapshot.Items[0].CanonicalInput = "mutated read"
+
+	secondDone := make(chan admissionResult, 1)
+	go func() {
+		item, err := engine.QueueUserMessage(context.Background(), "second")
+		secondDone <- admissionResult{item: item, err: err}
+	}()
+	close(releaseFirstReplacement)
+	firstResult := <-firstDone
+	secondResult := <-secondDone
+	if firstResult.err != nil || secondResult.err != nil {
+		t.Fatalf("admissions = %v/%v", firstResult.err, secondResult.err)
+	}
+
+	replacementsMu.Lock()
+	gotReplacements := append([]runtimeinput.PendingWork(nil), replacements...)
+	replacementsMu.Unlock()
+	if len(gotReplacements) != 2 ||
+		len(gotReplacements[0].Items) != 1 ||
+		len(gotReplacements[1].Items) != 2 ||
+		gotReplacements[0].Items[0].ID.String() != firstResult.item.ID ||
+		gotReplacements[1].Items[0].ID.String() != firstResult.item.ID ||
+		gotReplacements[1].Items[1].ID.String() != secondResult.item.ID {
+		t.Fatalf("serialized replacements = %+v", gotReplacements)
 	}
 	current := pendingWorkTestSnapshot(t, engine)
-	if len(current.Items) != 2 {
-		t.Fatalf("current Pending Work = %+v", current.Items)
+	if current.Items[0].CanonicalInput != "first" {
+		t.Fatalf("snapshot was mutated through read/event payload: %+v", current.Items)
 	}
-
-	releaseMaintenance()
 }
 
 func pendingWorkTestEngine(t *testing.T, cfg Config) *Engine {
@@ -221,6 +334,15 @@ func pendingWorkTestSnapshot(t *testing.T, engine *Engine) runtimeinput.PendingW
 		t.Fatal(err)
 	}
 	return snapshot
+}
+
+func pendingWorkTestContains(pending runtimeinput.PendingWork, id runtimeids.QueueItemID) bool {
+	for _, item := range pending.Items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func pendingWorkTestMust[T any](t *testing.T, operation func() (T, error)) T {

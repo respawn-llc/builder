@@ -224,7 +224,8 @@ To respond, run: kent run steer <source-session-id> "message"
 ## Fast Mode And Context Usage
 
 - Fast Mode is a persisted Session Chat setting when the active provider supports first-party Responses priority service.
-- Changing Fast Mode during an Agent Step affects the next provider or compaction request and never changes the request already running.
+- Changing Fast Mode during an Agent Step persists and publishes immediately, affects the next provider or compaction request, and never changes the request already running.
+- A Fast Mode change creates no transcript row.
 - A supported request uses the provider's priority service tier when Fast Mode is enabled.
 - Disabled Fast Mode omits the provider's priority service tier.
 - Enabling Fast Mode for an unsupported provider fails without changing the Session setting.
@@ -255,9 +256,11 @@ To respond, run: kent run steer <source-session-id> "message"
 - A user message submitted while eager compaction is running waits behind that compaction and is then processed against the compacted context.
 - Eager compaction is speculative. Its failure does not change the preceding successful turn, retains the uncompacted context, uses the ordinary diagnostic reporting, and is not retried automatically.
 - `compaction_mode=none` disables manual and automatic compaction and lets provider context-overflow errors surface.
-- A manual compact request follows the Session's accepted mutation order.
+- A manual compact request is a typed Pending Work item and follows the Session's accepted mutation order.
 - Compaction is an Agent Step selected after earlier accepted short mutations apply according to the Runtime Steering specification.
 - A manual compact request is never model-visible user text.
+- Manual-compaction policy and eligibility are revalidated when the pending request starts.
+- Manual compaction has canonical presentation `/compact` followed by normalized guidance when present.
 - Repeated manual compact requests remain distinct.
 - Clients do not coalesce manual compact requests.
 - Each manual compact request receives its own typed outcome.
@@ -346,8 +349,9 @@ To respond, run: kent run steer <source-session-id> "message"
 - A client does not consider a question or approval answered until the server accepts the answer and returns or publishes the resolved shared state.
 - A running Workflow Task is steerable from every attached client, including chat, queued input, Goal control, settings, compaction, worktree, and process controls. The model may not submit a structured final answer invalid for the current Node. Inability to reach active execution is a runtime-unavailable error.
 - Worktree controls are available from every client. List and status are reads. Creation and deletion that do not switch the calling Session execute immediately.
-- Entering or leaving a Worktree for an Active Session Runtime accepts one Session mutation carrying the domain Worktree Operation identity.
-- Acceptance starts the independent Worktree transition and returns the established acknowledgement without waiting for completion.
+- Entering or leaving a Worktree for an Active Session Runtime accepts one typed Pending Work item carrying the domain Worktree Operation identity.
+- Acceptance returns the established acknowledgement without waiting for the next Step Boundary or transition completion.
+- Entering or leaving a Worktree for a dormant Session remains a direct Worktree operation.
 - The Worktree owner later applies the target, Working Directory, tool environment, and reminder or failure.
 - Each explicit Worktree transition is an independent domain operation. Kent does not return an earlier result for a matching retry, reject a different transition merely because another is pending, replay an ambiguous operation, or resume process-local pending transitions after restart.
 - Worktree deletion follows the concrete multi-Session and process blockers in the Runtime Steering and Workflow specifications.

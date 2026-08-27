@@ -23,16 +23,9 @@ const (
 )
 
 type exclusiveStepReservation = struct {
-	Kind                    exclusiveStepReservationKind
-	queueable               bool
-	pendingManualCompaction *pendingManualCompaction
-	cancelPendingCompaction context.CancelCauseFunc
-}
-
-type pendingManualCompaction struct {
-	itemID    runtimeids.QueueItemID
-	order     uint64
-	admission runtimeinput.ManualCompactionAdmission
+	Kind        exclusiveStepReservationKind
+	queueable   bool
+	pendingWork *pendingOperationalWork
 }
 
 type exclusiveStepLifecycle interface {
@@ -157,14 +150,12 @@ type messageLifecycle interface {
 	FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
 	DrainPendingUserInjections() []QueuedUserMessage
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
-	DrainPendingUserInjectionsByScope(scopeID runtimeids.ExecutionScopeID) []interruptedHumanSteering
-	DrainInterruptedUserInjections() []interruptedHumanSteering
 	PendingUserMessages() []QueuedUserMessage
 	PendingUserMessageEntries() []queuedUserMessage
 	RestorePendingUserInjections(items []queuedUserMessage)
-	QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
-	QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
-	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
+	QueueUserMessage(text string, association queuedUserMessageAssociation) (QueuedUserMessage, error)
+	QueueUserMessageWithID(item QueuedUserMessage, association queuedUserMessageAssociation) (QueuedUserMessage, error)
+	DiscardQueuedUserMessage(queueItemID string) (queuedUserMessage, bool)
 	HasPendingUserInjections() bool
 }
 
@@ -203,6 +194,9 @@ type phaseProtocolEnforcer interface {
 
 func (e *Engine) ensureOrchestrationCollaborators() {
 	e.collaboratorsOnce.Do(func() {
+		if e.pendingWork == nil {
+			e.pendingWork = newPendingWorkCoordinator()
+		}
 		if e.liveRun == nil {
 			e.liveRun = newLiveRunCoordinator(func(result LiveRunResult) {
 				e.publishLiveRunFinished(result)

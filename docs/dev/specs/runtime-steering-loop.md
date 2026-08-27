@@ -8,9 +8,9 @@
 - A mutation request alone never creates an Active Session Runtime.
 - The Active Session Runtime is authoritative for its live model, transcript, Pending Work, and Session-setting state.
 - Clients render server state and do not create another ordering authority.
-- Accepted Session mutations are applied one at a time in first-in, first-out acceptance order.
+- Boundary-required Session mutations are applied one at a time in acceptance order.
 - Kent promises no order between concurrent requests before one request is accepted.
-- Acceptance order governs short Session mutations.
+- Acceptance order governs operations that share the same boundary owner.
 - Acceptance order does not promise the same order for later provider, tool, process, Worktree, Reviewer, or Workflow execution.
 - Accepted mutations belong to the Session, not to one client connection.
 - Caller cancellation after acceptance stops only that caller's wait.
@@ -25,19 +25,30 @@
 - An Idle Active Session Runtime applies accepted short mutations without waiting for a prior Agent Step.
 - Post-turn Queue is a separate server-owned first-in, first-out message collection.
 - Post-turn Queue accepts each message as a distinct Queue Item and returns without waiting for its later eligible turn.
-- Thinking, Fast Mode, Reviewer, Questions, and automatic-compaction settings apply in acceptance order and affect later Agent Steps, never an Agent Step already running.
-- Model-visible technical entries and Runtime-affecting slash-command results apply in the same accepted order.
+- Session Name, Thinking, Fast Mode, Supervisor, Questions, and Auto-compaction changes persist immediately while an Agent Step is running.
+- Immediate setting changes enter neither Pending Work nor the Engine Intent Queue.
+- The server publishes each successful setting change and its typed transient feedback to every connected client.
+- A setting change affects later provider and compaction requests and never alters an Agent Step already running.
+- Setting changes create no model-visible entries or transcript rows.
+- An operator Thinking change and a Workflow-owned Thinking change have no relative ordering or precedence guarantee when they overlap.
+- Kent does not delay either change, assign a shared winner order, or reconcile the two owners. Request acceptance and response order do not determine the effective Thinking value.
+- The effective live Thinking value is whichever independently owned write applies last.
+- A Thinking write that has become authoritative remains applied if its own later state publication or notification fails.
+- A definitely-uncommitted Thinking write does not change the live value.
+- Another independently owned Thinking write may replace an authoritative value.
+- Boundary-required model-visible technical entries apply in accepted order.
 - A user foreground shell command reports its terminal result at the command boundary.
 - A foreground shell process may run while later short Session mutations apply.
 - A background process becomes independent after Kent reports it as backgrounded.
 - Background completion is delivered when applicable and never blocks unrelated model or tool work.
-- Manual compaction requests return after scheduling.
+- Manual compaction requests enter Pending Work and return after scheduling.
 - Each manual compaction request remains distinct and receives its own later success or typed failure.
 - Reviewer execution never delays delivery of the main answer.
 - Reviewer feedback or failure arrives later if the originating Runtime remains available.
-- An Active-Runtime Worktree enter or leave returns the established Worktree Operation acknowledgement without waiting for the target change to finish.
+- An Active-Runtime Worktree enter or leave enters Pending Work and returns the established Worktree Operation acknowledgement without waiting for the target change to finish.
 - Attached clients later observe the authoritative target or typed failure.
 - An active agent rebinding its own Session returns the scheduled acknowledgement after Kent accepts the exact originating Agent Step, without waiting for the target change.
+- A dormant-Session Worktree enter or leave remains a direct Worktree operation.
 - Worktree create and delete are direct Worktree operations outside Session mutation ordering.
 - A live Workflow assignment applies in accepted Session order.
 - Workflow Execution still decides whether its Current Node start wins.
@@ -52,6 +63,43 @@
 - Authentication, metadata, execution-target, filesystem, tool, validation, Runtime-opening, or Runtime-publication failure before acceptance is terminal for that submission and creates no Pending Work or Queue Item.
 - Cancellation while waiting for acceptance creates no Pending Work or Queue Item.
 
+## Pending Work
+
+- Pending Work is the process-local server-authoritative projection of accepted work that has not started.
+- Pending Work contains only human messages, manual compaction, and Active-Runtime Worktree enter or leave.
+- Pending Work is separate from the internal Engine Intent Queue and has no persistence, replay, reconciliation, or connection-owned lifecycle.
+- Every accepted queued action receives one identity.
+- The same identity represents that action in Pending Work, removal, compaction status, and Worktree acknowledgement or outcome wherever those surfaces apply.
+- Each item carries a concrete typed operation rather than a generic command.
+- A human-message item presents its exact submitted text.
+- Manual compaction has canonical presentation `/compact` followed by its normalized guidance when guidance is present.
+- Worktree enter has canonical presentation `/wt switch <selector>`.
+- Worktree leave has canonical presentation `/wt leave`.
+- Canonical presentation is independent of command alias, capitalization, spacing, or whether a control or typed command initiated the action.
+- The server projects post-turn Queue items first in Queue order and then Steer items in server acceptance order across human messages, manual compaction, and Worktree transitions.
+- Projection order promises no order between concurrent requests before server acceptance and no later execution or completion order.
+- Human Send/Steer, post-turn Queue, manual compaction, and Active-Runtime Worktree enter or leave share a normal-admission capacity of 100 Pending Work items.
+- Normal admission rejects when the server independently observes at least 100 items.
+- Concurrent admissions that each observe a lower count may temporarily exceed 100.
+- Kent never evicts accepted work to enforce the capacity.
+- Every item is discardable until its operation starts.
+- Starting and discarding one item are mutually exclusive; whichever the server accepts first wins.
+- A discard after start fails because the item is no longer pending.
+- Successful discard removes only that item and returns its canonical presentation to the discarding client.
+- Every connected client observes the authoritative Pending Work replacement after a successful discard.
+- Pending Work removal never cancels an operation that has started.
+- Discarding a Worktree transition before start emits no Worktree completion, failure, or cancellation outcome.
+- Pending Work retains no running, completed, failed, canceled, or historical items.
+- A malformed command or missing required field fails before acceptance.
+- A Worktree selector resolves when its transition starts.
+- Mutable Worktree safety and manual-compaction eligibility are revalidated when the operation starts.
+- A user or validation failure after acceptance removes the item and reports the typed failure without restoring its canonical presentation.
+- A definitely unapplied technical failure broadcasts one ephemeral source-agnostic restoration containing the canonical presentation to every connected client.
+- Every client that observes the technical restoration restores the canonical presentation through its ordinary composer behavior.
+- Kent does not target, persist, replay, or acknowledge the restoration and does not count connected clients before broadcasting it.
+- If no client observes the restoration, the canonical presentation is lost.
+- An operation that committed is never restored because later publication or response delivery failed.
+
 ## Protected Agent Steps
 
 - An Agent Step begins when Kent starts a provider request and ends after Kent handles the response, every caused tool call, and every committed tool result needed before another provider request.
@@ -63,8 +111,8 @@
 
 ## Step Boundaries And Next Work
 
-- After each Agent Step, Kent applies all accepted short Session mutations before choosing another provider or tool action.
-- Mutations accepted while this processing is underway join the same first-in, first-out drain.
+- At each Step Boundary, Kent applies accepted boundary-required Session mutations in order until the next operation starts or no boundary-required mutation remains.
+- Mutations accepted while this processing is underway join the same acceptance-ordered drain.
 - Human input normally applies at the first Step Boundary after acceptance.
 - Kent never begins a third provider request with accepted human text still unapplied.
 - Time spent inside an Agent Step or concrete long-running domain work does not count as another provider request for that limit.
@@ -84,6 +132,8 @@
 - A background terminal update follows ordinary Session timing when delivery is still applicable.
 - A requested manual compaction is selected as the next Agent Step ahead of an already-requested ordinary continuation.
 - Kent applies newly accepted short mutations before selecting manual compaction and again after compaction before ordinary work continues.
+- Manual compaction and Worktree transitions start in server acceptance order relative to one another.
+- Neither operational kind has priority over the other.
 - Automatic compaction and Workflow Pre-Compaction keep the selection points defined by the Compaction and Workflow specifications.
 
 ## Workflow-Controlled Sessions
@@ -149,7 +199,7 @@
 ## Worktree Ownership And Deletion
 
 - Worktree create is owned completely by Worktree management and does not change a Session target.
-- Active-Runtime Worktree enter and leave preserve the priority and non-preemption rules in this specification.
+- Active-Runtime Worktree enter and leave use Pending Work and preserve the priority and non-preemption rules in this specification.
 - Worktree deletion never obtains permission by joining Session mutation order.
 - Deletion fails without waiting or stopping work when a targeting Active Session Runtime is executing, applying or holding accepted Session mutations, has selected or begun provider or tool work, or remains retained for Workflow control.
 - A targeting Active Session Runtime that is truly idle is retired before its durable Session is retargeted.
@@ -158,7 +208,7 @@
 - A live background process whose Working Directory is inside the target Worktree blocks deletion.
 - If human input is accepted first, deletion fails.
 - If deletion retires and retargets first, later input uses the new target.
-- Worktree operations are independent requests.
+- Worktree operations are independent requests and repeated requests remain distinct.
 - Kent does not replay, deduplicate, or reconcile an ambiguous Worktree retry.
 
 ## Fast Mode And Context Selection
@@ -176,11 +226,11 @@
 
 - Session durability has no Kent-imposed timeout.
 - A slow durable write may delay the operation without becoming a synthetic timeout failure.
-- A definitely uncommitted required Session mutation starts no later provider request, fails pending operation results, returns pending human text through the live interruption event, and closes the Runtime without automatic retry, replay, or recovery.
+- A definitely uncommitted required Session mutation starts no later provider request, fails pending operation results, returns restorable input through its ephemeral restoration event, and closes the Runtime without automatic retry, replay, or recovery.
 - A committed mutation remains authoritative if later publication or reply delivery fails.
 - Kent reports a failure after a committed mutation and does not apply the mutation again.
 - If Kent cannot determine whether an authoritative Session mutation committed, it terminates the backend with diagnostic context.
 - Process death may lose pending mutations, commands, Questions, Reviewer work, partial Agent Turns, and ephemeral input restoration.
 - Kent does not reconstruct or replay work lost on process death.
-- Except for the Pending Work normal-admission limit defined by the Desktop Sessions And Chat specification, accepting or retaining the 10,000th pending Session mutation for one Session terminates the backend as an invariant violation.
+- Except for the Pending Work normal-admission limit defined here, accepting or retaining the 10,000th pending Session mutation for one Session terminates the backend as an invariant violation.
 - Kent adds no other smaller capacity limit, eviction, persistence, retry, or recovery behavior.

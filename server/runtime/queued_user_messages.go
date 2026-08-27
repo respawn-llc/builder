@@ -7,6 +7,7 @@ import (
 
 	"core/server/llm"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/textutil"
 
 	"github.com/google/uuid"
@@ -20,41 +21,28 @@ type queuedUserMessageStore struct {
 }
 
 type queuedUserMessage struct {
-	message   QueuedUserMessage
-	admission uint64
-	scope     *runtimeids.ExecutionScopeID
+	message        QueuedUserMessage
+	lane           runtimeinput.PendingWorkLane
+	steerAdmission *pendingWorkSteerAdmission
 }
 
 func newQueuedUserMessageStore() *queuedUserMessageStore {
 	return &queuedUserMessageStore{}
 }
 
-func (s *queuedUserMessageStore) Queue(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (s *queuedUserMessageStore) Queue(text string, association queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	return s.QueueItem(QueuedUserMessage{
 		ID:      uuid.NewString(),
 		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
-	}, association...)
+	}, association)
 }
 
 type queuedUserMessageAssociation struct {
-	admission uint64
-	scope     *runtimeids.ExecutionScopeID
+	lane           runtimeinput.PendingWorkLane
+	steerAdmission *pendingWorkSteerAdmission
 }
 
-type interruptedHumanSteering struct {
-	ordinal uint64
-	item    QueuedUserMessage
-}
-
-func cloneExecutionScopeID(value *runtimeids.ExecutionScopeID) *runtimeids.ExecutionScopeID {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
-}
-
-func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, association queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	item.ID = strings.TrimSpace(item.ID)
 	if item.ID == "" {
 		item.ID = uuid.NewString()
@@ -67,57 +55,26 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations 
 	if _, err := runtimeids.ParseQueueItemID(item.ID); err != nil {
 		return QueuedUserMessage{}, err
 	}
-	var association queuedUserMessageAssociation
-	if len(associations) != 0 {
-		association = associations[0]
+	switch association.lane {
+	case runtimeinput.PendingWorkLaneQueue:
+		if association.steerAdmission != nil {
+			return QueuedUserMessage{}, errors.New("Queue message cannot carry a Steer admission")
+		}
+	case runtimeinput.PendingWorkLaneSteer:
+		if association.steerAdmission == nil {
+			return QueuedUserMessage{}, errors.New("Steer message admission is required")
+		}
+	default:
+		return QueuedUserMessage{}, errors.New("queued message Pending Work lane is required")
 	}
 	s.mu.Lock()
 	s.pending = append(s.pending, queuedUserMessage{
-		message:   item,
-		admission: association.admission,
-		scope:     cloneExecutionScopeID(association.scope),
+		message:        item,
+		lane:           association.lane,
+		steerAdmission: clonePendingWorkSteerAdmission(association.steerAdmission),
 	})
 	s.mu.Unlock()
 	return item, nil
-}
-
-func (s *queuedUserMessageStore) DrainByScope(scopeID runtimeids.ExecutionScopeID) []interruptedHumanSteering {
-	if s == nil || scopeID.IsZero() {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	removed := make([]interruptedHumanSteering, 0)
-	remaining := s.pending[:0]
-	for _, pending := range s.pending {
-		if pending.scope == nil || *pending.scope != scopeID {
-			remaining = append(remaining, pending)
-			continue
-		}
-		removed = append(removed, interruptedHumanSteering{
-			ordinal: pending.admission,
-			item:    pending.message,
-		})
-	}
-	s.pending = remaining
-	return removed
-}
-
-func (s *queuedUserMessageStore) DrainInterrupted() []interruptedHumanSteering {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	items := make([]interruptedHumanSteering, 0, len(s.pending))
-	for _, pending := range s.pending {
-		items = append(items, interruptedHumanSteering{
-			ordinal: pending.admission,
-			item:    pending.message,
-		})
-	}
-	s.pending = nil
-	return items
 }
 
 func (m QueuedUserMessage) DisplayText() (string, error) {
@@ -132,20 +89,20 @@ func (s *queuedUserMessageStore) Discard(queueItemID string) bool {
 	return removed
 }
 
-func (s *queuedUserMessageStore) DiscardItem(queueItemID string) (QueuedUserMessage, bool) {
+func (s *queuedUserMessageStore) DiscardItem(queueItemID string) (queuedUserMessage, bool) {
 	id := strings.TrimSpace(queueItemID)
 	if id == "" || s == nil {
-		return QueuedUserMessage{}, false
+		return queuedUserMessage{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	filtered := s.pending[:0]
 	removed := false
-	var item QueuedUserMessage
+	var item queuedUserMessage
 	for _, pending := range s.pending {
 		if pending.message.ID == id {
 			removed = true
-			item = pending.message
+			item = pending
 			continue
 		}
 		filtered = append(filtered, pending)
@@ -225,10 +182,18 @@ func (s *queuedUserMessageStore) EntrySnapshot() []queuedUserMessage {
 	out := make([]queuedUserMessage, 0, len(s.pending))
 	for _, pending := range s.pending {
 		out = append(out, queuedUserMessage{
-			message:   pending.message,
-			admission: pending.admission,
-			scope:     cloneExecutionScopeID(pending.scope),
+			message:        pending.message,
+			lane:           pending.lane,
+			steerAdmission: clonePendingWorkSteerAdmission(pending.steerAdmission),
 		})
 	}
 	return out
+}
+
+func clonePendingWorkSteerAdmission(value *pendingWorkSteerAdmission) *pendingWorkSteerAdmission {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }

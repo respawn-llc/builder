@@ -6,43 +6,80 @@ import (
 	"core/shared/runtimeids"
 )
 
-func TestCollectionContract(t *testing.T) {
+func TestPendingWorkClosedContract(t *testing.T) {
 	t.Parallel()
+
 	guidance := "keep implementation details"
-	steerMessage := PendingWorkItem{
-		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer, Kind: PendingWorkItemKindMessage,
-		State: PendingWorkItemStatePending, Message: &PendingWorkMessage{Text: "keep going"},
-	}
-	steerCompaction := PendingWorkItem{
+	selector := "feature/a"
+	queueMessage := pendingWorkTestMessage(PendingWorkLaneQueue, "run tests")
+	steerMessage := pendingWorkTestMessage(PendingWorkLaneSteer, "keep going")
+	compaction := PendingWorkItem{
 		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer, Kind: PendingWorkItemKindManualCompaction,
-		State: PendingWorkItemStatePending, ManualCompaction: &PendingWorkManualCompaction{
-			Guidance: &guidance, RestorationInput: "/compact   keep implementation details"},
+		State: PendingWorkItemStatePending, CanonicalInput: "/compact keep implementation details",
+		ManualCompaction: &PendingWorkManualCompaction{Guidance: &guidance},
 	}
-	queueMessage := steerMessage
-	queueMessage.ID = runtimeids.NewQueueItemID()
-	queueMessage.Lane = PendingWorkLaneQueue
-	noGuidance := steerCompaction
-	noGuidance.ID = runtimeids.NewQueueItemID()
-	noGuidance.ManualCompaction = &PendingWorkManualCompaction{RestorationInput: "/compact"}
-	if err := (PendingWork{Items: []PendingWorkItem{steerMessage, steerCompaction, noGuidance, queueMessage}}).Validate(); err != nil {
-		t.Fatalf("valid collection: %v", err)
+	enter := PendingWorkItem{
+		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer, Kind: PendingWorkItemKindWorktreeTransition,
+		State: PendingWorkItemStatePending, CanonicalInput: "/wt switch feature/a",
+		WorktreeTransition: &PendingWorkWorktreeTransition{
+			Transition: PendingWorkWorktreeTransitionEnter,
+			Selector:   &selector,
+		},
 	}
-	queueCompaction := steerCompaction
-	queueCompaction.Lane = PendingWorkLaneQueue
-	twoPayloads := steerMessage
-	twoPayloads.ManualCompaction = steerCompaction.ManualCompaction
+	leave := PendingWorkItem{
+		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer, Kind: PendingWorkItemKindWorktreeTransition,
+		State: PendingWorkItemStatePending, CanonicalInput: "/wt leave",
+		WorktreeTransition: &PendingWorkWorktreeTransition{
+			Transition: PendingWorkWorktreeTransitionLeave,
+		},
+	}
+
+	if err := (PendingWork{Items: []PendingWorkItem{queueMessage, steerMessage, compaction, enter, leave}}).Validate(); err != nil {
+		t.Fatalf("valid Queue-first collection: %v", err)
+	}
+
 	blank := " "
-	blankGuidance := steerCompaction
-	blankGuidance.ManualCompaction = &PendingWorkManualCompaction{Guidance: &blank, RestorationInput: "/compact"}
-	missingRestoration := steerCompaction
-	missingRestoration.ManualCompaction = &PendingWorkManualCompaction{}
+	unnormalizedGuidance := "keep   implementation details"
+	unnormalizedSelector := " feature/a "
+	wrongCompactionInput := compaction
+	wrongCompactionInput.CanonicalInput = "/compact   keep implementation details"
+	wrongEnterInput := enter
+	wrongEnterInput.CanonicalInput = "/worktree switch feature/a"
+	twoPayloads := steerMessage
+	twoPayloads.ManualCompaction = compaction.ManualCompaction
+	queueCompaction := compaction
+	queueCompaction.Lane = PendingWorkLaneQueue
+	blankGuidance := compaction
+	blankGuidance.ManualCompaction = &PendingWorkManualCompaction{Guidance: &blank}
+	nonNormalizedGuidance := compaction
+	nonNormalizedGuidance.ManualCompaction = &PendingWorkManualCompaction{Guidance: &unnormalizedGuidance}
+	enterWithoutSelector := enter
+	enterWithoutSelector.WorktreeTransition = &PendingWorkWorktreeTransition{
+		Transition: PendingWorkWorktreeTransitionEnter,
+	}
+	enterWithUnnormalizedSelector := enter
+	enterWithUnnormalizedSelector.WorktreeTransition = &PendingWorkWorktreeTransition{
+		Transition: PendingWorkWorktreeTransitionEnter,
+		Selector:   &unnormalizedSelector,
+	}
+	leaveWithSelector := leave
+	leaveWithSelector.WorktreeTransition = &PendingWorkWorktreeTransition{
+		Transition: PendingWorkWorktreeTransitionLeave,
+		Selector:   &selector,
+	}
+
 	for name, collection := range map[string]PendingWork{
-		"duplicate id":        {Items: []PendingWorkItem{steerMessage, steerMessage}},
-		"Queue before Steer":  {Items: []PendingWorkItem{queueMessage, steerMessage}},
-		"Queue compaction":    {Items: []PendingWorkItem{queueCompaction}},
-		"two payloads":        {Items: []PendingWorkItem{twoPayloads}},
-		"blank guidance":      {Items: []PendingWorkItem{blankGuidance}},
-		"missing restoration": {Items: []PendingWorkItem{missingRestoration}},
+		"Steer before Queue":            {Items: []PendingWorkItem{steerMessage, queueMessage}},
+		"duplicate id":                  {Items: []PendingWorkItem{queueMessage, queueMessage}},
+		"two payloads":                  {Items: []PendingWorkItem{twoPayloads}},
+		"Queue compaction":              {Items: []PendingWorkItem{queueCompaction}},
+		"blank guidance":                {Items: []PendingWorkItem{blankGuidance}},
+		"non-normalized guidance":       {Items: []PendingWorkItem{nonNormalizedGuidance}},
+		"wrong compaction canonical":    {Items: []PendingWorkItem{wrongCompactionInput}},
+		"enter without selector":        {Items: []PendingWorkItem{enterWithoutSelector}},
+		"non-normalized enter selector": {Items: []PendingWorkItem{enterWithUnnormalizedSelector}},
+		"wrong enter canonical":         {Items: []PendingWorkItem{wrongEnterInput}},
+		"leave with selector":           {Items: []PendingWorkItem{leaveWithSelector}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := collection.Validate(); err == nil {
@@ -50,13 +87,42 @@ func TestCollectionContract(t *testing.T) {
 			}
 		})
 	}
+
 	overCapacity := PendingWork{Items: make([]PendingWorkItem, PendingWorkCapacity+1)}
 	for index := range overCapacity.Items {
-		overCapacity.Items[index] = steerMessage
-		overCapacity.Items[index].ID = runtimeids.NewQueueItemID()
-		overCapacity.Items[index].Lane = PendingWorkLaneQueue
+		overCapacity.Items[index] = pendingWorkTestMessage(PendingWorkLaneQueue, "queued")
 	}
 	if err := overCapacity.Validate(); err != nil {
 		t.Fatalf("approved over-capacity collection: %v", err)
+	}
+}
+
+func TestPendingWorkRestorationUsesServerCanonicalInput(t *testing.T) {
+	t.Parallel()
+
+	guidance := "keep details"
+	item := PendingWorkItem{
+		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer, Kind: PendingWorkItemKindManualCompaction,
+		State: PendingWorkItemStatePending, CanonicalInput: "/compact keep details",
+		ManualCompaction: &PendingWorkManualCompaction{Guidance: &guidance},
+	}
+	restoration, err := item.Restoration()
+	if err != nil {
+		t.Fatalf("Restoration: %v", err)
+	}
+	if restoration.Kind != PendingWorkItemKindManualCompaction ||
+		restoration.CanonicalInput != item.CanonicalInput {
+		t.Fatalf("restoration = %#v", restoration)
+	}
+	if err := restoration.Validate(); err != nil {
+		t.Fatalf("Validate restoration: %v", err)
+	}
+}
+
+func pendingWorkTestMessage(lane PendingWorkLane, text string) PendingWorkItem {
+	return PendingWorkItem{
+		ID: runtimeids.NewQueueItemID(), Lane: lane, Kind: PendingWorkItemKindMessage,
+		State: PendingWorkItemStatePending, CanonicalInput: text,
+		Message: &PendingWorkMessage{Text: text},
 	}
 }

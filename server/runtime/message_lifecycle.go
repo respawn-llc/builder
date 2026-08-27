@@ -11,7 +11,6 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -497,18 +496,21 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	var pending []queuedUserMessage
-	switch selected := selection.(type) {
-	case allPendingUserInjectionSelection:
-		pending = m.queue.Drain()
-	case steerUserInjectionSelection:
-		if len(selected.queueItemIDs) > 0 {
-			pending = m.queue.DrainByID(selected.queueItemIDs)
+	err := m.engine.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
+		switch selected := selection.(type) {
+		case allPendingUserInjectionSelection:
+			pending = m.queue.Drain()
+		case steerUserInjectionSelection:
+			if len(selected.queueItemIDs) > 0 {
+				pending = m.queue.DrainByID(selected.queueItemIDs)
+			}
+		default:
+			return false, fmt.Errorf("unsupported user injection selection %T", selection)
 		}
-	default:
-		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
-	}
-	if len(pending) != 0 {
-		m.engine.publishPendingWorkSnapshot()
+		return len(pending) != 0, nil
+	}, nil)
+	if err != nil {
+		return userInjectionCommitResult{}, err
 	}
 	return m.commitPendingUserInjections(stepID, pending)
 }
@@ -557,32 +559,18 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 	return result, nil
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (m *defaultMessageLifecycle) QueueUserMessage(text string, association queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
-	return m.queue.Queue(text, association...)
+	return m.queue.Queue(text, association)
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage, association queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
-	return m.queue.QueueItem(item, association...)
-}
-
-func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByScope(scopeID runtimeids.ExecutionScopeID) []interruptedHumanSteering {
-	if m == nil || m.queue == nil {
-		return nil
-	}
-	return m.queue.DrainByScope(scopeID)
-}
-
-func (m *defaultMessageLifecycle) DrainInterruptedUserInjections() []interruptedHumanSteering {
-	if m == nil || m.queue == nil {
-		return nil
-	}
-	return m.queue.DrainInterrupted()
+	return m.queue.QueueItem(item, association)
 }
 
 func (m *defaultMessageLifecycle) DrainPendingUserInjections() []QueuedUserMessage {
@@ -630,9 +618,9 @@ func (m *defaultMessageLifecycle) RestorePendingUserInjections(items []queuedUse
 	m.queue.RestoreFront(items)
 }
 
-func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool) {
+func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (queuedUserMessage, bool) {
 	if m == nil || m.queue == nil {
-		return QueuedUserMessage{}, false
+		return queuedUserMessage{}, false
 	}
 	return m.queue.DiscardItem(queueItemID)
 }

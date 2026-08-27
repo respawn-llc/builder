@@ -19,6 +19,7 @@ import (
 	"core/shared/jsoncontract"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 
@@ -143,6 +144,7 @@ type Engine struct {
 	lifecycleClosed bool
 	closed          atomic.Bool
 	runtimeFIFO     *runtimeOperationFIFO
+	pendingWork     *pendingWorkCoordinator
 
 	store                       *session.Store
 	eventLog                    session.MaterializedEventLog
@@ -512,33 +514,38 @@ func (e *Engine) QueueUserMessage(ctx context.Context, text string) (QueuedUserM
 
 func (e *Engine) queueUserMessage(ctx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	return awaitEngineRuntimeOperation(ctx, e, func(operationCtx context.Context) (QueuedUserMessage, error) {
-		return e.queueUserMessageRaw(operationCtx, text, forceAutoDrain, accept)
+		_ = operationCtx
+		return e.queueUserMessageRaw(text, forceAutoDrain, accept)
 	})
 }
 
-func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	if err := e.requirePendingWorkCapacity(); err != nil {
 		return QueuedUserMessage{}, err
 	}
-	association := queuedUserMessageAssociation{admission: runtimeOperationSequence(operationCtx)}
 	if !forceAutoDrain {
 		var item QueuedUserMessage
 		committed, err := runCommandAcceptance(accept, func() (bool, error) {
-			e.outputMutationMu.Lock()
-			defer e.outputMutationMu.Unlock()
-			var queueErr error
-			item, queueErr = e.messageFlow.QueueUserMessage(text, association)
-			if queueErr != nil {
-				return false, queueErr
-			}
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-			return true, nil
+			err := e.mutatePendingWork(false, func(admission *pendingWorkSteerAdmission) (bool, error) {
+				e.outputMutationMu.Lock()
+				defer e.outputMutationMu.Unlock()
+				var queueErr error
+				item, queueErr = e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
+					lane:           runtimeinput.PendingWorkLaneQueue,
+					steerAdmission: admission,
+				})
+				if queueErr != nil {
+					return false, queueErr
+				}
+				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+				return true, nil
+			}, nil)
+			return err == nil, err
 		})
 		if err := commandAcceptanceResult(committed, err); err != nil {
 			return QueuedUserMessage{}, err
 		}
-		e.publishPendingWorkSnapshot()
 		return item, nil
 	}
 	liveItem := QueuedUserMessage{
@@ -555,19 +562,27 @@ func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, 
 				return false, nil
 			}
 			livePublication = true
-			e.outputMutationMu.Lock()
-			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem, association)
-			if queueErr != nil {
-				e.outputMutationMu.Unlock()
+			mutationErr := e.mutatePendingWork(true, func(admission *pendingWorkSteerAdmission) (bool, error) {
+				e.outputMutationMu.Lock()
+				defer e.outputMutationMu.Unlock()
+				queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem, queuedUserMessageAssociation{
+					lane:           runtimeinput.PendingWorkLaneSteer,
+					steerAdmission: admission,
+				})
+				if queueErr != nil {
+					return false, queueErr
+				}
+				item = queuedItem
+				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+				return true, nil
+			}, nil)
+			if mutationErr != nil {
 				queueItemID := mustQueueItemID(liveItem.ID)
 				e.liveRun.finishQueueItemPublication(queueItemID)
 				e.unmarkQueuedUserInjectionForAutoDrain(liveItem.ID)
 				e.completeLiveRunQueueItems(map[string]struct{}{liveItem.ID: {}})
-				return false, queueErr
+				return false, mutationErr
 			}
-			item = queuedItem
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-			e.outputMutationMu.Unlock()
 			return true, nil
 		})
 		if err != nil {
@@ -580,7 +595,6 @@ func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, 
 			} else {
 				e.scheduleQueuedUserInjectionsIfIdle()
 			}
-			e.publishPendingWorkSnapshot()
 			return item, nil
 		}
 		if livePublication {
@@ -599,22 +613,27 @@ func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, 
 	}
 	var item QueuedUserMessage
 	committed, err := runCommandAcceptance(accept, func() (bool, error) {
-		e.outputMutationMu.Lock()
-		defer e.outputMutationMu.Unlock()
-		var queueErr error
-		item, queueErr = e.messageFlow.QueueUserMessage(text, association)
-		if queueErr != nil {
-			return false, queueErr
-		}
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-		return true, nil
+		err := e.mutatePendingWork(true, func(admission *pendingWorkSteerAdmission) (bool, error) {
+			e.outputMutationMu.Lock()
+			defer e.outputMutationMu.Unlock()
+			var queueErr error
+			item, queueErr = e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
+				lane:           runtimeinput.PendingWorkLaneSteer,
+				steerAdmission: admission,
+			})
+			if queueErr != nil {
+				return false, queueErr
+			}
+			e.markQueuedUserInjectionForAutoDrain(item.ID)
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			return true, nil
+		}, nil)
+		return err == nil, err
 	})
 	if err := commandAcceptanceResult(committed, err); err != nil {
 		return QueuedUserMessage{}, err
 	}
-	e.markQueuedUserInjectionForAutoDrain(item.ID)
 	e.scheduleQueuedUserInjectionsIfIdle()
-	e.publishPendingWorkSnapshot()
 	return item, nil
 }
 

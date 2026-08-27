@@ -722,15 +722,17 @@ func (e *Engine) emitInterruptedHumanInputs(items []QueuedUserMessage) {
 
 func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
-	pending := e.messageFlow.DrainPendingUserInjections()
+	var pending []QueuedUserMessage
 	messages := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		messages = append(messages, item)
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
-	}
-	if len(pending) != 0 {
-		e.publishPendingWorkSnapshot()
-	}
+	_ = e.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
+		pending = e.messageFlow.DrainPendingUserInjections()
+		messages = append(messages, pending...)
+		return len(pending) != 0, nil
+	}, func() {
+		for _, item := range pending {
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
+		}
+	})
 	return messages
 }
 

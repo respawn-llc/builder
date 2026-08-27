@@ -366,7 +366,11 @@ The authoritative live status of a Session. It reports whether the Session is un
 
 ### Steering Intent
 
-A typed request accepted by an Active Session Runtime to apply one Session mutation in acceptance order. While an Agent Step executes, a Steering Intent that needs a Step Boundary waits for that boundary. An Idle Runtime may apply it immediately. A Steering Intent carries only its concrete operation and acknowledgement or result. It has no generic request identity, replay, or reconciliation behavior.
+A typed request accepted by an Active Session Runtime to apply one Session mutation in acceptance order. While an Agent Step executes, a Steering Intent that needs a Step Boundary waits for that boundary. An Idle Runtime may apply it immediately. A Steering Intent carries only its concrete operation and acknowledgement or result. A Steering Intent in Pending Work reuses its concrete operation identity and adds no second generic request identity, replay, or reconciliation behavior.
+
+### Engine Intent Queue
+
+The process-local internal queue that serializes Engine intents and drains them during the Step Boundary window. It is not Steering or Pending Work, carries no Pending Work identity, and is not exposed to clients.
 
 ### Append Certainty
 
@@ -402,7 +406,7 @@ A complete agent run from a user submission until the runtime returns to idle. A
 
 ### Step Boundary
 
-The interval after one Agent Step ends and before another provider request begins. The Active Session Runtime applies accepted short Session mutations before it chooses compaction, an ordinary Agent Step, or idle as its next state.
+The interval after one Agent Step ends and before another provider request begins. The Active Session Runtime applies accepted boundary-required Steering Intents in order. Manual compaction and Worktree transitions may start in this interval before Kent chooses ordinary model work or idle.
 
 ### Queue
 
