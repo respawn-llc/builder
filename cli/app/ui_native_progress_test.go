@@ -121,8 +121,8 @@ func TestNativeProgressEligibilityUsesOnlyApprovedSources(t *testing.T) {
 func TestReviewerAddressingFeedbackRemainsActiveInTUIStatus(t *testing.T) {
 	model, _ := nativeProgressTestModel(t, true)
 	model.runtimeActivityProjection.Reviewer = clientui.ReviewerActivityAddressingFeedback
-	if !model.isReviewerActive() || model.statusLineLabel() != "review" || !model.statusLineSpinning() {
-		t.Fatalf("addressing-feedback status = active=%t label=%q spinning=%t", model.isReviewerActive(), model.statusLineLabel(), model.statusLineSpinning())
+	if !model.isReviewerActive() || model.statusLinePhase() != statusLinePhaseSuccess || !model.statusLineSpinning() {
+		t.Fatalf("addressing-feedback status = active=%t phase=%v spinning=%t", model.isReviewerActive(), model.statusLinePhase(), model.statusLineSpinning())
 	}
 	if model.nativeProgressEligible() {
 		t.Fatal("addressing-feedback Reviewer phase activated native progress")
