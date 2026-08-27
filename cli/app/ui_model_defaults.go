@@ -35,16 +35,13 @@ func newUIRuntimeFeatureState(runtimeClient clientui.RuntimeClient) uiRuntimeFea
 
 func newUIInputFeatureState() uiInputFeatureState {
 	return uiInputFeatureState{
-		uiChatSettingsState: uiChatSettingsState{
-			reviewerMode:          "off",
-			autoCompactionEnabled: true,
-			questionsEnabled:      true,
-			source:                uiChatSettingsStateSourceInitial,
-		},
 		mainEditor:            tuiinput.NewEditor(),
 		activity:              uiActivityIdle,
 		mainInputDraftToken:   1,
 		commandRegistry:       commands.NewDefaultRegistry(),
+		reviewerMode:          "off",
+		autoCompactionEnabled: true,
+		questionsEnabled:      true,
 		conversationFreshness: clientui.ConversationFreshnessFresh,
 	}
 }

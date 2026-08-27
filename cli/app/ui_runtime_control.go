@@ -170,7 +170,6 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	m.compactionMode = string(response.Context.CompactionMode)
 	m.compactionCount = int(response.Context.CompletedCompactionCount)
 	m.modelContractLocked = settings.AgentLocked
-	m.source = uiChatSettingsStateSourceMutation
 	m.status.snapshot.CompactionCount = m.compactionCount
 	m.setRuntimeContextUsage(m.currentRuntimeSessionID(), runtimeContextUsageFromChatContext(response.Context))
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {

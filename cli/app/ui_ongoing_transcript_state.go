@@ -193,7 +193,6 @@ func (m *uiModel) applyTranscriptSessionStatus(status clientui.TranscriptSession
 	m.fastModeAvailable = status.FastModeAvailable
 	m.fastModeEnabled = status.FastModeEnabled
 	m.thinkingLevel = status.ThinkingLevel
-	m.source = uiChatSettingsStateSourceRuntime
 }
 
 func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSessionIdentity) tea.Cmd {

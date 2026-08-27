@@ -48,10 +48,8 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 
 func runtimeContextUsageFromChatContext(contextFacts serverapi.ChatContext) clientui.RuntimeContextUsage {
 	return clientui.RuntimeContextUsage{
-		UsedTokens:               int(contextFacts.UsedTokens),
-		WindowTokens:             int(contextFacts.ContextWindowTokens),
-		AutomaticThresholdTokens: int(contextFacts.AutomaticThresholdTokens),
-		HasAutomaticThreshold:    true,
+		UsedTokens:   int(contextFacts.UsedTokens),
+		WindowTokens: int(contextFacts.ContextWindowTokens),
 	}
 }
 

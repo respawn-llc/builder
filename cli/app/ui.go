@@ -49,9 +49,8 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 			enqueueRuntimeReconnectWarning(runtimeReconnectWarning, text, visibility)
 		})
 	}
-	if mainView, available := m.startupRuntimeMainView(); available {
-		m.applyRuntimeMainViewState(mainView)
-	}
+	mainView := m.runtimeMainView()
+	m.applyRuntimeMainViewState(mainView)
 	if !m.hasRuntimeClient() {
 		m.reviewerEnabled = strings.TrimSpace(m.reviewerMode) != "" && strings.TrimSpace(m.reviewerMode) != "off"
 	}
