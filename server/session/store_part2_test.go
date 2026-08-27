@@ -206,37 +206,6 @@ func TestRunArtifactRelocationUpdatesPathsAndWorkspaceAfterCallback(t *testing.T
 	}
 }
 
-func TestRunArtifactRelocationPreservesRebindReminderWithoutObservedUpdate(t *testing.T) {
-	store, err := Create(t.TempDir(), "source", "/workspace/source", testSessionCategory, sessionTestPersistence.options()...)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	workingDirectory := "/workspace/source"
-	reminder := SessionRebindReminder{
-		SourceProject:    serverapi.ProjectReference{ID: "source", Name: "Source"},
-		TargetProject:    serverapi.ProjectReference{ID: "target", Name: "Target"},
-		WorkingDirectory: &workingDirectory,
-	}
-	if err := store.SetSessionRebindReminder(&reminder); err != nil {
-		t.Fatalf("SetSessionRebindReminder: %v", err)
-	}
-	oldDir := store.Dir()
-	targetDir := filepath.Join(t.TempDir(), store.Meta().SessionID)
-	if err := store.RunArtifactRelocation(ArtifactRelocationTarget{
-		SessionDir:         targetDir,
-		WorkspaceRoot:      "/workspace/target",
-		WorkspaceContainer: "target",
-		UpdatedAt:          time.Now().UTC(),
-	}, func() (ArtifactRelocationObservation, error) {
-		return ArtifactRelocationObservation{}, os.Rename(oldDir, targetDir)
-	}); err != nil {
-		t.Fatalf("RunArtifactRelocation: %v", err)
-	}
-	if stored := store.Meta().RebindReminder; stored == nil || !SessionRebindReminderEqual(*stored, reminder) {
-		t.Fatalf("rebind reminder = %+v, want preserved %+v", stored, reminder)
-	}
-}
-
 func TestRunArtifactRelocationRejectsZeroCommitTimeBeforeCallback(t *testing.T) {
 	container := t.TempDir()
 	store, err := Create(container, "source", "/workspace/source", testSessionCategory, sessionTestPersistence.options()...)

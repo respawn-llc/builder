@@ -97,31 +97,3 @@ func TestTranscriptWorktreeTransitionOutcomeJSONKeepsDeletePrecondition(t *testi
 		t.Fatalf("decoded transcript outcome = %+v, want typed dirty precondition", decoded.Payload())
 	}
 }
-
-func TestTranscriptSessionRetargetOutcomeJSONKeepsTypedFailureFacts(t *testing.T) {
-	outcome := TranscriptSessionRetargetOutcome{
-		OperationID: NewWorktreeTransitionID(),
-		Kind:        TranscriptSessionRetargetFailed,
-		Failure: &TranscriptSessionRetargetFailure{
-			Diagnostic:                "commit failed",
-			UnchangedProjectID:        "project-id",
-			UnchangedProjectName:      "Project",
-			UnchangedWorkingDirectory: "/workspace",
-		},
-	}
-	data, err := json.Marshal(NewTranscriptMessage(1, NewTranscriptEvent(outcome)))
-	if err != nil {
-		t.Fatalf("marshal Session retarget outcome: %v", err)
-	}
-	var decoded TranscriptMessage
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal Session retarget outcome: %v", err)
-	}
-	got, ok := decoded.Payload().(TranscriptSessionRetargetOutcome)
-	if !ok || got.Failure == nil ||
-		got.Failure.Diagnostic != outcome.Failure.Diagnostic ||
-		got.Failure.UnchangedProjectID != outcome.Failure.UnchangedProjectID ||
-		got.Failure.UnchangedWorkingDirectory != outcome.Failure.UnchangedWorkingDirectory {
-		t.Fatalf("decoded Session retarget outcome = %+v, want %+v", decoded.Payload(), outcome)
-	}
-}

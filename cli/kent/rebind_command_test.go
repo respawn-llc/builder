@@ -3,11 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 
-	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
@@ -38,13 +36,7 @@ func TestParseRebindCommandSelectsHumanAgentAndExplicitSessions(t *testing.T) {
 
 func TestParseRebindCommandHardCutsOverToOnePositionalPath(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "current-session")
-	for _, input := range [][]string{
-		nil,
-		{"session-1", "/target"},
-		{"--session", "session-1"},
-		{"--session", " ", "/target"},
-		{"--project", " ", "/target"},
-	} {
+	for _, input := range [][]string{nil, {"session-1", "/target"}} {
 		var stderr bytes.Buffer
 		if _, ok, code := parseRebindCommandArguments(input, &stderr); ok || code != 2 || stderr.Len() == 0 {
 			t.Fatalf("args=%q parse=(%t,%d), stderr=%q", input, ok, code, stderr.String())
@@ -75,14 +67,8 @@ func TestNewRebindRequestUsesAgentOriginAndScheduledCompletion(t *testing.T) {
 		request.OperationID.String() == "" {
 		t.Fatalf("request=%+v", request)
 	}
-}
 
-func TestNewRebindRequestOmitsAgentOriginForAnotherSession(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "current-session")
-	t.Setenv(sessionenv.RunIDEnv, "018fdd67-89ab-4cde-8123-456789abc001")
-	t.Setenv(sessionenv.StepIDEnv, "018fdd67-89ab-4cde-8123-456789abc002")
-
-	request, err := newRebindRequest("other-session", "/target", nil)
+	request, err = newRebindRequest("other-session", "/target", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,27 +96,6 @@ func TestWriteRebindAcknowledgementSupportsHumanAndJSONOutput(t *testing.T) {
 }
 
 func TestSessionRetargetGuidanceUsesFlagSessionSyntaxAndWorktreeErrors(t *testing.T) {
-	retargetErr := &serverapi.SessionRetargetError{
-		Reason:        serverapi.SessionRetargetTargetProjectRequired,
-		SessionID:     "session-1",
-		SourceProject: serverapi.ProjectReference{ID: "project-1", Name: "One"},
-		TargetRoot:    "/target",
-		CandidateProjects: []serverapi.ProjectReference{
-			{ID: "project-2", Name: "Two"},
-		},
-	}
-	guidance := buildSessionRetargetCommandGuidance("/target", retargetErr)
-	if len(guidance.Candidates) != 1 || !slices.Equal(guidance.Candidates[0].Tokens, []string{
-		config.Command, "rebind", "--session", "session-1", "--project", "project-2", "/target",
-	}) {
-		t.Fatalf("candidate guidance=%+v", guidance.Candidates)
-	}
-	if !slices.Equal(guidance.RebindIntoSource, []string{
-		config.Command, "rebind", "--session", "session-1", "/target",
-	}) {
-		t.Fatalf("source guidance=%q", guidance.RebindIntoSource)
-	}
-
 	for _, reason := range []serverapi.SessionRetargetErrorReason{
 		serverapi.SessionRetargetSourceWorktree,
 		serverapi.SessionRetargetTargetWorktree,

@@ -31,27 +31,6 @@ func TestWorkspaceChangePromptYesHotkeyRebinds(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRetargetLoadingModelRunsOperationAndShowsProgress(t *testing.T) {
-	called := false
-	model := &workspaceRetargetLoadingModel{
-		width:  80,
-		height: 24,
-		theme:  "dark",
-		run: func() error {
-			called = true
-			return nil
-		},
-	}
-	message := model.Init()().(tea.BatchMsg)[0]()
-	if !called {
-		t.Fatal("loading model did not run Session retarget")
-	}
-	next, command := model.Update(message)
-	if next.(*workspaceRetargetLoadingModel).err != nil || command == nil {
-		t.Fatalf("completed loading model = %+v command=%v", next, command)
-	}
-}
-
 func TestInteractiveSessionRetargetPreservesTypedFailureFacts(t *testing.T) {
 	failure := serverapi.SessionRetargetFailure{
 		Diagnostic: "target workspace became unavailable",

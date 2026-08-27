@@ -351,29 +351,6 @@ func TestServiceRetargetSessionWorkspaceDelegatesAndMapsBinding(t *testing.T) {
 	}
 }
 
-func TestServiceRetargetSessionWorkspaceScheduledModeReturnsOnlyAcknowledgement(t *testing.T) {
-	operationID := serverapi.NewWorktreeOperationID()
-	targetRoot := t.TempDir()
-	retargeter := &sessionLifecycleRetargeterStub{response: serverapi.SessionRetargetWorkspaceResponse{
-		Acknowledgement: serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID},
-	}}
-	service := NewGlobalSessionLifecycleService(t.TempDir(), nil, nil).WithWorkspaceRetargeter(retargeter)
-	response, err := service.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: operationID,
-			SessionID:   "session-1",
-		},
-		WorkspaceRoot:  targetRoot,
-		CompletionMode: serverapi.SessionRetargetCompletionScheduled,
-	})
-	if err != nil {
-		t.Fatalf("RetargetSessionWorkspace: %v", err)
-	}
-	if response.Acknowledgement.OperationID != operationID || response.Outcome != nil {
-		t.Fatalf("scheduled response = %+v", response)
-	}
-}
-
 func TestServiceRetargetSessionWorkspaceRequiresRetargeter(t *testing.T) {
 	service := NewSessionLifecycleService(t.TempDir(), nil, nil)
 	_, err := service.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{

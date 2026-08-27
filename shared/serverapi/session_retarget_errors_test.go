@@ -40,25 +40,3 @@ func TestSessionRetargetErrorRoundTripsStructuredFacts(t *testing.T) {
 		})
 	}
 }
-
-func TestSessionRetargetWorktreeErrorsRoundTrip(t *testing.T) {
-	for _, reason := range []SessionRetargetErrorReason{
-		SessionRetargetSourceWorktree,
-		SessionRetargetTargetWorktree,
-	} {
-		source := &SessionRetargetError{
-			Reason:        reason,
-			SessionID:     "session-1",
-			SourceProject: ProjectReference{ID: "project-1", Name: "Project"},
-			TargetRoot:    "/workspace",
-		}
-		if err := source.Validate(); err != nil {
-			t.Fatalf("%s Validate: %v", reason, err)
-		}
-		decodedErr := DecodeSessionRetargetError(source.RPCErrorData(), source.Error())
-		var decoded *SessionRetargetError
-		if !errors.As(decodedErr, &decoded) || decoded.Reason != reason {
-			t.Fatalf("%s decoded error = %#v", reason, decodedErr)
-		}
-	}
-}

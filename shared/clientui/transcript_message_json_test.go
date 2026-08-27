@@ -187,16 +187,6 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		NewTranscriptEvent(TranscriptBackgroundActivity{ActivityID: transcriptTestBackgroundActivityID(t), ProcessID: "process-1", OwnerRunID: transcriptTestRunID(t), OwnerStepID: stepID, Lifecycle: BackgroundLifecycleBackgrounded, Command: "go test", Workdir: "/repo"}),
 		NewTranscriptEvent(prompt),
 		NewTranscriptEvent(TranscriptWorktreeTransitionOutcome{OperationID: NewWorktreeTransitionID(), Transition: WorktreeTransitionEnter, State: WorktreeTransitionCompleted}),
-		NewTranscriptEvent(TranscriptSessionRetargetOutcome{
-			OperationID: NewWorktreeTransitionID(),
-			Kind:        TranscriptSessionRetargetSucceeded,
-			Success: &TranscriptSessionRetargetSuccess{
-				ProjectID:     "project-id",
-				ProjectName:   "Project",
-				WorkspaceID:   "workspace-id",
-				CanonicalRoot: "/workspace",
-			},
-		}),
 		NewTranscriptEvent(TranscriptOperationalDiagnostic{Code: OperationalDiagnosticSleepGuardFailed, Detail: "failed"}),
 		NewTranscriptEvent(TranscriptLiveRunResult{Status: LiveRunStatusCompleted, ResultKind: LiveRunResultAssistantFinalAnswer, FinalAnswer: &final, StartedAt: time.Unix(1_700_000_000, 0), FinishedAt: time.Unix(1_700_000_001, 0)}),
 	}

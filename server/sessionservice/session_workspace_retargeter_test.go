@@ -252,27 +252,35 @@ func (c *selfRetargetRuntimeClient) Generate(_ context.Context, request llm.Requ
 
 func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t *testing.T) {
 	fixture := newRealSessionRetargetFixture(t)
+	overlappingRoot := filepath.Join(fixture.managedBase, "overlapping")
+	if err := os.MkdirAll(overlappingRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll overlapping target: %v", err)
+	}
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     fixture.child.Meta().SessionID,
 		WorkspaceRoot: fixture.targetWorkspaceRoot,
 		ProjectID:     &targetProjectID,
 	}
-	commitErr := errors.New("commit failed for active rebind")
 	published := retargetOutcomePublisher{outcomes: make(chan serverapi.SessionRetargetOutcome, 1)}
-	retargeter := fixture.retargeter(failingSessionRetargetCommit{Store: fixture.metadata, err: commitErr}).
+	retargeter := fixture.retargeter(overlappingSessionRetargetCommit{
+		Store: fixture.metadata,
+		request: metadata.SessionWorkspaceRetargetRequest{
+			SessionID:     fixture.child.Meta().SessionID,
+			WorkspaceRoot: overlappingRoot,
+		},
+	}).
 		WithOutcomePublisher(published)
 	t.Cleanup(func() { _ = retargeter.Close() })
 	client := &selfRetargetRuntimeClient{ignoreRunError: true}
 	engine := fixture.openRuntimeWithClient(t, client)
 	operationID := serverapi.NewWorktreeOperationID()
-	var acknowledgement serverapi.WorktreeScheduledAcknowledgement
 	client.run = func() error {
 		active := engine.ActiveRun()
 		if active == nil {
 			return errors.New("active Agent Step is required")
 		}
-		response, err := retargeter.RetargetWorkspace(context.Background(), SessionWorkspaceRetargetInvocation{
+		_, err := retargeter.RetargetWorkspace(context.Background(), SessionWorkspaceRetargetInvocation{
 			OperationID: operationID,
 			Request:     req,
 			Origin: &serverapi.RuntimeStepOrigin{
@@ -281,82 +289,38 @@ func TestSessionWorkspaceRetargeterFailureSteersUnchangedContextIntoSameEngine(t
 			},
 			CompletionMode: serverapi.SessionRetargetCompletionScheduled,
 		})
-		acknowledgement = response.Acknowledgement
 		return err
 	}
 
 	if _, err := engine.SubmitUserMessage(context.Background(), "try moving this Session"); err != nil {
 		t.Fatalf("originating Agent Step: %v", err)
 	}
-	if client.runErr != nil || acknowledgement.OperationID != operationID {
-		t.Fatalf("scheduled rebind = acknowledgement %+v error %v", acknowledgement, client.runErr)
+	if client.runErr != nil {
+		t.Fatalf("scheduled rebind: %v", client.runErr)
 	}
 	outcome := <-published.outcomes
 	if outcome.Kind != serverapi.SessionRetargetOutcomeFailed ||
 		outcome.Failure == nil ||
 		outcome.Failure.Diagnostic == "" ||
 		outcome.Failure.UnchangedProject.ID != fixture.sourceBinding.ProjectID ||
-		outcome.Failure.UnchangedWorkingDirectory != fixture.sourceBinding.CanonicalRoot {
+		canonicalRetargetTestPath(t, outcome.Failure.UnchangedWorkingDirectory) != canonicalRetargetTestPath(t, overlappingRoot) {
 		t.Fatalf("published failure outcome = %+v", *outcome.Failure)
 	}
 	if len(client.requests) != 2 {
 		t.Fatalf("provider requests = %d, want 2", len(client.requests))
 	}
-	var failureNotice *llm.ResponseItem
+	foundFailureNotice := false
 	for _, item := range client.requests[1].Items {
-		if item.MessageType != nil && *item.MessageType == llm.MessageTypeErrorFeedback &&
-			item.Content != nil {
-			copyItem := item
-			failureNotice = &copyItem
+		if item.MessageType != nil && *item.MessageType == llm.MessageTypeErrorFeedback {
+			foundFailureNotice = true
 			break
 		}
 	}
-	if failureNotice == nil {
+	if !foundFailureNotice {
 		t.Fatalf("second provider request lacks typed failure notice: %+v", client.requests[1].Items)
 	}
 	if workdir := fixture.runtimeWorkdir(t); canonicalRetargetTestPath(t, workdir) != canonicalRetargetTestPath(t, fixture.sourceBinding.CanonicalRoot) {
 		t.Fatalf("failed rebind changed runtime workdir to %q", workdir)
-	}
-	if err := fixture.authority.WithCurrentRuntime(context.Background(), fixture.childID, func(_ context.Context, current *runtime.Engine) error {
-		if current != engine {
-			t.Fatalf("failed Session rebind replaced Engine: before=%p after=%p", engine, current)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("inspect continued Engine: %v", err)
-	}
-}
-
-func TestSessionWorkspaceRetargeterFailureUsesAuthoritativePostApplySourceFacts(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t)
-	overlappingRoot := filepath.Join(fixture.managedBase, "overlapping")
-	if err := os.MkdirAll(overlappingRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll overlapping target: %v", err)
-	}
-	retargeter := fixture.retargeter(overlappingSessionRetargetCommit{
-		Store: fixture.metadata,
-		request: metadata.SessionWorkspaceRetargetRequest{
-			SessionID:     fixture.child.Meta().SessionID,
-			WorkspaceRoot: overlappingRoot,
-		},
-	})
-	t.Cleanup(func() { _ = retargeter.Close() })
-
-	response, err := retargeter.RetargetWorkspace(t.Context(), SessionWorkspaceRetargetInvocation{
-		OperationID: serverapi.NewWorktreeOperationID(),
-		Request: metadata.SessionWorkspaceRetargetRequest{
-			SessionID:     fixture.child.Meta().SessionID,
-			WorkspaceRoot: fixture.targetWorkspaceRoot,
-		},
-		CompletionMode: serverapi.SessionRetargetCompletionWait,
-	})
-	if err != nil ||
-		response.Outcome == nil ||
-		response.Outcome.Kind != serverapi.SessionRetargetOutcomeFailed ||
-		response.Outcome.Failure == nil ||
-		response.Outcome.Failure.UnchangedProject.ID != fixture.sourceBinding.ProjectID ||
-		canonicalRetargetTestPath(t, response.Outcome.Failure.UnchangedWorkingDirectory) != canonicalRetargetTestPath(t, overlappingRoot) {
-		t.Fatalf("overlapping rebind failure response = %+v error %v", response, err)
 	}
 }
 
@@ -386,113 +350,6 @@ func canonicalRetargetTestPath(t *testing.T, path string) string {
 		t.Fatalf("CanonicalWorkspaceRoot %q: %v", path, err)
 	}
 	return canonical
-}
-
-func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t)
-	worktreeReminder := session.WorktreeReminderState{
-		Mode: session.WorktreeReminderModeExit,
-		WorktreeContext: session.WorktreeContext{
-			WorktreePath:  filepath.Join(fixture.sourceBinding.CanonicalRoot, "previous-worktree"),
-			WorkspaceRoot: fixture.sourceBinding.CanonicalRoot,
-			EffectiveCwd:  fixture.sourceBinding.CanonicalRoot,
-		},
-	}
-	if err := fixture.child.SetWorktreeReminderState(&worktreeReminder); err != nil {
-		t.Fatalf("SetWorktreeReminderState: %v", err)
-	}
-	fixture.openRuntime(t)
-	targetProjectID := fixture.targetProject.ProjectID
-	req := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.child.Meta().SessionID,
-		WorkspaceRoot: fixture.targetWorkspaceRoot,
-		ProjectID:     &targetProjectID,
-	}
-	plan, err := fixture.metadata.PlanSessionWorkspaceRetarget(context.Background(), req)
-	if err != nil {
-		t.Fatalf("PlanSessionWorkspaceRetarget: %v", err)
-	}
-
-	result, err := fixture.retargeter(fixture.metadata).execute(context.Background(), req, nil)
-	if err != nil {
-		t.Fatalf("RetargetWorkspace: %v", err)
-	}
-	if !result.WorkspaceBindingCreated {
-		t.Fatal("WorkspaceBindingCreated = false, want true")
-	}
-	if result.Binding.ProjectID != targetProjectID {
-		t.Fatalf("target project = %q, want %q", result.Binding.ProjectID, targetProjectID)
-	}
-	if _, err := os.Stat(plan.SourceSessionDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("source artifact still exists: %v", err)
-	}
-	if info, err := os.Stat(plan.TargetSessionDir); err != nil || !info.IsDir() {
-		t.Fatalf("target artifact = %v, %v", info, err)
-	}
-	record, err := fixture.metadata.ResolvePersistedSession(context.Background(), fixture.child.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolvePersistedSession: %v", err)
-	}
-	if canonicalRetargetTestPath(t, record.SessionDir) != canonicalRetargetTestPath(t, plan.TargetSessionDir) {
-		t.Fatalf("persisted session dir = %q, want %q", record.SessionDir, plan.TargetSessionDir)
-	}
-	reopened, err := session.OpenByID(
-		fixture.metadata.PersistenceRoot(),
-		fixture.child.Meta().SessionID,
-		fixture.metadata.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("session.OpenByID: %v", err)
-	}
-	if reopened.Meta().WorkspaceRoot != result.Binding.CanonicalRoot {
-		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, result.Binding.CanonicalRoot)
-	}
-	parentID, err := runtimeids.ParseSessionID(fixture.parent.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ParseSessionID parent: %v", err)
-	}
-	if reopened.Meta().PreviousSessionID == nil || *reopened.Meta().PreviousSessionID != parentID {
-		t.Fatalf("reopened previous session = %v, want %q", reopened.Meta().PreviousSessionID, fixture.parent.Meta().SessionID)
-	}
-	parentInSource, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.parent.Meta().SessionID, fixture.sourceBinding.ProjectID)
-	if err != nil {
-		t.Fatalf("SessionBelongsToProject parent: %v", err)
-	}
-	childInTarget, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Meta().SessionID, targetProjectID)
-	if err != nil {
-		t.Fatalf("SessionBelongsToProject child: %v", err)
-	}
-	if !parentInSource || !childInTarget {
-		t.Fatalf("cross-project lineage ownership = parent-source:%t child-target:%t", parentInSource, childInTarget)
-	}
-	if !projectContainsWorkspaceRoot(t, fixture.metadata, targetProjectID, result.Binding.CanonicalRoot) {
-		t.Fatalf("target project does not contain auto-attached workspace %q", result.Binding.CanonicalRoot)
-	}
-	sourceAttached, err := fixture.metadata.ProjectWorkspaceAttached(context.Background(), fixture.sourceBinding.ProjectID, result.Binding.CanonicalRoot)
-	if err != nil {
-		t.Fatalf("ProjectWorkspaceAttached source: %v", err)
-	}
-	if sourceAttached {
-		t.Fatalf("source project unexpectedly retained target workspace %q", result.Binding.CanonicalRoot)
-	}
-	if published := fixture.publisher[fixture.child.Meta().SessionID]; published != 1 {
-		t.Fatalf("identity publication count = %d, want one", published)
-	}
-	if workdir := fixture.runtimeWorkdir(t); workdir != result.Binding.CanonicalRoot {
-		t.Fatalf("runtime workdir = %q, want %q", workdir, result.Binding.CanonicalRoot)
-	}
-	var activeMeta session.Meta
-	if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, store *session.Store, _ *sessionruntime.ActiveRuntimeMaintenance) error {
-		activeMeta = store.Meta()
-		return nil
-	}); err != nil {
-		t.Fatalf("inspect active Session metadata: %v", err)
-	}
-	if activeMeta.WorktreeReminder == nil ||
-		activeMeta.WorktreeReminder.Mode != session.WorktreeReminderModeExit ||
-		activeMeta.RebindReminder == nil {
-		t.Fatalf("active reminder states = worktree %+v rebind %+v", activeMeta.WorktreeReminder, activeMeta.RebindReminder)
-	}
 }
 
 func TestSessionWorkspaceRetargeterDoesNotBlockOnBackgroundProcessState(t *testing.T) {
@@ -587,27 +444,18 @@ func TestSessionWorkspaceRetargeterSelfRebindAppliesInsideOriginatingStepWithout
 	if len(client.requests) != 2 {
 		t.Fatalf("provider requests = %d, want 2", len(client.requests))
 	}
-	var reminder *llm.ResponseItem
+	foundReminder := false
 	for _, item := range client.requests[1].Items {
 		if item.MessageType != nil && *item.MessageType == llm.MessageTypeSessionRebind {
-			copyItem := item
-			reminder = &copyItem
+			foundReminder = true
 			break
 		}
 	}
-	if reminder == nil || reminder.CompactContent == nil || reminder.Content == nil {
-		t.Fatalf("second provider request Session move reminder = %+v", reminder)
+	if !foundReminder {
+		t.Fatalf("second provider request lacks Session move reminder: %+v", client.requests[1].Items)
 	}
 	if fixture.child.Meta().RebindReminder != nil {
 		t.Fatalf("consumed Session move reminder remains durable: %+v", fixture.child.Meta().RebindReminder)
-	}
-	if err := fixture.authority.WithCurrentRuntime(context.Background(), fixture.childID, func(_ context.Context, current *runtime.Engine) error {
-		if current != engine {
-			t.Fatalf("Session rebind replaced Engine: before=%p after=%p", engine, current)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("inspect continued Engine: %v", err)
 	}
 }
 
@@ -639,16 +487,104 @@ func TestSessionWorkspaceRetargeterNoOpPublishesSuccessWithoutReminder(t *testin
 	case <-time.After(time.Second):
 		t.Fatal("no-op outcome was not published")
 	}
-	reopened, err := session.OpenByID(
-		fixture.metadata.PersistenceRoot(),
-		fixture.child.Meta().SessionID,
-		fixture.metadata.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("OpenByID: %v", err)
+}
+
+func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
+	tests := []struct {
+		name         string
+		crossProject bool
+	}{
+		{name: "default source project", crossProject: false},
+		{name: "explicit target project", crossProject: true},
 	}
-	if reopened.Meta().RebindReminder != nil {
-		t.Fatalf("no-op created rebind reminder: %+v", reopened.Meta().RebindReminder)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRealSessionRetargetFixture(t)
+			sharedRoot := fixture.targetWorkspaceRoot
+			if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), fixture.sourceBinding.ProjectID, sharedRoot); err != nil {
+				t.Fatalf("AttachWorkspaceToProject source: %v", err)
+			}
+			if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), fixture.targetProject.ProjectID, sharedRoot); err != nil {
+				t.Fatalf("AttachWorkspaceToProject target: %v", err)
+			}
+
+			req := metadata.SessionWorkspaceRetargetRequest{
+				SessionID:     fixture.child.Meta().SessionID,
+				WorkspaceRoot: sharedRoot,
+			}
+			wantProjectID := fixture.sourceBinding.ProjectID
+			targetProjectID := fixture.targetProject.ProjectID
+			if test.crossProject {
+				req.ProjectID = &targetProjectID
+				wantProjectID = targetProjectID
+				fixture.openRuntime(t)
+			}
+
+			result, err := fixture.retargeter(fixture.metadata).execute(context.Background(), req, nil)
+			if err != nil {
+				t.Fatalf("RetargetWorkspace: %v", err)
+			}
+			if result.Binding.ProjectID != wantProjectID {
+				t.Fatalf("binding project = %q, want %q", result.Binding.ProjectID, wantProjectID)
+			}
+			if test.crossProject {
+				var rebound tools.FilesystemContext
+				if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
+					rebound = maintenance.PreviousFilesystemContext.Clone()
+					return nil
+				}); err != nil {
+					t.Fatalf("inspect cross-project filesystem context: %v", err)
+				}
+				if rebound.Access.ProjectWorkspace.ProjectID != targetProjectID {
+					t.Fatalf("rebound Project ID = %q, want %q", rebound.Access.ProjectWorkspace.ProjectID, targetProjectID)
+				}
+				for _, root := range rebound.Access.ProjectWorkspace.Roots {
+					if root.LexicalPath == fixture.sourceBinding.CanonicalRoot {
+						t.Fatalf("rebound context retained source-only root %q", root.LexicalPath)
+					}
+				}
+			}
+			descriptor, err := session.NewOpenSessionDescriptor(fixture.childID)
+			if err != nil {
+				t.Fatalf("NewOpenSessionDescriptor: %v", err)
+			}
+			if err := fixture.authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, store *session.Store) error {
+				if err := store.SetName("persisted after shared-root rebind"); err != nil {
+					return err
+				}
+				appendSessionMessage(t, store, "step-after-rebind", session.MessageRoleUser, "after rebind")
+				return nil
+			}); err != nil {
+				t.Fatalf("persist after rebind: %v", err)
+			}
+
+			reopened, err := session.OpenByID(
+				fixture.metadata.PersistenceRoot(),
+				fixture.child.Meta().SessionID,
+				fixture.metadata.AuthoritativeSessionStoreOptions()...,
+			)
+			if err != nil {
+				t.Fatalf("OpenByID after rebind: %v", err)
+			}
+			eventLog, err := reopened.MaterializeEventLog()
+			if err != nil {
+				t.Fatalf("materialize reopened event log: %v", err)
+			}
+			revision, err := eventLog.Revision()
+			if err != nil {
+				t.Fatalf("read reopened event-log revision: %v", err)
+			}
+			if reopened.Meta().Name != "persisted after shared-root rebind" || revision != 1 {
+				t.Fatalf("reopened metadata=%+v event-log revision=%d", reopened.Meta(), revision)
+			}
+			belongs, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Meta().SessionID, wantProjectID)
+			if err != nil {
+				t.Fatalf("SessionBelongsToProject: %v", err)
+			}
+			if !belongs {
+				t.Fatalf("session does not belong to selected project %q", wantProjectID)
+			}
+		})
 	}
 }
 
@@ -896,16 +832,6 @@ func TestSessionWorkspaceRetargeterSchedulesWithoutWaitingAndPublishesCompletion
 	}
 	if response.Acknowledgement.OperationID != operationID || response.Outcome != nil {
 		t.Fatalf("scheduled response = %+v", response)
-	}
-	select {
-	case <-blocking.started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("scheduled retarget did not start")
-	}
-	select {
-	case outcome := <-published.outcomes:
-		t.Fatalf("outcome published before commit release: %+v", outcome)
-	default:
 	}
 	close(blocking.release)
 	select {

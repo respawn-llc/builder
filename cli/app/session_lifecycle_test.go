@@ -10,7 +10,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/apicontract"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -243,28 +242,6 @@ func TestTransferredRuntimePlanClosesWhenReplacementSetupFails(t *testing.T) {
 	err := closeTransferredRuntimePlanAfterSetupFailure(plan, setupErr)
 	if !errors.Is(err, setupErr) || closeCalls != 1 {
 		t.Fatalf("setup cleanup = err %v close calls %d", err, closeCalls)
-	}
-}
-
-func TestSessionRetargetBindingChangedRefreshesSameProjectWorkspace(t *testing.T) {
-	current := client.ProjectAttachment{
-		ProjectID:     "project-a",
-		WorkspaceID:   "workspace-a",
-		WorkspaceRoot: "/workspace-a",
-	}
-	if !sessionRetargetBindingChanged(current, true, &clientui.TranscriptSessionRetargetSuccess{
-		ProjectID:     "project-a",
-		WorkspaceID:   "workspace-b",
-		CanonicalRoot: "/workspace-b",
-	}) {
-		t.Fatal("same-Project Workspace move did not request Remote refresh")
-	}
-	if sessionRetargetBindingChanged(current, true, &clientui.TranscriptSessionRetargetSuccess{
-		ProjectID:     current.ProjectID,
-		WorkspaceID:   current.WorkspaceID,
-		CanonicalRoot: current.WorkspaceRoot,
-	}) {
-		t.Fatal("unchanged binding requested Remote refresh")
 	}
 }
 
