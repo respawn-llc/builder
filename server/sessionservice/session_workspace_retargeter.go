@@ -78,6 +78,8 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 	maintenanceCtx := releaseStarts.AuthorizeMaintenance(ctx)
 
 	var result metadata.SessionWorkspaceRetargetResult
+	var publicationErr error
+	retirementScheduled := false
 	runMaintenance := s.authority.RunSessionMaintenance
 	if plan.CrossProject() {
 		runMaintenance = s.authority.RunSessionMaintenanceIfIdle
@@ -85,7 +87,11 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 	err = runMaintenance(maintenanceCtx, plan.SessionID, func(runCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
 		var applyErr error
 		result, applyErr = s.applyWorkspaceRetarget(runCtx, req, store, activeRuntime, false)
-		return applyErr
+		if applyErr != nil {
+			return applyErr
+		}
+		retirementScheduled, publicationErr = s.publishCommittedWorkspaceRetarget(plan.SessionID, activeRuntime)
+		return nil
 	})
 	if errors.Is(err, sessionruntime.ErrRuntimeActivityBusy) {
 		err = &serverapi.SessionRetargetError{
@@ -94,12 +100,16 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 			SourceProject: plan.SourceProject,
 			TargetRoot:    plan.TargetWorkspaceRoot,
 		}
+	} else if err != nil && retirementScheduled {
+		slog.ErrorContext(
+			context.WithoutCancel(ctx),
+			"retire committed Session rebind Runtime",
+			"session_id", plan.SessionID,
+			"error", err,
+		)
+		err = nil
 	}
 	closeErr := releaseStarts.Close(context.Background())
-	var publicationErr error
-	if err == nil {
-		publicationErr = s.publisher.PublishSessionIdentity(plan.SessionID)
-	}
 	return result, errors.Join(err, publicationErr, closeErr)
 }
 
@@ -128,6 +138,8 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 		offered := false
 		scheduled := false
 		failurePersisted := false
+		retirementScheduled := false
+		var publicationErr error
 		var failureCause error
 		runErr := s.authority.RunSessionMaintenanceAtStepBoundary(
 			runCtx,
@@ -152,13 +164,23 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 					failurePersisted = persistErr == nil
 					return errors.Join(applyErr, steerErr, persistErr)
 				}
-				return applyErr
+				retirementScheduled, publicationErr = s.publishCommittedWorkspaceRetarget(plan.SessionID, activeRuntime)
+				return nil
 			},
 		)
 		if offered && !scheduled {
 			return
 		}
 		if scheduled {
+			if runErr != nil && retirementScheduled {
+				slog.ErrorContext(
+					context.WithoutCancel(runCtx),
+					"retire committed scheduled Session rebind Runtime",
+					"session_id", plan.SessionID,
+					"error", runErr,
+				)
+				runErr = nil
+			}
 			if runErr != nil {
 				persistCtx := context.WithoutCancel(runCtx)
 				if failureCause == nil {
@@ -179,7 +201,7 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 				}
 				return
 			}
-			if publicationErr := s.publisher.PublishSessionIdentity(plan.SessionID); publicationErr != nil {
+			if publicationErr != nil {
 				slog.ErrorContext(
 					context.WithoutCancel(runCtx),
 					"publish scheduled Session rebind identity",
@@ -204,6 +226,13 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 		accepted <- false
 		return serverapi.WorktreeScheduledAcknowledgement{}, context.Cause(ctx)
 	}
+}
+
+func (s *SessionWorkspaceRetargeter) publishCommittedWorkspaceRetarget(
+	sessionID string,
+	activeRuntime *sessionruntime.ActiveRuntimeMaintenance,
+) (bool, error) {
+	return activeRuntime.RetirementScheduled(), s.publisher.PublishSessionIdentity(sessionID)
 }
 
 func (s *SessionWorkspaceRetargeter) applyWorkspaceRetarget(

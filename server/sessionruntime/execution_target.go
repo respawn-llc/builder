@@ -37,6 +37,10 @@ func (m *ActiveRuntimeMaintenance) RetireRuntime() {
 	}
 }
 
+func (m *ActiveRuntimeMaintenance) RetirementScheduled() bool {
+	return m != nil && m.retire
+}
+
 func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
