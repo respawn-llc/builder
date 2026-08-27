@@ -12,20 +12,14 @@ import (
 
 var errStaticToolContractPreparation = errors.New("static tool contract preparation failed")
 
-type InputAliases struct {
-	Canonical string
-	Aliases   []string
-}
-
 type StaticContractSource struct {
-	ID      toolspec.ID
-	Input   any
-	Aliases []InputAliases
+	ID    toolspec.ID
+	Input any
 }
 
 type staticToolContract struct {
-	schema     jsoncontract.Function
-	projection []jsoncontract.ObjectField
+	schema jsoncontract.Function
+	fields []string
 }
 
 type StaticToolContracts struct {
@@ -81,27 +75,8 @@ func NewStaticToolContracts(
 				err,
 			)
 		}
-		aliases := make(map[string][]string, len(source.Aliases))
-		for _, alias := range source.Aliases {
-			aliases[alias.Canonical] = append([]string(nil), alias.Aliases...)
-		}
 		fields := schema.Fields()
-		projection := make([]jsoncontract.ObjectField, 0, len(fields))
-		for _, field := range fields {
-			projection = append(projection, jsoncontract.ObjectField{
-				Name:    field,
-				Aliases: aliases[field],
-			})
-			delete(aliases, field)
-		}
-		if len(aliases) != 0 {
-			return StaticToolContracts{}, fmt.Errorf(
-				"%w: tool %q aliases target an unadvertised field",
-				errStaticToolContractPreparation,
-				source.ID,
-			)
-		}
-		contracts[source.ID] = staticToolContract{schema: schema, projection: projection}
+		contracts[source.ID] = staticToolContract{schema: schema, fields: fields}
 	}
 	return StaticToolContracts{ingress: ingress, byID: contracts}, nil
 }
@@ -124,26 +99,56 @@ func (c StaticToolContracts) definition(id toolspec.ID) (Definition, bool) {
 	return metadata, true
 }
 
+type PreparedInput struct {
+	Canonical       []byte
+	ValidationError error
+}
+
 func (c StaticToolContracts) prepareInput(id toolspec.ID, raw []byte) ([]byte, error) {
+	prepared, err := c.prepareInputOutcome(id, raw)
+	if err != nil {
+		return nil, err
+	}
+	if prepared.ValidationError != nil {
+		return nil, prepared.ValidationError
+	}
+	return prepared.Canonical, nil
+}
+
+func (c StaticToolContracts) prepareInputOutcome(id toolspec.ID, raw []byte) (PreparedInput, error) {
 	contract, ok := c.contract(id)
 	if !ok {
-		return nil, fmt.Errorf("tool %q has no prepared static contract", id)
+		return PreparedInput{}, fmt.Errorf("tool %q has no prepared static contract", id)
 	}
 	value, err := c.ingress.ValidateValue(raw)
 	if err != nil {
-		return nil, err
+		return PreparedInput{}, err
 	}
-	projected, err := value.ProjectObject(contract.projection)
+	projected, err := value.ProjectObjectWithMatcher(contract.fields, func(name string) (string, int, bool) {
+		if canonical, priority, ok := toolspec.MatchModelParameterName(id, name); ok {
+			return canonical, priority, true
+		}
+		for _, field := range contract.fields {
+			if name == field {
+				return field, 0, true
+			}
+		}
+		return "", 0, false
+	})
 	if err != nil {
-		return nil, err
+		return PreparedInput{}, err
 	}
 	canonical, err := projected.CompactJSON()
 	if err != nil {
-		return nil, err
+		return PreparedInput{}, err
 	}
 	validated, err := contract.schema.ValidateValue(canonical)
 	if err != nil {
-		return nil, err
+		return PreparedInput{Canonical: canonical, ValidationError: err}, nil
 	}
-	return validated.CompactJSON()
+	validatedJSON, err := validated.CompactJSON()
+	if err != nil {
+		return PreparedInput{}, err
+	}
+	return PreparedInput{Canonical: validatedJSON}, nil
 }

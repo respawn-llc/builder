@@ -60,7 +60,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 		toolID := prepared.toolID
 		knownTool := prepared.knownTool
 		executableCall := prepared.executableCall
-		transcriptCall := prepareRawToolCallForTranscript(call, executableCall, e.transcriptWorkingDir())
+		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
 		started := Event{Kind: EventToolCallStarted, StepID: exactStepIDPointer(stepID), ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
 			started.CommittedEntryStart = start
@@ -306,12 +306,13 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 	prepared := make([]executorToolCall, 0, len(calls))
 	askCandidateIndexes := make([]int, 0)
 	askCandidatePromptIDs := make([]string, 0)
+	registeredTools := registeredToolIDs(engine)
 	for i := range calls {
 		call := calls[i]
 		if strings.TrimSpace(call.ID) == "" {
 			return nil, fmt.Errorf("%w (tool=%s)", ErrMissingProviderToolCallID, call.Name)
 		}
-		toolID, knownTool := toolspec.ParseID(call.Name)
+		toolID, knownTool := toolspec.ResolveModelToolName(call.Name, registeredTools)
 		executableCall := call
 		if knownTool {
 			executableCall.Name = string(toolID)
@@ -323,7 +324,17 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 		var inputErr error
 		if knownTool && toolID != toolspec.ToolCompleteNode && engine != nil && engine.registry != nil {
 			if _, registered := engine.registry.Get(toolID); registered {
-				executableCall.Input, inputErr = engine.registry.PrepareInput(toolID, executableCall.Input)
+				rawInput := append(json.RawMessage(nil), executableCall.Input...)
+				input, prepareErr := engine.registry.PrepareInputOutcome(toolID, executableCall.Input)
+				if prepareErr != nil {
+					inputErr = prepareErr
+					executableCall.Input = rawInput
+				} else {
+					executableCall.Input = input.Canonical
+					if input.ValidationError != nil {
+						inputErr = fmt.Errorf("prepare %q input: %w", toolID, input.ValidationError)
+					}
+				}
 			}
 		}
 		prepared = append(prepared, executorToolCall{
@@ -362,6 +373,18 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 		}
 	}
 	return prepared, nil
+}
+
+func registeredToolIDs(engine *Engine) []toolspec.ID {
+	if engine == nil || engine.registry == nil {
+		return nil
+	}
+	definitions := engine.registry.Definitions()
+	ids := make([]toolspec.ID, 0, len(definitions))
+	for _, definition := range definitions {
+		ids = append(ids, definition.ID)
+	}
+	return ids
 }
 
 func askQuestionMaterializable(engine *Engine) bool {

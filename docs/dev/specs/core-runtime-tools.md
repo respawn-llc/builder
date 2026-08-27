@@ -31,9 +31,18 @@
 
 ## Core Tools And Runtime Integration
 
-- The core model tools are `shell`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
+- The core model tools are `exec_command`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
 - Kent does not expose model-callable Goal, worktree, Task, or Workflow tools outside Workflow-controlled Sessions. Adding a tool requires explicit human approval and a spec update.
 - Model/transcript-visible Session mutations follow the Active Session Runtime's accepted mutation order unless the Runtime Steering specification assigns the operation to an exact or direct owner.
+- Tool definitions advertise one canonical tool name and canonical parameter names, and their schemas remain closed to unrecognized parameters. Kent accepts the hidden aliases below only for incoming model tool calls, and they do not expand accepted configuration names.
+- Kent normalizes every accepted alias to its canonical tool and parameter names before execution, persistence, presentation, or later model context.
+- Kent checks exact canonical spelling, listed semantic aliases in order, canonical camelCase forms, semantic-alias camelCase forms, and then case-insensitive forms. Every listed multiword canonical name and semantic alias also accepts its explicit kebab-case companion. Kent does not perform generic punctuation or fuzzy normalization.
+- Canonical parameters and their accepted casing or separator forms take priority over semantic aliases. Precedence among multiple semantic aliases is unspecified. Unrecognized parameters are ignored when a call reaches Kent.
+- An active tool whose published name exactly matches the incoming spelling takes priority over a hidden alias. `patch` and `edit` are mutually exclusive: `edit` aliases `patch` when `patch` is active and remains canonical when `edit` is active.
+- Kent panics during startup in development and production when hidden aliases resolve one spelling to different tools, or parameter aliases within one tool resolve one spelling to different canonical parameters.
+- Tool aliases are `exec_command`: `shell`, `bash`, `exec`, `run_command`, `shell_command`, `run_shell`, `bash_command`; `write_stdin`: none; `view_image`: `read_image`, `open_image`, `inspect_image`, `vision`, `read_pdf`, `open_pdf`, `inspect_pdf`; `patch`: `apply_patch`, `edit`; `ask_question`: `question`, `ask_user_question`, `request_user_input`, `ask`, `ask_user`, `ask_human`, `help`, `say`; `trigger_handoff`: `handoff`, `compact`, `request_handoff`; and `edit`: `edit_file`, `str_replace_editor`, `replace`, `string_replace`, `replace_text`, `write`.
+- Parameter aliases are `exec_command`: `cmd` from `command`, `script`; `workdir` from `cwd`, `working_directory`, `working_dir`; `shell` from `shell_path`, `interpreter`; `login` from `login_shell`; `tty` from `pty`, `use_tty`; `raw` from `raw_output`; `yield_time_ms` from `yield_ms`, `wait_ms`; `max_output_tokens` from `max_tokens`, `output_token_limit`; `write_stdin`: `session_id` from `process_id`, `shell_id`; `chars` from `input`, `stdin`, `text`; `yield_time_ms` from `yield_ms`, `wait_ms`; `max_output_tokens` from `max_tokens`, `output_token_limit`; `view_image`: `path` from `file_path`, `image_path`, `file`, `pdf_path`, `filename`; `raw` from `raw_output`, `unoptimized`, `disable_optimization`, `original_quality`; `patch`: `patch` from `diff`, `patch_text`, `content`, `patch_content`, `input`; `edit`: `path` from `file_path`, `file`; `old_string` from `old_text`, `find`, `search`; `new_string` from `new_text`, `replacement`, `replace`; `replace_all` from `all`, `global`; `ask_question`: `question` from `prompt`, `message`, `text`; `suggestions` from `options`, `choices`, `answers`; `recommended_option_index` from `recommended_index`, `suggested_option_index`, `default_index`; and `trigger_handoff`: `summarizer_prompt` from `summary_prompt`, `handoff_prompt`, `compaction_prompt`; `future_agent_message` from `next_agent_message`, `handoff_message`, `continuation_message`.
+- The canonical parameter `yield_time_ms` also accepts the mixed separator form `yield-time_ms`, its full-kebab form `yield-time-ms`, and its generated camelCase form `yieldTimeMs`.
 - `steer` applies submitted input through that accepted mutation order.
 - `queue` remains the separate post-turn user Queue.
 - A human steer remains one user message and applies as one first-in, first-out Session mutation.
@@ -64,12 +73,12 @@ To respond, run: kent run steer <source-session-id> "message"
 
 ## Command Execution
 
-- `shell` is the only model-facing command-execution tool. It uses the user's login shell without a TTY, inherits the parent environment, adds non-interactive technical environment values, and combines stdout and stderr into one unlabelled stream.
+- `exec_command` is the only model-facing command-execution tool. It uses the user's login shell without a TTY, inherits the parent environment, adds non-interactive technical environment values, and combines stdout and stderr into one unlabelled stream.
 - Before launching a command, Kent must resolve a non-empty selected Working Directory to a normalized absolute path and verify that the path exists and is a directory.
 - If a non-empty selected Working Directory does not exist, Kent must not launch the command and must return `<normalized absolute path> does not exist, so the shell command was not executed. Please select an existing working directory`.
 - If a non-empty selected Working Directory exists but is not a directory, Kent must not launch the command and must return `<normalized absolute path> is not a directory, so the shell command was not executed. Please select an existing working directory`.
 - An empty selected Working Directory retains the shell manager's existing validation behavior and never falls back to Kent's server process working directory.
-- A `shell` failure never adds the `exec_command failed:` prefix to its model-visible error.
+- An `exec_command` failure never adds the `exec_command failed:` prefix to its model-visible error.
 - Commands have no lifetime limit. `yield_time_ms` returns control and leaves the command running in the background. An output check with no requested wait may return available output immediately.
 - Kent does not limit concurrent command processes, including background processes visible through `/ps`.
 - A foreground command may run while later short Session settings, human input, and model-visible notices are accepted and applied.
