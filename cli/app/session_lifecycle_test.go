@@ -232,6 +232,53 @@ func TestRuntimeReleaseUsesFinalModelPolicyAndPreservesErrors(t *testing.T) {
 	})
 }
 
+func TestReopenRetargetedSessionReleasesSourceRuntimeBeforeReplacingRemote(t *testing.T) {
+	sourceRemoteOpen := true
+	released := false
+	server := reattachSessionLifecycleServer{
+		lifecycle: &recordingSessionLifecycleClient{
+			persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+				if !sourceRemoteOpen {
+					return serverapi.SessionPersistInputDraftResponse{}, errors.New("source remote is closed")
+				}
+				return serverapi.SessionPersistInputDraftResponse{}, nil
+			},
+		},
+		reattach: func(context.Context, string) error {
+			if !released {
+				return errors.New("source runtime owner is still attached")
+			}
+			sourceRemoteOpen = false
+			return nil
+		},
+	}
+	runtimePlan := &runtimeLaunchPlan{close: func() error {
+		if !sourceRemoteOpen {
+			return errors.New("source remote is closed")
+		}
+		released = true
+		return nil
+	}}
+	sessionID := "11111111-1111-4111-8111-111111111111"
+
+	next, err := reopenRetargetedSession(
+		context.Background(),
+		server,
+		runtimePlan,
+		sessionID,
+		newUIModelDefaults(nil),
+	)
+	if err != nil {
+		t.Fatalf("reopen retargeted Session: %v", err)
+	}
+	if !released || sourceRemoteOpen {
+		t.Fatalf("handoff state released=%t source_remote_open=%t", released, sourceRemoteOpen)
+	}
+	if target := requireSessionOpenDestination(t, next); target != sessionID {
+		t.Fatalf("reopen destination = %q, want %q", target, sessionID)
+	}
+}
+
 type narrowSessionLifecycleServer struct {
 	lifecycle      apicontract.SessionLifecycleService
 	cfg            config.App
@@ -249,6 +296,19 @@ func (s narrowSessionLifecycleServer) Reauthenticate(ctx context.Context, intera
 		return nil
 	}
 	return s.reauthenticate(ctx, interactor)
+}
+
+type reattachSessionLifecycleServer struct {
+	lifecycle apicontract.SessionLifecycleService
+	reattach  func(context.Context, string) error
+}
+
+func (s reattachSessionLifecycleServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
+	return s.lifecycle
+}
+
+func (s reattachSessionLifecycleServer) ReattachSession(ctx context.Context, sessionID string) error {
+	return s.reattach(ctx, sessionID)
 }
 
 type recordingSessionLifecycleClient struct {

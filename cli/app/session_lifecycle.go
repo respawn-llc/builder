@@ -36,6 +36,11 @@ type sessionWorkspaceChangeServer interface {
 	sessionConfigProvider
 }
 
+type sessionReattachServer interface {
+	sessionLifecycleClientProvider
+	ReattachSession(context.Context, string) error
+}
+
 type promptCommandCatalogServer interface {
 	PromptCommandCatalogClient(context.Context, string, clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error)
 }
@@ -196,36 +201,14 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		}
 		transition := extractUITransition(finalModel)
 		if transition.SessionRetargeted {
-			if runtimePlan.stopEventStreams != nil {
-				runtimePlan.stopEventStreams()
-			}
-			reattacher, ok := server.(interface {
-				ReattachSession(context.Context, string) error
-			})
+			reattacher, ok := server.(sessionReattachServer)
 			if !ok {
 				return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, errors.New("Session rebind requires a Remote server"))
 			}
-			if err := reattacher.ReattachSession(ctx, plan.SessionID); err != nil {
-				return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
-			}
-			if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
-				return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
-			}
-			if err := runtimePlan.Close(); err != nil {
-				return err
-			}
-			sessionID, err := runtimeids.ParseSessionID(plan.SessionID)
+			next, err = reopenRetargetedSession(ctx, reattacher, runtimePlan, plan.SessionID, finalModel)
 			if err != nil {
 				return err
 			}
-			next = serverapi.LaunchSessionDirective(
-				serverapi.OpenExistingSessionLaunchIntent(sessionID),
-				serverapi.NewSessionLaunchPreparation(
-					nil,
-					serverapi.RestoreStoredDraftSessionDraftDisposition(),
-					serverapi.SessionAuthPreparationKeepCurrent,
-				),
-			)
 			continue
 		}
 		if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
@@ -241,6 +224,39 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		}
 		next = resolved
 	}
+}
+
+func reopenRetargetedSession(
+	ctx context.Context,
+	server sessionReattachServer,
+	runtimePlan *runtimeLaunchPlan,
+	rawSessionID string,
+	finalModel any,
+) (serverapi.SessionDirective, error) {
+	sessionID, err := runtimeids.ParseSessionID(rawSessionID)
+	if err != nil {
+		return serverapi.SessionDirective{}, releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
+	}
+	if runtimePlan.stopEventStreams != nil {
+		runtimePlan.stopEventStreams()
+	}
+	if err := persistSessionDraftToServer(ctx, server, rawSessionID, finalModel); err != nil {
+		return serverapi.SessionDirective{}, releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
+	}
+	if err := runtimePlan.Close(); err != nil {
+		return serverapi.SessionDirective{}, err
+	}
+	if err := server.ReattachSession(ctx, rawSessionID); err != nil {
+		return serverapi.SessionDirective{}, err
+	}
+	return serverapi.LaunchSessionDirective(
+		serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		serverapi.NewSessionLaunchPreparation(
+			nil,
+			serverapi.RestoreStoredDraftSessionDraftDisposition(),
+			serverapi.SessionAuthPreparationKeepCurrent,
+		),
+	), nil
 }
 
 func bindNavigationSessionContext(ctx context.Context, server interactiveSessionServer, preparation serverapi.SessionLaunchPreparation) (interactiveSessionServer, bool, error) {
