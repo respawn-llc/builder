@@ -10,6 +10,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -152,6 +153,8 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	}
 	response := msg.response
 	settings := response.Settings
+	m.modelName = settings.SelectedAgent.Model
+	m.agentRole = textutil.OptionalTrimmedString(settings.SelectedAgent.Role)
 	m.thinkingLevel = settings.SelectedAgent.Thinking
 	m.fastModeAvailable = settings.Fast != nil
 	m.fastModeEnabled = settings.Fast != nil && settings.Fast.Value
@@ -159,6 +162,8 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	m.reviewerEnabled = settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
 	m.questionsEnabled = settings.Questions.Enabled
 	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
+	m.compactionMode = string(response.Context.CompactionMode)
+	m.compactionCount = int(response.Context.CompletedCompactionCount)
 	m.setRuntimeContextUsage(m.currentRuntimeSessionID(), runtimeContextUsageFromChatContext(response.Context))
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
 		reason := "Chat settings mutation rejected"

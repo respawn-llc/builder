@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -22,6 +23,7 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 		return nil
 	}
 	status := view.Status
+	m.agentRole = textutil.Pointer(view.Session.AgentRole)
 	if strings.TrimSpace(status.ThinkingLevel) != "" {
 		m.thinkingLevel = status.ThinkingLevel
 	}
@@ -31,6 +33,8 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 	m.questionsEnabled = status.QuestionsEnabled
 	m.fastModeAvailable = status.FastModeAvailable
 	m.fastModeEnabled = status.FastModeEnabled
+	m.compactionMode = status.CompactionMode
+	m.compactionCount = status.CompactionCount
 	m.conversationFreshness = status.ConversationFreshness
 	m.setRuntimeContextUsage(view.Session.SessionID, status.ContextUsage)
 	if view.Activity.State != "" {
@@ -188,5 +192,7 @@ func (m *uiModel) localRuntimeStatus() clientui.RuntimeStatus {
 		FastModeEnabled:       m.fastModeEnabled,
 		ConversationFreshness: m.conversationFreshness,
 		ThinkingLevel:         m.thinkingLevel,
+		CompactionMode:        m.compactionMode,
+		CompactionCount:       m.compactionCount,
 	}
 }

@@ -210,9 +210,6 @@ func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Mod
 	requested = strings.TrimSpace(requested)
 	if requested == "" {
 		current := strings.TrimSpace(m.thinkingLevel)
-		if m.hasRuntimeClient() {
-			current = m.cachedRuntimeStatus().ThinkingLevel
-		}
 		return m, c.model.sendThinkingLevelQueryStatus(current)
 	}
 
@@ -333,7 +330,7 @@ func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Mo
 func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, tea.Cmd) {
 	m := c.model
 	requested = strings.ToLower(strings.TrimSpace(requested))
-	currentEnabled := m.cachedRuntimeStatus().QuestionsEnabled
+	currentEnabled := m.questionsEnabled
 	targetEnabled := currentEnabled
 	switch requested {
 	case "":
@@ -367,7 +364,7 @@ func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, 
 func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Model, tea.Cmd) {
 	m := c.model
 	requested = strings.ToLower(strings.TrimSpace(requested))
-	currentEnabled := m.cachedRuntimeStatus().AutoCompactionEnabled
+	currentEnabled := m.autoCompactionEnabled
 	targetEnabled := currentEnabled
 	switch requested {
 	case "":

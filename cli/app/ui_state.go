@@ -85,10 +85,13 @@ type uiInputFeatureState struct {
 	completedStepID             string
 
 	modelName                 string
+	agentRole                 *string
 	configuredModelName       *string
 	thinkingLevel             string
 	fastModeAvailable         bool
 	fastModeEnabled           bool
+	compactionMode            string
+	compactionCount           int
 	modelContractLocked       bool
 	spinnerFrame              int
 	spinnerClock              frameAnimationClock
