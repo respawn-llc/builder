@@ -78,6 +78,13 @@ func TestRunUIProgramSurfacesForcedExitStatusAfterLoopRestoration(t *testing.T) 
 	}
 }
 
+func TestNativeProgressRequiresTerminalOutput(t *testing.T) {
+	var output bytes.Buffer
+	if terminalSupportsNativeProgress(&output) {
+		t.Fatal("redirected output was treated as a terminal")
+	}
+}
+
 func TestRunUIProgramAttemptsBestEffortNativeProgressResetWhenEnabled(t *testing.T) {
 	var progress bytes.Buffer
 	composition := &uiProgramComposition{

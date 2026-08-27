@@ -15,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
+	"golang.org/x/term"
 )
 
 type uiProgramComposition struct {
@@ -50,6 +51,11 @@ func runUILoop(request uiLoopRequest) (tea.Model, error) {
 		return nil, err
 	}
 	return runUIProgram(composition, composition.model)
+}
+
+func terminalSupportsNativeProgress(output io.Writer) bool {
+	file, ok := output.(terminalCursorFile)
+	return ok && term.IsTerminal(int(file.Fd()))
 }
 
 func runUIProgram(composition *uiProgramComposition, initialModel tea.Model) (tea.Model, error) {
@@ -130,6 +136,11 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("transcript event stream is required")
 	}
+	nativeProgressEnabled := request.active.TUINativeProgressBar && terminalSupportsNativeProgress(output)
+	var nativeProgressOutput *uiTerminalOutput
+	if nativeProgressEnabled {
+		nativeProgressOutput = terminalOutput.uiTerminalOutput
+	}
 	// The first renderer write occurs only after Bubble Tea owns terminal mode.
 	// Queue the native-cursor signal there, so it is a real input-ready boundary.
 	if err := terminalOutput.AnnounceInputReady(); err != nil {
@@ -147,8 +158,8 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIThinkingLevel(request.active.ThinkingLevel),
 		WithUIModelContractLocked(request.modelContractLocked),
 		WithUITheme(request.active.Theme),
-		WithUINativeProgressBar(request.active.TUINativeProgressBar),
-		WithUITerminalOutput(terminalOutput.uiTerminalOutput),
+		WithUINativeProgressBar(nativeProgressEnabled),
+		WithUITerminalOutput(nativeProgressOutput),
 		WithUIMarkdownLinkPresentation(terminalCapabilities.MarkdownLinks),
 		WithUIDebug(request.active.Debug),
 		WithUICommandRegistry(request.commandRegistry),
@@ -208,8 +219,8 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		options:               options,
 		logger:                uiLogger,
 		output:                output,
-		terminalOutput:        terminalOutput.uiTerminalOutput,
-		nativeProgressEnabled: request.active.TUINativeProgressBar,
+		terminalOutput:        nativeProgressOutput,
+		nativeProgressEnabled: nativeProgressEnabled,
 		close: func() {
 			model.Close()
 			if tuiLogger != nil {
