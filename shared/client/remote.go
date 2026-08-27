@@ -19,7 +19,6 @@ import (
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/serverjsoncontract"
-	"core/shared/worktreecontract"
 
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -700,46 +699,6 @@ func (c *Remote) RetargetSessionWorkspace(ctx context.Context, req serverapi.Ses
 func (c *Remote) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
 	var resp serverapi.SessionResolveTransitionResponse
 	return resp, c.call(ctx, protocol.MethodSessionResolveTransition, req, &resp)
-}
-
-func (c *Remote) ListWorktrees(ctx context.Context, req worktreecontract.ListRequest) (worktreecontract.ListResponse, error) {
-	return newRemoteWorktreeBinaryClient(c).ListWorktrees(ctx, req)
-}
-
-func (c *Remote) ListWorkspaceWorktrees(ctx context.Context, req worktreecontract.WorkspaceListRequest) (worktreecontract.WorkspaceListResponse, error) {
-	return newRemoteWorktreeBinaryClient(c).ListWorkspaceWorktrees(ctx, req)
-}
-
-func (c *Remote) GetWorktreeStatus(ctx context.Context, req worktreecontract.StatusRequest) (worktreecontract.StatusResponse, error) {
-	return newRemoteWorktreeBinaryClient(c).GetWorktreeStatus(ctx, req)
-}
-
-func (c *Remote) ResolveWorktreeSelector(ctx context.Context, req worktreecontract.SelectorResolveRequest) (worktreecontract.SelectorResolveResponse, error) {
-	return newRemoteWorktreeBinaryClient(c).ResolveWorktreeSelector(ctx, req)
-}
-
-func (c *Remote) PreviewWorktreeDelete(ctx context.Context, req worktreecontract.DeletePreviewRequest) (worktreecontract.DeletePreviewResponse, error) {
-	return newRemoteWorktreeBinaryClient(c).PreviewWorktreeDelete(ctx, req)
-}
-
-func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, req worktreecontract.CreateTargetResolveRequest) (worktreecontract.CreateTargetResolveResponse, error) {
-	return newRemoteWorktreeBinaryClient(c).ResolveWorktreeCreateTarget(ctx, req)
-}
-
-func (c *Remote) CreateWorktree(ctx context.Context, req worktreecontract.CreateRequest) (worktreecontract.CreateResponse, error) {
-	return newRemoteWorktreeBinaryClient(c).CreateWorktree(ctx, req)
-}
-
-func (c *Remote) EnterWorktree(ctx context.Context, req worktreecontract.EnterRequest) (worktreecontract.ScheduledAcknowledgement, error) {
-	return newRemoteWorktreeBinaryClient(c).EnterWorktree(ctx, req)
-}
-
-func (c *Remote) LeaveWorktree(ctx context.Context, req worktreecontract.LeaveRequest) (worktreecontract.ScheduledAcknowledgement, error) {
-	return newRemoteWorktreeBinaryClient(c).LeaveWorktree(ctx, req)
-}
-
-func (c *Remote) DeleteWorktree(ctx context.Context, req worktreecontract.DeleteRequest) (worktreecontract.DeleteResult, error) {
-	return newRemoteWorktreeBinaryClient(c).DeleteWorktree(ctx, req)
 }
 
 func (c *Remote) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {

@@ -21,6 +21,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 type sessionRetargetMetadata interface {
@@ -151,18 +152,18 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 	ctx context.Context,
 	req metadata.SessionWorkspaceRetargetRequest,
 	origin serverapi.RuntimeStepOrigin,
-	operationID serverapi.WorktreeOperationID,
-) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	operationID worktreecontract.OperationID,
+) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error) {
 	if s == nil || s.metadata == nil || s.authority == nil || s.publisher == nil || s.processes == nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, errors.New("session workspace retarget dependencies are required")
+		return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{}, errors.New("session workspace retarget dependencies are required")
 	}
 	plan, err := s.metadata.PlanSessionWorkspaceRetarget(ctx, req)
 	if err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
+		return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{}, err
 	}
 	sourceTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, plan.SessionID)
 	if err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
+		return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{}, err
 	}
 	result := make(chan error, 1)
 	var admission scheduledRetargetAdmission
@@ -260,14 +261,14 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 	case err := <-result:
 		if err != nil {
 			cancelRun()
-			return serverapi.WorktreeScheduledAcknowledgement{}, err
+			return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{}, err
 		}
-		return serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID}, nil
+		return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{OperationID: operationID}, nil
 	case <-ctx.Done():
 		if admission.cancelPending() {
 			cancelRun()
 		}
-		return serverapi.WorktreeScheduledAcknowledgement{}, context.Cause(ctx)
+		return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{}, context.Cause(ctx)
 	}
 }
 

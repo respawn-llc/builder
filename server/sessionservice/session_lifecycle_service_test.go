@@ -21,6 +21,7 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 func appendSessionMessage(t *testing.T, store *session.Store, stepID string, role session.MessageRole, content string) session.EventRecord {
@@ -111,11 +112,11 @@ func (s *sessionLifecycleRetargeterStub) ScheduleWorkspaceRetarget(
 	_ context.Context,
 	req metadata.SessionWorkspaceRetargetRequest,
 	_ serverapi.RuntimeStepOrigin,
-	operationID serverapi.WorktreeOperationID,
-) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	operationID worktreecontract.OperationID,
+) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error) {
 	s.req = req
 	s.scheduled = true
-	return serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID}, s.err
+	return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{OperationID: operationID}, s.err
 }
 
 type sessionNavigationTargetResolverStub struct {

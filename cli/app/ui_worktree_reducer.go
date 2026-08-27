@@ -8,6 +8,7 @@ import (
 	"core/cli/app/internal/worktreeui"
 	"core/shared/clientui"
 	"core/shared/invariant"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -173,9 +174,9 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
 		event := msg.event
-		m.worktrees.create.setupEvent = &event
+		m.worktrees.create.setupEvent = event
 		m.layout().syncViewport()
-		if event.Phase == worktreecontract.SetupPhaseCompleted || event.Phase == worktreecontract.SetupPhaseFailed {
+		if event.GetCompleted() != nil || event.GetFailed() != nil {
 			return handledUIFeatureUpdate(m, nil)
 		}
 		return handledUIFeatureUpdate(m, worktreeSetupEventCmd(msg.events))
@@ -217,7 +218,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			var precondition *worktreecontract.DeletePreconditionError
 			if errors.As(msg.err, &precondition) {
 				m.worktrees.deleteConfirm.forceFolderRemoval = true
-				m.worktrees.deleteConfirm.errorText = worktreeDeleteForceConfirmation(precondition.DirtyState)
+				m.worktrees.deleteConfirm.errorText = worktreeDeleteForceConfirmation(precondition.Details.DirtyState)
 				m.layout().syncViewport()
 				return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 			}
@@ -267,7 +268,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			Token:         msg.token,
 			CurrentQuery:  m.worktrees.create.branchTarget.Text(),
 			ResponseQuery: msg.query,
-			Resolution:    msg.resp.Resolution,
+			Resolution:    resolvedCreateTarget(msg.resp),
 			HasError:      msg.err != nil,
 			ErrorText:     errorText,
 		})
@@ -286,6 +287,13 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		return handledUIFeatureUpdate(m, nil)
 	}
 	return uiFeatureUpdateResult{}
+}
+
+func resolvedCreateTarget(response *worktreepb.CreateTargetResolveSuccess) worktreepb.CreateTargetResolution {
+	if response == nil || response.Resolution == nil {
+		return worktreepb.CreateTargetResolution{}
+	}
+	return *response.Resolution
 }
 
 type worktreeCreateErrorPlacement struct {

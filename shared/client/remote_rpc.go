@@ -20,7 +20,6 @@ import (
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/serverjsoncontract"
-	"core/shared/worktreecontract"
 )
 
 var errRemoteClosed = errors.New("remote client is closed")
@@ -37,21 +36,6 @@ var errRemoteSessionIDRequired = errors.New("remote session ID is required")
 
 type requestCanceledError struct {
 	message string
-}
-
-type worktreeBlockedError struct {
-	diagnostic *string
-}
-
-func (e worktreeBlockedError) Error() string {
-	if e.diagnostic == nil {
-		return worktreecontract.ErrWorktreeBlocked.Error()
-	}
-	return *e.diagnostic
-}
-
-func (e worktreeBlockedError) Unwrap() error {
-	return worktreecontract.ErrWorktreeBlocked
 }
 
 func (e requestCanceledError) normalized() bool {
@@ -554,21 +538,6 @@ func protocolError(resp *protocol.ResponseError) error {
 	}
 	if resp.Code == protocol.ErrCodeSubagentLaunchPolicy {
 		return protocol.DecodeSubagentLaunchPolicyError(resp.Data, message)
-	}
-	if resp.Code == protocol.ErrCodeWorktreeBlocked {
-		diagnostic := resp.Message
-		return worktreeBlockedError{diagnostic: &diagnostic}
-	}
-	if resp.Code == protocol.ErrCodeWorktreeCreate {
-		return serverapi.DecodeWorktreeCreateError(resp.Data, message)
-	}
-	switch resp.Code {
-	case protocol.ErrCodeWorktreeSelector,
-		protocol.ErrCodeWorktreeSetupRetained,
-		protocol.ErrCodeWorktreeDeletePrecondition:
-		if len(resp.Data) > 0 {
-			return serverapi.DecodeWorktreeRPCError(resp.Data, message)
-		}
 	}
 	if resp.Code == protocol.ErrCodeWorkflowExecutionTargetResolution && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowExecutionTargetResolutionError(resp.Data, message)
