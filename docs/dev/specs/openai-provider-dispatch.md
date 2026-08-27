@@ -2,7 +2,7 @@
 
 ## Dispatch Identity
 
-- Every OpenAI-family generation, streaming-generation, and compaction dispatch sends `originator`, `User-Agent`, and `session-id`, including a dispatch to an explicit custom OpenAI-compatible endpoint without authentication.
+- Every OpenAI-family generation and compaction dispatch sends `originator`, `User-Agent`, and `session-id`, including a dispatch to an explicit custom OpenAI-compatible endpoint without authentication.
 - `session-id` is the dispatch's Kent Session identity. It must be nonempty, must have no leading or trailing space or horizontal tab, and must be valid as an outbound HTTP header value.
 - Kent rejects a missing or invalid dispatch Session identity before authentication resolution, credential refresh, or any network request.
 - Authenticated dispatches retain their `Authorization` and ChatGPT account-identity headers. An explicit custom OpenAI-compatible endpoint may remain anonymous and sends the common identity headers without `Authorization`.

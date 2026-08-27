@@ -255,7 +255,7 @@ type acceptedErrorRuntimeControlClient struct {
 	err error
 }
 
-func (c *acceptedErrorRuntimeControlClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (c *acceptedErrorRuntimeControlClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++

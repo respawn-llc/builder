@@ -57,7 +57,7 @@ func (o *goalAuthorityPersistenceObserver) recordedSnapshots() []session.Persist
 
 type goalAuthorityClient struct{}
 
-func (goalAuthorityClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (goalAuthorityClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 

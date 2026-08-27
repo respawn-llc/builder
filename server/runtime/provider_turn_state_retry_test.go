@@ -25,22 +25,6 @@ func (providerTurnStateOAuthAuth) OpenAIAuthMetadata(context.Context) (string, s
 	return "oauth", "account-1", nil
 }
 
-type nonStreamingClient struct {
-	client llm.Client
-}
-
-func (c nonStreamingClient) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
-	return c.client.Generate(ctx, request)
-}
-
-func (nonStreamingClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{
-		ProviderID:           "chatgpt-codex",
-		SupportsResponsesAPI: true,
-		IsOpenAIFirstParty:   true,
-	}, nil
-}
-
 func TestGenerateWithRetryReplaysExactProviderTurnState(t *testing.T) {
 	withGenerateRetryDelays(t, []time.Duration{0})
 	const turnState = "opaque,state=value"
@@ -70,7 +54,7 @@ func TestGenerateWithRetryReplaysExactProviderTurnState(t *testing.T) {
 		t.Fatalf("NewCodexDispatchContext: %v", err)
 	}
 	transport := newProviderTurnStateTransport(t, server)
-	client := nonStreamingClient{client: llm.NewOpenAIClient(transport)}
+	client := llm.NewOpenAIClient(transport)
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	_, err = engine.generateWithRetryClient(context.Background(), "", client, llm.Request{
 		Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
@@ -102,7 +86,7 @@ func TestGenerationMissingOutputRebuildDoesNotReplayProviderTurnState(t *testing
 	}))
 	t.Cleanup(server.Close)
 	transport := newProviderTurnStateTransport(t, server)
-	client := nonStreamingClient{client: llm.NewOpenAIClient(transport)}
+	client := llm.NewOpenAIClient(transport)
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	steerDanglingToolCall(t, engine, "seed", llm.ToolCall{ID: "missing", Name: "exec_command", Input: []byte(`{}`)})
 	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {

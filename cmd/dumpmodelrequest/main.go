@@ -392,7 +392,7 @@ type inspectionCapabilityClient struct {
 	capabilities llm.ProviderCapabilities
 }
 
-func (inspectionCapabilityClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (inspectionCapabilityClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, errors.New("dumpmodelrequest: model generation is not supported (inspection-only)")
 }
 

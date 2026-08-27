@@ -9,18 +9,14 @@ import (
 
 type streamingOnlyTransport struct{}
 
-func (streamingOnlyTransport) Generate(context.Context, OpenAIRequest) (OpenAIResponse, error) {
-	return OpenAIResponse{}, nil
-}
-
 func (streamingOnlyTransport) Compact(context.Context, OpenAICompactionRequest) (OpenAICompactionResponse, error) {
 	return OpenAICompactionResponse{}, nil
 }
 
-func (streamingOnlyTransport) GenerateStream(_ context.Context, _ OpenAIRequest, onDelta func(text string)) (OpenAIResponse, error) {
-	if onDelta != nil {
-		onDelta("Hel")
-		onDelta("lo")
+func (streamingOnlyTransport) Generate(_ context.Context, _ OpenAIRequest, callbacks StreamCallbacks) (OpenAIResponse, error) {
+	if callbacks.OnAssistantDelta != nil {
+		callbacks.OnAssistantDelta(AssistantDelta{Text: "Hel"})
+		callbacks.OnAssistantDelta(AssistantDelta{Text: "lo"})
 	}
 	return OpenAIResponse{AssistantText: textutil.Value("Hello"), ProviderPhase: AbsentProviderPhase()}, nil
 }
@@ -54,13 +50,15 @@ func TestRequestAsOpenAIClonesPreparedSchemaCarriers(t *testing.T) {
 	}
 }
 
-func TestOpenAIClientGenerateStreamDoesNotReplayFinalTextAsDelta(t *testing.T) {
+func TestOpenAIClientGenerateDoesNotReplayFinalTextAsDelta(t *testing.T) {
 	client := NewOpenAIClient(streamingOnlyTransport{})
 	req := Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}
 
 	var deltas []string
-	resp, err := client.GenerateStream(context.Background(), req, func(text string) {
-		deltas = append(deltas, text)
+	resp, err := client.Generate(context.Background(), req, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta.Text)
+		},
 	})
 	if err != nil {
 		t.Fatalf("generate stream failed: %v", err)
@@ -73,16 +71,18 @@ func TestOpenAIClientGenerateStreamDoesNotReplayFinalTextAsDelta(t *testing.T) {
 	}
 }
 
-func TestOpenAIClientGenerateStreamPreservesFinalTextThatExtendsStreamWithWhitespace(t *testing.T) {
+func TestOpenAIClientGeneratePreservesFinalTextThatExtendsStreamWithWhitespace(t *testing.T) {
 	transport := trailingWhitespaceStreamingTransport{}
 	client := NewOpenAIClient(transport)
 
 	var deltas []string
-	resp, err := client.GenerateStream(
+	resp, err := client.Generate(
 		context.Background(),
 		Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic},
-		func(text string) {
-			deltas = append(deltas, text)
+		StreamCallbacks{
+			OnAssistantDelta: func(delta AssistantDelta) {
+				deltas = append(deltas, delta.Text)
+			},
 		},
 	)
 	if err != nil {
@@ -100,13 +100,13 @@ type trailingWhitespaceStreamingTransport struct {
 	streamingOnlyTransport
 }
 
-func (trailingWhitespaceStreamingTransport) GenerateStream(
+func (trailingWhitespaceStreamingTransport) Generate(
 	_ context.Context,
 	_ OpenAIRequest,
-	onDelta func(text string),
+	callbacks StreamCallbacks,
 ) (OpenAIResponse, error) {
-	if onDelta != nil {
-		onDelta("done\n\n")
+	if callbacks.OnAssistantDelta != nil {
+		callbacks.OnAssistantDelta(AssistantDelta{Text: "done\n\n"})
 	}
 	return OpenAIResponse{
 		AssistantText: textutil.Value("done\n\n"),
@@ -114,12 +114,12 @@ func (trailingWhitespaceStreamingTransport) GenerateStream(
 	}, nil
 }
 
-func TestOpenAIClientLegacyStreamTransportEmitsUnknownDeltaPhase(t *testing.T) {
+func TestOpenAIClientGenerateEmitsUnknownDeltaPhase(t *testing.T) {
 	client := NewOpenAIClient(streamingOnlyTransport{})
 	req := Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}
 
 	var deltas []AssistantDelta
-	_, err := client.GenerateStreamWithEvents(context.Background(), req, StreamCallbacks{
+	_, err := client.Generate(context.Background(), req, StreamCallbacks{
 		OnAssistantDelta: func(delta AssistantDelta) {
 			deltas = append(deltas, delta)
 		},

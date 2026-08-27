@@ -51,7 +51,7 @@ func (cancellationAwareModelClient) ProviderCapabilities(context.Context) (llm.P
 	return defaultTestProviderCapabilities(), nil
 }
 
-func (c cancellationAwareModelClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c cancellationAwareModelClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	close(c.started)
 	<-ctx.Done()
 	return llm.Response{}, ctx.Err()

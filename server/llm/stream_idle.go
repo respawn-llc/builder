@@ -10,8 +10,6 @@ import (
 
 type streamingModelClient interface {
 	Client
-	StreamClient
-	StreamEventsClient
 	CompactionClient
 	ProviderCapabilitiesClient
 	ModelContextWindowClient
@@ -26,17 +24,7 @@ func newIdleWatchdogClient(inner streamingModelClient, idle time.Duration) *idle
 	return &idleWatchdogClient{streamingModelClient: inner, idle: idle}
 }
 
-func (c *idleWatchdogClient) GenerateStream(ctx context.Context, request Request, onDelta func(text string)) (Response, error) {
-	var callback func(AssistantDelta)
-	if onDelta != nil {
-		callback = func(delta AssistantDelta) {
-			onDelta(delta.Text)
-		}
-	}
-	return c.GenerateStreamWithEvents(ctx, request, StreamCallbacks{OnAssistantDelta: callback})
-}
-
-func (c *idleWatchdogClient) GenerateStreamWithEvents(ctx context.Context, request Request, callbacks StreamCallbacks) (Response, error) {
+func (c *idleWatchdogClient) Generate(ctx context.Context, request Request, callbacks StreamCallbacks) (Response, error) {
 	watchdog := newStreamIdleWatchdog(ctx, c.idle)
 	defer watchdog.stop()
 
@@ -48,7 +36,7 @@ func (c *idleWatchdogClient) GenerateStreamWithEvents(ctx context.Context, reque
 		}
 	}
 
-	resp, err := c.streamingModelClient.GenerateStreamWithEvents(watchdog.ctx, request, callbacks)
+	resp, err := c.streamingModelClient.Generate(watchdog.ctx, request, callbacks)
 	if err != nil && errors.Is(context.Cause(watchdog.ctx), ErrModelStreamStalled) {
 		return Response{}, fmt.Errorf("model stream stalled: %w", ErrModelStreamStalled)
 	}

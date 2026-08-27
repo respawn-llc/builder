@@ -856,7 +856,7 @@ type rollbackInterruptBlockingClient struct {
 	once    sync.Once
 }
 
-func (c *rollbackInterruptBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *rollbackInterruptBlockingClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	<-ctx.Done()
 	return llm.Response{}, ctx.Err()
