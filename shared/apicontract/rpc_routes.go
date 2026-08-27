@@ -213,7 +213,7 @@ var routeContracts = []Route{
 	unary[serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](protocol.MethodSessionRetargetWorkspace, AuthServer, ScopeSessionAttachedProject, ConnectionUnscoped),
 	unary[serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](protocol.MethodSessionResolveTransition, AuthServer, ScopeSessionActiveProjectIfSet, ConnectionControl),
 	unary[serverapi.SessionRuntimeActivateRequest, serverapi.SessionRuntimeActivateResponse](protocol.MethodSessionRuntimeActivate, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.SessionRuntimeReleaseRequest, serverapi.SessionRuntimeReleaseResponse](protocol.MethodSessionRuntimeRelease, AuthServer, ScopeSessionActiveProject, ConnectionControl),
+	unary[serverapi.SessionRuntimeReleaseRequest, serverapi.SessionRuntimeReleaseResponse](protocol.MethodSessionRuntimeRelease, AuthServer, ScopeNone, ConnectionControl),
 	unary[serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](protocol.MethodWorktreeStatus, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](protocol.MethodWorktreeList, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](protocol.MethodWorktreeWorkspaceList, AuthServer, ScopeProjectWorkspaceBinding, ConnectionControl),
