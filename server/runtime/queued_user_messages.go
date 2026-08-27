@@ -64,6 +64,9 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations 
 		item.Message.Role == "" {
 		return QueuedUserMessage{}, errInvalidQueuedUserMessage
 	}
+	if _, err := runtimeids.ParseQueueItemID(item.ID); err != nil {
+		return QueuedUserMessage{}, err
+	}
 	var association queuedUserMessageAssociation
 	if len(associations) != 0 {
 		association = associations[0]
@@ -209,6 +212,23 @@ func (s *queuedUserMessageStore) Snapshot() []QueuedUserMessage {
 	out := make([]QueuedUserMessage, 0, len(s.pending))
 	for _, pending := range s.pending {
 		out = append(out, pending.message)
+	}
+	return out
+}
+
+func (s *queuedUserMessageStore) EntrySnapshot() []queuedUserMessage {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]queuedUserMessage, 0, len(s.pending))
+	for _, pending := range s.pending {
+		out = append(out, queuedUserMessage{
+			message:   pending.message,
+			admission: pending.admission,
+			scope:     cloneExecutionScopeID(pending.scope),
+		})
 	}
 	return out
 }

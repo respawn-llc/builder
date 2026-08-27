@@ -535,9 +535,9 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 		if err := ctx.Err(); err != nil {
 			idle := s.cancelNextWaiter(waiter)
 			if idle {
-				return nil, "", errors.Join(err, s.scheduleIdleWork(true))
+				return nil, "", errors.Join(context.Cause(ctx), s.scheduleIdleWork(true))
 			}
-			return nil, "", err
+			return nil, "", context.Cause(ctx)
 		}
 
 		s.mu.Lock()

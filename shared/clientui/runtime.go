@@ -123,14 +123,14 @@ func (r RuntimeShellRequest) Validate() error {
 
 type RuntimeCompactRequest struct {
 	RequestID runtimeids.CompactionRequestID
-	Args      string
+	Admission runtimeinput.ManualCompactionAdmission
 }
 
 func (r RuntimeCompactRequest) Validate() error {
 	if r.RequestID.IsZero() {
 		return errors.New("compaction request id is required")
 	}
-	return nil
+	return r.Admission.Validate()
 }
 
 type SessionExecutionTarget struct {
@@ -243,6 +243,6 @@ type RuntimeClient interface {
 	RunUserShell(ctx context.Context, req RuntimeShellRequest) error
 	CompactRuntime(ctx context.Context, req RuntimeCompactRequest) error
 	Interrupt() error
-	DiscardQueuedUserMessage(queueItemID string) bool
+	RemovePendingWork(queueItemID string) bool
 	RecordPromptHistory(text string) error
 }

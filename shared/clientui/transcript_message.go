@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+
+	"core/shared/runtimeinput"
 )
 
 type TranscriptMessageKind string
@@ -20,6 +22,7 @@ const (
 	TranscriptMessageToolAbort                 TranscriptMessageKind = "tool_abort"
 	TranscriptMessageUserMessageFlushed        TranscriptMessageKind = "user_message_flushed"
 	TranscriptMessageQueuedMessageState        TranscriptMessageKind = "queued_message_state"
+	TranscriptMessagePendingWorkReplaced       TranscriptMessageKind = "pending_work_replaced"
 	TranscriptMessageHumanInputInterrupted     TranscriptMessageKind = "human_input_interrupted"
 	TranscriptMessageStepState                 TranscriptMessageKind = "step_state"
 	TranscriptMessageRuntimeReadModelUpdate    TranscriptMessageKind = "runtime_read_model_update"
@@ -57,6 +60,7 @@ type transcriptEventPayloadValue interface {
 		TranscriptToolAbort |
 		TranscriptUserMessageFlushed |
 		TranscriptQueuedMessageState |
+		TranscriptPendingWorkReplaced |
 		TranscriptHumanInputInterrupted |
 		TranscriptStepState |
 		RuntimeReadModelUpdate |
@@ -118,7 +122,7 @@ type TranscriptHydration struct {
 	ActiveStep             *TranscriptStepState
 	ActiveCompaction       *TranscriptCompactionStatus
 	InFlightTools          []TranscriptToolStart
-	QueuedMessages         []TranscriptQueuedMessageState
+	PendingWork            runtimeinput.PendingWork
 	PendingPrompts         []TranscriptPrompt
 	BackgroundActivities   []TranscriptBackgroundActivity
 	ContextUsage           *TranscriptContextUsage
@@ -221,6 +225,8 @@ func unmarshalTranscriptEvent(kind TranscriptMessageKind, data []byte) (Transcri
 		return decodeTranscriptPayload[TranscriptUserMessageFlushed](data)
 	case TranscriptMessageQueuedMessageState:
 		return decodeTranscriptPayload[TranscriptQueuedMessageState](data)
+	case TranscriptMessagePendingWorkReplaced:
+		return decodeTranscriptPayload[TranscriptPendingWorkReplaced](data)
 	case TranscriptMessageHumanInputInterrupted:
 		return decodeTranscriptPayload[TranscriptHumanInputInterrupted](data)
 	case TranscriptMessageStepState:
@@ -302,6 +308,10 @@ func (TranscriptUserMessageFlushed) transcriptEventKind() TranscriptMessageKind 
 
 func (TranscriptQueuedMessageState) transcriptEventKind() TranscriptMessageKind {
 	return TranscriptMessageQueuedMessageState
+}
+
+func (TranscriptPendingWorkReplaced) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessagePendingWorkReplaced
 }
 
 func (TranscriptHumanInputInterrupted) transcriptEventKind() TranscriptMessageKind {

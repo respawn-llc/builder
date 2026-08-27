@@ -15,6 +15,7 @@ import type {
 import { queryKeys } from "@/app-facade";
 import {
   projectTaskGroupPageSize,
+  projectTaskGroupRetainedPages,
   useProjectTaskListData,
   useProjectTaskListEvents,
 } from "./projectTaskListData";
@@ -141,6 +142,16 @@ describe("Project Task-list data ownership", () => {
   });
 
   it("starts at zero and exposes the current bounded window edges", async () => {
+    state.listPage = async (input) => {
+      const offset = input.offset ?? 0;
+      return {
+        ...pageResponse(taskGroupForInput(input), offset),
+        nextOffset:
+          offset < projectTaskGroupPageSize * projectTaskGroupRetainedPages
+            ? offset + projectTaskGroupPageSize
+            : null,
+      };
+    };
     const harness = createHarness();
     const { result, unmount } = renderHook(
       () =>
@@ -153,43 +164,36 @@ describe("Project Task-list data ownership", () => {
 
     await waitFor(() => {
       expect(state.listRequests[0]).toMatchObject({
-        limit: projectTaskGroupPageSize,
+        limit: 50,
         offset: 0,
         projectID: "project-1",
         group: "active",
         sort: [{ field: "updated", direction: "desc" }],
       });
     });
-    await act(async () => {
-      await result.current.active.fetchNextPage();
-    });
+    for (let page = 1; page <= projectTaskGroupRetainedPages; page += 1) {
+      await act(async () => {
+        await result.current.active.fetchNextPage();
+      });
+    }
     await waitFor(() => {
-      expect(result.current.active.pages).toHaveLength(2);
+      expect(result.current.active.pages).toHaveLength(10);
     });
-    await act(async () => {
-      await result.current.active.fetchNextPage();
-    });
-    await waitFor(() => {
-      expect(result.current.active.pages).toHaveLength(3);
-    });
-    expect(result.current.active.nextRequestGeneration).toBe("project-1:75");
-    await act(async () => {
-      await result.current.active.fetchNextPage();
-    });
-    await waitFor(() => {
-      expect(result.current.active.pages).toHaveLength(3);
-    });
-    expect(state.listRequests.map((request) => request.offset)).toEqual([0, 25, 50, 75]);
-    expect(result.current.active.nextRequestGeneration).toBe("project-1:100");
+    expect(state.listRequests.map((request) => request.offset)).toEqual([
+      0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500,
+    ]);
+    expect(result.current.active.tasks.at(0)?.id).toBe("active-50");
+    expect(result.current.active.nextRequestGeneration).toBe("project-1:end");
 
     await act(async () => {
       await result.current.active.fetchPreviousPage();
     });
     await waitFor(() => {
-      expect(result.current.active.pages).toHaveLength(3);
+      expect(result.current.active.pages).toHaveLength(10);
     });
-    expect(state.listRequests.map((request) => request.offset)).toEqual([0, 25, 50, 75, 0]);
-    expect(result.current.active.nextRequestGeneration).toBe("project-1:75");
+    expect(state.listRequests.at(-1)?.offset).toBe(0);
+    expect(result.current.active.tasks.at(0)?.id).toBe("active-0");
+    expect(result.current.active.nextRequestGeneration).toBe("project-1:500");
     unmount();
     expect(harness.queryClient.getQueryData(queryKeys.projectTaskGroup("project-1", "active"))).toBeDefined();
   });
@@ -208,7 +212,7 @@ describe("Project Task-list data ownership", () => {
       },
     );
     await waitFor(() => {
-      expect(result.current.active.nextRequestGeneration).toBe("project-1:25");
+      expect(result.current.active.nextRequestGeneration).toBe("project-1:50");
     });
 
     rerender({ expanded: false });
@@ -217,7 +221,7 @@ describe("Project Task-list data ownership", () => {
     });
     rerender({ expanded: true });
     await waitFor(() => {
-      expect(result.current.active.nextRequestGeneration).toBe("project-1:25");
+      expect(result.current.active.nextRequestGeneration).toBe("project-1:50");
     });
   });
 

@@ -1061,6 +1061,7 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 		for _, pending := range item.queuedRestore.items {
 			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
 		}
+		e.publishPendingWorkSnapshot()
 		return nil
 	}
 	if item.event != nil {

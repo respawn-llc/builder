@@ -175,10 +175,6 @@ func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *test
 		Question:  "Choose a strategy",
 		CreatedAt: time.Unix(1_700_000_000, 0),
 	}
-	submittedQueue := TranscriptQueuedMessageState{
-		QueueItemID: transcriptTestQueueItemID(t),
-		Status:      QueuedUserMessageSubmitted,
-	}
 	terminalBackground := TranscriptBackgroundActivity{
 		ActivityID:  transcriptTestBackgroundActivityID(t),
 		ProcessID:   ProcessID("process-1"),
@@ -197,11 +193,6 @@ func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *test
 		func() TranscriptHydration {
 			hydration := valid()
 			hydration.PendingPrompts = []TranscriptPrompt{resolvedPrompt}
-			return hydration
-		}(),
-		func() TranscriptHydration {
-			hydration := valid()
-			hydration.QueuedMessages = []TranscriptQueuedMessageState{submittedQueue}
 			return hydration
 		}(),
 		func() TranscriptHydration {

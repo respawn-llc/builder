@@ -12,6 +12,7 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -286,6 +287,13 @@ func TestTranscriptQueuedStateOnlyMutatesMatchingLocalRestorationOwnership(t *te
 				State:           injectedRuntimeQueueEnqueued,
 				submissionOrder: inputSubmissionOrder{sequence: 1},
 			}}
+			model.injectedQueue[0].ApprovalCommentaryAnswer = &clientui.PromptAnswer{PromptID: "approval"}
+			model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
+				ID: queueID.String(), Text: serverText})
+			model.applyPendingWorkReplacement(runtimeinput.PendingWork{})
+			if len(model.injectedQueue) != 1 || model.injectedQueue[0].ApprovalCommentaryAnswer == nil {
+				t.Fatal("membership replacement settled local queue lifecycle")
+			}
 			if test.status == clientui.QueuedUserMessageSubmitted {
 				model.queued = []queuedInputItem{{ID: "local-draft", Text: "local draft"}}
 				if cmd := model.inputController().resumeQueuedInputsAfterIdleRuntime(); cmd != nil || len(model.queued) != 1 {

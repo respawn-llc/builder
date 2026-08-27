@@ -19,7 +19,7 @@ func TestPromptCommandTokenReservesNamespaceCaseInsensitively(t *testing.T) {
 
 func TestUnknownPromptCommandFailsClosedBeforeOrdinarySubmission(t *testing.T) {
 	model := newProjectedStaticUIModel()
-	handled, _, cmd := model.inputController().handleEnteredSlashCommandInput("/prompt:doesnotexist")
+	handled, _, cmd := model.inputController().handleEnteredSlashCommandInput("/prompt:doesnotexist", "/prompt:doesnotexist")
 	if !handled {
 		t.Fatal("unknown prompt command was not handled locally")
 	}

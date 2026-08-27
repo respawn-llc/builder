@@ -11,6 +11,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -70,6 +71,7 @@ type uiInputFeatureState struct {
 	// injected user work.
 	queued                      []queuedInputItem
 	pendingCompactionRequestIDs map[runtimeids.CompactionRequestID]struct{}
+	pendingWork                 runtimeinput.PendingWork
 	submitToken                 uint64
 	activeSubmit                activeSubmitState
 

@@ -335,7 +335,7 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 	}
 }
 
-func TestDiscardQueuedUserMessageRemovesExactQueuedEntry(t *testing.T) {
+func TestQueuedUserMessageOwnerDiscardRemovesExactEntry(t *testing.T) {
 	t.Parallel()
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
@@ -343,7 +343,7 @@ func TestDiscardQueuedUserMessageRemovesExactQueuedEntry(t *testing.T) {
 	mustQueueUserMessage(t, eng, "other")
 	duplicate := mustQueueUserMessage(t, eng, "same")
 
-	if removed := mustDiscardQueuedUserMessage(t, eng, duplicate.ID); !removed {
+	if _, removed := eng.messageFlow.DiscardQueuedUserMessage(duplicate.ID); !removed {
 		t.Fatal("expected duplicate queued item removed")
 	}
 

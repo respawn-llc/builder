@@ -48,6 +48,7 @@ type runtimeControlFakeClient struct {
 	discardQueuedResult   bool
 	recordedPromptHistory string
 	refreshMainViewCalls  int
+	compactRequest        clientui.RuntimeCompactRequest
 	err                   error
 	appendErr             error
 	submitErr             error
@@ -207,7 +208,12 @@ func (f *runtimeControlFakeClient) compactContext(_ context.Context, args string
 	return f.err
 }
 func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clientui.RuntimeCompactRequest) error {
-	return f.compactContext(ctx, req.Args)
+	f.compactRequest = req
+	args := ""
+	if req.Admission.Guidance != nil {
+		args = *req.Admission.Guidance
+	}
+	return f.compactContext(ctx, args)
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++
@@ -216,7 +222,7 @@ func (f *runtimeControlFakeClient) Interrupt() error {
 	}
 	return f.err
 }
-func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) bool {
+func (f *runtimeControlFakeClient) RemovePendingWork(queueItemID string) bool {
 	f.discardQueuedCalls++
 	f.discardQueuedID = queueItemID
 	if f.discardQueuedResult {

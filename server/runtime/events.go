@@ -5,6 +5,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/transcript"
 	"fmt"
 	"strings"
@@ -47,6 +48,7 @@ const (
 	EventProviderTurnStateInvalid   EventKind = "provider_turn_state_invalid"
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
+	EventPendingWorkReplaced        EventKind = "pending_work_replaced"
 	EventHumanInputInterrupted      EventKind = "human_input_interrupted"
 	EventLiveRunFinished            EventKind = "live_run_finished"
 
@@ -142,6 +144,7 @@ type Event struct {
 	Background                   *BackgroundShellEvent
 	GoalStatus                   *GoalStatusUpdate
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
+	PendingWork                  *runtimeinput.PendingWork
 	HumanInputInterrupted        *HumanInputInterruptedEvent
 	LiveRunResult                *LiveRunResult
 }

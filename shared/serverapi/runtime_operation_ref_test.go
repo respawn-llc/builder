@@ -35,7 +35,7 @@ func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
 			request: RuntimeCompactContextRequest{
 				SessionID: "session-1",
 				RequestID: runtimeids.NewCompactionRequestID(),
-				Args:      "notes",
+				Admission: ManualCompactionAdmission{RestorationInput: "/compact"},
 			},
 			forbidden: []string{"operation_ref"},
 		},

@@ -507,6 +507,9 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 	default:
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
+	if len(pending) != 0 {
+		m.engine.publishPendingWorkSnapshot()
+	}
 	return m.commitPendingUserInjections(stepID, pending)
 }
 
@@ -611,6 +614,13 @@ func (m *defaultMessageLifecycle) PendingUserMessages() []QueuedUserMessage {
 		return nil
 	}
 	return m.queue.Snapshot()
+}
+
+func (m *defaultMessageLifecycle) PendingUserMessageEntries() []queuedUserMessage {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	return m.queue.EntrySnapshot()
 }
 
 func (m *defaultMessageLifecycle) RestorePendingUserInjections(items []queuedUserMessage) {

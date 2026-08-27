@@ -143,7 +143,7 @@ type RuntimeSubmitUserShellCommandRequest struct {
 type RuntimeCompactContextRequest struct {
 	SessionID string                         `json:"session_id"`
 	RequestID runtimeids.CompactionRequestID `json:"request_id"`
-	Args      string                         `json:"args"`
+	Admission ManualCompactionAdmission      `json:"admission"`
 }
 
 type RuntimeInterruptRequest struct {
@@ -203,15 +203,6 @@ type RuntimeLiveWaitResponse struct {
 	TerminalStatus string                `json:"terminal_status"`
 	ResultKind     RuntimeLiveResultKind `json:"result_kind"`
 	NoAnswerReason *string               `json:"no_answer_reason"`
-}
-
-type RuntimeDiscardQueuedUserMessageRequest struct {
-	SessionID   string `json:"session_id"`
-	QueueItemID string `json:"queue_item_id"`
-}
-
-type RuntimeDiscardQueuedUserMessageResponse struct {
-	Discarded bool `json:"discarded"`
 }
 
 type RuntimeRecordPromptHistoryRequest struct {
@@ -339,7 +330,7 @@ func (r RuntimeCompactContextRequest) Validate() error {
 	if r.RequestID.IsZero() {
 		return errors.New("compaction request id is required")
 	}
-	return nil
+	return r.Admission.Validate()
 }
 func (r RuntimeInterruptRequest) Validate() error {
 	return validateRuntimeControlRequest(r.SessionID)
@@ -418,15 +409,6 @@ func (r RuntimeLiveWaitResponse) Validate() error {
 		}
 	default:
 		return errors.New("result_kind must be assistant_final_answer or no_final_answer")
-	}
-	return nil
-}
-func (r RuntimeDiscardQueuedUserMessageRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.SessionID); err != nil {
-		return err
-	}
-	if strings.TrimSpace(r.QueueItemID) == "" {
-		return errors.New("queue_item_id is required")
 	}
 	return nil
 }

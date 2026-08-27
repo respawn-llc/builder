@@ -177,5 +177,5 @@
 - If Kent cannot determine whether an authoritative Session mutation committed, it terminates the backend with diagnostic context.
 - Process death may lose pending mutations, commands, Questions, Reviewer work, partial Agent Turns, and ephemeral input restoration.
 - Kent does not reconstruct or replay work lost on process death.
-- Accepting or retaining the 10,000th pending Session mutation for one Session terminates the backend as an invariant violation.
-- Kent adds no smaller capacity limit, eviction, persistence, retry, or recovery behavior.
+- Except for the Pending Work normal-admission limit defined by the Desktop Sessions And Chat specification, accepting or retaining the 10,000th pending Session mutation for one Session terminates the backend as an invariant violation.
+- Kent adds no other smaller capacity limit, eviction, persistence, retry, or recovery behavior.

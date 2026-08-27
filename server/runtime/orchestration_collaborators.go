@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 )
 
 type exclusiveStepOptions struct {
@@ -22,8 +23,16 @@ const (
 )
 
 type exclusiveStepReservation = struct {
-	Kind      exclusiveStepReservationKind
-	queueable bool
+	Kind                    exclusiveStepReservationKind
+	queueable               bool
+	pendingManualCompaction *pendingManualCompaction
+	cancelPendingCompaction context.CancelCauseFunc
+}
+
+type pendingManualCompaction struct {
+	itemID    runtimeids.QueueItemID
+	order     uint64
+	admission runtimeinput.ManualCompactionAdmission
 }
 
 type exclusiveStepLifecycle interface {
@@ -58,6 +67,7 @@ type backgroundNoticeScheduler interface {
 
 type contextCompactor interface {
 	CompactContextWithAcceptance(ctx context.Context, requestID runtimeids.CompactionRequestID, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
+	CompactContextAdmissionWithAcceptance(ctx context.Context, requestID runtimeids.CompactionRequestID, admission runtimeinput.ManualCompactionAdmission, accept CommandAcceptance) (session.CommitReceipt, error)
 	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
 	CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error)
 	CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
@@ -150,6 +160,7 @@ type messageLifecycle interface {
 	DrainPendingUserInjectionsByScope(scopeID runtimeids.ExecutionScopeID) []interruptedHumanSteering
 	DrainInterruptedUserInjections() []interruptedHumanSteering
 	PendingUserMessages() []QueuedUserMessage
+	PendingUserMessageEntries() []queuedUserMessage
 	RestorePendingUserInjections(items []queuedUserMessage)
 	QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
 	QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)

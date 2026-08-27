@@ -36,10 +36,7 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	hydration.ActiveThinkingStatus = transcriptThinkingStatusFromRuntime(runtimeSnapshot.ActiveThinkingStatus)
 	hydration.ActiveReasoningTraces = transcriptReasoningTracesFromRuntime(runtimeSnapshot.ActiveReasoningTraces)
 	hydration.InFlightTools = transcriptToolStartsFromRuntime(runtimeSnapshot.InFlightTools)
-	hydration.QueuedMessages, err = transcriptQueuedMessagesFromRuntime(runtimeSnapshot.QueuedMessages)
-	if err != nil {
-		return clientui.TranscriptHydration{}, err
-	}
+	hydration.PendingWork = runtimeSnapshot.PendingWork
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
 	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalSuspended)
@@ -72,25 +69,6 @@ func transcriptReasoningTracesFromRuntime(states []runtime.TranscriptReasoningTr
 		})
 	}
 	return out
-}
-
-func transcriptQueuedMessagesFromRuntime(messages []runtime.QueuedUserMessage) ([]clientui.TranscriptQueuedMessageState, error) {
-	if len(messages) == 0 {
-		return nil, nil
-	}
-	out := make([]clientui.TranscriptQueuedMessageState, 0, len(messages))
-	for index, message := range messages {
-		text, err := message.DisplayText()
-		if err != nil {
-			return nil, fmt.Errorf("queued message %d: %w", index, err)
-		}
-		out = append(out, clientui.TranscriptQueuedMessageState{
-			QueueItemID: mustTranscriptQueueItemID(message.ID, fmt.Sprintf("hydrated queued message %d", index)),
-			Status:      clientui.QueuedUserMessageAccepted,
-			Text:        textutil.Value(text),
-		})
-	}
-	return out, nil
 }
 
 func transcriptCompactionStateFromRuntime(state *runtime.TranscriptCompactionState) *clientui.TranscriptCompactionStatus {
@@ -226,6 +204,13 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		return transcriptToolAbortMessages(evt)
 	case runtime.EventQueuedUserMessageStatus:
 		return transcriptQueuedMessageStateMessages(evt)
+	case runtime.EventPendingWorkReplaced:
+		if evt.PendingWork == nil {
+			return nil
+		}
+		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(
+			clientui.TranscriptPendingWorkReplaced{PendingWork: *evt.PendingWork},
+		)}
 	case runtime.EventHumanInputInterrupted:
 		return transcriptHumanInputInterruptedMessages(evt)
 	case runtime.EventRunStateChanged:
