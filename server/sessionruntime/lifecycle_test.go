@@ -140,6 +140,7 @@ type lifecycleQuestionBarrierClient struct {
 func (c *lifecycleQuestionBarrierClient) Generate(
 	context.Context,
 	llm.Request,
+	llm.StreamCallbacks,
 ) (llm.Response, error) {
 	call := c.calls.Add(1)
 	if call != 1 {
@@ -200,7 +201,7 @@ func (e *lifecycleMalformedRuntimeAbort) RuntimeAbortDisposition() (bool, error)
 	return false, errors.New("unexposed abort cause")
 }
 
-func (c *lifecycleRequestCaptureClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+func (c *lifecycleRequestCaptureClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	*c <- request
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},

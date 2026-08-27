@@ -38,7 +38,7 @@ type sessionRuntimeTestLLMClient struct {
 	finalOnce sync.Once
 }
 
-func (c *sessionRuntimeTestLLMClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+func (c *sessionRuntimeTestLLMClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, llm.Request{Items: llm.CloneResponseItems(request.Items)})
 	if len(c.responses) == 0 {
@@ -71,7 +71,7 @@ type blockingLLMClient struct {
 	release     chan struct{}
 }
 
-func (c *blockingLLMClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+func (c *blockingLLMClient) Generate(_ context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.enteredOnce.Do(func() { close(c.entered) })
 	<-c.release
 	return llm.Response{

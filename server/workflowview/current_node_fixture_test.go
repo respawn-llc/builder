@@ -673,7 +673,7 @@ func mustOpenCurrentNodeViewSessionDescriptor(t *testing.T, sessionID runtimeids
 
 type currentNodeViewLLMClient struct{}
 
-func (currentNodeViewLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (currentNodeViewLLMClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 

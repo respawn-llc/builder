@@ -85,20 +85,12 @@ type OpenAICompactionResponse struct {
 }
 
 type OpenAITransport interface {
-	Generate(ctx context.Context, request OpenAIRequest) (OpenAIResponse, error)
+	Generate(ctx context.Context, request OpenAIRequest, callbacks StreamCallbacks) (OpenAIResponse, error)
 	Compact(ctx context.Context, request OpenAICompactionRequest) (OpenAICompactionResponse, error)
 }
 
 type OpenAIModelContextWindowTransport interface {
 	ResolveModelContextWindow(ctx context.Context, model string) (int, error)
-}
-
-type OpenAIStreamingTransport interface {
-	GenerateStream(ctx context.Context, request OpenAIRequest, onDelta func(text string)) (OpenAIResponse, error)
-}
-
-type OpenAIStreamingEventsTransport interface {
-	GenerateStreamWithEvents(ctx context.Context, request OpenAIRequest, callbacks StreamCallbacks) (OpenAIResponse, error)
 }
 
 type OpenAIProviderCapabilitiesTransport interface {
@@ -113,7 +105,7 @@ func NewOpenAIClient(transport OpenAITransport) *OpenAIClient {
 	return &OpenAIClient{transport: transport}
 }
 
-func (c *OpenAIClient) Generate(ctx context.Context, request Request) (Response, error) {
+func (c *OpenAIClient) Generate(ctx context.Context, request Request, callbacks StreamCallbacks) (Response, error) {
 	if c == nil || c.transport == nil {
 		return Response{}, ErrMissingTransport
 	}
@@ -123,9 +115,9 @@ func (c *OpenAIClient) Generate(ctx context.Context, request Request) (Response,
 
 	providerReq := RequestAsOpenAI(request)
 
-	providerResp, err := c.transport.Generate(ctx, providerReq)
+	providerResp, err := c.transport.Generate(ctx, providerReq, callbacks)
 	if err != nil {
-		return Response{}, fmt.Errorf("openai generate: %w", err)
+		return Response{}, fmt.Errorf("openai generate stream: %w", err)
 	}
 
 	return responseFromOpenAI(providerResp)
@@ -172,62 +164,6 @@ func resolveAssistantContent(role Role, phase MessagePhase, content *string) *st
 		return nil
 	}
 	return textutil.Pointer(content)
-}
-
-func (c *OpenAIClient) GenerateStream(ctx context.Context, request Request, onDelta func(text string)) (Response, error) {
-	var callback func(AssistantDelta)
-	if onDelta != nil {
-		callback = func(delta AssistantDelta) {
-			onDelta(delta.Text)
-		}
-	}
-	return c.GenerateStreamWithEvents(ctx, request, StreamCallbacks{OnAssistantDelta: callback})
-}
-
-func (c *OpenAIClient) GenerateStreamWithEvents(ctx context.Context, request Request, callbacks StreamCallbacks) (Response, error) {
-	if c == nil || c.transport == nil {
-		return Response{}, ErrMissingTransport
-	}
-	if err := request.Validate(); err != nil {
-		return Response{}, err
-	}
-
-	providerReq := RequestAsOpenAI(request)
-
-	if streamTransport, ok := c.transport.(OpenAIStreamingEventsTransport); ok {
-		providerResp, err := streamTransport.GenerateStreamWithEvents(ctx, providerReq, callbacks)
-		if err != nil {
-			return Response{}, fmt.Errorf("openai generate stream: %w", err)
-		}
-		return responseFromOpenAI(providerResp)
-	}
-
-	if streamTransport, ok := c.transport.(OpenAIStreamingTransport); ok {
-		var onTextDelta func(string)
-		if callbacks.OnAssistantDelta != nil {
-			onTextDelta = func(text string) {
-				callbacks.OnAssistantDelta(AssistantDelta{Text: text})
-			}
-		}
-		providerResp, err := streamTransport.GenerateStream(ctx, providerReq, onTextDelta)
-		if err != nil {
-			return Response{}, fmt.Errorf("openai generate stream: %w", err)
-		}
-		return responseFromOpenAI(providerResp)
-	}
-
-	resp, err := c.Generate(ctx, request)
-	if err != nil {
-		return Response{}, err
-	}
-	if callbacks.OnAssistantDelta != nil && resp.Assistant.Content != nil {
-		delta := AssistantDelta{Text: *resp.Assistant.Content}
-		if resp.Assistant.Phase != nil {
-			delta.Phase = *resp.Assistant.Phase
-		}
-		callbacks.OnAssistantDelta(delta)
-	}
-	return resp, nil
 }
 
 func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (CompactionResponse, error) {

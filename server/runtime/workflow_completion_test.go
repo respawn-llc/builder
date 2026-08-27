@@ -202,7 +202,7 @@ func newWorkflowSteeringClient() *workflowSteeringClient {
 	}
 }
 
-func (c *workflowSteeringClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+func (c *workflowSteeringClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, request)
 	call := len(c.requests)

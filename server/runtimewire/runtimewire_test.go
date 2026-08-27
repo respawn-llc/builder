@@ -1749,7 +1749,7 @@ type runtimewireCaptureClient struct {
 	calls     []llm.Request
 }
 
-func (f *runtimewireCaptureClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+func (f *runtimewireCaptureClient) Generate(ctx context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	if err := ctx.Err(); err != nil {
 		return llm.Response{}, err
 	}
@@ -1774,7 +1774,7 @@ func (f *runtimewireCaptureClient) CallCount() int {
 	return len(f.calls)
 }
 
-func (f *busyToggleFakeClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (f *busyToggleFakeClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	if err := ctx.Err(); err != nil {
 		return llm.Response{}, err
 	}
