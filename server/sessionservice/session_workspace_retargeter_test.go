@@ -381,12 +381,16 @@ func (retargetRuntimeClient) ProviderCapabilities(context.Context) (llm.Provider
 
 type selfRetargetRuntimeClient struct {
 	run      func() error
+	mu       sync.Mutex
 	requests []llm.Request
 }
 
 func (c *selfRetargetRuntimeClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
+	c.mu.Lock()
 	c.requests = append(c.requests, request)
-	if len(c.requests) == 1 {
+	index := len(c.requests)
+	c.mu.Unlock()
+	if index == 1 {
 		if err := c.run(); err != nil {
 			return llm.Response{}, err
 		}
@@ -411,6 +415,12 @@ func (c *selfRetargetRuntimeClient) Generate(_ context.Context, request llm.Requ
 
 func (c *selfRetargetRuntimeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	return llm.InferProviderCapabilities("openai")
+}
+
+func (c *selfRetargetRuntimeClient) requestCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.requests)
 }
 
 type queuedFailureRetargetRuntimeClient struct {
@@ -514,8 +524,8 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 	case <-time.After(3 * time.Second):
 		t.Fatal("self-rebind deadlocked its originating Agent Step")
 	}
-	if len(client.requests) != 1 {
-		t.Fatalf("provider requests after rebind acknowledgement = %d, want no forced continuation", len(client.requests))
+	if requestCount := client.requestCount(); requestCount != 1 {
+		t.Fatalf("provider requests after rebind acknowledgement = %d, want no forced continuation", requestCount)
 	}
 	select {
 	case err := <-published:
