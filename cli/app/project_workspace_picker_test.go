@@ -11,6 +11,7 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
 )
 
@@ -167,6 +168,32 @@ func TestProjectWorkspacePickerShowsOperationDiagnosticAtEdge(t *testing.T) {
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if _, ok := model.result.(projectbinding.WorkspacePickerSelected); !ok {
 		t.Fatalf("Enter with resident rows = %T, want selected workspace", model.result)
+	}
+}
+
+func TestProjectWorkspacePickerReservesRowsForStatusAndEdgeFailure(t *testing.T) {
+	diagnostic := errors.New("next page is unavailable")
+	loader := &workspacePickerLoader{
+		responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
+			0: workspacePickerResponse("project-1", 0, projectWorkspacePickerPageSize, true),
+		},
+		errors: map[int32]error{50: diagnostic},
+	}
+	model := newProjectWorkspacePickerModel(context.Background(), loader, "project-1", "dark")
+	model.height = 9
+	applyWorkspacePickerCommand(model, model.Init())
+	for range projectWorkspacePickerPageSize - 1 {
+		_, command := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		applyWorkspacePickerCommand(model, command)
+		if model.phase == projectWorkspacePickerReadyWithEdgeFailure {
+			break
+		}
+	}
+	if model.phase != projectWorkspacePickerReadyWithEdgeFailure {
+		t.Fatalf("phase after edge failure = %d", model.phase)
+	}
+	if got := lipgloss.Height(model.View()); got > model.height {
+		t.Fatalf("picker view height = %d, want at most terminal height %d", got, model.height)
 	}
 }
 

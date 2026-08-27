@@ -266,6 +266,17 @@ func (m *projectWorkspacePickerModel) renderEdgeStatus(edge *projectWorkspacePic
 
 func (m *projectWorkspacePickerModel) visibleLineBudget() int {
 	rows := m.height - 4
+	if m.phase == projectWorkspacePickerReady || m.phase == projectWorkspacePickerReadyWithEdgeFailure {
+		if renderStartupPickerStatus(projectStartupPickerStatus(m.startupStatus), m.width) != "" {
+			rows -= 2
+		}
+	}
+	if m.renderEdgeStatus(&m.previousEdge) != "" {
+		rows--
+	}
+	if m.renderEdgeStatus(&m.nextEdge) != "" {
+		rows--
+	}
 	if rows < 1 {
 		return 1
 	}
@@ -302,12 +313,7 @@ func (m *projectWorkspacePickerModel) moveCursorPage(direction int) tea.Cmd {
 	if len(workspaces) == 0 {
 		return nil
 	}
-	visible := len(projectbinding.VisibleRows(projectbinding.VisibleRowsRequest{
-		Offset: m.offset, ItemCount: len(workspaces), LineBudget: m.visibleLineBudget(), HasPreview: m.hasPreview,
-	}))
-	if visible < 1 {
-		visible = 1
-	}
+	visible := m.visiblePageDistance()
 	next := m.cursor + direction*visible
 	if next >= 0 && next < len(workspaces) {
 		m.selectIndex(next)
@@ -381,12 +387,7 @@ func (m *projectWorkspacePickerModel) prefetchAtSelection(direction int) tea.Cmd
 	if len(m.segments) == 0 {
 		return nil
 	}
-	visible := len(projectbinding.VisibleRows(projectbinding.VisibleRowsRequest{
-		Offset: m.offset, ItemCount: len(m.workspaces()), LineBudget: m.visibleLineBudget(), HasPreview: m.hasPreview,
-	}))
-	if visible < 1 {
-		visible = 1
-	}
+	visible := m.visiblePageDistance()
 	if direction < 0 && m.cursor < visible {
 		if cmd := m.requestEdge(projectWorkspacePickerPagePrevious, false, false, 0); cmd != nil {
 			return cmd
