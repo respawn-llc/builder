@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"core/server/metadata"
@@ -43,6 +44,32 @@ type SessionWorkspaceRetargeter struct {
 	authority *sessionruntime.Authority
 	publisher sessionIdentityPublisher
 	processes sessionProcessSource
+}
+
+type scheduledRetargetAdmission struct {
+	state atomic.Uint32
+}
+
+const (
+	scheduledRetargetPending uint32 = iota
+	scheduledRetargetAccepted
+	scheduledRetargetCanceled
+)
+
+func (a *scheduledRetargetAdmission) accept() bool {
+	return a.state.CompareAndSwap(scheduledRetargetPending, scheduledRetargetAccepted)
+}
+
+func (a *scheduledRetargetAdmission) cancelPending() bool {
+	return a.state.CompareAndSwap(scheduledRetargetPending, scheduledRetargetCanceled)
+}
+
+func (a *scheduledRetargetAdmission) accepted() bool {
+	return a.state.Load() == scheduledRetargetAccepted
+}
+
+func (a *scheduledRetargetAdmission) canceled() bool {
+	return a.state.Load() == scheduledRetargetCanceled
 }
 
 func NewSessionWorkspaceRetargeter(
@@ -143,12 +170,10 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 		return serverapi.WorktreeScheduledAcknowledgement{}, err
 	}
 	result := make(chan error, 1)
-	accepted := make(chan bool, 1)
+	var admission scheduledRetargetAdmission
 	runCtx, cancelRun := context.WithCancel(context.WithoutCancel(ctx))
 	go func() {
 		defer cancelRun()
-		offered := false
-		scheduled := false
 		failurePersisted := false
 		retirementScheduled := false
 		var publicationErr error
@@ -158,9 +183,9 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 			plan.SessionID,
 			origin,
 			func() {
-				offered = true
-				result <- nil
-				scheduled = <-accepted
+				if admission.accept() {
+					result <- nil
+				}
 			},
 			func(boundaryCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
 				_, applyErr := s.applyWorkspaceRetarget(boundaryCtx, req, store, activeRuntime, true)
@@ -180,10 +205,10 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 				return nil
 			},
 		)
-		if offered && !scheduled {
+		if admission.canceled() {
 			return
 		}
-		if scheduled {
+		if admission.accepted() {
 			if runErr != nil && retirementScheduled {
 				slog.ErrorContext(
 					context.WithoutCancel(runCtx),
@@ -231,11 +256,11 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 			cancelRun()
 			return serverapi.WorktreeScheduledAcknowledgement{}, err
 		}
-		accepted <- true
 		return serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID}, nil
 	case <-ctx.Done():
-		cancelRun()
-		accepted <- false
+		if admission.cancelPending() {
+			cancelRun()
+		}
 		return serverapi.WorktreeScheduledAcknowledgement{}, context.Cause(ctx)
 	}
 }

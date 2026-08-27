@@ -43,6 +43,19 @@ func (f retargetIdentityPublisherFunc) PublishSessionIdentity(sessionID string) 
 	return f(sessionID)
 }
 
+func TestScheduledRetargetAdmissionKeepsAcceptedOperationServerOwned(t *testing.T) {
+	var admission scheduledRetargetAdmission
+	if !admission.accept() {
+		t.Fatal("pending rebind was not accepted")
+	}
+	if admission.cancelPending() {
+		t.Fatal("request cancellation reclaimed an accepted rebind")
+	}
+	if !admission.accepted() {
+		t.Fatal("accepted rebind lost server ownership")
+	}
+}
+
 type staleFirstProjectBoundaryMetadata struct {
 	sessionRetargetMetadata
 
