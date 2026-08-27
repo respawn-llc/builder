@@ -174,14 +174,6 @@ func newSessionPickerPageSegment(requestedOffset int, response sessionPageRespon
 	return sessionPickerPageSegment{
 		requestedOffset: requestedOffset,
 		sessions:        append([]clientui.SessionSummary(nil), response.Sessions...),
-		nextOffset:      cloneSessionPageOffset(response.NextOffset),
+		nextOffset:      clonePointer(response.NextOffset),
 	}
-}
-
-func cloneSessionPageOffset(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }

@@ -589,7 +589,7 @@ func (m *projectWorkspacePickerModel) applyPageLoaded(message projectWorkspacePi
 	segment := projectWorkspacePickerPageSegment{
 		generation: request.generation, offset: request.offset,
 		workspaces: cloneProjectWorkspaceCatalogRows(message.response.Workspaces),
-		nextOffset: cloneInt32(message.response.NextOffset),
+		nextOffset: clonePointer(message.response.NextOffset),
 	}
 	if request.direction == projectWorkspacePickerPageInitial {
 		if len(segment.workspaces) == 0 {
@@ -854,14 +854,6 @@ func occurrenceIndex(occurrence *projectWorkspacePickerOccurrence, segments []pr
 		index += len(segment.workspaces)
 	}
 	return 0, false
-}
-
-func cloneInt32(value *int32) *int32 {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func cloneProjectWorkspaceCatalogRows(rows []*projectpb.ProjectWorkspaceCatalogSummary) []*projectpb.ProjectWorkspaceCatalogSummary {

@@ -82,6 +82,14 @@ func flattenBoundedPickerPages[P, T any](pages []P, items func(P) []T) []T {
 	return result
 }
 
+func clonePointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
 func (w *startupPickerPageWindow[P]) reset() {
 	w.segments = nil
 	w.request = nil
