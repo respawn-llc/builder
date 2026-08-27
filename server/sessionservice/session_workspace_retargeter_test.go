@@ -80,6 +80,31 @@ func (m *staleFirstProjectBoundaryMetadata) PlanSessionWorkspaceRetarget(
 	return plan, nil
 }
 
+type secondRetargetPlanSignal struct {
+	sessionRetargetMetadata
+
+	mu     sync.Mutex
+	calls  int
+	second chan struct{}
+}
+
+func (m *secondRetargetPlanSignal) PlanSessionWorkspaceRetarget(
+	ctx context.Context,
+	req metadata.SessionWorkspaceRetargetRequest,
+) (metadata.SessionWorkspaceRetargetPlan, error) {
+	plan, err := m.sessionRetargetMetadata.PlanSessionWorkspaceRetarget(ctx, req)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetPlan{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.calls == 2 {
+		close(m.second)
+	}
+	return plan, nil
+}
+
 type failingRetargetResourceLifecycle struct {
 	err error
 }
@@ -516,6 +541,85 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 	if reminder.WorkingDirectory == nil ||
 		canonicalRetargetTestPath(t, *reminder.WorkingDirectory) != canonicalRetargetTestPath(t, fixture.targetWorkspaceRoot) {
 		t.Fatalf("persisted Session rebind Working Directory = %v, want %q", reminder.WorkingDirectory, fixture.targetWorkspaceRoot)
+	}
+}
+
+func TestSessionWorkspaceRetargeterAllowsSelfRebindWhileHumanSameProjectRebindWaits(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	if _, err := fixture.metadata.AttachWorkspaceToProject(
+		context.Background(),
+		fixture.sourceBinding.ProjectID,
+		fixture.targetWorkspaceRoot,
+	); err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	request := metadata.SessionWorkspaceRetargetRequest{
+		SessionID:     fixture.child.Meta().SessionID,
+		WorkspaceRoot: fixture.targetWorkspaceRoot,
+	}
+	metadataSource := &secondRetargetPlanSignal{
+		sessionRetargetMetadata: fixture.metadata,
+		second:                  make(chan struct{}),
+	}
+	retargeter := fixture.retargeter(metadataSource, retargetProcessSource{})
+	invokeSelfRebind := make(chan struct{})
+	agentStarted := make(chan struct{})
+	client := &queuedFailureRetargetRuntimeClient{
+		scheduled:     make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+		secondStarted: make(chan struct{}),
+	}
+	engine := fixture.openRuntimeWithClient(t, client)
+	client.run = func() error {
+		close(agentStarted)
+		<-invokeSelfRebind
+		active := engine.ActiveRun()
+		if active == nil {
+			return errors.New("active Agent Step is required")
+		}
+		_, err := retargeter.ScheduleWorkspaceRetarget(
+			t.Context(),
+			request,
+			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
+			serverapi.NewWorktreeOperationID(),
+		)
+		return err
+	}
+
+	stepDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "move this Session")
+		stepDone <- err
+	}()
+	select {
+	case <-agentStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("active Agent Step did not start")
+	}
+
+	humanDone := make(chan error, 1)
+	go func() {
+		_, err := retargeter.RetargetWorkspace(context.Background(), request)
+		humanDone <- err
+	}()
+	select {
+	case <-metadataSource.second:
+	case <-time.After(3 * time.Second):
+		t.Fatal("human rebind did not reach its current maintenance plan")
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(invokeSelfRebind)
+	select {
+	case <-client.scheduled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("self-rebind could not schedule while the human rebind waited")
+	}
+	close(client.releaseFirst)
+	if err := <-stepDone; err != nil {
+		t.Fatalf("originating Agent Step: %v", err)
+	}
+	if err := <-humanDone; err != nil {
+		t.Fatalf("human rebind: %v", err)
 	}
 }
 

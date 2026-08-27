@@ -224,7 +224,7 @@ func (a *Authority) RunSessionMaintenanceAtStepBoundary(
 	if err != nil {
 		return err
 	}
-	return a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
+	return a.withExactStepBoundaryMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
 		if resource == nil {
 			return false, runtime.ErrActiveStepInactive
 		}
@@ -613,7 +613,27 @@ func ParseSessionIDs(raw []string) ([]runtimeids.SessionID, error) {
 
 type maintenanceCallback func(context.Context, *session.Store, *agentResource, *runtime.Engine) (retire bool, err error)
 
+type maintenanceAdmission uint8
+
+const (
+	maintenanceAdmissionAuthorized maintenanceAdmission = iota + 1
+	maintenanceAdmissionExactStepBoundary
+)
+
 func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runtimeids.SessionID, callback maintenanceCallback) error {
+	return a.withMaintenanceResourceAdmission(ctx, sessionID, maintenanceAdmissionAuthorized, callback)
+}
+
+func (a *Authority) withExactStepBoundaryMaintenanceResource(ctx context.Context, sessionID runtimeids.SessionID, callback maintenanceCallback) error {
+	return a.withMaintenanceResourceAdmission(ctx, sessionID, maintenanceAdmissionExactStepBoundary, callback)
+}
+
+func (a *Authority) withMaintenanceResourceAdmission(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	admission maintenanceAdmission,
+	callback maintenanceCallback,
+) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
 	}
@@ -625,8 +645,9 @@ func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runti
 	}
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
-	defer gate.lock.Unlock()
-	if block := gate.unauthorizedMaintenanceBlock(ctx); block != nil {
+	if block := gate.unauthorizedMaintenanceBlock(ctx); block != nil &&
+		(admission != maintenanceAdmissionExactStepBoundary || block.reason != SessionStartBlockMaintenance) {
+		gate.lock.Unlock()
 		return errors.Join(
 			ErrSessionStartsBlocked,
 			fmt.Errorf("session %s maintenance is blocked by session start block %d", sessionID, block.reason),
@@ -636,6 +657,7 @@ func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runti
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
 	if resource == nil {
+		defer gate.lock.Unlock()
 		descriptor, err := session.NewOpenSessionDescriptor(sessionID)
 		if err != nil {
 			return err
@@ -646,19 +668,33 @@ func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runti
 		}
 		return err
 	}
+	engine, err := resource.beginEngineCallbackUnderAdmission()
+	if err != nil {
+		gate.lock.Unlock()
+		return err
+	}
+	store := resource.store
+	gate.lock.Unlock()
 	retire := false
-	err := resource.withEngine(ctx, resource.ref, func(runCtx context.Context, engine *runtime.Engine) (err error) {
-		retire, err = callback(runCtx, resource.store, resource, engine)
-		return
-	})
+	err = func() error {
+		defer resource.releaseCallbackCount()
+		var callbackErr error
+		retire, callbackErr = callback(ctx, store, resource, engine)
+		return callbackErr
+	}()
 	if retire {
 		err = errors.Join(err, a.retireExactResource(ctx, resource))
+	} else {
+		err = errors.Join(err, a.closeRetiringResource(context.Background(), resource))
 	}
 	return err
 }
 
 func (a *Authority) retireExactResource(ctx context.Context, resource *agentResource) error {
 	sessionID := resource.ref.SessionID()
+	gate := a.gateFor(sessionID)
+	gate.lock.Lock()
+	defer gate.lock.Unlock()
 	a.mu.Lock()
 	if a.resources[sessionID] != resource {
 		a.mu.Unlock()
