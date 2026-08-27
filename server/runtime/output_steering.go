@@ -766,7 +766,7 @@ func (e *Engine) applySteeringItem(identity steeringStepIdentity, item steeringI
 				}
 			}
 		}
-		receipt, err := e.appendMessageRaw(stepID, commit.message, steeringMessageEventNone, true, &commit.result.provenance)
+		receipt, err := e.appendMessageRaw(identity.stepID, commit.message, steeringMessageEventNone, true, &commit.result.provenance)
 		item.recordCommitReceipt(receipt)
 		if err != nil || !receipt.Committed {
 			return err
@@ -804,7 +804,7 @@ func (e *Engine) applySteeringItem(identity steeringStepIdentity, item steeringI
 	}
 	if item.message != nil {
 		receipt, err := e.appendMessageRaw(
-			stepID,
+			identity.stepID,
 			item.message.message,
 			item.message.eventPolicy,
 			item.message.persist,
@@ -825,7 +825,7 @@ func (e *Engine) applySteeringItem(identity steeringStepIdentity, item steeringI
 	if item.goalNoticeAndStatus != nil {
 		notice := item.goalNoticeAndStatus
 		receipt, noticeErr := e.appendMessageRaw(
-			stepID,
+			identity.stepID,
 			notice.message,
 			steeringMessageEventDefault,
 			true,

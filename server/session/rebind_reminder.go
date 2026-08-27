@@ -58,11 +58,8 @@ func NormalizeSessionRebindReminder(reminder SessionRebindReminder) (SessionRebi
 func normalizeProjectReference(reference serverapi.ProjectReference) (serverapi.ProjectReference, error) {
 	reference.ID = strings.TrimSpace(reference.ID)
 	reference.Name = strings.TrimSpace(reference.Name)
-	if reference.ID == "" {
-		return serverapi.ProjectReference{}, errors.New("project id is required")
-	}
-	if reference.Name == "" {
-		return serverapi.ProjectReference{}, errors.New("project name is required")
+	if err := reference.Validate(); err != nil {
+		return serverapi.ProjectReference{}, err
 	}
 	return reference, nil
 }

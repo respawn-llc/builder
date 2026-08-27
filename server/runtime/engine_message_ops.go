@@ -409,12 +409,16 @@ func (e *Engine) applyPreparedMessageProjection(stepID string, prepared prepared
 }
 
 func (e *Engine) appendMessageRaw(
-	stepID string,
+	stepIdentity *string,
 	msg llm.Message,
 	eventPolicy steeringMessageEventPolicy,
 	persist bool,
 	provenanceDestination **TranscriptCommittedRowProvenance,
 ) (session.CommitReceipt, error) {
+	stepID := ""
+	if stepIdentity != nil {
+		stepID = *stepIdentity
+	}
 	prepared, err := e.prepareMessageProjection(stepID, msg)
 	if err != nil {
 		return session.CommitReceipt{}, err
@@ -424,7 +428,7 @@ func (e *Engine) appendMessageRaw(
 	var appendErr error
 	var provenance *TranscriptCommittedRowProvenance
 	if persist {
-		appended, err := e.appendPreparedMessageEvent(stepID, prepared)
+		appended, err := e.appendPreparedMessageEvent(stepIdentity, prepared)
 		receipt = appended.CommitReceipt
 		appendErr = err
 		if !receipt.Committed {
@@ -457,15 +461,15 @@ func (e *Engine) appendMessageRaw(
 	return receipt, appendErr
 }
 
-func (e *Engine) appendPreparedMessageEvent(stepID string, prepared preparedMessageProjection) (session.EventRecordAppendResult, error) {
+func (e *Engine) appendPreparedMessageEvent(stepID *string, prepared preparedMessageProjection) (session.EventRecordAppendResult, error) {
 	if !isRollbackCandidateMessage(prepared.message) {
-		appended, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), prepared.record)
+		appended, receipt, appendErr := e.eventLog.AppendRecord(stepID, prepared.record)
 		return session.EventRecordAppendResult{
 			Record:        appended,
 			CommitReceipt: receipt,
 		}, appendErr
 	}
-	appended, err := e.eventLog.AppendRecordWithEndByteCursor(textutil.OptionalExactString(stepID), prepared.record)
+	appended, err := e.eventLog.AppendRecordWithEndByteCursor(stepID, prepared.record)
 	if appended.Committed {
 		if appended.EndByteCursor == nil {
 			panic(fmt.Sprintf(
@@ -529,7 +533,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, message llm.Message
 	}
 	normalizedItems := normalizedQueuedUserMessageStatusItems(queueItems)
 	normalizedIDs := queuedUserMessageStatusItemIDs(normalizedItems)
-	appended, appendErr := e.appendPreparedMessageEvent(stepID, prepared)
+	appended, appendErr := e.appendPreparedMessageEvent(textutil.OptionalExactString(stepID), prepared)
 	if !appended.Committed {
 		return appended.CommitReceipt, appendErr
 	}
