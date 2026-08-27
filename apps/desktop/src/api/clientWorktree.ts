@@ -22,19 +22,16 @@ import {
   type DeleteSuccess,
   type EnterError,
   type LeaveError,
-  type ListError,
   type ListSuccess,
   type ScheduledAcknowledgement,
   type SelectorResolveError,
   type SelectorResolveSuccess,
   type SetupStartError,
-  type StatusError,
   type StatusSuccess,
-  type WorkspaceListError,
 } from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 
 import { ContractError, RpcError } from "./errors";
-import { protobufRpcError } from "./protobufRpc";
+import { protobufRpcError, requireUnarySuccess } from "./protobufRpc";
 import {
   authorizeWorktreeCreateTargetResolution,
   authorizeWorktreeDeletePreview,
@@ -52,7 +49,7 @@ export async function getWorktreeStatus(
   sessionID: string,
 ): Promise<StatusSuccess> {
   const method = StatusService.method.get;
-  return requireWorktreeSuccess(
+  return requireUnarySuccess(
     method,
     await transport.callDescriptor(method, create(method.input, { sessionId: sessionID })),
   );
@@ -63,7 +60,7 @@ export async function listWorktrees(
   sessionID: string,
 ): Promise<ListSuccess> {
   const method = ListService.method.list;
-  const success = requireWorktreeSuccess(
+  const success = requireUnarySuccess(
     method,
     await transport.callDescriptor(method, create(method.input, { sessionId: sessionID })),
   );
@@ -91,7 +88,7 @@ export async function resolveWorktreeCreateTarget(
   target: string,
 ): Promise<CreateTargetResolveSuccess> {
   const method = CreateTargetService.method.resolve;
-  const success = requireWorktreeSuccess(
+  const success = requireUnarySuccess(
     method,
     await transport.callDescriptor(method, create(method.input, { sessionId: sessionID, target })),
   );
@@ -202,12 +199,8 @@ export async function deleteWorktree(
 }
 
 export type WorktreeFailure =
-  | StatusError
-  | ListError
-  | WorkspaceListError
   | SelectorResolveError
   | DeletePreviewError
-  | CreateTargetResolveError
   | CreateError
   | EnterError
   | LeaveError
@@ -273,7 +266,6 @@ function projectWorktreeFailure(method: DescMethod, failure: WorktreeFailure): R
     case "worktreeBlocked":
       return new WorktreeError(generic, { kind: "blocked" });
     case "authRequired":
-    case "workspaceNotRegistered":
     case "serverNotReady":
     case "internalFailure":
     case undefined:

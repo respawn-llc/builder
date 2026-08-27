@@ -13,27 +13,11 @@ export type RpcSubscription = Readonly<{
   close(): void;
 }>;
 
-export type DescriptorTerminalOutcome =
-  Readonly<{ kind: "normal" }> | Readonly<{ kind: "error"; code: number; diagnostic: string }>;
-
-export type DescriptorSubscriptionHandler<Event> = Readonly<{
+export type DescriptorSubscriptionHandler<Event, Completion> = Readonly<{
   onOpen?(): void;
   onEvent(event: Event): void;
-  onTerminal(outcome: DescriptorTerminalOutcome): void;
+  onComplete(completion: Completion): void;
   onError(error: Error): void;
-}>;
-
-export type DescriptorSubscriptionContract<
-  Method extends DescMethod,
-  EventDescriptor extends DescMessage,
-  CompletionDescriptor extends DescMessage,
-  Event,
-> = Readonly<{
-  eventDescriptor: EventDescriptor;
-  completionDescriptor: CompletionDescriptor;
-  projectStart(result: MessageShape<Method["output"]>): void;
-  projectEvent(message: MessageShape<EventDescriptor>): Event;
-  classifyCompletion(message: MessageShape<CompletionDescriptor>): DescriptorTerminalOutcome;
 }>;
 
 export type RpcCallOptions = Readonly<{
@@ -69,11 +53,15 @@ export type DescriptorRpcTransport = RpcTransport &
       Method extends DescMethod,
       EventDescriptor extends DescMessage,
       CompletionDescriptor extends DescMessage,
-      Event,
     >(
       method: Method,
       request: MessageShape<Method["input"]>,
-      contract: DescriptorSubscriptionContract<Method, EventDescriptor, CompletionDescriptor, Event>,
-      handler: DescriptorSubscriptionHandler<Event>,
+      eventDescriptor: EventDescriptor,
+      completionDescriptor: CompletionDescriptor,
+      onStart: (result: MessageShape<Method["output"]>) => void,
+      handler: DescriptorSubscriptionHandler<
+        MessageShape<EventDescriptor>,
+        MessageShape<CompletionDescriptor>
+      >,
     ): RpcSubscription;
   }>;

@@ -34,7 +34,6 @@ import {
 import type {
   RpcCallOptions,
   DescriptorRpcTransport,
-  DescriptorSubscriptionContract,
   DescriptorSubscriptionHandler,
   RpcDedicatedCallOptions,
   RpcEventHandler,
@@ -159,7 +158,11 @@ class JsonRpcWebSocketTransport implements RpcTransport {
 
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription {
     const controller = new AbortController();
-    void this.#openSubscription(method, params, handler, controller.signal);
+    void this.#openSubscription(
+      (socket) => this.#runJsonSubscription(socket, method, params, handler, controller.signal),
+      handler.onError,
+      controller.signal,
+    );
     return {
       close() {
         controller.abort();
@@ -171,15 +174,33 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     Method extends DescMethod,
     EventDescriptor extends DescMessage,
     CompletionDescriptor extends DescMessage,
-    Event,
   >(
     method: Method,
     request: MessageShape<Method["input"]>,
-    contract: DescriptorSubscriptionContract<Method, EventDescriptor, CompletionDescriptor, Event>,
-    handler: DescriptorSubscriptionHandler<Event>,
+    eventDescriptor: EventDescriptor,
+    completionDescriptor: CompletionDescriptor,
+    onStart: (result: MessageShape<Method["output"]>) => void,
+    handler: DescriptorSubscriptionHandler<
+      MessageShape<EventDescriptor>,
+      MessageShape<CompletionDescriptor>
+    >,
   ): RpcSubscription {
     const controller = new AbortController();
-    void this.#openDescriptorSubscription({ method, request, contract, handler, signal: controller.signal });
+    void this.#openSubscription(
+      (socket) =>
+        runSocketDescriptorSubscription({
+          socket,
+          method,
+          request,
+          eventDescriptor,
+          completionDescriptor,
+          onStart,
+          handler,
+          signal: controller.signal,
+        }),
+      handler.onError,
+      controller.signal,
+    );
     return {
       close: () => {
         controller.abort();
@@ -417,91 +438,33 @@ class JsonRpcWebSocketTransport implements RpcTransport {
   }
 
   async #openSubscription(
-    method: string,
-    params: JsonValue,
-    handler: RpcEventHandler,
+    run: (socket: WebSocket) => Promise<void>,
+    onError: (error: Error) => void,
     signal: AbortSignal,
   ): Promise<void> {
     let attempt = 0;
     while (!signal.aborted) {
       try {
-        await this.#openSubscriptionSession(method, params, handler, signal);
+        await this.#withSubscriptionSocket(signal, run);
         return;
       } catch (error) {
         if (abortSignalWasRequested(signal)) {
           return;
         }
-        handler.onError(error instanceof Error ? error : new TransportError("Subscription failed."));
+        onError(error instanceof Error ? error : new TransportError("Subscription failed."));
         await delay(Math.min(subscriptionReconnectBaseMs * 2 ** attempt, subscriptionReconnectMaxMs), signal);
         attempt += 1;
       }
     }
   }
 
-  async #openDescriptorSubscription<
-    Method extends DescMethod,
-    EventDescriptor extends DescMessage,
-    CompletionDescriptor extends DescMessage,
-    Event,
-  >(
-    input: Readonly<{
-      method: Method;
-      request: MessageShape<Method["input"]>;
-      contract: DescriptorSubscriptionContract<Method, EventDescriptor, CompletionDescriptor, Event>;
-      handler: DescriptorSubscriptionHandler<Event>;
-      signal: AbortSignal;
-    }>,
-  ): Promise<void> {
-    const { method, request, contract, handler, signal } = input;
-    let attempt = 0;
-    while (!signal.aborted) {
-      try {
-        const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs);
-        try {
-          if (abortSignalWasRequested(signal)) return;
-          signal.addEventListener(
-            "abort",
-            () => {
-              socket.close();
-            },
-            { once: true },
-          );
-          await setupSocket(socket, {
-            timeoutMilliseconds: rpcRequestTimeoutMs,
-            expectedRootId: this.#expectedRootId,
-          });
-          await runSocketDescriptorSubscription({ socket, method, request, contract, handler, signal });
-          return;
-        } finally {
-          socket.close();
-        }
-      } catch (error) {
-        if (abortSignalWasRequested(signal)) return;
-        handler.onError(error instanceof Error ? error : new TransportError("Subscription failed."));
-        await delay(Math.min(subscriptionReconnectBaseMs * 2 ** attempt, subscriptionReconnectMaxMs), signal);
-        attempt += 1;
-      }
-    }
-  }
-
-  async #openSubscriptionSession(
+  async #runJsonSubscription(
+    socket: WebSocket,
     method: string,
     params: JsonValue,
     handler: RpcEventHandler,
     signal: AbortSignal,
   ): Promise<void> {
-    const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs);
-    if (abortSignalWasRequested(signal)) {
-      socket.close();
-      return;
-    }
-    signal.addEventListener(
-      "abort",
-      () => {
-        socket.close();
-      },
-      { once: true },
-    );
     const terminalCompleteRef: { current: Readonly<{ code: number; message: string }> | null } = {
       current: null,
     };
@@ -514,13 +477,6 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       }
     };
     try {
-      // The handshake must stay inside this scope: a rejected handshake (e.g. a
-      // server reporting a different persistence root) would otherwise leave the
-      // socket connected to the wrong server while the reconnect loop opens more.
-      await setupSocket(socket, {
-        timeoutMilliseconds: rpcRequestTimeoutMs,
-        expectedRootId: this.#expectedRootId,
-      });
       socket.addEventListener("message", subscriptionListener);
       await sendSocketRequest(socket, method, params, {
         timeoutMilliseconds: rpcRequestTimeoutMs,
@@ -536,6 +492,27 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       throw error;
     } finally {
       socket.removeEventListener("message", subscriptionListener);
+    }
+  }
+
+  async #withSubscriptionSocket(
+    signal: AbortSignal,
+    run: (socket: WebSocket) => Promise<void>,
+  ): Promise<void> {
+    const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs, signal);
+    const abort = () => {
+      socket.close();
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      await setupSocket(socket, {
+        timeoutMilliseconds: rpcRequestTimeoutMs,
+        expectedRootId: this.#expectedRootId,
+        signal,
+      });
+      await run(socket);
+    } finally {
+      signal.removeEventListener("abort", abort);
       socket.close();
     }
   }

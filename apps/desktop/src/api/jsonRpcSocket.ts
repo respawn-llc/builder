@@ -18,15 +18,12 @@ import {
   completeDescriptorResponse,
   decodeDescriptorResponse,
   encodeDescriptorCall,
-  encodeDescriptorSubscriptionCall,
 } from "./descriptorRpc";
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, TransportError } from "./errors";
 import { jsonValueSchema, type JsonValue } from "./json";
 import { protobufRpcError } from "./protobufRpc";
 import type {
-  DescriptorSubscriptionContract,
   DescriptorSubscriptionHandler,
-  DescriptorTerminalOutcome,
   RpcEventHandler,
 } from "./transport";
 
@@ -135,26 +132,31 @@ export async function runSocketDescriptorSubscription<
   Method extends DescMethod,
   EventDescriptor extends DescMessage,
   CompletionDescriptor extends DescMessage,
-  Event,
 >(
   input: Readonly<{
     socket: WebSocket;
     method: Method;
     request: MessageShape<Method["input"]>;
-    contract: DescriptorSubscriptionContract<Method, EventDescriptor, CompletionDescriptor, Event>;
-    handler: DescriptorSubscriptionHandler<Event>;
+    eventDescriptor: EventDescriptor;
+    completionDescriptor: CompletionDescriptor;
+    onStart(result: MessageShape<Method["output"]>): void;
+    handler: DescriptorSubscriptionHandler<
+      MessageShape<EventDescriptor>,
+      MessageShape<CompletionDescriptor>
+    >;
     signal: AbortSignal;
   }>,
 ): Promise<void> {
-  const { socket, method, request, contract, handler, signal } = input;
+  const { socket, method, request, eventDescriptor, completionDescriptor, onStart, handler, signal } =
+    input;
   const associations = subscriptionAssociations(method);
-  requireAssociatedDescriptor(associations.event.input, contract.eventDescriptor, "event");
-  requireAssociatedDescriptor(associations.completion.input, contract.completionDescriptor, "completion");
+  requireAssociatedDescriptor(associations.event.input, eventDescriptor, "event");
+  requireAssociatedDescriptor(associations.completion.input, completionDescriptor, "completion");
   const correlation = `${method.name}-${Date.now().toString()}`;
-  const { operation, bytes } = encodeDescriptorSubscriptionCall(method, request, correlation);
+  const { operation, bytes } = encodeDescriptorCall(method, request, correlation);
   return new Promise((resolve, reject) => {
     let acknowledged = false;
-    let terminal: DescriptorTerminalOutcome | null = null;
+    let terminal = false;
     let settled = false;
     const cleanup = () => {
       socket.removeEventListener("message", message);
@@ -169,21 +171,13 @@ export async function runSocketDescriptorSubscription<
       if (failure === undefined) resolve();
       else reject(failure);
     };
-    const terminalError = (outcome: Extract<DescriptorTerminalOutcome, { kind: "error" }>) =>
-      new TransportError(
-        `${operation} subscription completed with code ${outcome.code.toString()}: ${outcome.diagnostic}`,
-      );
-    const settleTerminal = () => {
-      if (terminal === null) return;
-      finish(terminal.kind === "normal" ? undefined : terminalError(terminal));
-    };
     const handleResponse = (frame: Uint8Array) => {
       const response = decodeDescriptorResponse(frame);
       if (response.correlation !== correlation) return;
-      contract.projectStart(completeDescriptorResponse(method, correlation, response));
+      onStart(completeDescriptorResponse(method, correlation, response));
       acknowledged = true;
-      if (terminal === null) handler.onOpen?.();
-      else settleTerminal();
+      if (!terminal) handler.onOpen?.();
+      else finish();
     };
     const handleNotification = (
       notification: Readonly<{ operation: string; payload?: Uint8Array | undefined }>,
@@ -192,14 +186,14 @@ export async function runSocketDescriptorSubscription<
         throw new TransportError(`${notification.operation} notification payload is required.`);
       }
       if (notification.operation === operationName(associations.event)) {
-        handler.onEvent(contract.projectEvent(decode(contract.eventDescriptor, notification.payload)));
+        handler.onEvent(decode(eventDescriptor, notification.payload));
         return;
       }
       if (notification.operation === operationName(associations.completion)) {
-        terminal = contract.classifyCompletion(decode(contract.completionDescriptor, notification.payload));
-        handler.onTerminal(terminal);
+        terminal = true;
+        handler.onComplete(decode(completionDescriptor, notification.payload));
         socket.close();
-        if (acknowledged) settleTerminal();
+        if (acknowledged) finish();
         return;
       }
       throw new TransportError(`${operation} received unexpected notification ${notification.operation}.`);
@@ -230,7 +224,7 @@ export async function runSocketDescriptorSubscription<
     };
     const close = () => {
       if (signal.aborted) finish();
-      else if (terminal !== null && acknowledged) settleTerminal();
+      else if (terminal && acknowledged) finish();
       else finish(new TransportError("Subscription socket closed."));
     };
     const error = () => {

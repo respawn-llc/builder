@@ -7,8 +7,6 @@ export type {
   RpcCallOptions,
   RpcDedicatedCallOptions,
   DescriptorRpcTransport,
-  DescriptorSubscriptionContract,
-  DescriptorSubscriptionHandler,
   RpcEventHandler,
   RpcSubscription,
   RpcTransport,

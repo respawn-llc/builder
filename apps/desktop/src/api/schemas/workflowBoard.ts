@@ -24,7 +24,6 @@ import type {
 import { ContractError, RpcError } from "../errors";
 import { rpcErrorCodes } from "../rpcErrorCodes";
 import { parseSetupOperationID, type SetupOperationID } from "../setupOperationID";
-import type { WorkflowExecutionTargetSelection } from "../workflowExecutionTarget";
 import {
   attentionItemSchema,
   boardCardSchema,
@@ -112,20 +111,11 @@ const workflowRegisteredWorktreeSchema = z
   })
   .transform((value) => ({ variant: value.variant, ...value.registered }));
 export type WorkflowRegisteredWorktree = z.output<typeof workflowRegisteredWorktreeSchema>;
-export type RetainedPreviousWorktree = Readonly<{ worktree: WorkflowRegisteredWorktree }>;
-const retainedPreviousWorktreeSchema: z.ZodType<RetainedPreviousWorktree> = z
+const retainedPreviousWorktreeSchema = z
   .object({ worktree: workflowRegisteredWorktreeSchema })
   .strict();
+export type RetainedPreviousWorktree = z.output<typeof retainedPreviousWorktreeSchema>;
 
-export type TaskSetupRecovery = Readonly<{
-  setupOperationID: SetupOperationID;
-  cause: "process_exit" | "timeout" | "target_preparation" | "operational";
-  diagnostic: string;
-  scriptPath: string | null;
-  executionTarget: WorkflowExecutionTargetSelection;
-  retainedWorktree: Readonly<{ worktreeID: string; root: string }> | null;
-  retainedPreviousWorktree: Readonly<{ worktreeID: string; root: string }> | null;
-}>;
 const recoveryWorktreeSchema = z
   .object({ worktree_id: nonBlankString, root: nonBlankString })
   .strict()
@@ -138,7 +128,7 @@ const setupOperationIDSchema = z.string().transform((value, context): SetupOpera
     return z.NEVER;
   }
 });
-const taskSetupRecoverySchema: z.ZodType<TaskSetupRecovery> = z
+const taskSetupRecoverySchema = z
   .object({
     setup_operation_id: setupOperationIDSchema,
     cause: z.enum(["process_exit", "timeout", "target_preparation", "operational"]),
@@ -150,6 +140,15 @@ const taskSetupRecoverySchema: z.ZodType<TaskSetupRecovery> = z
     retained_previous_worktree: recoveryWorktreeSchema.nullable(),
   })
   .strict()
+  .superRefine((value, context) => {
+    const scriptFailure = value.cause !== "target_preparation";
+    if (scriptFailure && (value.script_path === null || value.retained_worktree === null)) {
+      context.addIssue({ code: "custom", message: "Setup failure requires script and Worktree facts." });
+    }
+    if (!scriptFailure && value.script_path !== null) {
+      context.addIssue({ code: "custom", message: "Target preparation cannot include a setup script." });
+    }
+  })
   .transform((value) => ({
     setupOperationID: value.setup_operation_id,
     cause: value.cause,
@@ -159,6 +158,7 @@ const taskSetupRecoverySchema: z.ZodType<TaskSetupRecovery> = z
     retainedWorktree: value.retained_worktree,
     retainedPreviousWorktree: value.retained_previous_worktree,
   }));
+export type TaskSetupRecovery = z.output<typeof taskSetupRecoverySchema>;
 const taskSetupRecoveryEnvelopeSchema = z.object({ setup_recovery: taskSetupRecoverySchema.optional() }).loose();
 
 export function parseTaskSetupRecoveryDetail(detailJSON: string | null): TaskSetupRecovery | null {
@@ -170,7 +170,12 @@ export function parseTaskSetupRecoveryDetail(detailJSON: string | null): TaskSet
     throw new ContractError("Task setup recovery detail was not valid JSON.");
   }
   const parsed = taskSetupRecoveryEnvelopeSchema.safeParse(detail);
-  if (!parsed.success) throw new ContractError("Task setup recovery detail did not match GUI contract.");
+  if (!parsed.success) {
+    throw new ContractError(
+      "Task setup recovery detail did not match GUI contract.",
+      parsed.error.issues.map((issue) => ({ code: issue.code, path: issue.path.map(String) })),
+    );
+  }
   return parsed.data.setup_recovery ?? null;
 }
 

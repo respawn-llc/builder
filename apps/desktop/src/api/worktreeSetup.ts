@@ -7,7 +7,7 @@ import {
 } from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 
 import { requireWorktreeSuccess } from "./clientWorktree";
-import { ContractError } from "./errors";
+import { ContractError, TransportError } from "./errors";
 import type { SetupOperationID } from "./setupOperationID";
 import type { DescriptorRpcTransport, RpcSubscription } from "./transport";
 
@@ -35,20 +35,10 @@ export function subscribeWorktreeSetup(
   subscription = transport.subscribeDescriptor(
     method,
     create(method.input, { setupOperationId: setupOperationID.toJSONValue() }),
-    {
-      eventDescriptor: SetupEventSchema,
-      completionDescriptor: SetupCompletionSchema,
-      projectStart(result) {
-        requireWorktreeSuccess(method, result);
-      },
-      projectEvent(event) {
-        return event;
-      },
-      classifyCompletion(completion) {
-        return completion.code === undefined
-          ? { kind: "normal" }
-          : { kind: "error", code: completion.code, diagnostic: required(completion.diagnostic) };
-      },
+    SetupEventSchema,
+    SetupCompletionSchema,
+    (result) => {
+      requireWorktreeSuccess(method, result);
     },
     {
       ...(handler.onOpen === undefined
@@ -63,8 +53,19 @@ export function subscribeWorktreeSetup(
         handler.onEvent(event);
         if (event.phase.case !== "started") finish(handler.onComplete);
       },
-      onTerminal(outcome) {
-        if (outcome.kind === "normal") finish(handler.onComplete);
+      onComplete(completion) {
+        if (completion.code === undefined) {
+          finish(handler.onComplete);
+          return;
+        }
+        const diagnostic = required(completion.diagnostic);
+        finish(() => {
+          handler.onError(
+            new TransportError(
+              `Worktree setup completed with code ${completion.code?.toString()}: ${diagnostic}`,
+            ),
+          );
+        });
       },
       onError(error) {
         finish(() => {
