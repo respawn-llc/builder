@@ -48,6 +48,7 @@ const fixture = vi.hoisted<{
   initialGroupPagesError: boolean;
   initialGroupPagesEstablished: boolean;
   initialGroupPagesRefreshing: boolean;
+  activeDataOverrides: Partial<ProjectTaskListData.ProjectTaskGroupData>;
   backlogTasks: readonly TaskListItem[];
   doneDataOverrides: Partial<ProjectTaskListData.ProjectTaskGroupData>;
   invalidations: unknown[];
@@ -88,6 +89,7 @@ const fixture = vi.hoisted<{
   initialGroupPagesError: false,
   initialGroupPagesEstablished: true,
   initialGroupPagesRefreshing: false,
+  activeDataOverrides: {},
   backlogTasks: [task("backlog-1", "KNT-3", "Backlog task")],
   doneDataOverrides: {},
   invalidations: [],
@@ -163,15 +165,18 @@ vi.mock("./projectTaskListData", async (importOriginal) => {
         fixture.countsPending,
         fixture.countsEstablished,
       ),
-      active: groupData(
-        mockedActiveTasks ?? [
-          task("active-1", "KNT-1", "Active task"),
-          task("active-2", "KNT-2", "Running task"),
-        ],
-        fixture.initialGroupPagesEstablished,
-        fixture.initialGroupPagesError,
-        fixture.initialGroupPagesRefreshing,
-      ),
+      active: {
+        ...groupData(
+          mockedActiveTasks ?? [
+            task("active-1", "KNT-1", "Active task"),
+            task("active-2", "KNT-2", "Running task"),
+          ],
+          fixture.initialGroupPagesEstablished,
+          fixture.initialGroupPagesError,
+          fixture.initialGroupPagesRefreshing,
+        ),
+        ...fixture.activeDataOverrides,
+      },
       backlog: groupData(
         fixture.backlogTasks,
         fixture.initialGroupPagesEstablished,
@@ -215,6 +220,7 @@ describe("ProjectTasksSurface", () => {
     fixture.initialGroupPagesError = false;
     fixture.initialGroupPagesEstablished = true;
     fixture.initialGroupPagesRefreshing = false;
+    fixture.activeDataOverrides = {};
     fixture.backlogTasks = [task("backlog-1", "KNT-3", "Backlog task")];
     fixture.doneDataOverrides = {};
     fixture.activeDestination = null;
@@ -489,6 +495,38 @@ describe("ProjectTasksSurface", () => {
     const grid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
     expect(grid.scrollTop).toBe(200);
     expect(grid.scrollLeft).toBe(0);
+  });
+
+  it("prefetches the next page when the last loaded page is visible", () => {
+    const fetchNextPage = vi.fn();
+    const activeTasks = Array.from({ length: 50 }, (_value, index) =>
+      task(`active-${index.toString()}`, `KNT-${(index + 1).toString()}`, `Task ${index.toString()}`),
+    );
+    fixture.activeDataOverrides = {
+      fetchNextPage,
+      hasNextPage: true,
+      nextRequestGeneration: "project-1:50",
+    };
+
+    renderSurface(createProjectTasksViewMemory(), "shift", activeTasks);
+
+    expect(fetchNextPage).toHaveBeenCalledOnce();
+  });
+
+  it("does not prefetch while an earlier loaded page remains visible", () => {
+    const fetchNextPage = vi.fn();
+    const activeTasks = Array.from({ length: 100 }, (_value, index) =>
+      task(`active-${index.toString()}`, `KNT-${(index + 1).toString()}`, `Task ${index.toString()}`),
+    );
+    fixture.activeDataOverrides = {
+      fetchNextPage,
+      hasNextPage: true,
+      nextRequestGeneration: "project-1:100",
+    };
+
+    renderSurface(createProjectTasksViewMemory(), "shift", activeTasks);
+
+    expect(fetchNextPage).not.toHaveBeenCalled();
   });
 
   it("replaces the complete Tasks surface when initial exact counts fail", () => {
