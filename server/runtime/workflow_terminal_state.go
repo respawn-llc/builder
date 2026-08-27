@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"core/server/llm"
@@ -49,8 +48,9 @@ func workflowCompletionSource(mode workflowruntime.CompletionMode) WorkflowCompl
 }
 
 type WorkflowSessionState struct {
-	TaskID     workflow.TaskID
-	WorkflowID runtimeids.WorkflowID
+	TaskID      workflow.TaskID
+	WorkflowID  runtimeids.WorkflowID
+	CurrentNode workflow.CurrentNodeReference
 }
 
 func (e *Engine) WorkflowSessionState() (*WorkflowSessionState, error) {
@@ -59,15 +59,16 @@ func (e *Engine) WorkflowSessionState() (*WorkflowSessionState, error) {
 	}
 	if execution, active := e.currentNodeExecutionConfig(); active {
 		instructions := execution.Instructions
-		if strings.TrimSpace(string(instructions.CurrentNode.TaskID)) == "" {
-			return nil, fmt.Errorf("active Workflow execution has no Task ID")
+		if err := instructions.CurrentNode.Validate(); err != nil {
+			return nil, fmt.Errorf("active Workflow execution has invalid Current Node: %w", err)
 		}
 		if instructions.WorkflowID.IsZero() {
 			return nil, fmt.Errorf("active Workflow execution has no Workflow ID")
 		}
 		return &WorkflowSessionState{
-			TaskID:     instructions.CurrentNode.TaskID,
-			WorkflowID: instructions.WorkflowID,
+			TaskID:      instructions.CurrentNode.TaskID,
+			WorkflowID:  instructions.WorkflowID,
+			CurrentNode: instructions.CurrentNode,
 		}, nil
 	}
 	return nil, nil

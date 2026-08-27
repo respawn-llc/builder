@@ -415,6 +415,57 @@ func (a *Authority) SessionExecution(sessionID runtimeids.SessionID) (ExecutionH
 	return resource.currentExecution()
 }
 
+func (a *Authority) ValidateLiveWorkflowAgentExecution(
+	handle ExecutionHandle,
+	sessionID runtimeids.SessionID,
+	currentNode workflow.CurrentNodeReference,
+) (ExecutionHandle, error) {
+	if handle == nil {
+		return nil, errors.New("workflow execution is absent")
+	}
+	scope := handle.Scope()
+	if scope.Kind() != ExecutionScopeAgent {
+		return nil, fmt.Errorf(
+			"workflow Session %s started non-Agent execution scope %s",
+			sessionID,
+			scope.ID(),
+		)
+	}
+	resource, hasResource := scope.Resource()
+	workflowRef, workflowScoped := scope.Workflow()
+	if !hasResource ||
+		resource.SessionID() != sessionID ||
+		!workflowScoped ||
+		!workflowRef.CurrentNode.Equal(currentNode) {
+		return nil, fmt.Errorf(
+			"workflow Session %s started mismatched execution scope %s",
+			sessionID,
+			scope.ID(),
+		)
+	}
+	live, exists := a.SessionExecution(sessionID)
+	if !exists {
+		return nil, fmt.Errorf(
+			"workflow Session %s returned execution scope %s before publication",
+			sessionID,
+			scope.ID(),
+		)
+	}
+	liveScope := live.Scope()
+	liveWorkflowRef, liveWorkflowScoped := liveScope.Workflow()
+	if liveScope.ID() != scope.ID() ||
+		!liveWorkflowScoped ||
+		!liveWorkflowRef.CurrentNode.Equal(currentNode) {
+		return nil, fmt.Errorf(
+			"workflow Session %s returned execution scope %s that does not match live scope %s",
+			sessionID,
+			scope.ID(),
+			liveScope.ID(),
+		)
+	}
+	return live, nil
+}
+
 func (a *Authority) StopWorkflowExecutions(ctx context.Context) error {
 	if a == nil {
 		return nil

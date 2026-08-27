@@ -597,7 +597,7 @@ func TestGatewayCloseCancelsAndDrainsHandlersBeforeRuntimeCleanup(t *testing.T) 
 	t.Cleanup(allowActivationEnd)
 
 	sendGatewayRequest(t, conn, "workflow", protocol.MethodWorkflowTaskGet, serverapi.WorkflowTaskGetRequest{TaskID: "task-1"})
-	sendGatewayRequest(t, conn, "runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "runtime"))
+	sendGatewayRequest(t, conn, "runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID))
 	for i := 0; i < 2; i++ {
 		select {
 		case <-tracker.entered:

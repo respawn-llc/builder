@@ -693,7 +693,6 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	activateSettings.OpenAIBaseURL = "http://127.0.0.1:1/v1"
 	activateSettings.Shell.PostprocessingMode = config.ShellPostprocessingModeBuiltin
 	activation, err := runtimeService.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:       "activate-1",
 		SessionID:             forkID.String(),
 		OwnerID:               "test-owner",
 		ActiveSettings:        activateSettings,
@@ -705,9 +704,8 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
 	if _, err := runtimeService.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "release-1",
-		Attachment:      activation.Attachment,
-		OwnerID:         "test-owner",
+		Attachment: activation.Attachment,
+		OwnerID:    "test-owner",
 	}); err != nil {
 		t.Fatalf("ReleaseSessionRuntime: %v", err)
 	}

@@ -153,7 +153,6 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		enabledToolIDs = append(enabledToolIDs, string(toolID))
 	}
 	attachment, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:       "prompt-commands-activate",
 		SessionID:             plan.Plan.SessionId,
 		ActiveSettings:        activeSettings,
 		EnabledToolIDs:        enabledToolIDs,
@@ -171,10 +170,9 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
 	_, _ = remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "prompt-commands-release",
-		Attachment:      attachment.Attachment,
-		DropOwner:       true,
-		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		Attachment:  attachment.Attachment,
+		DropOwner:   true,
+		ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	})
 	var body json.RawMessage
 	testsetup.RequireUntil(t, time.Now().Add(10*time.Second), 10*time.Millisecond, func() bool {

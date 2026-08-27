@@ -539,16 +539,16 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 		}
 	})
 
-	t.Run("unsupported thinking level", func(t *testing.T) {
-		if err := eng.SetThinkingLevel(t.Context(), "ultra"); err == nil {
-			t.Fatal("expected unsupported thinking level error")
+	t.Run("provider-specific thinking level", func(t *testing.T) {
+		if err := eng.SetThinkingLevel(t.Context(), " provider-specific-depth "); err != nil {
+			t.Fatalf("set provider-specific thinking level: %v", err)
 		}
-		if got := eng.ThinkingLevel(); got != "high" {
-			t.Fatalf("thinking level after unsupported set = %q, want high", got)
+		if got := eng.ThinkingLevel(); got != "provider-specific-depth" {
+			t.Fatalf("thinking level = %q, want provider-specific-depth", got)
 		}
 		meta := eng.store.Meta()
-		if meta.ChatSettings != nil && meta.ChatSettings.Thinking != nil {
-			t.Fatalf("unsupported Thinking persisted Session override: %+v", meta.ChatSettings)
+		if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "provider-specific-depth" {
+			t.Fatalf("provider-specific Thinking override = %+v", meta.ChatSettings)
 		}
 	})
 

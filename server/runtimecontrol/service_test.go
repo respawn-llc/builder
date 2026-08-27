@@ -849,6 +849,97 @@ func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting
 	}
 }
 
+func TestServiceSubmitUserTurnRejectsMismatchedReactivatedWorkflowExecution(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(
+		t,
+		finalResponseRuntimeControlClient(),
+		nil,
+		runtime.Config{Model: "gpt-5"},
+	)
+	selected := runtimeControlExactExecution(t)
+	binding, err := engine.BindCurrentNodeExecution(selected)
+	if err != nil {
+		t.Fatalf("bind retained Workflow activation: %v", err)
+	}
+	bindingClosed := false
+	var execution sessionruntime.ExecutionHandle
+	t.Cleanup(func() {
+		if execution != nil {
+			execution.RequestStop()
+			_ = execution.Close(context.Background())
+		}
+		if !bindingClosed {
+			_ = binding.Close()
+		}
+	})
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	mismatchedNode, err := workflow.NewCurrentNodeReference(
+		selected.Instructions.CurrentNode.TaskID,
+		"mismatched-node",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create mismatched Current Node: %v", err)
+	}
+	service.WithWorkflowSessionReactivator(runtimeControlWorkflowSessionReactivatorFunc(
+		func(_ context.Context, got runtimeids.SessionID) (sessionruntime.ExecutionHandle, error) {
+			if got != sessionID {
+				t.Fatalf("reactivated session = %s, want %s", got, sessionID)
+			}
+			bindingClosed = true
+			if err := binding.Close(); err != nil {
+				return nil, err
+			}
+			config := runtimeControlExactExecution(t)
+			config.Instructions.CurrentNode = mismatchedNode
+			workflowRef := sessionruntime.WorkflowExecutionRef{
+				ProjectID:   "runtime-control-test-project",
+				WorkflowID:  runtimeids.NewWorkflowID(),
+				CurrentNode: mismatchedNode,
+			}
+			config.Instructions.WorkflowID = workflowRef.WorkflowID
+			descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+			if err != nil {
+				return nil, err
+			}
+			handle, err := service.authority.StartAgentExecution(
+				context.Background(),
+				sessionruntime.AgentExecutionRequest{
+					Descriptor: descriptor,
+					Workflow: &sessionruntime.WorkflowAgentExecution{
+						Reference: workflowRef,
+						Config:    config,
+					},
+					Resource: sessionruntime.CurrentAgentResource{},
+					Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+						<-ctx.Done()
+						return context.Cause(ctx)
+					},
+				},
+			)
+			if err != nil {
+				return nil, err
+			}
+			execution = handle
+			return handle, nil
+		},
+	))
+
+	_, err = service.SubmitUserTurn(
+		context.Background(),
+		runtimeControlUserTurnRequest(store, "reject-mismatched-reactivation", "do not accept"),
+	)
+	if err == nil {
+		t.Fatal("SubmitUserTurn accepted mismatched reactivated Workflow execution")
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("original input was accepted by a mismatched Workflow execution")
+	}
+}
+
 func (c *runtimeControlFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1831,23 +1922,22 @@ func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T)
 	}
 }
 
-func TestServiceSetThinkingLevelRejectsUnsupportedValue(t *testing.T) {
+func TestServiceSetThinkingLevelAcceptsProviderSpecificValue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{Model: "gpt-5"})
-	before := engine.ThinkingLevel()
 
 	err := service.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{
 		SessionID: store.Meta().SessionID,
-		Level:     "ultra",
+		Level:     " provider-specific-depth ",
 	})
-	if err == nil {
-		t.Fatal("SetThinkingLevel accepted unsupported value")
+	if err != nil {
+		t.Fatalf("SetThinkingLevel: %v", err)
 	}
-	if got := engine.ThinkingLevel(); got != before {
-		t.Fatalf("live Thinking = %q after rejection, want %q", got, before)
+	if got := engine.ThinkingLevel(); got != "provider-specific-depth" {
+		t.Fatalf("live Thinking = %q, want provider-specific-depth", got)
 	}
 	meta := store.Meta()
-	if meta.ChatSettings != nil && meta.ChatSettings.Thinking != nil {
-		t.Fatalf("unsupported Thinking persisted Session override: %+v", meta.ChatSettings)
+	if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "provider-specific-depth" {
+		t.Fatalf("provider-specific Thinking override = %+v", meta.ChatSettings)
 	}
 }
 

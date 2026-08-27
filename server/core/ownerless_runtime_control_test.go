@@ -23,17 +23,31 @@ import (
 func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 	t.Run("live steer", func(t *testing.T) {
 		runSecondClientLiveControlsActiveRun(t, "steered final answer", func(t *testing.T, appCore *Core, sessionID string) func() {
-			steerResp, err := appCore.RuntimeLiveControlClient().LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
-				SessionID: sessionID,
-				Text:      "steer me",
-			})
-			if err != nil {
-				t.Fatalf("LiveSteer during active run: %v", err)
+			type result struct {
+				response serverapi.RuntimeLiveSteerResponse
+				err      error
 			}
-			if steerResp.QueueItemID == "" {
-				t.Fatal("LiveSteer during active run returned no queue item id")
+			done := make(chan result, 1)
+			go func() {
+				response, err := appCore.RuntimeLiveControlClient().LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+					SessionID: sessionID,
+					Text:      "steer me",
+				})
+				done <- result{response: response, err: err}
+			}()
+			return func() {
+				select {
+				case result := <-done:
+					if result.err != nil {
+						t.Fatalf("LiveSteer during active run: %v", result.err)
+					}
+					if result.response.QueueItemID == "" {
+						t.Fatal("LiveSteer during active run returned no queue item id")
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for queued live Steering")
+				}
 			}
-			return nil
 		})
 	})
 	t.Run("runtime control submit user turn", func(t *testing.T) {

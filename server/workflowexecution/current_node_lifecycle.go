@@ -175,50 +175,7 @@ func (c *CurrentNodeController) validateReactivatedWorkflowExecution(
 	sessionID runtimeids.SessionID,
 	currentNode workflow.CurrentNodeReference,
 ) (sessionruntime.ExecutionHandle, error) {
-	if handle == nil {
-		return nil, errors.New("reactivated workflow execution is absent")
-	}
-	scope := handle.Scope()
-	if scope.Kind() != sessionruntime.ExecutionScopeAgent {
-		return nil, fmt.Errorf(
-			"reactivated workflow Session %s started non-Agent execution scope %s",
-			sessionID,
-			scope.ID(),
-		)
-	}
-	resource, hasResource := scope.Resource()
-	workflowRef, workflowScoped := scope.Workflow()
-	if !hasResource ||
-		resource.SessionID() != sessionID ||
-		!workflowScoped ||
-		!workflowRef.CurrentNode.Equal(currentNode) {
-		return nil, fmt.Errorf(
-			"reactivated workflow Session %s started mismatched execution scope %s",
-			sessionID,
-			scope.ID(),
-		)
-	}
-	live, exists := c.authority.SessionExecution(sessionID)
-	if !exists {
-		return nil, fmt.Errorf(
-			"reactivated workflow Session %s returned execution scope %s before publication",
-			sessionID,
-			scope.ID(),
-		)
-	}
-	liveScope := live.Scope()
-	liveWorkflowRef, liveWorkflowScoped := liveScope.Workflow()
-	if liveScope.ID() != scope.ID() ||
-		!liveWorkflowScoped ||
-		!liveWorkflowRef.CurrentNode.Equal(currentNode) {
-		return nil, fmt.Errorf(
-			"reactivated workflow Session %s returned execution scope %s that does not match live scope %s",
-			sessionID,
-			scope.ID(),
-			liveScope.ID(),
-		)
-	}
-	return live, nil
+	return c.authority.ValidateLiveWorkflowAgentExecution(handle, sessionID, currentNode)
 }
 
 func (c *CurrentNodeController) currentNodePreparingLocked(

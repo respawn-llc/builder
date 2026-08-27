@@ -181,13 +181,34 @@ func (s *Service) submitUserTurn(
 				return runTurn(runCtx, engine, attempt.Accept)
 			})
 		case s.reactivator != nil:
-			_, reactivateErr := s.reactivator.ReactivateWorkflowSession(attempt.Context(), sessionID)
+			var workflowState *runtime.WorkflowSessionState
+			stateErr := s.withRuntime(attempt.Context(), request.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+				var err error
+				workflowState, err = engine.WorkflowSessionState()
+				return err
+			})
+			if stateErr != nil {
+				err = stateErr
+				break
+			}
+			if workflowState == nil {
+				err = errors.New("retained Workflow Session has no Current Node binding")
+				break
+			}
+			handle, reactivateErr := s.reactivator.ReactivateWorkflowSession(attempt.Context(), sessionID)
 			if reactivateErr != nil {
 				err = reactivateErr
 			} else {
-				err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-					return runTurn(runCtx, engine, attempt.Accept)
-				})
+				_, err = s.authority.ValidateLiveWorkflowAgentExecution(
+					handle,
+					sessionID,
+					workflowState.CurrentNode,
+				)
+				if err == nil {
+					err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+						return runTurn(runCtx, engine, attempt.Accept)
+					})
+				}
 			}
 		}
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -358,12 +357,6 @@ func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 	if normalized == "" {
 		return errors.New("thinking level is required")
 	}
-	e.mu.Lock()
-	supported := slices.Contains(e.cfg.SupportedThinkingValues, normalized)
-	e.mu.Unlock()
-	if !supported {
-		return fmt.Errorf("thinking level %q is unavailable for the selected Session Agent", normalized)
-	}
 	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
 		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{Thinking: &normalized})
 		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
@@ -374,9 +367,8 @@ func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 	return err
 }
 
-// SetWorkflowThinkingValue applies a workflow-owned thinking value. Workflow
-// values may be standard Kent levels or provider-specific values, so they do
-// not use the operator-config normalization contract.
+// SetWorkflowThinkingValue applies a workflow-owned thinking value through the
+// same ordered Runtime mutation owner as operator settings.
 func (e *Engine) SetWorkflowThinkingValue(value workflow.ThinkingValue) error {
 	if err := value.Validate(); err != nil {
 		return err
