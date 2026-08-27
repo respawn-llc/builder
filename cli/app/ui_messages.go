@@ -82,22 +82,23 @@ type goalRuntimeDoneMsg struct {
 type runtimeControlOperation string
 
 const (
-	runtimeControlSetSessionName    runtimeControlOperation = "set_session_name"
-	runtimeControlInterrupt         runtimeControlOperation = "interrupt"
+	runtimeControlSetSessionName runtimeControlOperation = "set_session_name"
+	runtimeControlInterrupt      runtimeControlOperation = "interrupt"
 )
 
 type runtimeControlDoneMsg struct {
-	token          uint64
-	sessionID      string
-	operation      runtimeControlOperation
-	text           string
-	runtimeTuple   *runtimeTupleCandidate
-	err            error
+	token        uint64
+	sessionID    string
+	operation    runtimeControlOperation
+	text         string
+	runtimeTuple *runtimeTupleCandidate
+	err          error
 }
 
 type chatSettingsDoneMsg struct {
 	operation serverapi.ChatSettingsMutationOperationKind
 	response  serverapi.ChatSettingsMutationResponse
+	view      clientui.RuntimeMainView
 	err       error
 }
 

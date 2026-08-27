@@ -101,7 +101,6 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 			SessionID:             meta.SessionID,
 			SessionName:           meta.Name,
 			AgentRole:             session.ContinuationAgentRole(meta),
-			AgentRoleKnown:        true,
 			ConversationFreshness: freshness,
 		},
 		Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable},

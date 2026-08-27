@@ -56,7 +56,7 @@ func TestRuntimeClientControlMutationsPatchCachedSessionStatus(t *testing.T) {
 		t.Fatalf("SetSessionName: %v", err)
 	}
 	thinking := "high"
-	if response, err := runtimeClient.MutateChatSettings(serverapi.ChatSettingsMutationOperation{
+	if response, _, err := runtimeClient.MutateChatSettings(serverapi.ChatSettingsMutationOperation{
 		Kind:  serverapi.ChatSettingsMutationThinking,
 		Value: &thinking,
 	}); err != nil || response.Result.Kind != serverapi.ChatSettingsMutationApplied {

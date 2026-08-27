@@ -115,7 +115,7 @@ func (f *runtimeControlFakeClient) SetSessionName(name string) error {
 func (f *runtimeControlFakeClient) ReadChatSettings() (serverapi.ChatSettings, error) {
 	return f.chatSettings(), f.err
 }
-func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {
+func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, clientui.RuntimeMainView, error) {
 	settings := f.chatSettings()
 	switch operation.Kind {
 	case serverapi.ChatSettingsMutationThinking:
@@ -156,7 +156,7 @@ func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSe
 		AutomaticThresholdTokens: int(response.Context.AutomaticThresholdTokens),
 		HasAutomaticThreshold:    true,
 	}
-	return response, f.err
+	return response, f.MainView(), f.err
 }
 func (f *runtimeControlFakeClient) chatSettings() serverapi.ChatSettings {
 	return serverapi.ChatSettings{

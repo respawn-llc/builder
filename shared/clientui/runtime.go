@@ -187,7 +187,6 @@ type RuntimeSessionView struct {
 	SessionID             string
 	SessionName           string
 	AgentRole             *string
-	AgentRoleKnown        bool
 	ConversationFreshness ConversationFreshness
 	ExecutionTarget       SessionExecutionTarget
 }

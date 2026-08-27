@@ -20,7 +20,7 @@ type runtimeInterruptCandidateClient interface {
 
 type chatSettingsRuntimeClient interface {
 	ReadChatSettings() (serverapi.ChatSettings, error)
-	MutateChatSettings(serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error)
+	MutateChatSettings(serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, clientui.RuntimeMainView, error)
 }
 
 func (m *uiModel) runtimeClient() clientui.RuntimeClient {
@@ -43,10 +43,11 @@ func (m *uiModel) chatSettingsMutationCommand(operation serverapi.ChatSettingsMu
 		return nil
 	}
 	return func() tea.Msg {
-		response, err := client.MutateChatSettings(operation)
+		response, view, err := client.MutateChatSettings(operation)
 		return chatSettingsDoneMsg{
 			operation: operation.Kind,
 			response:  response,
+			view:      view,
 			err:       err,
 		}
 	}
@@ -72,10 +73,11 @@ func (m *uiModel) chatSettingsToggleCommand(
 		if err != nil {
 			return chatSettingsDoneMsg{operation: kind, err: err}
 		}
-		response, err := client.MutateChatSettings(operation)
+		response, view, err := client.MutateChatSettings(operation)
 		return chatSettingsDoneMsg{
 			operation: kind,
 			response:  response,
+			view:      view,
 			err:       err,
 		}
 	}
@@ -157,7 +159,7 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 		return m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	response := msg.response
-	m.applyRuntimeMainViewState(m.cachedRuntimeMainView())
+	m.applyRuntimeMainViewState(msg.view)
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
 		reason := "Chat settings mutation rejected"
 		if response.Result.Rejected != nil {
