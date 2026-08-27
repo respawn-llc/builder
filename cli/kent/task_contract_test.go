@@ -289,6 +289,16 @@ func TestTaskCommentListRejectsInvalidPaginationBeforeRemote(t *testing.T) {
 	}
 }
 
+func TestTaskCommentAddCannotSpoofUserAuthorFromAgentSession(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "018fdd67-89ab-4cde-8123-456789abcdef")
+
+	author := taskCommentAuthorForAdd(t.Context(), nil, "task-1", "user", true)
+
+	if author.Kind != "agent" {
+		t.Fatalf("author kind = %q, want agent", author.Kind)
+	}
+}
+
 func TestTaskSearchExecutionProjectsScopeAndTypedOutcomes(t *testing.T) {
 	nextOffset := 7
 	request := serverapi.TaskSearchRequest{
