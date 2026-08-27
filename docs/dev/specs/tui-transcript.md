@@ -28,7 +28,7 @@
 - Transcript failures never become fake empty or idle state.
 - A sequence gap, connection loss, or buffered-event overflow starts Scratch Rehydration. Terminal resize repaints only the Mutable Band and leaves Immutable Area reflow to the terminal.
 - Scratch rehydration never restarts the TUI process, clears immutable scrollback, compares against emitted lines, or suppresses duplicate-looking output.
-- Scratch rehydration emits committed assistant commentary and final answers from their full saved Markdown through the same stable projection as ordinary assistant messages. The compact ongoing assistant preview rule does not apply to rehydrated assistant messages.
+- Live streaming, ordinary committed emission, startup hydration, and Scratch Rehydration emit every user turn, assistant commentary turn, and assistant final turn from its complete source Markdown. These paths never substitute condensed text, a compact label, a line-limited preview, or an ellipsis for that source.
 - Assistant finalization matches the committed entry to its Streaming Message identity and compares only with the active stream source. If committed text extends the streamed source, Ongoing Mode emits only the missing suffix. Any other mismatch without a real connection gap is a developer error.
 - **Pending tool activity lives only in the Mutable Band. It shows a loading spinner until Kent commits the completed tool row to Scrollback.**
 - Messages in TUI use icon-like, single-symbol glyphs: `@` for web search, `§` for Reviewer feedback, `⇄` for file edits (edit/patch tools), `$` for shell tool calls including failed shell exits, `⚠` for warnings, `!` for Reviewer errors, other error notices, and default tool errors, `ℹ` for ongoing-visible neutral notices (such as goal and worktree messages), and `?` for questions.
@@ -48,7 +48,7 @@
 
 - Detail mode is an expandable transcript inspector.
 - Collapsed detail is default presentation mode.
-- User and assistant messages show at most the first 3 rendered lines when collapsed.
+- User turns, assistant commentary turns, and assistant final turns remain complete while Detail is collapsed. They do not become expandable merely to reveal omitted text.
 - Tool calls show the same first input line used by ongoing previews.
 - Detail Mode shows only completed tool results. A tool row includes its typed input facts and output. It does not show a separate raw tool-call record.
 - A backgrounded shell invocation stays compact while Detail is collapsed. Expanding it reveals its full command input and any tool output committed by the server.
@@ -156,7 +156,7 @@
 - Syntax-highlighted output must not emit backgrounds unless explicitly intended, such as diff add/remove decoration.
 - Formatted text uses app foreground as base text color.
 - Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
-- User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Assistant commentary and final turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
+- User turns render their full submitted text in every TUI transcript mode, including multiline prompts that invoke slash commands. Assistant commentary and final turns render their full model output in every TUI transcript mode. Streaming, ordinary emission, startup hydration, Scratch Rehydration, collapsed Detail, and expanded Detail all preserve the complete source. The TUI never uses condensed text, compact labels, line limits, or ellipses for user or assistant rows.
 - A transcript message with type `agent_steer` uses the `❯` symbol and full-strength foreground Markdown styling. Ongoing renders the complete model-visible message. Collapsed Detail uses the ordinary compact preview, and expanded Detail renders the complete model-visible message.
 - `agents.md`, `skills`, `subagents`, `environment`, `compaction_summary`, `headless_mode`, `headless_mode_exit`, `active_goal_continuation`, and `workflow_mode` render selected content as Markdown. `handoff_future_message` and Compaction-Preserved User Messages remain plaintext.
 - Stable ongoing user and final/streamed assistant Markdown emits width-independent logical lines so the terminal owns prose wrapping and copied prose contains no width-generated line breaks. Markdown soft line breaks flow as spaces; hard breaks and preformatted source boundaries remain explicit. GFM tables render through the Markdown library at the terminal width in effect when they enter scrollback, using continuous Unicode `│`, `─`, and `┼` separators without an outer frame.
