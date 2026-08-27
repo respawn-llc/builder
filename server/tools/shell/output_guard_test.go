@@ -15,58 +15,94 @@ import (
 
 func assertOversizedOutputFailure(t *testing.T, result tools.Result, logPath string) {
 	t.Helper()
-	want := fmt.Sprintf(oversizedOutputMessageTemplate, logPath)
-	wantBody, _ := json.Marshal(map[string]string{"error": want})
-	if !result.IsError || string(result.Output) != string(wantBody) {
-		t.Fatalf("failure = %s, want %s", string(result.Output), string(wantBody))
+	message := fmt.Sprintf(oversizedOutputMessageTemplate, logPath)
+	want, _ := json.Marshal(map[string]string{"error": message})
+	if !result.IsError || string(result.Output) != string(want) {
+		t.Fatalf("failure = %s, want %s", result.Output, want)
 	}
 }
 
-func TestExecCommandGuardRetainsCompleteOutputAtStructuredPath(t *testing.T) {
+func assertGuardedPresentation(t *testing.T, result tools.Result, raw bool, backgrounded bool, exitCode *int) {
+	t.Helper()
+	delta := result.PresentationDelta
+	if !result.IsError || delta == nil || delta.RawOutputRequested != raw ||
+		delta.MovedToBackground != backgrounded {
+		t.Fatalf("result = %+v, want guarded result with presentation facts", result)
+	}
+	if exitCode == nil && delta.ShellExitCode != nil ||
+		exitCode != nil && (delta.ShellExitCode == nil || *delta.ShellExitCode != *exitCode) {
+		t.Fatalf("exit code presentation = %+v, want %v", delta.ShellExitCode, exitCode)
+	}
+}
+
+func TestExecCommandGuardPreservesOutputPathPresentationAndLog(t *testing.T) {
 	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(t.TempDir(), 16_000, 20, manager, "")
+	tool := NewExecCommandTool(t.TempDir(), 16_000, 20, manager, "")
 	const output = "123456789012345678901234567890123456789012345678"
-	result := callExecCommand(t, execTool, "guarded", map[string]any{
+	result := callExecCommand(t, tool, "guarded", map[string]any{
 		"cmd": "printf '" + output + "'; exit 7", "shell": "/bin/sh", "login": false,
 		"raw": true, "yield_time_ms": 1_000, "max_output_tokens": 11,
 	})
 	entries, err := os.ReadDir(manager.TempDir())
 	if err != nil || len(entries) != 1 {
-		t.Fatalf("retained log entries = %v, error=%v, want one log", entries, err)
+		t.Fatalf("retained log entries = %v, error=%v", entries, err)
 	}
 	logPath := filepath.Join(manager.TempDir(), entries[0].Name())
 	assertOversizedOutputFailure(t, result, logPath)
+	if got := decodeStringToolOutput(t, result); got != "" {
+		t.Fatalf("guarded output = %q, want omitted command output", got)
+	}
 	if log, err := os.ReadFile(logPath); err != nil || string(log) != output {
-		t.Fatalf("retained output = %q, error=%v", string(log), err)
+		t.Fatalf("retained output = %q, error=%v", log, err)
 	}
-	if decoded := decodeStringToolOutput(t, result); decoded != "" {
-		t.Fatalf("guarded output = %q, want omitted command output", decoded)
+	exitCode := 7
+	assertGuardedPresentation(t, result, true, false, &exitCode)
+}
+
+func TestExecCommandGuardBoundariesAndOrdinaryTruncation(t *testing.T) {
+	ptr := func(value int) *int { return &value }
+	tests := []struct {
+		name, output string
+		cap          *int
+		full         bool
+		truncated    bool
+	}{
+		{"output at half", strings.Repeat("1", 80), ptr(21), true, false},
+		{"cap equal to half", strings.Repeat("1", 100), ptr(20), false, true},
+		{"cap below half", strings.Repeat("1", 100), ptr(19), false, true},
+		{"cap omitted", strings.Repeat("1", 84), nil, true, false},
+		{"decoded escaping", strings.Repeat(`"\`, 40), ptr(21), true, false},
 	}
-	if result.Summary == nil || *result.Summary != fmt.Sprintf(oversizedOutputMessageTemplate, logPath) {
-		t.Fatalf("summary = %v, want guard message", result.Summary)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager := newBackgroundTestManager(t)
+			input := map[string]any{
+				"cmd": "printf '%s' '" + test.output + "'", "shell": "/bin/sh",
+				"login": false, "yield_time_ms": 1_000,
+			}
+			if test.cap != nil {
+				input["max_output_tokens"] = *test.cap
+			}
+			result := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, 40, manager, ""), test.name, input)
+			if result.IsError {
+				t.Fatalf("unexpected error: %s", result.Output)
+			}
+			got := decodeStringToolOutput(t, result)
+			if test.full != (got == test.output) {
+				t.Fatalf("output = %q, want full=%t", got, test.full)
+			}
+			if test.truncated != (result.PresentationDelta != nil && result.PresentationDelta.OutputTruncated) {
+				t.Fatalf("presentation = %+v, want truncated=%t", result.PresentationDelta, test.truncated)
+			}
+		})
 	}
 }
 
-func TestExecCommandGuardPreservesPresentationFacts(t *testing.T) {
-	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(t.TempDir(), 16_000, 20, manager, "")
-	result := callExecCommand(t, execTool, "guarded-presentation", map[string]any{
-		"cmd": "printf 123456789012345678901234567890123456789012345678; exit 7", "shell": "/bin/sh", "login": false,
-		"raw": true, "yield_time_ms": 1_000, "max_output_tokens": 11,
-	})
-	if !result.IsError || result.PresentationDelta == nil ||
-		!result.PresentationDelta.RawOutputRequested ||
-		result.PresentationDelta.ShellExitCode == nil ||
-		*result.PresentationDelta.ShellExitCode != 7 {
-		t.Fatalf("presentation facts = %#v, want raw output and exit code 7", result.PresentationDelta)
-	}
-}
-
-func TestRunningExecCommandGuardPreservesLifecycleAndAllowsIndependentPoll(t *testing.T) {
+func TestRunningExecCommandGuardPreservesLifecycleAndIndependentPoll(t *testing.T) {
 	manager := newShellTestManager(t, 50*time.Millisecond)
-	execTool := NewExecCommandTool(t.TempDir(), 16_000, 40, manager, "")
+	tool := NewExecCommandTool(t.TempDir(), 16_000, 40, manager, "")
 	const output = "12345678901234567890123456789012345678901234567890123456789012345678901234567890"
-	result := callExecCommand(t, execTool, "running-guarded", map[string]any{
+	result := callExecCommand(t, tool, "running", map[string]any{
 		"cmd": "printf '" + output + "'; sleep 0.5", "shell": "/bin/sh", "login": false,
 		"raw": true, "yield_time_ms": 50, "max_output_tokens": 21,
 	})
@@ -75,64 +111,18 @@ func TestRunningExecCommandGuardPreservesLifecycleAndAllowsIndependentPoll(t *te
 		t.Fatalf("running snapshot = %+v, error=%v", snapshot, err)
 	}
 	assertOversizedOutputFailure(t, result, snapshot.LogPath)
-	if result.PresentationDelta == nil ||
-		!result.PresentationDelta.RawOutputRequested ||
-		!result.PresentationDelta.MovedToBackground ||
-		result.PresentationDelta.OutputTruncated ||
-		result.PresentationDelta.ShellExitCode != nil {
-		t.Fatalf("running presentation = %#v, want normal background facts", result.PresentationDelta)
-	}
+	assertGuardedPresentation(t, result, true, true, nil)
 	if log, err := os.ReadFile(snapshot.LogPath); err != nil || string(log) != output {
-		t.Fatalf("running log = %q, error=%v, want %q", string(log), err, output)
+		t.Fatalf("retained output = %q, error=%v", log, err)
 	}
-	poll := callWriteStdin(t, NewWriteStdinTool(16_000, 40, manager), "running-poll", map[string]any{
+	if poll := callWriteStdin(t, NewWriteStdinTool(16_000, 40, manager), "later", map[string]any{
 		"session_id": 1000, "yield_time_ms": 15_000, "max_output_tokens": 19,
-	})
-	if poll.IsError {
-		t.Fatalf("independent poll = %s, want ordinary success", string(poll.Output))
+	}); poll.IsError {
+		t.Fatalf("independent poll = %s", poll.Output)
 	}
 }
 
-func TestExecCommandGuardBoundaryCases(t *testing.T) {
-	tests := []struct {
-		name, output string
-		cap          *int
-		wantError    bool
-		wantOutput   string
-	}{
-		{"output at half", strings.Repeat("1", 80), func() *int { v := 21; return &v }(), false, strings.Repeat("1", 80)},
-		{"cap equal to half", strings.Repeat("1", 100), func() *int { v := 20; return &v }(), false, ""},
-		{"cap below half", strings.Repeat("1", 100), func() *int { v := 19; return &v }(), false, ""},
-		{"cap omitted", strings.Repeat("1", 84), nil, false, strings.Repeat("1", 84)},
-		{"escaped output", strings.Repeat(`"\`, 40), func() *int { v := 21; return &v }(), false, strings.Repeat(`"\`, 40)},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			manager := newBackgroundTestManager(t)
-			input := map[string]any{"cmd": "printf '%s' '" + test.output + "'", "shell": "/bin/sh", "login": false, "yield_time_ms": 1_000}
-			if test.cap != nil {
-				input["max_output_tokens"] = *test.cap
-			}
-			result := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, 40, manager, ""), test.name, input)
-			if result.IsError != test.wantError {
-				t.Fatalf("is_error = %t, want %t", result.IsError, test.wantError)
-			}
-			if test.name == "cap equal to half" || test.name == "cap below half" {
-				if result.PresentationDelta == nil || !result.PresentationDelta.OutputTruncated {
-					t.Fatalf("presentation = %#v, want ordinary truncation", result.PresentationDelta)
-				}
-				if got := decodeStringToolOutput(t, result); got == test.output {
-					t.Fatalf("output retained in full = %q, want ordinary truncation", got)
-				}
-			}
-			if test.wantOutput != "" && decodeStringToolOutput(t, result) != test.wantOutput {
-				t.Fatalf("output = %q, want %q", decodeStringToolOutput(t, result), test.wantOutput)
-			}
-		})
-	}
-}
-
-func TestWriteStdinGuardPreservesStatesAndIndependentPolls(t *testing.T) {
+func TestWriteStdinGuardPreservesRunningCompletedEscapedAndIndependentPolls(t *testing.T) {
 	const plain = "12345678901234567890123456789012345678901234567890123456789012345678901234567890"
 	tests := []struct {
 		name, command, output, chars string
@@ -156,7 +146,7 @@ func TestWriteStdinGuardPreservesStatesAndIndependentPolls(t *testing.T) {
 				"cmd": test.command, "shell": "/bin/sh", "login": false, "tty": true, "yield_time_ms": 50,
 			})
 			if start.IsError {
-				t.Fatalf("start = %s", string(start.Output))
+				t.Fatalf("start = %s", start.Output)
 			}
 			snapshot := <-backgrounded
 			sessionID, err := strconv.Atoi(snapshot.ID)
@@ -184,7 +174,7 @@ func TestWriteStdinGuardPreservesStatesAndIndependentPolls(t *testing.T) {
 				t.Fatal("later independent poll returned an error")
 			}
 			if log, err := os.ReadFile(snapshot.LogPath); err != nil || string(log) != test.output {
-				t.Fatalf("retained output = %q, error=%v", string(log), err)
+				t.Fatalf("retained output = %q, error=%v", log, err)
 			}
 		})
 	}

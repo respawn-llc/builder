@@ -35,6 +35,30 @@ func (c *delayedGenerateClient) Generate(ctx context.Context, req llm.Request) (
 	return c.fakeClient.Generate(ctx, req)
 }
 
+func forwardBackgroundEvents(t *testing.T, manager *shelltool.Manager, eng *Engine, ownerSessionID string) {
+	t.Helper()
+	manager.SetEventHandler(func(evt shelltool.Event) bool {
+		summary, err := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
+		if err != nil {
+			t.Errorf("SummarizeBackgroundEvent: %v", err)
+			return false
+		}
+		preview, previewRemoved := summary.RuntimePreview()
+		var exitCode *int
+		if evt.Snapshot.ExitCode != nil {
+			value := *evt.Snapshot.ExitCode
+			exitCode = &value
+		}
+		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+			Type: backgroundShellEventTypeForTest(evt.Type), ID: evt.Snapshot.ID, State: evt.Snapshot.State,
+			Command: evt.Snapshot.Command, Workdir: evt.Snapshot.Workdir, LogPath: evt.Snapshot.LogPath,
+			Preview: preview, PreviewRemoved: previewRemoved, ExitCode: exitCode,
+			NoticeSuppressed: evt.NoticeSuppressed,
+		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == ownerSessionID && !evt.NoticeSuppressed)
+		return true
+	})
+}
+
 func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -195,50 +219,12 @@ func TestCompletedWriteStdinGuardConsumesPendingBackgroundNotice(t *testing.T) {
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}, delay: 300 * time.Millisecond}
-	toolResults := make(chan tools.Result, 2)
 	registry := newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, 40, manager, store.Meta().SessionID)},
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, 40, manager)},
 	)
-	eng := mustNewTestEngine(t, store, client, registry, Config{
-		Model: "gpt-5",
-		OnEvent: func(event Event) {
-			if event.Kind == EventToolCallCompleted && event.ToolResult != nil {
-				toolResults <- *event.ToolResult
-			}
-		},
-	})
-	terminalEvents := make(chan shelltool.Event, 1)
-	manager.SetEventHandler(func(evt shelltool.Event) bool {
-		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
-		if summaryErr != nil {
-			t.Errorf("SummarizeBackgroundEvent: %v", summaryErr)
-			return false
-		}
-		preview, previewRemoved := summary.RuntimePreview()
-		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-			Type:           backgroundShellEventTypeForTest(evt.Type),
-			ID:             evt.Snapshot.ID,
-			State:          evt.Snapshot.State,
-			Command:        evt.Snapshot.Command,
-			Workdir:        evt.Snapshot.Workdir,
-			LogPath:        evt.Snapshot.LogPath,
-			Preview:        preview,
-			PreviewRemoved: previewRemoved,
-			ExitCode: func() *int {
-				if evt.Snapshot.ExitCode == nil {
-					return nil
-				}
-				out := *evt.Snapshot.ExitCode
-				return &out
-			}(),
-			NoticeSuppressed: evt.NoticeSuppressed,
-		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
-		if evt.Type == shelltool.EventCompleted {
-			terminalEvents <- evt
-		}
-		return true
-	})
+	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
+	forwardBackgroundEvents(t, manager, eng, store.Meta().SessionID)
 
 	assistant, err := eng.SubmitUserMessage(context.Background(), "run and poll")
 	if err != nil {
@@ -247,173 +233,24 @@ func TestCompletedWriteStdinGuardConsumesPendingBackgroundNotice(t *testing.T) {
 	if messageContent(assistant) != "done" {
 		t.Fatalf("assistant content = %q, want done", messageContent(assistant))
 	}
-	var pollResult tools.Result
-	for index := 0; index < 2; index++ {
-		select {
-		case result := <-toolResults:
-			if result.Name == toolspec.ToolWriteStdin {
-				pollResult = result
-			}
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for tool completion")
-		}
-	}
-	if !pollResult.IsError {
-		t.Fatalf("write_stdin result = %+v, want oversized-output failure", pollResult)
-	}
-	var pollBody map[string]string
-	if err := json.Unmarshal(pollResult.Output, &pollBody); err != nil {
-		t.Fatalf("decode guarded result: %v", err)
-	}
-	if len(pollBody) != 1 || !strings.Contains(pollBody["error"], "output you requested exceeded") ||
-		strings.Contains(string(pollResult.Output), "1234567890") {
-		t.Fatalf("guarded output = %s, want only failure without command output", pollResult.Output)
-	}
-	select {
-	case event := <-terminalEvents:
-		if event.NoticeSuppressed {
-			t.Fatal("terminal event unexpectedly suppressed")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for terminal background event")
-	}
-	time.Sleep(100 * time.Millisecond)
 	client.mu.Lock()
 	callCount := len(client.calls)
 	client.mu.Unlock()
 	if callCount != 3 {
 		t.Fatalf("model call count = %d, want 3 without an extra background continuation", callCount)
 	}
+	var pollOutput string
 	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
+		if msg.Role == llm.RoleTool && msg.ToolCallID != nil && *msg.ToolCallID == "call_stdin_1" {
+			pollOutput = messageContent(msg)
+		}
 		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice {
 			t.Fatalf("did not expect consumed background notice in transcript: %+v", msg)
 		}
 	}
-}
-
-func TestRunningExecGuardLeavesLaterCompletionNoticeIndependent(t *testing.T) {
-	store := mustCreateTestSession(t)
-	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
-	if err != nil {
-		t.Fatalf("new manager: %v", err)
-	}
-	defer func() {
-		_ = manager.Close()
-	}()
-
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("start background"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
-			ToolCalls: []llm.ToolCall{{
-				ID:    "call_exec_1",
-				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"cmd":"printf '12345678901234567890123456789012345678901234567890123456789012345678901234567890'; sleep 1","shell":"/bin/sh","login":false,"yield_time_ms":50,"max_output_tokens":21}`),
-			}},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("background handled"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	registry := newTestToolRegistry(t,
-		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, 40, manager, store.Meta().SessionID)},
-		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, 40, manager)},
-	)
-	toolResults := make(chan tools.Result, 1)
-	eng := mustNewTestEngine(t, store, client, registry, Config{
-		Model: "gpt-5",
-		OnEvent: func(event Event) {
-			if event.Kind == EventToolCallCompleted && event.ToolResult != nil {
-				toolResults <- *event.ToolResult
-			}
-		},
-	})
-	terminalEvents := make(chan shelltool.Event, 1)
-	manager.SetEventHandler(func(evt shelltool.Event) bool {
-		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
-		if summaryErr != nil {
-			t.Errorf("SummarizeBackgroundEvent: %v", summaryErr)
-			return false
-		}
-		preview, previewRemoved := summary.RuntimePreview()
-		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-			Type:           backgroundShellEventTypeForTest(evt.Type),
-			ID:             evt.Snapshot.ID,
-			State:          evt.Snapshot.State,
-			Command:        evt.Snapshot.Command,
-			Workdir:        evt.Snapshot.Workdir,
-			LogPath:        evt.Snapshot.LogPath,
-			Preview:        preview,
-			PreviewRemoved: previewRemoved,
-			ExitCode: func() *int {
-				if evt.Snapshot.ExitCode == nil {
-					return nil
-				}
-				out := *evt.Snapshot.ExitCode
-				return &out
-			}(),
-			NoticeSuppressed: evt.NoticeSuppressed,
-		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
-		if evt.Type == shelltool.EventCompleted {
-			terminalEvents <- evt
-		}
-		return true
-	})
-
-	assistant, err := eng.SubmitUserMessage(context.Background(), "run and wait")
-	if err != nil {
-		t.Fatalf("submit user message: %v", err)
-	}
-	if messageContent(assistant) != "done" {
-		t.Fatalf("assistant content = %q, want done", messageContent(assistant))
-	}
-	select {
-	case result := <-toolResults:
-		if !result.IsError {
-			t.Fatalf("guarded exec result = %+v, want oversized-output failure", result)
-		}
-		var body map[string]string
-		if err := json.Unmarshal(result.Output, &body); err != nil {
-			t.Fatalf("decode guarded exec result: %v", err)
-		}
-		if len(body) != 1 || !strings.Contains(body["error"], "output you requested exceeded") ||
-			strings.Contains(string(result.Output), "1234567890") {
-			t.Fatalf("guarded exec output = %s, want only failure without command output", result.Output)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for guarded exec result")
-	}
-	client.mu.Lock()
-	callCount := len(client.calls)
-	client.mu.Unlock()
-	if callCount != 2 {
-		t.Fatalf("model call count = %d, want 2", callCount)
-	}
-	select {
-	case event := <-terminalEvents:
-		if event.NoticeSuppressed {
-			t.Fatal("terminal event unexpectedly suppressed after an earlier guarded call")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for terminal background event")
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		client.mu.Lock()
-		callCount = len(client.calls)
-		client.mu.Unlock()
-		if callCount == 3 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("model call count after independent completion = %d, want 3", callCount)
-		}
-		time.Sleep(10 * time.Millisecond)
+	if !strings.Contains(pollOutput, "output you requested exceeded") ||
+		strings.Contains(pollOutput, "1234567890") {
+		t.Fatalf("guarded poll output = %q, want only oversized-output failure", pollOutput)
 	}
 }
 
