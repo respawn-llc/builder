@@ -90,6 +90,7 @@ type uiInputFeatureState struct {
 	thinkingLevel             string
 	fastModeAvailable         bool
 	fastModeEnabled           bool
+	settingsInitialized       bool
 	compactionMode            string
 	compactionCount           int
 	modelContractLocked       bool

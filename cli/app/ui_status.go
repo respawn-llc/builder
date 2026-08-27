@@ -153,6 +153,14 @@ func (m *uiModel) newStatusRequest(now time.Time) uiStatusRequest {
 	return populateStatusRequestCacheKeys(request)
 }
 
+func (m *uiModel) applyDirectRuntimeStatus(snapshot *uiStatusSnapshot) {
+	if m == nil || snapshot == nil || !m.settingsInitialized {
+		return
+	}
+	snapshot.AgentRole = textutil.Pointer(m.agentRole)
+	snapshot.CompactionCount = m.compactionCount
+}
+
 func (m *uiModel) currentExecutionTarget() clientui.SessionExecutionTarget {
 	if m == nil {
 		return clientui.SessionExecutionTarget{}

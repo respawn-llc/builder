@@ -33,6 +33,7 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 	m.questionsEnabled = status.QuestionsEnabled
 	m.fastModeAvailable = status.FastModeAvailable
 	m.fastModeEnabled = status.FastModeEnabled
+	m.settingsInitialized = true
 	m.compactionMode = status.CompactionMode
 	m.compactionCount = status.CompactionCount
 	m.conversationFreshness = status.ConversationFreshness
