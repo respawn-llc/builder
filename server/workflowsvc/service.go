@@ -824,7 +824,8 @@ func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.Workflow
 }
 
 func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	return s.startWorkflowTask(ctx, req)
+	response, err := s.startWorkflowTask(ctx, req)
+	return response, workflowSetupRetainedError(err)
 }
 
 func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
@@ -1020,12 +1021,10 @@ func workflowRetainedPreviousWorktree(retained *worktreepb.RetainedPreviousWorkt
 	if retained == nil {
 		return nil
 	}
-	registered := retained.GetWorktree()
-	if registered == nil {
-		return &serverapi.WorkflowRetainedPreviousWorktree{
-			Worktree: serverapi.WorkflowRegisteredWorktreeTopology{Variant: "registered"},
-		}
-	}
+	return &serverapi.WorkflowRetainedPreviousWorktree{Worktree: workflowRegisteredWorktree(retained.GetWorktree())}
+}
+
+func workflowRegisteredWorktree(registered *worktreepb.RegisteredFacts) serverapi.WorkflowRegisteredWorktreeTopology {
 	git := registered.GetGit()
 	kent := registered.GetKent()
 	facts := &serverapi.WorkflowRegisteredWorktreeFacts{}
@@ -1053,11 +1052,22 @@ func workflowRetainedPreviousWorktree(retained *worktreepb.RetainedPreviousWorkt
 			OriginSessionID: kent.OriginSessionId,
 		}
 	}
-	return &serverapi.WorkflowRetainedPreviousWorktree{
-		Worktree: serverapi.WorkflowRegisteredWorktreeTopology{
-			Variant:    "registered",
-			Registered: facts,
-		},
+	return serverapi.WorkflowRegisteredWorktreeTopology{
+		Variant:    "registered",
+		Registered: facts,
+	}
+}
+
+func workflowSetupRetainedError(err error) error {
+	var retained *worktreecontract.SetupRetainedError
+	if !errors.As(err, &retained) || retained == nil || retained.Details == nil {
+		return err
+	}
+	return &serverapi.WorkflowSetupRetainedError{
+		Worktree:                 workflowRegisteredWorktree(retained.Details.Worktree),
+		ScriptPath:               retained.Details.ScriptPath,
+		Diagnostic:               retained.Details.Diagnostic,
+		RetainedPreviousWorktree: workflowRetainedPreviousWorktree(retained.Details.RetainedPreviousWorktree),
 	}
 }
 
@@ -1507,7 +1517,8 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
-	return s.resumeWorkflowTask(ctx, req)
+	response, err := s.resumeWorkflowTask(ctx, req)
+	return response, workflowSetupRetainedError(err)
 }
 
 func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
@@ -1719,7 +1730,8 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 }
 
 func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
-	return s.moveWorkflowTask(ctx, req)
+	response, err := s.moveWorkflowTask(ctx, req)
+	return response, workflowSetupRetainedError(err)
 }
 
 func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {

@@ -59,6 +59,19 @@ func callGeneratedBinary[
 	if err := c.callBinary(ctx, method, request, result, classifyValidation...); err != nil {
 		return zeroSuccess, err
 	}
+	return decodeGeneratedResult(method, result, decodeFailure)
+}
+
+func decodeGeneratedResult[
+	Success any,
+	Failure comparableProtoMessage,
+	Result generatedUnaryResult[Success, Failure],
+](
+	method protoreflect.MethodDescriptor,
+	result Result,
+	decodeFailure func(Failure) error,
+) (Success, error) {
+	var zeroSuccess Success
 	classified, err := protoapi.ClassifyResult(result)
 	if err != nil {
 		return zeroSuccess, fmt.Errorf("classify %s result: %w", method.FullName(), err)

@@ -16,7 +16,6 @@ import (
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/worktreecontract"
 )
 
 var (
@@ -806,7 +805,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			ProceedDespiteDependencies: *ignoreDependencies,
 		})
 		if err != nil {
-			var setupErr *worktreecontract.SetupRetainedError
+			var setupErr *serverapi.WorkflowSetupRetainedError
 			if errors.As(err, &setupErr) {
 				guidance, projectionErr := projectMoveSetupGuidance(recoveryArgs, executionTarget, setupErr)
 				if projectionErr != nil {
@@ -1049,12 +1048,12 @@ const (
 )
 
 type taskSetupGuidance struct {
-	Outcome                  taskSetupOutcomeKind
-	Diagnostic               *string
-	ScriptPath               *string
-	RetainedRoot             *string
-	RetainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
-	Actions                  []taskSetupAction
+	Outcome              taskSetupOutcomeKind
+	Diagnostic           *string
+	ScriptPath           *string
+	RetainedRoot         *string
+	RetainedPreviousRoot *string
+	Actions              []taskSetupAction
 }
 
 func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string, projectRef *string, terminal *worktreepb.SetupEvent, observationErr error) (taskSetupGuidance, error) {
@@ -1092,7 +1091,8 @@ func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string
 			result.RetainedRoot = &failed.RetainedWorktree.Git.CanonicalRoot
 		}
 		if failed.RetainedPreviousWorktree != nil {
-			result.RetainedPreviousWorktree = failed.RetainedPreviousWorktree
+			root := failed.RetainedPreviousWorktree.GetWorktree().GetGit().GetCanonicalRoot()
+			result.RetainedPreviousRoot = &root
 		}
 		if failed.RetryReadiness != worktreepb.SetupRetryReadiness_WORKTREE_SETUP_RETRY_READY {
 			result.Actions = inspection
@@ -1122,7 +1122,8 @@ func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string
 	}
 	result := taskSetupGuidance{Outcome: taskSetupOutcomeCompleted}
 	if retained != nil {
-		result.RetainedPreviousWorktree = retained
+		root := retained.GetWorktree().GetGit().GetCanonicalRoot()
+		result.RetainedPreviousRoot = &root
 		result.Actions = []taskSetupAction{{Kind: taskSetupActionListWorktrees, Args: []string{config.Command, "worktree", "list"}}}
 	}
 	return result, nil
@@ -1180,9 +1181,9 @@ func taskMoveRecoveryArgs(taskRef, targetNode string, project, commentary, trans
 	return args, nil
 }
 
-func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecutionTargetSelection, setupErr *worktreecontract.SetupRetainedError) (taskSetupGuidance, error) {
-	if setupErr == nil || setupErr.Details == nil || setupErr.Details.Worktree == nil {
-		return taskSetupGuidance{}, errors.New("retained Worktree Setup error is incomplete")
+func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecutionTargetSelection, setupErr *serverapi.WorkflowSetupRetainedError) (taskSetupGuidance, error) {
+	if err := setupErr.Validate(); err != nil {
+		return taskSetupGuidance{}, err
 	}
 	var selector *string
 	if target != nil {
@@ -1192,9 +1193,15 @@ func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecution
 		}
 		selector = &value
 	}
-	script := setupErr.Details.ScriptPath
-	diagnostic := setupErr.Details.Diagnostic
-	return taskSetupGuidance{Outcome: taskSetupOutcomeMoveSetupFailure, Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &setupErr.Details.Worktree.Git.CanonicalRoot, RetainedPreviousWorktree: setupErr.Details.RetainedPreviousWorktree, Actions: taskTargetActions(base, selector)}, nil
+	script := setupErr.ScriptPath
+	diagnostic := setupErr.Diagnostic
+	root := setupErr.Worktree.Registered.Git.CanonicalRoot
+	var previousRoot *string
+	if retained := setupErr.RetainedPreviousWorktree; retained != nil && retained.Worktree.Registered != nil {
+		value := retained.Worktree.Registered.Git.CanonicalRoot
+		previousRoot = &value
+	}
+	return taskSetupGuidance{Outcome: taskSetupOutcomeMoveSetupFailure, Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &root, RetainedPreviousRoot: previousRoot, Actions: taskTargetActions(base, selector)}, nil
 }
 
 func taskSetupStringPointer(value string) *string { return &value }
@@ -1370,7 +1377,9 @@ func renderTaskSetupGuidance(stderr io.Writer, guidance taskSetupGuidance) {
 	if guidance.RetainedRoot != nil {
 		fmt.Fprintf(stderr, "Retained Worktree: %s\n", *guidance.RetainedRoot)
 	}
-	renderRetainedWorktreeGuidance(stderr, guidance.RetainedPreviousWorktree)
+	if guidance.RetainedPreviousRoot != nil {
+		renderRetainedWorktreeRootGuidance(stderr, *guidance.RetainedPreviousRoot)
+	}
 	for _, action := range guidance.Actions {
 		fmt.Fprintf(stderr, "  %s\n", commandString(action.Args))
 	}
@@ -1380,7 +1389,10 @@ func renderRetainedWorktreeGuidance(stderr io.Writer, retained *worktreepb.Retai
 	if retained == nil {
 		return
 	}
-	root := retained.GetWorktree().GetGit().GetCanonicalRoot()
+	renderRetainedWorktreeRootGuidance(stderr, retained.GetWorktree().GetGit().GetCanonicalRoot())
+}
+
+func renderRetainedWorktreeRootGuidance(stderr io.Writer, root string) {
 	fmt.Fprintf(stderr, "Warning: previous Worktree retained at %s\n  %s\n", root, commandString([]string{config.Command, "worktree", "list"}))
 }
 

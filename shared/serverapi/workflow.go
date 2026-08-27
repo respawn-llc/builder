@@ -1089,6 +1089,80 @@ type WorkflowWorktreeKentFacts struct {
 	OriginSessionID *string `json:"origin_session_id"`
 }
 
+type WorkflowSetupRetainedError struct {
+	Worktree                 WorkflowRegisteredWorktreeTopology `json:"worktree"`
+	ScriptPath               string                             `json:"script_path"`
+	Diagnostic               string                             `json:"diagnostic"`
+	RetainedPreviousWorktree *WorkflowRetainedPreviousWorktree  `json:"retained_previous_worktree"`
+	cause                    error
+}
+
+func (e *WorkflowSetupRetainedError) Error() string {
+	if e == nil || strings.TrimSpace(e.Diagnostic) == "" {
+		return worktreecontract.ErrWorktreeSetupRetained.Error()
+	}
+	return fmt.Sprintf("%s: %s", worktreecontract.ErrWorktreeSetupRetained, strings.TrimSpace(e.Diagnostic))
+}
+
+func (e *WorkflowSetupRetainedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func (e *WorkflowSetupRetainedError) Is(target error) bool {
+	return target == worktreecontract.ErrWorktreeSetupRetained
+}
+
+func (e *WorkflowSetupRetainedError) RPCErrorCode() int {
+	return protocol.ErrCodeWorktreeSetupRetained
+}
+
+func (e *WorkflowSetupRetainedError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type string `json:"type"`
+		*WorkflowSetupRetainedError
+	}{Type: "worktree_setup_retained", WorkflowSetupRetainedError: e})
+}
+
+func (e *WorkflowSetupRetainedError) Validate() error {
+	if e == nil || e.Worktree.Variant != "registered" || e.Worktree.Registered == nil {
+		return errors.New("retained setup error requires a registered worktree")
+	}
+	registered := e.Worktree.Registered
+	if strings.TrimSpace(registered.Git.CanonicalRoot) == "" ||
+		strings.TrimSpace(registered.Git.HeadObject) == "" ||
+		strings.TrimSpace(registered.Kent.WorktreeID) == "" ||
+		strings.TrimSpace(registered.Kent.CanonicalRoot) == "" ||
+		strings.TrimSpace(registered.Kent.DisplayName) == "" ||
+		registered.Git.CanonicalRoot != registered.Kent.CanonicalRoot {
+		return errors.New("retained setup error worktree facts are invalid")
+	}
+	if strings.TrimSpace(e.ScriptPath) == "" || strings.TrimSpace(e.Diagnostic) == "" {
+		return errors.New("retained setup error script_path and diagnostic are required")
+	}
+	return nil
+}
+
+func DecodeWorkflowSetupRetainedError(data json.RawMessage, message string) error {
+	var payload struct {
+		Type string `json:"type"`
+		WorkflowSetupRetainedError
+	}
+	if err := protocol.DecodeStrictJSON(data, &payload); err != nil || payload.Type != "worktree_setup_retained" {
+		return errors.New(strings.TrimSpace(message))
+	}
+	result := &payload.WorkflowSetupRetainedError
+	if err := result.Validate(); err != nil {
+		return errors.New(strings.TrimSpace(message))
+	}
+	return result
+}
+
 const (
 	WorkflowTaskCompleteActorAgent = "agent"
 	WorkflowTaskCompleteActorUser  = "user"

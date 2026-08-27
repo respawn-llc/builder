@@ -527,6 +527,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeWorkflowTaskInitialBranch && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskInitialBranchError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorktreeSetupRetained && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowSetupRetainedError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskDependency && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskDependencyError(resp.Data, message)
 	}
