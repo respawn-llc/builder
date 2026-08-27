@@ -75,7 +75,7 @@ func TestRowTextAndPreviewPath(t *testing.T) {
 	if project.Title != "project-1" || project.Preview != filepath.Join("~", "work", "app") || project.Timestamp != "now" {
 		t.Fatalf("project row text = %+v", project)
 	}
-	workspace := WorkspaceRowText("", "/outside/app", "", "/home/me")
+	workspace := WorkspaceRowText("", "/outside/app", "/home/me")
 	if workspace.Title != "app" || workspace.Preview != "/outside/app" {
 		t.Fatalf("workspace row text = %+v", workspace)
 	}

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"core/shared/protoapi"
@@ -90,22 +91,37 @@ func (c *Remote) ListProjectWorkspaces(ctx context.Context, request *projectpb.P
 	if err != nil {
 		return nil, err
 	}
+	if err := ValidateProjectWorkspacePage(response, request); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+// ValidateProjectWorkspacePage validates a catalog response against the request
+// that produced it.
+func ValidateProjectWorkspacePage(response *projectpb.ListProjectWorkspacesSuccess, request *projectpb.ProjectWorkspaceListRequest) error {
+	if response == nil {
+		return errors.New("project workspace catalog response is empty")
+	}
+	if request == nil {
+		return errors.New("project workspace catalog request is empty")
+	}
 	if response.ProjectId != request.ProjectId {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"project workspace catalog response project %q does not match request project %q",
 			response.ProjectId,
 			request.ProjectId,
 		)
 	}
 	if response.Offset != request.Offset {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"project workspace catalog response offset %d does not match request offset %d",
 			response.Offset,
 			request.Offset,
 		)
 	}
 	if len(response.Workspaces) > int(request.Limit) {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"project workspace catalog response returned %d rows for limit %d",
 			len(response.Workspaces),
 			request.Limit,
@@ -114,7 +130,7 @@ func (c *Remote) ListProjectWorkspaces(ctx context.Context, request *projectpb.P
 	if response.NextOffset != nil {
 		expected := request.Offset + request.Limit
 		if len(response.Workspaces) != int(request.Limit) || *response.NextOffset != expected {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"project workspace catalog response next_offset %d does not continue request offset %d with limit %d",
 				*response.NextOffset,
 				request.Offset,
@@ -122,7 +138,7 @@ func (c *Remote) ListProjectWorkspaces(ctx context.Context, request *projectpb.P
 			)
 		}
 	}
-	return response, nil
+	return nil
 }
 
 func (c *Remote) GetProjectWorkspace(ctx context.Context, request *projectpb.GetProjectWorkspaceRequest) (*projectpb.GetProjectWorkspaceSuccess, error) {

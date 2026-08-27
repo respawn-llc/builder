@@ -67,6 +67,21 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 - Creating a Project attaches the current workspace as its first workspace and main worktree.
 - Selecting an existing Project attaches the workspace to it.
 - The existing-Project Workspace picker uses the canonical Project Workspace catalog with infinite scroll. It preserves server order, shows Workspace name and path, and shows no activity timestamp.
+- The Workspace picker requests 50 Workspaces per page and keeps at most two pages resident.
+- When the selected Project has exactly one attached Workspace, startup continues without showing the Workspace picker.
+- The Workspace picker appears immediately with a loading state.
+- A first-page load failure replaces the list with a retry notice. `Enter` retries the failed request.
+- Loading or failure at an older or newer edge keeps resident rows, selection, and viewport visible. The picker shows a spinner while loading or retry text after failure at the affected edge and blocks only movement across that edge.
+- The picker prefetches an adjacent page when selection enters the first or last visible screenful of the resident window.
+- Up/Down and `j`/`k` move by one row. PgUp/PgDn move by one visible screenful. Row movement across a loaded boundary selects the first row of the next page or the last row of the previous page. PgUp/PgDn movement across a loaded boundary lands one visible screenful into the loaded page.
+- Adjacent-page loading or failure does not move selection. Loading adds no copy beyond the existing spinner. The shared startup status line shows the operation failure, and the affected list edge shows retry text.
+- `Enter` retries a failed first-page request. When valid resident Workspaces remain visible after an adjacent-page failure, `Enter` selects the current Workspace and moving toward the failed edge retries that page automatically.
+- A successful adjacent-page request with no rows leaves the resident information visible without an additional read or special status.
+- A successful retry immediately clears that operation's failure cause and retry affordance, then shows the loaded rows or the normal catalog boundary.
+- `Esc` returns to Project selection. Ctrl+C exits startup. The Workspace picker has no `q` binding.
+- Workspace catalog loads use the existing client request lifecycle without a picker-specific timeout or automatic retry.
+- An empty Workspace catalog shows `no workspace is attached to this project.` followed by `Please attach workspace before continuing.` Both lines use the normal foreground treatment without warning or error color. `Enter` reloads the catalog. `Esc` returns to Project selection.
+- Returning from the Workspace picker preserves the Project picker's selection and scroll. Entering a Project's Workspace picker again starts a fresh first-page load.
 - Server-browsing mode can open existing Projects and workspaces but cannot create or attach them.
 - Kent supplies the Project-name suggestion from the workspace. The TUI does not inspect the filesystem to derive it.
 - An empty Project name shows an inline error.

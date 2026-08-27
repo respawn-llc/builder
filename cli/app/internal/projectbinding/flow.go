@@ -21,15 +21,50 @@ import (
 // than comparing rendered message text.
 var ErrStartupCanceledByUser = errors.New("startup canceled by user")
 
-type ProjectPickerResult struct {
-	CreateNew bool
-	Project   *clientui.ProjectSummary
-	Canceled  bool
+type ProjectPickerSnapshot struct {
+	Cursor int
+	Offset int
 }
 
-type WorkspacePickerResult struct {
-	Workspace *clientui.ProjectWorkspaceSummary
-	Canceled  bool
+type ProjectPickerResult interface {
+	isProjectPickerResult()
+}
+
+type ProjectPickerCreateNew struct{}
+
+type ProjectPickerBack struct {
+	Snapshot ProjectPickerSnapshot
+}
+
+type ProjectPickerExit struct{}
+
+type ProjectPickerSelected struct {
+	Project  clientui.ProjectSummary
+	Snapshot ProjectPickerSnapshot
+}
+
+func (ProjectPickerCreateNew) isProjectPickerResult() {}
+func (ProjectPickerBack) isProjectPickerResult()      {}
+func (ProjectPickerExit) isProjectPickerResult()      {}
+func (ProjectPickerSelected) isProjectPickerResult()  {}
+
+type WorkspacePickerResult interface {
+	isWorkspacePickerResult()
+}
+
+type WorkspacePickerSelected struct {
+	Workspace *projectpb.ProjectWorkspaceCatalogSummary
+}
+
+type WorkspacePickerBack struct{}
+type WorkspacePickerExit struct{}
+
+func (WorkspacePickerSelected) isWorkspacePickerResult() {}
+func (WorkspacePickerBack) isWorkspacePickerResult()     {}
+func (WorkspacePickerExit) isWorkspacePickerResult()     {}
+
+type WorkspacePageLoader interface {
+	ListProjectWorkspaces(context.Context, *projectpb.ProjectWorkspaceListRequest) (*projectpb.ListProjectWorkspacesSuccess, error)
 }
 
 type Server[T any] interface {
@@ -41,9 +76,9 @@ type Server[T any] interface {
 
 type Request[T any] struct {
 	Server            Server[T]
-	PickLocalProject  func([]clientui.ProjectSummary, string) (ProjectPickerResult, error)
-	PickServerProject func([]clientui.ProjectSummary, string) (ProjectPickerResult, error)
-	PickWorkspace     func([]clientui.ProjectWorkspaceSummary, string) (WorkspacePickerResult, error)
+	PickLocalProject  func(context.Context, []clientui.ProjectSummary, string, ProjectPickerSnapshot) (ProjectPickerResult, error)
+	PickServerProject func(context.Context, []clientui.ProjectSummary, string, ProjectPickerSnapshot) (ProjectPickerResult, error)
+	PickWorkspace     func(context.Context, WorkspacePageLoader, string, string) (WorkspacePickerResult, error)
 	PromptProjectName func(defaultName string, theme string) (string, error)
 }
 
@@ -103,14 +138,16 @@ func ensureLocalPathBinding[T any](ctx context.Context, req Request[T], workspac
 		return zero, errors.New("project picker is required")
 	}
 	theme := req.Server.PresentationTheme()
-	picked, err := req.PickLocalProject(projects, theme)
+	picked, err := req.PickLocalProject(ctx, projects, theme, ProjectPickerSnapshot{})
 	if err != nil {
 		return zero, err
 	}
-	if picked.Canceled {
+	switch selected := picked.(type) {
+	case ProjectPickerExit:
 		return zero, ErrStartupCanceledByUser
-	}
-	if picked.CreateNew {
+	case ProjectPickerBack:
+		return zero, errors.New("local project picker cannot go back")
+	case ProjectPickerCreateNew:
 		if req.PromptProjectName == nil {
 			return zero, errors.New("project name prompt is required")
 		}
@@ -127,19 +164,19 @@ func ensureLocalPathBinding[T any](ctx context.Context, req Request[T], workspac
 			return zero, FormatStartupError(workspaceRoot, created.Binding.ProjectId, bindErr)
 		}
 		return bound, nil
-	}
-	if picked.Project == nil {
+	case ProjectPickerSelected:
+		attached, err := req.Server.ProjectViewClient().AttachWorkspaceToProject(ctx, &projectpb.AttachWorkspaceRequest{ProjectId: selected.Project.ProjectID, WorkspaceRoot: workspaceRoot})
+		if err != nil {
+			return zero, FormatMutationError(workspaceRoot, selected.Project.ProjectID, err)
+		}
+		bound, bindErr := req.Server.BindProjectWorkspace(ctx, attached.Binding.ProjectId, attached.Binding.WorkspaceId)
+		if bindErr != nil {
+			return zero, FormatStartupError(workspaceRoot, attached.Binding.ProjectId, bindErr)
+		}
+		return bound, nil
+	default:
 		return zero, errors.New("no project selected")
 	}
-	attached, err := req.Server.ProjectViewClient().AttachWorkspaceToProject(ctx, &projectpb.AttachWorkspaceRequest{ProjectId: picked.Project.ProjectID, WorkspaceRoot: workspaceRoot})
-	if err != nil {
-		return zero, FormatMutationError(workspaceRoot, picked.Project.ProjectID, err)
-	}
-	bound, bindErr := req.Server.BindProjectWorkspace(ctx, attached.Binding.ProjectId, attached.Binding.WorkspaceId)
-	if bindErr != nil {
-		return zero, FormatStartupError(workspaceRoot, attached.Binding.ProjectId, bindErr)
-	}
-	return bound, nil
 }
 
 func ensureServerBrowsingBinding[T any](ctx context.Context, req Request[T], projects []clientui.ProjectSummary) (T, error) {
@@ -150,29 +187,45 @@ func ensureServerBrowsingBinding[T any](ctx context.Context, req Request[T], pro
 	if req.PickServerProject == nil {
 		return zero, errors.New("server project picker is required")
 	}
-	picked, err := req.PickServerProject(projects, req.Server.PresentationTheme())
-	if err != nil {
-		return zero, err
+	snapshot := ProjectPickerSnapshot{}
+	for {
+		picked, err := req.PickServerProject(ctx, projects, req.Server.PresentationTheme(), snapshot)
+		if err != nil {
+			return zero, err
+		}
+		switch selected := picked.(type) {
+		case ProjectPickerExit, ProjectPickerBack:
+			return zero, ErrStartupCanceledByUser
+		case ProjectPickerCreateNew:
+			return zero, errors.New("server project picker cannot create a project")
+		case ProjectPickerSelected:
+			workspace, err := SelectWorkspaceForStartup(ctx, WorkspaceSelectionRequest{
+				Server:        req.Server,
+				ProjectID:     selected.Project.ProjectID,
+				PickWorkspace: req.PickWorkspace,
+			})
+			if err != nil {
+				return zero, err
+			}
+			switch workspace := workspace.(type) {
+			case WorkspacePickerBack:
+				snapshot = selected.Snapshot
+				continue
+			case WorkspacePickerExit:
+				return zero, ErrStartupCanceledByUser
+			case WorkspacePickerSelected:
+				bound, bindErr := req.Server.BindProjectWorkspace(ctx, selected.Project.ProjectID, workspace.Workspace.WorkspaceId)
+				if bindErr != nil {
+					return zero, FormatStartupError(workspace.Workspace.RootPath, selected.Project.ProjectID, bindErr)
+				}
+				return bound, nil
+			default:
+				return zero, errors.New("workspace picker exited without a result")
+			}
+		default:
+			return zero, errors.New("no project selected")
+		}
 	}
-	if picked.Canceled {
-		return zero, ErrStartupCanceledByUser
-	}
-	if picked.Project == nil {
-		return zero, errors.New("no project selected")
-	}
-	workspace, err := SelectWorkspaceForStartup(ctx, WorkspaceSelectionRequest{
-		Server:        req.Server,
-		ProjectID:     picked.Project.ProjectID,
-		PickWorkspace: req.PickWorkspace,
-	})
-	if err != nil {
-		return zero, err
-	}
-	bound, bindErr := req.Server.BindProjectWorkspace(ctx, picked.Project.ProjectID, workspace.WorkspaceID)
-	if bindErr != nil {
-		return zero, FormatStartupError(workspace.RootPath, picked.Project.ProjectID, bindErr)
-	}
-	return bound, nil
 }
 
 type WorkspaceSelectionRequest struct {
@@ -182,41 +235,21 @@ type WorkspaceSelectionRequest struct {
 		ProjectViewClient() apicontract.ProjectViewService
 	}
 	ProjectID     string
-	PickWorkspace func([]clientui.ProjectWorkspaceSummary, string) (WorkspacePickerResult, error)
+	PickWorkspace func(context.Context, WorkspacePageLoader, string, string) (WorkspacePickerResult, error)
 }
 
-func SelectWorkspaceForStartup(ctx context.Context, req WorkspaceSelectionRequest) (clientui.ProjectWorkspaceSummary, error) {
+func SelectWorkspaceForStartup(ctx context.Context, req WorkspaceSelectionRequest) (WorkspacePickerResult, error) {
 	if req.Server == nil || req.Server.ProjectViewClient() == nil {
-		return clientui.ProjectWorkspaceSummary{}, errors.New("project view client is required")
-	}
-	overview, err := req.Server.ProjectViewClient().GetProjectOverview(ctx, &projectpb.GetOverviewRequest{ProjectId: req.ProjectID})
-	if err != nil {
-		return clientui.ProjectWorkspaceSummary{}, err
-	}
-	workspaces, err := client.ProjectWorkspaceSummariesFromProto(overview.Overview.Workspaces)
-	if err != nil {
-		return clientui.ProjectWorkspaceSummary{}, err
-	}
-	if len(workspaces) == 0 {
-		return clientui.ProjectWorkspaceSummary{}, fmt.Errorf("project %q has no attached workspaces", strings.TrimSpace(req.ProjectID))
-	}
-	if len(workspaces) == 1 {
-		return workspaces[0], nil
+		return nil, errors.New("project view client is required")
 	}
 	if req.PickWorkspace == nil {
-		return clientui.ProjectWorkspaceSummary{}, errors.New("workspace picker is required")
+		return nil, errors.New("workspace picker is required")
 	}
-	picked, err := req.PickWorkspace(workspaces, req.Server.PresentationTheme())
-	if err != nil {
-		return clientui.ProjectWorkspaceSummary{}, err
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
 	}
-	if picked.Canceled {
-		return clientui.ProjectWorkspaceSummary{}, ErrStartupCanceledByUser
-	}
-	if picked.Workspace == nil {
-		return clientui.ProjectWorkspaceSummary{}, errors.New("no workspace selected")
-	}
-	return *picked.Workspace, nil
+	return req.PickWorkspace(ctx, req.Server.ProjectViewClient(), projectID, req.Server.PresentationTheme())
 }
 
 func FormatStartupError(workspaceRoot string, projectID string, err error) error {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"core/cli/app/internal/projectbinding"
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
 	tuitest "core/internal/testharness/pty"
@@ -92,7 +93,7 @@ func TestStartupMarkdownHeadersUseCurrentSurfaceWidths(t *testing.T) {
 				model := newProjectBindingPickerModel(nil, "dark", projectPickerOptions{
 					HeaderMarkdown: source,
 					HeaderFallback: "fallback",
-				})
+				}, projectbinding.ProjectPickerSnapshot{})
 				model.width = width
 				return model.renderHeader()
 			},
@@ -100,7 +101,12 @@ func TestStartupMarkdownHeadersUseCurrentSurfaceWidths(t *testing.T) {
 		{
 			name: "workspace picker",
 			render: func() string {
-				model := newProjectWorkspacePickerModel(nil, "dark")
+				model := &projectWorkspacePickerModel{
+					width:    width,
+					theme:    "dark",
+					styles:   newSessionPickerStyles("dark"),
+					headerMD: newStartupMarkdownRendererWithWordWrap("dark"),
+				}
 				model.width = width
 				return model.renderHeader()
 			},
