@@ -150,6 +150,10 @@ message SessionRetargetBackgroundProcessActiveDetails {
   SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
 }
 
+message SessionRetargetRuntimeActiveDetails {
+  SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
+}
+
 message SessionRetargetWorkspaceError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
@@ -184,6 +188,12 @@ message SessionRetargetWorkspaceError {
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
+      }
+    ];
+    SessionRetargetRuntimeActiveDetails runtime_active = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "runtime_active"
       }
     ];
   }

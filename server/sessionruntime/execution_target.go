@@ -182,6 +182,40 @@ func (a *Authority) RunSessionMaintenance(
 	})
 }
 
+func (a *Authority) RunSessionMaintenanceIfIdle(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error,
+) error {
+	if fn == nil {
+		return nil
+	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
+		if resource == nil {
+			return false, fn(runCtx, store, nil)
+		}
+		if hasBlockingRuntimeActivity(resource, engine) {
+			return false, ErrRuntimeActivityBusy
+		}
+		var retire bool
+		started, runErr := engine.RunIfIdleBeforeQueuedUserWork(runCtx, runtime.ActiveKindRuntimeMaintenance, func() error {
+			var maintenanceErr error
+			retire, maintenanceErr = runActiveRuntimeMaintenance(resource, engine, func(maintenance *ActiveRuntimeMaintenance) error {
+				return fn(runCtx, store, maintenance)
+			})
+			return maintenanceErr
+		})
+		if !started && errors.Is(runErr, runtime.ErrAgentBusy) {
+			return false, ErrRuntimeActivityBusy
+		}
+		return retire, runErr
+	})
+}
+
 func (a *Authority) RunSessionMaintenanceAtStepBoundary(
 	ctx context.Context,
 	sessionID string,
@@ -296,16 +330,19 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 	if resource == nil {
 		return false, nil
 	}
+	return hasBlockingRuntimeActivity(resource, resource.engine), nil
+}
+
+func hasBlockingRuntimeActivity(resource *agentResource, engine *runtime.Engine) bool {
 	resource.mu.Lock()
 	active := resource.state != AgentResourceReady ||
 		resource.current != nil ||
 		len(resource.steps) != 0
-	engine := resource.engine
 	resource.mu.Unlock()
 	if !active && engine != nil {
 		active = engine.HasActiveLiveRunGroup()
 	}
-	return active, nil
+	return active
 }
 
 func (a *Authority) routeBackgroundEvent(event shelltool.Event) bool {

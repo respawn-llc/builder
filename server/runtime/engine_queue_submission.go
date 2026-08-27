@@ -59,6 +59,21 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind
 	return e.RunWhenIdle(ctx, activeKind, fn)
 }
 
+func (e *Engine) RunIfIdleBeforeQueuedUserWork(ctx context.Context, activeKind ActiveKind, fn func() error) (bool, error) {
+	if fn == nil {
+		return false, nil
+	}
+	e.ensureOrchestrationCollaborators()
+	e.pauseQueuedUserAutoDrain()
+	defer e.resumeQueuedUserAutoDrain()
+	started := false
+	err := e.stepLifecycle.Run(ctx, exclusiveStepOptions{ActiveKind: activeKind}, func(context.Context, string) error {
+		started = true
+		return fn()
+	})
+	return started, err
+}
+
 // RunWorktreeTransition runs immediately when idle or suspends an active Agent
 // Turn at its next Step Boundary. Queued user steering remains paused until the
 // execution target and its model-visible reminder are updated together.

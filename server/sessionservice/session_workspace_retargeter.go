@@ -78,11 +78,23 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 	maintenanceCtx := releaseStarts.AuthorizeMaintenance(ctx)
 
 	var result metadata.SessionWorkspaceRetargetResult
-	err = s.authority.RunSessionMaintenance(maintenanceCtx, plan.SessionID, func(runCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
+	runMaintenance := s.authority.RunSessionMaintenance
+	if plan.CrossProject() {
+		runMaintenance = s.authority.RunSessionMaintenanceIfIdle
+	}
+	err = runMaintenance(maintenanceCtx, plan.SessionID, func(runCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
 		var applyErr error
 		result, applyErr = s.applyWorkspaceRetarget(runCtx, req, store, activeRuntime, false)
 		return applyErr
 	})
+	if errors.Is(err, sessionruntime.ErrRuntimeActivityBusy) {
+		err = &serverapi.SessionRetargetError{
+			Reason:        serverapi.SessionRetargetRuntimeActive,
+			SessionID:     plan.SessionID,
+			SourceProject: plan.SourceProject,
+			TargetRoot:    plan.TargetWorkspaceRoot,
+		}
+	}
 	closeErr := releaseStarts.Close(context.Background())
 	var publicationErr error
 	if err == nil {
@@ -303,6 +315,9 @@ func (s *SessionWorkspaceRetargeter) applyWorkspaceRetarget(
 		runtimeRebound = false
 		return nil
 	})
+	if err == nil && currentPlan.CrossProject() && activeRuntime != nil {
+		activeRuntime.RetireRuntime()
+	}
 	return result, err
 }
 

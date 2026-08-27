@@ -40,3 +40,23 @@ func TestSessionRetargetErrorRoundTripsStructuredFacts(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionRetargetRuntimeActiveErrorRoundTripsStructuredFacts(t *testing.T) {
+	source := &SessionRetargetError{
+		Reason:        SessionRetargetRuntimeActive,
+		SessionID:     "session-1",
+		SourceProject: ProjectReference{ID: "project-source", Name: "Source"},
+		TargetRoot:    "/work/target",
+	}
+	decodedErr := DecodeSessionRetargetError(source.RPCErrorData(), source.Error())
+	var decoded *SessionRetargetError
+	if !errors.As(decodedErr, &decoded) {
+		t.Fatalf("decoded error = %T %v, want SessionRetargetError", decodedErr, decodedErr)
+	}
+	if decoded.Reason != source.Reason ||
+		decoded.SessionID != source.SessionID ||
+		decoded.SourceProject != source.SourceProject ||
+		decoded.TargetRoot != source.TargetRoot {
+		t.Fatalf("decoded error = %+v, want facts from %+v", decoded, source)
+	}
+}

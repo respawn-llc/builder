@@ -253,6 +253,22 @@ func (f realSessionRetargetFixture) runtimeWorkdir(t *testing.T) string {
 	return workdir
 }
 
+func (f realSessionRetargetFixture) runtimeAvailable(t *testing.T) bool {
+	t.Helper()
+	err := f.authority.WithCurrentRuntime(t.Context(), f.childID, func(context.Context, *runtime.Engine) error {
+		return nil
+	})
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, serverapi.ErrRuntimeUnavailable):
+		return false
+	default:
+		t.Fatalf("inspect Runtime availability: %v", err)
+		return false
+	}
+}
+
 type retargetRuntimeClient struct{}
 
 func (retargetRuntimeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
@@ -387,35 +403,31 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 		t.Fatalf("provider requests after rebind acknowledgement = %d, want no forced continuation", len(client.requests))
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for canonicalRetargetTestPath(t, fixture.runtimeWorkdir(t)) != canonicalRetargetTestPath(t, fixture.targetWorkspaceRoot) {
-		if time.Now().After(deadline) {
-			t.Fatalf("runtime Working Directory remained %q", fixture.runtimeWorkdir(t))
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	deadline = time.Now().Add(2 * time.Second)
 	for {
-		_, err := engine.SubmitUserMessage(context.Background(), "continue naturally")
-		if err == nil {
+		if !fixture.runtimeAvailable(t) {
 			break
 		}
-		if !errors.Is(err, runtime.ErrAgentBusy) {
-			t.Fatalf("next natural Agent Step: %v", err)
-		}
 		if time.Now().After(deadline) {
-			t.Fatalf("next natural Agent Step remained busy: %v", err)
+			t.Fatal("source Runtime remained active after cross-Project self-rebind")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(client.requests) != 2 {
-		t.Fatalf("provider requests after natural continuation = %d, want 2", len(client.requests))
+	reopened, err := session.OpenByID(
+		fixture.metadata.PersistenceRoot(),
+		fixture.childID.String(),
+		fixture.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("open moved Session: %v", err)
 	}
-	for _, item := range client.requests[1].Items {
-		if item.MessageType != nil && *item.MessageType == llm.MessageTypeSessionRebind {
-			return
-		}
+	reminder := reopened.Meta().RebindReminder
+	if reminder == nil || reminder.Kind != session.SessionRebindReminderSucceeded {
+		t.Fatalf("persisted Session rebind reminder = %+v", reminder)
 	}
-	t.Fatalf("next natural Agent Step lacks Session rebind reminder: %+v", client.requests[1].Items)
+	if reminder.WorkingDirectory == nil ||
+		canonicalRetargetTestPath(t, *reminder.WorkingDirectory) != canonicalRetargetTestPath(t, fixture.targetWorkspaceRoot) {
+		t.Fatalf("persisted Session rebind Working Directory = %v, want %q", reminder.WorkingDirectory, fixture.targetWorkspaceRoot)
+	}
 }
 
 func TestSessionWorkspaceRetargeterPublishesFailureBeforeQueuedModelWorkResumes(t *testing.T) {
@@ -493,6 +505,47 @@ func TestSessionWorkspaceRetargeterPublishesFailureBeforeQueuedModelWorkResumes(
 		}
 	}
 	t.Fatalf("queued request lacks rebind failure notice; message types: %v", messageTypes)
+}
+
+func TestSessionWorkspaceRetargeterRejectsActiveCrossProjectRuntimeImmediately(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	targetProjectID := fixture.targetProject.ProjectID
+	request := metadata.SessionWorkspaceRetargetRequest{
+		SessionID:     fixture.child.Meta().SessionID,
+		WorkspaceRoot: fixture.targetWorkspaceRoot,
+		ProjectID:     &targetProjectID,
+	}
+	client := &queuedFailureRetargetRuntimeClient{
+		run:           func() error { return nil },
+		scheduled:     make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+		secondStarted: make(chan struct{}),
+	}
+	engine := fixture.openRuntimeWithClient(t, client)
+	stepDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "keep this Session active")
+		stepDone <- err
+	}()
+	select {
+	case <-client.scheduled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("active Agent Step did not start")
+	}
+	defer func() {
+		close(client.releaseFirst)
+		if err := <-stepDone; err != nil {
+			t.Errorf("finish active Agent Step: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := fixture.retargeter(fixture.metadata, retargetProcessSource{}).RetargetWorkspace(ctx, request)
+	var retargetErr *serverapi.SessionRetargetError
+	if !errors.As(err, &retargetErr) || retargetErr.Reason != serverapi.SessionRetargetRuntimeActive {
+		t.Fatalf("RetargetWorkspace error = %v, want active-Runtime rejection", err)
+	}
 }
 
 func projectContainsWorkspaceRoot(t *testing.T, store *metadata.Store, projectID string, workspaceRoot string) bool {
@@ -598,8 +651,8 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	if published := fixture.publisher[fixture.child.Meta().SessionID]; published != 1 {
 		t.Fatalf("identity publication count = %d, want one", published)
 	}
-	if workdir := fixture.runtimeWorkdir(t); workdir != result.Binding.CanonicalRoot {
-		t.Fatalf("runtime workdir = %q, want %q", workdir, result.Binding.CanonicalRoot)
+	if fixture.runtimeAvailable(t) {
+		t.Fatal("cross-Project retarget retained the source Runtime")
 	}
 }
 
@@ -675,23 +728,8 @@ func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
 				t.Fatalf("binding project = %q, want %q", result.Binding.ProjectID, wantProjectID)
 			}
 			if test.crossProject {
-				var rebound tools.FilesystemContext
-				if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
-					rebound = maintenance.PreviousFilesystemContext.Clone()
-					return nil
-				}); err != nil {
-					t.Fatalf("inspect cross-project filesystem context: %v", err)
-				}
-				if rebound.Access.ProjectWorkspace.ProjectID != targetProjectID {
-					t.Fatalf("rebound Project ID = %q, want %q", rebound.Access.ProjectWorkspace.ProjectID, targetProjectID)
-				}
-				if len(rebound.Access.ProjectWorkspace.Roots) != 2 {
-					t.Fatalf("rebound Project Workspace roots = %+v, want target project roots", rebound.Access.ProjectWorkspace.Roots)
-				}
-				for _, root := range rebound.Access.ProjectWorkspace.Roots {
-					if root.LexicalPath == fixture.sourceBinding.CanonicalRoot {
-						t.Fatalf("rebound context retained source-only root %q", root.LexicalPath)
-					}
+				if fixture.runtimeAvailable(t) {
+					t.Fatal("cross-Project retarget retained the source Runtime")
 				}
 			}
 			descriptor, err := session.NewOpenSessionDescriptor(fixture.childID)
