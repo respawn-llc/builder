@@ -12,7 +12,7 @@ type State struct {
 	Resolving     bool
 	SubmitPending bool
 	Token         uint64
-	Resolution    worktreepb.CreateTargetResolution
+	Resolution    *worktreepb.CreateTargetResolution
 }
 
 type ScheduleOutcome struct {
@@ -24,7 +24,7 @@ func Schedule(state State, query string) (State, ScheduleOutcome) {
 	trimmedQuery := strings.TrimSpace(query)
 	state.ErrorText = ""
 	state.Token++
-	state.Resolution = worktreepb.CreateTargetResolution{}
+	state.Resolution = nil
 	state.Resolving = trimmedQuery != ""
 	state.SubmitPending = false
 	return state, ScheduleOutcome{Token: state.Token, Debounce: trimmedQuery != ""}
@@ -42,7 +42,7 @@ func BeginSubmit(state State, query string) (State, BeginSubmitOutcome, error) {
 		return state, BeginSubmitOutcome{}, err
 	}
 	state.ErrorText = ""
-	state.Resolution = worktreepb.CreateTargetResolution{}
+	state.Resolution = nil
 	state.Resolving = true
 	state.SubmitPending = true
 	state.Token++
@@ -65,7 +65,7 @@ func DebounceReady(state State, token uint64, query string) (State, DebounceOutc
 	if trimmedQuery == "" {
 		state.Resolving = false
 		state.SubmitPending = false
-		state.Resolution = worktreepb.CreateTargetResolution{}
+		state.Resolution = nil
 		state.ErrorText = ""
 		return state, DebounceOutcome{}
 	}
@@ -76,7 +76,7 @@ type DoneInput struct {
 	Token         uint64
 	CurrentQuery  string
 	ResponseQuery string
-	Resolution    worktreepb.CreateTargetResolution
+	Resolution    *worktreepb.CreateTargetResolution
 	HasError      bool
 	ErrorText     string
 }
@@ -98,14 +98,14 @@ func Done(state State, input DoneInput) (State, DoneOutcome) {
 	submitPending := state.SubmitPending
 	state.SubmitPending = false
 	if input.HasError {
-		state.Resolution = worktreepb.CreateTargetResolution{}
+		state.Resolution = nil
 		state.ErrorText = input.ErrorText
 		return state, DoneOutcome{}
 	}
 	state.ErrorText = ""
 	state.Resolution = input.Resolution
 	if submitPending {
-		return state, DoneOutcome{Submit: true, SubmitKind: input.Resolution.Kind}
+		return state, DoneOutcome{Submit: true, SubmitKind: input.Resolution.GetKind()}
 	}
 	return state, DoneOutcome{}
 }

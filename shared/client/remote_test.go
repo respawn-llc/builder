@@ -868,7 +868,7 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 		if params.SessionId != "session-1" ||
 			params.Selector != "wt-1" ||
 			params.BranchCleanupPolicy != worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_SAFE {
-			t.Fatalf("unexpected delete params: %+v", params)
+			t.Fatalf("unexpected delete params: session=%q selector=%q cleanup=%v", params.GetSessionId(), params.GetSelector(), params.GetBranchCleanupPolicy())
 		}
 		if params.ProtoReflect().Descriptor().Fields().ByName("operation_id") != nil {
 			t.Fatal("delete request unexpectedly contains operation_id")
@@ -909,7 +909,7 @@ func TestRemoteResolveWorktreeCreateTargetCarriesMethodAndPayload(t *testing.T) 
 		var params worktreepb.CreateTargetResolveRequest
 		call := receiveRemoteGeneratedCall(t, ws, "CreateTargetService", "Resolve", &params)
 		if params.SessionId != "session-1" || params.Target != "HEAD~1" {
-			t.Fatalf("unexpected resolve params: %+v", params)
+			t.Fatalf("unexpected resolve params: session=%q target=%q", params.GetSessionId(), params.GetTarget())
 		}
 		resolvedRef := "abc123"
 		sendRemoteGeneratedResult(t, ws, call, &worktreepb.CreateTargetResolveResult{
@@ -952,7 +952,7 @@ func TestRemoteCreateWorktreeUsesOnlySetupOperationIdentity(t *testing.T) {
 			t.Fatal("create request retained generic identity")
 		}
 		if params.SetupOperationId != setupID || params.SessionId != "session-1" {
-			t.Fatalf("create params = %+v", params)
+			t.Fatalf("create params: setup operation=%q session=%q", params.GetSetupOperationId(), params.GetSessionId())
 		}
 		sendRemoteGeneratedResult(t, ws, call, &worktreepb.CreateResult{
 			Outcome: &worktreepb.CreateResult_Success{Success: &worktreepb.CreateSuccess{

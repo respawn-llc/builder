@@ -253,7 +253,7 @@ func (l uiViewLayout) renderWorktreeCreateDialog(width, height int, style uiStyl
 		style.brand.Render(truncateQueuedMessageLine("New worktree", width)),
 	})
 	addSection(uiWorktreeCreateFieldBranchTarget, true, l.renderWorktreeCreateTargetField(width, dialog))
-	usesBaseRef := dialog.resolution.Kind == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH
+	usesBaseRef := dialog.resolution.GetKind() == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH
 	addSection(uiWorktreeCreateFieldBaseRef, usesBaseRef, l.renderWorktreeCreateField(width, style, "Base ref", "Used when creating a new branch.", dialog.baseRef, dialog.baseRefErrorText, dialog.focus == uiWorktreeCreateFieldBaseRef, usesBaseRef))
 	addSection(uiWorktreeCreateFieldActions, true, renderWorktreeCreateActionGroup(width, m.theme, dialog, dialog.focus == uiWorktreeCreateFieldActions))
 	footer := make([]string, 0, 3)
@@ -319,13 +319,13 @@ func (l uiViewLayout) renderWorktreeCreateTargetField(width int, dialog uiWorktr
 		badgeText = ""
 	case dialog.resolving:
 		badgeText = ""
-	case dialog.resolution.Kind == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH:
+	case dialog.resolution.GetKind() == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH:
 		badgeStyle = rowStyle.Foreground(p.secondary).Bold(true)
 		badgeText = "✔︎ new branch"
-	case dialog.resolution.Kind == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH:
+	case dialog.resolution.GetKind() == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH:
 		badgeStyle = rowStyle.Foreground(sharedtheme.DefaultPalette().Status.Warning.Adaptive()).Bold(true)
 		badgeText = "∴ existing branch"
-	case dialog.resolution.Kind == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_DETACHED_REF:
+	case dialog.resolution.GetKind() == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_DETACHED_REF:
 		badgeStyle = rowStyle.Foreground(sharedtheme.DefaultPalette().Status.Warning.Adaptive()).Bold(true)
 		badgeText = "∴ detached ref"
 	}

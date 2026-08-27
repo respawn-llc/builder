@@ -27,7 +27,7 @@ func (d *uiWorktreeCreateDialogState) syncFocus() {
 	if d == nil {
 		return
 	}
-	if d.resolution.Kind != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH && d.focus == uiWorktreeCreateFieldBaseRef {
+	if d.resolution.GetKind() != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH && d.focus == uiWorktreeCreateFieldBaseRef {
 		d.focus = uiWorktreeCreateFieldBranchTarget
 	}
 }
@@ -36,7 +36,7 @@ func (d *uiWorktreeCreateDialogState) moveFocus(delta int) {
 	if d == nil {
 		return
 	}
-	d.focus = worktreeui.MoveField(d.focus, d.resolution.Kind, delta)
+	d.focus = worktreeui.MoveField(d.focus, d.resolution.GetKind(), delta)
 	if d.focus == uiWorktreeCreateFieldBranchTarget {
 		d.branchTarget.SetCursor(len(d.branchTarget.Text()))
 	}
@@ -71,7 +71,7 @@ func (d *uiWorktreeCreateDialogState) applyResolveState(state worktreeui.State) 
 	d.submitPending = state.SubmitPending
 	d.resolveToken = state.Token
 	d.resolution = state.Resolution
-	if d.resolution.Kind != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH {
+	if d.resolution.GetKind() != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH {
 		d.baseRefErrorText = ""
 	}
 	d.syncFocus()

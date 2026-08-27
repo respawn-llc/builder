@@ -79,7 +79,7 @@ type uiWorktreeCreateDialogState struct {
 	resolving        bool
 	submitPending    bool
 	resolveToken     uint64
-	resolution       worktreepb.CreateTargetResolution
+	resolution       *worktreepb.CreateTargetResolution
 	setupProgress    *uiWorktreeSetupProgressState
 	setupEvent       *worktreepb.SetupEvent
 }

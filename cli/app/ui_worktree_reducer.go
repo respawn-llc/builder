@@ -9,7 +9,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/invariant"
 	"core/shared/protoapi"
-	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -269,7 +268,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			Token:         msg.token,
 			CurrentQuery:  m.worktrees.create.branchTarget.Text(),
 			ResponseQuery: msg.query,
-			Resolution:    resolvedCreateTarget(msg.resp),
+			Resolution:    msg.resp.GetResolution(),
 			HasError:      msg.err != nil,
 			ErrorText:     errorText,
 		})
@@ -288,13 +287,6 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		return handledUIFeatureUpdate(m, nil)
 	}
 	return uiFeatureUpdateResult{}
-}
-
-func resolvedCreateTarget(response *worktreepb.CreateTargetResolveSuccess) worktreepb.CreateTargetResolution {
-	if response == nil || response.Resolution == nil {
-		return worktreepb.CreateTargetResolution{}
-	}
-	return *response.Resolution
 }
 
 type worktreeCreateErrorPlacement struct {

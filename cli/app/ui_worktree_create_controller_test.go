@@ -69,7 +69,7 @@ func TestWorktreeCreateControllerNavigatesFields(t *testing.T) {
 		t.Fatalf("focus after shift+tab = %v, want branch target", updated.worktrees.create.focus)
 	}
 
-	updated.worktrees.create.resolution = worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
+	updated.worktrees.create.resolution = &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
 	updated, _ = applyWorktreeCreateControllerKey(updated, tea.KeyMsg{Type: tea.KeyDown})
 	if updated.worktrees.create.focus != uiWorktreeCreateFieldBaseRef {
 		t.Fatalf("focus after down with new branch = %v, want base ref", updated.worktrees.create.focus)
@@ -180,7 +180,7 @@ func TestWorktreeCreateCompletionSwitchesByStableWorktreeID(t *testing.T) {
 
 func TestWorktreeCreateErrorOwnershipStopsSpinnerAndPreservesForm(t *testing.T) {
 	model := newWorktreeCreateControllerTestModel(t, nil)
-	model.worktrees.create.resolution = worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
+	model.worktrees.create.resolution = &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
 	model.worktrees.create.branchTarget.Replace(strings.NewReplacer("\r", "", "\n", "").Replace("feature/entered"))
 	model.worktrees.create.baseRef.Replace(strings.NewReplacer("\r", "", "\n", "").Replace("HEAD"))
 	model.worktrees.create.submitting = true
@@ -248,7 +248,7 @@ func TestWorktreeCreateNonTypedAndSetupRetainedErrorsUseFormRegion(t *testing.T)
 
 func TestWorktreeCreateFieldErrorClearsWhenBaseRefIsEdited(t *testing.T) {
 	model := newWorktreeCreateControllerTestModel(t, nil)
-	model.worktrees.create.resolution = worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
+	model.worktrees.create.resolution = &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
 	model.worktrees.create.focus = uiWorktreeCreateFieldBaseRef
 	model.worktrees.create.baseRefErrorText = "old base ref error"
 
@@ -262,10 +262,10 @@ func TestWorktreeCreateFieldErrorClearsWhenBaseRefIsEdited(t *testing.T) {
 func TestWorktreeCreateFieldErrorClearsWhenBaseRefBecomesHidden(t *testing.T) {
 	model := newWorktreeCreateControllerTestModel(t, nil)
 	model.worktrees.create.baseRefErrorText = "old base ref error"
-	model.worktrees.create.resolution = worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
+	model.worktrees.create.resolution = &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
 
 	model.worktrees.create.applyResolveState(worktreeui.State{
-		Resolution: worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH},
+		Resolution: &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH},
 	})
 
 	if model.worktrees.create.baseRefErrorText != "" {
