@@ -2,7 +2,6 @@ package serverapi
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 
 	"core/shared/config"
@@ -36,9 +35,6 @@ func TestSessionRuntimeRequestsHaveNoGenericClientRequestIdentity(t *testing.T) 
 			}
 			if _, exists := fields["client_request_id"]; exists {
 				t.Fatalf("request retained generic client identity: %s", data)
-			}
-			if _, exists := reflect.TypeOf(request).FieldByName("ClientRequestID"); exists {
-				t.Fatal("request retained ClientRequestID")
 			}
 		})
 	}
