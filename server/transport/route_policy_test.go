@@ -159,14 +159,10 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		t.Fatal("active project foreign prompt follow-up watch unexpectedly allowed")
 	}
 	attachedRoute := routeForTest(t, protocol.MethodSessionRetargetWorkspace)
-	if err := executor.authorizeScope(ctx, &connectionState{}, attachedRoute, serverapi.SessionRetargetWorkspaceRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{SessionID: fixture.foreignSessionID},
-	}); err != nil {
+	if err := executor.authorizeScope(ctx, &connectionState{}, attachedRoute, serverapi.SessionRetargetWorkspaceRequest{SessionID: fixture.foreignSessionID}); err != nil {
 		t.Fatalf("attached-project unscoped session: %v", err)
 	}
-	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, attachedRoute, serverapi.SessionRetargetWorkspaceRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{SessionID: fixture.foreignSessionID},
-	}); err == nil {
+	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, attachedRoute, serverapi.SessionRetargetWorkspaceRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("attached-project foreign session unexpectedly allowed")
 	}
 
@@ -193,8 +189,8 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		rpccontract.ScopeAttachSession,
 		"AttachSession",
 		routeScopeParams{sessionID: fixture.foreignSessionID},
-	); err != nil {
-		t.Fatalf("attach foreign-Project session: %v", err)
+	); err == nil {
+		t.Fatal("attach foreign session unexpectedly allowed")
 	}
 }
 

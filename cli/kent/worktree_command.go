@@ -56,7 +56,7 @@ func worktreeStatusSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, "worktree status does not accept positional arguments")
 		return 2
 	}
-	sessionID, err := resolveCommandSession(*sessionFlag)
+	sessionID, err := resolveWorktreeCommandSession(*sessionFlag)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -91,7 +91,7 @@ func worktreeListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, "worktree list does not accept positional arguments")
 		return 2
 	}
-	if sessionID := resolveOptionalCommandSession(*sessionFlag); sessionID != nil {
+	if sessionID := resolveOptionalWorktreeCommandSession(*sessionFlag); sessionID != nil {
 		return withWorktreeCommandRemote(stderr, *sessionID, func(remote apicontract.WorktreeService) int {
 			ctx, cancel := context.WithTimeout(context.Background(), worktreeCommandTimeout)
 			defer cancel()
@@ -157,7 +157,7 @@ func worktreeCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, "worktree create requires <branch-or-ref> and optional [path]")
 		return 2
 	}
-	sessionID, err := resolveCommandSession(*sessionFlag)
+	sessionID, err := resolveWorktreeCommandSession(*sessionFlag)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -227,12 +227,12 @@ func worktreeEnterSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, "worktree enter requires exactly one selector")
 		return 2
 	}
-	sessionID, err := resolveCommandSession(*sessionFlag)
+	sessionID, err := resolveWorktreeCommandSession(*sessionFlag)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	header, err := newSessionTransitionHeader(sessionID)
+	header, err := newWorktreeCommandTransitionHeader(sessionID)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -256,12 +256,12 @@ func worktreeLeaveSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, "worktree leave does not accept positional arguments")
 		return 2
 	}
-	sessionID, err := resolveCommandSession(*sessionFlag)
+	sessionID, err := resolveWorktreeCommandSession(*sessionFlag)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	header, err := newSessionTransitionHeader(sessionID)
+	header, err := newWorktreeCommandTransitionHeader(sessionID)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -293,12 +293,12 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	sessionID, err := resolveCommandSession(*sessionFlag)
+	sessionID, err := resolveWorktreeCommandSession(*sessionFlag)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	header, err := newSessionTransitionHeader(sessionID)
+	header, err := newWorktreeCommandTransitionHeader(sessionID)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -390,24 +390,24 @@ func withWorktreeCommandRemote(stderr io.Writer, sessionID string, fn func(apico
 	return fn(remote)
 }
 
-func resolveCommandSession(sessionFlag string) (string, error) {
-	if sessionID := resolveOptionalCommandSession(sessionFlag); sessionID != nil {
+func resolveWorktreeCommandSession(sessionFlag string) (string, error) {
+	if sessionID := resolveOptionalWorktreeCommandSession(sessionFlag); sessionID != nil {
 		return *sessionID, nil
 	}
-	return "", errors.New("--session is required outside Kent shell commands")
+	return "", errors.New("worktree command requires --session outside Kent shell commands")
 }
 
-func resolveOptionalCommandSession(sessionFlag string) *string {
-	if trimmed := strings.TrimSpace(sessionFlag); trimmed != "" {
-		return &trimmed
-	}
+func resolveOptionalWorktreeCommandSession(sessionFlag string) *string {
 	if sessionID, ok := sessionenv.LookupSessionID(os.LookupEnv); ok {
 		return &sessionID
+	}
+	if trimmed := strings.TrimSpace(sessionFlag); trimmed != "" {
+		return &trimmed
 	}
 	return nil
 }
 
-func commandRuntimeOrigin() (*serverapi.RuntimeStepOrigin, error) {
+func worktreeCommandRuntimeOrigin() (*serverapi.RuntimeStepOrigin, error) {
 	runID, hasRunID := os.LookupEnv(sessionenv.RunIDEnv)
 	stepID, hasStepID := os.LookupEnv(sessionenv.StepIDEnv)
 	if !hasRunID && !hasStepID {
@@ -417,14 +417,10 @@ func commandRuntimeOrigin() (*serverapi.RuntimeStepOrigin, error) {
 	return origin, origin.Validate()
 }
 
-func newSessionTransitionHeader(sessionID string) (serverapi.WorktreeTransitionHeader, error) {
-	var origin *serverapi.RuntimeStepOrigin
-	if currentSessionID, ok := sessionenv.LookupSessionID(os.LookupEnv); ok && currentSessionID == sessionID {
-		var err error
-		origin, err = commandRuntimeOrigin()
-		if err != nil {
-			return serverapi.WorktreeTransitionHeader{}, err
-		}
+func newWorktreeCommandTransitionHeader(sessionID string) (serverapi.WorktreeTransitionHeader, error) {
+	origin, err := worktreeCommandRuntimeOrigin()
+	if err != nil {
+		return serverapi.WorktreeTransitionHeader{}, err
 	}
 	return serverapi.WorktreeTransitionHeader{
 		OperationID: serverapi.NewWorktreeOperationID(),
@@ -434,10 +430,6 @@ func newSessionTransitionHeader(sessionID string) (serverapi.WorktreeTransitionH
 }
 
 func openWorktreeCommandRemote(ctx context.Context, sessionID string) (*client.Remote, error) {
-	return openSessionCommandRemote(ctx, sessionID)
-}
-
-func openSessionCommandRemote(ctx context.Context, sessionID string) (*client.Remote, error) {
 	configRoot, err := nearestCommandConfigRoot()
 	if err != nil {
 		return nil, err

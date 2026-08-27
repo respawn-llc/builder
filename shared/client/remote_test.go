@@ -1093,7 +1093,6 @@ func TestRemoteReattachSessionUpdatesBindingOnSameControlConnection(t *testing.T
 		}{
 			{sessionID: "session-a", projectID: "project-a", workspaceID: "workspace-a", workspaceRoot: "/workspace-a"},
 			{sessionID: "session-b", projectID: "project-b", workspaceID: "workspace-b", workspaceRoot: "/workspace-b"},
-			{sessionID: "session-a", projectID: "project-a", workspaceID: "workspace-a", workspaceRoot: "/workspace-a"},
 		} {
 			request := acceptRemoteSessionAttachmentOrClosed(
 				t,
@@ -1117,31 +1116,16 @@ func TestRemoteReattachSessionUpdatesBindingOnSameControlConnection(t *testing.T
 	}
 	defer func() { _ = remote.Close() }()
 
-	for _, expected := range []struct {
-		sessionID     string
-		projectID     string
-		workspaceRoot string
-	}{
-		{sessionID: "session-b", projectID: "project-b", workspaceRoot: "/workspace-b"},
-		{sessionID: "session-a", projectID: "project-a", workspaceRoot: "/workspace-a"},
-	} {
-		binding, err := remote.ReattachSession(context.Background(), expected.sessionID)
-		if err != nil {
-			t.Fatalf("ReattachSession(%q): %v", expected.sessionID, err)
-		}
-		current, present := remote.ProjectBinding()
-		if !present ||
-			binding.ProjectID != expected.projectID ||
-			current.ProjectID != expected.projectID ||
-			current.WorkspaceRoot != expected.workspaceRoot {
-			t.Fatalf(
-				"binding after ReattachSession(%q) = returned %+v current %+v/%t",
-				expected.sessionID,
-				binding,
-				current,
-				present,
-			)
-		}
+	binding, err := remote.ReattachSession(context.Background(), "session-b")
+	if err != nil {
+		t.Fatalf("ReattachSession: %v", err)
+	}
+	current, present := remote.ProjectBinding()
+	if !present ||
+		binding.ProjectID != "project-b" ||
+		current.ProjectID != "project-b" ||
+		current.WorkspaceRoot != "/workspace-b" {
+		t.Fatalf("binding after ReattachSession = returned %+v current %+v/%t", binding, current, present)
 	}
 }
 
@@ -1341,12 +1325,9 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   source.SessionID,
-		},
-		WorkspaceRoot:  source.TargetRoot,
-		CompletionMode: serverapi.SessionRetargetCompletionScheduled,
+		ClientRequestID: "request-1",
+		SessionID:       source.SessionID,
+		WorkspaceRoot:   source.TargetRoot,
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }

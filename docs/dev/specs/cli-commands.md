@@ -97,23 +97,13 @@
 - `kent attach --project <project-id> [path]` selects the Project explicitly.
 - Each omitted path means the current directory.
 - Project, attach, and rebind commands use the configured daemon and never take local ownership of persistence.
-- `kent rebind [--session <session-id>] [--project <project-id>] [--json] <path>` schedules a Session move to the workspace root at `path`.
-- Inside a Kent agent shell, rebind selects the current Session by default. An explicit `--session` selects that Session instead.
-- Outside a Kent agent shell, rebind requires `--session`.
-- Rebind does not accept a positional Session ID.
-- Rebind uses the caller's configured daemon for the selected Session. The target path does not select another daemon or configuration.
-- Rebind without `--project` keeps the Session in its source Project. If the target belongs to both the source and other Projects, it selects the source binding. If it belongs only to other Projects, it fails without mutation, identifies the source Session and Project, and gives complete commands to attach it to the source Project or make an explicit cross-Project move.
-- Rebind requires `--project <project-id>` for cross-Project movement. It may attach an unbound target path to the explicit Project, but rejects a path already attached only to other Projects.
-- Rebind validates every problem it can determine before scheduling and rejects an invalid request without an acknowledgement. It validates authoritative state again when the move applies.
-- A valid rebind returns a scheduled acknowledgement without waiting for an active Agent Step. Human-readable output uses the ordinary scheduled-worktree acknowledgement pattern. JSON output includes the operation ID.
-- Rebinding to the current Project, workspace, and workspace-root Working Directory returns the same acknowledgement and immediately publishes a completed outcome. It creates no pending move or model reminder.
-- Rebind rejects a Session that still targets a worktree with `You are still in a worktree of the original workspace, which would make transition to the main worktree implicit. First, leave the worktree to enter a regular workspace, then try to rebind after the move finishes`.
-- Rebind checks Kent's recorded Worktrees instead of inspecting Git.
-- Rebind rejects a target path recorded as a Kent Worktree with `The target path is a Kent Worktree, not a Workspace, attaching it as a workspace is not correct and pollutes the project. Rebind to the main workspace, then enter the worktree directly instead.`
-- Entering or leaving a Kent Worktree requires the explicit worktree command.
-- The final success outcome identifies the target Project and workspace and states whether rebind attached the workspace to the Project.
+- `kent rebind <session-id> <path>` keeps a Session in its source Project. If the target belongs to both the source and other Projects, it selects the source binding. If it belongs only to other Projects, it fails without mutation, identifies the source Session and Project, and gives complete commands to attach it to the source Project or make an explicit cross-Project move.
+- `kent rebind --project <project-id> <session-id> <path>` is required for cross-Project movement. It may attach an unbound target path to the explicit Project and reports that attachment, but rejects a path already attached only to other Projects.
 - Failed rebinds never change bindings or Session attachment.
 - Sessions attached to Workflow Nodes cannot move across Projects.
+- A human or startup rebind completes synchronously. It waits for active model work to reach a maintenance boundary, prevents concurrent Session starts during the move, and rejects rebind when the Session owns a running background command.
+- When the Session's active agent invokes rebind for its own Session, the command returns a scheduled acknowledgement without waiting for the Agent Step to finish. The move applies at the next between-Agent-Step boundary before queued user work.
+- A self-agent rebind ignores Session-owned background commands. Those commands continue in the directories where they started.
 - A cross-Project move either changes both Session location and artifact location or leaves both unchanged.
 
 ## Question Commands

@@ -74,16 +74,14 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 ## Workspace-Change Prompt
 
 - If a selected Session has an available attached workspace root different from the current root, startup shows `Workspace changed`.
-- `Yes` schedules the Session retarget and shows loading until its final success or failure. Startup opens and promotes the Session only after success.
-- `No` returns to the picker.
+- `Yes` retargets the Session. `No` returns to the picker.
 - A detached historical workspace path cannot trigger or supply the retarget.
 - Retargeting always requires explicit user action.
 
 ## Multi-Client Attach
 
 - Opening a Session that another client uses gives this client Equal Full-Control Attach. Startup has no read-only or reduced-control mode.
-- If an open TUI Session moves within its Project, the TUI refreshes the existing attachment in place.
-- If an open TUI Session moves to another Project, the TUI replaces its complete Project-scoped server and Runtime client attachment, starts a destination transcript subscription, and keeps the same Session open.
+- When an open Session moves to another Workspace, the TUI closes its current view and automatically reopens and rehydrates the same Session in its new location.
 
 ## Errors
 

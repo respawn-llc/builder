@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"core/cli/app/internal/runtimeattach"
 	"core/shared/apicontract"
 	"core/shared/authstatus"
 	"core/shared/client"
@@ -59,40 +58,11 @@ type sessionLaunchPlan struct {
 
 type runtimeLaunchPlan struct {
 	Wiring           *runtimeWiring
-	reactivator      *runtimeReactivator
-	updateRequest    func(runtimeattach.Request)
 	stopEventStreams func()
 	close            func() error
 	detachClose      func() error
 	closeOnce        sync.Once
 	closeErr         error
-}
-
-func (p *runtimeLaunchPlan) Rewire(ctx context.Context, source runtimeAttachmentSource, plan sessionLaunchPlan) error {
-	if p == nil || p.reactivator == nil {
-		return errors.New("transferable Runtime plan is required")
-	}
-	if source == nil {
-		return errors.New("runtime attachment server is required")
-	}
-	if p.updateRequest != nil {
-		p.updateRequest(runtimeAttachmentRequest(plan))
-	}
-	p.stopStreams()
-	wiring, stop, err := prepareSharedRuntimeWiring(ctx, source.RuntimeAttachmentClients(), plan, p.reactivator)
-	if err != nil {
-		return err
-	}
-	var stopOnce sync.Once
-	p.Wiring = wiring
-	p.stopEventStreams = func() { stopOnce.Do(stop) }
-	return nil
-}
-
-func (p *runtimeLaunchPlan) stopStreams() {
-	if p != nil && p.stopEventStreams != nil {
-		p.stopEventStreams()
-	}
 }
 
 func validateLaunchSessionTitle(value *string) (*string, error) {
@@ -119,7 +89,9 @@ func (p *runtimeLaunchPlan) closeWithPolicy(detachOnly bool) error {
 		return nil
 	}
 	p.closeOnce.Do(func() {
-		p.stopStreams()
+		if p.stopEventStreams != nil {
+			p.stopEventStreams()
+		}
 		if detachOnly && p.detachClose != nil {
 			p.closeErr = p.detachClose()
 		} else if p.close != nil {

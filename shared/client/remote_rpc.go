@@ -228,13 +228,16 @@ func (c *Remote) openRPCConnWithAdditionalAttachment(
 	ctx context.Context,
 	additionalAttachmentIntent *remoteAttachmentIntent,
 ) (rpcwire.Conn, func(), error) {
-	conn, cleanup, _, err := c.openSetupRPCConn(ctx, additionalAttachmentIntent)
+	attachmentIntent, attachment := c.attachmentState()
+	conn, cleanup, _, err := c.openSetupRPCConn(ctx, additionalAttachmentIntent, attachmentIntent, attachment)
 	return conn, cleanup, err
 }
 
 func (c *Remote) openSetupRPCConn(
 	ctx context.Context,
 	additionalAttachmentIntent *remoteAttachmentIntent,
+	attachmentIntent *remoteAttachmentIntent,
+	attachment *remoteAttachment,
 ) (rpcwire.Conn, func(), remoteConnectionState, error) {
 	if err := c.ensureOpen(); err != nil {
 		return nil, nil, remoteConnectionState{}, err
@@ -245,11 +248,11 @@ func (c *Remote) openSetupRPCConn(
 	}
 	cleanup := func() { _ = conn.Close() }
 	setup := remoteConnectionSetup{
-		attachmentIntent:           c.attachIntent,
+		attachmentIntent:           attachmentIntent,
 		additionalAttachmentIntent: additionalAttachmentIntent,
 		expectation: &remoteConnectionExpectation{
 			rootID:     c.rootID(),
-			attachment: c.attachment,
+			attachment: attachment,
 		},
 		acknowledgeNoAuth: c.acknowledgeNoAuthOnConn,
 	}

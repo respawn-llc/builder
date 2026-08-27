@@ -63,6 +63,10 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind
 // Turn at its next Step Boundary. Queued user steering remains paused until the
 // execution target and its model-visible reminder are updated together.
 func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) error {
+	return e.RunExecutionTargetTransition(ctx, nil, fn)
+}
+
+func (e *Engine) RunExecutionTargetTransition(ctx context.Context, onScheduled func(), fn func() error) error {
 	if fn == nil {
 		return nil
 	}
@@ -75,6 +79,9 @@ func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) err
 		return err
 	}
 	defer e.stepLifecycle.ReleaseReservation(reservation)
+	if onScheduled != nil {
+		onScheduled()
+	}
 	e.pauseQueuedUserAutoDrain()
 	defer e.resumeQueuedUserAutoDrain()
 	return runExclusiveStepWhenIdle(

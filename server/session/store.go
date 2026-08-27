@@ -452,16 +452,10 @@ type ArtifactRelocationTarget struct {
 	WorkspaceRoot      string
 	WorkspaceContainer string
 	UpdatedAt          time.Time
+	RebindReminder     *SessionRebindReminder
 }
 
-type ArtifactRelocationObservation struct {
-	UpdatedRebindReminder *SessionRebindReminder
-}
-
-func (s *Store) RunArtifactRelocation(
-	target ArtifactRelocationTarget,
-	relocate func() (ArtifactRelocationObservation, error),
-) error {
+func (s *Store) RunArtifactRelocation(target ArtifactRelocationTarget, relocate func() error) error {
 	if s == nil {
 		return errors.New("session store is required")
 	}
@@ -495,8 +489,7 @@ func (s *Store) RunArtifactRelocation(
 	if filepath.Base(target.SessionDir) != sessionID {
 		return fmt.Errorf("session relocation target %q does not end with session id %q", target.SessionDir, sessionID)
 	}
-	observation, err := relocate()
-	if err != nil {
+	if err := relocate(); err != nil {
 		return err
 	}
 	s.sessionDir = target.SessionDir
@@ -506,8 +499,9 @@ func (s *Store) RunArtifactRelocation(
 	}
 	s.meta.WorkspaceRoot = target.WorkspaceRoot
 	s.meta.WorkspaceContainer = target.WorkspaceContainer
-	if observation.UpdatedRebindReminder != nil {
-		s.meta.RebindReminder = CloneSessionRebindReminder(observation.UpdatedRebindReminder)
+	s.meta.WorktreeReminder = nil
+	if target.RebindReminder != nil {
+		s.meta.RebindReminder = CloneSessionRebindReminder(target.RebindReminder)
 	}
 	s.meta.UpdatedAt = target.UpdatedAt
 	return nil

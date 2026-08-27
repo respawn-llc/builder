@@ -36,15 +36,6 @@ type Activation struct {
 	attachment serverapi.SessionRuntimeAttachment
 }
 
-func (a *Activation) UpdateRequest(req Request) {
-	if a == nil {
-		return
-	}
-	a.mu.Lock()
-	a.request = req
-	a.mu.Unlock()
-}
-
 func Activate(ctx context.Context, service servicecontract.SessionRuntimeService, req Request) (*Activation, error) {
 	if service == nil {
 		return nil, errors.New("session runtime service is required")

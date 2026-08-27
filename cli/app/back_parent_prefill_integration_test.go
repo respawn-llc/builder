@@ -18,6 +18,7 @@ import (
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 type backParentPrefillScenarioServer interface {
@@ -142,13 +143,10 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	if _, err := sourceServer.SessionLifecycleClient().RetargetSessionWorkspace(
 		context.Background(),
 		serverapi.SessionRetargetWorkspaceRequest{
-			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-				OperationID: serverapi.NewWorktreeOperationID(),
-				SessionID:   parent.Meta().SessionID,
-			},
-			WorkspaceRoot:  workspaceB,
-			ProjectID:      &targetProjectID,
-			CompletionMode: serverapi.SessionRetargetCompletionWait,
+			ClientRequestID: uuid.NewString(),
+			SessionID:       parent.Meta().SessionID,
+			WorkspaceRoot:   workspaceB,
+			ProjectID:       &targetProjectID,
 		},
 	); err != nil {
 		t.Fatalf("move parent to target project: %v", err)

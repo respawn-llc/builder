@@ -8,7 +8,6 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/apicontract"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/lifecyclecontract"
@@ -80,7 +79,6 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 	}
 	nextSessionOverrides := opts.Overrides
 	var pickerNotice *startupPickerNotice
-	var transferredRuntimePlan *runtimeLaunchPlan
 	for {
 		switch next.Kind() {
 		case serverapi.SessionDirectiveStop:
@@ -150,7 +148,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		}
 		reboundServer, rebound, err := bindNavigationSessionContext(ctx, server, preparation)
 		if err != nil {
-			return closeTransferredRuntimePlanAfterSetupFailure(transferredRuntimePlan, err)
+			return err
 		}
 		if rebound {
 			if shouldCloseReboundServer(server, reboundServer) {
@@ -161,11 +159,11 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		}
 		launchRequest, err := sessionLaunchRequestFromIntent(intent, nextSessionOverrides)
 		if err != nil {
-			return closeTransferredRuntimePlanAfterSetupFailure(transferredRuntimePlan, err)
+			return err
 		}
 		plan, err := planner.PlanSession(ctx, launchRequest)
 		if err != nil {
-			return closeTransferredRuntimePlanAfterSetupFailure(transferredRuntimePlan, err)
+			return err
 		}
 		plan.ClientLifecycleCommand = clientSettings.Hooks.LifecycleCommand()
 		switch intent.Kind() {
@@ -177,9 +175,9 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		nextSessionOverrides = serverapi.RunPromptOverrides{}
 		initialPrompt, initialPromptHistoryRecorded, transitionInput, overrideStoredDraft, err := sessionLaunchPreparationValues(preparation)
 		if err != nil {
-			return closeTransferredRuntimePlanAfterSetupFailure(transferredRuntimePlan, err)
+			return err
 		}
-		runtimePlan, request, err := prepareSessionUIRunWithTransferredRuntime(
+		runtimePlan, request, err := prepareSessionUIRun(
 			ctx,
 			server,
 			planner,
@@ -188,9 +186,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			initialPromptHistoryRecorded,
 			transitionInput,
 			overrideStoredDraft,
-			transferredRuntimePlan,
 		)
-		transferredRuntimePlan = nil
 		if err != nil {
 			return err
 		}
@@ -199,35 +195,31 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, runErr)
 		}
 		transition := extractUITransition(finalModel)
-		if transition.Exit {
-			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, nil)
-		}
-		if transition.SessionRetargetSuccess != nil {
-			handoff, ok := server.(interface {
-				ProjectBinding() (client.ProjectAttachment, bool)
-				ReattachSession(context.Context, string) (client.ProjectAttachment, error)
+		if transition.SessionRetargeted {
+			if runtimePlan.stopEventStreams != nil {
+				runtimePlan.stopEventStreams()
+			}
+			reattacher, ok := server.(interface {
+				ReattachSession(context.Context, string) error
 			})
 			if !ok {
-				return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, errors.New("Session retarget handoff requires a Remote server"))
+				return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, errors.New("Session rebind requires a Remote server"))
 			}
-			target := transition.SessionRetargetSuccess
-			current, present := handoff.ProjectBinding()
-			if sessionRetargetBindingChanged(current, present, target) {
-				runtimePlan.stopStreams()
-				if _, err := handoff.ReattachSession(ctx, plan.SessionID); err != nil {
-					return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
-				}
+			if err := reattacher.ReattachSession(ctx, plan.SessionID); err != nil {
+				return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
 			}
 			if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
 				return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
 			}
-			transferredRuntimePlan = runtimePlan
-			retargetSessionID, err := runtimeids.ParseSessionID(plan.SessionID)
+			if err := runtimePlan.Close(); err != nil {
+				return err
+			}
+			sessionID, err := runtimeids.ParseSessionID(plan.SessionID)
 			if err != nil {
-				return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
+				return err
 			}
 			next = serverapi.LaunchSessionDirective(
-				serverapi.OpenExistingSessionLaunchIntent(retargetSessionID),
+				serverapi.OpenExistingSessionLaunchIntent(sessionID),
 				serverapi.NewSessionLaunchPreparation(
 					nil,
 					serverapi.RestoreStoredDraftSessionDraftDisposition(),
@@ -239,32 +231,16 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
 			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
 		}
+
+		if transition.Exit {
+			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, nil)
+		}
 		resolved, err := resolveAndReleaseSessionAction(ctx, server, interactor, plan.SessionID, transition, runtimePlan, finalModel)
 		if err != nil {
 			return err
 		}
 		next = resolved
 	}
-}
-
-func sessionRetargetBindingChanged(
-	current client.ProjectAttachment,
-	present bool,
-	target *clientui.TranscriptSessionRetargetSuccess,
-) bool {
-	if !present || target == nil {
-		return true
-	}
-	return current.ProjectID != target.ProjectID ||
-		current.WorkspaceID != target.WorkspaceID ||
-		comparableWorkspaceChangeRoot(current.WorkspaceRoot) != comparableWorkspaceChangeRoot(target.CanonicalRoot)
-}
-
-func closeTransferredRuntimePlanAfterSetupFailure(plan *runtimeLaunchPlan, setupErr error) error {
-	if plan == nil {
-		return setupErr
-	}
-	return errors.Join(setupErr, plan.Close())
 }
 
 func bindNavigationSessionContext(ctx context.Context, server interactiveSessionServer, preparation serverapi.SessionLaunchPreparation) (interactiveSessionServer, bool, error) {
@@ -308,36 +284,8 @@ func prepareSessionUIRun(
 	transitionInput string,
 	overrideStoredDraft bool,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
-	return prepareSessionUIRunWithTransferredRuntime(ctx, server, planner, plan, initialPrompt, initialPromptHistoryRecorded, transitionInput, overrideStoredDraft, nil)
-}
-
-func prepareSessionUIRunWithTransferredRuntime(
-	ctx context.Context,
-	server interactiveSessionServer,
-	planner *launchPlanner,
-	plan sessionLaunchPlan,
-	initialPrompt string,
-	initialPromptHistoryRecorded bool,
-	transitionInput string,
-	overrideStoredDraft bool,
-	transferred *runtimeLaunchPlan,
-) (*runtimeLaunchPlan, uiLoopRequest, error) {
-	runtimePlan := transferred
-	var err error
-	if runtimePlan == nil {
-		runtimePlan, err = planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
-	} else {
-		source, ok := server.(runtimeAttachmentSource)
-		if !ok {
-			err = errors.New("runtime attachment server is required")
-		} else {
-			err = runtimePlan.Rewire(ctx, source, plan)
-		}
-	}
+	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
 	if err != nil {
-		if transferred != nil {
-			return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(transferred, err)
-		}
 		return nil, uiLoopRequest{}, err
 	}
 	commandRegistry := commands.NewDefaultRegistry()

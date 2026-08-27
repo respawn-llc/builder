@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
@@ -151,24 +150,6 @@ func TestRunArtifactRelocationUpdatesPathsAndWorkspaceAfterCallback(t *testing.T
 		t.Fatalf("EnsureDurable: %v", err)
 	}
 	log := mustMaterializeSessionTestEventLog(t, store)
-	worktreeReminder := WorktreeReminderState{
-		Mode: WorktreeReminderModeEnter,
-		WorktreeContext: WorktreeContext{
-			WorktreePath:  "/workspace/source-worktree",
-			WorkspaceRoot: "/workspace/source",
-			EffectiveCwd:  "/workspace/source-worktree",
-		},
-	}
-	if err := store.SetWorktreeReminderState(&worktreeReminder); err != nil {
-		t.Fatalf("SetWorktreeReminderState: %v", err)
-	}
-	persistedWorktreeReminder := CloneWorktreeReminderState(store.Meta().WorktreeReminder)
-	workingDirectory := "/workspace/target"
-	rebindReminder := SessionRebindReminder{
-		SourceProject:    serverapi.ProjectReference{ID: "source", Name: "Source"},
-		TargetProject:    serverapi.ProjectReference{ID: "target", Name: "Target"},
-		WorkingDirectory: &workingDirectory,
-	}
 	oldDir := store.Dir()
 	targetContainer := t.TempDir()
 	targetDir := filepath.Join(targetContainer, store.Meta().SessionID)
@@ -178,8 +159,8 @@ func TestRunArtifactRelocationUpdatesPathsAndWorkspaceAfterCallback(t *testing.T
 		WorkspaceRoot:      "/workspace/target",
 		WorkspaceContainer: "target",
 		UpdatedAt:          time.Now().UTC(),
-	}, func() (ArtifactRelocationObservation, error) {
-		return ArtifactRelocationObservation{UpdatedRebindReminder: &rebindReminder}, os.Rename(oldDir, targetDir)
+	}, func() error {
+		return os.Rename(oldDir, targetDir)
 	})
 	if err != nil {
 		t.Fatalf("RunArtifactRelocation: %v", err)
@@ -192,11 +173,8 @@ func TestRunArtifactRelocationUpdatesPathsAndWorkspaceAfterCallback(t *testing.T
 	if meta.WorkspaceRoot != "/workspace/target" || meta.WorkspaceContainer != "target" {
 		t.Fatalf("workspace metadata = %+v", meta)
 	}
-	if meta.WorktreeReminder == nil || !WorktreeReminderStateEqual(*meta.WorktreeReminder, *persistedWorktreeReminder) {
-		t.Fatalf("worktree reminder = %+v, want preserved %+v", meta.WorktreeReminder, persistedWorktreeReminder)
-	}
-	if meta.RebindReminder == nil || !SessionRebindReminderEqual(*meta.RebindReminder, rebindReminder) {
-		t.Fatalf("rebind reminder = %+v, want observed %+v", meta.RebindReminder, rebindReminder)
+	if meta.WorktreeReminder != nil {
+		t.Fatalf("worktree reminder = %+v, want nil", meta.WorktreeReminder)
 	}
 	if _, _, err := log.AppendRecord(stringPointer("step-1"), sessionTestMessage(MessageRoleUser, "after move")); err != nil {
 		t.Fatalf("AppendEvent after move: %v", err)
@@ -219,9 +197,9 @@ func TestRunArtifactRelocationRejectsZeroCommitTimeBeforeCallback(t *testing.T) 
 		SessionDir:         targetDir,
 		WorkspaceRoot:      "/workspace/target",
 		WorkspaceContainer: "target",
-	}, func() (ArtifactRelocationObservation, error) {
+	}, func() error {
 		callbackCalled = true
-		return ArtifactRelocationObservation{}, nil
+		return nil
 	})
 	if err == nil {
 		t.Fatal("RunArtifactRelocation accepted a zero update time")
@@ -246,8 +224,8 @@ func TestRunArtifactRelocationDoesNotMutateStoreWhenCallbackFails(t *testing.T) 
 		WorkspaceRoot:      "/workspace/target",
 		WorkspaceContainer: "target",
 		UpdatedAt:          time.Now().UTC(),
-	}, func() (ArtifactRelocationObservation, error) {
-		return ArtifactRelocationObservation{}, callbackErr
+	}, func() error {
+		return callbackErr
 	})
 	if !errors.Is(err, callbackErr) {
 		t.Fatalf("RunArtifactRelocation error = %v, want %v", err, callbackErr)

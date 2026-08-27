@@ -25,10 +25,32 @@ func NormalizeSessionRebindReminder(reminder SessionRebindReminder) (SessionRebi
 		}
 		workingDirectory = &value
 	}
+	var failureDiagnostic *string
+	if reminder.FailureDiagnostic != nil {
+		value := strings.TrimSpace(*reminder.FailureDiagnostic)
+		if value == "" {
+			return SessionRebindReminder{}, errors.New("failure diagnostic must be non-empty when present")
+		}
+		failureDiagnostic = &value
+	}
+	switch reminder.Kind {
+	case SessionRebindReminderSucceeded:
+		if failureDiagnostic != nil {
+			return SessionRebindReminder{}, errors.New("successful rebind reminder cannot contain a failure diagnostic")
+		}
+	case SessionRebindReminderFailed:
+		if failureDiagnostic == nil || workingDirectory == nil {
+			return SessionRebindReminder{}, errors.New("failed rebind reminder requires a diagnostic and unchanged working directory")
+		}
+	default:
+		return SessionRebindReminder{}, errors.New("rebind reminder kind is required")
+	}
 	return SessionRebindReminder{
-		SourceProject:    source,
-		TargetProject:    target,
-		WorkingDirectory: workingDirectory,
+		Kind:              reminder.Kind,
+		SourceProject:     source,
+		TargetProject:     target,
+		WorkingDirectory:  workingDirectory,
+		FailureDiagnostic: failureDiagnostic,
 	}, nil
 }
 
@@ -53,15 +75,26 @@ func CloneSessionRebindReminder(reminder *SessionRebindReminder) *SessionRebindR
 		workingDirectory := *reminder.WorkingDirectory
 		clone.WorkingDirectory = &workingDirectory
 	}
+	if reminder.FailureDiagnostic != nil {
+		diagnostic := *reminder.FailureDiagnostic
+		clone.FailureDiagnostic = &diagnostic
+	}
 	return &clone
 }
 
 func SessionRebindReminderEqual(left, right SessionRebindReminder) bool {
-	if left.SourceProject != right.SourceProject || left.TargetProject != right.TargetProject {
+	if left.Kind != right.Kind || left.SourceProject != right.SourceProject || left.TargetProject != right.TargetProject {
 		return false
 	}
-	if left.WorkingDirectory == nil || right.WorkingDirectory == nil {
-		return left.WorkingDirectory == nil && right.WorkingDirectory == nil
+	if !optionalStringEqual(left.WorkingDirectory, right.WorkingDirectory) {
+		return false
 	}
-	return *left.WorkingDirectory == *right.WorkingDirectory
+	return optionalStringEqual(left.FailureDiagnostic, right.FailureDiagnostic)
+}
+
+func optionalStringEqual(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

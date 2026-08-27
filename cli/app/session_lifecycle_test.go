@@ -73,9 +73,9 @@ func TestMaybeHandlePickedSessionWorkspaceChangeCanonicalizesAliases(t *testing.
 
 	action, err := maybeHandlePickedSessionWorkspaceChange(
 		context.Background(),
-		workspaceRetargetContextTestServer{
-			narrowSessionLifecycleServer: narrowSessionLifecycleServer{cfg: config.App{WorkspaceRoot: aliasRoot, Settings: config.Settings{Theme: "dark"}}},
-			retargetContext:              &sessionWorkspaceRetargetContext{workspaceRoot: aliasRoot, theme: "dark"},
+		&remoteAppServer{
+			cfg:      config.App{WorkspaceRoot: aliasRoot, Settings: config.Settings{Theme: "dark"}},
+			retarget: &sessionWorkspaceRetargetContext{workspaceRoot: aliasRoot, theme: "dark"},
 		},
 		"session-1",
 		clientui.SessionExecutionTarget{
@@ -102,9 +102,9 @@ func TestMaybeHandlePickedSessionWorkspaceChangeUsesRemoteServerBindingRoot(t *t
 
 	action, err := maybeHandlePickedSessionWorkspaceChange(
 		context.Background(),
-		workspaceRetargetContextTestServer{
-			narrowSessionLifecycleServer: narrowSessionLifecycleServer{cfg: config.App{WorkspaceRoot: "/source-client-workspace", Settings: config.Settings{Theme: "dark"}}},
-			retargetContext:              &sessionWorkspaceRetargetContext{workspaceRoot: "/active-server-workspace", theme: "dark"},
+		&remoteAppServer{
+			cfg:      config.App{WorkspaceRoot: "/source-client-workspace", Settings: config.Settings{Theme: "dark"}},
+			retarget: &sessionWorkspaceRetargetContext{workspaceRoot: "/active-server-workspace", theme: "dark"},
 		},
 		"session-1",
 		clientui.SessionExecutionTarget{
@@ -232,32 +232,10 @@ func TestRuntimeReleaseUsesFinalModelPolicyAndPreservesErrors(t *testing.T) {
 	})
 }
 
-func TestTransferredRuntimePlanClosesWhenReplacementSetupFails(t *testing.T) {
-	setupErr := errors.New("replacement setup failed")
-	closeCalls := 0
-	plan := &runtimeLaunchPlan{close: func() error {
-		closeCalls++
-		return nil
-	}}
-	err := closeTransferredRuntimePlanAfterSetupFailure(plan, setupErr)
-	if !errors.Is(err, setupErr) || closeCalls != 1 {
-		t.Fatalf("setup cleanup = err %v close calls %d", err, closeCalls)
-	}
-}
-
 type narrowSessionLifecycleServer struct {
 	lifecycle      apicontract.SessionLifecycleService
 	cfg            config.App
 	reauthenticate func(context.Context, authInteractor) error
-}
-
-type workspaceRetargetContextTestServer struct {
-	narrowSessionLifecycleServer
-	retargetContext *sessionWorkspaceRetargetContext
-}
-
-func (s workspaceRetargetContextTestServer) workspaceRetargetContext() *sessionWorkspaceRetargetContext {
-	return s.retargetContext
 }
 
 func (s narrowSessionLifecycleServer) SessionLifecycleClient() apicontract.SessionLifecycleService {

@@ -6,7 +6,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/clientui"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -242,7 +241,7 @@ func compactLabelForMessage(msg llm.Message) string {
 	case llm.MessageTypeWorktreeModeExit:
 		return ""
 	case llm.MessageTypeSessionRebind:
-		return clientui.SessionRebindCompactLabel
+		return ""
 	case llm.MessageTypeCompactionSummary:
 		return ""
 	case llm.MessageTypeInterruption:

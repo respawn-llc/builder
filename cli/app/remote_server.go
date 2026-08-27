@@ -20,6 +20,7 @@ type remoteAppServer struct {
 	identity       protocol.ServerIdentity
 	cfg            config.App
 	presentation   startupPresentation
+	retarget       *sessionWorkspaceRetargetContext
 	clientSettings config.ClientSettings
 }
 
@@ -36,6 +37,9 @@ func newRemoteAppServerWithAuth(remote *client.Remote, cfg config.App) *remoteAp
 		identity:     remote.Identity(),
 		cfg:          cfg,
 		presentation: startupPresentation{Theme: theme.Resolve(cfg.Settings.Theme)},
+	}
+	if binding, present := remote.ProjectBinding(); present {
+		server.retarget = sessionWorkspaceRetargetContextFromBinding(binding, server.presentation.Theme)
 	}
 	return server
 }
@@ -76,14 +80,11 @@ func (s *remoteAppServer) ClientSettings() config.ClientSettings {
 }
 
 func (s *remoteAppServer) workspaceRetargetContext() *sessionWorkspaceRetargetContext {
-	if s == nil || s.remote == nil {
+	if s == nil || s.retarget == nil {
 		return nil
 	}
-	binding, present := s.remote.ProjectBinding()
-	if !present {
-		return nil
-	}
-	return sessionWorkspaceRetargetContextFromBinding(binding, s.presentation.Theme)
+	copied := *s.retarget
+	return &copied
 }
 
 func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error) {
@@ -94,31 +95,31 @@ func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID st
 	if err != nil {
 		return nil, err
 	}
-	_, present := bound.ProjectBinding()
+	binding, present := bound.ProjectBinding()
 	if !present {
 		closeErr := bound.Close()
 		s.remote = nil
 		return nil, errors.Join(errors.New("remote project attachment binding is required"), closeErr)
 	}
+	retargetContext := sessionWorkspaceRetargetContextFromBinding(binding, s.presentation.Theme)
 	next := newRemoteAppServerWithAuth(bound, s.cfg)
 	next.presentation = s.presentation
+	next.retarget = retargetContext
 	next.clientSettings = s.clientSettings
 	s.remote = nil
 	return next, nil
 }
 
-func (s *remoteAppServer) ReattachSession(ctx context.Context, sessionID string) (client.ProjectAttachment, error) {
+func (s *remoteAppServer) ReattachSession(ctx context.Context, sessionID string) error {
 	if s == nil || s.remote == nil {
-		return client.ProjectAttachment{}, errors.New("remote server is required")
+		return errors.New("remote server is required")
 	}
-	return s.remote.ReattachSession(ctx, sessionID)
-}
-
-func (s *remoteAppServer) ProjectBinding() (client.ProjectAttachment, bool) {
-	if s == nil || s.remote == nil {
-		return client.ProjectAttachment{}, false
+	binding, err := s.remote.ReattachSession(ctx, sessionID)
+	if err != nil {
+		return err
 	}
-	return s.remote.ProjectBinding()
+	s.retarget = sessionWorkspaceRetargetContextFromBinding(binding, s.presentation.Theme)
+	return nil
 }
 
 func (s *remoteAppServer) AuthStatusClient() apicontract.AuthStatusService {

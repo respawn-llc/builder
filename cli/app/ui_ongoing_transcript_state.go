@@ -75,15 +75,6 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
 	case clientui.TranscriptMessageWorktreeTransitionOutcome:
 		return m.reconcileTranscriptWorktreeTransitionOutcome(message.Payload().(clientui.TranscriptWorktreeTransitionOutcome))
-	case clientui.TranscriptMessageSessionRetargetOutcome:
-		outcome := message.Payload().(clientui.TranscriptSessionRetargetOutcome)
-		if outcome.Kind != clientui.TranscriptSessionRetargetSucceeded || outcome.Success == nil {
-			return nil
-		}
-		m.sessionRetargetSuccess = cloneTranscriptSessionRetargetSuccess(outcome.Success)
-		m.nextSessionID = strings.TrimSpace(m.sessionID)
-		m.exitAction = UIActionOpenSession
-		return tea.Quit
 	case clientui.TranscriptMessageOperationalDiagnostic:
 		return m.applyTranscriptOperationalDiagnostic(message.Payload().(clientui.TranscriptOperationalDiagnostic))
 	}
@@ -207,6 +198,12 @@ func (m *uiModel) applyTranscriptSessionStatus(status clientui.TranscriptSession
 func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSessionIdentity) tea.Cmd {
 	previousSessionID := strings.TrimSpace(m.sessionID)
 	nextSessionID := identity.SessionID.String()
+	previousTarget := m.sessionExecutionTarget
+	m.sessionExecutionTarget = nil
+	if identity.ExecutionTarget != nil {
+		normalized := clientui.NormalizeSessionExecutionTarget(*identity.ExecutionTarget)
+		m.sessionExecutionTarget = &normalized
+	}
 	m.sessionID = nextSessionID
 	m.sessionName = ""
 	if identity.SessionName != nil {
@@ -214,6 +211,14 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	}
 	m.conversationFreshness = identity.ConversationFreshness
 	titleCmd := tea.SetWindowTitle(sessionTitle(m.sessionName))
+	if previousTarget != nil && m.sessionExecutionTarget != nil &&
+		(previousTarget.WorkspaceID != m.sessionExecutionTarget.WorkspaceID ||
+			previousTarget.WorkspaceRoot != m.sessionExecutionTarget.WorkspaceRoot) {
+		m.sessionRetargeted = true
+		m.nextSessionID = nextSessionID
+		m.exitAction = UIActionOpenSession
+		return tea.Batch(titleCmd, tea.Quit)
+	}
 	if previousSessionID == "" || previousSessionID == nextSessionID {
 		return titleCmd
 	}

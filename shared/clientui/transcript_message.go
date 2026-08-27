@@ -33,7 +33,6 @@ const (
 	TranscriptMessageBackgroundActivity        TranscriptMessageKind = "background_activity"
 	TranscriptMessagePrompt                    TranscriptMessageKind = "prompt"
 	TranscriptMessageWorktreeTransitionOutcome TranscriptMessageKind = "worktree_transition_outcome"
-	TranscriptMessageSessionRetargetOutcome    TranscriptMessageKind = "session_retarget_outcome"
 	TranscriptMessageOperationalDiagnostic     TranscriptMessageKind = "operational_diagnostic"
 	TranscriptMessageLiveRunFinished           TranscriptMessageKind = "live_run_finished"
 )
@@ -71,7 +70,6 @@ type transcriptEventPayloadValue interface {
 		TranscriptBackgroundActivity |
 		TranscriptPrompt |
 		TranscriptWorktreeTransitionOutcome |
-		TranscriptSessionRetargetOutcome |
 		TranscriptOperationalDiagnostic |
 		TranscriptLiveRunResult
 }
@@ -248,8 +246,6 @@ func unmarshalTranscriptEvent(kind TranscriptMessageKind, data []byte) (Transcri
 		return decodeTranscriptPayload[TranscriptPrompt](data)
 	case TranscriptMessageWorktreeTransitionOutcome:
 		return decodeTranscriptPayload[TranscriptWorktreeTransitionOutcome](data)
-	case TranscriptMessageSessionRetargetOutcome:
-		return decodeTranscriptPayload[TranscriptSessionRetargetOutcome](data)
 	case TranscriptMessageOperationalDiagnostic:
 		return decodeTranscriptPayload[TranscriptOperationalDiagnostic](data)
 	case TranscriptMessageLiveRunFinished:
@@ -391,10 +387,6 @@ func (TranscriptPrompt) transcriptEventKind() TranscriptMessageKind {
 
 func (TranscriptWorktreeTransitionOutcome) transcriptEventKind() TranscriptMessageKind {
 	return TranscriptMessageWorktreeTransitionOutcome
-}
-
-func (TranscriptSessionRetargetOutcome) transcriptEventKind() TranscriptMessageKind {
-	return TranscriptMessageSessionRetargetOutcome
 }
 
 func (TranscriptOperationalDiagnostic) transcriptEventKind() TranscriptMessageKind {

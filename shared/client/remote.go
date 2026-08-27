@@ -288,12 +288,17 @@ func (c *Remote) ProjectBinding() (ProjectAttachment, bool) {
 }
 
 func (c *Remote) projectBinding() (ProjectAttachment, bool) {
+	_, attachment := c.attachmentState()
+	return remoteAttachmentProjectBinding(attachment)
+}
+
+func (c *Remote) attachmentState() (*remoteAttachmentIntent, *remoteAttachment) {
 	if c == nil {
-		return ProjectAttachment{}, false
+		return nil, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return remoteAttachmentProjectBinding(c.attachment)
+	return c.attachIntent, c.attachment
 }
 
 func (c *Remote) ReattachSession(ctx context.Context, sessionID string) (ProjectAttachment, error) {
@@ -728,14 +733,14 @@ func (c *Remote) PersistInputDraft(ctx context.Context, req serverapi.SessionPer
 }
 
 func (c *Remote) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	resp, err := callUnscopedRPC[serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](c, ctx, protocol.MethodSessionRetargetWorkspace, req)
+	response, err := callUnscopedRPC[serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](c, ctx, protocol.MethodSessionRetargetWorkspace, req)
 	if err != nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
-	if err := resp.ValidateForCompletionMode(req.CompletionMode); err != nil {
+	if err := response.Validate(); err != nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, invalidResponseError("session retarget", err)
 	}
-	return resp, nil
+	return response, nil
 }
 
 func (c *Remote) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
@@ -1030,7 +1035,7 @@ func (c *Remote) ensureControl(ctx context.Context) (*remoteControlConn, error) 
 		_ = c.control.Close()
 		c.control = nil
 	}
-	conn, cleanup, state, err := c.openSetupRPCConn(ctx, nil)
+	conn, cleanup, state, err := c.openSetupRPCConn(ctx, nil, c.attachIntent, c.attachment)
 	if err != nil {
 		return nil, err
 	}

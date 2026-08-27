@@ -167,10 +167,19 @@ type WorktreeReminderState struct {
 }
 
 type SessionRebindReminder struct {
-	SourceProject    serverapi.ProjectReference `json:"source_project"`
-	TargetProject    serverapi.ProjectReference `json:"target_project"`
-	WorkingDirectory *string                    `json:"working_directory,omitempty"`
+	Kind              SessionRebindReminderKind  `json:"kind"`
+	SourceProject     serverapi.ProjectReference `json:"source_project"`
+	TargetProject     serverapi.ProjectReference `json:"target_project"`
+	WorkingDirectory  *string                    `json:"working_directory,omitempty"`
+	FailureDiagnostic *string                    `json:"failure_diagnostic,omitempty"`
 }
+
+type SessionRebindReminderKind string
+
+const (
+	SessionRebindReminderSucceeded SessionRebindReminderKind = "succeeded"
+	SessionRebindReminderFailed    SessionRebindReminderKind = "failed"
+)
 
 type GoalStatus string
 

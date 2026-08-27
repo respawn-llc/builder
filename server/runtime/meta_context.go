@@ -679,6 +679,19 @@ func worktreeModeExitMetaMessage(state session.WorktreeReminderState) (llm.Messa
 }
 
 func sessionRebindMetaMessage(reminder session.SessionRebindReminder) (llm.Message, bool) {
+	if reminder.Kind == session.SessionRebindReminderFailed {
+		return llm.Message{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeErrorFeedback),
+			Content: textutil.Value(fmt.Sprintf(
+				"Session move to Project %s failed: %s\nThe Session remains in Project %s with Working Directory %s.",
+				reminder.TargetProject.Name,
+				*reminder.FailureDiagnostic,
+				reminder.SourceProject.Name,
+				*reminder.WorkingDirectory,
+			)),
+		}, true
+	}
 	content := prompts.RenderSessionRebindPrompt(
 		reminder.SourceProject.Name,
 		reminder.TargetProject.Name,
@@ -689,10 +702,9 @@ func sessionRebindMetaMessage(reminder session.SessionRebindReminder) (llm.Messa
 		return llm.Message{}, false
 	}
 	return llm.Message{
-		Role:           llm.RoleDeveloper,
-		MessageType:    textutil.Value(llm.MessageTypeSessionRebind),
-		Content:        textutil.Value(content),
-		CompactContent: textutil.Value(clientui.SessionRebindCompactLabel),
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeSessionRebind),
+		Content:     textutil.Value(content),
 	}, true
 }
 

@@ -699,27 +699,6 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 		t.Fatalf("worktree transition projection = %+v, want %+v", projected, outcome)
 	}
 
-	retargetOutcome := serverapi.SessionRetargetOutcome{
-		OperationID: serverapi.NewWorktreeOperationID(),
-		Kind:        serverapi.SessionRetargetOutcomeSucceeded,
-		Success: &serverapi.SessionRetargetSuccess{
-			Binding: serverapi.ProjectBinding{
-				ProjectID:     "project-id",
-				ProjectName:   "Project",
-				WorkspaceID:   "workspace-id",
-				CanonicalRoot: "/workspace",
-			},
-		},
-	}
-	registry.PublishSessionRetargetOutcome(engine.SessionID(), retargetOutcome)
-	message = nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageSessionRetargetOutcome)
-	retargetProjected := transcriptPayload[clientui.TranscriptSessionRetargetOutcome](t, message)
-	if retargetProjected.OperationID != retargetOutcome.OperationID ||
-		retargetProjected.Success == nil ||
-		retargetProjected.Success.ProjectID != retargetOutcome.Success.Binding.ProjectID {
-		t.Fatalf("Session retarget projection = %+v, want %+v", retargetProjected, retargetOutcome)
-	}
-
 	dirtyCount := 2
 	failed := clientui.WorktreeTransitionOutcome{
 		OperationID: clientui.NewWorktreeTransitionID(),

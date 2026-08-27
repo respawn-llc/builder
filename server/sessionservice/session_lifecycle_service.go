@@ -49,7 +49,8 @@ type sessionTransitionMemoRequest struct {
 }
 
 type sessionWorkspaceRetargeter interface {
-	RetargetWorkspace(ctx context.Context, req SessionWorkspaceRetargetInvocation) (serverapi.SessionRetargetWorkspaceResponse, error)
+	RetargetWorkspace(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
+	ScheduleWorkspaceRetarget(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest, origin serverapi.RuntimeStepOrigin, operationID serverapi.WorktreeOperationID) (serverapi.WorktreeScheduledAcknowledgement, error)
 }
 
 type sessionNavigationTargetResolver interface {
@@ -155,16 +156,41 @@ func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, 
 	if s == nil || s.retargeter == nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, errSessionWorkspaceRetargeterRequired
 	}
-	return s.retargeter.RetargetWorkspace(ctx, SessionWorkspaceRetargetInvocation{
-		OperationID: req.OperationID,
-		Request: metadata.SessionWorkspaceRetargetRequest{
-			SessionID:     req.SessionID,
-			WorkspaceRoot: req.WorkspaceRoot,
-			ProjectID:     req.ProjectID,
-		},
-		Origin:         req.Origin,
-		CompletionMode: req.CompletionMode,
-	})
+	retargetRequest := metadata.SessionWorkspaceRetargetRequest{
+		SessionID:     req.SessionID,
+		WorkspaceRoot: req.WorkspaceRoot,
+		ProjectID:     req.ProjectID,
+	}
+	if req.Origin != nil {
+		acknowledgement, err := s.retargeter.ScheduleWorkspaceRetarget(
+			ctx,
+			retargetRequest,
+			*req.Origin,
+			serverapi.NewWorktreeOperationID(),
+		)
+		if err != nil {
+			return serverapi.SessionRetargetWorkspaceResponse{}, err
+		}
+		return serverapi.SessionRetargetWorkspaceResponse{Scheduled: &acknowledgement}, nil
+	}
+	result, err := s.retargeter.RetargetWorkspace(ctx, retargetRequest)
+	if err != nil {
+		return serverapi.SessionRetargetWorkspaceResponse{}, err
+	}
+	binding := result.Binding
+	bindingResponse := serverapi.ProjectBinding{
+		ProjectID:       binding.ProjectID,
+		ProjectKey:      binding.ProjectKey,
+		ProjectName:     binding.ProjectName,
+		WorkspaceID:     binding.WorkspaceID,
+		CanonicalRoot:   binding.CanonicalRoot,
+		WorkspaceName:   binding.WorkspaceName,
+		WorkspaceStatus: binding.WorkspaceStatus,
+	}
+	return serverapi.SessionRetargetWorkspaceResponse{
+		Binding:                 &bindingResponse,
+		WorkspaceBindingCreated: result.WorkspaceBindingCreated,
+	}, nil
 }
 
 func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {

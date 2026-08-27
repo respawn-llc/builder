@@ -136,10 +136,8 @@
 ## Sessions, Location, And Transcript Bounds
 
 - Sessions can stop and resume. The persistence root is configurable and defaults to `~/.kent`; their durable location model is Project, Workspace, then Worktree.
-- Moving a Session to a Workspace in another Project while an Agent Step is active is accepted without waiting for that step to finish.
-- An accepted cross-Project move applies at the next between-step boundary before queued user work.
-- At the cross-Project boundary, Kent applies the target Project, Workspace, Working Directory, tool-access boundary, and reminder to the existing Active Session Runtime. The active agent loop continues with its next model request in the target Project and Working Directory. The Runtime does not retain learned Workspace access from the source Project.
-- A cross-Project rebind does not retire or replace the Active Session Runtime.
+- Moving a Session to a Workspace in another Project is accepted only while its RuntimeActivity is idle or it has no Active Session Runtime. Every other live state rejects the move immediately without waiting for current work.
+- An accepted cross-Project move retires an idle Active Session Runtime before moving the Session. Opening the Session in the destination Project creates a fresh learned-Workspace cache.
 - Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself, or when the Question-history command performs its explicitly requested backward history read.
 - Transcript access for active and dormant Sessions is limited to the requested bounded page or recent tail plus live streaming output. Model context retains only the bounded active segment established by compaction, never the full transcript.
 - `server_host` and `server_port` explicitly select the daemon address; Kent binds exactly that address and fails startup if it is occupied. Local same-machine optimization is additive and cannot override either explicit setting.
@@ -269,28 +267,12 @@ OpenAI-family request identity, ChatGPT Codex routing, and provider turn state a
 - Worktree controls are available from every client. List and status are reads. Creation and deletion that do not switch the calling Session execute immediately.
 - Entering, leaving, or deleting a worktree when it switches the calling Session is scheduled for the next between-step idle point before queued user work. The command returns an accepted result without waiting for the current step. If no model step is active, the transition may apply immediately but retains its scheduled reminder behavior. At most one such transition can be pending per Exact Execution Scope; a matching retry returns the original result and a different transition is rejected.
 - Later failure does not alter the accepted worktree command result; attached clients receive completion or failure, and the affected Session receives a failure notice when it can accept one. A successful target change becomes authoritative only when its ordinary worktree reminder arrives. Pending transitions are lost on restart rather than resumed.
-- An accepted Session rebind applies between Agent Steps before queued user work. It does not interrupt an active Agent Step.
-- If no Agent Step is active, Session rebind may apply immediately while preserving the same reminder lifecycle.
-- A Session rebind sets the Working Directory to the target workspace root.
-- Existing Session-owned background commands continue in the directories where they started. Commands started after the move use the new Working Directory.
-- A Session rebind either applies its Project, workspace, artifact-location, and Working Directory changes together or leaves all previous values unchanged.
-- A successful Session rebind commits its required durable reminder with the location change. Failure to validate or persist the reminder leaves the previous location and previous reminder unchanged.
-- After a successful rebind during an active agent loop, that loop continues without new user input and includes the rebind reminder in its next model request.
-- After a rebind apply failure during an active agent loop, that loop continues against the unchanged Project and Working Directory.
-- Kent does not promise ordering, conflict rejection, replacement, retry, or supersession behavior for overlapping Session rebinds. Each rebind applies atomically on a best-effort basis and publishes only its ordinary outcome.
-- A successful cross-Project rebind tells the model that the Session moved from the source Project to the target Project. A successful same-Project rebind tells the model that the Session moved to another workspace in the same Project.
-- A successful rebind creates a model reminder when the Working Directory changes.
-- A Project change creates a model reminder when the Working Directory path stays the same.
-- A rebind that changes neither the Project nor the Working Directory creates no model reminder.
-- When the Working Directory changes, the reminder tells the model that it changed to the new Working Directory starting with that message.
-- A same-Workspace rebind that changes only the Working Directory uses the ordinary same-Project wording that the Session moved to another workspace.
-- Except when server shutdown cancels the operation, attached clients receive the final success or failure for each accepted rebind.
-- A later rebind failure preserves the accepted result, and the affected Session receives a model-visible failure notice when it can accept one.
-- A model-visible rebind failure preserves the authoritative reason and states that the Project and Working Directory did not change.
-- An unapplied rebind has no product timeout. Kent loses it on server shutdown or restart instead of resuming it.
-- A rebind canceled by server shutdown produces no terminal outcome.
-- An applied Session location and an unconsumed successful rebind reminder remain durable.
-- A no-op rebind publishes an immediate completed outcome without pending work or a model reminder.
+- When the active agent invokes rebind for its own Session, Kent accepts the move only for that Exact Execution Scope and applies it at the next between-Agent-Step boundary before queued user work.
+- Human and startup rebinds remain synchronous.
+- A self-agent rebind ignores Session-owned background commands. Existing commands continue in the directories where they started, and commands started after the move use the new Working Directory.
+- A Session rebind sets the Working Directory to the target Workspace root.
+- A Session rebind either applies its Project, Workspace, artifact location, Working Directory, and successful reminder together or leaves the previous location unchanged.
+- A successful self-agent rebind or its authoritative failure notice is included in the next naturally occurring model step. Rebind does not start a model step.
 - Resuming a Session reapplies its recorded subagent role, including a role that is no longer available in the catalog. If no role was recorded, explicit continuation does not block. After the Session Contract is locked, a later role selection does not replace the retained role.
 
 ## Provider Stream Completion
