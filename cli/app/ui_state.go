@@ -89,6 +89,10 @@ type uiInputFeatureState struct {
 	compactionMode            string
 	compactionCount           int
 	modelContractLocked       bool
+	reviewerEnabled           bool
+	reviewerMode              string
+	autoCompactionEnabled     bool
+	questionsEnabled          bool
 	spinnerFrame              int
 	spinnerClock              frameAnimationClock
 	spinnerTickDue            time.Time

@@ -59,6 +59,21 @@ func (m *uiModel) runtimeMainView() clientui.RuntimeMainView {
 	}
 }
 
+func (m *uiModel) initialRuntimeMainView() (clientui.RuntimeMainView, bool) {
+	if m == nil {
+		return clientui.RuntimeMainView{}, false
+	}
+	if client := m.runtimeClient(); client != nil {
+		if cached, ok := client.(interface {
+			CachedMainView() (clientui.RuntimeMainView, bool)
+		}); ok {
+			return cached.CachedMainView()
+		}
+		return m.runtimeMainView(), true
+	}
+	return m.runtimeMainView(), true
+}
+
 func (m *uiModel) cachedRuntimeMainView() clientui.RuntimeMainView {
 	client := m.runtimeClient()
 	if cached, ok := client.(interface {
@@ -78,7 +93,17 @@ func (m *uiModel) cachedRuntimeStatus() clientui.RuntimeStatus {
 	view := m.cachedRuntimeMainView()
 	status := view.Status
 	if m.runtimeContextUsageAppliesTo(view.Session.SessionID) {
-		status.ContextUsage = m.runtimeContextUsage
+		usage := m.runtimeContextUsage
+		status.ContextUsage.UsedTokens = usage.UsedTokens
+		status.ContextUsage.WindowTokens = usage.WindowTokens
+		if usage.HasAutomaticThreshold {
+			status.ContextUsage.AutomaticThresholdTokens = usage.AutomaticThresholdTokens
+			status.ContextUsage.HasAutomaticThreshold = true
+		}
+		if usage.HasCacheHitPercentage {
+			status.ContextUsage.CacheHitPercent = usage.CacheHitPercent
+			status.ContextUsage.HasCacheHitPercentage = true
+		}
 	}
 	return status
 }
