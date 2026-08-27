@@ -464,7 +464,15 @@ func (m *projectWorkspacePickerModel) startPageRequest(offset int, direction pro
 }
 
 func (m *projectWorkspacePickerModel) startPageRequestWithIntent(offset int, direction projectWorkspacePickerPageDirection, crossing bool, pageMove bool, visibleDistance int) tea.Cmd {
-	request, ok := m.begin(direction, offset, crossing, pageMove, visibleDistance, 0)
+	request, ok := m.begin(
+		direction,
+		offset,
+		m.pageBoundary(direction),
+		crossing,
+		pageMove,
+		visibleDistance,
+		0,
+	)
 	if !ok {
 		return nil
 	}
@@ -494,6 +502,10 @@ func (m *projectWorkspacePickerModel) applyPageLoaded(message projectWorkspacePi
 		return nil
 	}
 	request := *active
+	if request.direction != projectWorkspacePickerPageInitial && !m.pageBoundaryMatches(request) {
+		m.completeStalePage(request)
+		return nil
+	}
 	if message.err != nil {
 		m.failPage(request, sessionPickerFailurePageRequest, message.err)
 		return nil
@@ -604,6 +616,81 @@ func (m *projectWorkspacePickerModel) applyPageLoaded(message projectWorkspacePi
 		m.ensureCursorVisible()
 	}
 	return nil
+}
+
+func (m *projectWorkspacePickerModel) pageBoundary(direction projectWorkspacePickerPageDirection) *startupPickerPageBoundary {
+	if len(m.segments) == 0 {
+		return nil
+	}
+	switch direction {
+	case projectWorkspacePickerPagePrevious:
+		first := m.segments[0]
+		if len(first.workspaces) == 0 {
+			return nil
+		}
+		return &startupPickerPageBoundary{
+			generation: first.generation,
+			offset:     first.offset,
+			index:      0,
+		}
+	case projectWorkspacePickerPageNext:
+		last := m.segments[len(m.segments)-1]
+		if len(last.workspaces) == 0 {
+			return nil
+		}
+		return &startupPickerPageBoundary{
+			generation: last.generation,
+			offset:     last.offset,
+			index:      len(last.workspaces) - 1,
+		}
+	default:
+		return nil
+	}
+}
+
+func (m *projectWorkspacePickerModel) pageBoundaryMatches(request projectWorkspacePickerPageRequest) bool {
+	boundary := request.boundary
+	if boundary == nil || len(m.segments) == 0 {
+		return false
+	}
+	switch request.direction {
+	case projectWorkspacePickerPagePrevious:
+		first := m.segments[0]
+		if len(first.workspaces) == 0 ||
+			boundary.generation != first.generation ||
+			boundary.offset != first.offset ||
+			boundary.index != 0 ||
+			first.offset == 0 {
+			return false
+		}
+		expectedOffset := first.offset - projectWorkspacePickerPageSize
+		if expectedOffset < 0 {
+			expectedOffset = 0
+		}
+		return request.offset == expectedOffset
+	case projectWorkspacePickerPageNext:
+		last := m.segments[len(m.segments)-1]
+		if len(last.workspaces) == 0 ||
+			boundary.generation != last.generation ||
+			boundary.offset != last.offset ||
+			boundary.index != len(last.workspaces)-1 ||
+			last.nextOffset == nil {
+			return false
+		}
+		return request.offset == int(*last.nextOffset)
+	default:
+		return false
+	}
+}
+
+func (m *projectWorkspacePickerModel) completeStalePage(request projectWorkspacePickerPageRequest) {
+	if !m.complete(request) {
+		return
+	}
+	edge := m.edge(request.direction)
+	edge.state = projectWorkspacePickerEdgeUnknown
+	m.syncBoundaryEdges()
+	m.phase, m.failure = m.edgeFailurePhase(), nil
 }
 
 func (m *projectWorkspacePickerModel) syncBoundaryEdges() {

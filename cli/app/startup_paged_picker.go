@@ -14,10 +14,17 @@ type startupPickerPageRequest struct {
 	generation      uint64
 	offset          int
 	direction       startupPickerPageDirection
+	boundary        *startupPickerPageBoundary
 	crossing        bool
 	pageMove        bool
 	visibleDistance int
 	move            int
+}
+
+type startupPickerPageBoundary struct {
+	generation uint64
+	offset     int
+	index      int
 }
 
 type startupPickerEdgeState uint8
@@ -84,6 +91,7 @@ func (w *startupPickerPageWindow[P]) reset() {
 func (w *startupPickerPageWindow[P]) begin(
 	direction startupPickerPageDirection,
 	offset int,
+	boundary *startupPickerPageBoundary,
 	crossing bool,
 	pageMove bool,
 	visibleDistance int,
@@ -97,6 +105,7 @@ func (w *startupPickerPageWindow[P]) begin(
 		generation:      w.generation,
 		offset:          offset,
 		direction:       direction,
+		boundary:        boundary,
 		crossing:        crossing,
 		pageMove:        pageMove,
 		visibleDistance: visibleDistance,
@@ -127,7 +136,15 @@ func (w *startupPickerPageWindow[P]) retry(
 	if visibleDistance < 1 {
 		visibleDistance = edge.failedRequest.visibleDistance
 	}
-	return w.begin(direction, edge.failedRequest.offset, crossing, pageMove, visibleDistance, edge.failedRequest.move)
+	return w.begin(
+		direction,
+		edge.failedRequest.offset,
+		edge.failedRequest.boundary,
+		crossing,
+		pageMove,
+		visibleDistance,
+		edge.failedRequest.move,
+	)
 }
 
 func (w *startupPickerPageWindow[P]) requestFor(direction startupPickerPageDirection) *startupPickerPageRequest {

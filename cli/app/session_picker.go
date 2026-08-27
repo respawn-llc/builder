@@ -426,7 +426,7 @@ func (m *sessionPickerModel) startDirectionalRequest(tab *sessionPickerTab, requ
 	if move < 0 {
 		direction = startupPickerPagePrevious
 	}
-	request, ok := tab.begin(direction, requestedOffset, false, false, 0, move)
+	request, ok := tab.begin(direction, requestedOffset, nil, false, false, 0, move)
 	if !ok {
 		return nil
 	}

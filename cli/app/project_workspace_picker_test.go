@@ -517,6 +517,123 @@ func TestProjectWorkspacePickerAllowsOppositeEdgeWhileOneEdgeLoads(t *testing.T)
 	}
 }
 
+func TestProjectWorkspacePickerRejectsOverlappingEdgeResults(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		blockOffset  int32
+		applyNext    bool
+		empty        bool
+		anchorOffset int
+		wantOffsets  []int
+	}{
+		{
+			name:         "previous completes first",
+			blockOffset:  150,
+			anchorOffset: 50,
+			wantOffsets:  []int{0, 50},
+			applyNext:    false,
+		},
+		{
+			name:         "previous completes first with stale empty next result",
+			blockOffset:  150,
+			anchorOffset: 50,
+			wantOffsets:  []int{0, 50},
+			applyNext:    false,
+			empty:        true,
+		},
+		{
+			name:         "next completes first",
+			blockOffset:  0,
+			anchorOffset: 100,
+			wantOffsets:  []int{100, 150},
+			applyNext:    true,
+		},
+		{
+			name:         "next completes first with stale empty previous result",
+			blockOffset:  0,
+			anchorOffset: 100,
+			wantOffsets:  []int{100, 150},
+			applyNext:    true,
+			empty:        true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := &workspacePickerLoader{
+				responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
+					0:   workspacePickerResponse("project-1", 0, projectWorkspacePickerPageSize, true),
+					50:  workspacePickerResponse("project-1", 50, projectWorkspacePickerPageSize, true),
+					100: workspacePickerResponse("project-1", 100, projectWorkspacePickerPageSize, true),
+					150: workspacePickerResponse("project-1", 150, 1, false),
+				},
+				errors: map[int32]error{},
+			}
+			model := newProjectWorkspacePickerModel(context.Background(), base, "project-1", "dark")
+			applyWorkspacePickerCommand(model, model.Init())
+			applyWorkspacePickerCommand(model, model.startPageRequest(50, projectWorkspacePickerPageNext))
+			model.selectIndex(50)
+			model.viewport = model.selected
+			model.offset = 50
+			page100Command := model.startPageRequest(100, projectWorkspacePickerPageNext)
+			applyWorkspacePickerCommand(model, page100Command)
+			model.selectIndex(test.anchorOffset - 50)
+			model.viewport = model.selected
+			model.offset = model.cursor
+			if test.empty {
+				base.responses[test.blockOffset] = workspacePickerResponse("project-1", test.blockOffset, 0, false)
+			}
+
+			loader := &delayedWorkspacePickerLoader{
+				base:        base,
+				blockOffset: test.blockOffset,
+				started:     make(chan struct{}),
+				release:     make(chan struct{}),
+			}
+			model.loader = loader
+
+			nextCommand := model.requestEdge(projectWorkspacePickerPageNext, false, false, 0)
+			previousCommand := model.requestEdge(projectWorkspacePickerPagePrevious, false, false, 0)
+			if previousCommand == nil {
+				t.Fatal("overlapping opposite-edge request was blocked")
+			}
+			if test.applyNext {
+				previousMessages := make(chan tea.Msg, 1)
+				go func() { previousMessages <- previousCommand() }()
+				<-loader.started
+				model.Update(nextCommand())
+				close(loader.release)
+				model.Update(<-previousMessages)
+			} else {
+				nextMessages := make(chan tea.Msg, 1)
+				go func() { nextMessages <- nextCommand() }()
+				<-loader.started
+				model.Update(previousCommand())
+				close(loader.release)
+				model.Update(<-nextMessages)
+			}
+
+			if len(model.segments) != len(test.wantOffsets) {
+				t.Fatalf("resident segments = %+v, want offsets %v", model.segments, test.wantOffsets)
+			}
+			for index, wantOffset := range test.wantOffsets {
+				if model.segments[index].offset != wantOffset {
+					t.Fatalf("resident offsets = %+v, want %v", model.segments, test.wantOffsets)
+				}
+			}
+			if model.nextEdge.state == projectWorkspacePickerEdgeLoading ||
+				model.previousEdge.state == projectWorkspacePickerEdgeLoading {
+				t.Fatalf("overlapping request remained loading: next=%+v previous=%+v",
+					model.nextEdge, model.previousEdge)
+			}
+			if test.applyNext && model.previousEdge.state == projectWorkspacePickerEdgeExhausted {
+				t.Fatalf("stale previous result changed the current edge authority: %+v", model.previousEdge)
+			}
+			if !test.applyNext && model.nextEdge.state == projectWorkspacePickerEdgeExhausted {
+				t.Fatalf("stale next result changed the current edge authority: %+v", model.nextEdge)
+			}
+		})
+	}
+}
+
 func TestProjectWorkspacePickerPageDownKeepsPreTransitionVisibleDistance(t *testing.T) {
 	loader := &workspacePickerLoader{
 		responses: map[int32]*projectpb.ListProjectWorkspacesSuccess{
