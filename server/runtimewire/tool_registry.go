@@ -37,6 +37,7 @@ type LocalToolRuntimeContext struct {
 	OwnerSessionID                  string
 	ExecutionCorrelation            *runtimeids.ExecutionCorrelation
 	ShellOutputMaxChars             int
+	ModelContextWindow              int
 	AllowNonCwdEdits                bool
 	SupportsVision                  bool
 	AskQuestionBroker               *askquestion.AskQuestionBroker
@@ -64,7 +65,7 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 		if ctx.BackgroundShellManager == nil {
 			return nil, fmt.Errorf("exec_command background manager is unavailable")
 		}
-		return shelltool.NewExecCommandToolWithConfig(workingDirectory, ctx.ShellOutputMaxChars, ctx.BackgroundShellManager, ctx.OwnerSessionID, shelltool.ExecCommandToolConfig{
+		return shelltool.NewExecCommandToolWithConfig(workingDirectory, ctx.ShellOutputMaxChars, ctx.ModelContextWindow, ctx.BackgroundShellManager, ctx.OwnerSessionID, shelltool.ExecCommandToolConfig{
 			Postprocessor:        ctx.ShellPostprocessor,
 			ExecutionCorrelation: ctx.ExecutionCorrelation,
 		}), nil
@@ -72,7 +73,7 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 		if ctx.BackgroundShellManager == nil {
 			return nil, fmt.Errorf("write_stdin background manager is unavailable")
 		}
-		return shelltool.NewWriteStdinTool(ctx.ShellOutputMaxChars, ctx.BackgroundShellManager), nil
+		return shelltool.NewWriteStdinTool(ctx.ShellOutputMaxChars, ctx.ModelContextWindow, ctx.BackgroundShellManager), nil
 	case tools.LocalRuntimeBuilderPatch:
 		if ctx.OutsideWorkspaceEditApprover == nil {
 			return nil, fmt.Errorf("patch outside-workspace approver is unavailable")
@@ -233,6 +234,7 @@ type LocalToolRegistryOptions struct {
 	Enabled                  []toolspec.ID
 	MinimumExecToBgTime      time.Duration
 	ShellOutputMaxChars      int
+	ModelContextWindow       int
 	AllowNonCwdEdits         bool
 	SupportsVision           bool
 	Logger                   Logger
@@ -247,6 +249,9 @@ type LocalToolRegistryOptions struct {
 func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegistryBinding, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
 	if err := validateFilesystemContext(opts.FilesystemContext); err != nil {
 		return nil, nil, nil, err
+	}
+	if enabledToolsContainShell(opts.Enabled) && opts.ModelContextWindow <= 0 {
+		return nil, nil, nil, errors.New("model context window is required for shell tools")
 	}
 	if opts.ExecutionCorrelation != nil {
 		if err := opts.ExecutionCorrelation.Validate(); err != nil {
@@ -286,6 +291,7 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 		OwnerSessionID:               opts.OwnerSessionID,
 		ExecutionCorrelation:         opts.ExecutionCorrelation,
 		ShellOutputMaxChars:          opts.ShellOutputMaxChars,
+		ModelContextWindow:           opts.ModelContextWindow,
 		AllowNonCwdEdits:             opts.AllowNonCwdEdits,
 		SupportsVision:               opts.SupportsVision,
 		AskQuestionBroker:            broker,
@@ -461,6 +467,15 @@ func trustedRootForPath(root string) (tools.FilesystemRoot, error) {
 func enabledToolsNeedEditDenyPolicy(enabled []toolspec.ID) bool {
 	for _, id := range enabled {
 		if id == toolspec.ToolPatch || id == toolspec.ToolEdit {
+			return true
+		}
+	}
+	return false
+}
+
+func enabledToolsContainShell(enabled []toolspec.ID) bool {
+	for _, id := range enabled {
+		if toolspec.IsShellTool(id) {
 			return true
 		}
 	}

@@ -18,7 +18,7 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 		return true
 	})
 
-	result := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, manager, ""), execID, map[string]any{
+	result := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, 200_000, manager, ""), execID, map[string]any{
 		"cmd":           command,
 		"shell":         "/bin/sh",
 		"login":         false,
@@ -28,7 +28,7 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
 	}
 
-	pollResult := callWriteStdin(t, NewWriteStdinTool(16_000, manager), pollID, map[string]any{
+	pollResult := callWriteStdin(t, NewWriteStdinTool(16_000, 200_000, manager), pollID, map[string]any{
 		"session_id":    1000,
 		"yield_time_ms": pollYieldMS,
 	})
@@ -124,7 +124,7 @@ func TestSharedManagerWriteStdinHarvestLeavesProcessOwnerNoticeUnsuppressed(t *t
 func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newShellTestManager(t, 50*time.Millisecond)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 	terminalHandlerStarted := make(chan struct{})
 	releaseTerminalHandler := make(chan struct{})
 	events := make(chan Event, 1)
@@ -192,7 +192,7 @@ func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 		events <- evt
 		return true
 	})
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	execTool := NewExecCommandTool(workspace, 16_000, 200_000, manager, "")
 
 	result := callExecCommand(t, execTool, "eof-1", map[string]any{
 		"cmd":           "if read line; then echo line:$line; else echo eof; fi",

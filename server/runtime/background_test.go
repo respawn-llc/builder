@@ -1,8 +1,11 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +17,100 @@ import (
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
+
+type blockingBackgroundStepLifecycle struct {
+	started chan struct{}
+	stopped chan error
+}
+
+func (s *blockingBackgroundStepLifecycle) Run(ctx context.Context, _ exclusiveStepOptions, _ func(stepCtx context.Context, stepID string) error) error {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	err := ctx.Err()
+	select {
+	case s.stopped <- err:
+	default:
+	}
+	return err
+}
+
+func (s *blockingBackgroundStepLifecycle) RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+	return s.Run(ctx, options, fn)
+}
+
+func (s *blockingBackgroundStepLifecycle) AcquireReservation(*exclusiveStepReservation) error {
+	return nil
+}
+func (s *blockingBackgroundStepLifecycle) ReleaseReservation(*exclusiveStepReservation) {}
+func (s *blockingBackgroundStepLifecycle) Interrupt() error                             { return nil }
+func (s *blockingBackgroundStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunSnapshot, error) {
+	return nil, nil
+}
+func (s *blockingBackgroundStepLifecycle) InterruptCurrentAgentTurn(func(*RunSnapshot)) (*RunSnapshot, error) {
+	return nil, nil
+}
+func (s *blockingBackgroundStepLifecycle) IsBusy() bool { return false }
+func (s *blockingBackgroundStepLifecycle) Snapshot() *RunSnapshot {
+	return nil
+}
+func (s *blockingBackgroundStepLifecycle) WithActiveStep(func(stepID string) error) (bool, error) {
+	return false, nil
+}
+func (s *blockingBackgroundStepLifecycle) ApplyForActiveStep(string, func() error) error {
+	return ErrActiveStepInactive
+}
+func (s *blockingBackgroundStepLifecycle) BeginAgentStepBoundary(context.Context) error {
+	return nil
+}
+func (s *blockingBackgroundStepLifecycle) CompleteAgentStepBoundary(context.Context) error {
+	return nil
+}
+func (s *blockingBackgroundStepLifecycle) DrainAgentStepBoundary(context.Context) error {
+	return nil
+}
+func (s *blockingBackgroundStepLifecycle) EndAgentStepBoundary() {}
+
+func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *testing.T) {
+	t.Parallel()
+	steps := &blockingBackgroundStepLifecycle{
+		started: make(chan struct{}, 1),
+		stopped: make(chan error, 1),
+	}
+	eng := &Engine{}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
+
+	scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("queued background notice")})
+
+	select {
+	case <-steps.started:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background continuation did not start")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		_ = eng.Close()
+		close(closeDone)
+	}()
+
+	select {
+	case err := <-steps.stopped:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("step lifecycle stopped with %v, want context canceled", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background continuation was not canceled on engine close")
+	}
+
+	select {
+	case <-closeDone:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("engine close did not wait for queued background continuation")
+	}
+}
 
 func TestSteerBackgroundContinuationFailureUsesDeveloperErrorFeedback(t *testing.T) {
 	store := mustCreateTestSession(t)
@@ -32,6 +129,94 @@ func TestSteerBackgroundContinuationFailureUsesDeveloperErrorFeedback(t *testing
 	mustBlockTestEventLogAppends(t, store)
 	if err := engine.SteerBackgroundContinuationFailure(errors.New("retry failed")); err == nil {
 		t.Fatal("background continuation failure steering swallowed persistence error")
+	}
+}
+
+func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	for i := 0; i < 200; i++ {
+		steps := &blockingBackgroundStepLifecycle{
+			started: make(chan struct{}, 1),
+			stopped: make(chan error, 1),
+		}
+		eng := &Engine{}
+		scheduler := &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
+		panicErrs := make(chan error, 4)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+
+		runSafe := func(fn func()) {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						panicErrs <- fmt.Errorf("panic: %v", recovered)
+					}
+				}()
+				<-start
+				fn()
+			}()
+		}
+
+		runSafe(func() {
+			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("queued background notice")})
+		})
+		runSafe(func() {
+			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("queued schedule-if-idle")})
+			scheduler.ScheduleIfIdle()
+		})
+		runSafe(func() {
+			_ = eng.Close()
+		})
+
+		close(start)
+		wg.Wait()
+		close(panicErrs)
+		for err := range panicErrs {
+			if err != nil {
+				t.Fatalf("iteration %d: %v", i, err)
+			}
+		}
+
+		select {
+		case err := <-steps.stopped:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("iteration %d: stopped with %v, want context canceled", i, err)
+			}
+		default:
+		}
+
+		closeDone := make(chan struct{})
+		go func() {
+			_ = eng.Close()
+			close(closeDone)
+		}()
+		select {
+		case <-closeDone:
+		case <-time.After(runtimeTestSynchronizationTimeout):
+			t.Fatalf("iteration %d: close remained blocked after race", i)
+		}
+	}
+}
+
+func TestBackgroundNoticeSchedulerPreservesNoticeWhenMetaContextPreparationFails(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	mustBlockTestEventLogAppends(t, store)
+	steps := &stubExclusiveStepLifecycle{busy: true}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+
+	scheduler.QueueDeveloperNotice(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Content: textutil.Value("queued background notice"),
+	})
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); err == nil {
+		t.Fatal("background notice preparation unexpectedly succeeded")
+	}
+	if !scheduler.HasPendingNotices() {
+		t.Fatal("background notice was lost after meta-context preparation failed")
 	}
 }
 
@@ -250,10 +435,11 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 
 			presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{ToolName: string(toolspec.ToolWriteStdin)})
 			receipt, _, err := engine.persistToolCompletionRaw("step", tools.Result{
-				CallID:       "write-stdin-call",
-				Name:         toolspec.ToolWriteStdin,
-				Output:       json.RawMessage(`{"background_session_id":42,"background_running":false,"backgrounded":true}`),
-				Presentation: &presentation,
+				CallID:                       "write-stdin-call",
+				Name:                         toolspec.ToolWriteStdin,
+				Output:                       json.RawMessage(`{"background_session_id":42,"background_running":false,"backgrounded":true}`),
+				Presentation:                 &presentation,
+				CompletedBackgroundSessionID: textutil.Value(42),
 			})
 			if receipt.Committed == tt.wantPending {
 				t.Fatalf("completion receipt = %+v, want committed=%t", receipt, !tt.wantPending)
@@ -266,6 +452,62 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 			}
 			if got := scheduler.HasPendingNotices(); got != tt.wantPending {
 				t.Fatalf("pending notice after completion = %t, want %t", got, tt.wantPending)
+			}
+		})
+	}
+}
+
+func TestInvalidWriteStdinCompletionProvenanceFailsWithoutPersistence(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		debug bool
+	}{
+		{name: "production", debug: false},
+		{name: "debug", debug: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+				Model: "gpt-5",
+				Debug: test.debug,
+			})
+			presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{ToolName: string(toolspec.ToolWriteStdin)})
+
+			persist := func() (session.CommitReceipt, error) {
+				receipt, _, err := engine.persistToolCompletionRaw("step", tools.Result{
+					CallID:                       "write-stdin-call",
+					Name:                         toolspec.ToolWriteStdin,
+					Output:                       json.RawMessage(`{"error":"invalid completion"}`),
+					IsError:                      true,
+					Presentation:                 &presentation,
+					CompletedBackgroundSessionID: textutil.Value(0),
+				})
+				return receipt, err
+			}
+
+			if test.debug {
+				defer func() {
+					recovered := recover()
+					var provenanceErr invalidBackgroundCompletionProvenanceError
+					panicErr, ok := recovered.(error)
+					if !ok || !errors.As(panicErr, &provenanceErr) {
+						t.Fatalf("debug invalid completion panic = %v, want typed provenance error", recovered)
+					}
+				}()
+				_, _ = persist()
+				t.Fatal("debug invalid completion did not panic")
+			}
+
+			receipt, err := persist()
+			if receipt.Committed {
+				t.Fatal("invalid completion provenance was persisted")
+			}
+			var provenanceErr invalidBackgroundCompletionProvenanceError
+			if !errors.As(err, &provenanceErr) {
+				t.Fatalf("persist invalid completion error = %v, want typed provenance error", err)
+			}
+			if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("write-stdin-call"); found {
+				t.Fatal("invalid completion provenance was applied to runtime state")
 			}
 		})
 	}

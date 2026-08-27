@@ -210,31 +210,34 @@ func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
 
 func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
+	if err := fixture.store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5", ContextWindow: 20, ContextPercent: 95}); err != nil {
+		t.Fatalf("lock Session context window: %v", err)
+	}
 	calls := 0
 	factory := runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
 		calls++
 		if req.Purpose != runtimewire.RuntimeClientPurposeMain {
 			t.Fatalf("factory purpose = %v, want main", req.Purpose)
 		}
+		if req.ActiveSettings.ModelContextWindow != 20 {
+			t.Fatalf("factory context window = %d, want locked Session window 20", req.ActiveSettings.ModelContextWindow)
+		}
 		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
 	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{RuntimeClientFactory: factory})
-
+	settings := config.DefaultOnboardingSettings()
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 40
+	settings.CompactionMode = config.CompactionModeNative
+	settings.Reviewer.Frequency = "off"
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		SessionID:             fixture.store.Meta().SessionID,
 		OwnerID:               "owner",
 		QuestionsEnabled:      textutil.Value(true),
 		AutoCompactionEnabled: textutil.Value(true),
-		ActiveSettings: config.Settings{
-			Model:              "gpt-5",
-			ThinkingLevel:      "medium",
-			ModelContextWindow: 200000,
-			Reviewer:           config.ReviewerSettings{Frequency: "off"},
-			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
-			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
-		},
-		EnabledToolIDs: []string{string(toolspec.ToolExecCommand)},
-		Source:         config.SourceReport{Sources: map[string]string{}},
+		ActiveSettings:        settings,
+		EnabledToolIDs:        []string{string(toolspec.ToolExecCommand)},
+		Source:                config.SourceReport{Sources: map[string]string{}},
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)

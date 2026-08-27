@@ -79,7 +79,7 @@ func newProcessViewFixture(t *testing.T) processViewFixture {
 	t.Cleanup(func() { _ = manager.Close() })
 
 	workspace := t.TempDir()
-	tool := shelltool.NewExecCommandTool(workspace, 16_000, manager, "session-1")
+	tool := shelltool.NewExecCommandTool(workspace, 16_000, 200_000, manager, "session-1")
 	return processViewFixture{manager: manager, tool: tool, service: NewProcessViewService(manager)}
 }
 

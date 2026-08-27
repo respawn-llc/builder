@@ -41,7 +41,10 @@ type appliedFinalizedToolCompletion struct {
 func (e *Engine) prepareFinalizedToolCompletion(
 	completion finalizedToolCompletion,
 ) (preparedFinalizedToolCompletion, error) {
-	stored, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(completion.Result)
+	stored, backgroundSessionID, hasBackgroundSession, err := e.prepareStoredToolCompletion(completion.Result)
+	if err != nil {
+		return preparedFinalizedToolCompletion{}, err
+	}
 	completionRecord, err := sessionToolCompletionRecordFromStored(stored)
 	if err != nil {
 		return preparedFinalizedToolCompletion{}, fmt.Errorf("adapt tool completion record: %w", err)
@@ -165,7 +168,7 @@ func (e *Engine) persistFinalizedToolCompletionRaw(
 
 func (e *Engine) prepareStoredToolCompletion(
 	r tools.Result,
-) (storedToolCompletion, string, bool) {
+) (storedToolCompletion, string, bool, error) {
 	if r.PresentationDelta != nil {
 		panic(fmt.Sprintf(
 			"tool result presentation invariant violated: unconsumed presentation delta reached persistence (call_id=%q tool=%q)",
@@ -180,7 +183,13 @@ func (e *Engine) prepareStoredToolCompletion(
 			r.Name,
 		))
 	}
-	backgroundSessionID, hasBackgroundSession := harvestedBackgroundCompletionSessionID(r)
+	backgroundSessionID, hasBackgroundSession, err := harvestedBackgroundCompletionSessionID(r)
+	if err != nil {
+		if e.cfg.Debug {
+			panic(err)
+		}
+		return storedToolCompletion{}, "", false, err
+	}
 	payload := storedToolCompletion{
 		CallID:         r.CallID,
 		Name:           string(r.Name),
@@ -192,7 +201,7 @@ func (e *Engine) prepareStoredToolCompletion(
 		ProviderItems:  e.providerItemsForToolCompletion(r),
 		QuestionAnswer: r.QuestionAnswer,
 	}
-	return payload, backgroundSessionID, hasBackgroundSession
+	return payload, backgroundSessionID, hasBackgroundSession, nil
 }
 
 func (e *Engine) applyCommittedStoredToolCompletion(

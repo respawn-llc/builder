@@ -2,9 +2,9 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -327,24 +327,27 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 	}
 }
 
-type harvestedBackgroundCompletion struct {
-	SessionID  int  `json:"background_session_id"`
-	Running    bool `json:"background_running"`
-	Background bool `json:"backgrounded"`
+type invalidBackgroundCompletionProvenanceError struct {
+	SessionID int
 }
 
-func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
-	if res.IsError || res.Name != toolspec.ToolWriteStdin {
-		return "", false
+func (e invalidBackgroundCompletionProvenanceError) Error() string {
+	return fmt.Sprintf(
+		"write_stdin completion provenance has invalid session ID %d",
+		e.SessionID,
+	)
+}
+
+func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool, error) {
+	if res.Name != toolspec.ToolWriteStdin || res.CompletedBackgroundSessionID == nil {
+		return "", false, nil
 	}
-	var out harvestedBackgroundCompletion
-	if err := json.Unmarshal(res.Output, &out); err != nil {
-		return "", false
+	if *res.CompletedBackgroundSessionID <= 0 {
+		return "", false, invalidBackgroundCompletionProvenanceError{
+			SessionID: *res.CompletedBackgroundSessionID,
+		}
 	}
-	if out.SessionID <= 0 || out.Running || !out.Background {
-		return "", false
-	}
-	return fmt.Sprintf("%d", out.SessionID), true
+	return strconv.Itoa(*res.CompletedBackgroundSessionID), true, nil
 }
 
 func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) *resultGroupFatal {

@@ -152,7 +152,7 @@ func compactionOverflowRepairToolID(item llm.ResponseItem, callTools map[string]
 }
 
 func isCompactionOverflowRepairShellOutputTool(toolID toolspec.ID) bool {
-	return toolID == toolspec.ToolExecCommand || toolID == toolspec.ToolWriteStdin
+	return toolspec.IsShellTool(toolID)
 }
 
 func collapsedCompactionOverflowShellOutput(output json.RawMessage) (json.RawMessage, int) {
