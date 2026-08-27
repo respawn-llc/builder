@@ -323,9 +323,9 @@
 - After reconnection, Desktop reissues the current-target and open Worktree-list reads.
 - Desktop does not reconstruct, retain, or retry a pending Worktree target change that the server lost during shutdown or restart.
 - Reconnection shows no speculative warning for an absent pending Worktree operation. Mutation admission remains authoritative if the operator acts on a stale Worktree projection.
-- If connection loss interrupts creation or setup, Desktop does not retry the Create request or keep waiting for its old result.
-- After reconnection, an open Worktree surface returns to its list and performs another server-owned read. A worktree retained by the interrupted operation appears when a read or update observes it.
-- Desktop performs the automatic Switch only after it receives a successful Create result. An interrupted Create request does not infer success from list topology.
+- If connection loss ends Desktop's observation of creation or setup, the server operation continues independently. Desktop does not retry the Create request or keep waiting for its old result.
+- After reconnection, an open Worktree surface returns to its list and performs another server-owned read. The completed or still-running server operation is reflected only through server-owned reads and updates.
+- Desktop performs the automatic Switch only after it receives a successful Create result. A Create whose result was not observed does not infer success from list topology.
 - The list contains the server's complete worktree topology in authoritative order without pagination.
 - The current target row uses the shared UI kit's established selected-list-row treatment. Desktop adds no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.
@@ -399,7 +399,7 @@
 - Every Base-ref validation or operational error appears beneath the `Base ref` field in error-colored plain text.
 - Desktop uses typed error ownership to distinguish a Base-ref error from another creation failure. It never parses diagnostic text to choose error placement.
 - An empty Base ref sends no creation request and shows `Base ref is required`.
-- The creation state has no custom filesystem-path field. Kent uses the configured worktree base directory.
+- The creation state has no custom filesystem-path field. Kent uses the Worktree Base Dir.
 - The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
 - While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
 - Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.

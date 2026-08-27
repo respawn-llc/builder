@@ -11,7 +11,7 @@ import (
 var ErrScriptedRuntime = scriptedllm.ErrScriptExhausted
 
 type ScriptedRuntimeStep = scriptedllm.Step
-type ScriptedClient = scriptedllm.LegacyClient
+type ScriptedClient = scriptedllm.Client
 
 type compactingScriptedClient struct {
 	base        *ScriptedClient
@@ -31,8 +31,8 @@ func NewCompactingScriptedClient(
 	}
 }
 
-func (c *compactingScriptedClient) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
-	return c.base.Generate(ctx, request)
+func (c *compactingScriptedClient) Generate(ctx context.Context, request llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
+	return c.base.Generate(ctx, request, callbacks)
 }
 
 func (c *compactingScriptedClient) ProviderCapabilities(ctx context.Context) (llm.ProviderCapabilities, error) {
@@ -71,11 +71,12 @@ func (c *compactingScriptedClient) CompactionCalls() []llm.CompactionRequest {
 }
 
 func NewScriptedClient(caps llm.ProviderCapabilities, steps ...ScriptedRuntimeStep) *ScriptedClient {
-	return scriptedllm.NewLegacyOnlyClient(caps, steps...)
+	return scriptedllm.NewClient(scriptedllm.Script{Capabilities: &caps, Steps: steps})
 }
 
 func NewDefaultScriptedClient(steps ...ScriptedRuntimeStep) *ScriptedClient {
-	return scriptedllm.NewLegacyOnlyClient(scriptedllm.DefaultProviderCapabilities(), steps...)
+	caps := scriptedllm.DefaultProviderCapabilities()
+	return scriptedllm.NewClient(scriptedllm.Script{Capabilities: &caps, Steps: steps})
 }
 
 func ScriptedFinalAnswer(content string) ScriptedRuntimeStep {

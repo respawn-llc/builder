@@ -80,7 +80,7 @@ func newLiveWatchBlockingClient() *liveWatchBlockingClient {
 	return &liveWatchBlockingClient{started: make(chan struct{})}
 }
 
-func (c *liveWatchBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *liveWatchBlockingClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	<-ctx.Done()
 	return llm.Response{}, context.Cause(ctx)
@@ -103,7 +103,7 @@ func newLiveWatchReleasableFinalClient() *liveWatchReleasableFinalClient {
 	}
 }
 
-func (c *liveWatchReleasableFinalClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *liveWatchReleasableFinalClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	select {
 	case <-c.release:

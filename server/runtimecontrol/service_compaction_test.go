@@ -62,7 +62,7 @@ func newBoundaryCompactionRuntimeControlClient() *boundaryCompactionRuntimeContr
 	}
 }
 
-func (c *boundaryCompactionRuntimeControlClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *boundaryCompactionRuntimeControlClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.generateCalls++
 	call := c.generateCalls

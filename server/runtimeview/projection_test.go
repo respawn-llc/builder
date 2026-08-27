@@ -29,7 +29,7 @@ const (
 
 type projectionFastClient struct{}
 
-func (projectionFastClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (projectionFastClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, errors.New("not implemented")
 }
 
@@ -39,7 +39,7 @@ func (projectionFastClient) ProviderCapabilities(context.Context) (llm.ProviderC
 
 type projectionUnavailableFastClient struct{}
 
-func (projectionUnavailableFastClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (projectionUnavailableFastClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, errors.New("not implemented")
 }
 
@@ -56,7 +56,7 @@ func newProjectionBlockingClient() *projectionBlockingClient {
 	return &projectionBlockingClient{started: make(chan struct{}), release: make(chan struct{})}
 }
 
-func (c *projectionBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *projectionBlockingClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	select {
 	case <-c.started:
 	default:
@@ -76,7 +76,7 @@ func (c *projectionBlockingClient) ProviderCapabilities(context.Context) (llm.Pr
 
 type projectionUsageClient struct{}
 
-func (projectionUsageClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (projectionUsageClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{InputTokens: 900, OutputTokens: 100, WindowTokens: 400_000},

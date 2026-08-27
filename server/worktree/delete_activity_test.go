@@ -39,7 +39,7 @@ func (l *deleteInFlightStartLifecycle) ResourceDraining(context.Context, session
 
 type deleteActivityTestLLMClient struct{}
 
-func (deleteActivityTestLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (deleteActivityTestLLMClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 

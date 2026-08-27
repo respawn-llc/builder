@@ -4,7 +4,7 @@
 
 - Kent does not virtualize or sandbox command execution. Isolation requires running Kent on a remote machine or in Docker.
 - The server is the single authority for tool calls, session and other durable data, agent execution, and provider communication. CLI and GUI clients control and observe that authority; they do not own parallel local state or execution.
-- Client connection changes are transport-only. They never change server work, and server event publication never depends on subscriber count.
+- Client presence and connection lifecycle are transport-only and are never server-work authority. Connecting, disconnecting, canceling or closing a client request, reconnecting, changing subscriber count, navigating away, or closing a UI may stop that client's observation or delivery only; it never starts, stops, pauses, cancels, retries, replays, duplicates, authorizes, or otherwise changes server-owned work. Server event publication never depends on subscriber count.
 - A completed live execution has one server-authoritative terminal result: status, result kind, reason that no final answer exists, final assistant message, runtime error, timestamps, and whether work was performed. Work was performed when a completed step observed at least two tool-start events, including events emitted during recovery.
 - Terminal-result delivery is best-effort and never delays execution completion, waiting callers, queued work, interruption, or successor scheduling.
 - Each controlling TUI may run its configured read-only lifecycle command after it accepts a lifecycle event. Desktop, headless, subagent, and server-only use never run it. The server neither supplies nor overrides the command.
@@ -16,7 +16,7 @@
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
 - A failure to clear PendingModelRecovery remains live operational feedback. TUI and Desktop surface it through their typed operational-diagnostic or status-notice owner; it is neither persisted nor projected as committed transcript history.
 - The server owns exact Session-resource admission, Runtime Command ordering, dormant Goal commands, domain-operation ordering, idempotency, server work queues, execution lifecycle, reconciliation, and persistence disposition.
-- Transport preserves request identity for request/response correlation. Transport may sequence connection setup, bound concurrent handling of requests on one client connection, apply socket backpressure, correlate and write responses, and cancel and drain connection-bound request handling when that connection closes. These connection mechanics never order domain operations, retain server work after request handling, or decide idempotency, execution, reconciliation, or persistence outcomes.
+- Transport preserves request identity for request/response correlation. Transport may sequence connection setup, bound concurrent handling of requests on one client connection, apply socket backpressure, correlate and write responses, and stop connection-bound waiting and delivery when that connection closes. Transport teardown never cancels or drains the underlying server operation. Connection mechanics never order domain operations or decide their lifetime, idempotency, execution, reconciliation, or persistence outcomes.
 
 ## Skills And Generated Assets
 
@@ -76,7 +76,7 @@
 - `patch`, `edit`, and `view_image` allow targets under the operating system's temporary roots and their canonical platform aliases without approval; Kent recognizes aliases such as `/tmp` and `/private/tmp` and `/var/tmp` and `/private/var/tmp` where those paths exist. The temporary-root allowance does not establish an attached Workspace, override path-deny rules, or permit direct edits to another Kent-managed Worktree. The default for `allow_non_cwd_edits` is `false`. A denied edit returns an explicit error telling the model not to circumvent the decision and to request manual user edits when essential.
 - Metadata contention keeps the file operation pending instead of producing a busy or locked failure. An unavailable metadata store terminates Kent immediately in debug and production.
 - An edit that targets another Kent-managed Worktree is forbidden even when that Worktree belongs to a Workspace attached to the same Project.
-- `patch` and `edit` deny every target under the global `worktrees.base_dir` loaded at server startup unless the target is inside the Session's current Worktree. This denial applies to a sibling Worktree created after the Session starts, and it occurs before any outside-Workspace approval.
+- `patch` and `edit` deny every target under the Worktree Base Dir loaded at server startup unless the target is inside the Session's current Worktree. This denial applies to a sibling Worktree created after the Session starts, and it occurs before any outside-Workspace approval.
 - `view_image` resolves absolute canonical paths before checking access. Workspace checks happen after symlink resolution, so symlink escapes outside the Session's Execution Target Root and learned attached Workspace roots remain outside the trusted boundary until the authoritative Project check succeeds. Image reads use the same Project boundary and approval policy as edits.
 - Approved outside-workspace image reads appear in run logs with the requested and resolved paths.
 - `view_image` opens and reads each local file in an isolated worker. Kent terminates the worker and returns a recoverable tool error when opening or reading takes longer than 10 seconds or the Agent Step is interrupted.
@@ -87,6 +87,13 @@
 
 - Kent truncates large tool output for model context with standardized head/tail content and truncation metadata. The threshold is configurable and applies after command post-processing.
 - Foreground shell output is evaluated after sanitization, post-processing, warnings, truncation, and presentation trimming. Whitespace-only content is no output.
+- Each `shell` and `write_stdin` call independently applies the oversized-output guard after its existing output processing and ordinary truncation. The guard carries no state between calls.
+- The oversized-output threshold is half of the active Session's established context window.
+- The oversized-output guard is eligible only when the current call explicitly requests `max_output_tokens` above the threshold.
+- For an eligible call, Kent applies its standard token estimate to the final model-visible result. When that estimate exceeds the threshold, Kent omits all command output and returns a failed tool result.
+- An oversized-output failure must say `Command was executed but the output you requested exceeded 0.5 of your memory size. It was forcibly truncated still to prevent your memory overload, and the output written to ${command.output_path} . Next time be more careful with larger outputs.`, replacing `${command.output_path}` with the retained shell-log path.
+- An oversized-output failure never stops a running command or changes command execution, the complete shell log, or later independent polls.
+- An omitted `max_output_tokens`, a requested cap at or below the threshold, or an eligible call whose estimated final result is at or below the threshold retains existing behavior.
 - A successful foreground command with output returns only that plaintext. Any completed foreground command without output returns `Exit code N, no output.`. An unsuccessful foreground command with output returns `Exit code N, output:` followed by the output.
 - Background completion and polling always include the exit code. Completion with no output says `Exit code N, no output.`. Lifecycle facts remain separate from output summaries.
 - Concise background output may hide an inline preview, but completion must expose the exit code and output-file location when output exists and must not claim there was no output. Recoverable warnings remain visible and count as output, but do not imply command-log content.
@@ -177,6 +184,9 @@
 
 ## Model Requests And Cache Continuity
 
+- Every model generation request uses the provider's streaming response protocol. Kent has no non-streaming generation or fallback path.
+- Callers that expose only a completed response consume the generation stream internally and return the assembled response only after the stream completes successfully.
+- One generation-stream contract carries assistant output, reasoning output, provider-hosted output, and stream activity.
 - Every generation request has a required tool-choice mode: automatic or required. Missing or unknown modes are invalid.
 - Required tool choice validates against the complete advertised tool set, including local, custom, and enabled provider-hosted tools. An empty set is invalid. A provider that cannot represent required choice returns a policy error before dispatch. Automatic and required requests use the same bounded provider- and transport-failure retry policy; a retry preserves the request's tool-choice mode and advertised tools, and Kent never falls back from required to automatic choice.
 - Tool-choice mode changes only tool selection. It never changes the advertised tools or their order, parallel-tool behavior, or prompt-cache identity.

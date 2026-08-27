@@ -239,7 +239,7 @@ func (f realSessionRetargetFixture) runtimeWorkdir(t *testing.T) string {
 
 type retargetRuntimeClient struct{}
 
-func (retargetRuntimeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (retargetRuntimeClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 

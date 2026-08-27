@@ -347,6 +347,128 @@ func TestCompleteCurrentNodeJoinCreatesScriptWithAggregatedInput(t *testing.T) {
 	}
 }
 
+func TestCompleteCurrentNodeJoinScriptCarriesSharedActiveSourceToRetainedTarget(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		plan := nodeByKey(t, def, "plan")
+		synth := nodeByKey(t, def, "synth")
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		synthRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(synth))
+		synthRecord.Kind = workflow.NodeKindScript
+		synthRecord.SubagentRole = ""
+		synthRecord.ScriptPath = "/usr/bin/true"
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			testEdgeID("edge-join-synth-"+workflowID.String()),
+		).PromptTemplate = ""
+		for _, key := range []string{"split_a", "split_b"} {
+			edge := workflowGraphSaveEdgeRecord(t, req.Edges, edgeByKey(t, def, key).ID)
+			edge.ContextMode = workflow.ContextModeContinueSession
+			edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+		}
+		returnToPlan := workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			testEdgeID("edge-synth-done-"+workflowID.String()),
+		)
+		returnToPlan.TargetNodeID = workflow.NodeIDOf(plan)
+		returnToPlan.ContextMode = workflow.ContextModeContinueSession
+		returnToPlan.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}
+		returnToPlan.PromptTemplate = "Continue planning."
+		finishGroupID := testTransitionGroupID("group-synth-finish-" + workflowID.String())
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+			ID:           finishGroupID,
+			WorkflowID:   workflowID,
+			SourceNodeID: workflow.NodeIDOf(synth),
+			TransitionID: "finish",
+			DisplayName:  "Finish",
+		})
+		req.Edges = append(req.Edges, EdgeRecord{
+			ID:                testEdgeID("edge-synth-finish-" + workflowID.String()),
+			WorkflowID:        workflowID,
+			TransitionGroupID: finishGroupID,
+			Key:               "finish",
+			TargetNodeID:      workflow.NodeIDOf(done),
+			AssigneeSelection: workflow.AssigneeSelectionConfigured,
+			ThinkingSelection: workflow.ThinkingSelectionConfigured,
+			ContextMode:       workflow.ContextModeNewSession,
+		})
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	activeSourceSessionID := associateAndBindCurrentNodeSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		plan.Reference,
+	)
+
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode split: %v", err)
+	}
+	branches := make(map[workflow.TransitionBranchKey]workflow.CurrentNode)
+	for _, branch := range split.Mutation.Created {
+		branchKey, present := branch.Reference.TransitionBranchKey()
+		if !present {
+			t.Fatalf("fan-out Current Node = %+v, want branch scope", branch)
+		}
+		branches[branchKey] = branch
+	}
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       branches["split_a"].Reference,
+		TransitionID: "join_a",
+		OutputValues: map[string]string{"joined": "branch aggregate"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode first join arrival: %v", err)
+	}
+	joined, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       branches["split_b"].Reference,
+		TransitionID: "join_b",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode second join arrival: %v", err)
+	}
+	if len(joined.Mutation.Created) != 1 {
+		t.Fatalf("join mutation = %+v, want one Script successor", joined.Mutation)
+	}
+	script := joined.Mutation.Created[0]
+	scriptSourceSessionID, exact := script.ContinuationSource.ExactSessionID()
+	if !exact || scriptSourceSessionID != activeSourceSessionID {
+		t.Fatalf(
+			"Script active source = (%q, %v), want exact Session %q",
+			scriptSourceSessionID,
+			exact,
+			activeSourceSessionID,
+		)
+	}
+
+	returned, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       script.Reference,
+		TransitionID: "done",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode Script: %v", err)
+	}
+	if len(returned.Mutation.Created) != 1 ||
+		returned.Mutation.Created[0].SessionID == nil ||
+		*returned.Mutation.Created[0].SessionID != activeSourceSessionID {
+		t.Fatalf(
+			"retained target = %+v, want reused Session %q",
+			returned.Mutation.Created,
+			activeSourceSessionID,
+		)
+	}
+}
+
 func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)

@@ -98,7 +98,7 @@ func (s *ResponsesStub) serveScripted(
 		writer.Header().Set("Content-Type", "text/event-stream")
 		streamStarted = true
 	}
-	outcome, err := s.scripted.client.GenerateStreamWithEventsOutcome(ctx, llmRequest, llm.StreamCallbacks{
+	outcome, err := s.scripted.client.GenerateOutcome(ctx, llmRequest, llm.StreamCallbacks{
 		OnAssistantDelta: func(delta llm.AssistantDelta) {
 			startStream()
 			if !assistantStarted {
