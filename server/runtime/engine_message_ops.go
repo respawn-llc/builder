@@ -186,6 +186,9 @@ func (e *Engine) prepareStoredToolCompletion(
 	}
 	backgroundSessionID, hasBackgroundSession, err := harvestedBackgroundCompletionSessionID(r)
 	if err != nil {
+		if e.cfg.Debug {
+			panic(err)
+		}
 		return storedToolCompletion{}, "", false, err
 	}
 	payload := storedToolCompletion{
