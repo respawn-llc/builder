@@ -20,6 +20,7 @@ type toolAliasSpec struct {
 	aliases       []string
 	variations    bool
 	legacyAliases []string
+	configurable  bool
 	configAliases []string
 }
 
@@ -41,6 +42,7 @@ func newToolAliasCatalog(specs []toolAliasSpec) toolAliasCatalog {
 			aliases:       append([]string(nil), spec.aliases...),
 			variations:    spec.variations,
 			legacyAliases: append([]string(nil), spec.legacyAliases...),
+			configurable:  spec.configurable,
 			configAliases: append([]string(nil), spec.configAliases...),
 		}
 	}
@@ -75,26 +77,29 @@ var modelToolAliases = newToolAliasCatalog([]toolAliasSpec{
 		aliases:       []string{"shell", "bash", "exec", "run_command", "shell_command", "run_shell", "bash_command"},
 		variations:    true,
 		legacyAliases: []string{"shell", "bash", "bash_command", "shell_command"},
+		configurable:  true,
 		configAliases: []string{"shell"},
 	},
-	{id: ToolWriteStdin, variations: true},
+	{id: ToolWriteStdin, variations: true, configurable: true},
 	{
 		id:            ToolViewImage,
 		aliases:       []string{"read_image", "open_image", "inspect_image", "vision", "read_pdf", "open_pdf", "inspect_pdf"},
 		variations:    true,
 		legacyAliases: []string{"read_image"},
+		configurable:  true,
 		configAliases: []string{"read_image"},
 	},
-	{id: ToolPatch, aliases: []string{"apply_patch", "edit"}, variations: true},
+	{id: ToolPatch, aliases: []string{"apply_patch", "edit"}, variations: true, configurable: true},
 	{
-		id:         ToolAskQuestion,
-		aliases:    []string{"question", "ask_user_question", "request_user_input", "ask", "ask_user", "ask_human", "help", "say"},
-		variations: true,
+		id:           ToolAskQuestion,
+		aliases:      []string{"question", "ask_user_question", "request_user_input", "ask", "ask_user", "ask_human", "help", "say"},
+		variations:   true,
+		configurable: true,
 	},
 	{id: ToolCompleteNode},
-	{id: ToolTriggerHandoff, aliases: []string{"handoff", "compact", "request_handoff"}, variations: true},
-	{id: ToolWebSearch},
-	{id: ToolEdit, aliases: []string{"edit_file", "str_replace_editor", "replace", "string_replace", "replace_text", "write"}, variations: true, legacyAliases: []string{"replace", "write"}},
+	{id: ToolTriggerHandoff, aliases: []string{"handoff", "compact", "request_handoff"}, variations: true, configurable: true},
+	{id: ToolWebSearch, configurable: true},
+	{id: ToolEdit, aliases: []string{"edit_file", "str_replace_editor", "replace", "string_replace", "replace_text", "write"}, variations: true, legacyAliases: []string{"replace", "write"}, configurable: true},
 })
 
 func approvedModelParameterAliases() map[ID][]parameterAliasSpec {
@@ -106,13 +111,13 @@ func approvedModelParameterAliases() map[ID][]parameterAliasSpec {
 			{canonical: "login", aliases: []string{"login_shell"}},
 			{canonical: "tty", aliases: []string{"pty", "use_tty"}},
 			{canonical: "raw", aliases: []string{"raw_output"}},
-			{canonical: "yield_time_ms", aliases: []string{"yield_ms", "wait_ms", "yield-time_ms", "yield-time-ms"}},
+			{canonical: "yield_time_ms", aliases: []string{"yield_ms", "wait_ms"}},
 			{canonical: "max_output_tokens", aliases: []string{"max_tokens", "output_token_limit"}},
 		},
 		ToolWriteStdin: {
 			{canonical: "session_id", aliases: []string{"process_id", "shell_id"}},
 			{canonical: "chars", aliases: []string{"input", "stdin", "text"}},
-			{canonical: "yield_time_ms", aliases: []string{"yield_ms", "wait_ms", "yield-time_ms", "yield-time-ms"}},
+			{canonical: "yield_time_ms", aliases: []string{"yield_ms", "wait_ms"}},
 			{canonical: "max_output_tokens", aliases: []string{"max_tokens", "output_token_limit"}},
 		},
 		ToolViewImage: {
@@ -303,27 +308,35 @@ func resolveModelParameterName(tool ID, name string) (string, int, bool) {
 	spelling := name
 	specs := modelToolAliases.parameters[tool]
 	for _, spec := range specs {
-		for _, candidate := range canonicalParameterSpellings(spec) {
-			if spelling == candidate {
-				return spec.canonical, 0, true
-			}
+		if spelling == spec.canonical {
+			return spec.canonical, 0, true
 		}
 	}
 	for _, spec := range specs {
-		for _, candidate := range semanticParameterSpellings(spec) {
+		for _, candidate := range canonicalParameterDerivedSpellings(spec) {
 			if spelling == candidate {
 				return spec.canonical, 1, true
 			}
 		}
 	}
 	for _, spec := range specs {
-		for _, candidate := range append(canonicalParameterSpellings(spec), semanticParameterSpellings(spec)...) {
+		for _, candidate := range semanticParameterSpellings(spec) {
+			if spelling == candidate {
+				return spec.canonical, 2, true
+			}
+		}
+	}
+	for _, spec := range specs {
+		for _, candidate := range canonicalParameterSpellings(spec) {
 			if strings.EqualFold(spelling, candidate) {
-				rank := 0
-				if containsString(semanticParameterSpellings(spec), candidate) {
-					rank = 1
-				}
-				return spec.canonical, rank, true
+				return spec.canonical, 1, true
+			}
+		}
+	}
+	for _, spec := range specs {
+		for _, candidate := range semanticParameterSpellings(spec) {
+			if strings.EqualFold(spelling, candidate) {
+				return spec.canonical, 2, true
 			}
 		}
 	}
@@ -340,7 +353,11 @@ func MatchModelParameterName(tool ID, name string) (string, int, bool) {
 }
 
 func canonicalParameterSpellings(spec parameterAliasSpec) []string {
-	out := []string{spec.canonical, generatedCamelCase(spec.canonical)}
+	return append([]string{spec.canonical}, canonicalParameterDerivedSpellings(spec)...)
+}
+
+func canonicalParameterDerivedSpellings(spec parameterAliasSpec) []string {
+	out := []string{generatedCamelCase(spec.canonical)}
 	if kebab := kebabCase(spec.canonical); kebab != spec.canonical {
 		out = append(out, kebab)
 	}
@@ -374,15 +391,6 @@ func uniqueStrings(values []string) []string {
 	return out
 }
 
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
 func buildLegacyParseAliases() map[string]ID {
 	out := make(map[string]ID)
 	for _, spec := range modelToolAliases.tools {
@@ -397,6 +405,9 @@ func buildLegacyParseAliases() map[string]ID {
 func buildConfigAliases() map[string]ID {
 	out := make(map[string]ID)
 	for _, spec := range modelToolAliases.tools {
+		if !spec.configurable {
+			continue
+		}
 		out[string(spec.id)] = spec.id
 		for _, alias := range spec.configAliases {
 			out[alias] = spec.id

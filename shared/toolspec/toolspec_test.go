@@ -52,6 +52,9 @@ func TestParseConfigIDAndConfigName(t *testing.T) {
 			t.Fatalf("ParseConfigID(%s) unexpectedly resolved to %q", alias, got)
 		}
 	}
+	if got, ok := ParseConfigID("complete_node"); ok {
+		t.Fatalf("ParseConfigID(complete_node) unexpectedly resolved to %q", got)
+	}
 	for _, alias := range []string{"run_command", "exec", "open_image", "ask", "edit_file", "handoff"} {
 		if got, ok := ParseID(alias); ok {
 			t.Fatalf("ParseID(%s) unexpectedly resolved to %q", alias, got)
@@ -62,6 +65,18 @@ func TestParseConfigIDAndConfigName(t *testing.T) {
 	}
 	if got := ConfigName(ToolExecCommand); got != "shell" {
 		t.Fatalf("ConfigName(exec_command) = %q, want shell", got)
+	}
+}
+
+func TestResolveModelParameterNamePrefersExactCanonicalSpelling(t *testing.T) {
+	for _, name := range []string{"CMD", "cmd"} {
+		got, priority, ok := MatchModelParameterName(ToolExecCommand, name)
+		if !ok || got != "cmd" {
+			t.Fatalf("MatchModelParameterName(%q) = %q, %d, %t; want cmd", name, got, priority, ok)
+		}
+	}
+	if _, priority, _ := MatchModelParameterName(ToolExecCommand, "CMD"); priority != 1 {
+		t.Fatalf("MatchModelParameterName(CMD) priority = %d, want canonical-derived priority", priority)
 	}
 }
 

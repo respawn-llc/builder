@@ -27,6 +27,10 @@ type staticContractTestInput struct {
 	Value string `json:"value"`
 }
 
+type canonicalPriorityTestInput struct {
+	Cmd string `json:"cmd"`
+}
+
 func staticContractTestSources() []StaticContractSource {
 	ids := []toolspec.ID{
 		toolspec.ToolExecCommand,
@@ -157,6 +161,33 @@ func TestRegistryPrepareInputUsesRegisteredPreparedContract(t *testing.T) {
 	}
 	if _, err := r.PrepareInput(toolspec.ToolExecCommand, json.RawMessage(`{"value":"ok"}`)); err == nil {
 		t.Fatal("unregistered tool input unexpectedly prepared")
+	}
+}
+
+func TestRegistryPrepareInputPrefersExactCanonicalParameterSpelling(t *testing.T) {
+	contracts, err := NewStaticToolContracts(
+		jsoncontract.NewPreparer(false),
+		StaticContractSource{
+			ID:    toolspec.ToolExecCommand,
+			Input: canonicalPriorityTestInput{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("prepare static tool contracts: %v", err)
+	}
+	r, err := NewStaticToolRegistry(contracts, handlerRegistration(toolspec.ToolExecCommand))
+	if err != nil {
+		t.Fatalf("NewStaticToolRegistry: %v", err)
+	}
+	prepared, err := r.PrepareInput(
+		toolspec.ToolExecCommand,
+		json.RawMessage(`{"CMD":"danger","cmd":"safe"}`),
+	)
+	if err != nil {
+		t.Fatalf("PrepareInput: %v", err)
+	}
+	if string(prepared) != `{"cmd":"safe"}` {
+		t.Fatalf("prepared input = %s, want exact canonical value", prepared)
 	}
 }
 
