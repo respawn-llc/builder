@@ -13,6 +13,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessionenv"
 )
 
 type taskPaginationStub struct {
